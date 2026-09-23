@@ -18,17 +18,17 @@ function ruleBlock(content, id) {
   return rest.slice(0, Math.min(...ends));
 }
 
-test("BUILD-ONCE-SEED and FANOUT-DISPATCH-EMIT describe reference seeding via requiredReads, without the old verbatim/non-compliant clauses", () => {
+test("BUILD-ONCE-SEED and FANOUT-DISPATCH-EMIT describe reference seeding via requiredReads, without the old verbatim-seeding clauses", () => {
   const contract = read(CONTRACT);
   for (const id of ["GATE-EXEC-BUILD-ONCE-SEED", "GATE-EXEC-FANOUT-DISPATCH-EMIT"]) {
     assertRuleOwned(id, CONTRACT);
     const block = ruleBlock(contract, id);
     assert.match(block, /requiredReads/, `${id} names requiredReads`);
     assert.match(block, /reference seed/i, `${id} names reference seeding`);
-    assert.doesNotMatch(block, /pointer-seeded (emitted )?prompts? (are|is) non-compliant/i);
+    assert.doesNotMatch(block, /seeded with that unit's `promptPath` bytes verbatim/);
     assert.doesNotMatch(block, /seed(ed)? .*verbatim with (that|the neutral) bundle/i);
   }
-  assert.doesNotMatch(contract, /pointer-seeded (emitted )?prompts? (are|is) non-compliant/i);
+  assert.doesNotMatch(contract, /seeded with that unit's `promptPath` bytes verbatim/);
   assert.doesNotMatch(contract, /seed(ed)? .*verbatim with (that|the neutral) bundle/i);
 });
 

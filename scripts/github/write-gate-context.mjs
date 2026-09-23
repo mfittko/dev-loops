@@ -1301,7 +1301,7 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
   return [
     "## Required reads",
     "",
-    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. `optional` entries are for widening only. Your angle section may name one more required read.",
+    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. From the `context` entry, `.adjacentCode` is required: read it with `jq '.adjacentCode' <path>`, never `cat`. Other `optional` entries are for widening only. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
     "",
     ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
   ].join("\n");
@@ -1690,9 +1690,11 @@ export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "ca
 // kept, every free-form field is truncated at
 // PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH chars with an ellipsis marker, and any
 // overflow past the entry cap is summarized in one terse line rather than
-// silently dropped.
-export const PRIOR_DISPOSITIONS_MAX_ENTRIES = 20;
-export const PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH = 200;
+// silently dropped. Sized so the maximal block, the prefix and a suffix with
+// the three longest shipped angle prompts stay under the emitter's
+// REVIEWER_WORK_ORDER_MAX_BYTES ceiling (pinned by a worst-case test).
+export const PRIOR_DISPOSITIONS_MAX_ENTRIES = 10;
+export const PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH = 100;
 
 /**
  * Truncate a free-form field to {@link PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}
@@ -2471,15 +2473,26 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       kind, path: readPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes), required,
     });
     requiredReads = [hashed("evidence", evidencePath, evidence.text, true)];
-    if (options.diffToWrite && options.diffPath) {
+    if (options.diffPath) {
       // The filtered, collapsed diff inside the evidence file is the review
       // surface; the full `.diff` is required only when the evidence points to it.
-      requiredReads.push(hashed("diff", options.diffPath, options.diffToWrite.text, prefixMode === "pointer"));
+      // A pointer to a diff this call does not write binds the on-disk bytes.
+      let diffBytes = options.diffToWrite?.text;
+      if (diffBytes === undefined && prefixMode === "pointer") {
+        try {
+          diffBytes = await readFile(path.resolve(repoRoot, options.diffPath));
+        } catch (err) {
+          throw new Error(`diffPath ${JSON.stringify(options.diffPath)} is unreadable (${err?.code ?? err?.message}) — refusing to point the evidence at an unbound diff`);
+        }
+      }
+      if (diffBytes !== undefined) requiredReads.push(hashed("diff", options.diffPath, diffBytes, prefixMode === "pointer"));
     }
     if (validationBytes !== null) {
       const relative = path.relative(path.resolve(repoRoot), options.validationResultsPath);
-      const storedPath = relative.startsWith("..") || path.isAbsolute(relative) ? options.validationResultsPath : relative;
-      requiredReads.push(hashed("validation", storedPath, validationBytes, true));
+      const outside = relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+      const storedPath = outside ? options.validationResultsPath : relative;
+      // Read by field via jq, never whole; the sentinel still verifies the hash.
+      requiredReads.push(hashed("validation", storedPath, validationBytes, false));
     }
     requiredReads.push({ kind: "context", path: contextPath, required: false });
     const rendered = renderBriefingPrefix({
@@ -2526,6 +2539,10 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         });
         pendingVariants.set(scope, { path: scopePath, text: variant.text });
         briefingVariants[scope] = scopePath;
+        // Pushed after the prefix render: the shared prefix never lists a
+        // variant, but the sentinel verifies it and the emitter copies it.
+        const { kind, ...identity } = hashed("scoped-evidence", scopePath, variant.text, false);
+        requiredReads.push({ kind, scope, ...identity });
       } catch (err) {
         process.stderr.write(
           `[gate-context] scope variant "${scope}" failed to build (continuing without it; affected angles fail open to the full briefing): ${err?.message ?? err}\n`,
@@ -2793,6 +2810,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       } catch (error) {
         await rm(fullPath, { force: true });
         delete briefingVariants[scope];
+        artifact.requiredReads = artifact.requiredReads.filter((read) => !(read.kind === "scoped-evidence" && read.scope === scope));
         process.stderr.write(`[gate-context] scope variant "${scope}" failed to build (continuing without it; affected angles fail open to the full briefing): ${error.message}\n`);
         for (const [angle, s] of Object.entries(angleScopes)) {
           if (s === scope) angleScopes[angle] = "full";

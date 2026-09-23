@@ -813,11 +813,12 @@ async function seedRequiredReads(tmpDir) {
     evidence: [`${ctxRelDir}/draft_gate-abc1234.briefing-evidence.txt`, "## PR body\nevidence\n"],
     diff: [`${ctxRelDir}/draft_gate-abc1234.diff`, "diff --git a/x b/x\n"],
     validation: [`${ctxRelDir}/draft_gate-abc1234.validation.json`, "{\"allPassed\":true}\n"], // secret-scan:allow fixture artifact path (not a secret)
+    "scoped-evidence": [`${ctxRelDir}/draft_gate-abc1234.briefing-docs-only.txt`, "## Docs-only slice\nvariant\n"], // secret-scan:allow fixture artifact path (not a secret)
   };
   const requiredReads = [];
   for (const [kind, [rel, text]] of Object.entries(files)) {
     await writeFile(path.join(tmpDir, rel), text, "utf8");
-    requiredReads.push({ kind, path: rel, sha256: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text), required: kind !== "diff" });
+    requiredReads.push({ kind, path: rel, sha256: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text), required: kind === "evidence" });
   }
   const ctxRelPath = `${ctxRelDir}/draft_gate-abc1234.json`; // secret-scan:allow fixture artifact path (not a secret)
   requiredReads.push({ kind: "context", path: ctxRelPath, required: false });
@@ -830,6 +831,7 @@ test("verify-fresh-review-context --context-path verifies every hashed required 
     ["tampered evidence", async (tmpDir, files) => writeFile(path.join(tmpDir, files.evidence[0]), "## PR body\nedited\n", "utf8"), /evidence/],
     ["deleted diff", async (tmpDir, files) => rm(path.join(tmpDir, files.diff[0])), /diff/],
     ["stale validation", async (tmpDir, files) => writeFile(path.join(tmpDir, files.validation[0]), "{\"allPassed\":false}\n", "utf8"), /validation/],
+    ["tampered scoped variant", async (tmpDir, files) => writeFile(path.join(tmpDir, files["scoped-evidence"][0]), "## Docs-only slice\nedited\n", "utf8"), /scoped-evidence/],
   ];
   for (const [label, breakRead, namePattern] of cases) {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));

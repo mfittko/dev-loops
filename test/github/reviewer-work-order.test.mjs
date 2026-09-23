@@ -5,13 +5,17 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { REVIEWER_WORK_ORDER_MAX_BYTES } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { parse as parseYaml } from "yaml";
+import { REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import {
   buildGateBriefingPrefixPath,
   buildGateDiffPath,
   buildGateEmitPlanPath,
   mapGateToConfigKey,
+  PRIOR_DISPOSITIONS_MAX_ENTRIES,
+  PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH,
   parseWriteGateContextCliArgs,
+  renderBriefingVolatile,
   resolveFanoutDispatch,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
@@ -240,20 +244,66 @@ test("work order: Claude and Pi paths get identical prompt bytes and the same re
   assert.deepEqual(perHarness[0].reads, perHarness[1].reads);
 });
 
-test("work order: a unit whose angles share a scoped variant gets that variant as an extra hashed required read", async () => {
+test("work order: a unit whose angles share a scoped variant reads the builder-hashed variant in place of the shared evidence", async () => {
   await withTmpDir(async (repoRoot) => {
     const written = await writeRound(repoRoot, { angleScopes: { dry: "docs-only", kiss: "docs-only" } });
+    const recorded = written.artifact.requiredReads.find((r) => r.kind === "scoped-evidence");
+    assert.equal(recorded.scope, "docs-only");
+    assert.equal(recorded.path, written.artifact.briefingVariants["docs-only"]);
+    assert.equal(recorded.required, false);
+    assert.equal(recorded.sha256, sha256(await readFile(path.join(repoRoot, recorded.path))));
+    const prefix = await readFile(path.join(repoRoot, written.prefixPath), "utf8");
+    assert.ok(!prefix.includes(recorded.sha256), "the shared prefix never lists a variant");
     const payload = runEmit(repoRoot);
     const scoped = payload.units.find((u) => u.angles.includes("dry"));
     const extra = scoped.workOrder.requiredReads.filter((r) => r.kind === "scoped-evidence");
-    assert.equal(extra.length, 1);
-    assert.equal(extra[0].path, written.artifact.briefingVariants["docs-only"]);
-    assert.equal(extra[0].required, true);
-    assert.equal(extra[0].sha256, sha256(await readFile(path.join(repoRoot, extra[0].path))));
+    assert.deepEqual(extra, [{ ...recorded, required: true }]);
+    assert.ok(!scoped.workOrder.requiredReads.some((r) => r.kind === "evidence"), "the variant replaces the shared evidence read");
     const prompt = await readFile(scoped.promptPath, "utf8");
-    assert.ok(prompt.includes(path.resolve(repoRoot, extra[0].path)) && prompt.includes(extra[0].sha256));
+    assert.ok(prompt.includes(path.resolve(repoRoot, recorded.path)) && prompt.includes(recorded.sha256));
+    assert.match(prompt, /REPLACES the shared `evidence` read/);
     for (const unit of payload.units.filter((u) => u !== scoped)) {
       assert.ok(!unit.workOrder.requiredReads.some((r) => r.kind === "scoped-evidence"));
+      assert.ok(unit.workOrder.requiredReads.some((r) => r.kind === "evidence"));
     }
+  });
+});
+
+// Every `prompt` string anywhere in the shipped defaults, longest first.
+function shippedPrompts(node, out = []) {
+  if (Array.isArray(node)) for (const item of node) shippedPrompts(item, out);
+  else if (node && typeof node === "object") {
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "prompt" && typeof value === "string") out.push(value);
+      else shippedPrompts(value, out);
+    }
+  }
+  return out.sort((a, b) => Buffer.byteLength(b) - Buffer.byteLength(a));
+}
+
+test("work order: the worst case (maximal prior dispositions, three longest shipped prompts, scoped read) stays under the ceiling", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const written = await writeRound(repoRoot);
+    const prefixBytes = (await stat(path.join(repoRoot, written.prefixPath))).size;
+    // 3-byte UTF-8 characters: the largest byte count per UTF-16 unit the char-based truncation allows.
+    const wide = "中".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 50);
+    const priorDispositions = Array.from({ length: PRIOR_DISPOSITIONS_MAX_ENTRIES + 5 }, () => ({
+      fingerprint: "f".repeat(16), angle: wide, severity: wide, summary: wide, judgeRationale: wide,
+    }));
+    const volatileBytes = Buffer.byteLength(renderBriefingVolatile({
+      gate: GATE, headSha: HEAD_SHA, loggedAt: new Date().toISOString(), validationPosture: "v".repeat(500), priorDispositions,
+    }));
+    const defaults = parseYaml(await readFile(path.resolve("packages/core/src/config/extension-defaults.yaml"), "utf8"));
+    const longest = shippedPrompts(defaults).slice(0, 3);
+    assert.equal(longest.length, 3);
+    const angles = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+    const suffixBytes = Buffer.byteLength(buildAngleNamingSuffix(
+      { name: "n".repeat(64), angles },
+      `pre-approval-gate-group-${"s".repeat(64)}`,
+      angles.map((angle, i) => ({ angle, persona: "p".repeat(64), prompt: longest[i] })),
+      [{ kind: "scoped-evidence", scope: "changed-files", path: path.join(repoRoot, "p".repeat(200)), sha256: "f".repeat(64), bytes: 99999999, required: true }],
+    ));
+    const total = prefixBytes + volatileBytes + suffixBytes;
+    assert.ok(total < REVIEWER_WORK_ORDER_MAX_BYTES, `worst case ${total} bytes (prefix ${prefixBytes}, volatile ${volatileBytes}, suffix ${suffixBytes})`);
   });
 });

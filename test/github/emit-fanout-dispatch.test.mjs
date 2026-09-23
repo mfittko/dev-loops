@@ -1698,3 +1698,16 @@ test("emitter: refuses a composed prompt over the work-order ceiling or carrying
     });
   }
 });
+
+test("emitter: an oversized consumer-configured angle prompt refuses (exit 1) naming the unit, its angles, and the byte count", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await writeFile(path.join(tmpDir, ".devloops"), `version: 1\ngates:\n  preApproval:\n    angles:\n      - name: kiss\n        persona: review\n        prompt: ${"k".repeat(REVIEWER_WORK_ORDER_MAX_BYTES)}\n`, "utf8");
+    await seedBundle(tmpDir);
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stderr || result.stdout);
+    const { error } = JSON.parse(result.stdout);
+    assert.match(error, /unit "design-simplicity"/);
+    assert.match(error, /angles dry, kiss/);
+    assert.match(error, /is \d+ bytes, over the REVIEWER_WORK_ORDER_MAX_BYTES ceiling/);
+  });
+});

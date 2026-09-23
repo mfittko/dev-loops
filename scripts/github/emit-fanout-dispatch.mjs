@@ -108,9 +108,9 @@ Exit codes:
      pendingGroups under --pending, resolves zero units, a unit carries no
      angles, a dispatch unit's name sanitizes to an invalid scope, two units
      derive a colliding scope, a unit's invariant-prefix record is missing /
-     suffix could not be composed, an angle has no resolvable prompt, a unit's
-     scoped evidence variant is unreadable, or a composed work order exceeds
-     REVIEWER_WORK_ORDER_MAX_BYTES (30 KB) or carries an inline "diff --git" line
+     suffix could not be composed, an angle has no resolvable prompt, or a
+     composed work order exceeds REVIEWER_WORK_ORDER_MAX_BYTES (30 KB) or
+     carries an inline "diff --git" line
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, filesystem
      error, or invalid --jq filter)`.trim();
 
@@ -257,7 +257,7 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
     : `## Your review angles (dispatch unit "${unit?.name}"): ${list}`;
   const scopeLine = `Dispatch scope: pass \`--scope ${scope}\` verbatim to the mandatory \`verify-fresh-review-context.mjs\` sentinel named in the briefing prefix above — this is your dispatch unit's exact emitted scope, never composed from the unit name.`;
   const reads = unitReads.length > 0
-    ? `Unit required read, in addition to the prefix's \`## Required reads\` (same rules: read it IN FULL and verify its sha256 before judgment):\n${unitReads.map((read) => renderRequiredReadLine(read, process.cwd())).join("\n")}\n\n`
+    ? `Unit required read. It REPLACES the shared \`evidence\` read of the prefix's \`## Required reads\` for this unit: read this scoped evidence IN FULL instead of the shared evidence file, and verify its sha256 before judgment. Every other prefix read still applies:\n${unitReads.map((read) => renderRequiredReadLine(read, process.cwd())).join("\n")}\n\n`
     : "";
   const body = single
     ? `Review this angle adversarially per your scoped angle-review mode, using the persona and focus prompt below. Write one findings artifact for this angle at its per-angle path.`
@@ -463,18 +463,19 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
 
 /**
  * The unit-scoped required read: when every angle of the unit declares the
- * same non-"full" scope and the context builder rendered that scope's
- * variant, the unit reads the variant in full, bound by its sha256. A unit
- * with mixed or full scopes gets none (the shared evidence covers it).
- * @returns {Promise<{ kind: string, path: string, sha256: string, bytes: number, required: true }[]>}
+ * same non-"full" scope and the context builder recorded that scope's
+ * `scoped-evidence` entry in `artifact.requiredReads`, the unit reads that
+ * variant in full INSTEAD of the shared evidence. The entry is copied (with
+ * `required: true`), never re-hashed, so the sentinel verifies the same
+ * sha256 the builder recorded. A unit with mixed or full scopes gets none.
+ * @returns {{ kind: string, scope: string, path: string, sha256: string, bytes: number, required: true }[]}
  */
-async function resolveUnitScopedReads(artifact, angles) {
+function resolveUnitScopedReads(artifact, angles) {
   const scopes = new Set(angles.map((angle) => artifact?.angleScopes?.[angle] ?? "full"));
   const [scope] = scopes;
-  const variantPath = scopes.size === 1 && scope !== "full" ? artifact?.briefingVariants?.[scope] : null;
-  if (typeof variantPath !== "string") return [];
-  const bytes = await readFile(path.resolve(variantPath));
-  return [{ kind: "scoped-evidence", path: variantPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length, required: true }];
+  if (scopes.size !== 1 || scope === "full" || !Array.isArray(artifact?.requiredReads)) return [];
+  const entry = artifact.requiredReads.find((read) => read?.kind === "scoped-evidence" && read.scope === scope);
+  return entry ? [{ ...entry, required: true }] : [];
 }
 
 function resolveFlagValue(argv, flag) {
@@ -721,7 +722,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // Round-level work-order identity shared by every unit: the required reads
   // the context builder bound into the prefix, the merged-config hash, and the
   // absolute per-angle findings directory.
-  const sharedReads = Array.isArray(artifact.requiredReads) ? artifact.requiredReads : [];
+  const sharedReads = Array.isArray(artifact.requiredReads) ? artifact.requiredReads.filter((read) => read?.kind !== "scoped-evidence") : [];
   const configSha256 = createHash("sha256").update(JSON.stringify(config ?? {})).digest("hex");
   const findingsDir = path.resolve(buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot }));
   let prefixSha256 = null;
@@ -748,12 +749,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       }
       angleInstructions.push({ angle, persona: role.persona, prompt: role.prompt });
     }
-    let unitReads;
-    try {
-      unitReads = await resolveUnitScopedReads(artifact, angles);
-    } catch (err) {
-      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — the scoped evidence variant for unit ${JSON.stringify(unit.name)} is unreadable (${err.code ?? err.message}); re-run write-gate-context.mjs` }, false);
-    }
+    const unitReads = resolveUnitScopedReads(artifact, angles);
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
@@ -783,7 +779,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     // evidence leaked into the work order. Refuse rather than relay it.
     const promptBytes = Buffer.byteLength(promptText);
     if (promptBytes > REVIEWER_WORK_ORDER_MAX_BYTES) {
-      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — the work order for unit ${JSON.stringify(unit.name)} (scope ${scope}) is ${promptBytes} bytes, over the REVIEWER_WORK_ORDER_MAX_BYTES ceiling of ${REVIEWER_WORK_ORDER_MAX_BYTES}; reference bulk evidence through requiredReads instead of inlining it` }, false);
+      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — the work order for unit ${JSON.stringify(unit.name)} (scope ${scope}, angles ${angles.join(", ")}) is ${promptBytes} bytes, over the REVIEWER_WORK_ORDER_MAX_BYTES ceiling of ${REVIEWER_WORK_ORDER_MAX_BYTES}; shorten the configured angle prompts or split the unit, and reference bulk evidence through requiredReads instead of inlining it` }, false);
     }
     if (/^diff --git /m.test(promptText)) {
       return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — the work order for unit ${JSON.stringify(unit.name)} (scope ${scope}) carries inline diff text (a "diff --git" line); reference the diff through requiredReads instead` }, false);
@@ -798,7 +794,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
         configSha256,
         assignedAngles: angles,
         angleInstructions,
-        requiredReads: [...sharedReads, ...unitReads],
+        requiredReads: unitReads.length > 0 ? [...sharedReads.filter((read) => read.kind !== "evidence"), ...unitReads] : sharedReads,
         outputRefs: angles.map((angle) => path.join(findingsDir, `${angle}.json`)),
         executionRules: { budget: REVIEWER_UNIT_BUDGET, prohibited: PROHIBITED_REVIEWER_OPERATIONS },
       },
