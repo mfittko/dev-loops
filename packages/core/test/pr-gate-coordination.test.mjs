@@ -41,7 +41,7 @@ test("draft PR only allows mark-ready after current-head clean draft gate eviden
 });
 
 // ---------------------------------------------------------------------------
-// #2381: unresolvedGateThreadCount folds into draftGate.currentHeadClean —
+// ADR 0088: unresolvedGateThreadCount folds into draftGate.currentHeadClean —
 // reconciling this detector's MARK_READY_FOR_REVIEW decision with
 // detect-checkpoint-evidence.mjs's own unresolved-gate-authored-thread report
 // for the same PR state (the previously deadlocked state).
@@ -4351,7 +4351,7 @@ test("incomplete fixerDisposition blocks even a draft PR's mark-ready-for-review
   assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
 });
 
-// #2381 (folded finding a): applyDraftGateEvidenceGuard must NOT rewrite an
+// ADR 0088 (folded finding a): applyDraftGateEvidenceGuard must NOT rewrite an
 // in-progress draft-side COMPLETE_FIXER_DISPOSITION result to
 // reconcile_draft_gate. Absent/not-yet-clean draft_gate COMMENT evidence
 // (cleanEvidenceExists false — no draft_gate verdict posted yet for THIS

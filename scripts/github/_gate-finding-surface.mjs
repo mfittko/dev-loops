@@ -1288,7 +1288,7 @@ async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, g
  * snapshot of whatever disposition the FIRST posting of this finding
  * rendered, which can be stale relative to the very disagreement tier 2 just
  * detected, and letting it win on tier 2's ambiguity would defeat the
- * fail-closed intent (#2381). A corrupt/unreadable local ledger file, or one
+ * fail-closed intent (ADR 0088). A corrupt/unreadable local ledger file, or one
  * whose own recorded repo/pr/gate does not match the inputs, is skipped,
  * never thrown — a stale/foreign/hand-edited local artifact must not block
  * or poison the lookup.
