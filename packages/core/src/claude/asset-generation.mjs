@@ -313,11 +313,11 @@ export function isSkillExcludedFromClaude(frontmatter) {
     return false;
   }
   const claudeSync = frontmatter["claude-sync"];
-  if (claudeSync === false || (typeof claudeSync === "string" && claudeSync.toLowerCase() === "false")) {
+  if (claudeSync === false || (typeof claudeSync === "string" && claudeSync.trim().toLowerCase() === "false")) {
     return true;
   }
   const piOnly = frontmatter["pi-only"];
-  if (piOnly === true || (typeof piOnly === "string" && piOnly.toLowerCase() === "true")) {
+  if (piOnly === true || (typeof piOnly === "string" && piOnly.trim().toLowerCase() === "true")) {
     return true;
   }
   const harness = frontmatter.harness;
