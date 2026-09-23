@@ -226,6 +226,10 @@ const CASES = [
   // the base-relative reduction empties the delta.
   { name: "integrate-only base move: code delta outside the PR's own diff", fixture: { threads: [thread({ isResolved: true })], delta: CODE_DELTA, prOwn: DOCS_DELTA }, carried: true },
   { name: "docs-only delta, body-only changes-recommended, no record", fixture: { priorBody: YELLOW }, carried: false },
+  // The body-blocking set: an unrecognized disposition header fails closed, and
+  // the soft needs-a-closer-look non-approval carries without a record.
+  { name: "docs-only delta, body-only unrecognized disposition header, no record", fixture: { priorBody: "### 🟣 Something new\n\nBody." }, carried: false },
+  { name: "docs-only delta, body-only needs-a-closer-look, no record", fixture: { priorBody: "### 🔵 Needs a closer look\n\nBody." }, carried: true },
   {
     name: "docs-only delta, body-only changes-recommended, trusted operator record",
     fixture: { priorBody: YELLOW, dispositions: [dispositionComment({ reviewId: "PRR_prior" })] },
@@ -576,6 +580,42 @@ describe("round cap: an earlier-head body-only finding clears only through a rec
     it(`request tool never re-requests: ${name}`, async () => {
       const request = await runRequestTool(fixture());
       assert.equal(request.status, "round_cap_reached");
+    });
+  }
+});
+
+// At the cap, each blocker other than the earlier-head body finding keeps the
+// cycle closed: a significant change must not reopen Copilot past it.
+describe("round cap: an earlier-head body finding reopens a cycle only on an otherwise clean head", () => {
+  const capSnapshot = {
+    prExists: true,
+    prNumber: PR,
+    currentHeadSha: HEAD,
+    copilotReviewPresent: true,
+    copilotReviewRoundCount: 2,
+    ciStatus: "success",
+    copilotPriorHeadBodyFeedbackUnresolved: true,
+  };
+  const BLOCKERS = [
+    { name: "an unresolved thread", patch: { unresolvedThreadCount: 1 }, state: "round_cap_reached" },
+    { name: "a current-head body finding", patch: { copilotBodyFeedbackUnresolved: true }, state: "round_cap_reached" },
+    { name: "non-green CI", patch: { ciStatus: "failure" }, state: "round_cap_reached" },
+    // An in-flight request leaves the not-clean cap to the normal routing.
+    { name: "a review in flight", patch: { copilotReviewRequestStatus: "requested" }, state: null },
+  ];
+
+  it("the earlier-head body finding alone is reopen-eligible", () => {
+    const interpretation = interpretLoopState(capSnapshot, { maxCopilotRounds: 2 });
+    assert.equal(interpretation.state, "round_cap_reached");
+    assert.equal(interpretation.roundCapReopenEligible, true);
+  });
+
+  for (const { name, patch, state } of BLOCKERS) {
+    it(`${name} blocks the reopen`, () => {
+      const interpretation = interpretLoopState({ ...capSnapshot, ...patch }, { maxCopilotRounds: 2 });
+      if (state) assert.equal(interpretation.state, state);
+      else assert.notEqual(interpretation.state, "round_cap_clean_fallback");
+      assert.equal(interpretation.roundCapReopenEligible, false);
     });
   }
 });
