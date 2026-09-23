@@ -246,7 +246,7 @@ async function hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, r
   let compareReadable = false;
   const probe = async (cmd, args, childEnv) => {
     const result = await runChild(cmd, args, childEnv);
-    try { compareReadable = result?.code === 0 && JSON.parse(result.stdout) !== null; } catch { compareReadable = false; }
+    try { compareReadable = result?.code === 0 && Array.isArray(JSON.parse(result.stdout)?.files); } catch { compareReadable = false; }
     return result;
   };
   try {

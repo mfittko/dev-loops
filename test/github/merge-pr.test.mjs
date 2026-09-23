@@ -62,6 +62,7 @@ function makeRuntime({
         calls.runChild.push({ cmd, args, env });
         if (String(args[1]).includes("/compare/")) {
           if (compare.code) return { stdout: "", stderr: "compare failed", code: compare.code };
+          if (compare.stdout !== undefined) return { stdout: compare.stdout, stderr: "", code: 0 };
           return { stdout: JSON.stringify({ status: compare.status ?? "ahead", files: (compareFiles ?? []).map((filename) => ({ filename, status: "modified" })) }), stderr: "", code: 0 };
         }
         if (args[0] === "pr" && args[1] === "view" && args.includes("files")) {
@@ -245,6 +246,18 @@ test("at the round cap a significant change after a converged review opens a new
 
 test("at the round cap a compare failure after a converged review fails closed", async () => {
   await expectCopilotRefusal("compare failure", { maxCopilotRounds: 2, reviews: CONVERGED_AT_CAP, compare: { code: 1 } });
+});
+
+test("at the round cap a readable compare payload without a files array fails closed", async () => {
+  for (const stdout of [JSON.stringify({ status: "ahead" }), JSON.stringify("ahead"), "42"]) {
+    await expectCopilotRefusal(`compare payload ${stdout}`, { maxCopilotRounds: 2, reviews: CONVERGED_AT_CAP, compare: { stdout } });
+  }
+});
+
+test("at the round cap an empty compare delta after a converged review keeps round_cap_clean_fallback", async () => {
+  const { runtime } = makeRuntime({ maxCopilotRounds: 2, reviews: CONVERGED_AT_CAP, compare: { stdout: JSON.stringify({ status: "ahead", files: [] }) } });
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.copilotDisposition, "round_cap_clean_fallback");
 });
 
 test("at the round cap a trivial change after a converged review keeps round_cap_clean_fallback", async () => {
