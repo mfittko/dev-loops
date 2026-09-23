@@ -2601,7 +2601,12 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
     }
     // ADR 0089: without a ledger, the structured findings carry the judge act list.
-    const flatFindings = preloadedFindingsLedger ? [] : flattenAnglesForBodyList(structuredFindings);
+    // Read the RAW entries: normalization turns an unparseable finding into a bare marker and drops its judgeDisposition.
+    const flatFindings = preloadedFindingsLedger ? [] : candidate.flatMap((e) => (looksLikePerAngleEntry(e) ? e.findings : [e])).map((f) => ({
+      severity: f?.severity,
+      summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
+      judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
+    }));
     const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
     if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
     const actItems = listOpenActItems(flatFindings);

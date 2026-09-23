@@ -181,3 +181,30 @@ test("--findings-json without a ledger fails closed on a judgeDisposition outsid
     );
   }, { prefix: "dev-loops-act-list-json-bogus-" });
 });
+
+// A nested finding with an empty summary normalizes to an unparseable marker
+// that drops judgeDisposition, so the act-list checks must read the raw entry.
+async function postUnparseableJson(tempDir, judgeDisposition) {
+  const jsonPath = path.join(tempDir, "findings.json");
+  await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ severity: "low", summary: "", judgeDisposition }] }]), "utf8");
+  const args = [
+    "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+    "--findings-json", jsonPath, "--next-action", "follow the verdict", "--inline-reason", "act list test",
+    "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }), "--verdict", "clean",
+  ];
+  return upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+    env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]),
+  });
+}
+
+test("--findings-json without a ledger refuses an explicit clean over a nested unparseable finding judged act", async () => {
+  await withTempDir(async (tempDir) => {
+    await assert.rejects(() => postUnparseableJson(tempDir, "act"), /--verdict "clean".*1 open judge act item\(s\).*\[low\] \(unparseable\)/s);
+  }, { prefix: "dev-loops-act-list-json-unparseable-" });
+});
+
+test("--findings-json without a ledger fails closed on a nested unparseable finding with a bogus judgeDisposition", async () => {
+  await withTempDir(async (tempDir) => {
+    await assert.rejects(() => postUnparseableJson(tempDir, "bogus"), /\[low\] \(unparseable\)" carries judgeDisposition "bogus" outside act\/defer\/reject/);
+  }, { prefix: "dev-loops-act-list-json-unparseable-bogus-" });
+});
