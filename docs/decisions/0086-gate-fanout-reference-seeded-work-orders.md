@@ -1,0 +1,21 @@
+# 0086. Seed gate fan-out reviewers by reference with bounded work orders
+
+## Status
+
+Accepted — 2026-09-23 ([issue #2385](https://github.com/mfittko/dev-loops/issues/2385))
+
+Amends 0021 ([ADR 0021](./0021-gate-fanout-build-once-seed-many.md)): it replaces verbatim seeding with reference seeding. It keeps the rest of that decision unchanged: one build-once neutral bundle per gate pass, fresh-context reviewers, and fail-closed prefix-hash enforcement.
+
+## Context
+
+ADR 0021 seeds every fan-out reviewer with the neutral bundle verbatim (`GATE-EXEC-BUILD-ONCE-SEED`). The briefing prefix inlined the PR body, the linked-issue bodies, the diff and the changed-files summary, so each emitted reviewer prompt grew with the diff and the spec. Recent gate rounds emitted 73 to 80 KB per reviewer. The Claude Code conductor must copy each prompt into an Agent-tool argument, and on one `draft_gate` round the auto-mode classifier interrupted two of those relays and the round broke off. Prompt-cache alignment does not solve this: the conductor still relays the full bytes, the child still receives them, and the harness exposes no cache-read telemetry. Clipping the diff with an ellipsis keeps the size coupled to the diff and can hide the lines a reviewer needs.
+
+## Decision
+
+Reviewers are seeded by reference. `write-gate-context.mjs` writes the bulk evidence to `<gate>-<headSha>.briefing-evidence.txt` and records a `requiredReads` manifest on the context artifact: each entry names a kind, a path, a sha256 and a byte count, and whether the read is required. The briefing prefix stays byte-identical across the round and ends with a `## Required reads` section that binds those hashes, so the existing prefix-hash sentinel and the no-rebuild-mid-fan-out guard cover the referenced bytes transitively. `emit-fanout-dispatch.mjs` emits a bounded work order per unit: the round identity, the merged-config hash, the assigned angles with their resolved persona and prompt, the required reads (plus a hashed scoped-variant read when all of the unit's angles share one scope), the output refs and the execution rules. The emitter refuses a work order over 30 KB or one that carries an inline `diff --git` line, and it refuses an angle with no resolvable prompt. The reviewer reads every required read in full. `verify-fresh-review-context.mjs --context-path` re-hashes every hashed required read before it creates the sentinel and refuses on a missing, unreadable or mismatched read; the reviewer then emits a blocked result.
+
+We rejected ellipsis truncation of the diff or spec, because it hides evidence and keeps the prompt size coupled to the diff. We rejected keeping verbatim seeding and relying on the prompt cache, because a cache hit reduces cost but not the relayed bytes, and the harness cannot prove a hit. A prompt that points at `briefing-prefix.txt` instead of inlining the compact prefix stays non-compliant; only the bulk evidence moves behind references.
+
+## Consequences
+
+The emitted reviewer prompt no longer grows with the diff or the spec, so the conductor relays a small, bounded task on both the Claude and the Pi paths. A stale or edited evidence file is a new fail-closed refusal at the sentinel. That a reviewer actually read each required read in full is not mechanically observable; the sentinel proves only that the referenced bytes still match. The primer and cache alignment remain as optional cost optimizations, and correctness does not depend on a cache hit. `test/github/reviewer-work-order.test.mjs` and `test/contracts/gate-reviewer-work-order-contract.test.mjs` pin the work-order shape and the contract wording.

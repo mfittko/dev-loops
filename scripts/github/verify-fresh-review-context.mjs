@@ -99,6 +99,7 @@ Output (stdout, JSON):
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "repoRoot": "...", "sameHeadRetry": true, "prBodyFixRetry": true, "prefixHash": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "reason": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": false, "reason": "..." }
+  { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": true, "reason": "required read <kind> ..." }
   repoRoot (fresh runs only) is the directory the sentinel ran in. With
   --context-path it is worktree-local (the locality guard proved it); without
   that flag it is simply the invocation cwd, unvalidated. Reviewer shells
@@ -113,7 +114,9 @@ Exit codes:
      recorded hash
   1  Refuse to review: contaminated (prior session detected), OR (with
      --context-path) the seeded gate-context artifact is missing or resolves
-     outside the reviewer's working directory, OR (with --prefix-file) the
+     outside the reviewer's working directory, OR (with --context-path) a
+     hashed requiredReads entry of that artifact is missing, unreadable, or no
+     longer matches its recorded sha256, OR (with --prefix-file) the
      prefix file is missing, OR (with --same-head-retry) the existing
      sentinel's recorded prefix hash does not match the given one (or records
      none at all)
@@ -228,6 +231,33 @@ async function readSentinelPrefixHash(sentinelPath) {
     return null;
   }
 }
+// Returns null when every `requiredReads` entry carrying a sha256 reads back
+// with that hash and byte count, else a reason naming the failing read. An
+// unparseable artifact is a failure: its required reads cannot be proven.
+async function verifyRequiredReads(contextPath, cwd) {
+  let artifact;
+  try {
+    artifact = JSON.parse(await readFile(contextPath, "utf8"));
+  } catch (err) {
+    return `gate-context artifact is unreadable (${err.code ?? err.message}), so its required reads cannot be verified`;
+  }
+  const reads = Array.isArray(artifact?.requiredReads) ? artifact.requiredReads : [];
+  for (const read of reads) {
+    if (typeof read?.sha256 !== "string") continue;
+    const label = `required read ${read.kind} "${read.path}"`;
+    let bytes;
+    try {
+      bytes = await readFile(path.resolve(cwd, String(read.path)));
+    } catch (err) {
+      return `${label} is unreadable (${err.code ?? "error"})`;
+    }
+    const actual = createHash("sha256").update(bytes).digest("hex");
+    if (actual !== read.sha256 || (typeof read.bytes === "number" && bytes.length !== read.bytes)) {
+      return `${label} does not match its recorded sha256 ${read.sha256} (found ${actual}, ${bytes.length} bytes)`;
+    }
+  }
+  return null;
+}
 async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
@@ -331,6 +361,21 @@ async function main(argv = process.argv.slice(2)) {
         gateContextPath: contextPathArg,
         gateContextPresent: false,
         reason: `Seeded gate-context artifact missing at "${contextPathArg}" — refusing to review without the build-once neutral context bundle. Per-angle gate reviewers must run in the PR's actual worktree/head (never an isolated worktree checked out from stale main), which is where the context-builder preamble wrote this gitignored artifact.`,
+      }, false);
+    }
+    // Reference seeding: every hashed required read the builder bound into the
+    // prefix must still match, before the sentinel exists. An artifact without
+    // requiredReads (legacy or --prefix-file) has nothing to check.
+    const readFailure = await verifyRequiredReads(resolvedContextPath, cwd);
+    if (readFailure !== null) {
+      return finish({
+        ok: true,
+        fresh: false,
+        sentinelCreated: false,
+        round: round ?? null,
+        gateContextPath: contextPathArg,
+        gateContextPresent: true,
+        reason: `${readFailure} — refusing to review from missing or stale evidence. Emit a blocked result via emit-reviewer-blocked.mjs (omit --completed-angles); never judge from a summary or partial read.`,
       }, false);
     }
   }

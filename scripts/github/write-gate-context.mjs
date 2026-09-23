@@ -209,12 +209,12 @@ Optional:
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
   --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
-  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
+  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing evidence file. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
   --validation-posture <text>    Short description of the validation posture
-  --pr-body <text>               PR description text, inlined into the rendered briefing prefix. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
-  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the prefix entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
+  --pr-body <text>               PR description text, inlined into the rendered briefing evidence file. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
+  --issue-body <text>            Linked-issue body text, inlined into the briefing evidence file under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the prefix entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
-  --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
+  --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as a required read (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
@@ -722,6 +722,14 @@ export function buildGateDiffPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) 
 // `verify-fresh-review-context.mjs --prefix-file` agree on the path.
 export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".briefing-prefix.txt" });
+}
+
+// Deterministic path for the referenced evidence file: the PR/issue bodies,
+// the diff (inline up to the cap, else a pointer), the changed-files summary
+// and the validation pointer. The briefing prefix binds it by sha256 in its
+// `## Required reads` manifest; reviewers read it in full.
+export function buildGateBriefingEvidencePath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".briefing-evidence.txt" });
 }
 
 // Deterministic path for a per-scope briefing companion file (AC3): a
@@ -1244,7 +1252,7 @@ function renderTokenDisciplineSection(contextPath) {
     "",
     "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
     `- Read the gate-context artifact that way, e.g. \`jq '{resolvedAngles, scope}' "${contextPathDisplay}"\`.`,
-    "- This briefing already carries the diff it scopes (or a pointer to it) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior already shown above.",
+    "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior you already read there.",
     "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
     "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
   ].join("\n");
@@ -1276,68 +1284,54 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
 }
 
 /**
+ * Render one `## Required reads` manifest line. `read.path` is stored
+ * cwd-relative (or absolute) and rendered worktree-absolute. Shared with the
+ * fan-out emitter's per-unit read so both render the same line shape.
+ * @param {{ kind: string, path: string, sha256?: string, bytes?: number, required: boolean }} read
+ * @param {string} worktreeRoot
+ * @returns {string}
+ */
+export function renderRequiredReadLine(read, worktreeRoot) {
+  const identity = typeof read.sha256 === "string" ? ` (sha256 ${read.sha256}, ${read.bytes} bytes)` : "";
+  return `- ${read.required ? "required" : "optional"} ${read.kind}: \`${path.resolve(worktreeRoot, read.path)}\`${identity}`;
+}
+
+function renderRequiredReadsSection(requiredReads, worktreeRoot) {
+  const reads = Array.isArray(requiredReads) ? requiredReads : [];
+  return [
+    "## Required reads",
+    "",
+    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. `optional` entries are for widening only. Your angle section may name one more required read.",
+    "",
+    ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
+  ].join("\n");
+}
+
+/**
  * Render the invariant briefing-prefix text (GATE-EXEC-BRIEFING-PREFIX):
  * header (repo/PR/head/gate/worktree + the mandatory verify-fresh-review-context.mjs
- * instruction), reviewer token discipline, PR body, linked-issue body (when
- * present), the full diff at the reviewed head (inlined up to `capBytes`, else
- * a pointer to `diffPath`), and a changed-files/adjacent-code summary, in that
- * fixed order. Pure and deterministic: identical input always renders
- * identical bytes. The CLI resolves live PR/issue bodies from GitHub before
- * calling this, so a same-head rebuild after a live description edit yields
- * DIFFERENT prefix bytes — a conductor MUST NOT rebuild the context while reviewers
- * for that head are still running (GATE-EXEC-BRIEFING-PREFIX in the
- * gate-review sub-loop contract).
- *
- * prBody/issueBody/issueSections/diffOutput are untrusted GitHub text (PR
- * author or linked-issue author controlled) and are each wrapped in their own
- * fenced code block, sized per pickFence(). A fenced block renders as inert
- * literal text, so a hostile body cannot forge a `##` heading (e.g. a second
- * "## Diff at reviewed head" or "## Changed files" section ahead of the real
- * one) or emit either ABSENT_SENTINEL string as if it were the renderer's own
- * statement, and an unbalanced fence inside the body text cannot leak out to
- * swallow a later section. This holds for the multi-issue case too: each
- * issue's `### <label>` heading is emitted by THIS function as a plain line
- * OUTSIDE any fence, immediately followed by that issue's OWN fenced block —
- * never inside another issue's fence — so a hostile issue body cannot forge a
- * `### <label>` heading for a DIFFERENT linked issue (issueSections is
- * structured data, not a pre-joined string carrying the delimiter inside the
- * untrusted region).
+ * instruction), the cwd and findings write-path invariants, the source-read
+ * invariant, reviewer token discipline, and the `## Required reads` manifest
+ * LAST, in that fixed order. Bulk evidence (PR/issue bodies, diff, changed
+ * files, validation pointer) lives in the referenced evidence file
+ * ({@link renderBriefingEvidence}); this prefix binds it by sha256 and byte
+ * count. Pure and deterministic: identical input always renders identical
+ * bytes. The CLI resolves live PR/issue bodies from GitHub before rendering the
+ * evidence, so a same-head rebuild after a live description edit changes the
+ * evidence hash and yields DIFFERENT prefix bytes — a conductor MUST NOT
+ * rebuild the context while reviewers for that head are still running
+ * (GATE-EXEC-BRIEFING-PREFIX in the gate-review sub-loop contract).
  *
  * @param {object} input
  * @param {string} input.worktreeRoot — absolute path reviewers run in
  * @param {string} input.contextPath — the sibling JSON artifact path
  * @param {string} input.briefingPrefixPath — this rendered file's own path
- * @param {string|null} [input.prBody]
- * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. a single issue-reference label, or a comma-joined multi-issue list)
- * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
- * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
- * @param {string|null} [input.diffOutput] — full diff text, when captured
- * @param {string|null} [input.diffPath] — persisted `.diff` pointer (pointer-mode fallback)
- * @param {string[]} [input.changedFiles]
- * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output
- * @param {string|null} [input.validationResultsPath] — absolute path to the
- *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-ARTIFACT).
- *   When non-empty, ONE additional `## Validation results at this head` section is
- *   appended LAST, after the changed-files summary, without reordering or
- *   changing the fixed sections. Omitted entirely when absent.
- * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES
- * @returns {{ text: string, prefixMode: "inline"|"pointer", diffBytes: number }}
+ * @param {{ kind: string, path: string, sha256?: string, bytes?: number, required: boolean }[]} [input.requiredReads]
+ * @returns {{ text: string }}
  */
 export function renderBriefingPrefix({
-  repo, pr, gate, headSha, worktreeRoot, contextPath, briefingPrefixPath,
-  prBody = null, issueRef = null, issueBody = null, issueSections = null,
-  diffOutput = null, diffPath = null, changedFiles = [], adjacentCode = null,
-  validationResultsPath = null,
-  capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
+  repo, pr, gate, headSha, worktreeRoot, contextPath, briefingPrefixPath, requiredReads = [],
 }) {
-  const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
-  // AC8: collapse provably-pure hunk runs BEFORE the inline/pointer cap
-  // decision — the collapsed bytes are what actually get inlined, so the cap
-  // and the disclosed byte count must agree with them, not the raw diff.
-  const renderedDiff = hasDiffText ? collapsePureSubstitutionRuns(diffOutput) : null;
-  const diffBytes = hasDiffText ? Buffer.byteLength(renderedDiff, "utf8") : 0;
-  const prefixMode = hasDiffText && diffBytes > capBytes ? "pointer" : "inline";
-
   const lines = [];
   lines.push("# Gate Review Briefing — invariant prefix (GATE-EXEC-BRIEFING-PREFIX)");
   lines.push("");
@@ -1346,7 +1340,6 @@ export function renderBriefingPrefix({
   lines.push(`gate: ${gate}`);
   lines.push(`head: ${headSha}`);
   lines.push(`worktree: ${worktreeRoot}`);
-  lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   lines.push(
     `Mandatory: before doing any angle-specific work, run \`dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope <the exact --scope value your dispatch unit's angle section names> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\` once — run once for the whole dispatch unit, never once per angle in it. Refuse to proceed on contamination or a missing artifact.`,
@@ -1364,6 +1357,73 @@ export function renderBriefingPrefix({
   lines.push(renderSourceReadInvariantSection(worktreeRoot));
   lines.push("");
   lines.push(renderTokenDisciplineSection(contextPath));
+  lines.push("");
+  lines.push(renderRequiredReadsSection(requiredReads, worktreeRoot));
+  return { text: lines.join("\n") + "\n" };
+}
+
+/**
+ * Render the referenced evidence file: PR body, linked-issue body (when
+ * present), the diff at the reviewed head (inlined up to `capBytes`, else a
+ * pointer to `diffPath`), a changed-files/adjacent-code summary, and the
+ * validation pointer, in that fixed order. The briefing prefix binds this
+ * file by sha256 in its `## Required reads`; reviewers read it in full.
+ * Pure and deterministic.
+ *
+ * prBody/issueBody/issueSections/diffOutput are untrusted GitHub text (PR
+ * author or linked-issue author controlled) and are each wrapped in their own
+ * fenced code block, sized per pickFence(). A fenced block renders as inert
+ * literal text, so a hostile body cannot forge a `##` heading (e.g. a second
+ * "## Diff at reviewed head" or "## Changed files" section ahead of the real
+ * one) or emit either ABSENT_SENTINEL string as if it were the renderer's own
+ * statement, and an unbalanced fence inside the body text cannot leak out to
+ * swallow a later section. This holds for the multi-issue case too: each
+ * issue's `### <label>` heading is emitted by THIS function as a plain line
+ * OUTSIDE any fence, immediately followed by that issue's OWN fenced block —
+ * never inside another issue's fence — so a hostile issue body cannot forge a
+ * `### <label>` heading for a DIFFERENT linked issue (issueSections is
+ * structured data, not a pre-joined string carrying the delimiter inside the
+ * untrusted region).
+ *
+ * @param {object} input
+ * @param {string|null} [input.prBody]
+ * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. a single issue-reference label, or a comma-joined multi-issue list)
+ * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
+ * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
+ * @param {string|null} [input.diffOutput] — full diff text, when captured
+ * @param {string|null} [input.diffPath] — persisted `.diff` pointer (pointer-mode fallback)
+ * @param {string[]} [input.changedFiles]
+ * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output
+ * @param {string|null} [input.validationResultsPath] — absolute path to the
+ *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-ARTIFACT).
+ *   When non-empty, ONE additional `## Validation results at this head` section is
+ *   appended LAST. Omitted entirely when absent.
+ * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES
+ * @returns {{ text: string, prefixMode: "inline"|"pointer", diffBytes: number }}
+ */
+export function renderBriefingEvidence({
+  repo, pr, gate, headSha,
+  prBody = null, issueRef = null, issueBody = null, issueSections = null,
+  diffOutput = null, diffPath = null, changedFiles = [], adjacentCode = null,
+  validationResultsPath = null,
+  capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
+}) {
+  const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
+  // AC8: collapse provably-pure hunk runs BEFORE the inline/pointer cap
+  // decision — the collapsed bytes are what actually get inlined, so the cap
+  // and the disclosed byte count must agree with them, not the raw diff.
+  const renderedDiff = hasDiffText ? collapsePureSubstitutionRuns(diffOutput) : null;
+  const diffBytes = hasDiffText ? Buffer.byteLength(renderedDiff, "utf8") : 0;
+  const prefixMode = hasDiffText && diffBytes > capBytes ? "pointer" : "inline";
+
+  const lines = [];
+  lines.push("# Gate Review Briefing — referenced evidence (GATE-EXEC-BUILD-ONCE-SEED)");
+  lines.push("");
+  lines.push(`repo: ${repo}`);
+  lines.push(`pr: #${pr}`);
+  lines.push(`gate: ${gate}`);
+  lines.push(`head: ${headSha}`);
+  lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   lines.push("## PR body");
   lines.push("");
@@ -1461,20 +1521,20 @@ export function renderBriefingPrefix({
  * same context for an angle whose configured `scope` is not "full" (see
  * GATE_ANGLE_SCOPES). Always carries the PR body, linked-issue body/sections,
  * and the validation-results pointer (a narrow angle still needs its
- * mandatory inputs — AC1) plus a pointer BACK to the full byte-identical
- * prefix so a reviewer can always widen. The diff itself differs by scope:
+ * mandatory inputs — AC1) plus a pointer BACK to the full referenced
+ * evidence file so a reviewer can always widen. The diff itself differs by scope:
  * - "changed-files": the full diff (AC8-collapsed), same cap/pointer
- *   behavior as the full prefix, but WITHOUT the adjacent-code bundle or the
- *   full prefix's "Changed files + adjacent-code summary" section (the diff
+ *   behavior as the full evidence file, but WITHOUT the adjacent-code bundle or the
+ *   full evidence file's "Changed files + adjacent-code summary" section (the diff
  *   text itself still names every changed file).
  * - "docs-only": only doc-file hunks (classifyFile === "docs"), AC8-collapsed,
  *   always inlined (doc-only slices are bounded by definition).
- * Pure and deterministic, mirroring renderBriefingPrefix's guarantee: same
+ * Pure and deterministic, mirroring renderBriefingEvidence's guarantee: same
  * input renders the same bytes.
  *
  * @param {"changed-files"|"docs-only"} scope
  * @param {object} input
- * @param {string} input.briefingPrefixPath — the full prefix's own path, for the widen-back pointer
+ * @param {string} input.evidencePath — the full referenced evidence file, for the widen-back pointer
  * @param {string|null} [input.contextPath] — the sibling JSON context-artifact path, for the widen-back pointer
  * @param {string|null} [input.worktreeRoot] — absolute path of the worktree at the reviewed head, stamped into the source-read invariant section (mirrors the full prefix's `worktree:` line so a scoped reviewer need not widen just to learn the tree)
  * @param {string|null} [input.prBody]
@@ -1488,7 +1548,7 @@ export function renderBriefingPrefix({
  * @returns {{ text: string }}
  */
 export function renderScopedBriefingVariant(scope, {
-  repo, pr, gate, headSha, briefingPrefixPath, contextPath = null, worktreeRoot = null,
+  repo, pr, gate, headSha, evidencePath, contextPath = null, worktreeRoot = null,
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
   validationResultsPath = null,
@@ -1507,7 +1567,7 @@ export function renderScopedBriefingVariant(scope, {
   lines.push(`scope: ${scope}`);
   lines.push("");
   lines.push(
-    `This is a narrowed companion to the full byte-identical briefing prefix, which always stays available at ${briefingPrefixPath} — read it directly to widen scope any time (AC1: a scoped briefing never loses access to the full bundle).`,
+    `This is a narrowed companion to the full referenced evidence file, which always stays available at ${evidencePath} — read it directly to widen scope any time (AC1: a scoped briefing never loses access to the full bundle).`,
   );
   // GATE-EXEC-BRIEFING-PREFIX: a scoped variant must ALSO link scope.diffPath
   // and the context artifact, unconditionally — not only in the changed-files
@@ -2201,8 +2261,9 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
 /**
  * Write both the JSON context artifact AND its sibling rendered briefing
  * prefix (GATE-EXEC-BRIEFING-PREFIX): the byte-identical invariant block every
- * per-angle reviewer of this gate pass is seeded with. The prefix's
- * `prefixMode` (inline|pointer, from the diff-size cap; or file, when
+ * per-angle reviewer of this gate pass is seeded with, plus the referenced
+ * evidence file the prefix binds by sha256 in `artifact.requiredReads`. The
+ * evidence `prefixMode` (inline|pointer, from the diff-size cap; or file, when
  * `--prefix-file` records an orchestrator-authored prefix verbatim) is
  * recorded on the JSON artifact so both files stay in sync.
  *
@@ -2215,7 +2276,7 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  *   run-gate-validation.mjs artifact; fails closed when missing/unreadable —
  *   see the CLI's `--validation-results` doc above).
  * @param {{ repoRoot?: string }} [runtime]
- * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file", warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
+ * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, evidencePath: string|null, prefixHash: string, prefixMode: "inline"|"pointer"|"file", warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
  */
 export async function writeGateContext(options, { repoRoot = process.cwd() } = {}) {
   // Validate/dedupe options.angles BEFORE any file write. The CLI path
@@ -2252,6 +2313,13 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     tmpRoot: options.tmpRoot || "tmp",
   });
   const briefingPrefixPath = buildGateBriefingPrefixPath({
+    repo: options.repo,
+    pr: options.pr,
+    gate: options.gate,
+    headSha: options.headSha,
+    tmpRoot: options.tmpRoot || "tmp",
+  });
+  const evidencePath = buildGateBriefingEvidencePath({
     repo: options.repo,
     pr: options.pr,
     gate: options.gate,
@@ -2312,10 +2380,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
   }
 
+  let validationBytes = null;
   if (typeof options.validationResultsPath === "string" && options.validationResultsPath.length > 0) {
     const resolvedValidationResultsPath = path.resolve(repoRoot, options.validationResultsPath);
     try {
-      await readFile(resolvedValidationResultsPath);
+      validationBytes = await readFile(resolvedValidationResultsPath);
     } catch (err) {
       throw new Error(`GATE-EXEC-VALIDATION-ARTIFACT: --validation-results ${JSON.stringify(options.validationResultsPath)} is unreadable: ${err?.message ?? err}`);
     }
@@ -2332,6 +2401,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // before.
   let prefixBytes;
   let prefixMode;
+  let pendingEvidence = null;
+  let requiredReads = null;
   // AC3: scope.<name> -> emitted companion-file path. Only built in
   // self-rendered mode — under --prefix-file the CLI never resolves
   // prBody/issueBody, so a variant rendered here would carry the
@@ -2375,14 +2446,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     const inlineDiffOutput = typeof options.diffOutput === "string" && options.diffOutput.length > 0
       ? filterDiffForInline(options.diffOutput, { excludeGlobs: options.diffExcludeGlobs ?? [] }).filteredDiff
       : (options.diffOutput ?? null);
-    const rendered = renderBriefingPrefix({
+    const evidence = renderBriefingEvidence({
       repo: options.repo,
       pr: options.pr,
       gate: options.gate,
       headSha: options.headSha,
-      worktreeRoot: path.resolve(repoRoot),
-      contextPath,
-      briefingPrefixPath,
       prBody: options.prBody ?? null,
       issueRef: options.acceptanceCriteria ?? null,
       issueBody: options.issueBody ?? null,
@@ -2393,8 +2461,38 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       adjacentCode: options.adjacentCode ?? null,
       validationResultsPath: options.validationResultsPath ?? null,
     });
+    prefixMode = evidence.prefixMode;
+    pendingEvidence = { path: evidencePath, text: evidence.text };
+    // Reference seeding: the prefix binds every bulk artifact by sha256 and
+    // byte count, so the sentinel's prefix-hash check and the
+    // no-rebuild-mid-fan-out guard cover the referenced bytes transitively.
+    // The context JSON carries no hash because it embeds the prefix identity.
+    const hashed = (kind, readPath, bytes, required) => ({
+      kind, path: readPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes), required,
+    });
+    requiredReads = [hashed("evidence", evidencePath, evidence.text, true)];
+    if (options.diffToWrite && options.diffPath) {
+      // The filtered, collapsed diff inside the evidence file is the review
+      // surface; the full `.diff` is required only when the evidence points to it.
+      requiredReads.push(hashed("diff", options.diffPath, options.diffToWrite.text, prefixMode === "pointer"));
+    }
+    if (validationBytes !== null) {
+      const relative = path.relative(path.resolve(repoRoot), options.validationResultsPath);
+      const storedPath = relative.startsWith("..") || path.isAbsolute(relative) ? options.validationResultsPath : relative;
+      requiredReads.push(hashed("validation", storedPath, validationBytes, true));
+    }
+    requiredReads.push({ kind: "context", path: contextPath, required: false });
+    const rendered = renderBriefingPrefix({
+      repo: options.repo,
+      pr: options.pr,
+      gate: options.gate,
+      headSha: options.headSha,
+      worktreeRoot: path.resolve(repoRoot),
+      contextPath,
+      briefingPrefixPath,
+      requiredReads,
+    });
     prefixBytes = Buffer.from(rendered.text, "utf8");
-    prefixMode = rendered.prefixMode;
 
     // AC3: render one companion file per DISTINCT non-"full" scope actually
     // declared by this round's resolved angles (never every GATE_ANGLE_SCOPES
@@ -2415,7 +2513,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           pr: options.pr,
           gate: options.gate,
           headSha: options.headSha,
-          briefingPrefixPath,
+          evidencePath,
           contextPath,
           worktreeRoot: path.resolve(repoRoot),
           prBody: options.prBody ?? null,
@@ -2660,11 +2758,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     validationPosture: options.validationPosture ?? null,
     priorDispositions,
   });
-  const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }), loggedAt };
+  const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }), ...(requiredReads ? { requiredReads } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files
-  // are unchanged. A filtered/pointer diff can change without changing the prefix.
+  // are unchanged on disk (the prefix hash-binds the evidence and full diff).
   let markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
-  const referencedWrites = [...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : [])];
+  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : [])];
   for (const pending of referencedWrites) {
     if (!markerUnchanged) break;
     try {
@@ -2688,6 +2786,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         return await writeGateContext({ ...options, diffPath: null, diffToWrite: null }, { repoRoot });
       }
     }
+    if (pendingEvidence) await writeFile(path.resolve(repoRoot, pendingEvidence.path), pendingEvidence.text, "utf8");
     for (const [scope, variant] of pendingVariants) {
       try {
         await writeFile(path.resolve(repoRoot, variant.path), variant.text, "utf8");
@@ -2721,6 +2820,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     path: contextPath,
     artifact,
     prefixPath: briefingPrefixPath,
+    evidencePath: pendingEvidence ? evidencePath : null,
     prefixHash,
     prefixMode,
     volatilePath,
@@ -2750,14 +2850,14 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string[]} [input.touchedFiles]
  * @param {string|null} [input.acceptanceCriteria]
  * @param {string|null} [input.validationPosture]
- * @param {string|null} [input.prBody] — PR description text, inlined into the rendered briefing prefix
+ * @param {string|null} [input.prBody] — PR description text, inlined into the rendered briefing evidence file
  * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
  * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the preflight; null/omitted = unexposed (proceed, no shortfall proven)
  * @param {string[]|null} [input.carriedAngles] — angle names the fail-closed Phase 1.2 carry-forward seam (resolve-angle-carry-forward.mjs) has proven carried from a prior clean head; excluded from the preflight's `requiredReviewers`/`pendingGroups` alongside `completedAngles`; null/omitted = no carried angles known
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
- * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object, warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
+ * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, evidencePath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object, warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
  *   prefixMode is never "file" here — this programmatic entrypoint never threads a
  *   `prefixFile` into its internal writeGateContext() call, so it always self-renders.
  *   "file" mode is CLI-only (main()'s `--prefix-file` flag).

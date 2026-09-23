@@ -59,8 +59,9 @@ Read [Gate-review sub-loop contract](../docs/gate-review-sub-loop-contract.md) b
    `dev-loops:review` persona in scoped angle-review mode
    (`agents/review.agent.md`, generated to `.claude/agents/review.md`),
    spawned via the plain Agent tool, NOT a general-purpose agent — per
-   resolved dispatch unit (`resolveFanoutGroups`), each seeded with the
-   identical neutral bundle plus its angle(s) — unchanged from draft/
+   resolved dispatch unit (`resolveFanoutGroups`), each given its bounded
+   work order, which references the identical neutral evidence and carries
+   its angle prompts — unchanged from draft/
    pre-approval fan-out; no new reviewer angles, no bespoke review agent.
 4. **Phase 3 — fan-in + post.** `node scripts/loop/consolidate-fanin.mjs
    --gate review [...] --emit-plan <emit-plan-path> --ledger-out <path>`

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -800,6 +801,74 @@ test("verify-fresh-review-context reports the validated repo root on fresh runs 
     const retryOut = JSON.parse(retried.stdout.trim());
     assert.equal(retryOut.sameHeadRetry, true);
     assert.equal(retryOut.repoRoot, await realpath(tmpDir));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+async function seedRequiredReads(tmpDir) {
+  const ctxRelDir = "tmp/gate-context/owner-repo/pr-1";
+  await mkdir(path.join(tmpDir, ctxRelDir), { recursive: true });
+  const files = {
+    evidence: [`${ctxRelDir}/draft_gate-abc1234.briefing-evidence.txt`, "## PR body\nevidence\n"],
+    diff: [`${ctxRelDir}/draft_gate-abc1234.diff`, "diff --git a/x b/x\n"],
+    validation: [`${ctxRelDir}/draft_gate-abc1234.validation.json`, "{\"allPassed\":true}\n"], // secret-scan:allow fixture artifact path (not a secret)
+  };
+  const requiredReads = [];
+  for (const [kind, [rel, text]] of Object.entries(files)) {
+    await writeFile(path.join(tmpDir, rel), text, "utf8");
+    requiredReads.push({ kind, path: rel, sha256: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text), required: kind !== "diff" });
+  }
+  const ctxRelPath = `${ctxRelDir}/draft_gate-abc1234.json`; // secret-scan:allow fixture artifact path (not a secret)
+  requiredReads.push({ kind: "context", path: ctxRelPath, required: false });
+  await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify({ requiredReads }) + "\n", "utf8");
+  return { ctxRelPath, files };
+}
+
+test("verify-fresh-review-context --context-path verifies every hashed required read before creating the sentinel", async () => {
+  const cases = [
+    ["tampered evidence", async (tmpDir, files) => writeFile(path.join(tmpDir, files.evidence[0]), "## PR body\nedited\n", "utf8"), /evidence/],
+    ["deleted diff", async (tmpDir, files) => rm(path.join(tmpDir, files.diff[0])), /diff/],
+    ["stale validation", async (tmpDir, files) => writeFile(path.join(tmpDir, files.validation[0]), "{\"allPassed\":false}\n", "utf8"), /validation/],
+  ];
+  for (const [label, breakRead, namePattern] of cases) {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+    try {
+      const { ctxRelPath, files } = await seedRequiredReads(tmpDir);
+      await breakRead(tmpDir, files);
+      const result = runScript(["--scope", "draft-gate-coverage", "--context-path", ctxRelPath, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
+      assert.equal(result.status, 1, `${label}: ${result.stderr}`);
+      const output = JSON.parse(result.stdout.trim());
+      assert.equal(output.fresh, false, label);
+      assert.equal(output.sentinelCreated, false, label);
+      assert.match(output.reason, /required read/, label);
+      assert.match(output.reason, namePattern, label);
+      const sentinels = (await readdir(path.join(tmpDir, "tmp"))).filter((n) => n.startsWith("checkpoint-context-sentinel"));
+      assert.deepEqual(sentinels, [], `${label}: no sentinel on a bad required read`);
+
+      // The reviewer then blocks: no completed angles means every assigned angle
+      // gets a blocked artifact, which fan-in refuses to consolidate as clean.
+      const findingsDir = path.join(tmpDir, "findings");
+      const blocked = spawnSync("node", [path.resolve("scripts/github/emit-reviewer-blocked.mjs"), "--head-sha", "b".repeat(40), "--angles", "coverage,correctness",
+        "--model-turns", "1", "--tool-calls", "1", "--findings-dir", findingsDir], { encoding: "utf8" });
+      assert.equal(blocked.status, 0, blocked.stderr);
+      for (const angle of ["coverage", "correctness"]) {
+        const artifact = JSON.parse(await readFile(path.join(findingsDir, `${angle}.json`), "utf8"));
+        assert.equal(artifact.verdict, "blocked");
+      }
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+});
+
+test("verify-fresh-review-context --context-path passes when every hashed required read matches", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    const { ctxRelPath } = await seedRequiredReads(tmpDir);
+    const result = runScript(["--scope", "draft-gate-coverage", "--context-path", ctxRelPath, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout.trim()).fresh, true);
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
