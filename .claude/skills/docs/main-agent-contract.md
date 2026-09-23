@@ -33,3 +33,20 @@ guard still applies (harness-agnostic). A separate, stricter main-agent read-onl
 also be re-imposed via the same hook — opt-in with `DEVLOOPS_MAIN_AGENT_READONLY=1` (default
 fail-open) — for repos that want it.
 
+## Sanctioned tooling
+
+`scripts/loop/sanctioned-commands.mjs` exports `SANCTIONED_COMMANDS`. That module is the owning
+index of the sanctioned GitHub-operation surface. It maps each operation to its wrapper script and
+lists the raw commands that are forbidden. Read the index for the current list. This section does
+not copy it.
+
+The index marks three operations as orchestrator-owned. A spawned `dev-loop` subagent never
+performs them:
+
+- Merge, through `scripts/github/merge-pr.mjs`.
+- Board status transitions, through `scripts/projects/sync-item-status.mjs` or `move-queue-item`.
+- Issue creation, through `scripts/github/create-issue.mjs`.
+
+Every `ok: true` result of `dev-loops loop startup` carries an `operatorBriefing` field that points
+to the index and to this section.
+

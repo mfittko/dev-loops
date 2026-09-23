@@ -33,6 +33,23 @@ guard still applies (harness-agnostic). A separate, stricter main-agent read-onl
 also be re-imposed via the same hook — opt-in with `DEVLOOPS_MAIN_AGENT_READONLY=1` (default
 fail-open) — for repos that want it.
 
+## Sanctioned tooling
+
+`scripts/loop/sanctioned-commands.mjs` exports `SANCTIONED_COMMANDS`. That module is the owning
+index of the sanctioned GitHub-operation surface. It maps each operation to its wrapper script and
+lists the raw commands that are forbidden. Read the index for the current list. This section does
+not copy it.
+
+The index marks three operations as orchestrator-owned. A spawned `dev-loop` subagent never
+performs them:
+
+- Merge, through `scripts/github/merge-pr.mjs`.
+- Board status transitions, through `scripts/projects/sync-item-status.mjs` or `move-queue-item`.
+- Issue creation, through `scripts/github/create-issue.mjs`.
+
+Every `ok: true` result of `dev-loops loop startup` carries an `operatorBriefing` field that points
+to the index and to this section.
+
 <!-- pi-only -->
 > **Absolute read-only boundary (Pi).** The main agent must never mutate files tracked by the repository.
 > All mutations flow through the `dev-loop` async subagent.
@@ -51,8 +68,9 @@ because "the user said yes," not because it is running from a worktree.
 
 - Read, inspect, search any repo file
 - `git worktree list`, `git status`, `git log` (read-only git). `git fetch` is also allowed (updates local refs but does not touch tracked working-tree files).
-- `gh issue view / create / edit / comment / close` (GitHub API, not file mutations)
-- `gh pr view / list` (read-only GitHub API)
+- Issue reads, edits, and comments through the wrappers in the [Sanctioned tooling](#sanctioned-tooling) index (GitHub API, not file mutations)
+- Issue creation through `scripts/github/create-issue.mjs` (orchestrator-owned)
+- PR reads through `scripts/github/view-pr.mjs` (read-only GitHub API)
 - Write to `/tmp` or other non-repo paths (e.g., issue body drafts)
 - Delegate to the `dev-loop` agent (async, with worktree cwd)
 - Report findings, ask questions, get confirmation
@@ -69,7 +87,7 @@ because "the user said yes," not because it is running from a worktree.
 
 - ALL file mutations in the repo (write, edit, delete)
 - ALL git operations (branch, commit, push)
-- ALL PR lifecycle (create, draft, review, merge)
+- ALL PR lifecycle (create, draft, review). Merge is orchestrator-owned; see [Sanctioned tooling](#sanctioned-tooling).
 - Sub-delegation to developer, fixer, review, quality, docs agents. `developer`/`quality`/`docs`/`fixer`
   sub-delegates COMMIT THEIR OWN WORK before exit (`LOCAL-COMMIT-BEFORE-EXIT`); for a session
   that pushes and opens a PR (the scope `PRE-PR-BEFORE-FIRST-PUSH` in the
@@ -109,7 +127,7 @@ asset-generation time (`harness: "claude"`).
 
 | Operation | Verdict |
 |---|---|
-| `gh issue create --title "..." --body "..."` | Allowed — mutates GitHub, not files tracked by the repository |
+| `node scripts/github/create-issue.mjs ...` | Allowed: orchestrator-owned issue creation. It mutates GitHub, not files tracked by the repository. |
 | Write to `/tmp/issue-body.md` | Allowed — outside the repo |
 | Write to `packages/core/src/foo.mjs` | **BREACH** — must delegate to `dev-loop` |
 | `git status` | Allowed — read-only |

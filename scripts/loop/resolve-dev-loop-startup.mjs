@@ -124,6 +124,11 @@ const STARTUP_RECONCILE_BUDGET_MS = 20000;
 export function shouldRunStartupReconcile(options) {
   return options.reconcile !== false && (options.issue !== undefined || options.pr !== undefined);
 }
+// Static pointer for whichever session runs `loop startup` (issue 2351). It names
+// where the sanctioned tooling surface is documented and never copies the list, so
+// a wrapper added to SANCTIONED_COMMANDS needs no edit here.
+export const OPERATOR_BRIEFING =
+  "Sanctioned GitHub-operation tooling is indexed in scripts/loop/sanctioned-commands.mjs (SANCTIONED_COMMANDS). Ownership rules, including the orchestrator-owned operations, are in skills/docs/main-agent-contract.md#sanctioned-tooling.";
 const SHARED_PUBLIC_CONTRACT = "skills/docs/public-dev-loop-contract.md";
 const SHARED_RETROSPECTIVE_CONTRACT = "skills/docs/retrospective-checkpoint-contract.md";
 const STRATEGY_REQUIRED_READS = {
@@ -539,6 +544,7 @@ function buildNeedsReconcileStartupResult(bundle, nextAction) {
     bundleKind: "needs_reconcile",
     selectedStrategy: "none",
     requiredReads: STRATEGY_REQUIRED_READS.none,
+    operatorBriefing: OPERATOR_BRIEFING,
     nextAction,
     canonicalStateSummary: summarizeCanonicalState(reconciliationBundle),
     bundle: reconciliationBundle,
@@ -1305,6 +1311,7 @@ export function buildResolveDevLoopStartupResult(input, {
     bundleKind: bundle.bundleKind,
     selectedStrategy: strategyKey,
     requiredReads: STRATEGY_REQUIRED_READS[strategyKey],
+    operatorBriefing: OPERATOR_BRIEFING,
     nextAction: bundle.nextAction,
     canonicalStateSummary: summarizeCanonicalState(bundle),
     ...(planFileIntakeState !== null ? { planFileIntakeState } : {}),
