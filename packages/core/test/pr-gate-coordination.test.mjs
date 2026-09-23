@@ -76,6 +76,11 @@ test("#2381: a clean draft_gate marker with a dangling unresolvedGateThreadCount
   assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
   assert.equal(result.draftGate.currentHeadClean, false);
   assert.equal(result.draftGate.markerCleanThreadsUnresolved, true);
+  // The reason text names "stop for the operator" as the remedy for an
+  // unanswered question that cannot be answered — that escalation must be a
+  // legal next action, not just prose with no sanctioned way to take it.
+  assert.ok(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+  assert.ok(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
 });
 
 test("#2381: a clean draft_gate marker with a dangling unresolvedGateThreadCount names the thread blocker even while CI is pending (the marker blocker is never masked by CI)", () => {

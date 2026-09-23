@@ -1271,7 +1271,14 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // resolving the thread (reject-close or fixer triage) is exactly what
     // this action already means on the post-draft path.
     if (draftGate.markerCleanThreadsUnresolved) {
-      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS]);
+      pushUnique(allowedNextActions, [
+        PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
+        // The reason text names "stop for the operator" as the remedy for an
+        // unanswered question that cannot be answered — that escalation must
+        // be a legal next action, not just prose an allowedNextActions-honoring
+        // conductor has no sanctioned way to take.
+        PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+      ]);
       pushUnique(forbiddenActions, [
         PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
         ...draftReviewForbidden,
