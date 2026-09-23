@@ -2,6 +2,10 @@
 // round must run in a dedicated, fresh-context gate coordinator agent. This
 // is the only sanctioned round shape (GATE-EXEC-GATE-COORDINATOR). Fails if
 // the rule text, its registration, or its cross-harness mirrors regress.
+import { lstatSync, readFileSync, readlinkSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { FANOUT_UNAVAILABLE_MESSAGE } from "@dev-loops/core/loop/gate-fanin";
 
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
@@ -9,6 +13,7 @@ import { assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";
 
 const CONTRACT_DOC = "skills/docs/gate-review-sub-loop-contract.md";
 const MARKER = "<!-- rule: GATE-EXEC-GATE-COORDINATOR -->";
+const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 
 // The rule's own section: from its marker to the next `### ` heading, so the
 // slice tracks the prose instead of a fixed, wrap-dependent character count.
@@ -90,13 +95,18 @@ test("the rule pins the reserved-lifecycle-writes sentence", async () => {
   );
 });
 
-test("the rule states the typed-observation stop on head change, dispatch/fan-in failure, or failed judge-pass", async () => {
+test("the rule states the typed-observation stop on head change, unrecovered dispatch failure, fan-in failure, or a failed Phase 3.5 judge rerun", async () => {
   const content = await readRepo(CONTRACT_DOC);
   const section = ruleSection(content);
   assert.match(
     section,
-    /On a head change, a\s+dispatch or fan-in failure, or a failed `judge-pass`, the gate coordinator stops and returns a\s+typed observation instead of choosing the next step/,
-    "expected the rule to state the typed-observation stop condition",
+    /On a head change, a\s+dispatch failure that `GATE-EXEC-DISPATCH-RETRY-BACKOFF` does not recover, or a fan-in\s+failure,\s+the gate coordinator stops and returns a typed observation instead of choosing the next step/,
+    "expected the rule to state the head-change/dispatch/fan-in typed-observation stop condition",
+  );
+  assert.match(
+    section,
+    /If\s+the Phase 3\.5 judge rerun at the current head also fails, the gate coordinator stops and returns\s+a typed observation/,
+    "expected the rule to state the Phase 3.5 judge-rerun-failure typed-observation stop condition",
   );
 });
 
@@ -108,7 +118,11 @@ test("the rule states the fail-closed fan-out-unavailable path and never degradi
 
   const failClosedIdx = content.indexOf("### Fail-closed: fan-out unavailable");
   assert.ok(failClosedIdx !== -1, "expected the fail-closed fan-out-unavailable section");
-  const failClosedSection = content.slice(failClosedIdx, failClosedIdx + 2400);
+  const nextSubheadingIdx = content.indexOf("\n### ", failClosedIdx + 1);
+  const nextHeadingIdx = content.indexOf("\n## ", failClosedIdx + 1);
+  const candidates = [nextSubheadingIdx, nextHeadingIdx].filter((idx) => idx !== -1);
+  const failClosedEnd = candidates.length === 0 ? content.length : Math.min(...candidates);
+  const failClosedSection = content.slice(failClosedIdx, failClosedEnd);
   const quoted = failClosedSection.match(/> \*\*(.+)\*\*/);
   assert.ok(quoted, "expected the fail-closed section to quote FANOUT_UNAVAILABLE_MESSAGE");
   assert.equal(
@@ -160,13 +174,42 @@ test("the Claude surfaces mirror the rule id and gate-coordinator wording", asyn
   );
 });
 
-test("the Pi surface (source files Pi reads through its symlinks) carries the same rule id", async () => {
-  // Pi reads agents/skills through .pi/agents and .pi/skills symlinks. Read
-  // the source paths directly rather than depending on the symlinks existing
-  // in this checkout/worktree.
-  const piAgentSource = await readRepo("agents/dev-loop.agent.md");
-  assert.match(piAgentSource, /GATE-EXEC-GATE-COORDINATOR/, "expected agents/dev-loop.agent.md to link the rule");
+// Pi reads agents/skills through the tracked .pi/agents -> ../agents and
+// .pi/skills -> ../skills symlinks, never the source paths directly. A test
+// that only re-reads agents/dev-loop.agent.md and the contract source (also
+// asserted above) proves nothing about the Pi read path. Assert the symlinks
+// resolve to the expected targets, then read THROUGH them, so a broken or
+// re-pointed symlink fails this test instead of silently passing.
+test("the Pi surface (agents/skills reached through the tracked .pi symlinks) carries the same rule id", () => {
+  const piAgentsLink = path.join(repoRoot, ".pi", "agents");
+  const piSkillsLink = path.join(repoRoot, ".pi", "skills");
 
-  const piContractSource = await readRepo(CONTRACT_DOC);
-  assert.match(piContractSource, /GATE-EXEC-GATE-COORDINATOR/, "expected the contract source to carry the rule id");
+  assert.ok(
+    lstatSync(piAgentsLink).isSymbolicLink(),
+    "expected .pi/agents to be a symlink (tracked in git); it must exist in this checkout",
+  );
+  assert.equal(readlinkSync(piAgentsLink), "../agents", "expected .pi/agents to point at ../agents");
+
+  assert.ok(
+    lstatSync(piSkillsLink).isSymbolicLink(),
+    "expected .pi/skills to be a symlink (tracked in git); it must exist in this checkout",
+  );
+  assert.equal(readlinkSync(piSkillsLink), "../skills", "expected .pi/skills to point at ../skills");
+
+  const piAgentContent = readFileSync(path.join(piAgentsLink, "dev-loop.agent.md"), "utf8");
+  assert.match(
+    piAgentContent,
+    /GATE-EXEC-GATE-COORDINATOR/,
+    "expected agents/dev-loop.agent.md, read through .pi/agents, to link the rule",
+  );
+
+  const piContractContent = readFileSync(
+    path.join(piSkillsLink, "docs", "gate-review-sub-loop-contract.md"),
+    "utf8",
+  );
+  assert.match(
+    piContractContent,
+    /GATE-EXEC-GATE-COORDINATOR/,
+    "expected the contract doc, read through .pi/skills, to carry the rule id",
+  );
 });

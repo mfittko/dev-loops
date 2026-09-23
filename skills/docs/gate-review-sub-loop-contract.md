@@ -68,21 +68,26 @@ Phase 3 fan-in and durable ledger write, the Phase 3.5 judge, and `judge-pass`. 
 this contract means the gate coordinator. The dev-loop coordinator dispatches the gate
 coordinator with the round's arguments, including the prior head for this gate that it keeps in
 run state, and awaits it with a blocking join (`END-TURN-AND-AWAIT-WAKE` in
-[Anti-patterns](./anti-patterns.md)). It never runs these steps in its own context. The gate
+[Anti-patterns](./anti-patterns.md)). The gate coordinator reads the prior rounds' ledgers,
+judge verdicts, and prior-approvals record for this gate from their deterministic on-disk paths,
+keyed by the prior heads the dev-loop coordinator passes in the dispatch arguments, so
+`GATE-EXEC-JUDGE-NOT-FRESH` inputs and `judge-pass`'s `--prior-approvals` survive the fresh
+context. It never runs these steps in its own context. The gate
 coordinator returns only the round's typed result: the verdict, the severity counts, the fan-in
 output path, the durable findings-log path, the act-list path, and the judge summary. Reviewer
 and judge outputs stay in the gate coordinator's context and never propagate to the dev-loop
 coordinator. The gate coordinator never posts the verdict comment, flips ready, pushes, or
 merges; these reserved lifecycle writes stay with the dev-loop coordinator. On a head change, a
-dispatch or fan-in failure, or a failed `judge-pass`, the gate coordinator stops and returns a
-typed observation instead of choosing the next step. The Phase 4 fixer and each Phase 5 repeat
+dispatch failure that `GATE-EXEC-DISPATCH-RETRY-BACKOFF` does not recover, or a fan-in failure,
+the gate coordinator stops and returns a typed observation instead of choosing the next step. If
+the Phase 3.5 judge rerun at the current head also fails, the gate coordinator stops and returns
+a typed observation. The Phase 4 fixer and each Phase 5 repeat
 are dispatched by the dev-loop coordinator, and each repeat round runs in a new gate coordinator.
 If a harness cannot fan out at the gate coordinator's depth, the round fails closed with
 `FANOUT_UNAVAILABLE_MESSAGE` ([below](#fail-closed-fan-out-unavailable--route-to-conductor))
 and never degrades to inline review.
 
-The standalone `review` gate (described near the top of the contract) is not a lifecycle gate;
-leave it unchanged.
+The standalone `review` gate is outside this rule's scope.
 
 ### Phase 1 — Preamble: context-builder
 
