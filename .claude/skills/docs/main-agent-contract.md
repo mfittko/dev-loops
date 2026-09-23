@@ -26,10 +26,32 @@ delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verif
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
 `pnpm`, inline — delegate the run to a fresh worker subagent, which reports back a compact
 pass/fail plus any failing-test names, or, when checking a pushed commit, prefer CI's structured
-conclusion (`gh pr checks` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
+conclusion (`scripts/github/probe-ci-status.mjs` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
 same opt-in `PreToolUse` Bash gate hook and the same `DEVLOOPS_COORDINATOR_READONLY=1` flag; a
 worker subagent's verify/build run is unaffected. The draft-gate `gh pr ready`
 guard still applies (harness-agnostic). A separate, stricter main-agent read-only boundary can
 also be re-imposed via the same hook — opt-in with `DEVLOOPS_MAIN_AGENT_READONLY=1` (default
 fail-open) — for repos that want it.
+
+## Sanctioned tooling
+
+`scripts/loop/sanctioned-commands.mjs` exports `SANCTIONED_COMMANDS`. That module is the owning
+index of the sanctioned GitHub-operation surface. It maps each operation to its wrapper script and
+lists the raw commands that are forbidden. Read the index for the current list. This section does
+not copy it.
+
+The `SANCTIONED_COMMANDS` index marks three operations as orchestrator-owned. A spawned `dev-loop`
+subagent routes them to the orchestrator:
+
+- Merge, through `scripts/github/merge-pr.mjs`.
+- Board status transitions, through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs`.
+- Issue creation, through `scripts/github/create-issue.mjs`.
+
+Known gaps outside this contract's current scope still create issues directly with raw
+`gh issue create`. They include the epic-decomposition step in `skills/docs/issue-intake-procedure.md`,
+the child-issue creation step in `skills/docs/sub-issue-tree-contract.md`, and the issue-creation
+guidance in `AGENTS.md`.
+
+Every `ok: true` result of `dev-loops loop startup` carries an `operatorBriefing` field that points
+to the index and to this section.
 
