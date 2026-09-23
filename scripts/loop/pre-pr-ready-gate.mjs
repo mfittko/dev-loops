@@ -6,6 +6,7 @@ import {
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchDraftGateEvidence } from "../github/_gate-finding-surface.mjs";
+import { describeUnresolvedGateThreadReasons } from "../github/ready-for-review.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
@@ -155,10 +156,13 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
         ? `PR #${options.pr} draft_gate evidence exists but does not match current head ${shortSha}. Re-run draft gate for the current head.`
         : `No visible clean draft_gate checkpoint verdict found on PR #${options.pr} for head ${shortSha}. Run the draft gate review and post a clean verdict before marking ready for review.`;
     } else {
-      // Verdict is clean, but gate-authored threads remain unresolved.
+      // Verdict is clean, but gate-authored threads remain unresolved. Same
+      // per-blocking-reason remedy text ready-for-review.mjs's own refusal
+      // uses (ADR 0088) — this raw `gh pr ready` path must never name a
+      // remedy that cannot actually clear the reported count either.
       const threadReason = gate.unresolvedGateThreadCount === -1
         ? "could not read review-thread state from GitHub; re-run when API connectivity is restored"
-        : `${gate.unresolvedGateThreadCount} unresolved gate-authored review thread(s) remain; run the disposition pass (close-gate-findings) + fixer triage to resolve (fix-close or defer-close) every gate-authored thread before ready-for-review`;
+        : `${gate.unresolvedGateThreadCount} unresolved gate-authored review thread(s) remain: ${describeUnresolvedGateThreadReasons(gate.unresolvedGateThreadBreakdown, gate.unresolvedGateThreadCount)}`;
       reason = `PR #${options.pr} draft_gate verdict is clean for head ${shortSha} but ${threadReason}.`;
     }
     return {
