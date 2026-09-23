@@ -24,11 +24,18 @@ function mockRunChild(responses) {
       throw new Error(`Unexpected gh call #${callIndex + 1} (only ${responses.length} mocked)`);
     }
     const resp = responses[callIndex++];
+    if (resp.raw) return resp.raw;
     if (resp.error) {
       return { code: 1, stdout: "", stderr: resp.error };
     }
     return { code: 0, stdout: JSON.stringify(resp.payload), stderr: "" };
   };
+}
+
+// Real `gh api graphql` exits 1 when the response has GraphQL errors, but
+// still prints the JSON payload on stdout.
+function ghNotFound(payload, stderr) {
+  return { raw: { code: 1, stdout: JSON.stringify(payload), stderr: `gh: ${stderr}` } };
 }
 
 // Variant of mockRunChild that records every gh invocation so tests can assert
@@ -550,14 +557,14 @@ describe("move-queue-item", () => {
     // GitHub's ProjectV2.items listing can lag by hours and omit newly added
     // items. The move must find them from the issue side or by node, so the
     // listing is never queried.
-    const listingQueries = (calls) => calls.filter((c) => c.query && c.query.includes("items(first"));
+    const listingQueries = (calls) => calls.filter((c) => c.query && c.query.includes("orderBy:{field:POSITION"));
 
     function responsesWith(itemPayload, extra = [{ payload: updateItemFieldResponse() }]) {
       return [
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
-        { payload: itemPayload },
+        itemPayload.raw ? itemPayload : { payload: itemPayload },
         ...extra,
       ];
     }
@@ -663,23 +670,41 @@ describe("move-queue-item", () => {
           { repo: "mfittko/dev-loops", project: "1", item: "2392", toColumn: "Next Up" },
           { env: {}, runChild: mockRunChild(responsesWith(issueSideItemsResponse([]), [])) },
         ),
-        (err) => err.code === "ITEM_NOT_FOUND" && /Item #2392 not found in project/.test(err.message),
+        (err) => err.code === "ITEM_NOT_FOUND"
+          && err.message === 'Item #2392 not found in project "Dev Loop Queue" for repo "mfittko/dev-loops"',
       );
     });
 
-    it("maps a GraphQL NOT_FOUND on the issue number to ITEM_NOT_FOUND", async () => {
+    it("maps a GraphQL NOT_FOUND on the issue number (gh exit 1) to ITEM_NOT_FOUND", async () => {
       await assert.rejects(
         () => main(
           { repo: "mfittko/dev-loops", project: "1", item: "99999", toColumn: "Next Up" },
           {
             env: {},
-            runChild: mockRunChild(responsesWith({
+            runChild: mockRunChild(responsesWith(ghNotFound({
               data: { repository: { issueOrPullRequest: null } },
-              errors: [{ type: "NOT_FOUND", message: "Could not resolve to an issue or pull request" }],
-            }, [])),
+              errors: [{ type: "NOT_FOUND", message: "Could not resolve to an issue or pull request with the number of 99999." }],
+            }, "Could not resolve to an issue or pull request with the number of 99999."), [])),
           },
         ),
-        (err) => err.code === "ITEM_NOT_FOUND",
+        (err) => err.code === "ITEM_NOT_FOUND" && /project "Dev Loop Queue"/.test(err.message),
+      );
+    });
+
+    it("maps a GraphQL NOT_FOUND on an unknown node ID (gh exit 1) to ITEM_NOT_FOUND", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: "PVTI_bogus", toColumn: "Next Up" },
+          {
+            env: {},
+            runChild: mockRunChild(responsesWith(ghNotFound({
+              data: { node: null },
+              errors: [{ type: "NOT_FOUND", message: "Could not resolve to a node with the global id of 'PVTI_bogus'" }],
+            }, "Could not resolve to a node with the global id of 'PVTI_bogus'"), [])),
+          },
+        ),
+        (err) => err.code === "ITEM_NOT_FOUND"
+          && err.message === 'Item "PVTI_bogus" not found in project "Dev Loop Queue" for repo "mfittko/dev-loops"',
       );
     });
 

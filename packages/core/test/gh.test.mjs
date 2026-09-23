@@ -137,6 +137,40 @@ describe("gh.mjs (#1695 shared gh CLI helper extraction)", () => {
       assert.deepEqual(payload, errorsPayload);
     });
 
+    test("allowErrors:true returns the errors payload when gh exits 1 with errors JSON on stdout", async () => {
+      const errorsPayload = { data: { node: null }, errors: [{ type: "NOT_FOUND", message: "Could not resolve" }] };
+      const runChild = stubRunChild({ code: 1, stdout: JSON.stringify(errorsPayload), stderr: "gh: Could not resolve" });
+      const payload = await ghGraphql("query{viewer{id}}", {}, {}, runChild, { allowErrors: true });
+      assert.deepEqual(payload, errorsPayload);
+    });
+
+    test("allowErrors:true still throws GH_API_ERROR when gh exits 1 with non-JSON stdout", async () => {
+      const runChild = stubRunChild({ code: 1, stdout: "", stderr: "auth error" });
+      await assert.rejects(
+        () => ghGraphql("query{viewer{id}}", {}, {}, runChild, { allowErrors: true }),
+        (error) => {
+          assert.equal(error.message, "gh api graphql failed: auth error");
+          assert.equal(error.code, "GH_API_ERROR");
+          return true;
+        },
+      );
+    });
+
+    test("allowErrors:false throws GH_API_ERROR when gh exits 1 even with errors JSON on stdout", async () => {
+      const runChild = stubRunChild({
+        code: 1,
+        stdout: JSON.stringify({ errors: [{ type: "NOT_FOUND", message: "Could not resolve" }] }),
+        stderr: "gh: Could not resolve",
+      });
+      await assert.rejects(
+        () => ghGraphql("query{viewer{id}}", {}, {}, runChild),
+        (error) => {
+          assert.equal(error.code, "GH_API_ERROR");
+          return true;
+        },
+      );
+    });
+
     test("defaults allowErrors to false when the options object is omitted", async () => {
       const runChild = stubRunChild({
         code: 0,

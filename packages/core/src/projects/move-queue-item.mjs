@@ -84,7 +84,7 @@ async function main(args, { env = process.env, runChild, cwd = null } = {}) {
 
   // 4. Find the item from the issue side or by node, never from the board
   // listing: `ProjectV2.items` can lag behind GitHub and omit new items.
-  const match = await resolveProjectItem({ projectId: project.id, repo, itemRef, env, runChild: child });
+  const match = await resolveProjectItem({ projectId: project.id, projectTitle: project.title, repo, itemRef, env, runChild: child });
 
   const itemId = match.id;
   const previousColumn = statusOf(match);

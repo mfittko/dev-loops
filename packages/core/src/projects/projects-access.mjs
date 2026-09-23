@@ -272,12 +272,14 @@ async function lookupGraphql(query, vars, env, runChild) {
  *
  * @param {object} opts
  * @param {string} opts.projectId
+ * @param {string} [opts.projectTitle]  shown in ITEM_NOT_FOUND messages when present
  * @param {string} opts.repo  validated `owner/name`
  * @param {{kind:"number"|"id", value:number|string}} opts.itemRef  from parseItemRef
  * @param {object} opts.env
  * @param {Function} opts.runChild
  */
-export async function resolveProjectItem({ projectId, repo, itemRef, env, runChild }) {
+export async function resolveProjectItem({ projectId, projectTitle, repo, itemRef, env, runChild }) {
+  const projectLabel = projectTitle ?? projectId;
   if (itemRef.kind === "number") {
     const [owner, name] = repo.split("/");
     const payload = await lookupGraphql(
@@ -289,7 +291,7 @@ export async function resolveProjectItem({ projectId, repo, itemRef, env, runChi
     const nodes = payload?.data?.repository?.issueOrPullRequest?.projectItems?.nodes ?? [];
     const match = nodes.find((n) => n && n.project?.id === projectId && !n.isArchived);
     if (!match) {
-      throw itemNotFound(`Item #${itemRef.value} not found in project "${projectId}" for repo "${repo}"`);
+      throw itemNotFound(`Item #${itemRef.value} not found in project "${projectLabel}" for repo "${repo}"`);
     }
     return match;
   }
@@ -297,7 +299,7 @@ export async function resolveProjectItem({ projectId, repo, itemRef, env, runChi
   const payload = await lookupGraphql(GET_ITEM_BY_ID, { id: itemRef.value }, env, runChild);
   const node = payload?.data?.node;
   if (!node?.id || node.isArchived) {
-    throw itemNotFound(`Item "${itemRef.value}" not found in project "${projectId}" for repo "${repo}"`);
+    throw itemNotFound(`Item "${itemRef.value}" not found in project "${projectLabel}" for repo "${repo}"`);
   }
   if (node.project?.id !== projectId) {
     throw itemNotFound(

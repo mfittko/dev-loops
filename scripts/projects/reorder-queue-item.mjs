@@ -214,8 +214,8 @@ async function snapshotOrder(projectId, repo, statusFilter, env, runChild) {
 // Resolve a ref (number or item node ID) from the issue side or by node, never
 // from the board listing, which can lag behind GitHub and omit new items.
 // Project and repo scope mismatches fail closed with ITEM_NOT_FOUND.
-async function resolveRef(itemRef, { projectId, repo, env, child }) {
-  return describeItem(await resolveProjectItem({ projectId, repo, itemRef, env, runChild: child }));
+async function resolveRef(itemRef, { projectId, projectTitle, repo, env, child }) {
+  return describeItem(await resolveProjectItem({ projectId, projectTitle, repo, itemRef, env, runChild: child }));
 }
 
 // ── Exit code classification ────────────────────────────────────────────
@@ -258,7 +258,7 @@ async function mainFlagForm(args, { env, child, repo, project }) {
   let afterRef = null;
   if (args.after !== undefined) afterRef = parseItemRef(args.after, "--after");
 
-  const scope = { projectId: project.id, repo, env, child };
+  const scope = { projectId: project.id, projectTitle: project.title, repo, env, child };
   const item = await resolveRef(itemRef, scope);
 
   let afterItem = null;
@@ -328,7 +328,7 @@ async function mainSubcommand(args, { env, child, repo, project }) {
   // Resolve all referenced items up-front (fail closed before any mutation).
   // The board listing is read only for the before/after snapshot.
   const refs = positional.map((p) => parseItemRef(p, "<ref>"));
-  const scope = { projectId: project.id, repo, env, child };
+  const scope = { projectId: project.id, projectTitle: project.title, repo, env, child };
   const resolved = [];
   for (const ref of refs) resolved.push(await resolveRef(ref, scope));
 
