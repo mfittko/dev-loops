@@ -1047,6 +1047,27 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
 }
 
 /**
+ * The judge's act list: the findings this PR must still fix. Pure.
+ * @param {unknown} findings
+ * @returns {Array<object>}
+ */
+export function listOpenActItems(findings) {
+  return (Array.isArray(findings) ? findings : []).filter((f) => f && f.judgeDisposition === "act");
+}
+
+/**
+ * Compose a round's review verdict with the judge act list (ADR 0089): a
+ * non-empty act list keeps a `clean` severity verdict from `clean`. Never
+ * lowers a verdict; the blockCleanOnFindingSeverities floor already applied.
+ * @param {"clean"|"findings_present"|"blocked"} overallVerdict
+ * @param {unknown} findings
+ * @returns {"clean"|"findings_present"|"blocked"}
+ */
+export function composeReviewVerdict(overallVerdict, findings) {
+  return overallVerdict === "clean" && listOpenActItems(findings).length > 0 ? "findings_present" : overallVerdict;
+}
+
+/**
  * Map consolidated findings into the `--findings` JSON shape consumed by
  * scripts/github/write-gate-findings-log.mjs (severity, angle, summary,
  * disposition, optional files, optional line). Pure.
