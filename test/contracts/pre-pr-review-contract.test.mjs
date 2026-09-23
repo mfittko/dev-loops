@@ -163,3 +163,48 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
   assert.ok(!fullId.test(step), "SKILL pre-PR step must not embed a full model id");
   assert.ok(!namesResolvedModel(step), "SKILL pre-PR step must not name a resolved harness model id");
 });
+
+// Issue #2357: the pre-PR trigger is a session property (pushes and opens a
+// PR), not a route property. GitHub-first routes reach the same step at
+// OPS-DRAFT-FIRST-PR; the local route keeps step 11b.
+const OPS = "skills/docs/copilot-loop-operations.md";
+
+test("PRE-PR-BEFORE-FIRST-PUSH is route-neutral and names the GitHub-first placement", () => {
+  const para = ruleParagraph(readRepo(CONTRACT), "PRE-PR-BEFORE-FIRST-PUSH");
+  assert.ok(!para.includes("local-implementation session that pushes"), "scope must not be limited to local-implementation sessions");
+  assert.ok(para.includes("OPS-DRAFT-FIRST-PR"), "rule must name the GitHub-first placement");
+  assert.ok(para.includes("copilot-loop-operations.md"), "rule must link Copilot Loop Operations");
+  assert.ok(/opens no PR has no pre-PR step/.test(para), "rule must state that a session opening no PR has no pre-PR step");
+});
+
+test("OPS-DRAFT-FIRST-PR references the pre-PR review before the create-pr.mjs MUST-use line", () => {
+  const ops = readRepo(OPS);
+  const start = ops.indexOf("<!-- rule: OPS-DRAFT-FIRST-PR -->");
+  const createIdx = ops.indexOf("MUST use `node <resolved-skill-scripts>/github/create-pr.mjs --repo", start);
+  assert.ok(start !== -1 && createIdx !== -1, "OPS-DRAFT-FIRST-PR block and its create-pr.mjs line must exist");
+  const block = ops.slice(start, createIdx);
+  assert.ok(block.includes("PRE-PR-BEFORE-FIRST-PUSH"), "block must cite PRE-PR-BEFORE-FIRST-PUSH before create-pr.mjs");
+  assert.ok(block.includes("pre-pr-review-contract.md"), "block must link the pre-PR review contract before create-pr.mjs");
+});
+
+test("every PR-creating route loads a pack that carries the pre-PR step", () => {
+  const skill = readRepo("skills/dev-loop/SKILL.md");
+  const row = (route) => {
+    const line = skill.split("\n").find((l) => l.startsWith(`| \`${route}\` |`));
+    assert.ok(line, `route table must have a ${route} row`);
+    return line;
+  };
+  assert.ok(row("local_implementation").includes("../local-implementation/SKILL.md"));
+  assert.ok(readRepo(SKILL).includes("<!-- rule: LOCAL-PRE-PR-REVIEW-BEFORE-PUSH -->"));
+  for (const route of ["issue_intake", "copilot_pr_followup"]) {
+    assert.ok(row(route).includes("copilot-loop-operations.md"), `${route} must load Copilot Loop Operations`);
+  }
+  for (const route of ["external_pr_followup", "reviewer_fixer", "final_approval"]) {
+    assert.ok(row(route).includes("same as `copilot_pr_followup`"), `${route} must inherit the copilot_pr_followup pack`);
+  }
+});
+
+test("main-agent contract cites the route-neutral PRE-PR-BEFORE-FIRST-PUSH scope", () => {
+  const doc = readRepo("skills/docs/main-agent-contract.md").replace(/\s+/g, " ");
+  assert.ok(/that pushes and opens a PR \(the scope `PRE-PR-BEFORE-FIRST-PUSH`/.test(doc), "sub-delegate sentence must cite PRE-PR-BEFORE-FIRST-PUSH");
+});

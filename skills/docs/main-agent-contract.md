@@ -72,8 +72,8 @@ because "the user said yes," not because it is running from a worktree.
 - ALL PR lifecycle (create, draft, review, merge)
 - Sub-delegation to developer, fixer, review, quality, docs agents. `developer`/`quality`/`docs`/`fixer`
   sub-delegates COMMIT THEIR OWN WORK before exit (`LOCAL-COMMIT-BEFORE-EXIT`); for a session
-  that pushes and opens a PR (the scope `local-implementation` SKILL step 11b,
-  `LOCAL-PRE-PR-REVIEW-BEFORE-PUSH`, defines: tracker-backed or issue-less `--lightweight`) the
+  that pushes and opens a PR (the scope `PRE-PR-BEFORE-FIRST-PUSH` in the
+  [Pre-PR review contract](pre-pr-review-contract.md) defines, on any route) the
   first push is deferred to that step so the branch reaches origin once, already cleaned — a
   sub-delegate commits but does not push. There is no "edit here, commit there" split: an editing sub-delegate is
   never told not to commit, and a `dev-loop` session that wants a single consolidated commit
