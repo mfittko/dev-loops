@@ -4,13 +4,14 @@ import { parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import {
+  detectGrillProvenance,
   interpretRefinementGrillState,
   normalizeGrillSnapshot,
 } from "@dev-loops/core/loop/refinement-grill-state";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-const HELP = `Usage: detect-refinement-grill-state.mjs [--input <path> | --body-file <path> [--surface issue|pr|plan]]
+const HELP = `Usage: detect-refinement-grill-state.mjs [--input <path> | --body-file <path> [--surface issue|pr|plan] [--comments-file <path>]]
 Detect refinement/grill sub-loop state.
 Modes (choose exactly one):
   --input <path>                  Interpret a JSON grill snapshot from file
@@ -18,6 +19,10 @@ Modes (choose exactly one):
                                   snapshot from a markdown body on disk
 Options (body-file mode only):
   --surface issue|pr|plan         Surface the body belongs to (default: issue)
+  --comments-file <path>          JSON array of comments (or { "comments": [...] }), each a
+                                  string or an object with a string "body"; detects recorded
+                                  grill provenance (a posted "🔬 Grill / refinement results"
+                                  comment, optionally carrying a recorded bypass line)
 
 ${JQ_OUTPUT_USAGE}
 
@@ -37,6 +42,7 @@ export function parseDetectGrillCliArgs(argv) {
       input: { type: "string" },
       "body-file": { type: "string" },
       surface: { type: "string" },
+      "comments-file": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -47,6 +53,7 @@ export function parseDetectGrillCliArgs(argv) {
     inputPath: undefined,
     bodyFilePath: undefined,
     surface: undefined,
+    commentsFilePath: undefined,
     help: false,
   };
   for (const token of tokens) {
@@ -76,6 +83,10 @@ export function parseDetectGrillCliArgs(argv) {
       options.surface = surface;
       continue;
     }
+    if (token.name === "comments-file") {
+      options.commentsFilePath = requireTokenValue(token);
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t))) continue;
     throw new Error(`Unknown argument: ${token.rawName}`);
   }
@@ -86,6 +97,9 @@ export function parseDetectGrillCliArgs(argv) {
   }
   if (hasInput && options.surface !== undefined) {
     throw new Error("--surface applies only to --body-file mode");
+  }
+  if (hasInput && options.commentsFilePath !== undefined) {
+    throw new Error("--comments-file applies only to --body-file mode");
   }
   return options;
 }
@@ -104,10 +118,20 @@ export async function runCli(
   } else {
     const body = await readFile(options.bodyFilePath, "utf8");
     const surface = options.surface ?? "issue";
+    let provenance = { provenanceRecorded: false, bypass: false };
+    if (options.commentsFilePath) {
+      const commentsText = await readFile(options.commentsFilePath, "utf8");
+      const parsedComments = parseJsonText(commentsText);
+      const comments = Array.isArray(parsedComments)
+        ? parsedComments
+        : parsedComments?.comments;
+      provenance = detectGrillProvenance(comments);
+    }
     // Deterministic seed for the already-refined / zero-iteration path only: the full
     // semantic gap detection (scope/actor/decision) is the agent-layer bounded input consumed
     // at await_answers. This body-file mode computes ONLY the deterministic AC-presence signal
-    // via the single is-it-refined source of truth, detectIssueRefinementArtifact.
+    // via the single is-it-refined source of truth, detectIssueRefinementArtifact, plus the
+    // recorded-provenance signal from --comments-file (ADR 0084).
     const artifact = detectIssueRefinementArtifact({ body });
     snapshot = normalizeGrillSnapshot({
       loaded: true,
@@ -115,6 +139,8 @@ export async function runCli(
       surface,
       openGapCount: artifact.finding ? 1 : 0,
       unresolvedGapCount: 0,
+      provenanceRecorded: provenance.provenanceRecorded,
+      provenanceBypass: provenance.bypass,
     });
   }
 
@@ -126,6 +152,8 @@ export async function runCli(
       state: interpretation.state,
       allowedTransitions: interpretation.allowedTransitions,
       nextAction: interpretation.nextAction,
+      reason: interpretation.reason,
+      bypass: interpretation.bypass,
     },
     { jq: options.jq, silent: options.silent, stdout, stderr },
   );

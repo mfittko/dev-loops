@@ -50,7 +50,9 @@ Before doing anything else:
 - **PR body:** fetch the PR body via `scripts/github/view-pr.mjs` (never raw `gh`).
 - **Local-planning:** read the plan file from disk.
 
-"Is it refined" is decided by `detectIssueRefinementArtifact` (`packages/core/src/loop/issue-refinement-artifact.mjs`) — the single source of truth, same as the enqueue gate; do not add a divergent check. An already-refined artifact — the authoritative AC→DoD mapping matrix plus an explicit Non-goals section per `detectIssueRefinementArtifact` (#1951) — is a zero-iteration `grill_clean`: do not rewrite the body. A body carrying only AC/DoD checklists and no mapping matrix is NOT refined (`missing_ac_dod_matrix`) and MUST be grilled to synthesize the matrix — a matrix-missing issue can never emit `grill-clean`.
+"Is it refined" is decided by `detectIssueRefinementArtifact` (`packages/core/src/loop/issue-refinement-artifact.mjs`) — the single source of truth, same as the enqueue gate; do not add a divergent check. A body carrying only AC/DoD checklists and no mapping matrix is NOT refined (`missing_ac_dod_matrix`) and MUST be grilled to synthesize the matrix — a matrix-missing issue can never emit `grill-clean`.
+
+The zero-iteration `grill_clean` exit requires BOTH a shape-clean artifact AND recorded provenance (ADR 0084, amends ADR 0029): a `🔬 Grill / refinement results` comment already posted on the target. For **tracker-first**, fetch comments via `scripts/github/view-issue.mjs --json comments` (never raw `gh`); for **PR body**, via `scripts/github/view-pr.mjs --json comments`. A shape-clean target with no such comment is NOT a zero-iteration exit — run the full grill (Steps 2–4) anyway; a zero-gap pass still records its own provenance by posting the results comment (Step 4), stating that no gaps were found. **Local-planning** plan files have no comment surface, so they keep shape-only behavior: a shape-clean plan file is always a zero-iteration `grill_clean`, do not rewrite it.
 
 ## Step 1b — Surface external resources
 
@@ -156,7 +158,7 @@ dev-loops issue edit --repo <owner/repo> --issue <n> --body-file <tmp-body-path>
 node scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-rationale-path>
 ```
 
-Never `gh issue comment` directly, and never fold this content back into the issue body. The same `#<number>` hygiene rule (`GRILL-SUBLOOP-NO-BARE-HASH`) applies to the comment. A zero-iteration `grill_clean` target (already refined, body left unchanged) has no rationale to post and skips this step; any run that actually filled a gap MUST post the results comment.
+Never `gh issue comment` directly, and never fold this content back into the issue body. The same `#<number>` hygiene rule (`GRILL-SUBLOOP-NO-BARE-HASH`) applies to the comment. Every semantic pass (Steps 2–4 actually ran) MUST post this results comment, including a zero-gap pass that finds no gaps to fill — its comment states plainly that no gaps were found, so the pass records its own provenance and a later re-run reaches the zero-iteration exit. A pass that proceeds despite a shape-clean `detectIssueRefinementArtifact` result under explicit operator authorization records that as a `bypass: operator-authorized by <handle>` line in the comment; a normal pass (not shape-clean, or no bypass involved) carries no such line. Only the provenance-recorded zero-iteration `grill_clean` exit from Step 1 (already refined AND a results comment already posted, or a `plan` surface) has no rationale to post and skips this step.
 
 **PR-body write-back:** update the PR body via `scripts/github/edit-pr.mjs` (never raw `gh`), same replace-section semantics.
 
@@ -203,7 +205,7 @@ Before emitting the verdict for a tracker-first grill that filled at least one g
 1. The rewritten description has no `Refinement notes` / `Grill findings` / rationale narrative section.
 2. The rewritten description has no unresolved "suggested … or …" / "option A or B" marker for a gap this run decided.
 3. Neither the rewritten description nor the results comment contains a bare non-issue `#<number>`.
-4. A `🔬 Grill / refinement results` comment was actually posted (skip this check only for the zero-iteration `grill_clean` path, which has no rationale to post).
+4. A `🔬 Grill / refinement results` comment was actually posted (skip this check only for the provenance-recorded zero-iteration `grill_clean` path from Step 1, which has no rationale to post; a zero-gap semantic pass still MUST post one).
 
 After write-back (and, for tracker-first, after the above verification passes), emit the verdict line to stdout:
 

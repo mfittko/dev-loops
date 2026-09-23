@@ -39,7 +39,7 @@ Terminal states with no outgoing transitions: `grill_clean`, `needs_human_handof
 - `detect_gaps` -> `await_answers`
   - one or more answerable gaps were found
 - `detect_gaps` -> `grill_clean`
-  - detection found no open gaps (also the already-refined, zero-iteration path)
+  - detection found no open gaps AND provenance is recorded — a `plan` surface (shape-only, no comment surface), or a posted `🔬 Grill / refinement results` comment on the target (with or without a recorded bypass line). Zero open gaps with no recorded provenance stays at `detect_gaps`: the semantic pass is still owed, and it records its own provenance, including a zero-gap outcome (ADR 0084, amends ADR 0029).
 - `detect_gaps` -> `needs_human_handoff`
   - detection surfaced an uncitable gap
 - `await_answers` -> `synthesize`
@@ -64,21 +64,24 @@ Terminal states with no outgoing transitions: `grill_clean`, `needs_human_handof
 - detection: `detectRan`, `openGapCount` (answerable gaps still awaiting an answer), `unresolvedGapCount` (uncitable gaps that must hand off)
 - bounded answer input: `answersReady`, `synthesized`
 - fixed-point signals: `reGrillRan`, `reGrillFixedPoint`
+- recorded provenance (ADR 0084): `provenanceRecorded` (a `🔬 Grill / refinement results` comment is posted on the target), `provenanceBypass` (that comment also carries a recorded `bypass: operator-authorized by <handle>` line)
 
-`loadFailed` fails closed from anywhere. `unresolvedGapCount > 0` outranks every non-failure branch: an uncitable gap always drives `needs_human_handoff`, never a fabricated synthesis. The bounded answer input (`answersReady`) is consumed only at `await_answers`; the machine never advances synthesis on its own.
+`loadFailed` fails closed from anywhere. `unresolvedGapCount > 0` outranks every non-failure branch: an uncitable gap always drives `needs_human_handoff`, never a fabricated synthesis. The bounded answer input (`answersReady`) is consumed only at `await_answers`; the machine never advances synthesis on its own. `interpretRefinementGrillState` also returns `reason` (a string naming the resolved branch, `null` when not applicable) and `bypass` (boolean); both are populated only for the zero-open-gap `detect_gaps` branch (`plan_shape_only`, `provenance_recorded`, `provenance_bypass_recorded`, or `provenance_missing`) and are `null`/`false` elsewhere.
+
+The pure exported helper `detectGrillProvenance(comments)` computes `provenanceRecorded`/`provenanceBypass` from an array of comments (each a string or an object with a string `body`); a non-array input yields no provenance. The ephemeral, gitignored `tmp/issues/issue-<n>/grill/` transcript is never a comment, so it never counts as provenance.
 
 ## Detector CLI Contract
 
 `node scripts/loop/detect-refinement-grill-state.mjs` supports:
 
 - `--input <path>` (snapshot interpretation only)
-- `--body-file <path> [--surface issue|pr|plan]` (deterministic already-refined / zero-iteration seed)
+- `--body-file <path> [--surface issue|pr|plan] [--comments-file <path>]` (deterministic already-refined / zero-iteration seed)
 
-The `--body-file` mode computes only the deterministic AC-presence signal via `detectIssueRefinementArtifact` (the single is-it-refined source of truth): an already-refined body seeds `grill_clean`, a body missing AC seeds `await_answers`. The full semantic gap detection is the agent-layer bounded input consumed at `await_answers`.
+The `--body-file` mode computes the deterministic AC-presence signal via `detectIssueRefinementArtifact` (the single is-it-refined source of truth): an already-refined body with recorded provenance (or a `plan` surface) seeds `grill_clean`; a body missing AC seeds `await_answers`. `--comments-file` (a JSON array of comments, or `{ "comments": [...] }`) feeds `detectGrillProvenance` to populate `provenanceRecorded`/`provenanceBypass`; omitting it means no recorded provenance. `--surface` and `--comments-file` both apply only to `--body-file` mode and are rejected alongside `--input`. The full semantic gap detection is the agent-layer bounded input consumed at `await_answers`.
 
 Success output:
 
-- `{ "ok": true, "snapshot": { ... }, "state": "...", "allowedTransitions": [...], "nextAction": "..." }`
+- `{ "ok": true, "snapshot": { ... }, "state": "...", "allowedTransitions": [...], "nextAction": "...", "reason": "..."|null, "bypass": false }`
 
 Failure output:
 
@@ -90,7 +93,7 @@ Failure output:
 `GRILL-SUBLOOP-STATE-MACHINE`: The refinement/grill sub-loop MUST be modeled as this closed deterministic STATE+TRANSITIONS machine with a detector; iteration lives in the transition graph and the LLM answer/synthesis enters only as a bounded input consumed at the `await_answers` state, never as hidden orchestration in a deterministic coordinator script (keeps OPS-NO-INLINE-INTERPRETER clean).
 
 <!-- rule: GRILL-SUBLOOP-ITERATE-TO-CLEAN -->
-`GRILL-SUBLOOP-ITERATE-TO-CLEAN`: The grill MUST iterate detect-gaps -> answer -> synthesize -> re-grill to a fixed point, reusing the existing loop-grill gap detectors and `--auto` citability self-answer (not a parallel mechanism), and MUST reuse `detectIssueRefinementArtifact` as the single is-it-refined source of truth; an already-refined item reaches `grill_clean` in zero iterations without rewriting the body.
+`GRILL-SUBLOOP-ITERATE-TO-CLEAN`: The grill MUST iterate detect-gaps -> answer -> synthesize -> re-grill to a fixed point, reusing the existing loop-grill gap detectors and `--auto` citability self-answer (not a parallel mechanism), and MUST reuse `detectIssueRefinementArtifact` as the single is-it-refined source of truth; an already-refined item with recorded provenance (a posted `🔬 Grill / refinement results` comment, or a `plan` surface, which is shape-only) reaches `grill_clean` in zero iterations without rewriting the body (ADR 0084, amends ADR 0029).
 
 <!-- rule: GRILL-SUBLOOP-NO-EMBED-SYNTHESIS -->
 `GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`: Grill write-back MUST synthesize only the `## Acceptance criteria`, `## Definition of done`, and `## Non-goals` sections into the issue/PR/plan body (idempotent replace-section) and MUST NOT embed the raw Q&A transcript in the body; the raw transcript is written only to the gitignored, ephemeral `tmp/issues/issue-<n>/grill/` artifact.
