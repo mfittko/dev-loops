@@ -663,8 +663,7 @@ orchestrator MUST NOT manually clear sentinels between rounds or clear carried a
 sentinels. Phase 1.2 chooses retries, including eligible findings-present carries;
 retirement affects only its gate+head, never carried angles' prior-head sentinels.
 
-**Sanctioned same-head retry.** For an interrupted reviewer, harness crash or
-PR-body-only fix, use `verify-fresh-review-context.mjs --same-head-retry`
+**Sanctioned same-head retry.** For an interrupted reviewer or harness crash, use `verify-fresh-review-context.mjs --same-head-retry`
 (deprecated alias: `--pr-body-fix-retry`). It overwrites only that scope+head sentinel
 and only when supplied `--prefix-hash`/`--prefix-file` EXACTLY matches the existing
 recorded hash. The reason never affects eligibility. Missing hash or mismatch fails
@@ -672,10 +671,11 @@ closed; changed briefing bytes require retirement instead.
 
 Re-brief with the UNCHANGED invariant prefix; do not rerun `write-gate-context.mjs`.
 Other angles' sentinels remain untouched and verify against the same prefix record;
-no full re-fan or manual deletion is needed. For a PR-body fix, additionally tell
-the retried reviewer to fetch the CURRENT PR body live (for example `gh pr view`),
-because the unchanged prefix contains the old description. See the guard's `--help`
-for exact exit semantics.
+no full re-fan or manual deletion is needed. A same-head retry replays the
+build-time evidence file and known-findings snapshot, so it never sees a PR-body edit
+or a thread posted after the build. A PR-body-only fix, or a retry that must see newly
+posted threads, uses `GATE-EXEC-ROUND-RETIREMENT` (retire, then rebuild). See the
+guard's `--help` for exact exit semantics.
 
 **Sanctioned rebuild-and-retire.**
 
@@ -1604,8 +1604,9 @@ owned by the
 the context builder renders a known-findings block from `write-gate-context.mjs --known-findings`
 (`capture-review-threads.mjs` output) into the round-bound `<gate>-<headSha>.known-findings.json`
 and hash-binds it as a required read when at least one thread exists. The block stays outside the
-byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX` hashes, so the prefix hash and the
-same-head-retry sentinel (`--same-head-retry`) stay untouched by a findings post. The conductor
+byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX` hashes. The snapshot is build-time: a
+`--same-head-retry` replays it, and a retry that must see threads posted after the build uses
+`GATE-EXEC-ROUND-RETIREMENT` (retire, then rebuild). The conductor
 relays each work order's `promptPath` bytes unchanged and never appends anything after them.
 
 <!-- rule: GATE-EXEC-THREAD-DISPOSITION -->

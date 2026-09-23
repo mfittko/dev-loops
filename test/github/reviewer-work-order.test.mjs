@@ -305,7 +305,8 @@ test("work order: the worst case (maximal worktree path, every read kind, maxima
   const read = (kind, suffix, required) => ({ kind, path: artifactPath(suffix), sha256: hash, bytes: 99999999, required });
   const requiredReads = [
     read("evidence", ".briefing-evidence.txt", true),
-    read("diff", ".diff", true),
+    read("diff", ".filtered.diff", true),
+    read("raw-diff", ".diff", false),
     read("validation", ".validation.json", false),
     { kind: "context", path: artifactPath(".json"), required: false },
   ];
