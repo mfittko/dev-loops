@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +11,7 @@ import {
   fragmentBodyClosesSection,
   fragmentFormatErrors,
   isChangelogFragmentPath,
+  unreleasedFormatErrors,
 } from "../release/assemble-changelog-fragments.mjs";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
@@ -219,10 +220,17 @@ export async function main({ root, env = process.env, log = console, git = creat
     files,
   });
 
-  // Format rule for every new or changed fragment still present at HEAD. A
-  // fragment consumed into CHANGELOG.md is deleted, so history is never re-checked.
+  // A direct `## Unreleased` edit uses the same line format assembly groups by.
+  errors.push(...unreleasedFormatErrors(headChangelog).map((e) => `${CHANGELOG_PATH}: ${e}`));
+
+  // Format rule for every pending fragment at HEAD (release assembles them all)
+  // plus every fragment path in the diff (for the regular-file rule). A fragment
+  // consumed into CHANGELOG.md is deleted, so history is never re-checked.
   if (changesDirIsReal) {
-    for (const f of files.filter((file) => isChangelogFragmentPath(file))) {
+    const pending = (await readdir(path.join(root, FRAGMENTS_DIR)).catch(() => []))
+      .map((name) => `${FRAGMENTS_DIR}/${name}`);
+    const fragmentPaths = [...new Set([...files, ...pending])].filter((file) => isChangelogFragmentPath(file)).sort();
+    for (const f of fragmentPaths) {
       const stat = await lstat(path.join(root, f)).catch(() => null);
       if (!stat) continue; // deleted at HEAD
       if (!stat.isFile()) {

@@ -18,8 +18,9 @@ regular file (not a symlink).
 - Every other non-blank line is one entry: `- <user-visible effect> (#<issue-or-PR>)`.
   The link ends the line.
 - An entry is at most 200 characters and never wraps onto a continuation line.
-- An entry has no bold lead and no rule ids. It names a function or file only
-  when that name is the user-facing command or config key.
+- An entry has no bold lead.
+- Writing guidance (not enforced): an entry has no rule ids. It names a
+  function or file only when that name is the user-facing command or config key.
 - A fragment has no other heading. A level-2 `## ` heading would truncate the
   assembled release section.
 
@@ -34,8 +35,12 @@ Example:
 The changelog-completeness gate
 (`scripts/docs/validate-changelog-completeness.mjs`) accepts an added fragment
 in place of a direct `CHANGELOG.md` edit. It rejects an empty or symlinked
-fragment. It rejects any new or changed fragment that breaks the format or is
-not a regular file. Each rejection names the broken rule.
+fragment. It checks every pending fragment at HEAD against these rules:
+one-line, entry-prefix, entry-text, 200-character, no-bold-lead, link and
+section-heading. It rejects a fragment in the diff that is not a regular file.
+A direct `## Unreleased` edit must use the same line format: only `- ` entries
+and `### Added|Changed|Fixed` headings (unreleased-line rule). Each rejection
+names the broken rule.
 
 ## Release assembly
 

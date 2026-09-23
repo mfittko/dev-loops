@@ -87,6 +87,8 @@ export function fragmentFormatErrors(content) {
     }
     if (!/^- \S/.test(line)) {
       errors.push(`entry-prefix rule: an entry starts with exactly "- " and then text: ${excerpt}`);
+    } else if (line.slice(2).replace(ENTRY_LINK_RE, "").trim() === "") {
+      errors.push(`entry-text rule: an entry has text before its (#NNN) link: ${excerpt}`);
     }
     if (line.length > MAX_ENTRY_CHARS) {
       errors.push(`200-character rule: entry is ${line.length} characters: ${excerpt}`);
@@ -182,6 +184,69 @@ export function readFragments(repoRoot) {
 }
 
 /**
+ * Index of the `## Unreleased` heading (-1 when absent) and the end of its body:
+ * just before the next `## ` heading (or EOF), trailing blank lines excluded.
+ *
+ * @param {string[]} lines
+ * @returns {{ headingIdx: number, tail: number }}
+ */
+function locateUnreleased(lines) {
+  const headingIdx = lines.findIndex((l) => /^##\s+Unreleased\b/i.test(l));
+  let tail = lines.length;
+  if (headingIdx !== -1) {
+    for (let i = headingIdx + 1; i < lines.length; i += 1) {
+      if (/^##\s/.test(lines[i])) {
+        tail = i;
+        break;
+      }
+    }
+    while (tail > headingIdx + 1 && lines[tail - 1].trim() === "") tail -= 1;
+  }
+  return { headingIdx, tail };
+}
+
+/**
+ * Group `## Unreleased` body lines by section. A `### Added|Changed|Fixed` line
+ * switches section; entries before any heading are `Changed`. Every other
+ * non-blank, non-`- ` line is an error naming the unreleased-line rule.
+ *
+ * @param {string[]} bodyLines
+ * @returns {{ bySection: Map<string, string[]>, errors: string[] }}
+ */
+function groupUnreleasedLines(bodyLines) {
+  const bySection = new Map(FRAGMENT_SECTIONS.map((name) => [name, []]));
+  const errors = [];
+  let section = DEFAULT_SECTION;
+  for (const raw of bodyLines) {
+    const line = raw.trimEnd();
+    if (line === "") continue;
+    const match = SECTION_LINE_RE.exec(line);
+    if (match) section = match[1];
+    else if (line.startsWith("- ")) bySection.get(section).push(line);
+    else {
+      errors.push(
+        `unreleased-line rule: the existing "## Unreleased" section has a line that is neither a "- " entry nor a ### Added, ### Changed or ### Fixed heading: ${line.slice(0, 60)}`,
+      );
+    }
+  }
+  return { bySection, errors };
+}
+
+/**
+ * Lines in the `## Unreleased` section of a changelog that assembly cannot
+ * group. The validator and `assembleFragments` share this parsing, so a
+ * changelog the PR gate accepts never stops the release.
+ *
+ * @param {string} changelog
+ * @returns {string[]}
+ */
+export function unreleasedFormatErrors(changelog) {
+  const lines = String(changelog ?? "").split("\n");
+  const { headingIdx, tail } = locateUnreleased(lines);
+  return headingIdx === -1 ? [] : groupUnreleasedLines(lines.slice(headingIdx + 1, tail)).errors;
+}
+
+/**
  * Merge pending fragment bodies into the `## Unreleased` section, preserving
  * any existing Unreleased entries and the rest of the file. Existing entries are
  * grouped like fragments (a `### Added|Changed|Fixed` line switches section;
@@ -203,38 +268,13 @@ export function assembleFragments({ changelog, fragments }) {
 
   const consumed = frags.map((f) => f.name);
   const lines = String(changelog ?? "").split("\n");
-  const headingIdx = lines.findIndex((l) => /^##\s+Unreleased\b/i.test(l));
-
-  // Tail of the Unreleased body: just before the next `## ` heading (or EOF),
-  // with trailing blank lines left in place.
-  let tail = lines.length;
-  if (headingIdx !== -1) {
-    for (let i = headingIdx + 1; i < lines.length; i += 1) {
-      if (/^##\s/.test(lines[i])) {
-        tail = i;
-        break;
-      }
-    }
-    while (tail > headingIdx + 1 && lines[tail - 1].trim() === "") tail -= 1;
-  }
+  const { headingIdx, tail } = locateUnreleased(lines);
 
   // One heading per section, in FRAGMENT_SECTIONS order; empty sections omitted.
   // Existing Unreleased entries come first, then fragment entries.
-  const bySection = new Map(FRAGMENT_SECTIONS.map((name) => [name, []]));
-  if (headingIdx !== -1) {
-    let section = DEFAULT_SECTION;
-    for (const raw of lines.slice(headingIdx + 1, tail)) {
-      const line = raw.trimEnd();
-      if (line === "") continue;
-      const match = SECTION_LINE_RE.exec(line);
-      if (match) section = match[1];
-      else if (line.startsWith("- ")) bySection.get(section).push(line);
-      else {
-        throw new Error(
-          `the existing "## Unreleased" section has a line that is neither a "- " entry nor a ### Added, ### Changed or ### Fixed heading; fold it by hand before assembling fragments: ${line.slice(0, 60)}`,
-        );
-      }
-    }
+  const { bySection, errors } = groupUnreleasedLines(headingIdx === -1 ? [] : lines.slice(headingIdx + 1, tail));
+  if (errors.length > 0) {
+    throw new Error(`${errors[0]}; fold it by hand before assembling fragments`);
   }
   for (const f of frags) {
     const { section, lines: body } = parseFragment(f.content);

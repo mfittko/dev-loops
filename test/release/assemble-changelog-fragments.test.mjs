@@ -11,6 +11,7 @@ import {
   fragmentFormatErrors,
   isChangelogFragmentPath,
   readFragments,
+  unreleasedFormatErrors,
 } from "../../scripts/release/assemble-changelog-fragments.mjs";
 
 const CHANGELOG = `# Changelog
@@ -145,6 +146,30 @@ test("fragmentFormatErrors names the rule for each violation and passes a confor
   assert.match(fragmentFormatErrors("- __Bold__ x (#1)").join("\n"), /no-bold-lead rule/);
   assert.match(fragmentFormatErrors("-  **Bold** x (#1)").join("\n"), /entry-prefix rule/);
   assert.match(fragmentFormatErrors("-  **Bold** x (#1)").join("\n"), /no-bold-lead rule/);
+  assert.match(fragmentFormatErrors("- (#1)").join("\n"), /entry-text rule/);
+});
+
+test("fragmentFormatErrors pins the 200-character boundary", () => {
+  const exactly200 = `- ${"x".repeat(193)} (#1)`;
+  assert.equal(exactly200.length, 200);
+  assert.deepEqual(fragmentFormatErrors(exactly200), []);
+  assert.match(fragmentFormatErrors(`- ${"x".repeat(194)} (#1)`).join("\n"), /200-character rule: entry is 201 characters/);
+});
+
+test("assembleFragments files a headingless existing Unreleased entry under Changed, ahead of fragment entries", () => {
+  const { changelog } = assembleFragments({
+    changelog: "# Changelog\n\n## Unreleased\n\n- existing (#9)\n\n## 1.0.3\n\n- Old.\n",
+    fragments: [{ name: "a", content: "- new change (#10)\n" }],
+  });
+  const section = changelog.slice(changelog.indexOf("## Unreleased"), changelog.indexOf("## 1.0.3"));
+  assert.equal(section, "## Unreleased\n\n### Changed\n\n- existing (#9)\n- new change (#10)\n\n");
+});
+
+test("unreleasedFormatErrors names the rule for lines assembly cannot group", () => {
+  assert.deepEqual(unreleasedFormatErrors("## Unreleased\n\n### Fixed\n- a (#1)\n\n## 1.0.0\n\nold prose\n"), []);
+  assert.deepEqual(unreleasedFormatErrors("# Changelog\n"), []);
+  assert.match(unreleasedFormatErrors("## Unreleased\n\n* star item\n").join("\n"), /unreleased-line rule/);
+  assert.match(unreleasedFormatErrors("## Unreleased\n\n- a\n  wrapped\n").join("\n"), /unreleased-line rule/);
 });
 
 test("readFragments fails closed on a fragment that breaks the format, naming its path", () => {

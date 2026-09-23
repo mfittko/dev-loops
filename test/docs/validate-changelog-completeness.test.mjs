@@ -453,6 +453,7 @@ describe("fragment format rule", () => {
     ["a bold lead", "- **Bold lead.** A change (#1)\n", /no-bold-lead rule/],
     ["a missing link", "- A change with no link\n", /link rule/],
     ["two section headings", "### Added\n\n- A (#1)\n\n### Fixed\n\n- B (#2)\n", /section-heading rule/],
+    ["an entry with only a link", "- (#1)\n", /entry-text rule/],
   ];
   for (const [name, body, rule] of cases) {
     it(`rejects ${name} with a message naming the rule`, async () => {
@@ -503,6 +504,31 @@ describe("fragment format rule", () => {
       const log = capturingLog();
       assert.equal(await main({ root, git, env: {}, log }), 0, log.lines.join("\n"));
     }, legacy);
+  });
+
+  it("checks an unchanged pending fragment at HEAD, but not a consumed (deleted) one", async () => {
+    await withTempChangelog(async (root) => {
+      await mkdir(path.join(root, "changes"), { recursive: true });
+      await writeFile(path.join(root, "changes", "new.md"), "- Conforming note (#3)\n", "utf8");
+      await writeFile(path.join(root, "changes", "old.md"), "- **Old format.** no link\n", "utf8");
+      const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/consumed.md", "changes/new.md"],
+        diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+      });
+      const log = capturingLog();
+      assert.equal(await main({ root, git, env: {}, log }), 1);
+      const output = log.lines.join("\n");
+      assert.match(output, /changes\/old\.md: no-bold-lead rule/);
+      assert.doesNotMatch(output, /changes\/consumed\.md/);
+    });
+  });
+
+  it("rejects a direct Unreleased edit that assembly cannot group, naming the rule", async () => {
+    const wrapped = BASE_CHANGELOG.replace("- Existing entry two", "- Existing entry two\n  wraps onto a second line");
+    const { code, output } = await runWithFragment("- Conforming note (#3)\n", { changelog: wrapped });
+    assert.equal(code, 1);
+    assert.match(output, /CHANGELOG\.md: unreleased-line rule/);
   });
 });
 
