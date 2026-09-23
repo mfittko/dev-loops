@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 
 import { containsBareCopilotSummon } from "../../scripts/_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -31,6 +31,7 @@ import {
   renderFoldedFindingsBlock,
   renderInlineCommentBody,
   renderNonLocatableBlock,
+  resolveGateRound,
   updateGateReview,
 } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -870,7 +871,10 @@ test("readGateFindingsLedger normalizes the legacy severity spelling on read", a
 
 import {
   countUnresolvedGateAuthoredThreads,
+  countUnresolvedGateAuthoredThreadsBySeverity,
   countUnresolvedGateAuthoredThreadsFromRawNodes,
+  findJudgeDispositionForFingerprint,
+  parseRenderedJudgeDisposition,
 } from "../../scripts/github/_gate-finding-surface.mjs";
 
 const GATE_LOGIN = "gate-bot";
@@ -945,6 +949,264 @@ test("#1585: an empty-string login falls back to the marker-only fail-closed pro
   // "" must behave like null (marker-only: over-counts a foreign quote, blocks safely).
   assert.equal(countUnresolvedGateAuthoredThreads([thread], ""), 1);
   assert.equal(countUnresolvedGateAuthoredThreads([thread], null), 1);
+});
+
+// #2381: countUnresolvedGateAuthoredThreadsBySeverity — same predicate,
+// split into "question", "nit", and "other" (high/medium/low) buckets for
+// ready-for-review.mjs's per-reason refusal text.
+test("#2381: countUnresolvedGateAuthoredThreadsBySeverity splits question from every other severity, and the total always matches countUnresolvedGateAuthoredThreads", () => {
+  const question = thread({ body: `${buildFindingMarker({ fp: "e".repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?` });
+  const high = thread({ body: `${buildFindingMarker({ fp: "f".repeat(16), severity: "must-fix", angle: "sec", round: 1 })}\n**must-fix** (\`sec\`): x` });
+  const resolvedQuestion = thread({ body: `${buildFindingMarker({ fp: "1".repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): resolved already`, isResolved: true });
+  const threads = [question, high, resolvedQuestion];
+  const breakdown = countUnresolvedGateAuthoredThreadsBySeverity(threads, GATE_LOGIN);
+  assert.deepEqual(breakdown, { total: 2, question: 1, nit: 0, other: 1 });
+  assert.equal(breakdown.total, countUnresolvedGateAuthoredThreads(threads, GATE_LOGIN));
+});
+
+// Copilot review (PR 2402): a nit must split out of "other" into its OWN
+// bucket — a nit is never a fixer target (NON_DEFECT_SEVERITIES,
+// gate-fanin.mjs), unlike high/medium/low, so lumping it into "other" told
+// operators to use a remedy (fixer fix-close) that cannot clear it.
+test("#2381: countUnresolvedGateAuthoredThreadsBySeverity splits nit into its own bucket, separate from question and other defect severities", () => {
+  const nit = thread({ body: `${buildFindingMarker({ fp: "9".repeat(16), severity: "nit", angle: "style", round: 1 })}\n**nit** (\`style\`): x` });
+  const low = thread({ body: `${buildFindingMarker({ fp: "8".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): y` });
+  const threads = [nit, low];
+  const breakdown = countUnresolvedGateAuthoredThreadsBySeverity(threads, GATE_LOGIN);
+  assert.deepEqual(breakdown, { total: 2, question: 0, nit: 1, other: 1 });
+  assert.equal(breakdown.total, countUnresolvedGateAuthoredThreads(threads, GATE_LOGIN));
+});
+
+test("#2381: countUnresolvedGateAuthoredThreadsBySeverity throws (fail-closed) on a non-array threads input", () => {
+  assert.throws(() => countUnresolvedGateAuthoredThreadsBySeverity(null, GATE_LOGIN), /threads must be an array/);
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0088: findJudgeDispositionForFingerprint — tier 2 (prior local ledger)
+// disagreement resolution
+// ---------------------------------------------------------------------------
+
+const JDF_REPO = "owner/repo";
+const JDF_PR = 42;
+const JDF_GATE = "draft_gate";
+const JDF_SUMMARY = "why this approach?";
+const JDF_FP = fingerprintFinding({ summary: JDF_SUMMARY });
+
+async function withLocalLedgerFiles(ledgers, fn) {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-finding-surface-ledgers-"));
+  try {
+    const dir = path.join(tmpRoot, "gate-findings", JDF_REPO.replace("/", "-"), `pr-${JDF_PR}`);
+    await mkdir(dir, { recursive: true });
+    for (const [filename, content] of Object.entries(ledgers)) {
+      await writeFile(path.join(dir, filename), JSON.stringify(content), "utf8");
+    }
+    return await fn(tmpRoot);
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+function jdfLedger({ repo = JDF_REPO, pr = JDF_PR, gate = JDF_GATE, verdict = "findings_present", loggedAt, disposition, rationale }) {
+  return {
+    repo,
+    pr,
+    gate,
+    verdict,
+    loggedAt,
+    findings: [{ severity: "question", angle: "scope", summary: JDF_SUMMARY, judgeDisposition: disposition, judgeRationale: rationale }],
+  };
+}
+
+test("#2381: findJudgeDispositionForFingerprint picks the disposition from the ledger with the GREATEST loggedAt when two prior ledgers disagree", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "reject", rationale: "old reasoning" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: "2026-09-10T00:00:00.000Z", disposition: "act", rationale: "new reasoning" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning" });
+    },
+  );
+});
+
+// Mirrors the test above with the NEWER ledger in headA.json (lexically
+// first) and the OLDER one in headB.json (lexically last) — the opposite
+// directory-order pairing. The original test's lexical order coincides with
+// "last readdir match wins"; this one's coincides with "first readdir match
+// wins". Together the two pin down newest-loggedAt selection regardless of
+// directory order, since only the real (loggedAt-based) implementation
+// passes both.
+test("#2381: findJudgeDispositionForFingerprint picks the GREATEST loggedAt regardless of directory order (mirrored fixture)", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: "2026-09-10T00:00:00.000Z", disposition: "act", rationale: "new reasoning" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "reject", rationale: "old reasoning" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headA", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning" });
+    },
+  );
+});
+
+test("#2381: findJudgeDispositionForFingerprint ignores a ledger whose own recorded repo/pr/gate does not match the inputs", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ pr: 999, loggedAt: "2026-09-10T00:00:00.000Z", disposition: "act", rationale: "foreign PR" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "reject", rationale: "this PR's own reasoning" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { disposition: "reject", rationale: "this PR's own reasoning" });
+    },
+  );
+});
+
+// Copilot review (PR 2402): the SAME carry-forward eligibility gate
+// write-gate-context.mjs applies to a prior ledger (buildCarryForwardPlan,
+// resolve-angle-carry-forward.mjs — only `clean`/`findings_present` is a
+// genuinely CLOSED round) must apply here too, or a `blocked`/partial local
+// ledger can surface a stale `judgeDisposition: reject` for a round that
+// never produced a settled verdict.
+test("#2381: findJudgeDispositionForFingerprint ignores a ledger whose own verdict is not clean/findings_present (blocked, or missing)", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ verdict: "blocked", loggedAt: "2026-09-10T00:00:00.000Z", disposition: "reject", rationale: "stale, unsettled round" }),
+      // Explicit undefined would just re-trigger jdfLedger's own default
+      // parameter (verdict = "findings_present") — override the RETURNED
+      // object's field instead so JSON.stringify genuinely drops it,
+      // exercising the "missing verdict key entirely" case.
+      [`${JDF_GATE}-headB.json`]: { ...jdfLedger({ loggedAt: "2026-09-11T00:00:00.000Z", disposition: "reject", rationale: "missing verdict field" }), verdict: undefined },
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.equal(result, null, "neither a blocked nor a verdict-less ledger is carry-eligible; both must be skipped, not surfaced");
+    },
+  );
+});
+
+// #2381: an undecidable tier-2 disagreement returns a DISTINCT `{ ambiguous:
+// true }` shape, never a plain `null` — resolveJudgeRejection (close-gate-findings.mjs)
+// must be able to tell "no prior ledger matched at all" (a genuine cache
+// miss, safe to fall through to tier 3) apart from "prior ledgers disagree
+// with no decidable winner" (must STOP, never fall through to a possibly
+// stale tier-3 rendered suffix).
+test("#2381: findJudgeDispositionForFingerprint returns { ambiguous: true } (not null) when TIED loggedAt candidates disagree", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: "2026-09-10T00:00:00.000Z", disposition: "reject", rationale: "tied A" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: "2026-09-10T00:00:00.000Z", disposition: "act", rationale: "tied B" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { ambiguous: true });
+    },
+  );
+});
+
+test("#2381: findJudgeDispositionForFingerprint returns { ambiguous: true } (not null) when a MISSING loggedAt makes disagreeing candidates undecidable", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: undefined, disposition: "reject", rationale: "no timestamp" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: "2026-09-10T00:00:00.000Z", disposition: "act", rationale: "timestamped" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { ambiguous: true });
+    },
+  );
+});
+
+// listLocalFindingsLogFiles sorts its filename list (rather than trusting
+// readdir order) so the ALL-AGREE citation path (matches[0].rationale, used
+// when at least one candidate lacks a usable loggedAt) always cites the same
+// ledger's rationale regardless of filesystem directory order. Filenames are
+// written here in non-lexical order to show the result tracks sorted order,
+// not write/insertion order.
+test("#2381: findJudgeDispositionForFingerprint cites a deterministic (sorted-filename) rationale when every agreeing candidate lacks a usable loggedAt", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headC.json`]: jdfLedger({ loggedAt: undefined, disposition: "reject", rationale: "from headC" }),
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: undefined, disposition: "reject", rationale: "from headA" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: undefined, disposition: "reject", rationale: "from headB" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      // Alphabetically-first filename (headA) wins the citation, not
+      // whatever order readdir happened to return the three files in.
+      assert.deepEqual(result, { disposition: "reject", rationale: "from headA" });
+    },
+  );
+});
+
+// Copilot review (PR 2402): a non-ENOENT readdir failure on the ledger
+// DIRECTORY (permissions, I/O error, the path being a file, ...) must fail
+// closed for the judge-disposition lookup — treating it as an empty history
+// would let a reject-close fall through to tier 3's possibly-stale rendered
+// suffix without knowing whether an unreadable prior ledger disagreed. Only
+// an ABSENT directory (ENOENT, the fresh-worktree/no-prior-round case) is a
+// genuine cache miss.
+async function withUnreadableLedgerDir(fn) {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-finding-surface-unreadable-"));
+  try {
+    const parentDir = path.join(tmpRoot, "gate-findings", JDF_REPO.replace("/", "-"));
+    await mkdir(parentDir, { recursive: true });
+    // A FILE where the ledger directory should be: readdir() on it throws
+    // ENOTDIR, a non-ENOENT failure distinct from "directory absent" and
+    // reproducible cross-platform (no chmod/permission dependence).
+    await writeFile(path.join(parentDir, `pr-${JDF_PR}`), "not a directory", "utf8");
+    return await fn(tmpRoot);
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+test("#2381: findJudgeDispositionForFingerprint fails closed ({ ambiguous: true }) on a non-ENOENT ledger-directory read failure (ENOTDIR)", async () => {
+  await withUnreadableLedgerDir(async (tmpRoot) => {
+    const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+    assert.deepEqual(result, { ambiguous: true });
+  });
+});
+
+test("#2381: findJudgeDispositionForFingerprint still treats an ABSENT ledger directory (ENOENT) as a cache miss (null)", async () => {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-finding-surface-absent-"));
+  try {
+    const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+    assert.equal(result, null);
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+// The round-number fallback count (resolveGateRound → countLocalFindingsLogFiles)
+// shares listLocalFindingsLogFiles with the judge-disposition lookup above,
+// but has no fail-closed obligation: it must keep working (not throw) on the
+// exact same non-ENOENT failure that the judge lookup fails closed on.
+test("#2381: resolveGateRound does not throw on a non-ENOENT ledger-directory read failure (ENOTDIR)", async () => {
+  await withUnreadableLedgerDir(async (tmpRoot) => {
+    const round = await resolveGateRound({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", reviews: [], issueComments: [], tmpRoot, repoRoot: tmpRoot });
+    assert.equal(round, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0088: parseRenderedJudgeDisposition tier 3 — only the exact
+// renderFindingLine suffix shape counts
+// ---------------------------------------------------------------------------
+
+test("#2381: parseRenderedJudgeDisposition parses the exact renderFindingLine suffix shape", () => {
+  const body = "**question** (`scope`): why this approach? — judge: reject";
+  assert.equal(parseRenderedJudgeDisposition(body), "reject");
+});
+
+test("#2381: parseRenderedJudgeDisposition does NOT parse a quoted 'judge: reject' phrase with looser spacing than the exact render suffix", () => {
+  // An LLM-authored summary that discusses "judge: reject" in its own prose,
+  // with double spaces around the separators (never what renderFindingLine
+  // itself emits — always exactly one space on each side) — must not be
+  // misread as a genuine rendered disposition suffix.
+  const body = "**question** (`scope`): the review notes say the panel's rule is  —  judge:  reject";
+  assert.equal(parseRenderedJudgeDisposition(body), null);
 });
 
 test("#1585: countUnresolvedGateAuthoredThreadsFromRawNodes throws (fail-closed) on a non-array rawNodes", () => {
