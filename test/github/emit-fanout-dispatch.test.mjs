@@ -1566,6 +1566,15 @@ test("buildAngleNamingSuffix states the unit's emitted scope verbatim as the --s
   assert.ok(suffix.includes(`--scope ${scope}`));
 });
 
+// Copilot review on PR 2404: a caller that omits `scope` must not render the
+// literal string "undefined" into the --scope instruction — fail closed.
+test("buildAngleNamingSuffix throws when scope is missing", () => {
+  const unit = { name: "coverage", angles: ["coverage"] };
+  assert.throws(() => buildAngleNamingSuffix(unit), TypeError);
+  assert.throws(() => buildAngleNamingSuffix(unit, ""), TypeError);
+  assert.throws(() => buildAngleNamingSuffix(unit, undefined), TypeError);
+});
+
 // Issue 2155 AC row 2 (slice b): the emitted suffix also carries the bounded
 // reviewer contract — budget numbers derived from REVIEWER_UNIT_BUDGET (never
 // hard-coded), an instruction for every PROHIBITED_REVIEWER_OPERATIONS kind,
