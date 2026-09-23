@@ -7,30 +7,40 @@ concurrent PRs stop conflicting on the changelog (issue #2293).
 
 ## Adding a fragment
 
-Create `changes/<slug>.md` (any unique slug — the issue/PR number plus a short
-name works well, e.g. `changes/2293-changeset-fragments.md`). Write one or more
-Keep-a-Changelog bullet lines describing the user-facing change:
+Create `changes/<slug>.md` with a unique slug, for example
+`changes/2293-changeset-fragments.md`. The fragment must be a real, non-empty,
+regular file (not a symlink).
+
+## Fragment format
+
+- The first line may be one section line: `### Added`, `### Changed` or
+  `### Fixed`. Without it, the section is `Changed`.
+- Every other line is one entry: `- <user-visible effect> (#<issue-or-PR>)`.
+- An entry is at most 200 characters and never wraps onto a continuation line.
+- An entry has no bold lead and no rule ids. It names a function or file only
+  when that name is the user-facing command or config key.
+- A fragment has no other heading. A level-2 `## ` heading would truncate the
+  assembled release section.
+
+Example:
 
 ```markdown
-- **Short summary of the change (issue #NNNN).** Longer description of what
-  changed and why it matters to a consumer.
+### Fixed
+
+- `dev-loops queue move` finds items that the board listing omits (#2397)
 ```
 
-Write bullet lines (a `### Added`/`### Fixed` level-3 subsection is fine). Do
-NOT put a level-2 `## ` heading in a fragment: the release assembler treats the
-next `## ` heading as the end of the section, so a `## ` line would truncate the
-assembled notes. The fragment must be a real, non-empty, regular file (not a
-symlink).
-
 The changelog-completeness gate
-(`scripts/docs/validate-changelog-completeness.mjs`) accepts such a fragment in
-place of a direct `CHANGELOG.md` edit, so a PR that ships only a fragment passes;
-it rejects an empty fragment, a symlink, or a fragment containing a `## ` heading.
+(`scripts/docs/validate-changelog-completeness.mjs`) accepts an added fragment
+in place of a direct `CHANGELOG.md` edit. It rejects an empty or symlinked
+fragment, and it rejects any new or changed fragment that breaks the format.
+Each rejection names the broken rule.
 
 ## Release assembly
 
 At release, `scripts/release/bump-version.mjs` (via
 `scripts/release/assemble-changelog-fragments.mjs`) folds every pending fragment
-into the `## Unreleased` section of `CHANGELOG.md`, removes the consumed
-fragment files, and stamps `## Unreleased` to `## <version>`. This `README.md`
-is never treated as a fragment.
+into the `## Unreleased` section of `CHANGELOG.md` under one `### Added`, one
+`### Changed` and one `### Fixed` heading, in that order. It removes the
+consumed fragment files and stamps `## Unreleased` to `## <version>`. This
+`README.md` is never treated as a fragment.

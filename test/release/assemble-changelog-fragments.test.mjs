@@ -8,6 +8,7 @@ import path from "node:path";
 import {
   assembleFragments,
   fragmentBodyClosesSection,
+  fragmentFormatErrors,
   isChangelogFragmentPath,
   readFragments,
 } from "../../scripts/release/assemble-changelog-fragments.mjs";
@@ -75,8 +76,46 @@ test("assembleFragments creates an Unreleased section when none exists", () => {
     changelog: noUnreleased,
     fragments: [{ name: "x", content: "- New change.\n" }],
   });
-  assert.match(changelog, /## Unreleased\n\n- New change\./);
+  assert.match(changelog, /## Unreleased\n\n### Changed\n\n- New change\./);
   assert.ok(changelog.indexOf("## Unreleased") < changelog.indexOf("## 1.0.3"));
+});
+
+test("assembleFragments merges repeated and missing section lines into one Added, Changed, Fixed in order", () => {
+  const { changelog } = assembleFragments({
+    changelog: "# Changelog\n\n## 1.0.3\n\n- Old.\n",
+    fragments: [
+      { name: "a", content: "### Fixed\n\n- Fix one (#1)\n" },
+      { name: "b", content: "- Default change (#2)\n" },
+      { name: "c", content: "### Added\n\n- Add one (#3)\n" },
+      { name: "d", content: "### Fixed\n\n- Fix two (#4)\n" },
+      { name: "e", content: "### Changed\n- Change two (#5)\n" },
+    ],
+  });
+  const section = changelog.slice(changelog.indexOf("## Unreleased"), changelog.indexOf("## 1.0.3"));
+  assert.deepEqual(section.match(/^### .*$/gm), ["### Added", "### Changed", "### Fixed"]);
+  assert.equal(
+    section.trim(),
+    "## Unreleased\n\n### Added\n\n- Add one (#3)\n\n### Changed\n\n- Default change (#2)\n- Change two (#5)\n\n### Fixed\n\n- Fix one (#1)\n- Fix two (#4)",
+  );
+});
+
+test("assembleFragments omits empty section headings", () => {
+  const { changelog } = assembleFragments({
+    changelog: "# Changelog\n",
+    fragments: [{ name: "a", content: "### Fixed\n- Only a fix (#1)\n" }],
+  });
+  assert.deepEqual(changelog.match(/^### .*$/gm), ["### Fixed"]);
+});
+
+test("fragmentFormatErrors names the rule for each violation and passes a conforming fragment", () => {
+  assert.deepEqual(fragmentFormatErrors("### Added\n\n- New command (#2429)\n"), []);
+  assert.match(fragmentFormatErrors(`- ${"x".repeat(200)} (#1)`).join("\n"), /200-character rule/);
+  assert.match(fragmentFormatErrors("- a (#1)\n  more").join("\n"), /one-line rule/);
+  assert.match(fragmentFormatErrors("- **b.** a (#1)").join("\n"), /no-bold-lead rule/);
+  assert.match(fragmentFormatErrors("- a").join("\n"), /link rule/);
+  assert.match(fragmentFormatErrors("### Added\n- a (#1)\n### Fixed\n- b (#2)").join("\n"), /more than one section heading/);
+  assert.match(fragmentFormatErrors("- a (#1)\n### Fixed").join("\n"), /section-heading rule/);
+  assert.match(fragmentFormatErrors("### Fixed\n").join("\n"), /no entries/);
 });
 
 test("readFragments reads changes/*.md sorted, skipping README and non-md", () => {
@@ -144,7 +183,7 @@ test("assembleFragments creates an Unreleased section at EOF when the changelog 
     changelog: "# Changelog\n\nAll notable changes.\n",
     fragments: [{ name: "x", content: "- New change.\n" }],
   });
-  assert.match(changelog, /## Unreleased\n\n- New change\./);
+  assert.match(changelog, /## Unreleased\n\n### Changed\n\n- New change\./);
 });
 
 test("readFragments fails closed when changes/ is a file, not a directory", () => {

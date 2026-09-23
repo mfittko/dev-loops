@@ -339,7 +339,7 @@ describe("main()", () => {
     await withTempChangelog(async (root) => {
       const dir = path.join(root, "changes");
       await mkdir(dir, { recursive: true });
-      await writeFile(path.join(dir, "new.md"), "- A real note.\n", "utf8");
+      await writeFile(path.join(dir, "new.md"), "- A real note. (#1)\n", "utf8");
       const added = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
         logSubjects: async () => ["feat: x"],
         diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/new.md"],
@@ -415,6 +415,77 @@ describe("main()", () => {
       assert.equal(await main({ root, git: passing, env: {}, log: log2 }), 0);
       assert.ok(log2.lines.some((l) => l.includes("check passed")));
     }, headChangelogWith(["New entry"]));
+  });
+});
+
+// --- fragment format rule: one-line entries, 200 chars, no bold lead, a link, one section ---
+
+async function runWithFragment(body, { added = true, changelog } = {}) {
+  let result;
+  await withTempChangelog(async (root) => {
+    await mkdir(path.join(root, "changes"), { recursive: true });
+    await writeFile(path.join(root, "changes", "frag.md"), body, "utf8");
+    const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+      logSubjects: async () => ["feat: x"],
+      diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/frag.md"],
+      diffAddedFiles: async () => (added ? ["packages/core/src/x.mjs", "changes/frag.md"] : ["packages/core/src/x.mjs"]),
+    });
+    const log = capturingLog();
+    const code = await main({ root, git, env: {}, log });
+    result = { code, output: log.lines.join("\n") };
+  }, changelog);
+  return result;
+}
+
+describe("fragment format rule", () => {
+  it("passes a conforming fragment", async () => {
+    const { code, output } = await runWithFragment("### Fixed\n\n- Merge no longer passes without a review (#2429)\n- Another fix (#1, #2)\n");
+    assert.equal(code, 0, output);
+  });
+
+  it("passes a conforming fragment with no section line (default Changed)", async () => {
+    assert.equal((await runWithFragment("- Release notes are one line per change (#2429)\n")).code, 0);
+  });
+
+  const cases = [
+    ["an entry over 200 characters", `- ${"x".repeat(200)} (#1)\n`, /200-character rule/],
+    ["a continuation line", "- A change (#1)\n  that wraps onto a second line\n", /one-line rule/],
+    ["a bold lead", "- **Bold lead.** A change (#1)\n", /no-bold-lead rule/],
+    ["a missing link", "- A change with no link\n", /link rule/],
+    ["two section headings", "### Added\n\n- A (#1)\n\n### Fixed\n\n- B (#2)\n", /section-heading rule/],
+  ];
+  for (const [name, body, rule] of cases) {
+    it(`rejects ${name} with a message naming the rule`, async () => {
+      const { code, output } = await runWithFragment(body);
+      assert.equal(code, 1);
+      assert.match(output, rule);
+      assert.match(output, /changes\/frag\.md/);
+    });
+  }
+
+  it("checks a modified (not only added) fragment", async () => {
+    const { code, output } = await runWithFragment("- **Bold.** x (#1)\n", { added: false });
+    assert.equal(code, 1);
+    assert.match(output, /no-bold-lead rule/);
+  });
+
+  it("does not re-check consumed history in CHANGELOG.md or deleted fragments", async () => {
+    const legacy = BASE_CHANGELOG.replace(
+      "## 1.0.0-rc.7",
+      "## 1.0.0-rc.8\n\n### Fixed\n\n- **Bold legacy entry.** wraps\n  onto a continuation line\n\n### Fixed\n\n## 1.0.0-rc.7",
+    );
+    await withTempChangelog(async (root) => {
+      await mkdir(path.join(root, "changes"), { recursive: true });
+      await writeFile(path.join(root, "changes", "new.md"), "- Conforming note (#3)\n", "utf8");
+      const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        // changes/consumed.md is in the diff (deleted at release) but absent at HEAD.
+        diffNameOnly: async () => ["packages/core/src/x.mjs", "CHANGELOG.md", "changes/consumed.md", "changes/new.md"],
+        diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+      });
+      const log = capturingLog();
+      assert.equal(await main({ root, git, env: {}, log }), 0, log.lines.join("\n"));
+    }, legacy);
   });
 });
 

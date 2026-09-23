@@ -9,6 +9,7 @@ import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import {
   FRAGMENTS_DIR,
   fragmentBodyClosesSection,
+  fragmentFormatErrors,
   isChangelogFragmentPath,
 } from "../release/assemble-changelog-fragments.mjs";
 
@@ -217,6 +218,17 @@ export async function main({ root, env = process.env, log = console, git = creat
     commitSubjects,
     files,
   });
+
+  // Format rule for every new or changed fragment still present at HEAD. A
+  // fragment consumed into CHANGELOG.md is deleted, so history is never re-checked.
+  if (changesDirIsReal) {
+    for (const f of files.filter((file) => isChangelogFragmentPath(file))) {
+      const stat = await lstat(path.join(root, f)).catch(() => null);
+      if (!stat || !stat.isFile()) continue;
+      const body = await readFile(path.join(root, f), "utf8").catch(() => "");
+      for (const error of fragmentFormatErrors(body)) errors.push(`${f}: ${error}`);
+    }
+  }
   if (errors.length > 0) {
     log.error("CHANGELOG completeness check failed (issue #1864):");
     for (const error of errors) log.error(`  - ${error}`);

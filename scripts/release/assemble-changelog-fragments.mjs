@@ -32,6 +32,67 @@ export function fragmentBodyClosesSection(content) {
   return /^##\s/m.test(String(content ?? ""));
 }
 
+/** Section headings a fragment may declare, in release order. */
+export const FRAGMENT_SECTIONS = ["Added", "Changed", "Fixed"];
+const DEFAULT_SECTION = "Changed";
+const SECTION_LINE_RE = /^###\s+(Added|Changed|Fixed)\s*$/;
+const HEADING_RE = /^#{1,6}\s/;
+export const MAX_ENTRY_CHARS = 200;
+const ENTRY_LINK_RE = /\(#\d+(?:,\s*#\d+)*\)/;
+
+/**
+ * Split a fragment into its section and its non-blank body lines. The section
+ * comes from a `### Added|Changed|Fixed` first line; it defaults to `Changed`.
+ *
+ * @param {string} content
+ * @returns {{ section: string, lines: string[] }}
+ */
+export function parseFragment(content) {
+  const lines = String(content ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim() !== "");
+  const match = lines.length > 0 ? SECTION_LINE_RE.exec(lines[0]) : null;
+  return match
+    ? { section: match[1], lines: lines.slice(1) }
+    : { section: DEFAULT_SECTION, lines };
+}
+
+/**
+ * Format violations of a fragment body. Each entry is one `- <effect> (#NNN)`
+ * line of at most MAX_ENTRY_CHARS characters with no bold lead, under at most
+ * one leading `### Added|Changed|Fixed` section line. Each message names its rule.
+ *
+ * @param {string} content
+ * @returns {string[]}
+ */
+export function fragmentFormatErrors(content) {
+  const errors = [];
+  const all = String(content ?? "").split(/\r?\n/).filter((l) => l.trim() !== "");
+  const headings = all.filter((l) => HEADING_RE.test(l));
+  const { lines } = parseFragment(content);
+  if (headings.length > 1) {
+    errors.push("section-heading rule: more than one section heading; use one ### Added, ### Changed or ### Fixed line at the top");
+  } else if (headings.length === 1 && lines.length === all.length) {
+    errors.push("section-heading rule: the only allowed heading is a first-line ### Added, ### Changed or ### Fixed");
+  }
+  if (lines.length === 0) errors.push("one-line rule: the fragment has no entries");
+  for (const line of lines) {
+    if (HEADING_RE.test(line)) continue; // reported by the section-heading rule
+    const excerpt = line.slice(0, 60);
+    if (!line.startsWith("- ")) {
+      errors.push(`one-line rule: continuation or non-entry line (each entry is one "- " line): ${excerpt}`);
+      continue;
+    }
+    if (line.length > MAX_ENTRY_CHARS) {
+      errors.push(`200-character rule: entry is ${line.length} characters: ${excerpt}`);
+    }
+    if (line.startsWith("- **")) errors.push(`no-bold-lead rule: entry opens with bold text: ${excerpt}`);
+    if (!ENTRY_LINK_RE.test(line)) errors.push(`link rule: entry has no (#NNN) issue or PR link: ${excerpt}`);
+  }
+  return errors;
+}
+
 /**
  * Whether a path is a changeset fragment: `changes/<slug>.md`, excluding the
  * convention `changes/README.md` (which documents the directory, not a change).
@@ -127,7 +188,16 @@ export function assembleFragments({ changelog, fragments }) {
     .filter((f) => f && typeof f.content === "string" && f.content.trim() !== "");
   if (frags.length === 0) return { changelog: String(changelog ?? ""), consumed: [] };
 
-  const block = frags.map((f) => f.content.trim()).join("\n\n");
+  // One heading per section, in FRAGMENT_SECTIONS order; empty sections omitted.
+  const bySection = new Map(FRAGMENT_SECTIONS.map((name) => [name, []]));
+  for (const f of frags) {
+    const { section, lines: body } = parseFragment(f.content);
+    bySection.get(section).push(...body);
+  }
+  const block = FRAGMENT_SECTIONS
+    .filter((name) => bySection.get(name).length > 0)
+    .map((name) => `### ${name}\n\n${bySection.get(name).join("\n")}`)
+    .join("\n\n");
   const consumed = frags.map((f) => f.name);
   const lines = String(changelog ?? "").split("\n");
 
