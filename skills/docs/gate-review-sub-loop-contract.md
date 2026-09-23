@@ -55,6 +55,26 @@ severities per gate are in [Gate-specific configuration](#gate-specific-configur
 
 Both gates run the identical phases with their own review angles.
 
+### Round owner: the gate coordinator
+
+<!-- rule: GATE-EXEC-GATE-COORDINATOR -->
+`GATE-EXEC-GATE-COORDINATOR`: Every gate review round MUST run in a dedicated, fresh-context
+**gate coordinator** agent. This is the only sanctioned round shape. The gate coordinator is
+the "gate-round capsule" of ADR 0081.
+It owns exactly one round for one gate at one head: the Phase 1 context and Phase 1.5 primer,
+the Phase 2 wave dispatch of `review` agents, the Phase 3 fan-in, and the Phase 3.5 judge. The
+dev-loop coordinator dispatches the gate coordinator and awaits it with a blocking join
+(`END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](./anti-patterns.md)); it never runs these phases
+in its own context. The gate coordinator returns only the round's typed result: the verdict,
+the findings artifact path, and the judge summary. Reviewer and judge outputs stay in the gate
+coordinator's context and never propagate to the dev-loop coordinator. The gate coordinator
+never posts the verdict comment, flips ready, pushes, or merges; these reserved lifecycle
+writes stay with the dev-loop coordinator. The Phase 4 fixer and each Phase 5 repeat are
+dispatched by the dev-loop coordinator, and each repeat round runs in a new gate coordinator.
+If a harness cannot fan out at the gate coordinator's depth, the round fails closed with
+`FANOUT_UNAVAILABLE_MESSAGE` ([below](#fail-closed-fan-out-unavailable--route-to-conductor))
+and never degrades to inline review.
+
 ### Phase 1 — Preamble: context-builder
 
 Before fanning out reviewers, run a preamble pass that produces review handoff context
@@ -254,7 +274,7 @@ Resolve grouping through `resolveFanoutGroups(config, gate, resolvedAngles, { fu
 
 Keep reviewer groups separate from `requestGroups`: the latter batch models/request fingerprints for caching, not reviewer identity. Validate provenance against resolved reviewer groups (`fanoutReviewerPairingError`), never against model/cache groups.
 
-Dispatch one independent, fresh-context `review` agent per emitted unit via the plain Agent tool — releasing the wave's units together (under Pi: ONE call per wave, the wave rule below), never N separate blocking calls — seeded verbatim with the neutral bundle and its angle prompts. Never inherit the conductor's or a sibling reviewer's context. Follow the [review agent's scoped angle-review mode](../../agents/review.md).
+The gate coordinator dispatches one independent, fresh-context `review` agent per emitted unit via the plain Agent tool — releasing the wave's units together (under Pi: ONE call per wave, the wave rule below), never N separate blocking calls — seeded verbatim with the neutral bundle and its angle prompts. Never inherit the gate coordinator's, the dev-loop coordinator's, or a sibling reviewer's context. Follow the [review agent's scoped angle-review mode](../../agents/review.md).
 
 Wave the emitted units under the emitter's `maxConcurrent` (`resolveFanoutEffectiveConcurrency`) in ONE call per wave — under Pi a single `subagent({ workflowScriptPath })` call whose script body returns ONE `runs.all([...])` with its own unique `key` per unit (this shape needs pi-subagents ≥0.57; `tasks: [...]` was removed in 0.41.0, and the repo's `Dockerfile` `PI_SUBAGENTS_VERSION` pin is below that floor and must be raised for the shape to run in the declared container) — then join that wave before releasing the next. Never issue N separate blocking per-unit calls for one wave: that is the shape Pi's foreground guard rejects, and it silently serializes the round. The configured cross-harness default is 4; this repo configures 3. `gates.fanout.sequential: true` resolves to 1, so each reviewer completes and writes evidence before the next starts. Under the Claude harness the effective value is additionally capped at 4; Pi/unknown harnesses retain the configured value. These bounds never collapse independent review into inline review.
 
@@ -535,13 +555,14 @@ reconciles and closes the records-floor residual carried on #1468.
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Bounded parallelism is the DEFAULT dispatch posture:
 fan-out dispatches up to `gates.fanout.maxConcurrent` dispatch units concurrently per wave
 (this repo: 3, aligned with `queue.maxParallel`) in one wave (under Pi: ONE call per wave — one
-`subagent`/`runs.all([...])` call, described above) — the conductor awaits each wave before releasing
+`subagent`/`runs.all([...])` call, described above) — the gate coordinator awaits each wave before releasing
 the next. `gates.fanout.sequential:
 true` (effective concurrency 1, above) is the documented LOAD FALLBACK for an environment
 that SIGTERMs heavy reviewers under parallel overload (ADR 0049) — a repo that enables it MUST
 record why parallel execution was impractical for its environment; it is a fallback, never the
-default. The conductor NEVER ends its turn mid-chain to await a nested reviewer, judge, or
-fixer it just dispatched — see `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](./anti-patterns.md)
+default. Neither the dev-loop coordinator nor the gate coordinator ever ends its turn mid-chain
+to await a nested gate coordinator, reviewer, judge, or fixer it just dispatched — see
+`END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](./anti-patterns.md)
 for the sanctioned blocking-join (or `bg_wait` subscription) alternative.
 
 **Re-run rule:** In subsequent retry cycles (Phase 5), re-running is governed by
@@ -941,7 +962,7 @@ for uniformity, even though the draft boundary does not carry that specific refu
 
 <!-- rule: GATE-EXEC-JUDGE-PHASE -->
 `GATE-EXEC-JUDGE-PHASE`: After fan-in (Phase 3) and before the fix pass (Phase 4), the
-conductor dispatches the dedicated `judge` agent (`agents/judge.agent.md`). The judge holds
+gate coordinator dispatches the dedicated `judge` agent (`agents/judge.agent.md`). The judge holds
 the linked issue's acceptance criteria, definition of done, and non-goals, the PR's declared
 scope, and the prior rounds' judge ledgers, and decides — per finding — whether this PR is
 the place to act on it. This is the relevance axis; it is distinct from and complementary
@@ -2050,7 +2071,7 @@ and `detect-checkpoint-evidence.mjs` (merge-evidence time), sharing the same
 pure coverage check (`checkFanoutAngleCoverage` in
 `@dev-loops/core/loop/gate-fanin`).
 
-### Fail-closed: fan-out unavailable → route to conductor
+### Fail-closed: fan-out unavailable → route to conductor {#fail-closed-fan-out-unavailable--route-to-conductor}
 
 When a child/agent **cannot** perform real parallel fan-out (e.g. a harness that does not
 honor the subagent tool at child depth), the flow MUST fail closed rather than silently
@@ -2066,6 +2087,10 @@ constant `FANOUT_UNAVAILABLE_MESSAGE` (`@dev-loops/core/loop/gate-fanin`):
 The full end-to-end driving command that dispatches per-angle review subagents at child
 depth is provided by the Pi-harness child (the bridge); this contract specifies only the
 recording + enforcement + fail-closed signal that land independently.
+
+Under `GATE-EXEC-GATE-COORDINATOR`, the gate coordinator returns this signal to the dev-loop
+coordinator as the round's result. The dev-loop coordinator then stops for an operator's
+per-PR decision and never runs the round inline.
 
 ## Additive review-lineage composition (Section E)
 
