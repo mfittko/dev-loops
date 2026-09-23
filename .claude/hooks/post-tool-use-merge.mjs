@@ -10,23 +10,44 @@
  * read-only gate scripts (probe-ci-status.mjs, detect-copilot-loop-state.mjs, …) run from the
  * main checkout on stale code — re-introducing the CI-wait stall every PR. This hook resolves
  * the main (primary) checkout via `git worktree list` and runs a best-effort `--ff-only`
- * fast-forward there. Never blocks (always `process.exit(0)`); `--ff-only` refuses a diverged
+ * fast-forward there. Never blocks (always exits 0); `--ff-only` refuses a diverged
  * main without rewriting history, so a diverged checkout warns and continues.
  */
 import { execFileSync, execSync } from "node:child_process";
 import { isMergeCapableCommand, extractPrNumberFromGhPrMergeAnywhere } from "./_bash-command-classify.mjs";
 import { parseMainWorktreePath } from "./_worktree-guard.mjs";
 import {
-  buildMainCheckoutFastForwardCommand,
   WORKTREE_CLEANUP_TIMEOUT_MS,
   MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS,
   MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
   buildWorktreeCleanupCommand,
   buildPostMergeActionsCommand,
   POST_MERGE_ACTIONS_TIMEOUT_MS,
+  syncMainCheckout,
 } from "./_main-checkout-ff.mjs";
 
 import { readHookInput } from "./_hook-io.mjs";
+
+/**
+ * Build a `syncMainCheckout` run() adapter over a synchronous `execSync` call in
+ * `mainCheckout`, normalizing a thrown failure into `{ ok: false, reason }`.
+ */
+function makeSyncExecRun(mainCheckout) {
+  return async (command) => {
+    try {
+      const stdout = execSync(command, {
+        cwd: mainCheckout,
+        timeout: MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf8",
+      });
+      return { ok: true, stdout };
+    } catch (error) {
+      const reason = error?.stderr?.toString?.()?.trim() || error?.message || String(error);
+      return { ok: false, reason };
+    }
+  };
+}
 
 const input = readHookInput();
 const command = input?.tool_input?.command;
@@ -45,17 +66,26 @@ if (typeof command === "string" && isMergeCapableCommand(command)) {
       "[dev-loops] post-merge: main-checkout fast-forward skipped (best-effort): could not resolve main checkout from `git worktree list`.\n",
     );
   } else {
+    // The action-required `not_on_main` case is surfaced as a structured PostToolUse
+    // `systemMessage` on stdout RIGHT AWAY (the only thing this hook ever writes to
+    // stdout, and never mixed with the generic stderr warning below) — a hook killed by
+    // the harness's default timeout during the worktree-cleanup/postMerge.actions work
+    // further down must not lose this action-required signal.
     try {
-      execSync(buildMainCheckoutFastForwardCommand(mainCheckout), {
-        cwd: mainCheckout,
-        timeout: MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      process.stderr.write(
-        "[dev-loops] post-merge: main checkout fast-forwarded local main to origin/main.\n",
-      );
+      const syncResult = await syncMainCheckout(mainCheckout, makeSyncExecRun(mainCheckout));
+      if (syncResult.status === "fast_forwarded") {
+        process.stderr.write(
+          "[dev-loops] post-merge: main checkout fast-forwarded local main to origin/main.\n",
+        );
+      } else if (syncResult.status === "not_on_main") {
+        process.stdout.write(JSON.stringify({ systemMessage: syncResult.diagnostic.message }) + "\n");
+      } else {
+        process.stderr.write(
+          `[dev-loops] post-merge: main-checkout fast-forward skipped (best-effort): ${syncResult.reason}\n`,
+        );
+      }
     } catch (error) {
-      const reason = error?.stderr?.toString?.()?.trim() || error?.message || String(error);
+      const reason = error?.message || String(error);
       process.stderr.write(
         `[dev-loops] post-merge: main-checkout fast-forward skipped (best-effort): ${reason}\n`,
       );
@@ -112,4 +142,11 @@ if (typeof command === "string" && isMergeCapableCommand(command)) {
     }
   }
 }
-process.exit(0);
+
+// Still non-fatal regardless of what ran above: always exit 0. `exitCode` (not
+// `process.exit(0)`) lets Node drain the stdout pipe before exiting — every call
+// above is synchronous (execFileSync/execSync/readFileSync), so no open handle
+// keeps the process alive once the module body finishes; `process.exit(0)` here
+// could terminate the process while the not_on_main systemMessage write above is
+// still buffered in the stdout pipe on some platforms.
+process.exitCode = 0;
