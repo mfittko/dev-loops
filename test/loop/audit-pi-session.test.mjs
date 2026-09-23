@@ -39,7 +39,9 @@ function writeSimpleTranscript(filePath) {
         message: {
           role: "assistant",
           model: "model-a",
-          usage: { input: 100, output: 50, cacheRead: 200, cacheWrite: 0 },
+          // Carries a cost so a mixed Pi + Claude directory exercises "partial" cost
+          // availability (Claude turns never report cost; see the mixed-directory test).
+          usage: { input: 100, output: 50, cacheRead: 200, cacheWrite: 0, cost: 0.02 },
         },
       }),
     ].join("\n") + "\n",
@@ -1114,6 +1116,10 @@ describe("audit-pi-session unit & integration", () => {
     assert.equal(audit.summary.totalTurns, 3);
     assert.equal(audit.summary.totalTokens, 41800);
     assert.ok(Math.abs(audit.summary.cacheHitRatio - 0.8537) < 0.001);
+    // Claude transcripts carry no cost (list-price estimation is out of scope), so the
+    // summary reports it as unavailable rather than a misleading $0.0000.
+    assert.equal(audit.summary.estimatedCost, null);
+    assert.equal(audit.summary.availability.estimatedCost, "unavailable");
 
     const claudeModel = audit.byModel["claude-opus-5-5"];
     assert.ok(claudeModel, "expected a per-model entry for claude-opus-5-5");
@@ -1171,6 +1177,9 @@ describe("audit-pi-session unit & integration", () => {
     const mixed = await auditPiSession(mixedDir);
     assert.equal(mixed.harness, "mixed");
     assert.equal(mixed.totalFilesExamined, 2);
+    // The Pi turn reports a cost but the Claude turn never does, so the mixed aggregate
+    // is partially (not fully) available rather than unavailable or falsely complete.
+    assert.equal(mixed.summary.availability.estimatedCost, "partial");
     assert.match(formatMarkdownSummary(mixed), /## Session Token Audit/);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1284,6 +1293,36 @@ describe("audit-pi-session unit & integration", () => {
     stderr = captureStream();
     assert.equal(await runAuditCli([claudeFile, "--harness", "claude", "--json"], { stdout, stderr }), 0);
     assert.equal(JSON.parse(stdout.value).harness, "claude");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("--harness forwards through the CLI to the extractor, forcing a result auto-detection would not produce", async () => {
+    const tmpDir = createTempDir();
+    const claudeFile = path.join(tmpDir, "agent-claude-5.jsonl");
+    writeClaudeTranscript(claudeFile, [
+      { usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+    const piFile = path.join(tmpDir, "session.jsonl");
+    writeSimpleTranscript(piFile);
+
+    // Forcing --harness pi on a Claude-shaped file finds zero pi-shaped turns; if the CLI
+    // silently dropped the flag, auto-detection would still find the file's real
+    // claude-shaped turns and exit 0, so this distinguishes forwarding from a no-op flag.
+    let stdout = captureStream();
+    let stderr = captureStream();
+    assert.equal(await runAuditCli([claudeFile, "--harness", "pi"], { stdout, stderr }), 1);
+    assert.match(stderr.value, /try --harness auto/);
+    assert.equal(stdout.value, "");
+
+    // Forcing --harness claude on a Pi-shaped file finds zero claude-shaped turns and
+    // errors out instead of reporting harness "pi"; a dropped flag would auto-detect
+    // "pi" and succeed instead.
+    stdout = captureStream();
+    stderr = captureStream();
+    assert.equal(await runAuditCli([piFile, "--harness", "claude", "--json"], { stdout, stderr }), 1);
+    assert.match(stderr.value, /try --harness auto/);
+    assert.doesNotMatch(stdout.value + stderr.value, /"harness":"pi"/);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
