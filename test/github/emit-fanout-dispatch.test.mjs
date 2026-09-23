@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
-import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { consolidateGateFanin, parseConsolidateFaninCliArgs } from "../../scripts/loop/consolidate-fanin.mjs";
@@ -399,11 +399,11 @@ test("contradiction-lens's emitted unit leads with the invariant prefix, and its
     // extension-defaults — the same layer a real reviewer resolves from.
     const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
     assert.deepEqual(errors, []);
-    const { resolveReviewerRole } = await import("@dev-loops/core/config");
     const role = resolveReviewerRole(config, "contradiction-lens");
     assert.equal(role.persona, "review");
     assert.ok(role.prompt && role.prompt.length > 0, "contradiction-lens must resolve a non-empty prompt");
     assert.match(role.prompt, /contradict/i);
+    assert.ok(!composed.includes(role.prompt), "emitter must not copy the angle prompt");
   });
 });
 

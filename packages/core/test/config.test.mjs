@@ -3615,11 +3615,11 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
   // five were previously fallback-only (default-reviewer, null prompt) and
   // now resolve their own persona + prompt, same as the map above.
   const NEWLY_PROMPTED_ANGLES = {
-    "contradiction-lens": ["review", "Find statements in the diff, the PR body, or touched contracts that contradict"],
+    "contradiction-lens": ["review", "Apply STYLE-CONTRADICTION-LENS when the repo defines it"],
     "code-conformance": ["review", "Review this change for conformance to existing repo code conventions"],
     "semantic-drift": ["review", "Review this change for semantic drift between code and its documented behavior"],
-    "correctness-final": ["review", "Perform a final correctness check before pre-approval"],
-    "ui-validation": ["review", "Review this change against the UI Validation Contract"],
+    "correctness-final": ["review", "Perform a final correctness pass on the current head"],
+    "ui-validation": ["review", "Review this change against the repo's UI validation contract"],
   };
 
   test("every pre-#1404 personas[angle] entry still resolves the same persona + prompt from its gate entry", async () => {
@@ -3682,6 +3682,20 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
         }
       }
     }
+  });
+
+  // #2374 pre-PR review fix: the draft-gate and preApproval contradiction-lens
+  // entries must carry the exact same prompt — one shared lens definition,
+  // not two copies that can silently drift apart.
+  test("draft and preApproval contradiction-lens entries carry an identical, non-empty prompt", async () => {
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT, devloopsOverride: { raw: null } });
+    assert.deepEqual(errors, []);
+    const draftEntry = config.gates.draft.angles.find((a) => a.name === "contradiction-lens");
+    const preApprovalEntry = config.gates.preApproval.angles.find((a) => a.name === "contradiction-lens");
+    assert.ok(draftEntry?.prompt, "draft contradiction-lens entry must have a non-empty prompt");
+    assert.ok(preApprovalEntry?.prompt, "preApproval contradiction-lens entry must have a non-empty prompt");
+    assert.equal(draftEntry.prompt, preApprovalEntry.prompt, "draft and preApproval contradiction-lens prompts must be identical");
   });
 });
 

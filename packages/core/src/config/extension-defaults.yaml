@@ -128,7 +128,7 @@ gates:
           - Unresolved review threads that raise implementation concerns Flag any unresolved comment that identifies a concrete implementation problem as a blocking finding (severity: high or medium). Do not flag: - Resolved threads - Style nits, formatting suggestions, or cosmetic feedback - Comments from non-collaborators or bots - Outdated comments that were already addressed in a later commit If no unresolved implementation concerns exist, return clean.
       - name: contradiction-lens
         persona: review
-        prompt: Find statements in the diff, the PR body, or touched contracts that contradict each other or contradict an accepted ADR (docs/decisions/). Cite both sides of each contradiction with file:line.
+        prompt: "Apply STYLE-CONTRADICTION-LENS when the repo defines it (dev-loops: skills/docs/contract-style-guide.md): check every added or changed normative rule (MUST/SHOULD/MAY) against the repo's rule registry for opposing modality or a weaker restatement. Also flag statements in the diff, the PR body, touched contracts, or accepted decision records (for example docs/decisions/) that contradict each other. Cite both sides of each contradiction with file:line."
       - name: code-conformance
         persona: review
         prompt: Review this change for conformance to existing repo code conventions and patterns. Compare naming, module layout, and helper reuse against neighboring code in the same package. Flag ad hoc patterns that diverge from an established convention without a stated reason.
@@ -350,13 +350,13 @@ gates:
           clean.
       - name: contradiction-lens
         persona: review
-        prompt: Find statements in the diff, the PR body, or touched contracts that contradict each other or contradict an accepted ADR (docs/decisions/). Cite both sides of each contradiction with file:line.
+        prompt: "Apply STYLE-CONTRADICTION-LENS when the repo defines it (dev-loops: skills/docs/contract-style-guide.md): check every added or changed normative rule (MUST/SHOULD/MAY) against the repo's rule registry for opposing modality or a weaker restatement. Also flag statements in the diff, the PR body, touched contracts, or accepted decision records (for example docs/decisions/) that contradict each other. Cite both sides of each contradiction with file:line."
       - name: correctness-final
         persona: review
-        prompt: Perform a final correctness check before pre-approval. Confirm the implementation still matches the acceptance criteria and PR description, and flag any remaining logic errors, contract violations, or behavior mismatches missed at the draft gate.
+        prompt: Perform a final correctness pass on the current head. Flag residual logic errors, contract violations, and behavior mismatches introduced or left unfixed since the draft gate. Leave acceptance-criteria coverage to the acceptance-criteria angle.
       - name: ui-validation
         persona: review
-        prompt: Review this change against the UI Validation Contract (skills/docs/ui-validation-contract.md). When the changed-file set touches a registered rendered artifact (a deck, an article, or the inspect-run viewer), verify passing UI e2e coverage exists per the contract. Return clean when no UI surface changed.
+        prompt: "Review this change against the repo's UI validation contract when it defines one (dev-loops: skills/docs/ui-validation-contract.md and skills/docs/ui-e2e-scoping-step.md). When the changed-file set matches the UI e2e scoping globs, verify passing UI e2e coverage exists and that each touched rendered artifact is registered; an unregistered new artifact is a blocking finding. Return clean when no changed path matches or the repo defines no UI validation contract."
     required: true
   # Relaxed spike gate profile (#965). A spike's deliverable is a findings doc,
   # not production code, so it is intentionally lighter than the production
