@@ -2308,9 +2308,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // OTHER states too (merge conflicts, blocked); converting those to draft
     // would be wrong, so this must NOT key off `gateActionForbidden` alone.
     // Waiting-for-CI and unresolved-feedback states stay protected from the
-    // transition only while clean draft_gate evidence exists; with no clean
-    // evidence, coordination allows RECONCILE_DRAFT_GATE there too, so the
-    // transition proceeds.
+    // transition only while clean draft_gate evidence exists. Without clean
+    // evidence, the core allows RECONCILE_DRAFT_GATE in those states too, so
+    // the self-heal converts the PR to draft. On a PR whose CI is not green,
+    // that draft re-entry then refuses (draft_review / wait_for_ci under the
+    // draft requireCi default), and the PR is restored to ready.
     if (
       options.gate === "draft_gate"
       && !prIsDraft
