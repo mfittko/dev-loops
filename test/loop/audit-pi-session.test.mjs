@@ -1085,10 +1085,13 @@ describe("audit-pi-session unit & integration", () => {
 
     // Same prompt progression as the Pi snowball test: 1,000 -> 10,000 -> 30,000 prompt
     // tokens (30x growth), 35,000 cached read of 41,000 total prompt tokens (~85.4% hit).
+    // The middle turn also carries a nonzero cache_creation_input_tokens so the four-field
+    // totalTokens sum and cacheWriteTokens are exercised without disturbing the
+    // first/last-turn initial/final prompt (and growth) numbers above.
     const claudeFile = path.join(tmpDir, "agent-claude-1.jsonl");
     writeClaudeTranscript(claudeFile, [
       { id: "msg_1", usage: { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
-      { id: "msg_2", usage: { input_tokens: 2000, output_tokens: 100, cache_read_input_tokens: 8000, cache_creation_input_tokens: 0 } },
+      { id: "msg_2", usage: { input_tokens: 2000, output_tokens: 100, cache_read_input_tokens: 8000, cache_creation_input_tokens: 500 } },
       { id: "msg_3", usage: { input_tokens: 3000, output_tokens: 150, cache_read_input_tokens: 27000, cache_creation_input_tokens: 0 } },
     ]);
 
@@ -1102,12 +1105,20 @@ describe("audit-pi-session unit & integration", () => {
     assert.equal(s.inputTokens, 6000);
     assert.equal(s.cacheReadTokens, 35000);
     assert.equal(s.outputTokens, 300);
+    assert.equal(s.cacheWriteTokens, 500);
+    assert.equal(s.totalTokens, 41800);
     assert.equal(s.snowball.initialPromptTokens, 1000);
     assert.equal(s.snowball.finalPromptTokens, 30000);
     assert.equal(s.snowball.promptGrowthFactor, 30);
     assert.ok(Math.abs(s.snowball.cacheHitRatio - 0.8537) < 0.001);
     assert.equal(audit.summary.totalTurns, 3);
+    assert.equal(audit.summary.totalTokens, 41800);
     assert.ok(Math.abs(audit.summary.cacheHitRatio - 0.8537) < 0.001);
+
+    const claudeModel = audit.byModel["claude-opus-5-5"];
+    assert.ok(claudeModel, "expected a per-model entry for claude-opus-5-5");
+    assert.equal(claudeModel.turns, 3);
+    assert.equal(claudeModel.totalTokens, 41800);
 
     const claudeMd = formatMarkdownSummary(audit);
     assert.ok(claudeMd.includes("Claude Code Session Token Audit"));
@@ -1202,6 +1213,9 @@ describe("audit-pi-session unit & integration", () => {
     const parsed = await parseTranscriptFile(claudeFile);
     assert.equal(parsed.turns.length, 1);
     assert.equal(parsed.turns[0].usage.output, 8);
+    // Claude's prompt size includes cache-creation tokens (input + cacheRead + cacheWrite),
+    // unlike Pi's input + cacheRead; assert the nonzero cache_creation_input_tokens is summed in.
+    assert.equal(parsed.turns[0].promptTokens, 2 + 15613);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -1228,6 +1242,16 @@ describe("audit-pi-session unit & integration", () => {
     assert.equal(audit.sessions.length, 1);
     assert.equal(audit.sessions[0].role, "fixer");
     assert.equal(audit.sessions[0].sessionName, "Fix draft_gate r1 act list");
+
+    // Auditing the parent directory (holding both the agents/ target and the tasks/
+    // symlink) is the realistic Claude invocation; the realpath dedupe must still collapse
+    // the pair to one file/turn regardless of readdir order, and deterministically keep the
+    // canonical (non-symlink) path.
+    const parentAudit = await auditPiSession(tmpDir);
+    assert.equal(parentAudit.totalFilesExamined, 1);
+    assert.equal(parentAudit.summary.totalTurns, 1);
+    assert.equal(parentAudit.sessions[0].role, "fixer");
+    assert.deepEqual(collectTranscriptFiles(tmpDir), [transcriptFile]);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -1319,6 +1343,29 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("keeps both turns when the same message.id appears with a different requestId across files", async () => {
+    const tmpDir = createTempDir();
+    const sessionDir = path.join(tmpDir, "session-root");
+    fs.mkdirSync(sessionDir, { recursive: true });
+
+    const firstFile = path.join(sessionDir, "agent-claude-a.jsonl");
+    const secondFile = path.join(sessionDir, "agent-claude-b.jsonl");
+    writeClaudeTranscript(firstFile, [
+      { id: "msg_shared", requestId: "req_1", usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+    // Same message.id but a distinct requestId: this is not a replay of the same turn, so
+    // id-only keying would wrongly drop it. Both turns must be counted.
+    writeClaudeTranscript(secondFile, [
+      { id: "msg_shared", requestId: "req_2", usage: { input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+
+    const audit = await auditPiSession(sessionDir);
+    assert.equal(audit.summary.totalTurns, 2);
+    assert.equal(audit.summary.inputTokens, 13);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it("ignores a .output file whose first line is JSON but not transcript-shaped (a bare value or object)", () => {
     const tmpDir = createTempDir();
     const tasksDir = path.join(tmpDir, "tasks");
@@ -1328,6 +1375,71 @@ describe("audit-pi-session unit & integration", () => {
     fs.writeFileSync(path.join(tasksDir, "null.output"), "null\nDone\n");
 
     assert.deepEqual(collectTranscriptFiles(tasksDir), []);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("collects a .output file whose first record exceeds the 64 KiB sniff prefix via a structural fallback", async () => {
+    const tmpDir = createTempDir();
+    const tasksDir = path.join(tmpDir, "tasks");
+    fs.mkdirSync(tasksDir, { recursive: true });
+
+    // A large inlined prompt pushes the first record's JSON.stringify output past the 64
+    // KiB sniff window, so JSON.parse on the truncated prefix throws; the "type"/"message"
+    // keys still land inside the prefix, so the structural fallback should still accept it.
+    const largeFirstRecord = JSON.stringify({
+      type: "assistant",
+      message: {
+        model: "claude-opus-5-5",
+        id: "msg_large",
+        role: "assistant",
+        usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+      largePrompt: "x".repeat(70_000),
+    });
+    assert.ok(largeFirstRecord.length > 64 * 1024);
+    const outputFile = path.join(tasksDir, "task-1.output");
+    fs.writeFileSync(outputFile, `${largeFirstRecord}\n`);
+
+    assert.deepEqual(collectTranscriptFiles(tasksDir), [outputFile]);
+
+    const audit = await auditPiSession(tasksDir);
+    assert.equal(audit.summary.totalTurns, 1);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("collects a .output symlink to a .jsonl transcript without content-sniffing it, even past the 64 KiB window", async () => {
+    const tmpDir = createTempDir();
+    const agentsDir = path.join(tmpDir, "agents");
+    const tasksDir = path.join(tmpDir, "tasks");
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.mkdirSync(tasksDir, { recursive: true });
+
+    // Padding placed before the transcript-shaping keys so neither "type" nor "message"
+    // falls within the first 64 KiB: this record would fail even the structural fallback,
+    // but a `.output` symlink whose realpath ends in `.jsonl` is a known transcript shape
+    // and must be collected regardless of the content sniff.
+    const paddedRecord = JSON.stringify({
+      pad: "x".repeat(70_000),
+      type: "assistant",
+      message: {
+        model: "claude-opus-5-5",
+        id: "msg_padded",
+        role: "assistant",
+        usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    });
+    assert.ok(paddedRecord.indexOf('"type"') > 64 * 1024);
+    const transcriptFile = path.join(agentsDir, "agent-padded.jsonl");
+    fs.writeFileSync(transcriptFile, `${paddedRecord}\n`);
+    const outputSymlink = path.join(tasksDir, "task-2.output");
+    fs.symlinkSync(transcriptFile, outputSymlink);
+
+    assert.deepEqual(collectTranscriptFiles(tasksDir), [outputSymlink]);
+
+    const audit = await auditPiSession(tasksDir);
+    assert.equal(audit.summary.totalTurns, 1);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -1376,6 +1488,27 @@ describe("audit-pi-session unit & integration", () => {
 
     const audit = await auditPiSession(claudeFile);
     assert.equal(audit.sessions[0].role, "subagent");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("classifies a Claude agent-<id>.jsonl transcript as subagent when its meta sidecar parses but lacks agentType", async () => {
+    const tmpDir = createTempDir();
+    const claudeFile = path.join(tmpDir, "agent-blankmeta123.jsonl");
+    writeClaudeTranscript(claudeFile, [
+      { usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+    // The sidecar parses but has no agentType; this must not fall through to
+    // deriveSessionRole's generic "coordinator" bucket, which is reserved for
+    // main-session <uuid>.jsonl transcripts.
+    fs.writeFileSync(
+      path.join(tmpDir, "agent-blankmeta123.meta.json"),
+      JSON.stringify({ description: "no agentType here" }),
+    );
+
+    const audit = await auditPiSession(claudeFile);
+    assert.equal(audit.sessions[0].role, "subagent");
+    assert.equal(audit.sessions[0].sessionName, "no agentType here");
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });

@@ -62,17 +62,31 @@ function looksLikeTranscriptOutputFile(filePath) {
     return false;
   }
 
-  const firstLine = prefix.split("\n").map((line) => line.trim()).find((line) => line.length > 0);
+  const rawLines = prefix.split("\n");
+  const prefixIsFull = prefix.length === OUTPUT_SNIFF_BYTES;
+  let firstLine;
+  let firstLineTruncated = false;
+  for (let i = 0; i < rawLines.length; i += 1) {
+    const trimmed = rawLines[i].trim();
+    if (!trimmed) continue;
+    firstLine = trimmed;
+    // The last raw line carries no trailing newline in this prefix; if the prefix filled
+    // the sniff buffer, that line's own newline (if any) lies past the read window.
+    firstLineTruncated = prefixIsFull && i === rawLines.length - 1;
+    break;
+  }
   if (!firstLine) return false;
 
-  let parsed;
   try {
-    parsed = JSON.parse(firstLine);
+    const parsed = JSON.parse(firstLine);
+    if (!parsed || typeof parsed !== "object") return false;
+    return typeof parsed.type === "string" || (parsed.message !== null && typeof parsed.message === "object");
   } catch {
-    return false;
+    if (!firstLineTruncated) return false;
+    // The first record exceeds the sniff window and can't be parsed whole; fall back to a
+    // structural check on the truncated prefix so a large first record isn't skipped silently.
+    return /^\{/.test(firstLine) && (/"type"\s*:/.test(firstLine) || /"message"\s*:/.test(firstLine));
   }
-  if (!parsed || typeof parsed !== "object") return false;
-  return typeof parsed.type === "string" || (parsed.message !== null && typeof parsed.message === "object");
 }
 
 function findRepositoryRoot(startPath) {
@@ -258,7 +272,11 @@ function collectTranscriptFilesWithMetadata(targetPath) {
           continue; // broken symlink
         }
         if (!targetStat.isFile()) continue;
-        if (e.name.endsWith(".output") && !looksLikeTranscriptOutputFile(full)) continue;
+        // A `.output` symlink whose realpath is itself a `.jsonl` transcript is a known
+        // transcript shape regardless of its content sniff; only sniff a `.output`
+        // symlink pointing at a non-`.jsonl` target.
+        const realPath = resolveClaudeTranscriptRealPath(full);
+        if (e.name.endsWith(".output") && !realPath.endsWith(".jsonl") && !looksLikeTranscriptOutputFile(full)) continue;
         files.push(full);
       }
     }
@@ -275,20 +293,25 @@ function collectTranscriptFilesWithMetadata(targetPath) {
     : rawList;
 
   // A `.output` symlink and the `agent-<id>.jsonl` file it points at can both surface
-  // during the walk; dedupe by realpath so the transcript is only audited once.
-  const seenRealPaths = new Set();
-  const dedupedByRealPath = [];
-  for (const file of withoutArtifacts) {
+  // during the walk; dedupe by realpath so the transcript is only audited once. Sort
+  // first so the survivor doesn't depend on filesystem-dependent readdir order, and
+  // prefer the canonical (non-symlink) path among duplicates so the choice is stable
+  // regardless of naming.
+  const seenRealPaths = new Map();
+  for (const file of [...withoutArtifacts].sort()) {
     let realPath;
     try {
       realPath = fs.realpathSync(file);
     } catch {
       realPath = file;
     }
-    if (seenRealPaths.has(realPath)) continue;
-    seenRealPaths.add(realPath);
-    dedupedByRealPath.push(file);
+    const isCanonical = file === realPath;
+    const existing = seenRealPaths.get(realPath);
+    if (!existing || (isCanonical && !existing.isCanonical)) {
+      seenRealPaths.set(realPath, { file, isCanonical });
+    }
   }
+  const dedupedByRealPath = [...seenRealPaths.values()].map(({ file }) => file);
 
   // Fork snapshots remain in the audit. parseTranscriptFile removes their inherited
   // replay prefix while retaining the fork's own continuation.
@@ -369,14 +392,15 @@ function resolveClaudeMetaSidecarPath(resolvedPath) {
 function readClaudeMetaSidecar(filePath) {
   const resolvedPath = resolveClaudeTranscriptRealPath(filePath);
   const metaPath = resolveClaudeMetaSidecarPath(resolvedPath);
+  const isAgentTranscript = /^agent-.+\.jsonl$/.test(path.basename(resolvedPath));
   try {
     const data = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    const agentType = typeof data.agentType === "string" && data.agentType ? data.agentType : null;
     return {
-      role: typeof data.agentType === "string" && data.agentType ? data.agentType : null,
+      role: agentType ?? (isAgentTranscript ? "subagent" : null),
       sessionName: typeof data.description === "string" && data.description ? data.description : null,
     };
   } catch {
-    const isAgentTranscript = /^agent-.+\.jsonl$/.test(path.basename(resolvedPath));
     return { role: isAgentTranscript ? "subagent" : null, sessionName: null };
   }
 }

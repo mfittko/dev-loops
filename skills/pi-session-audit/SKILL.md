@@ -64,8 +64,8 @@ Claude Code streams one JSONL record per content block; records sharing one `mes
 first-appearance order, keeping the last record's usage. A resumed Claude session can also
 replay prior history across files sharing one `message.id` + `requestId`; transcript files
 are audited in sorted order and the first file to carry a given `message.id`:`requestId`
-pair wins, so later replays of the same turn in a later file are skipped. A Claude
-subagent transcript's prompt size is `input + cacheRead + cacheCreate` on its first/last
+pair wins, so later replays of the same turn in a later file are skipped. A Claude Code
+transcript's prompt size is `input + cacheRead + cacheCreate` on its first/last
 turn (Pi's is `input + cacheRead`, unchanged); this is the only place the two harnesses'
 metric definitions differ, per the issue that introduced Claude support. Role and session
 name come from the sibling `agent-<id>.meta.json` (`agentType` / `description`) when
@@ -79,6 +79,7 @@ record (a string `type`, or an object `message`); a plain-text or non-transcript
 ## Interpreting Output
 
 ### 1. Overall Summary
+- **Harness**: Top-level `harness` field reports `pi`, `claude`, or `mixed`. `mixed` covers both a single file whose records match both shapes and a directory audit whose transcript files individually resolve to different harnesses. The Markdown heading follows this value (`Pi Session Token Audit`, `Claude Code Session Token Audit`, or `Session Token Audit` for `mixed`). Claude transcripts never report a cost, so **Estimated Cost** is always `n/a` (`unavailable`) in Claude or mixed mode.
 - **Resolved Target**: Absolute session path selected by `--latest` or supplied explicitly. A single transcript file target is audited alone; **Transcript Files Examined** makes that scope visible in Markdown.
 - **Total Turns**: Sum of assistant turns carrying a non-zero usage envelope (any of `input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, or `cost`). For a genuine fork transcript (its `session` header has a non-empty string `parentSession`), this excludes the inherited replay prefix and includes the fork's own turns; multiple `session_info` records in an ordinary transcript are all retained.
 - **Total Tokens**: Sum of `input + output + cacheRead + cacheWrite` when those provider dimensions are reported.
@@ -95,7 +96,7 @@ Breaks down token volume and cache ratios per model provider (e.g., `gemini-3.8-
 Each row represents one `session_info` agent segment within a transcript, so multiple rows can share the same `file`. In JSON, `file` identifies the transcript, `sessionName` preserves the segment's `session_info.name` (or is `null` when absent), and top-level `activeSessionsCount` is the number of emitted segment rows. Each row includes:
 - **Role**: Inferred agent role (`dev-loop`, `review`, `fixer`, etc.).
 - **Turns**: Count of assistant turns carrying a non-zero usage envelope (any of `input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, or `cost`) for that specific agent segment. In a fork snapshot, inherited replay turns are excluded when its timestamp boundary is resolved.
-- **Init Prompt**: Size of the prompt (input + cacheRead) on the first prompt-bearing turn (the first post-fork prompt-bearing turn for a fork snapshot).
+- **Init Prompt**: Size of the prompt on the first prompt-bearing turn (the first post-fork prompt-bearing turn for a fork snapshot): `input + cacheRead` for Pi, `input + cacheRead + cacheCreate` for Claude Code (see [Pi vs Claude Code](#pi-vs-claude-code)).
 - **Final Prompt**: Size of the prompt on the final prompt-bearing turn.
 - **Growth**: Growth factor `finalPromptTokens / initialPromptTokens`.
 
