@@ -55,13 +55,25 @@ node scripts/loop/audit-pi-session.mjs --harness claude path/to/claude-transcrip
 
 Harness auto-detects per record from the usage envelope's field-naming shape (Claude's
 `input_tokens`/`output_tokens`/... vs Pi's `input`/`output`/...); pass `--harness pi` or
-`--harness claude` only to force a mode. Claude Code streams one JSONL record per content
-block, so records sharing one `message.id` are deduped to a single turn using the last
-record's usage. A Claude subagent transcript's prompt size is `input + cacheRead +
-cacheCreate` on its first/last turn (Pi's is `input + cacheRead`, unchanged); this is the
-only place the two harnesses' metric definitions differ, per the issue that introduced
-Claude support. Role and session name come from the sibling `agent-<id>.meta.json`
-(`agentType` / `description`) when present.
+`--harness claude` only to force a mode. A file with both shapes reports its harness as
+`mixed`. If a forced `--harness` mode finds zero usage turns while the other shape was
+present, the error names the detected shape and suggests `--harness auto`.
+
+Claude Code streams one JSONL record per content block; records sharing one `message.id`
+(including interleaved, not just adjacent, repeats) are deduped to a single turn in
+first-appearance order, keeping the last record's usage. A resumed Claude session can also
+replay prior history across files sharing one `message.id` + `requestId`; transcript files
+are audited in sorted order and the first file to carry a given `message.id`:`requestId`
+pair wins, so later replays of the same turn in a later file are skipped. A Claude
+subagent transcript's prompt size is `input + cacheRead + cacheCreate` on its first/last
+turn (Pi's is `input + cacheRead`, unchanged); this is the only place the two harnesses'
+metric definitions differ, per the issue that introduced Claude support. Role and session
+name come from the sibling `agent-<id>.meta.json` (`agentType` / `description`) when
+present; a Claude subagent transcript without a meta sidecar falls back to `coordinator`,
+the same unclassified default used across roles. A background-task `.output` file is only
+collected when its first non-empty line parses as a JSON object shaped like a transcript
+record (a string `type`, or an object `message`); a plain-text or non-transcript-JSON
+`.output` file (e.g. `{"ok":true}`) is skipped rather than surfaced as malformed lines.
 
 ## Interpreting Output
 

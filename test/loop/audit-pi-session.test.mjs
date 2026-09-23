@@ -57,6 +57,7 @@ function writeClaudeTranscript(filePath, turns) {
     agentId: "agent-claude-test",
     type: "assistant",
     timestamp: turn.timestamp ?? `2026-01-01T00:00:0${index}.000Z`,
+    requestId: turn.requestId,
     message: {
       model: turn.model ?? "claude-opus-5-5",
       id: turn.id ?? `msg_${index}`,
@@ -1275,5 +1276,121 @@ describe("audit-pi-session unit & integration", () => {
       const occurrences = source.split(threshold).length - 1;
       assert.equal(occurrences, 1, `threshold ${threshold} should appear exactly once (shared, not duplicated)`);
     }
+  });
+
+  it("dedupes interleaved Claude message.id turns by first appearance, keeping each id's last usage", async () => {
+    const tmpDir = createTempDir();
+    const claudeFile = path.join(tmpDir, "agent-claude-interleaved.jsonl");
+    writeClaudeTranscript(claudeFile, [
+      { id: "msg_A", usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+      { id: "msg_B", usage: { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+      { id: "msg_A", usage: { input_tokens: 1, output_tokens: 9, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+
+    const parsed = await parseTranscriptFile(claudeFile);
+    // Not 3: an interleaved repeat of "msg_A" overwrites its first-appearance slot rather
+    // than being appended as a second turn.
+    assert.equal(parsed.turns.length, 2);
+    assert.deepEqual(parsed.turns.map((turn) => turn.usage.output), [9, 2]);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("dedupes a Claude turn replayed with the same message.id + requestId across two files, first file wins", async () => {
+    const tmpDir = createTempDir();
+    const sessionDir = path.join(tmpDir, "session-root");
+    fs.mkdirSync(sessionDir, { recursive: true });
+
+    const firstFile = path.join(sessionDir, "agent-claude-a.jsonl");
+    const secondFile = path.join(sessionDir, "agent-claude-b.jsonl");
+    writeClaudeTranscript(firstFile, [
+      { id: "msg_shared", requestId: "req_shared", usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+    // A resumed session replays the same turn (identical id + requestId) plus one new turn.
+    writeClaudeTranscript(secondFile, [
+      { id: "msg_shared", requestId: "req_shared", usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+      { id: "msg_new", requestId: "req_new", usage: { input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+
+    const audit = await auditPiSession(sessionDir);
+    assert.equal(audit.summary.totalTurns, 2);
+    assert.equal(audit.summary.inputTokens, 13);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("ignores a .output file whose first line is JSON but not transcript-shaped (a bare value or object)", () => {
+    const tmpDir = createTempDir();
+    const tasksDir = path.join(tmpDir, "tasks");
+    fs.mkdirSync(tasksDir, { recursive: true });
+    fs.writeFileSync(path.join(tasksDir, "status.output"), '{"ok":true}\nExit code: 0\n');
+    fs.writeFileSync(path.join(tasksDir, "code.output"), "42\nDone\n");
+    fs.writeFileSync(path.join(tasksDir, "null.output"), "null\nDone\n");
+
+    assert.deepEqual(collectTranscriptFiles(tasksDir), []);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reports a single file's harness as mixed when it contains both Pi- and Claude-shaped usage envelopes, preserving record order", async () => {
+    const tmpDir = createTempDir();
+    const mixedFile = path.join(tmpDir, "mixed-session.jsonl");
+    fs.writeFileSync(
+      mixedFile,
+      [
+        JSON.stringify({ type: "message", message: { role: "assistant", model: "model-a", usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0 } } }),
+        JSON.stringify({ type: "assistant", message: { role: "assistant", model: "claude-opus-5-5", id: "msg_1", usage: { input_tokens: 50, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }),
+      ].join("\n") + "\n",
+    );
+
+    const parsed = await parseTranscriptFile(mixedFile);
+    assert.equal(parsed.harness, "mixed");
+    assert.equal(parsed.turns.length, 2);
+    assert.equal(parsed.turns[0].usage.input, 100);
+    assert.equal(parsed.turns[1].usage.input, 50);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("hints at the detected harness and --harness auto when a forced --harness mode finds zero usage turns", async () => {
+    const tmpDir = createTempDir();
+    const claudeFile = path.join(tmpDir, "agent-claude-forced.jsonl");
+    writeClaudeTranscript(claudeFile, [
+      { usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+
+    await assert.rejects(
+      () => auditPiSession(claudeFile, { harness: "pi" }),
+      /No assistant turns with token usage found in .*\(detected claude-shaped usage envelopes; try --harness auto\)/,
+    );
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("classifies a Claude agent-<id>.jsonl transcript without a meta sidecar as coordinator, not a generic subagent bucket", async () => {
+    const tmpDir = createTempDir();
+    const claudeFile = path.join(tmpDir, "agent-nometa123.jsonl");
+    writeClaudeTranscript(claudeFile, [
+      { usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+
+    const audit = await auditPiSession(claudeFile);
+    assert.equal(audit.sessions[0].role, "coordinator");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("mentions .output files too in the no-transcripts error", async () => {
+    const tmpDir = createTempDir();
+    const emptyDir = path.join(tmpDir, "empty-dir");
+    fs.mkdirSync(emptyDir);
+
+    const stdout = captureStream();
+    const stderr = captureStream();
+    assert.equal(await runAuditCli([emptyDir], { stdout, stderr }), 1);
+    assert.match(stderr.value, /No \.jsonl transcripts found/);
+    assert.match(stderr.value, /\.output/);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });

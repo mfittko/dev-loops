@@ -35,30 +35,44 @@ function detectHarnessFromUsageShape(usage) {
   return null;
 }
 
+const OUTPUT_SNIFF_BYTES = 64 * 1024;
+
 /**
- * A background-task `.output` file may hold plain-text logs rather than a transcript.
- * Only collect it if at least one line parses as JSON.
+ * A background-task `.output` file may hold plain-text logs, or a single JSON value that
+ * is not a transcript record at all (e.g. `{"ok":true}`, `42`, `null`). Only collect it
+ * when its first non-empty line parses as a JSON object shaped like a transcript record
+ * (a string `type`, or an object `message`); otherwise later plain-text lines would be
+ * miscounted as malformed. Reads only a bounded prefix so a large non-transcript file
+ * isn't read in full just to reject it.
  * @param {string} filePath
  * @returns {boolean}
  */
-function hasAnyParseableJsonLine(filePath) {
-  let content;
+function looksLikeTranscriptOutputFile(filePath) {
+  let prefix;
   try {
-    content = fs.readFileSync(filePath, "utf8");
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(OUTPUT_SNIFF_BYTES);
+      const bytesRead = fs.readSync(fd, buffer, 0, OUTPUT_SNIFF_BYTES, 0);
+      prefix = buffer.toString("utf8", 0, bytesRead);
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     return false;
   }
-  for (const rawLine of content.split("\n")) {
-    const trimmed = rawLine.trim();
-    if (!trimmed) continue;
-    try {
-      JSON.parse(trimmed);
-      return true;
-    } catch {
-      // keep scanning; a stray plain-text line does not disqualify a later JSON line
-    }
+
+  const firstLine = prefix.split("\n").map((line) => line.trim()).find((line) => line.length > 0);
+  if (!firstLine) return false;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(firstLine);
+  } catch {
+    return false;
   }
-  return false;
+  if (!parsed || typeof parsed !== "object") return false;
+  return typeof parsed.type === "string" || (parsed.message !== null && typeof parsed.message === "object");
 }
 
 function findRepositoryRoot(startPath) {
@@ -231,7 +245,7 @@ function collectTranscriptFilesWithMetadata(targetPath) {
         continue;
       }
       if (e.isFile() && e.name.endsWith(".output")) {
-        if (hasAnyParseableJsonLine(full)) files.push(full);
+        if (looksLikeTranscriptOutputFile(full)) files.push(full);
         continue;
       }
       // Claude Code task directories hold `.output` symlinks to `agent-<id>.jsonl`
@@ -244,7 +258,7 @@ function collectTranscriptFilesWithMetadata(targetPath) {
           continue; // broken symlink
         }
         if (!targetStat.isFile()) continue;
-        if (e.name.endsWith(".output") && !hasAnyParseableJsonLine(full)) continue;
+        if (e.name.endsWith(".output") && !looksLikeTranscriptOutputFile(full)) continue;
         files.push(full);
       }
     }
@@ -306,6 +320,8 @@ function buildClaudeTurn(data, msg, usage, currentAgent, segmentId) {
   const promptTokens = [input, cacheRead, cacheWrite].every((value) => value !== null)
     ? input + cacheRead + cacheWrite
     : null;
+  const messageId = typeof msg.id === "string" ? msg.id : null;
+  const requestId = typeof data.requestId === "string" ? data.requestId : null;
   return {
     timestamp: data.timestamp || msg.timestamp || null,
     model: msg.model || data.model || "unknown",
@@ -321,6 +337,9 @@ function buildClaudeTurn(data, msg, usage, currentAgent, segmentId) {
       totalTokens: componentTotal,
       cost: null, // Claude transcripts carry no cost; list-price estimation is out of scope.
     },
+    // Cross-file identity for a resumed session's replayed history (see the audit-wide
+    // dedupe Set in auditPiSession). Pi turns never set this.
+    dedupeKey: messageId !== null ? `${messageId}:${requestId ?? ""}` : null,
   };
 }
 
@@ -359,7 +378,7 @@ function readClaudeMetaSidecar(filePath) {
  * harness per record from the usage envelope's field-naming shape unless `harness` overrides it.
  * @param {string} filePath
  * @param {{ harness?: "auto" | "pi" | "claude" }} [options]
- * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null, isForkSnapshot: boolean, inheritedTurnCount: number, unresolvedForkBoundary: boolean, malformedLineCount: number, harness: "pi" | "claude" | null }>}
+ * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null, isForkSnapshot: boolean, inheritedTurnCount: number, unresolvedForkBoundary: boolean, malformedLineCount: number, harness: "pi" | "claude" | "mixed" | null, detectedOtherHarnesses: string[] }>}
  */
 export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
   const stat = fs.statSync(filePath);
@@ -373,6 +392,7 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
       unresolvedForkBoundary: false,
       malformedLineCount: 0,
       harness: null,
+      detectedOtherHarnesses: [],
     };
   }
 
@@ -386,8 +406,16 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
   let forkBoundarySeen = false;
   let inheritedTurnCount = 0;
   let malformedLineCount = 0;
-  let pendingClaudeTurn = null;
-  let fileHarness = null;
+  // Claude Code logs one record per content block; consecutive or interleaved records
+  // sharing one message.id are one API call. Track each id's turn by index (in first-
+  // appearance order) so a later record for the same id overwrites in place instead of
+  // being appended, which would double-count interleaved ids (A, B, A).
+  let claudeTurnIndexById = new Map();
+  // Per-file record shapes seen (finding: report "mixed" when a file contains both).
+  const fileHarnessesSeen = new Set();
+  // Record shapes seen that don't match a forced (non-"auto") --harness, so a zero-turn
+  // result can hint at the shape that was actually present.
+  const detectedOtherHarnesses = new Set();
 
   const rl = readline.createInterface({
     input: fs.createReadStream(filePath, { encoding: "utf8" }),
@@ -425,6 +453,7 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
         ) {
           inheritedTurnCount = turns.filter(isUsageBearing).length;
           turns = [];
+          claudeTurnIndexById = new Map();
           forkBoundarySeen = true;
         }
         sessionInfo = data;
@@ -441,20 +470,24 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
         const usage = msg.usage || data.usage;
         if (usage) {
           const detectedHarness = detectHarnessFromUsageShape(usage);
+          if (harness !== "auto" && detectedHarness !== null && detectedHarness !== harness) {
+            detectedOtherHarnesses.add(detectedHarness);
+          }
           const effectiveHarness = harness === "auto" ? (detectedHarness ?? "pi") : harness;
-          fileHarness = effectiveHarness;
+          fileHarnessesSeen.add(effectiveHarness);
 
           if (effectiveHarness === "claude") {
             const claudeTurn = buildClaudeTurn(data, msg, usage, currentAgent, segmentId);
-            // Claude Code logs one record per content block; consecutive records sharing
-            // one message.id are one API call. Keep only the last record's usage per id.
+            // Keep only the last record's usage per message.id, in first-appearance
+            // order; a record without an id is pushed directly (see the class comment).
             const messageId = typeof msg.id === "string" ? msg.id : null;
-            if (messageId !== null && pendingClaudeTurn?.id === messageId) {
-              pendingClaudeTurn.turn = claudeTurn;
+            if (messageId === null) {
+              turns.push(claudeTurn);
+            } else if (claudeTurnIndexById.has(messageId)) {
+              turns[claudeTurnIndexById.get(messageId)] = claudeTurn;
             } else {
-              if (pendingClaudeTurn) turns.push(pendingClaudeTurn.turn);
-              pendingClaudeTurn = messageId !== null ? { id: messageId, turn: claudeTurn } : null;
-              if (messageId === null) turns.push(claudeTurn);
+              claudeTurnIndexById.set(messageId, turns.length);
+              turns.push(claudeTurn);
             }
           } else {
             const input = toNonNegativeFiniteNumber(usage.input);
@@ -490,9 +523,9 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
     }
   }
 
-  if (pendingClaudeTurn) {
-    turns.push(pendingClaudeTurn.turn);
-  }
+  // A file can carry both Pi- and Claude-shaped usage envelopes under auto-detection
+  // (e.g. a mixed-content collection); report "mixed" rather than picking the last one.
+  const fileHarness = fileHarnessesSeen.size > 1 ? "mixed" : [...fileHarnessesSeen][0] ?? null;
 
   return {
     turns,
@@ -503,6 +536,7 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
     unresolvedForkBoundary: isForkSnapshot && !forkBoundarySeen,
     malformedLineCount,
     harness: fileHarness,
+    detectedOtherHarnesses: [...detectedOtherHarnesses],
   };
 }
 
@@ -623,13 +657,19 @@ function splitTurnsByAgentSegment(turns) {
 export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
   const { files } = collectTranscriptFilesWithMetadata(targetPath);
   if (files.length === 0) {
-    throw new Error(`No .jsonl transcripts found in ${targetPath}`);
+    throw new Error(`No .jsonl transcripts found in ${targetPath} (nor any .output transcripts)`);
   }
 
   const sessions = [];
   const modelAggregates = Object.create(null);
   const overallAggregate = createUsageAggregate();
   const harnessesSeen = new Set();
+  const detectedOtherHarnesses = new Set();
+  // A resumed Claude session can replay prior history sharing one message.id + requestId
+  // with an earlier file. `files` is processed in sorted order (see
+  // collectTranscriptFilesWithMetadata), so the first occurrence of a given key wins and
+  // every later occurrence across any file is skipped.
+  const seenClaudeTurnKeys = new Set();
 
   let forkSnapshotsProcessed = 0;
   let retainedForkTurns = 0;
@@ -640,8 +680,14 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
   for (const file of files) {
     const parsed = await parseTranscriptFile(file, { harness });
     if (parsed.harness) harnessesSeen.add(parsed.harness);
+    for (const other of parsed.detectedOtherHarnesses) detectedOtherHarnesses.add(other);
     const claudeMeta = parsed.harness === "claude" ? readClaudeMetaSidecar(file) : null;
-    const usageTurns = parsed.turns.filter(isUsageBearing);
+    const usageTurns = parsed.turns.filter(isUsageBearing).filter((turn) => {
+      if (!turn.dedupeKey) return true;
+      if (seenClaudeTurnKeys.has(turn.dedupeKey)) return false;
+      seenClaudeTurnKeys.add(turn.dedupeKey);
+      return true;
+    });
     malformedLines += parsed.malformedLineCount;
     if (parsed.unresolvedForkBoundary) unresolvedForkBoundaries += 1;
     if (parsed.isForkSnapshot) {
@@ -705,7 +751,12 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
   }
 
   if (sessions.length === 0) {
-    throw new Error(`No assistant turns with token usage found in ${targetPath}`);
+    // A forced --harness mode can find zero turns while the other extractor would find
+    // some (e.g. --harness pi against a Claude transcript); name the detected shape.
+    const hint = harness !== "auto" && detectedOtherHarnesses.size > 0
+      ? ` (detected ${[...detectedOtherHarnesses].sort().join(", ")}-shaped usage envelopes; try --harness auto)`
+      : "";
+    throw new Error(`No assistant turns with token usage found in ${targetPath}${hint}`);
   }
 
   const modelAggregation = Object.create(null);
