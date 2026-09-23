@@ -204,6 +204,18 @@ test("every PR-creating route loads Copilot Loop Operations or the local SKILL",
   for (const route of ["external_pr_followup", "reviewer_fixer", "final_approval"]) {
     assert.ok(row(route).includes("same as `copilot_pr_followup`"), `${route} must inherit the copilot_pr_followup pack`);
   }
+  // Runtime requiredReads: STRATEGY_REQUIRED_READS is not exported, so slice
+  // each strategy entry from the resolver source text.
+  const resolver = readRepo("scripts/loop/resolve-dev-loop-startup.mjs");
+  for (const route of ["issue_intake", "copilot_pr_followup", "external_pr_followup", "reviewer_fixer", "final_approval"]) {
+    const start = resolver.indexOf(`  ${route}: [`);
+    const end = start === -1 ? -1 : resolver.indexOf("],", start);
+    assert.ok(start !== -1 && end !== -1, `STRATEGY_REQUIRED_READS entry for ${route} must exist in the startup resolver`);
+    assert.ok(
+      resolver.slice(start, end).includes('"skills/docs/copilot-loop-operations.md"'),
+      `${route} runtime requiredReads must include skills/docs/copilot-loop-operations.md`,
+    );
+  }
 });
 
 test("main-agent contract cites the route-neutral PRE-PR-BEFORE-FIRST-PUSH scope", () => {
