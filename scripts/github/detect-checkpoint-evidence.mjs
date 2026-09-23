@@ -1174,12 +1174,21 @@ async function main() {
       // login narrowing can only SHRINK that count, so a marker-only 0
       // already proves the exact-author count is 0 too. A login-resolution
       // failure fails closed to -1, same as an unreadable thread payload.
-      const markerOnlyGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
-      if (markerOnlyGateThreadCount === 0) {
-        unresolvedGateThreadCount = 0;
-      } else {
-        const login = await resolveAuthenticatedLogin({ env: process.env });
-        unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, login);
+      // Its own try/catch: a `gh api user` failure here must fail closed
+      // ONLY unresolvedGateThreadCount, never overwrite the already-computed
+      // unresolvedThreadCount above (that count is unrelated to the login
+      // lookup and buildPreMergeGateCheck's diagnostic depends on it staying
+      // accurate).
+      try {
+        const markerOnlyGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
+        if (markerOnlyGateThreadCount === 0) {
+          unresolvedGateThreadCount = 0;
+        } else {
+          const login = await resolveAuthenticatedLogin({ env: process.env });
+          unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, login);
+        }
+      } catch {
+        unresolvedGateThreadCount = -1;
       }
     } catch {
       unresolvedThreadCount = -1;

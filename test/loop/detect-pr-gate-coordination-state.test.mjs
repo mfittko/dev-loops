@@ -618,6 +618,88 @@ test("#2381: a DRAFT PR with a clean draft_gate marker but ONE unresolved gate-a
   }
 });
 
+// #2381: the detector-level fail-closed case — reuses the deadlock fixture
+// above but makes the `gh api user` login lookup itself fail (after a
+// marker-only candidate thread was found). No detector-level test previously
+// stubbed a failing login call; a regression here (e.g. falling back to the
+// marker-only count, or leaving unresolvedGateThreadCount undefined, which
+// maps to currentHeadClean=true) would fail open and go undetected.
+test("#2381: a login-resolution failure at the detector level fails closed (-1), not mark_ready_for_review", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-2381-login-fail-"));
+  try {
+    const headSha = "abc1234567";
+    const questionMarker = buildFindingMarker({ fp: "b".repeat(16), severity: "question", angle: "scope", round: 1 });
+    const questionThreadNode = {
+      id: "PRRT_Q2",
+      isResolved: false,
+      isOutdated: false,
+      path: "src/scope.mjs",
+      line: 4,
+      comments: {
+        nodes: [{
+          id: "PRRC_Q2",
+          databaseId: 9002,
+          body: `${questionMarker}\n**question** (\`scope\`): why this approach?`,
+          author: { login: "dev-loops-gate[bot]", __typename: "Bot" },
+        }],
+      },
+    };
+    const cleanDraftGateBody = renderGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha,
+      verdict: "clean",
+      findingsSummary: "no blocking issues found",
+      nextAction: "mark ready for review",
+    });
+    const env = await writeGhStub(tempDir, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: headSha,
+          mergeStateStatus: "CLEAN",
+          body: "## Objective\n\nShip.\n\n## In scope\n\n- x\n\n## Explicit non-goals\n\n- y\n\n## Acceptance criteria\n\n- [ ] x\n\n## Definition of done\n\n- [ ] tests pass\n\n## Open questions/risks\n\n- none\n",
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [questionThreadNode], pageInfo: { hasNextPage: false } } } } } }) },
+      // ADR 0088: a candidate (marker-bearing) thread was found, so the
+      // detector resolves the authenticated login before narrowing the
+      // count — this call fails, so the count must fail closed to -1
+      // rather than fall back to the marker-only count (1).
+      { assertArgs: ["api", "user"], stdout: "", exitCode: 1, stderr: "HTTP 500" },
+      { stdout: jsonLine({ headRefOid: headSha }) },
+      { stdout: jsonLine([[{ id: 11, body: cleanDraftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
+      { stdout: "[]\n" }, // detectCheckpointEvidence's own PR-reviews read
+      {
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: "\n",
+      },
+    ]);
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      buildMockRuntime(env),
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.draftGate.verdict, "clean");
+    assert.equal(result.draftGate.markerCleanThreadStateUnreadable, true);
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
+    assert.match(result.reason, /could not read review-thread state/);
+    assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+
+    const context = await loadPrGateCoordinationContext({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env));
+    assert.equal(context.unresolvedGateThreadCount, -1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // ADR 0088 agreement, paired with detect-checkpoint-evidence-gate-threads.test.mjs's
 // "#2381: a foreign marker-quoting thread ... does not block draftGateSatisfied":
 // a thread that merely QUOTES a gate finding marker, authored by someone
@@ -678,7 +760,7 @@ test("#2381: a foreign marker-quoting thread (not the gate's own login) is narro
       // ADR 0088: the marker-only pass finds one candidate, so the login is
       // resolved to narrow the count — "someone-else" != "dev-loops-gate[bot]",
       // so the narrowed count is 0.
-      { stdout: jsonLine({ login: "dev-loops-gate[bot]" }) },
+      { assertArgs: ["api", "user"], stdout: jsonLine({ login: "dev-loops-gate[bot]" }) },
       { stdout: jsonLine({ headRefOid: headSha }) },
       { stdout: jsonLine([[{ id: 11, body: cleanDraftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
       { stdout: "[]\n" }, // detectCheckpointEvidence's own PR-reviews read

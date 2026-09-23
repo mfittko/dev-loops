@@ -392,6 +392,20 @@ test("#2381 shared fixture: an unreadable thread state (-1) refuses ready-for-re
   const mock = buildUnreadableThreadsMock([threadState]);
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "agreement-repo-root-unreadable-"));
   try {
+    // Both surfaces must fail CLOSED on the same unreadable thread listing —
+    // never report/return as if 0 threads were unresolved. close-gate-findings
+    // has no -1 sentinel of its own: an unreadable thread listing throws
+    // before it ever computes unresolvedGateThreadCount, which is itself a
+    // fail-closed outcome (the ledger stays untouched, no thread gets
+    // resolved), just a different shape than ready-for-review's refusal.
+    await assert.rejects(
+      () => withLedgerFile((ledgerPath) =>
+        closeGateFindings({ ledgerPath }, { env: runIdFreeEnv(), ghCommand: "gh", runChild: mock.runChild, repoRoot }),
+      ),
+      /gh command failed/,
+    );
+    assert.equal(threadState.isResolved, false, "close-gate-findings must not resolve the thread when the listing is unreadable");
+
     await assert.rejects(
       () => readyForReview(
         { repo: REPO, pr: PR, waiveSizeBudget: false, reason: null, approvedBy: null },

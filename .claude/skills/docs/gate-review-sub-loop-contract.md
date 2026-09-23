@@ -1580,9 +1580,11 @@ answer-and-resolve path above never runs for it — once the thread carries a re
 reply, `close-gate-findings.mjs` closes it directly, citing the judge's rejection rationale in
 the reply. A resolving answer reply is identified by WHAT IT IS, never by WHO POSTED IT (a
 non-empty, non-bot, non-System/ghost comment that is not the gate's own automation output and
-not a bare `@copilot` summon): a single-account setup can post the finding and every reply
-under the same authenticated login, so "posted by someone other than the gate" is never the
-criterion. This is still a reply-and-resolve, never a
+does not contain an unescaped `@copilot`/`/copilot*` summon anywhere in its body): a
+single-account setup can post the finding and every reply under the same authenticated login,
+so "posted by someone other than the gate" is never the criterion. A reply that mixes a real
+answer with a summon is still excluded — post the answer and the re-review summon as separate
+replies. This is still a reply-and-resolve, never a
 `disposition=deferred` stamp, and a question is still never fileable; an unanswered question, or
 one the judge disposed `act`/`defer`, is untouched by this exception and still follows the paths
 above. A nit thread is

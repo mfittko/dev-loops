@@ -202,15 +202,18 @@ test("#2381: a foreign marker-quoting thread narrows the gate-authored count to 
 });
 
 // ADR 0088: the login round-trip only runs when the marker-only pass found a
-// candidate thread; when that call itself fails, the whole read fails closed
-// (-1), the same as an unreadable thread payload — never falls back to the
-// wider marker-only count (which would under-narrow and could disagree with
-// the login-narrowed count detect-pr-gate-coordination-state.mjs reports for
-// the same failure). The login call shares the outer try/catch with the
-// thread-payload fetch, so a login failure here is indistinguishable from a
-// thread-fetch failure — both surface the same "could not fetch review
-// thread state" fail-closed message, never a crash.
-test("#2381: a login-resolution failure (after a marker-only candidate is found) fails closed, not the marker-only count", async () => {
+// candidate thread; when that call itself fails, the gate-authored count
+// fails closed (-1), the same as an unreadable thread payload — never falls
+// back to the wider marker-only count (which would under-narrow and could
+// disagree with the login-narrowed count detect-pr-gate-coordination-state.mjs
+// reports for the same failure). The login lookup and the login-narrowed
+// count live in their OWN try/catch, separate from the thread-payload fetch
+// above it: a login failure here must fail closed ONLY the gate-authored
+// count, never clobber the already-computed general unresolvedThreadCount
+// (which the thread-payload fetch read successfully). The diagnostic below
+// therefore names the real unresolved-thread count, not the misleading
+// "could not fetch review thread state" message a shared catch would produce.
+test("#2381: a login-resolution failure (after a marker-only candidate is found) fails closed the gate-authored count without clobbering the already-computed unresolvedThreadCount", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-2381-login-fail-"));
   onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
   await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
@@ -243,7 +246,13 @@ test("#2381: a login-resolution failure (after a marker-only candidate is found)
   const parsed = JSON.parse(result.stderr);
   assert.equal(parsed.preMergeGateCheck.ok, false);
   assert.equal(parsed.evidenceState, "violation");
-  assert.match(parsed.preMergeGateCheck.failures.join("; "), /could not fetch review thread state/i);
+  const failureText = parsed.preMergeGateCheck.failures.join("; ");
+  // The general thread read (t1, unresolved) succeeded BEFORE the login
+  // lookup failed, so the real count (1) must survive into the diagnostic —
+  // never the "could not fetch review thread state" message a shared catch
+  // would produce by clobbering unresolvedThreadCount back to -1.
+  assert.match(failureText, /unresolved review threads present \(1\)/i);
+  assert.doesNotMatch(failureText, /could not fetch review thread state/i);
 });
 
 test("runIdFreeEnv strips ambient markers, drops undefined overrides, and lets explicit overrides win", () => {

@@ -581,10 +581,20 @@ function findingFingerprintMatches(finding, fp) {
 // pass cannot actually resolve on the merits. A plain `null` (no matching
 // prior ledger at all) is a genuine cache miss and still falls through.
 async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate, headSha, tmpRoot, repoRoot }) {
-  const current = findings.find((f) =>
+  const currentMatches = findings.filter((f) =>
     f && typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0 && findingFingerprintMatches(f, fp),
   );
-  if (current) {
+  if (currentMatches.length > 0) {
+    // fingerprintFinding hashes only files[0] + the normalized summary, and
+    // the ledger does not dedupe by fingerprint — two angles can share one
+    // fingerprint with different judge dispositions in the SAME ledger.
+    // findings.find() would pick whichever comes first in array order,
+    // fail open on ng:0 for one of the two, and disagree with tier 2's own
+    // `{ ambiguous: true }` stop on the identical case. Collect every match
+    // and stop, same as tier 2, when they disagree.
+    const dispositions = new Set(currentMatches.map((f) => f.judgeDisposition.trim()));
+    if (dispositions.size > 1) return null;
+    const current = currentMatches[0];
     const rationale = typeof current.judgeRationale === "string" && current.judgeRationale.trim().length > 0
       ? current.judgeRationale.trim()
       : null;

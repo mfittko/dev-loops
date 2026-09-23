@@ -1197,6 +1197,37 @@ test("tier 1 (current ledger) wins over a disagreeing tier 2 (prior local ledger
   ));
 });
 
+// #2381: two CURRENT-ledger findings sharing one fingerprint (fingerprintFinding
+// hashes only files[0] + the normalized summary — the ledger itself is never
+// deduped by fingerprint) with DISAGREEING judge dispositions must STOP tier 1,
+// never pick whichever comes first in ledger array order (that would fail open
+// on ng:0 and depend on array order). This mirrors tier 2's own `{ ambiguous:
+// true }` stop for the identical shape of disagreement. No reply/resolve gh
+// call is stubbed, so a regression that reject-closes here overflows the stub
+// and fails the test.
+test("#2381: two current-ledger findings sharing a fingerprint with disagreeing judge dispositions is ambiguous — tier 1 stops, the thread stays open", async () => {
+  const rejectedFinding = { severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "Already decided elsewhere." };
+  const actedFinding = { severity: "question", angle: "naming", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "Worth fixing after all." };
+  const fp = fingerprintFinding(rejectedFinding);
+  assert.equal(fp, fingerprintFinding(actedFinding)); // same files[0] (none) + summary → same fingerprint, by construction
+  const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 2 })}\n**question** (\`scope\`): why this approach?`;
+  const thread = threadNode({
+    id: "THREAD_Q_TIER1_CONFLICTING_FP",
+    commentId: 6279,
+    body: questionBody,
+    replies: [{ body: "Answering now.", author: "operator" }],
+  });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [rejectedFinding, actedFinding] }), (ledgerPath) => withGhStub(
+    // No reply/resolve entries: a disagreeing tier 1 must never reject-close.
+    roundEntries({ issueComments: roundHistory("draft_gate", 2), threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
 // #2381: tier 2's ambiguous result (a tied or undecidable disagreement across
 // prior local ledgers) must STOP resolveJudgeRejection, never fall through to
 // a stale tier-3 render-time suffix — even when that suffix says reject. Both
