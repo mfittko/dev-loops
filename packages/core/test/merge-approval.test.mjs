@@ -8,6 +8,8 @@ import {
   resolveCiGreenFromRollup,
   evaluateMergePreconditions,
   evaluateCopilotConvergence,
+  COPILOT_CONVERGENCE_STATE,
+  COPILOT_ABSENT_REVIEW_DISPOSITION,
   MERGE_CLASS,
 } from "../src/loop/merge-approval.mjs";
 
@@ -204,6 +206,9 @@ function greenFacts(overrides = {}) {
     comments: [],
     standingAuthorized: true,
     stableRelease: false,
+    // No current-head Copilot review in the default facts: a sanctioned
+    // disposition for this head satisfies copilot_convergence.
+    copilotAbsentReviewDisposition: { kind: "copilot_gate_disabled", headSha: HEAD },
     ...overrides,
   };
 }
@@ -325,13 +330,56 @@ test("evaluateCopilotConvergence: current-head 🟢 Approval recommended passes"
   assert.equal(res.disposition, "clean");
 });
 
-test("evaluateCopilotConvergence: a stale 🟡 non-approval at an EARLIER head does not block", () => {
-  const res = evaluateCopilotConvergence({
-    currentHeadSha: HEAD,
-    reviews: [copilotReview({ commit: OLD, body: "### 🟡 Changes recommended\n\nold finding." })],
-  });
-  assert.equal(res.ok, true, JSON.stringify(res));
+test("evaluateCopilotConvergence: a stale 🟡 at an EARLIER head is not a current-head verdict (state 3, passes only via a sanctioned disposition)", () => {
+  const reviews = [copilotReview({ commit: OLD, body: "### 🟡 Changes recommended\n\nold finding." })];
+  const bare = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews });
+  assert.equal(bare.ok, false, JSON.stringify(bare));
+  assert.equal(bare.state, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+  const disposed = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews, absentReviewDisposition: { kind: "round_cap_clean_fallback", headSha: HEAD } });
+  assert.equal(disposed.ok, true, JSON.stringify(disposed));
+  assert.equal(disposed.disposition, "round_cap_clean_fallback");
+});
+
+test("evaluateCopilotConvergence: the three states produce distinct decisions", () => {
+  const clean = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [copilotReview({ body: "### 🟢 Approval recommended" })] });
+  const findings = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [copilotReview({ body: "### 🟡 Changes recommended" })] });
+  const absent = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [] });
+  assert.deepEqual([clean.state, clean.ok], [COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN, true]);
+  assert.deepEqual([findings.state, findings.ok], [COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_FINDINGS, false]);
+  assert.deepEqual([absent.state, absent.ok], [COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW, false]);
+});
+
+test("evaluateCopilotConvergence: state 3 with no recorded disposition refuses and names the missing review", () => {
+  const res = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [] });
+  assert.equal(res.ok, false);
   assert.equal(res.disposition, null);
+  assert.match(res.reason, /no current-head Copilot review/);
+  for (const kind of Object.values(COPILOT_ABSENT_REVIEW_DISPOSITION)) assert.ok(res.reason.includes(kind), res.reason);
+});
+
+for (const kind of Object.values(COPILOT_ABSENT_REVIEW_DISPOSITION)) {
+  test(`evaluateCopilotConvergence: state 3 passes via ${kind} only when recorded for the current head`, () => {
+    const current = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [], absentReviewDisposition: { kind, headSha: HEAD } });
+    assert.equal(current.ok, true, JSON.stringify(current));
+    assert.equal(current.state, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+    assert.equal(current.disposition, kind);
+    const older = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [], absentReviewDisposition: { kind, headSha: OLD } });
+    assert.equal(older.ok, false, JSON.stringify(older));
+  });
+}
+
+test("evaluateCopilotConvergence: an unsanctioned disposition kind never satisfies state 3", () => {
+  const res = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [], absentReviewDisposition: { kind: "whatever", headSha: HEAD } });
+  assert.equal(res.ok, false);
+});
+
+test("evaluateCopilotConvergence: a head advance after a clean review returns to state 3", () => {
+  const reviews = [copilotReview({ body: "### 🟢 Approval recommended" })];
+  assert.equal(evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews }).state, COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN);
+  const NEXT = "1111111111111111111111111111111111111111";
+  const advanced = evaluateCopilotConvergence({ currentHeadSha: NEXT, reviews });
+  assert.equal(advanced.state, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+  assert.equal(advanced.ok, false);
 });
 
 test("evaluateCopilotConvergence: a later same-head 🟢 supersedes an earlier same-head 🟡", () => {
@@ -411,13 +459,27 @@ test("evaluateCopilotConvergence: an unknown head fails closed (cannot pin a dis
   }
 });
 
-test("evaluateCopilotConvergence: no current-head Copilot review passes (not this precondition's concern)", () => {
-  assert.equal(evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [] }).ok, true);
-  // A human review is ignored entirely.
-  assert.equal(
-    evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [{ user: { login: "alice" }, state: "APPROVED", commit_id: HEAD }] }).ok,
-    true,
-  );
+test("evaluateCopilotConvergence: a human review never counts as a current-head Copilot review", () => {
+  const res = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [{ user: { login: "alice" }, state: "APPROVED", commit_id: HEAD }] });
+  assert.equal(res.state, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+  assert.equal(res.ok, false);
+});
+
+test("evaluateMergePreconditions: no current-head Copilot review and no disposition refuses via copilot_convergence", () => {
+  const res = evaluateMergePreconditions(greenFacts({ copilotAbsentReviewDisposition: null }));
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.failures.map((f) => f.precondition), ["copilot_convergence"]);
+  assert.equal(res.copilotConvergenceState, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+});
+
+test("evaluateMergePreconditions: records the convergence state and the disposition that satisfied it", () => {
+  const absent = evaluateMergePreconditions(greenFacts({ copilotAbsentReviewDisposition: { kind: "docs_only_suppression", headSha: HEAD } }));
+  assert.equal(absent.ok, true, JSON.stringify(absent.failures));
+  assert.equal(absent.copilotConvergenceState, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+  assert.equal(absent.copilotDisposition, "docs_only_suppression");
+  const clean = evaluateMergePreconditions(greenFacts({ reviews: [copilotReview({ body: "### 🟢 Approval recommended" })] }));
+  assert.equal(clean.copilotConvergenceState, COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN);
+  assert.equal(clean.copilotDisposition, "clean");
 });
 
 test("evaluateMergePreconditions: a current-head Copilot 🟡 refuses via the named copilot_convergence precondition", () => {

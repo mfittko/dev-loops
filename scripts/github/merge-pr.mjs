@@ -6,10 +6,19 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as defaultGhJson } from "@dev-loops/core/github/gh";
-import { loadDevLoopConfig, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly } from "@dev-loops/core/config";
 import { countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
-import { evaluateMergePreconditions, resolveCiGreenFromRollup, isValidGithubLogin } from "@dev-loops/core/loop/merge-approval";
+import {
+  evaluateMergePreconditions,
+  evaluateCopilotConvergence,
+  resolveCiGreenFromRollup,
+  isValidGithubLogin,
+  COPILOT_CONVERGENCE_STATE,
+  COPILOT_ABSENT_REVIEW_DISPOSITION,
+} from "@dev-loops/core/loop/merge-approval";
+import { summarizeCopilotReviews, resolveDraftGateRoundResetMs } from "@dev-loops/core/github/copilot-helpers";
+import { getLastCopilotReviewHeadSha, classifyDeltaSinceLastReview } from "./request-copilot-review.mjs";
 import { resolveNamedContextState, LOOP_DERIVED_CI_CHECK_NAME } from "@dev-loops/core/loop/copilot-ci-status";
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
@@ -59,7 +68,11 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   copilot_convergence, size_budget_human_approval, merge_approval.
   copilot_convergence refuses a current-head Copilot "Changes recommended" (🟡)
   or unrecognized non-approval disposition (🔵 "Needs a closer look" is
-  conductor-overridable; unresolved threads still gate it). gate_evidence reuses
+  conductor-overridable; unresolved threads still gate it). With no current-head
+  Copilot review it passes only via a sanctioned disposition for the current
+  head: copilot_gate_disabled (maxCopilotRounds 0), round_cap_clean_fallback
+  (round cap reached), or docs_only_suppression (last reviewed head clean and
+  the delta since then outside Copilot's review surface). gate_evidence reuses
   detect-checkpoint-evidence (draft_gate + current-head pre_approval_gate with
   fan-out provenance, zero unresolved threads, a non-stale/non-foreign runner lock).
 
@@ -72,7 +85,10 @@ Merge classes:
              satisfy it. Fresh approval = a head-pinned APPROVED review by
              <login>, else a head-pinned operator comment "approve merge <headSha>".
 
-Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, method, repo, pr, headSha, copilotDisposition }
+Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition }
+  copilotConvergenceState: current_head_clean | current_head_findings | no_current_head_review
+  copilotDisposition: the current-head review disposition, or for
+  no_current_head_review the sanctioned disposition that satisfied it
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Merge succeeded
@@ -169,11 +185,35 @@ function defaultDetectEvidence({ repo, pr, env, cwd }) {
           // fails closed on absent evidence rather than reading it as "untouched".
           touchesT1: typeof size.sizeTouchesT1 === "boolean" ? size.sizeTouchesT1 : null,
           currentHeadSha: typeof parsed?.currentHeadSha === "string" ? parsed.currentHeadSha : null,
+          draftGate: parsed?.draftGate ?? null,
           failures,
         });
       },
     );
   });
+}
+
+// Resolve the sanctioned disposition that lets a head WITHOUT a current-head
+// Copilot review converge, in order: the Copilot gate is disabled (cap 0); the
+// round cap is exhausted (round-cap clean fallback); or the last Copilot-reviewed
+// head was clean and the delta since then is outside Copilot's review surface
+// (docs-only suppression). Returns `{ kind, headSha }` pinned to the current
+// head, or null (copilot_convergence then refuses).
+async function resolveCopilotAbsentReviewDisposition({ repo, currentHeadSha, rawReviews, config, draftGate }, runtime) {
+  const cap = resolveEffectiveCopilotRoundCap(config ?? { version: 1 });
+  if (cap === 0) return { kind: COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED, headSha: currentHeadSha };
+  // The shared round/last-head helpers read the GraphQL review shape.
+  const reviews = rawReviews.map((r) => ({ ...r, author: { login: r.login }, submittedAt: r.submitted_at }));
+  const { completedCopilotReviewRounds } = summarizeCopilotReviews(reviews, {
+    headSha: currentHeadSha,
+    draftGateResetAtMs: resolveDraftGateRoundResetMs({ draftGate, currentHeadSha }),
+  });
+  if (completedCopilotReviewRounds >= cap) return { kind: COPILOT_ABSENT_REVIEW_DISPOSITION.ROUND_CAP_CLEAN_FALLBACK, headSha: currentHeadSha };
+  const lastReviewedHead = getLastCopilotReviewHeadSha({ reviews });
+  if (!lastReviewedHead || lastReviewedHead === currentHeadSha) return null;
+  if (evaluateCopilotConvergence({ currentHeadSha: lastReviewedHead, reviews }).state !== COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN) return null;
+  const delta = await classifyDeltaSinceLastReview({ repo, base: lastReviewedHead, head: currentHeadSha }, runtime);
+  return delta.carryForward === true ? { kind: COPILOT_ABSENT_REVIEW_DISPOSITION.DOCS_ONLY_SUPPRESSION, headSha: currentHeadSha } : null;
 }
 
 export async function mergePr(options, runtime = {}) {
@@ -242,6 +282,15 @@ export async function mergePr(options, runtime = {}) {
     && evidence.currentHeadSha.length > 0
     && evidence.currentHeadSha !== currentHeadSha;
 
+  // Only a head without a current-head Copilot review needs a sanctioned
+  // disposition, so the extra config/compare work runs only then.
+  const copilotAbsentReviewDisposition = evaluateCopilotConvergence({ currentHeadSha, reviews: rawReviews }).state === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW
+    ? await resolveCopilotAbsentReviewDisposition(
+      { repo: options.repo, currentHeadSha, rawReviews, config: configLoad?.config, draftGate: evidence.draftGate },
+      { env, ghCommand, runChild },
+    )
+    : null;
+
   const verdict = evaluateMergePreconditions({
     humanApprovedBy: options.humanApprovedBy,
     mergeable: typeof prView?.mergeable === "string" ? prView.mergeable : null,
@@ -262,6 +311,7 @@ export async function mergePr(options, runtime = {}) {
     comments,
     standingAuthorized,
     stableRelease: options.stableRelease === true,
+    copilotAbsentReviewDisposition,
   });
 
   if (!verdict.ok) {
@@ -275,6 +325,8 @@ export async function mergePr(options, runtime = {}) {
       approvedBy: options.humanApprovedBy,
       mergeClass: verdict.mergeClass,
       failures: verdict.failures,
+      copilotConvergenceState: verdict.copilotConvergenceState,
+      copilotDisposition: verdict.copilotDisposition,
     };
     throw error;
   }
@@ -344,6 +396,7 @@ export async function mergePr(options, runtime = {}) {
     repo: options.repo,
     pr: options.pr,
     headSha: currentHeadSha,
+    copilotConvergenceState: verdict.copilotConvergenceState,
     copilotDisposition: verdict.copilotDisposition,
   };
 }
