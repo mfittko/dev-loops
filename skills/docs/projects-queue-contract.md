@@ -185,6 +185,17 @@ query($projectId:ID!, $statusFieldId:ID!, $statusOptionId:ID!, $after:String) {
   ordered by POSITION.
 - When the `--limit N` flag is used, tooling takes the first N items from the ordered result.
 
+### Listing lag
+
+The whole-board `ProjectV2.items` listing can lag behind GitHub. It can leave out newly
+added items for hours, so `list-queue-items` and the `reorder` before/after snapshot can
+miss them. This is a known limit of the listing, and tooling does not work around it.
+Move and reorder do not depend on the listing to find an item. A number ref is looked up
+from the issue side (`issueOrPullRequest(number).projectItems`, filtered to the configured
+project and to unarchived items). An item node ID ref is looked up directly with
+`node(id)` and must belong to the configured project and repository. Any other result
+fails closed with `ITEM_NOT_FOUND`.
+
 ## Fail-closed behavior
 
 Tooling never silently assumes board state is correct. Every operation that depends on the
@@ -449,7 +460,9 @@ Helpers consume these minimal GraphQL operations:
 | `linkProjectV2ToRepository` mutation | Link a project board to a repository | bootstrap only |
 | `updateProjectV2Field` mutation | Add columns to an existing Status field | bootstrap auto-repair only |
 | `fields` query (with `ProjectV2SingleSelectField`) | Read Status field + options | bootstrap, list, move, add |
-| `items` query (with `orderBy` + `filterBy`) | List items in a column by POSITION | list, reorder |
+| `items` query (with `orderBy` + `filterBy`) | List items in a column by POSITION | list, reorder (before/after snapshot only) |
+| `issueOrPullRequest` query (with `projectItems`) | Find an item by issue/PR number | move, reorder |
+| `node` query (as `ProjectV2Item`) | Find an item by item node ID and verify its project and repository | move, reorder |
 | `updateProjectV2ItemFieldValue` mutation | Set Status on an item (move between columns) | move |
 | `addProjectV2ItemById` mutation | Add an existing issue/PR to the project | add |
 | `updateProjectV2ItemPosition` mutation | Reorder an item within/between columns | reorder |

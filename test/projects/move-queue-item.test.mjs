@@ -11,7 +11,8 @@ import {
   statusField,
   existingProject,
   fieldsResponse as getFieldsResponse,
-  itemsByContentResponse as getItemsByContentResponse,
+  issueSideItemsResponse,
+  itemNodeResponse,
 } from "./_fixtures.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -148,7 +149,7 @@ describe("move-queue-item", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         {
-          payload: getItemsByContentResponse([
+          payload: issueSideItemsResponse([
             makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
           ]),
         },
@@ -168,9 +169,9 @@ describe("move-queue-item", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         {
-          payload: getItemsByContentResponse([
+          payload: itemNodeResponse(
             makeItemNode("PVTI_42", makeContent("Issue", 10), "Backlog"),
-          ]),
+          ),
         },
         { payload: updateItemFieldResponse() },
       ];
@@ -194,9 +195,9 @@ describe("move-queue-item", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         {
-          payload: getItemsByContentResponse([
+          payload: itemNodeResponse(
             makeItemNode(hyphenId, makeContent("Issue", 10), "In Progress"),
-          ]),
+          ),
         },
         { payload: updateItemFieldResponse() },
       ];
@@ -217,7 +218,7 @@ describe("move-queue-item", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         {
-          payload: getItemsByContentResponse([
+          payload: issueSideItemsResponse([
             makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
           ]),
         },
@@ -242,7 +243,7 @@ describe("move-queue-item", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         {
-          payload: getItemsByContentResponse([
+          payload: issueSideItemsResponse([
             makeItemNode("PVTI_2", makeContent("PR", 20), "In Progress"),
           ]),
         },
@@ -267,7 +268,7 @@ describe("move-queue-item", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         {
-          payload: getItemsByContentResponse([
+          payload: issueSideItemsResponse([
             makeItemNode("PVTI_1", makeContent("Issue", 10), "Next Up"),
           ]),
         },
@@ -289,9 +290,9 @@ describe("move-queue-item", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         {
-          payload: getItemsByContentResponse([
+          payload: itemNodeResponse(
             makeItemNode("PVTI_42", makeContent("Issue", 10), "Done"),
-          ]),
+          ),
         },
         // No mutation
       ];
@@ -320,7 +321,7 @@ describe("move-queue-item", () => {
           { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
           { payload: getFieldsResponse([STATUS_FIELD]) },
           {
-            payload: getItemsByContentResponse([
+            payload: issueSideItemsResponse([
               makeItemNode("PVTI_1", makeContent("Issue", 10), from),
             ]),
           },
@@ -395,7 +396,7 @@ describe("move-queue-item", () => {
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
-        { payload: getItemsByContentResponse([]) },
+        { payload: issueSideItemsResponse([]) },
       ];
       try {
         await main(
@@ -413,7 +414,7 @@ describe("move-queue-item", () => {
         { payload: userPayload() },
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
-        { payload: getItemsByContentResponse([]) },
+        { payload: itemNodeResponse(null) },
       ];
       try {
         await main(
@@ -481,9 +482,9 @@ describe("move-queue-item", () => {
         },
         { payload: getFieldsResponse([orgStatusField]) },
         {
-          payload: getItemsByContentResponse([
+          payload: issueSideItemsResponse([
             makeItemNode("PVTI_org", makeContent("Issue", 10, "myorg/repo"), "Backlog"),
-          ]),
+          ], "PVT_org"),
         },
         { payload: updateItemFieldResponse() },
       ];
@@ -500,7 +501,7 @@ describe("move-queue-item", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         {
-          payload: getItemsByContentResponse([
+          payload: issueSideItemsResponse([
             makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
           ]),
         },
@@ -525,7 +526,7 @@ describe("move-queue-item", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         {
-          payload: getItemsByContentResponse([
+          payload: issueSideItemsResponse([
             makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
           ]),
         },
@@ -545,63 +546,157 @@ describe("move-queue-item", () => {
     });
   });
 
-  describe("regression — well-formed GraphQL for both lookup paths", () => {
-    // The original bug: the by-number path issued a single non-paginated
-    // `items(first:10)` page, so an item beyond the first page (e.g. #857 on a
-    // busy board) reported ITEM_NOT_FOUND even though it was on the board.
-    it("paginates item lookup by number across pages", async () => {
-      const firstPage = {
-        data: {
-          node: {
-            items: {
-              nodes: Array.from({ length: 3 }, (_, i) =>
-                makeItemNode(`PVTI_p1_${i}`, makeContent("Issue", 100 + i), "Done")),
-              pageInfo: { hasNextPage: true, endCursor: "CURSOR_1" },
-            },
-          },
-        },
-      };
-      const secondPage = {
-        data: {
-          node: {
-            items: {
-              nodes: [makeItemNode("PVTI_target", makeContent("Issue", 857), "Done")],
-              pageInfo: { hasNextPage: false, endCursor: null },
-            },
-          },
-        },
-      };
+  describe("regression — lookup does not depend on the lagging board listing", () => {
+    // GitHub's ProjectV2.items listing can lag by hours and omit newly added
+    // items. The move must find them from the issue side or by node, so the
+    // listing is never queried.
+    const listingQueries = (calls) => calls.filter((c) => c.query && c.query.includes("items(first"));
+
+    function responsesWith(itemPayload, extra = [{ payload: updateItemFieldResponse() }]) {
+      return [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: itemPayload },
+        ...extra,
+      ];
+    }
+
+    it("moves by number an item the listing omits but projectItems returns", async () => {
       const calls = [];
       const result = await main(
-        { repo: "mfittko/dev-loops", project: "1", item: "857", toColumn: "Next Up" },
+        { repo: "mfittko/dev-loops", project: "1", item: "2392", toColumn: "Next Up" },
         {
           env: {},
           runChild: recordingRunChild(
-            [
-              { payload: userPayload() },
-              { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-              { payload: getFieldsResponse([STATUS_FIELD]) },
-              { payload: firstPage },
-              { payload: secondPage },
-              { payload: updateItemFieldResponse() },
-            ],
+            responsesWith(issueSideItemsResponse([
+              makeItemNode("PVTI_other_board", makeContent("Issue", 2392), "Done"),
+              makeItemNode("PVTI_new", makeContent("Issue", 2392), "Backlog"),
+            ].map((n, i) => (i === 0 ? { ...n, project: { id: "PVT_other" } } : n)))),
             calls,
           ),
         },
       );
       assert.equal(result.ok, true);
-      assert.equal(result.item.itemId, "PVTI_target");
-      assert.equal(result.item.issueNumber, 857);
-      assert.equal(result.item.previousColumn, "Done");
-      assert.equal(result.item.newColumn, "Next Up");
-
-      // The second item-list call must forward the endCursor — proves pagination.
-      const itemListCalls = calls.filter((c) => c.query && c.query.includes("orderBy:{field:POSITION"));
-      assert.equal(itemListCalls.length, 2, "expected two paginated item-list calls");
-      assert.equal(itemListCalls[1].variables.after, "CURSOR_1");
+      assert.equal(result.item.itemId, "PVTI_new");
+      assert.equal(result.item.issueNumber, 2392);
+      assert.equal(result.item.previousColumn, "Backlog");
+      assert.equal(listingQueries(calls).length, 0, "the board listing must not be queried");
+      const lookup = calls.find((c) => c.query && c.query.includes("issueOrPullRequest"));
+      assert.ok(lookup.query.includes("projectItems(first:100, includeArchived:false)"));
+      assert.ok(lookup.query.includes("__typename"));
+      assert.equal(lookup.variables.owner, "mfittko");
+      assert.equal(lookup.variables.name, "dev-loops");
+      assert.equal(lookup.variables.number, "2392");
     });
 
-    it("item-list query requests __typename and never references ProjectV2.item or an unused $itemId", async () => {
+    it("skips an archived item on the target project", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: "2392", toColumn: "Next Up" },
+          {
+            env: {},
+            runChild: mockRunChild(responsesWith(issueSideItemsResponse([
+              { ...makeItemNode("PVTI_old", makeContent("Issue", 2392), "Done"), isArchived: true },
+            ]), [])),
+          },
+        ),
+        (err) => err.code === "ITEM_NOT_FOUND",
+      );
+    });
+
+    it("moves by node ID an item the listing omits", async () => {
+      const calls = [];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: "PVTI_new", toColumn: "Next Up" },
+        {
+          env: {},
+          runChild: recordingRunChild(
+            responsesWith(itemNodeResponse(makeItemNode("PVTI_new", makeContent("Issue", 2392), "Backlog"))),
+            calls,
+          ),
+        },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.itemId, "PVTI_new");
+      assert.equal(result.item.issueNumber, 2392);
+      assert.equal(listingQueries(calls).length, 0, "the board listing must not be queried");
+      const lookup = calls.find((c) => c.query && c.query.includes("... on ProjectV2Item"));
+      assert.equal(lookup.variables.id, "PVTI_new");
+    });
+
+    it("fails closed for a node ID on another project", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: "PVTI_new", toColumn: "Next Up" },
+          {
+            env: {},
+            runChild: mockRunChild(responsesWith(
+              itemNodeResponse(makeItemNode("PVTI_new", makeContent("Issue", 2392), "Backlog"), "PVT_other"),
+              [],
+            )),
+          },
+        ),
+        (err) => err.code === "ITEM_NOT_FOUND" && /belongs to project "PVT_other", not "PVT_proj1"/.test(err.message),
+      );
+    });
+
+    it("fails closed for a node ID whose issue is in another repo", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: "PVTI_new", toColumn: "Next Up" },
+          {
+            env: {},
+            runChild: mockRunChild(responsesWith(
+              itemNodeResponse(makeItemNode("PVTI_new", makeContent("Issue", 7, "other/repo"), "Backlog")),
+              [],
+            )),
+          },
+        ),
+        (err) => err.code === "ITEM_NOT_FOUND" && /is for repo "other\/repo", not "mfittko\/dev-loops"/.test(err.message),
+      );
+    });
+
+    it("returns ITEM_NOT_FOUND when the issue has no project items", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: "2392", toColumn: "Next Up" },
+          { env: {}, runChild: mockRunChild(responsesWith(issueSideItemsResponse([]), [])) },
+        ),
+        (err) => err.code === "ITEM_NOT_FOUND" && /Item #2392 not found in project/.test(err.message),
+      );
+    });
+
+    it("maps a GraphQL NOT_FOUND on the issue number to ITEM_NOT_FOUND", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: "99999", toColumn: "Next Up" },
+          {
+            env: {},
+            runChild: mockRunChild(responsesWith({
+              data: { repository: { issueOrPullRequest: null } },
+              errors: [{ type: "NOT_FOUND", message: "Could not resolve to an issue or pull request" }],
+            }, [])),
+          },
+        ),
+        (err) => err.code === "ITEM_NOT_FOUND",
+      );
+    });
+
+    it("keeps other GraphQL errors as GRAPHQL_ERROR", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: "2392", toColumn: "Next Up" },
+          {
+            env: {},
+            runChild: mockRunChild(responsesWith({ errors: [{ type: "FORBIDDEN", message: "nope" }] }, [])),
+          },
+        ),
+        (err) => err.code === "GRAPHQL_ERROR",
+      );
+    });
+
+    it("item lookup query requests __typename and never references ProjectV2.item or an unused $itemId", async () => {
       const calls = [];
       await main(
         { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
@@ -613,7 +708,7 @@ describe("move-queue-item", () => {
               { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
               { payload: getFieldsResponse([STATUS_FIELD]) },
               {
-                payload: getItemsByContentResponse([
+                payload: issueSideItemsResponse([
                   makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
                 ]),
               },
@@ -638,12 +733,12 @@ describe("move-queue-item", () => {
       // The item-resolution query must request __typename so issue/PR is
       // classified correctly (the original query omitted it, so issueNumber
       // was always null).
-      const itemListQuery = queries.find((q) => q.includes("orderBy:{field:POSITION"));
-      assert.ok(itemListQuery, "expected an item-list query");
-      assert.ok(itemListQuery.includes("__typename"), "item-list query must request __typename");
+      const itemListQuery = queries.find((q) => q.includes("issueOrPullRequest"));
+      assert.ok(itemListQuery, "expected an item lookup query");
+      assert.ok(itemListQuery.includes("__typename"), "item lookup query must request __typename");
     });
 
-    it("item ID lookup resolves from the paginated list (no ProjectV2.item query)", async () => {
+    it("item ID lookup resolves by node (no ProjectV2.item query)", async () => {
       const calls = [];
       const result = await main(
         { repo: "mfittko/dev-loops", project: "1", item: "PVTI_target", toColumn: "Next Up" },
@@ -655,9 +750,9 @@ describe("move-queue-item", () => {
               { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
               { payload: getFieldsResponse([STATUS_FIELD]) },
               {
-                payload: getItemsByContentResponse([
+                payload: itemNodeResponse(
                   makeItemNode("PVTI_target", makeContent("Issue", 42), "Backlog"),
-                ]),
+                ),
               },
               { payload: updateItemFieldResponse() },
             ],
@@ -706,7 +801,7 @@ describe("move-queue-item", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         {
-          payload: getItemsByContentResponse([
+          payload: issueSideItemsResponse([
             makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
           ]),
         },
@@ -742,7 +837,7 @@ describe("move-queue-item", () => {
           { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
           { payload: getFieldsResponse([STATUS_FIELD]) },
           {
-            payload: getItemsByContentResponse([
+            payload: issueSideItemsResponse([
               makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
             ]),
           },
@@ -791,7 +886,7 @@ describe("move-queue-item", () => {
           { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
           { payload: getFieldsResponse([STATUS_FIELD]) },
           {
-            payload: getItemsByContentResponse([
+            payload: issueSideItemsResponse([
               makeItemNode("PVTI_20", makeContent("PR", 20), "Backlog"),
             ]),
           },
@@ -820,7 +915,7 @@ describe("move-queue-item", () => {
               { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
               { payload: getFieldsResponse([STATUS_FIELD]) },
               {
-                payload: getItemsByContentResponse([
+                payload: issueSideItemsResponse([
                   makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
                 ]),
               },
@@ -842,7 +937,7 @@ describe("move-queue-item", () => {
           { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
           { payload: getFieldsResponse([STATUS_FIELD]) },
           {
-            payload: getItemsByContentResponse([
+            payload: issueSideItemsResponse([
               makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
             ]),
           },
@@ -870,7 +965,7 @@ describe("move-queue-item", () => {
         { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
         { payload: getFieldsResponse([STATUS_FIELD]) },
         {
-          payload: getItemsByContentResponse([
+          payload: issueSideItemsResponse([
             makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog"),
           ]),
         },
@@ -895,7 +990,7 @@ describe("move-queue-item", () => {
             { payload: userPayload() },
             { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
             { payload: getFieldsResponse([STATUS_FIELD]) },
-            { payload: getItemsByContentResponse([]) },
+            { payload: issueSideItemsResponse([]) },
           ]) },
         );
         assert.fail("should have thrown");

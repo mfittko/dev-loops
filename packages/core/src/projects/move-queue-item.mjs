@@ -3,40 +3,13 @@ import { runPickupRefinementGate } from "../loop/issue-refinement-artifact.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "../loop/queue-board-sync.mjs";
 import { resolveProjectSelector, findProject, parseItemRef } from "./resolve-project.mjs";
 import { ghGraphql, resolveOwner } from "../github/gh.mjs";
-import { validateProjectsRepo, discoverProjects, listProjectFields, paginateNodes, extractStatus } from "./projects-access.mjs";
+import { validateProjectsRepo, discoverProjects, listProjectFields, extractStatus, resolveProjectItem } from "./projects-access.mjs";
 
 // ── Validation ───────────────────────────────────────────────────────────
 
 const validateRepo = validateProjectsRepo;
 
 // ── GraphQL fragments ────────────────────────────────────────────────────
-
-const GET_PROJECT_ITEMS_BY_CONTENT = [
-  "query($projectId:ID!, $after:String) {",
-  "  node(id:$projectId) {",
-  "    ... on ProjectV2 {",
-  "      items(first:100, after:$after, orderBy:{field:POSITION, direction:ASC}) {",
-  "        pageInfo { hasNextPage endCursor }",
-  "        nodes {",
-  "          id",
-  "          fieldValues(first:20) {",
-  "            nodes {",
-  "              ... on ProjectV2ItemFieldSingleSelectValue {",
-  "                field { ... on ProjectV2SingleSelectField { id name } }",
-  "                name",
-  "              }",
-  "            }",
-  "          }",
-  "          content {",
-  "            ... on Issue { __typename number repository { nameWithOwner } }",
-  "            ... on PullRequest { __typename number repository { nameWithOwner } }",
-  "          }",
-  "        }",
-  "      }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
 
 const UPDATE_ITEM_FIELD = [
   "mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $optionId:String!) {",
@@ -52,19 +25,6 @@ const UPDATE_ITEM_FIELD = [
 
 const listAllProjects = discoverProjects;
 const listAllFields = listProjectFields;
-
-// ── Paginated item listing (position order) ──────────────────────────────
-
-function fetchAllItems(projectId, env, runChild) {
-  return paginateNodes({
-    query: GET_PROJECT_ITEMS_BY_CONTENT,
-    variables: { projectId },
-    selectConnection: (payload) => payload?.data?.node?.items,
-    env,
-    runChild,
-    entity: "items",
-  });
-}
 
 const statusOf = extractStatus;
 
@@ -84,7 +44,7 @@ function classifyExitCode(err) {
 async function main(args, { env = process.env, runChild, cwd = null } = {}) {
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
-  const [owner, repoName] = repo.split("/");
+  const [owner] = repo.split("/");
   const selector = resolveProjectSelector(args);
   const itemRef = parseItemRef(args.item);
   const toColumn = (args.toColumn ?? "").trim();
@@ -122,43 +82,9 @@ async function main(args, { env = process.env, runChild, cwd = null } = {}) {
     );
   }
 
-  // 4. Find the item.
-  //
-  // Fetch the full board item list ONCE (paginated, position order) and resolve
-  // BOTH ref kinds against it. This reuses the proven pattern from
-  // reorder-queue-item / list-queue-items: a node-id ref matches by item.id, a
-  // number ref matches by content.number. Both are scoped to the requested repo
-  // so a cross-project ref fails closed with ITEM_NOT_FOUND. (The previous code
-  // used `ProjectV2.item` — a field that does not exist — for the node-id path,
-  // and a single non-paginated `items(first:10)` page for the number path, so it
-  // could not find items beyond the first page.)
-  const allItems = await fetchAllItems(project.id, env, child);
-
-  let match;
-  if (itemRef.kind === "id") {
-    match = allItems.find(
-      (it) => it.id === itemRef.value && it.content?.repository?.nameWithOwner === repo,
-    );
-    if (!match) {
-      throw Object.assign(
-        new Error(`Item "${itemRef.value}" not found in project "${project.title}" for repo "${repo}"`),
-        { code: "ITEM_NOT_FOUND" },
-      );
-    }
-  } else {
-    match = allItems.find(
-      (it) =>
-        it.content &&
-        it.content.repository?.nameWithOwner === repo &&
-        it.content.number === itemRef.value,
-    );
-    if (!match) {
-      throw Object.assign(
-        new Error(`Item #${itemRef.value} not found in project "${project.title}" for repo "${repo}"`),
-        { code: "ITEM_NOT_FOUND" },
-      );
-    }
-  }
+  // 4. Find the item from the issue side or by node, never from the board
+  // listing: `ProjectV2.items` can lag behind GitHub and omit new items.
+  const match = await resolveProjectItem({ projectId: project.id, repo, itemRef, env, runChild: child });
 
   const itemId = match.id;
   const previousColumn = statusOf(match);

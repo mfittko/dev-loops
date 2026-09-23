@@ -269,16 +269,14 @@ describe("reconcile-queue main (#1069)", () => {
         },
       },
       {
+        // Direct item node lookup (`node(id)` as a ProjectV2Item on the project).
         data: {
           node: {
-            items: {
-              pageInfo: { hasNextPage: false, endCursor: null },
-              nodes: [{
-                id: hyphenId,
-                fieldValues: { nodes: [{ field: { id: "PVTSSF_status", name: "Status" }, name: "Backlog" }] },
-                content: { __typename: "Issue", number: 1196, repository: { nameWithOwner: "o/r" } },
-              }],
-            },
+            id: hyphenId,
+            isArchived: false,
+            project: { id: "PVT_proj1" },
+            fieldValues: { nodes: [{ field: { id: "PVTSSF_status", name: "Status" }, name: "Backlog" }] },
+            content: { __typename: "Issue", number: 1196, repository: { nameWithOwner: "o/r" } },
           },
         },
       },

@@ -200,3 +200,113 @@ export function extractStatus(node) {
   }
   return null;
 }
+
+// ── Single item resolution ─────────────────────────────────────────────────
+
+// Item projection shared by both lookups. It matches the board listing node
+// shape (id, fieldValues, content) so `extractStatus` works on the result.
+const ITEM_FIELDS = [
+  "id isArchived project { id }",
+  "fieldValues(first:20) {",
+  "  nodes {",
+  "    ... on ProjectV2ItemFieldSingleSelectValue {",
+  "      field { ... on ProjectV2SingleSelectField { id name } }",
+  "      name",
+  "    }",
+  "  }",
+  "}",
+  "content {",
+  "  ... on Issue { __typename number repository { nameWithOwner } }",
+  "  ... on PullRequest { __typename number repository { nameWithOwner } }",
+  "}",
+].join("\n");
+
+// ponytail: projectItems(first:100) ceiling; an issue on more than 100 boards needs a page loop here.
+const GET_ITEMS_BY_CONTENT_NUMBER = [
+  "query($owner:String!, $name:String!, $number:Int!) {",
+  "  repository(owner:$owner, name:$name) {",
+  "    issueOrPullRequest(number:$number) {",
+  `      ... on Issue { projectItems(first:100, includeArchived:false) { nodes { ${ITEM_FIELDS} } } }`,
+  `      ... on PullRequest { projectItems(first:100, includeArchived:false) { nodes { ${ITEM_FIELDS} } } }`,
+  "    }",
+  "  }",
+  "}",
+].join("\n");
+
+const GET_ITEM_BY_ID = [
+  "query($id:ID!) {",
+  `  node(id:$id) { ... on ProjectV2Item { ${ITEM_FIELDS} } }`,
+  "}",
+].join("\n");
+
+function itemNotFound(message) {
+  return Object.assign(new Error(message), { code: "ITEM_NOT_FOUND" });
+}
+
+// Run a lookup query where a GraphQL NOT_FOUND error means "no such item".
+// Any other GraphQL error still fails as GRAPHQL_ERROR.
+async function lookupGraphql(query, vars, env, runChild) {
+  const payload = await ghGraphql(query, vars, env, runChild, { allowErrors: true });
+  const errors = payload.errors ?? [];
+  const other = errors.filter((e) => e?.type !== "NOT_FOUND");
+  if (other.length > 0) {
+    throw Object.assign(
+      new Error(`GraphQL errors: ${other.map((e) => e.message).join("; ")}`),
+      { code: "GRAPHQL_ERROR" },
+    );
+  }
+  return payload;
+}
+
+/**
+ * Resolve one project item without the whole-board `ProjectV2.items` listing,
+ * which can lag behind GitHub by hours and omit newly added items.
+ *
+ *   - number ref: read the issue or PR's own `projectItems` and pick the
+ *     unarchived item on `projectId`.
+ *   - id ref: look the item node up directly, then verify that it belongs to
+ *     `projectId` and that its content is in `repo`.
+ *
+ * Every miss or mismatch fails closed with code ITEM_NOT_FOUND. Returns a node
+ * in the listing shape: `{ id, isArchived, project, fieldValues, content }`.
+ *
+ * @param {object} opts
+ * @param {string} opts.projectId
+ * @param {string} opts.repo  validated `owner/name`
+ * @param {{kind:"number"|"id", value:number|string}} opts.itemRef  from parseItemRef
+ * @param {object} opts.env
+ * @param {Function} opts.runChild
+ */
+export async function resolveProjectItem({ projectId, repo, itemRef, env, runChild }) {
+  if (itemRef.kind === "number") {
+    const [owner, name] = repo.split("/");
+    const payload = await lookupGraphql(
+      GET_ITEMS_BY_CONTENT_NUMBER,
+      { owner, name, number: itemRef.value },
+      env,
+      runChild,
+    );
+    const nodes = payload?.data?.repository?.issueOrPullRequest?.projectItems?.nodes ?? [];
+    const match = nodes.find((n) => n && n.project?.id === projectId && !n.isArchived);
+    if (!match) {
+      throw itemNotFound(`Item #${itemRef.value} not found in project "${projectId}" for repo "${repo}"`);
+    }
+    return match;
+  }
+
+  const payload = await lookupGraphql(GET_ITEM_BY_ID, { id: itemRef.value }, env, runChild);
+  const node = payload?.data?.node;
+  if (!node?.id || node.isArchived) {
+    throw itemNotFound(`Item "${itemRef.value}" not found in project "${projectId}" for repo "${repo}"`);
+  }
+  if (node.project?.id !== projectId) {
+    throw itemNotFound(
+      `Item "${itemRef.value}" belongs to project "${node.project?.id ?? "(unknown)"}", not "${projectId}"`,
+    );
+  }
+  const itemRepo = node.content?.repository?.nameWithOwner ?? null;
+  if (itemRepo !== repo) {
+    throw itemNotFound(`Item "${itemRef.value}" is for repo "${itemRepo ?? "(none)"}", not "${repo}"`);
+  }
+  return node;
+}

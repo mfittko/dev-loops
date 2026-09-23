@@ -4,7 +4,8 @@ import { main } from "../../scripts/projects/reorder-queue-item.mjs";
 import {
   userPayload,
   existingProject,
-  itemsByContentResponse as getItemsByContentResponse,
+  issueSideItemsResponse,
+  itemNodeResponse,
 } from "./_fixtures.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -60,7 +61,7 @@ function listUserProjectsResponse(projects) {
 const EXISTING_PROJECT = existingProject();
 
 function emptyItemsResponse() {
-  return getItemsByContentResponse([]);
+  return issueSideItemsResponse([]);
 }
 
 function updatePositionResponse() {
@@ -103,7 +104,7 @@ describe("reorder-queue-item — move to top (no --after)", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse([makeItemNode("PVTI_item_1", 630)]) },
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_item_1", 630)]) },
       { payload: updatePositionResponse() },
     ];
     const runChild = mockRunChild(responses);
@@ -140,9 +141,7 @@ describe("reorder-queue-item — move to top (no --after)", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      // Single fetch-all-items call resolves the id-kind ref (mainFlagForm
-      // no longer issues a separate GET_PROJECT_ITEM lookup).
-      { payload: getItemsByContentResponse([makeItemNode("PVTI_item_x", 88, "PullRequest")]) },
+      { payload: itemNodeResponse(makeItemNode("PVTI_item_x", 88, "PullRequest")) },
       { payload: updatePositionResponse() },
     ];
     const runChild = mockRunChild(responses);
@@ -176,8 +175,7 @@ describe("reorder-queue-item — move to top (no --after)", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      // Single fetch-all-items call resolves the id-kind ref.
-      { payload: getItemsByContentResponse([makeItemNode(hyphenId, 88, "PullRequest")]) },
+      { payload: itemNodeResponse(makeItemNode(hyphenId, 88, "PullRequest")) },
       { payload: updatePositionResponse() },
     ];
 
@@ -196,11 +194,9 @@ describe("reorder-queue-item — move after another item", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      // Single fetch-all-items call resolves BOTH item and after-item.
-      { payload: getItemsByContentResponse([
-        makeItemNode("PVTI_item_630", 630),
-        makeItemNode("PVTI_item_625", 625),
-      ]) },
+      // One issue-side lookup per ref: item, then after-item.
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_item_630", 630)]) },
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_item_625", 625)]) },
       { payload: updatePositionResponse() },
     ];
     const runChild = mockRunChild(responses);
@@ -232,8 +228,9 @@ describe("reorder-queue-item — move after another item", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      // Single fetch-all-items call: item 630 is present, after-ref 999 is not.
-      { payload: getItemsByContentResponse([makeItemNode("PVTI_item_630", 630)]) },
+      // Item 630 is on the board, after-ref 999 is not.
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_item_630", 630)]) },
+      { payload: issueSideItemsResponse([]) },
     ];
     const runChild = mockRunChild(responses);
 
@@ -250,8 +247,9 @@ describe("reorder-queue-item — move after another item", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      // Single fetch-all-items call; item and after-ref both resolve to 630.
-      { payload: getItemsByContentResponse([makeItemNode("PVTI_item_630", 630)]) },
+      // Item and after-ref both resolve to 630.
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_item_630", 630)]) },
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_item_630", 630)]) },
     ];
     const runChild = mockRunChild(responses);
 
@@ -304,7 +302,7 @@ describe("reorder-queue-item — URI project resolution", () => {
   it("resolves a user-scoped board URI without a resolveOwner round-trip", async () => {
     const responses = [
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse([makeItemNode("PVTI_item_1", 630)]) },
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_item_1", 630)]) },
       { payload: updatePositionResponse() },
     ];
     const result = await main(
@@ -327,7 +325,7 @@ describe("reorder-queue-item — board title resolution (no --project)", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse([makeItemNode("PVTI_item_1", 630)]) },
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_item_1", 630)]) },
       { payload: updatePositionResponse() },
     ];
     const result = await main(
@@ -349,7 +347,7 @@ describe("reorder-queue-item — mutation input construction", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse([makeItemNode("PVTI_item_1", 630)]) },
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_item_1", 630)]) },
       { payload: updatePositionResponse() },
     ];
     const runChild = mockRunChild(responses);
@@ -378,12 +376,9 @@ describe("reorder-queue-item — mutation input construction", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      // Single fetch-all-items call resolves item 630 AND the after-ref (a
-      // node ID, "PVTI_item_625") from the same list.
-      { payload: getItemsByContentResponse([
-        makeItemNode("PVTI_item_630", 630),
-        makeItemNode("PVTI_item_625", 625),
-      ]) },
+      // Item 630 resolves from the issue side, the after-ref node ID by node.
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_item_630", 630)]) },
+      { payload: itemNodeResponse(makeItemNode("PVTI_item_625", 625)) },
       { payload: updatePositionResponse() },
     ];
     const runChild = mockRunChild(responses);
