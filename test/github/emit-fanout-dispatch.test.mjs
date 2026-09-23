@@ -374,6 +374,39 @@ test("shares a reviewer for a configured group AND an auto-chunk bundle alike; o
   });
 });
 
+// gate(angles): the contradiction-lens singleton unit's composed prompt
+// instructs the reviewer to self-resolve via resolveReviewerRole(config,
+// "contradiction-lens") — prove that call, against the same shipped
+// extension-defaults config the emitter dispatches with, now actually returns
+// a non-null default prompt (previously this angle had no prompt anywhere,
+// so a dispatched reviewer received no defined task).
+test("contradiction-lens's emitted unit leads with the invariant prefix, and its self-resolve instruction now resolves the new default prompt", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const unit = payload.units.find((u) => u.scope === "pre-approval-gate-contradiction-lens");
+    assert.ok(unit, "contradiction-lens singleton unit must be emitted");
+    const composed = await readFile(unit.promptPath, "utf8");
+    assert.ok(composed.startsWith(PREFIX_BYTES), "composed prompt must lead with the invariant prefix");
+    assert.match(composed, /resolveReviewerRole\(config, "contradiction-lens"\)/);
+
+    // tmpDir has no .devloops of its own, so this resolves the shipped
+    // extension-defaults — the same layer a real reviewer resolves from.
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.deepEqual(errors, []);
+    const { resolveReviewerRole } = await import("@dev-loops/core/config");
+    const role = resolveReviewerRole(config, "contradiction-lens");
+    assert.equal(role.persona, "review");
+    assert.ok(role.prompt && role.prompt.length > 0, "contradiction-lens must resolve a non-empty prompt");
+    assert.match(role.prompt, /contradict/i);
+  });
+});
+
 // End-to-end split-path regression (#2155 wiring slice a, Copilot follow-up):
 // a CONFIGURED group of 5 angles (over REVIEWER_UNIT_MAX_ANGLES) must come out
 // of the REAL emitter (main(), not just expandDispatchUnits in isolation) as
