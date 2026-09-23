@@ -1857,6 +1857,8 @@ export function buildCoordinationEvaluatorInput({
     // the absent/never-driven entry guard keys on a round driven for THIS head
     // (never a raw across-PR copilotReviewRoundCount, which counts prior-head rounds).
     copilotReviewOnCurrentHead: coordinationContext.snapshot?.copilotReviewOnCurrentHead === true,
+    // Blocks the evaluator's absent-review round-cap grant.
+    copilotPriorHeadBodyFeedbackUnresolved: coordinationContext.snapshot?.copilotPriorHeadBodyFeedbackUnresolved ?? null,
     // Operator-marker suppression or carried convergence: computed and
     // verified once in loadPrGateCoordinationContext (_copilot-convergence-carry.mjs)
     // — see detect-pr-gate-coordination-state.mjs.

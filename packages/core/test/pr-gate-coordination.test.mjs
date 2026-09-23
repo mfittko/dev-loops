@@ -3780,10 +3780,12 @@ for (const [label, copilotConvergenceOk] of [["yellow", false], ["unknown", unde
   });
 }
 
-for (const [label, copilotReviewOnCurrentHead, granted, currentHeadSha = "29aa40b7deadbeef"] of [
+for (const [label, copilotReviewOnCurrentHead, granted, currentHeadSha = "29aa40b7deadbeef", copilotPriorHeadBodyFeedbackUnresolved = false] of [
   ["absent", false, true],
   ["findings", true, false],
   ["absent (unknown head)", false, false, null],
+  ["absent, earlier-head body finding without a record,", false, false, undefined, true],
+  ["absent, earlier-head body fact missing,", false, false, undefined, null],
 ]) {
   test(`round_cap_reached with no-convergence and a ${label} current-head review ${granted ? "grants" : "blocks"} the round-cap fallback`, () => {
     // An absent current-head review at the cap IS the round-cap clean fallback;
@@ -3801,6 +3803,7 @@ for (const [label, copilotReviewOnCurrentHead, granted, currentHeadSha = "29aa40
       unresolvedThreadCount: 0,
       copilotConvergenceOk: false,
       copilotReviewOnCurrentHead,
+      copilotPriorHeadBodyFeedbackUnresolved,
       draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
       draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
       preApprovalGate: gate({ visible: false }),
