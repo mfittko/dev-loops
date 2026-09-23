@@ -55,7 +55,7 @@ flowchart TD
     C --> P[Deterministic context + dispatch plan]
     P --> F[Harness-mediated reviewer fan-out]
     F --> I[Deterministic artifact fan-in]
-    I --> J[Harness-mediated fresh judge]
+    I --> J[Harness-mediated judge seeded with prior-round history]
     J --> K[Compact typed result + refs]
 
     K --> R2[Refresh / reconciliation]
@@ -67,6 +67,8 @@ flowchart TD
 ```
 
 The capsule MAY receive unavoidable child handback in its own transcript because the harness owns that delivery. The capsule SHALL be short-lived and SHALL NOT propagate raw reviewer/judge transcripts or bulk findings into the outer coordinator.
+
+The capsule's freshness is a claim about the outer coordinator's transcript, not about the judge's inputs: per `GATE-EXEC-JUDGE-NOT-FRESH`, the judge inside the capsule is seeded with prior-round ledgers and judge verdict artifacts as explicit durable input, and reviewer fresh-context isolation is unchanged by this decision.
 
 The outer coordinator receives compact typed results and references only.
 
