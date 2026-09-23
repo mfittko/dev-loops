@@ -224,6 +224,13 @@ test("Phase 2 routes known-findings reads to the full-body helper and dispositio
   // prove helper behavior, not the conductor's decision to invoke it correctly.
 });
 
+test("Phase 2 delivers known findings by reference and never appends after the promptPath bytes", async () => {
+  const step = extractStep(await readRepo(SKILL), "2", SKILL).replace(/\s+/g, " ");
+  assert.ok(step.includes("`--known-findings <path>`"), "known findings route through the context builder flag");
+  assert.ok(step.includes("never appends anything after the `promptPath` bytes"), "the conductor relays the work order unchanged");
+  assert.doesNotMatch(step, /appended AFTER/i, "no instruction to append evidence after the angle prompt");
+});
+
 test("detect-checkpoint-evidence.mjs has no gate-thread-specific second unresolved-thread counter", async () => {
   // Anti-double-enforcement pin: gate-authored finding threads must route
   // through the SAME unresolvedThreadCount check as every other review
