@@ -221,13 +221,12 @@ const ITEM_FIELDS = [
   "}",
 ].join("\n");
 
-// ponytail: projectItems(first:100) ceiling; an issue on more than 100 boards needs a page loop here.
 const GET_ITEMS_BY_CONTENT_NUMBER = [
-  "query($owner:String!, $name:String!, $number:Int!) {",
+  "query($owner:String!, $name:String!, $number:Int!, $after:String) {",
   "  repository(owner:$owner, name:$name) {",
   "    issueOrPullRequest(number:$number) {",
-  `      ... on Issue { projectItems(first:100, includeArchived:false) { nodes { ${ITEM_FIELDS} } } }`,
-  `      ... on PullRequest { projectItems(first:100, includeArchived:false) { nodes { ${ITEM_FIELDS} } } }`,
+  `      ... on Issue { projectItems(first:100, after:$after, includeArchived:false) { pageInfo { hasNextPage endCursor } nodes { ${ITEM_FIELDS} } } }`,
+  `      ... on PullRequest { projectItems(first:100, after:$after, includeArchived:false) { pageInfo { hasNextPage endCursor } nodes { ${ITEM_FIELDS} } } }`,
   "    }",
   "  }",
   "}",
@@ -282,23 +281,30 @@ export async function resolveProjectItem({ projectId, projectTitle, repo, itemRe
   const projectLabel = projectTitle ?? projectId;
   if (itemRef.kind === "number") {
     const [owner, name] = repo.split("/");
-    const payload = await ghGraphql(
-      GET_ITEMS_BY_CONTENT_NUMBER,
-      { owner, name, number: itemRef.value },
-      env,
-      runChild,
-      { allowErrors: true },
-    );
-    const nodes = payload?.data?.repository?.issueOrPullRequest?.projectItems?.nodes ?? [];
-    const match = nodes.find((n) => n && n.project?.id === projectId && !n.isArchived);
-    if (!match) {
+    let after = null;
+    while (true) {
+      const vars = { owner, name, number: itemRef.value };
+      if (after) vars.after = after;
+      const payload = await ghGraphql(GET_ITEMS_BY_CONTENT_NUMBER, vars, env, runChild, { allowErrors: true });
+      const connection = payload?.data?.repository?.issueOrPullRequest?.projectItems;
+      const match = (connection?.nodes ?? []).find((n) => n && n.project?.id === projectId && !n.isArchived);
       // A partial response can carry errors for other boards the token cannot
       // read (e.g. FORBIDDEN). A match on the configured board wins; the error
-      // is raised only when no match exists.
-      assertOnlyNotFoundErrors(payload);
-      throw itemNotFound(`Item #${itemRef.value} not found in project "${projectLabel}" for repo "${repo}"`);
+      // is raised only when no page holds a match.
+      if (match) return match;
+      const pageInfo = connection?.pageInfo ?? {};
+      if (!pageInfo.hasNextPage) {
+        assertOnlyNotFoundErrors(payload);
+        throw itemNotFound(`Item #${itemRef.value} not found in project "${projectLabel}" for repo "${repo}"`);
+      }
+      if (!pageInfo.endCursor) {
+        throw Object.assign(
+          new Error("Invalid projectItems payload: hasNextPage is true but endCursor is missing"),
+          { code: "GH_API_ERROR" },
+        );
+      }
+      after = pageInfo.endCursor;
     }
-    return match;
   }
 
   const payload = await ghGraphql(GET_ITEM_BY_ID, { id: itemRef.value }, env, runChild, { allowErrors: true });

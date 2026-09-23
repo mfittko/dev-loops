@@ -590,11 +590,81 @@ describe("move-queue-item", () => {
       assert.equal(result.item.previousColumn, "Backlog");
       assert.equal(listingQueries(calls).length, 0, "the board listing must not be queried");
       const lookup = calls.find((c) => c.query && c.query.includes("issueOrPullRequest"));
-      assert.ok(lookup.query.includes("projectItems(first:100, includeArchived:false)"));
+      assert.ok(lookup.query.includes("projectItems(first:100, after:$after, includeArchived:false)"));
       assert.ok(lookup.query.includes("__typename"));
       assert.equal(lookup.variables.owner, "mfittko");
       assert.equal(lookup.variables.name, "dev-loops");
       assert.equal(lookup.variables.number, "2392");
+    });
+
+    it("finds a number match on the second projectItems page", async () => {
+      const calls = [];
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: "2392", toColumn: "Next Up" },
+        {
+          env: {},
+          runChild: recordingRunChild(
+            responsesWith(
+              issueSideItemsResponse(
+                [makeItemNode("PVTI_other_board", makeContent("Issue", 2392), "Done")],
+                "PVT_other",
+                { hasNextPage: true, endCursor: "CURSOR_1" },
+              ),
+              [
+                { payload: issueSideItemsResponse([makeItemNode("PVTI_new", makeContent("Issue", 2392), "Backlog")]) },
+                { payload: updateItemFieldResponse() },
+              ],
+            ),
+            calls,
+          ),
+        },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.item.itemId, "PVTI_new");
+      const lookups = calls.filter((c) => c.query && c.query.includes("issueOrPullRequest"));
+      assert.equal(lookups.length, 2);
+      assert.equal(lookups[0].variables.after, undefined);
+      assert.equal(lookups[1].variables.after, "CURSOR_1");
+    });
+
+    it("returns ITEM_NOT_FOUND when no projectItems page holds a match", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: "2392", toColumn: "Next Up" },
+          {
+            env: {},
+            runChild: mockRunChild(responsesWith(
+              issueSideItemsResponse(
+                [makeItemNode("PVTI_a", makeContent("Issue", 2392), "Done")],
+                "PVT_other",
+                { hasNextPage: true, endCursor: "CURSOR_1" },
+              ),
+              [{ payload: issueSideItemsResponse([makeItemNode("PVTI_b", makeContent("Issue", 2392), "Done")], "PVT_other") }],
+            )),
+          },
+        ),
+        (err) => err.code === "ITEM_NOT_FOUND",
+      );
+    });
+
+    it("fails closed when a projectItems page has hasNextPage without endCursor", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: "2392", toColumn: "Next Up" },
+          {
+            env: {},
+            runChild: mockRunChild(responsesWith(
+              issueSideItemsResponse(
+                [makeItemNode("PVTI_a", makeContent("Issue", 2392), "Done")],
+                "PVT_other",
+                { hasNextPage: true, endCursor: null },
+              ),
+              [],
+            )),
+          },
+        ),
+        (err) => err.code === "GH_API_ERROR" && /hasNextPage is true but endCursor is missing/.test(err.message),
+      );
     });
 
     it("skips an archived item on the target project", async () => {

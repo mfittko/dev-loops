@@ -65,11 +65,11 @@ function onProject(node, projectId) {
 }
 
 // The issue-side lookup envelope: `issueOrPullRequest(n).projectItems`.
-export function issueSideItemsResponse(nodes, projectId = "PVT_proj1") {
+export function issueSideItemsResponse(nodes, projectId = "PVT_proj1", pageInfo = { hasNextPage: false, endCursor: null }) {
   return {
     data: {
       repository: {
-        issueOrPullRequest: { projectItems: { nodes: nodes.map((n) => onProject(n, projectId)) } },
+        issueOrPullRequest: { projectItems: { pageInfo, nodes: nodes.map((n) => onProject(n, projectId)) } },
       },
     },
   };
