@@ -86,6 +86,18 @@ test("unknown --gate value: exit 2", async () => {
   }
 });
 
+test("whitespace-only --harness: exit 2 (never a silent env fallback)", async () => {
+  const dir = await makeFixtureRepo();
+  try {
+    const r = runCli(["--gate", "draft_gate", "--angle", "correctness", "--harness", " "], { cwd: dir });
+    assert.equal(r.status, 2);
+    const payload = JSON.parse(r.stderr.trim());
+    assert.match(payload.error, /--harness must be one of/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 for (const alias of ["draft", "preApproval"]) {
   test(`config-key alias --gate ${alias} is rejected: exit 2 (never inferred/aliased)`, async () => {
     const dir = await makeFixtureRepo();
@@ -254,6 +266,36 @@ for (const harness of ["claude", "pi"]) {
     }
   });
 }
+
+// The layered-config loop above pins a literal angle `model:`, which
+// resolveRoleModel(kind: "angle") returns before it ever reads `harness`
+// (config.mjs), so it cannot prove --harness actually threads through. This
+// fixture instead leaves the angle's `model` unset, sets a `tier:` alias, and
+// configures `models.tiers.<alias>` with DISTINCT claude/pi ids — the only
+// shape that can observe a harness mixup.
+test("--harness selects the harness-specific tier model (no per-angle literal model)", async () => {
+  const dir = await makeFixtureRepo({
+    devloops:
+      "version: 1\nmodels:\n  tiers:\n    resolve-role-2336-tier:\n      claude: claude-tier-model\n      pi: pi-tier-model\ngates:\n  draft:\n    angles:\n      - name: tiered-angle\n        persona: tiered-persona\n        prompt: \"Tiered prompt.\"\n        tier: resolve-role-2336-tier\n",
+  });
+  try {
+    const claude = runCli(["--gate", "draft_gate", "--angle", "tiered-angle", "--harness", "claude"], { cwd: dir });
+    assert.equal(claude.status, 0, claude.stderr);
+    const claudePayload = parseJson(claude.stdout);
+    assert.equal(claudePayload.model, "claude-tier-model");
+
+    const pi = runCli(["--gate", "draft_gate", "--angle", "tiered-angle", "--harness", "pi"], { cwd: dir });
+    assert.equal(pi.status, 0, pi.stderr);
+    const piPayload = parseJson(pi.stdout);
+    assert.equal(piPayload.model, "pi-tier-model");
+
+    // Eligibility/exit code are harness-independent; only the model differs.
+    assert.equal(claudePayload.ok, piPayload.ok);
+    assert.notEqual(claudePayload.model, piPayload.model);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("--harness defaults to claude under a Claude-harness env, pi otherwise", async () => {
   const dir = await makeFixtureRepo({

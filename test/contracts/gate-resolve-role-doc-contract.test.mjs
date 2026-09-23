@@ -40,6 +40,27 @@ test("every edited reviewer surface names `gate resolve-role` as the role source
   }
 });
 
+// Regression guard for the defect issue #2336 exists to remove: reviewer
+// prose instructing an inline `resolveReviewerRole(config, angle)`
+// interpreter call. scripts/github/emit-fanout-dispatch.mjs is exempt — it is
+// the emitter's own dispatch-time source, not reviewer-facing instruction
+// prose — and the explicit "never calls resolveReviewerRole ... inline"
+// prohibition sentence names the function without invoking it, so it does
+// not match this call-shaped pattern.
+const INLINE_CALL_RE = /resolveReviewerRole\(\s*config\b/;
+
+test("no reviewer surface instructs an inline resolveReviewerRole(config, ...) call", () => {
+  for (const rel of REVIEWER_SURFACES) {
+    if (rel === "scripts/github/emit-fanout-dispatch.mjs") continue;
+    const content = read(rel);
+    assert.doesNotMatch(
+      content,
+      INLINE_CALL_RE,
+      `${rel} must not instruct an inline resolveReviewerRole(config, ...) call (OPS-NO-INLINE-INTERPRETER)`,
+    );
+  }
+});
+
 test("generated Claude mirrors are in sync with the edited reviewer surfaces", () => {
   const assets = collectGeneratedAssets({ repoRoot });
   const byTarget = new Map(assets.map((a) => [a.target, a.content]));
@@ -58,7 +79,7 @@ test("generated Claude mirrors are in sync with the edited reviewer surfaces", (
 // `"prompt-missing"`. Plain English use of the bare words ("the resolved
 // angle set", "an unresolved thread") is untouched — only the formatted
 // literal is checked, keeping the false-positive rate low.
-const STATUS_LITERAL_RE = /[`"](resolved|fallback|prompt-missing|unresolved|config-error)[`"]/;
+const STATUS_LITERAL_RE = /[`"](resolved|fallback|prompt-missing|unresolved|non-member|config-error)[`"]/;
 
 // Scoped to paragraphs that actually name `resolve-role`: a bare status word
 // elsewhere in a reviewer surface (e.g. prose describing an unrelated

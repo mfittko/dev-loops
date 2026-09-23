@@ -115,7 +115,11 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
     throw parseError(`--gate must be one of ${REVIEW_OPERATIONS.join("|")} (got ${JSON.stringify(options.gate)})`);
   }
   if (!options.angle) throw parseError("resolve-reviewer-role requires --angle <name>");
-  if (options.harness && !HARNESSES.has(options.harness)) {
+  // `!== null` (not a truthiness check) so a whitespace-only --harness that
+  // trims to "" is still rejected here, matching --gate/--angle's rejection
+  // of the same input, instead of silently falling through to the env
+  // default below.
+  if (options.harness !== null && !HARNESSES.has(options.harness)) {
     throw parseError(`--harness must be one of pi|claude (got ${JSON.stringify(options.harness)})`);
   }
   if (!options.harness) options.harness = isClaudeHarness(env) ? "claude" : "pi";
