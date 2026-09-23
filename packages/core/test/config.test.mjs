@@ -50,6 +50,7 @@ import {
   CLAUDE_MAX_EFFECTIVE_CONCURRENT,
   resolveGateAngleScope,
   resolveEffectiveCopilotRoundCap,
+  resolveRequireCopilotConvergenceAtLatestHead,
   GATE_FULL_LABEL,
   resolveRequireFanoutEvidence,
   resolveRequireFanoutProvenance,
@@ -7315,4 +7316,23 @@ describe("resolvePostMergeActions (#1457)", () => {
     };
     assert.deepEqual(resolvePostMergeActions(config).map((a) => a.name), ["ok"]);
   });
+});
+
+// ── Copilot convergence mode: converged-once default, strict opt-in ─────────
+
+test("refinement.requireCopilotConvergenceAtLatestHead defaults to false (converged-once) and parses true", () => {
+  const parsed = DevLoopConfigSchema.parse({ version: 1, refinement: { fanOut: 3, mode: "parallel" } });
+  assert.equal(parsed.refinement.requireCopilotConvergenceAtLatestHead, false);
+  const strict = DevLoopConfigSchema.parse({ version: 1, refinement: { fanOut: 3, mode: "parallel", requireCopilotConvergenceAtLatestHead: true } });
+  assert.equal(strict.refinement.requireCopilotConvergenceAtLatestHead, true);
+  assert.equal(DevLoopConfigSchema.safeParse({ version: 1, refinement: { fanOut: 3, mode: "parallel", requireCopilotConvergenceAtLatestHead: "yes" } }).success, false);
+});
+
+test("resolveRequireCopilotConvergenceAtLatestHead: true only for an explicit true", () => {
+  assert.equal(resolveRequireCopilotConvergenceAtLatestHead(undefined), false);
+  assert.equal(resolveRequireCopilotConvergenceAtLatestHead({ version: 1 }), false);
+  assert.equal(resolveRequireCopilotConvergenceAtLatestHead(BUILT_IN_DEFAULTS), false);
+  assert.equal(resolveRequireCopilotConvergenceAtLatestHead({ version: 1, refinement: { requireCopilotConvergenceAtLatestHead: false } }), false);
+  assert.equal(resolveRequireCopilotConvergenceAtLatestHead({ version: 1, refinement: { requireCopilotConvergenceAtLatestHead: "true" } }), false);
+  assert.equal(resolveRequireCopilotConvergenceAtLatestHead({ version: 1, refinement: { requireCopilotConvergenceAtLatestHead: true } }), true);
 });

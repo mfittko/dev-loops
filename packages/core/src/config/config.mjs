@@ -110,6 +110,7 @@ const RefinementConfig = z.strictObject({
   fanOut: z.number().int().min(1).max(10).describe("Parallel reviewers per refinement round."),
   mode: z.enum(["parallel", "sequential"]).describe("Whether refinement reviewers run in parallel or one after another."),
   maxCopilotRounds: z.number().int().nonnegative().default(5).describe("Automated Copilot review rounds before converging; 0 disables Copilot review."),
+  requireCopilotConvergenceAtLatestHead: z.boolean().default(false).describe("Require a converged Copilot review at the latest head. False (default): one converged Copilot review stands for later heads, which pre_approval_gate covers. True: a significant change after convergence opens a new Copilot cycle."),
   lowSignal: LowSignalConfig.optional().describe("Early-stop policy for low-signal Copilot rounds."),
   roles: z.array(z.string().trim().min(1)).describe("Review lenses the refinement fan-out dispatches.").optional(),
 });
@@ -1969,6 +1970,20 @@ export function resolveEffectiveCopilotRoundCap(config, { lightweight = false } 
     ? Math.max(0, lightMaxRounds)
     : 1;
   return Math.min(effectiveLightCap, maxCopilotRounds);
+}
+
+/**
+ * Resolve the Copilot convergence mode. False (the default) selects the
+ * converged-once rule: one converged Copilot review stands for later heads.
+ * True restores the strict rule: a significant change after convergence opens
+ * a new Copilot cycle, and only a docs-only or integrate-only delta carries.
+ * Loop and merge both read the mode through this resolver. Light-dispatched
+ * PRs use the same value.
+ * @param {DevLoopConfig} config
+ * @returns {boolean}
+ */
+export function resolveRequireCopilotConvergenceAtLatestHead(config) {
+  return config?.refinement?.requireCopilotConvergenceAtLatestHead === true;
 }
 
 /** Label that forces full fan-out regardless of change size. */
