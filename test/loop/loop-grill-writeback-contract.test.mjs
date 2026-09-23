@@ -219,3 +219,34 @@ test("interactive answers attribute to the resolved operator handle, with human 
   // The resolved-handle acceptance shape is pinned (exit 0, non-empty, not null, plain handle).
   assert.match(skill, /\^\[A-Za-z0-9-\]\{1,39\}\$/, "the handle allowlist shape is documented");
 });
+
+// Zero-gap provenance (#2364): the zero-iteration exit and the owed semantic-pass
+// comment are both load-bearing contract statements, not incidental prose --
+// pin stable phrases (not whole sentences) so wording can still shift.
+test("Step 1 states the zero-iteration grill_clean exit requires recorded provenance", () => {
+  const step1 = skill.split("## Step 1 — Load the target")[1]?.split("## Step 1b")[0] ?? "";
+  assert.match(
+    step1,
+    /zero-iteration `grill_clean` exit requires BOTH a shape-clean artifact AND recorded provenance/i,
+    "Step 1 must state recorded provenance is required, not shape-clean alone",
+  );
+});
+
+test("Step 4 states a zero-gap semantic pass MUST post the results comment, and documents the bypass line", () => {
+  const step4 = skill.split("## Step 4 — Write back")[1]?.split("## Output artifact format")[0] ?? "";
+  assert.match(
+    step4,
+    /Every semantic pass \(Steps 2–4 actually ran\) MUST post this results comment/i,
+    "Step 4 must require every semantic pass to post the results comment",
+  );
+  assert.match(
+    step4,
+    /including a zero-gap pass that finds no gaps to fill/i,
+    "Step 4 must call out the zero-gap case explicitly, not just the general rule",
+  );
+  assert.match(
+    step4,
+    /`bypass: operator-authorized by <handle>` line/,
+    "Step 4 must document the recorded bypass line format",
+  );
+});

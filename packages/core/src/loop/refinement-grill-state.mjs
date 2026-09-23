@@ -95,8 +95,9 @@ const VALID_SURFACES = new Set(["issue", "pr", "plan"]);
 
 // The exact comment title provenance is keyed on (GRILL-SUBLOOP-RATIONALE-COMMENT).
 const RESULTS_COMMENT_TITLE = "🔬 Grill / refinement results";
-// A results comment's recorded bypass line: "bypass: operator-authorized by <handle>".
-const BYPASS_LINE_RE = /^bypass: operator-authorized by ([A-Za-z0-9-]{1,39})\s*$/;
+// A results comment's recorded bypass line: "bypass: operator-authorized by <handle>",
+// with an optional leading @ before the handle and a case-insensitive "bypass:" key.
+const BYPASS_LINE_RE = /^bypass: operator-authorized by @?([A-Za-z0-9][A-Za-z0-9-]{0,38})\s*$/i;
 
 function normalizeCount(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -130,15 +131,26 @@ export function detectGrillProvenance(comments) {
     if (body === null) continue;
 
     const lines = body.split(/\r?\n/);
-    const isResultsComment = lines.some((line) => line.trim().replace(/^#+/, "").trim() === RESULTS_COMMENT_TITLE);
+    // A comment counts as a results comment only when its FIRST non-empty
+    // line (after trimming and stripping leading `#` characters) IS the
+    // title -- this rejects the title merely quoted in a code fence or
+    // appearing later in an unrelated reply.
+    const firstNonEmpty = lines.find((line) => line.trim().length > 0);
+    const isResultsComment = firstNonEmpty !== undefined
+      && firstNonEmpty.trim().replace(/^#+/, "").trim() === RESULTS_COMMENT_TITLE;
     if (!isResultsComment) continue;
 
     provenanceRecorded = true;
-    for (const line of lines) {
-      const match = line.trim().match(BYPASS_LINE_RE);
-      if (match) {
-        bypass = true;
-        bypassBy = match[1];
+    if (!bypass) {
+      // Take the first bypass-line match across all results comments; a
+      // later comment's bypass line never overwrites an earlier one.
+      for (const line of lines) {
+        const match = line.trim().match(BYPASS_LINE_RE);
+        if (match) {
+          bypass = true;
+          bypassBy = match[1];
+          break;
+        }
       }
     }
   }
@@ -180,9 +192,12 @@ export function normalizeGrillSnapshot(raw) {
     reGrillFixedPoint: Boolean(raw.reGrillFixedPoint),
 
     // recorded provenance: a posted `🔬 Grill / refinement results` comment
-    // (see detectGrillProvenance), and whether it carries a recorded bypass line
+    // (see detectGrillProvenance), and whether it carries a recorded bypass line.
+    // A bypass line only ever means anything alongside a recorded comment, so
+    // provenanceBypass is forced false when provenanceRecorded is false --
+    // never a standalone shortcut to grill_clean.
     provenanceRecorded: Boolean(raw.provenanceRecorded),
-    provenanceBypass: Boolean(raw.provenanceBypass),
+    provenanceBypass: Boolean(raw.provenanceRecorded) && Boolean(raw.provenanceBypass),
   };
 }
 

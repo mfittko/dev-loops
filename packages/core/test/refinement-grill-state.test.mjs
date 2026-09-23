@@ -108,6 +108,26 @@ test("a recorded bypass line reaches grill_clean and is flagged as bypass", () =
   assert.equal(result.bypass, true);
 });
 
+test("provenanceBypass is forced false when provenanceRecorded is false: stays at detect_gaps / provenance_missing", () => {
+  const result = interpretRefinementGrillState({
+    loaded: true,
+    detectRan: true,
+    openGapCount: 0,
+    provenanceRecorded: false,
+    provenanceBypass: true,
+  });
+  assert.equal(result.state, GRILL_STATE.DETECT_GAPS);
+  assert.equal(result.reason, "provenance_missing");
+  assert.equal(result.bypass, false);
+});
+
+test("normalizeGrillSnapshot forces provenanceBypass false when provenanceRecorded is false", () => {
+  const s = normalizeGrillSnapshot({ provenanceRecorded: false, provenanceBypass: true });
+  assert.equal(s.provenanceBypass, false);
+  const kept = normalizeGrillSnapshot({ provenanceRecorded: true, provenanceBypass: true });
+  assert.equal(kept.provenanceBypass, true);
+});
+
 test("a normal recorded comment (no bypass line) reaches grill_clean with bypass false", () => {
   const result = interpretRefinementGrillState({
     loaded: true,
@@ -188,6 +208,39 @@ test("detectGrillProvenance: a bypass line inside a results comment is flagged w
 test("detectGrillProvenance: bypass is absent for a normal results comment with no bypass line", () => {
   const result = detectGrillProvenance([{ body: `## ${RESULTS_TITLE}\n\nNo gaps were found.` }]);
   assert.deepEqual(result, { provenanceRecorded: true, bypass: false, bypassBy: null });
+});
+
+test("detectGrillProvenance: the title quoted inside a code fence is not a results comment", () => {
+  const result = detectGrillProvenance([
+    { body: `Here is an example of the heading:\n\n\`\`\`\n## ${RESULTS_TITLE}\n\`\`\`\n\nNot an actual results comment.` },
+  ]);
+  assert.equal(result.provenanceRecorded, false);
+});
+
+test("detectGrillProvenance: the title appearing later in an unrelated reply is not a results comment", () => {
+  const result = detectGrillProvenance([
+    { body: `Thanks! Replying re: ${RESULTS_TITLE}\n\nJust a comment mentioning it, not posting one.` },
+  ]);
+  assert.equal(result.provenanceRecorded, false);
+});
+
+test("detectGrillProvenance: a leading blank line before the ## heading is still accepted", () => {
+  const result = detectGrillProvenance([{ body: `\n\n## ${RESULTS_TITLE}\n\nNo gaps were found.` }]);
+  assert.equal(result.provenanceRecorded, true);
+});
+
+test("detectGrillProvenance: bypass line accepts an optional @ before the handle", () => {
+  const result = detectGrillProvenance([
+    { body: `## ${RESULTS_TITLE}\n\nbypass: operator-authorized by @mfittko\n\nRan anyway.` },
+  ]);
+  assert.deepEqual(result, { provenanceRecorded: true, bypass: true, bypassBy: "mfittko" });
+});
+
+test("detectGrillProvenance: bypass key is case-insensitive", () => {
+  const result = detectGrillProvenance([
+    { body: `## ${RESULTS_TITLE}\n\nBypass: operator-authorized by mfittko\n\nRan anyway.` },
+  ]);
+  assert.deepEqual(result, { provenanceRecorded: true, bypass: true, bypassBy: "mfittko" });
 });
 
 test("detectGrillProvenance: a bypass-shaped line outside any results comment does not count", () => {

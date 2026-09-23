@@ -155,9 +155,9 @@ dev-loops-run cli/index.mjs issue edit --repo <owner/repo> --issue <n> --body-fi
 dev-loops-run scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-rationale-path>
 ```
 
-Never `gh issue comment` directly, and never fold this content back into the issue body. The same `#<number>` hygiene rule (`GRILL-SUBLOOP-NO-BARE-HASH`) applies to the comment. Every semantic pass (Steps 2–4 actually ran) MUST post this results comment, including a zero-gap pass that finds no gaps to fill — its comment states plainly that no gaps were found, so the pass records its own provenance and a later re-run reaches the zero-iteration exit. A pass that proceeds despite a shape-clean `detectIssueRefinementArtifact` result under explicit operator authorization records that as a `bypass: operator-authorized by <handle>` line in the comment; a normal pass (not shape-clean, or no bypass involved) carries no such line. Only the provenance-recorded zero-iteration `grill_clean` exit from Step 1 (already refined AND a results comment already posted, or a `plan` surface) has no rationale to post and skips this step.
+Never `gh issue comment` directly, and never fold this content back into the issue body. The same `#<number>` hygiene rule (`GRILL-SUBLOOP-NO-BARE-HASH`) applies to the comment. Every semantic pass (Steps 2–4 actually ran) MUST post this results comment — on the issue surface AND the PR surface alike — including a zero-gap pass that finds no gaps to fill — its comment states plainly that no gaps were found, so the pass records its own provenance and a later re-run reaches the zero-iteration exit. A pass that proceeds despite a shape-clean `detectIssueRefinementArtifact` result under explicit operator authorization records that as a `bypass: operator-authorized by <handle>` line in the comment; a normal pass (not shape-clean, or no bypass involved) carries no such line. Only the provenance-recorded zero-iteration `grill_clean` exit from Step 1 (already refined AND a results comment already posted, or a `plan` surface) has no rationale to post and skips this step.
 
-**PR-body write-back:** update the PR body via `scripts/github/edit-pr.mjs` (never raw `gh`), same replace-section semantics.
+**PR-body write-back:** update the PR body via `scripts/github/edit-pr.mjs` (never raw `gh`), same replace-section semantics. Post the results comment the same way as the issue surface: GitHub issue comments work on PR numbers too, so `dev-loops-run scripts/github/comment-issue.mjs --repo <owner/repo> --issue <pr-number> --body-file <tmp-rationale-path>` posts it on the PR.
 
 **GitHub body size guard:** issue/PR bodies are capped at 65,536 characters. Before writing back, check whether the updated body would exceed this limit. If so, warn: `Warning: updated body would exceed GitHub's 65,536-character limit — write-back skipped. Sharpen the sections or the body manually.` Do not silently truncate.
 
@@ -165,11 +165,11 @@ Never `gh issue comment` directly, and never fold this content back into the iss
 
 ## Output artifact format
 
-Three distinct artifacts for tracker-first (two for PR-body/local-planning, which have no separate results-comment surface in this contract):
+Three distinct artifacts for tracker-first AND PR-body (two for local-planning, which has no comment surface at all in this contract):
 
 1. **Rewritten description** (issue/PR/plan body): the fully rewritten, locked spec — context, decided approach, the authoritative `## AC / DoD matrix`, and `## Non-goals` (optional human-readable AC/DoD prose may accompany the matrix). No raw Q&A, no rationale narrative, no unresolved "suggested … or …" phrasing, no bare non-issue `#<number>`.
 
-2. **Results comment** (tracker-first only, posted separately, titled `🔬 Grill / refinement results`): the rationale — gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken. For an interactive run the preamble reads `source: <handle> answers via operator Q&A` using the same resolved handle (fallback: `source: human answers via operator Q&A`). Same `#<number>` hygiene rule applies.
+2. **Results comment** (issue AND PR surfaces, posted separately, titled `🔬 Grill / refinement results`): the rationale — gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken. For an interactive run the preamble reads `source: <handle> answers via operator Q&A` using the same resolved handle (fallback: `source: human answers via operator Q&A`). Same `#<number>` hygiene rule applies. Posted via `dev-loops-run scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n|pr-number> --body-file <tmp-rationale-path>` in both cases — GitHub issue comments work on PR numbers too.
 
 3. **Raw Q&A transcript** (ephemeral `tmp/issues/issue-<n>/grill/<timestamp>.md` only — never the body, never the comment):
 
@@ -197,12 +197,12 @@ Replace `grill-clean` with `N unresolved items` when unresolved gaps remain.
 
 ## Step 5 — Emit verdict
 
-Before emitting the verdict for a tracker-first grill that filled at least one gap, verify the write-back contract and fail closed if any check fails — stop and report the specific violation instead of emitting a verdict:
+Before emitting the verdict for a tracker-first or PR-body grill whose semantic pass ran (Steps 2–4), verify the write-back contract and fail closed if any check fails — stop and report the specific violation instead of emitting a verdict:
 
-1. The rewritten description has no `Refinement notes` / `Grill findings` / rationale narrative section.
-2. The rewritten description has no unresolved "suggested … or …" / "option A or B" marker for a gap this run decided.
+1. The rewritten description has no `Refinement notes` / `Grill findings` / rationale narrative section. (Applies only when the body was rewritten — i.e. at least one gap was filled.)
+2. The rewritten description has no unresolved "suggested … or …" / "option A or B" marker for a gap this run decided. (Applies only when the body was rewritten.)
 3. Neither the rewritten description nor the results comment contains a bare non-issue `#<number>`.
-4. A `🔬 Grill / refinement results` comment was actually posted (skip this check only for the provenance-recorded zero-iteration `grill_clean` path from Step 1, which has no rationale to post; a zero-gap semantic pass still MUST post one).
+4. A `🔬 Grill / refinement results` comment was actually posted. (Applies to every semantic pass, skip this check only for the provenance-recorded zero-iteration `grill_clean` path from Step 1, which has no rationale to post; a zero-gap semantic pass still MUST post one.)
 
 After write-back (and, for tracker-first, after the above verification passes), emit the verdict line to stdout:
 

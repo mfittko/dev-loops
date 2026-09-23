@@ -124,7 +124,12 @@ export async function runCli(
       const parsedComments = parseJsonText(commentsText);
       const comments = Array.isArray(parsedComments)
         ? parsedComments
-        : parsedComments?.comments;
+        : (parsedComments && typeof parsedComments === "object" && Array.isArray(parsedComments.comments)
+          ? parsedComments.comments
+          : undefined);
+      if (comments === undefined) {
+        throw new Error('--comments-file must be a JSON array or { "comments": [...] }');
+      }
       provenance = detectGrillProvenance(comments);
     }
     // Deterministic seed for the already-refined / zero-iteration path only: the full

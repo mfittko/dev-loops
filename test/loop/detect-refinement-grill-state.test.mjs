@@ -158,6 +158,38 @@ test("--body-file with a refined body on a plan surface seeds grill_clean with n
   }
 });
 
+test("--comments-file fails closed on a wrong-shape JSON payload", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-comments-badshape-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    await writeFile(commentsPath, JSON.stringify({ notComments: [] }), "utf8");
+    await assert.rejects(
+      runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]),
+      /--comments-file must be a JSON array or \{ "comments": \[\.\.\.\] \}/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--comments-file fails closed on a bare string JSON payload", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-comments-string-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    await writeFile(commentsPath, JSON.stringify("not comments"), "utf8");
+    await assert.rejects(
+      runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]),
+      /--comments-file must be a JSON array or \{ "comments": \[\.\.\.\] \}/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("--comments-file is rejected in --input mode, same as --surface", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-comments-input-mode-"));
   try {
@@ -174,7 +206,7 @@ test("--comments-file is rejected in --input mode, same as --surface", async () 
   }
 });
 
-test("end-to-end: a hand-authored matrix with no comments gets a real semantic pass (detect_gaps), then a zero-gap results comment reaches grill_clean, and a gap-filling results comment also reaches grill_clean", async () => {
+test("detector round-trip: a hand-authored matrix with no comments gets a real semantic pass (detect_gaps), then a zero-gap results comment reaches grill_clean, and a gap-filling results comment also reaches grill_clean", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-e2e-"));
   try {
     const bodyPath = path.join(tempDir, "body.md");
