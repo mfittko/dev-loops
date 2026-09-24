@@ -80,6 +80,22 @@ test("a --tmp-root run from a non-git dir still writes the ledger", async () => 
   }
 });
 
+test("a writer run from a non-git dir with an absolute --tmp-root inside a linked worktree is refused", async () => {
+  const { base, linked } = makeRepo();
+  const outsideCwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), "ledger-outside-cwd-")));
+  try {
+    for (const tmpRoot of [path.join(linked, "tmp"), path.join(linked, "tmp", "not", "yet", "created")]) {
+      const result = await write(outsideCwd, tmpRoot);
+      assert.equal(result.code, 1, `${tmpRoot}: ${result.stderr}`);
+      assert.match(result.stderr, /linked worktree/);
+      assert.equal(existsSync(ledgerPath(tmpRoot)), false, tmpRoot);
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(outsideCwd, { recursive: true, force: true });
+  }
+});
+
 test("an absolute --tmp-root outside any linked worktree still writes the ledger", async () => {
   const { base, main, linked } = makeRepo();
   const outside = realpathSync(mkdtempSync(path.join(os.tmpdir(), "ledger-outside-")));

@@ -17,7 +17,7 @@
  * from the checkout's git-toplevel so config resolves correctly.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { parseAllWorktreePaths, parseMainWorktreePath, realpathNearestExisting, resolveContainingWorktreeRoot } from "@dev-loops/core/loop/worktree-guard";
 
@@ -135,17 +135,24 @@ export function listWorktreeEntries(cwd, { gitCommand = "git" } = {}) {
  * at `repoRoot`: a ledger written there is lost on prune and unreadable by the
  * merge. `absTmpRoot` must already be resolved against the base the caller
  * writes under. The main checkout and paths outside every checkout stay
- * allowed. A git failure (e.g. `repoRoot` is not a git repo) leaves nothing to
- * compare against and allows the write.
+ * allowed. The linked worktrees are listed from the tmp root's nearest existing
+ * directory AND from `repoRoot`, so a writer running outside the repo (a
+ * non-git cwd) still sees the worktree the tmp root sits in. Only when both
+ * listings fail is there nothing to compare against, and the write is allowed.
  */
+function isDirectorySync(p) {
+  try { return statSync(p).isDirectory(); } catch { return false; }
+}
+
 export function assertTmpRootOutsideLinkedWorktree(absTmpRoot, repoRoot, { gitCommand = "git" } = {}) {
-  let entries;
-  try {
-    entries = listWorktreeEntries(repoRoot, { gitCommand });
-  } catch {
-    return;
+  let anchor = absTmpRoot;
+  while (!isDirectorySync(anchor) && path.dirname(anchor) !== anchor) anchor = path.dirname(anchor);
+  const linked = [];
+  for (const cwd of [anchor, repoRoot]) {
+    try {
+      for (const e of listWorktreeEntries(cwd, { gitCommand }).slice(1)) if (!linked.includes(e.path)) linked.push(e.path);
+    } catch { /* not inside a git repo: this listing contributes nothing */ }
   }
-  const linked = entries.slice(1).map((e) => e.path);
   const containing = resolveContainingWorktreeRoot(realpathNearestExisting(absTmpRoot), linked);
   if (containing !== null) {
     throw new Error(`--tmp-root ${absTmpRoot} resolves inside the linked worktree ${containing}; gate findings ledgers must stay out of linked worktrees. Omit --tmp-root to use the main-anchored default ${resolveGateArtifactTmpRoot(repoRoot, { gitCommand })}`);
