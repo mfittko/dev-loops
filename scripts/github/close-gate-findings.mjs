@@ -38,7 +38,7 @@ against the current round. A thread whose finding the judge disposed \`act\`
 rendered judge suffix; an ambiguous prior result also skips) is never
 selected, at any severity and round (ADR 0089): it gets no
 stamp, no reply, no resolve, and no deferral entry, and stays open until the fixer
-replies with the fixing commit and resolves it. Otherwise: high always stays open (it never defers, forcing
+replies with the fixing commit or a decline reason and resolves it. Otherwise: high always stays open (it never defers, forcing
 per-gate continuation until the gate round cap escalates); medium stays
 open through this gate's configured medium fix window (default
 ${MEDIUM_FIX_WINDOW}, set per gate via gates.<gate>.mediumFixWindow)
@@ -270,7 +270,7 @@ function unfiledResolutionMessage({ fp, severity, angle, round, body, operatorVi
 // A thread whose finding the judge disposed `act` is never selected, whatever
 // its severity and round (ADR 0089): the judge `act` overrides the medium fix
 // window, so the thread stays open until the fixer replies with the fixing
-// commit and resolves it, or a judge rerun at the current head changes the
+// commit or a decline reason and resolves it, or a judge rerun at the current head changes the
 // disposition. It gets no stamp, reply, or resolve. The disposition comes
 // from the current ledger first. On no current-ledger match, the prior local
 // ledgers and then the thread's rendered ` — judge: <disposition>` suffix

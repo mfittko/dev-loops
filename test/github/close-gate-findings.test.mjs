@@ -1657,6 +1657,42 @@ test("a round-4 medium thread with an empty current ledger and a rendered 'judge
   ));
 });
 
+// Tier 2 of isJudgeActThread: with an empty current ledger and NO rendered
+// judge suffix, the prior local ledgers decide. A prior `act` keeps the thread
+// open; a tied act-vs-defer disagreement is ambiguous and also keeps it open
+// (fail closed). No stamp/reply/resolve/comment entry is stubbed, so selecting
+// the thread overflows the sequential stub.
+for (const [label, priorDispositions] of [
+  ["a prior ledger disposing it act", ["act"]],
+  ["a TIED act-vs-defer prior-ledger disagreement (ambiguous)", ["act", "defer"]],
+]) {
+  test(`a round-4 medium thread with an empty current ledger, no judge suffix and ${label} is NOT selected`, async () => {
+    const finding = { severity: "medium", angle: "perf", summary: "stale cache not invalidated" };
+    const fp = fingerprintFinding(finding);
+    const body = `${buildFindingMarker({ fp, severity: "medium", angle: "perf", round: 1 })}\n**medium** (\`perf\`): stale cache not invalidated`;
+    const thread = threadNode({ id: "THREAD_PRIOR_LEDGER_ACT", path: "src/cache.mjs", line: 9, commentId: 6604, body });
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+      roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+        await mkdir(findingsDir, { recursive: true });
+        for (const [i, judgeDisposition] of priorDispositions.entries()) {
+          await writeFile(
+            path.join(findingsDir, `draft_gate-${nthHeadSha(i + 1)}.json`),
+            JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ ...finding, judgeDisposition, judgeRationale: `prior ${judgeDisposition}` }] }),
+            "utf8",
+          );
+        }
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.round, 4);
+        assert.equal(result.deferredResolved, 0);
+        assert.equal(result.unresolvedGateThreadCount, 1);
+        assert.equal(result.followUpIssueNumber, undefined);
+      },
+    ));
+  });
+}
+
 for (const [mediumDisposition, lowDisposition] of [["defer", "reject"], ["reject", "defer"]]) {
   test(`the same threads with a ${mediumDisposition} medium and a ${lowDisposition} low ARE still selected`, async () => {
     const { findings, threads, mediumFp, mediumBody } = actExclusionFixtures(mediumDisposition, lowDisposition);

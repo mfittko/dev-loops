@@ -37,8 +37,9 @@ test("GATE-EXEC-THREAD-DISPOSITION states the act-thread exclusion and the fixer
   assert.match(section, /no stamp,\s+no reply, no resolve, and no deferral comment entry/);
   assert.match(
     section,
-    /The fixer\s+replies to every gate thread whose finding it fixed, of any severity and including a judge `act`\s+item past the medium fix window, with the fixing commit, and resolves it before\s+`close-gate-findings\.mjs` runs\./,
+    /The fixer\s+replies to every gate thread whose finding it fixed or declined on reproduction grounds, of any severity and including a judge `act`\s+item past the medium fix window, with the fixing commit or a decline reason, and resolves it before\s+`close-gate-findings\.mjs` runs\./,
   );
+  assert.match(section, /closes it\s+with a fixing commit or a decline reason, or a judge rerun/);
   assert.doesNotMatch(section, /PR's tracked follow-up issue/);
 });
 

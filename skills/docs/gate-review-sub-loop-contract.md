@@ -1710,9 +1710,9 @@ posted finding is suppressed from later ledgers), the prior local ledgers decide
 thread's rendered ` — judge: <disposition>` suffix. An ambiguous prior-ledger result also skips
 the thread (fail closed). The judge `act` overrides the medium fix window, so that thread gets no stamp,
 no reply, no resolve, and no deferral comment entry, and it stays open until the fixer closes it
-with a fixing commit or a judge rerun at the current head changes the disposition. The fixer
-replies to every gate thread whose finding it fixed, of any severity and including a judge `act`
-item past the medium fix window, with the fixing commit, and resolves it before
+with a fixing commit or a decline reason, or a judge rerun at the current head changes the disposition. The fixer
+replies to every gate thread whose finding it fixed or declined on reproduction grounds, of any severity and including a judge `act`
+item past the medium fix window, with the fixing commit or a decline reason, and resolves it before
 `close-gate-findings.mjs` runs. Resolving and FILING (to the round's deferral comment, stamping
 `disposition=deferred`) are two separate decisions (#1846): out-of-window
 medium always files; a low files only when operator-visible; a nit never files — the unfiled
