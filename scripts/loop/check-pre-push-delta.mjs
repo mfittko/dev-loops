@@ -107,7 +107,17 @@ function gitRevParse(worktree, rev) {
   return out.stdout.trim();
 }
 
-export function runCli(argv = process.argv.slice(2), { revParse = gitRevParse, stdout = process.stdout } = {}) {
+function gitIsAncestor(worktree, ancestor, descendant) {
+  const out = spawnSync("git", ["-C", worktree, "merge-base", "--is-ancestor", ancestor, descendant], { encoding: "utf8" });
+  if (out.status === 0) return true;
+  if (out.status === 1) return false;
+  throw new Error(`git merge-base --is-ancestor failed in ${worktree}: ${out.stderr.trim()}`);
+}
+
+export function runCli(
+  argv = process.argv.slice(2),
+  { revParse = gitRevParse, isAncestor = gitIsAncestor, stdout = process.stdout } = {},
+) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
@@ -122,6 +132,11 @@ export function runCli(argv = process.argv.slice(2), { revParse = gitRevParse, s
   const fixCommitted = currentHead !== sequence.reviewBaselineHead;
   if (resolveDeltaTrigger({ actItemCount: sequence.actItems.length, fixCommitted }) !== "delta") {
     throw new Error(`worktree HEAD ${currentHead} equals the baseline: commit the act-list fix before the delta review`);
+  }
+  if (!isAncestor(options.worktree, sequence.reviewBaselineHead, currentHead)) {
+    throw new Error(
+      `baseline ${sequence.reviewBaselineHead} is not an ancestor of worktree HEAD ${currentHead}: the delta range must extend the reviewed head`,
+    );
   }
   const payload = options.result
     ? {

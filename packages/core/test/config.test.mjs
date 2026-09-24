@@ -6904,6 +6904,16 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     }
   });
 
+  test("the retired pre-PR-reviewer role has no built-in tier (resolves like an unknown role)", () => {
+    for (const harness of ["claude", "pi"]) {
+      assert.equal(
+        resolveRoleModel({}, { role: "pre-PR-reviewer", harness }),
+        resolveRoleModel({}, { role: "no-such-role", harness }),
+        `pre-PR-reviewer on ${harness}`,
+      );
+    }
+  });
+
   test("null/unknown harness and empty role resolve null (fail closed)", () => {
     assert.equal(resolveRoleModel({}, { role: "developer", harness: "openai" }), null);
     assert.equal(resolveRoleModel({}, { role: "developer" }), null);

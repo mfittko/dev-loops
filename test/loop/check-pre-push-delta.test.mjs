@@ -30,7 +30,7 @@ function fixture() {
 }
 
 const quiet = { stdout: { write: () => {} } };
-const headAt = (head) => ({ ...quiet, revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev) });
+const headAt = (head) => ({ ...quiet, revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev), isAncestor: () => true });
 
 test("without --result the CLI prints the cumulative delta input for the worktree head", () => {
   const { dir, actList } = fixture();
@@ -53,9 +53,23 @@ test("with --result the CLI authorizes the push only for the reviewed head", () 
 test("the baseline resolves to a full SHA, and HEAD equal to the baseline fails", () => {
   const { actList } = fixture();
   const full = `${A}${"0".repeat(26)}`;
-  const resolve = (head) => ({ ...quiet, revParse: (_worktree, rev) => (rev === "HEAD" ? head : full) });
+  const resolve = (head) => ({ ...quiet, revParse: (_worktree, rev) => (rev === "HEAD" ? head : full), isAncestor: () => true });
   assert.equal(runCli(["--act-list", actList, "--baseline", A], resolve(B)).input.reviewBaselineHead, full);
   assert.throws(() => runCli(["--act-list", actList, "--baseline", A], resolve(full)), /equals the baseline/);
+});
+
+test("a baseline that is not an ancestor of HEAD fails", () => {
+  const { actList } = fixture();
+  const calls = [];
+  const seam = {
+    ...headAt(B),
+    isAncestor: (_worktree, ancestor, descendant) => {
+      calls.push([ancestor, descendant]);
+      return false;
+    },
+  };
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A], seam), /is not an ancestor of worktree HEAD/);
+  assert.deepEqual(calls, [[A, B]]);
 });
 
 test("argument errors fail closed", () => {
