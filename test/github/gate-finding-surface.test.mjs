@@ -1217,6 +1217,7 @@ function fakeGh({ closing = [], listedComments = [] } = {}) {
 
 test("buildDeferredFindingsComment: every entry listed, the PR linked, no issue-create wording", () => {
   const body = buildDeferredFindingsComment({ repo: "o/r", pr: 42, entries: deferralEntries() });
+  assert.equal(body.split("\n")[0], "<!-- dev-loops:deferred-summary -->");
   assert.match(body, /https:\/\/github\.com\/o\/r\/pull\/42/);
   assert.match(body, /^- `1111111111111111` \*\*low\*\* \(`naming`\): casing nit$/m);
   assert.match(body, /^- `2222222222222222` \*\*medium\*\* \(`perf`\): stale cache$/m);
@@ -1229,15 +1230,15 @@ test("resolveDeferralCommentTarget: github tracker + exactly one same-repo closi
   assert.deepEqual(calls[0], ["pr", "view", "42", "--repo", "o/r", "--json", "closingIssuesReferences"]);
 });
 
-test("resolveDeferralCommentTarget: no closing reference, more than one, or a cross-repo one -> the PR", async () => {
-  for (const closing of [[], [{ number: 77 }, { number: 78 }], [{ number: 77, repository: { name: "other", owner: { login: "o" } } }]]) {
+test("resolveDeferralCommentTarget: no closing reference, more than one, a cross-repo one, or one without repository data -> the PR", async () => {
+  for (const closing of [[], [{ number: 77 }], [{ number: 77 }, { number: 78 }], [{ number: 77, repository: { name: "other", owner: { login: "o" } } }]]) {
     const { run } = fakeGh({ closing });
     assert.equal(await resolveDeferralCommentTarget({ repo: "o/r", pr: 42, trackerProvider: "github" }, { run }), 42, JSON.stringify(closing));
   }
 });
 
 test("resolveDeferralCommentTarget: a tracker other than github -> the PR, with no gh call at all", async () => {
-  const { run, calls } = fakeGh({ closing: [{ number: 77 }] });
+  const { run, calls } = fakeGh({ closing: [{ number: 77, repository: { name: "r", owner: { login: "o" } } }] });
   assert.equal(await resolveDeferralCommentTarget({ repo: "o/r", pr: 42, trackerProvider: "jira" }, { run }), 42);
   assert.equal(calls.length, 0);
 });
@@ -1254,7 +1255,7 @@ test("fetchListedFingerprints: reads only leading-bullet fingerprints from the t
 });
 
 test("commentDeferredFindings: one closing reference -> ONE batched comment on that issue, never an issue create", async () => {
-  const { run, calls } = fakeGh({ closing: [{ number: 77 }] });
+  const { run, calls } = fakeGh({ closing: [{ number: 77, repository: { name: "r", owner: { login: "o" } } }] });
   const commentCalls = [];
   const commentIssue = async (opts) => {
     commentCalls.push(opts);
@@ -1276,14 +1277,14 @@ test("commentDeferredFindings: no closing reference -> the comment goes to the P
 });
 
 test("commentDeferredFindings: a fingerprint the target already lists is not appended again; nothing new posts nothing", async () => {
-  const { run, calls } = fakeGh({ closing: [{ number: 77 }], listedComments: ["- `1111111111111111` **low** (`naming`): casing nit"] });
+  const { run, calls } = fakeGh({ closing: [{ number: 77, repository: { name: "r", owner: { login: "o" } } }], listedComments: ["- `1111111111111111` **low** (`naming`): casing nit"] });
   const first = await commentDeferredFindings({ repo: "o/r", pr: 42, entries: deferralEntries() }, { run });
   assert.deepEqual([...first.appendedFingerprints], ["2222222222222222"]);
   const bodyArg = calls.at(-1)[calls.at(-1).indexOf("--body") + 1];
   assert.doesNotMatch(bodyArg, /1111111111111111/);
   assert.match(bodyArg, /2222222222222222/);
 
-  const retry = fakeGh({ closing: [{ number: 77 }], listedComments: ["- `1111111111111111` x", "- `2222222222222222` y"] });
+  const retry = fakeGh({ closing: [{ number: 77, repository: { name: "r", owner: { login: "o" } } }], listedComments: ["- `1111111111111111` x", "- `2222222222222222` y"] });
   const second = await commentDeferredFindings({ repo: "o/r", pr: 42, entries: deferralEntries() }, { run: retry.run });
   assert.equal(second.issueNumber, 77);
   assert.equal(second.appendedFingerprints.size, 0);

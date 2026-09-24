@@ -281,6 +281,8 @@ function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, ref
 
 export function buildDeferredFindingsComment({ repo, pr, entries }) {
   return [
+    // Machine marker: isGateMachineArtifactBody excludes this comment from PR-comment scans.
+    "<!-- dev-loops:deferred-summary -->",
     `Gate findings deferred from https://github.com/${repo}/pull/${pr} (recorded as a comment; no issue is created for a deferred finding):`,
     "",
     ...entries.map(formatDeferredFindingEntry),
@@ -308,7 +310,8 @@ export async function resolveDeferralCommentTarget(
   const [ref] = refs;
   const owner = ref?.repository?.owner?.login;
   const name = ref?.repository?.name;
-  const sameRepo = !owner || !name || `${owner}/${name}`.toLowerCase() === repo.toLowerCase();
+  // A reference with no repository data is treated as foreign (fail closed to the PR).
+  const sameRepo = Boolean(owner && name) && `${owner}/${name}`.toLowerCase() === repo.toLowerCase();
   return sameRepo && Number.isInteger(ref?.number) && ref.number > 0 ? ref.number : pr;
 }
 

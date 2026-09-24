@@ -588,7 +588,7 @@ function stubDeferralDeps({ closing = [], listed = [] } = {}) {
   const run = async (_cmd, args) => {
     runCalls.push(args);
     if (args[0] === "pr" && args[1] === "view") {
-      return { code: 0, stdout: JSON.stringify({ closingIssuesReferences: closing.map((number) => ({ number })) }), stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ closingIssuesReferences: closing.map((number) => ({ number, repository: { name: "dev-loops", owner: { login: "mfittko" } } })) }), stderr: "" };
     }
     if (args[0] === "api" && args.some((arg) => /\/issues\/\d+\/comments/.test(arg))) {
       return { code: 0, stdout: JSON.stringify([listed.map((body) => ({ body }))]), stderr: "" };

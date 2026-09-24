@@ -24,7 +24,7 @@ async function withFakeGh(fn) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "deferral-write-guard-"));
   try {
     const { env, ghPath } = await writeGhStub(tmpDir, [
-      { assertArgs: ["pr", "view"], stdout: `${JSON.stringify({ closingIssuesReferences: [{ number: 999 }] })}\n` },
+      { assertArgs: ["pr", "view"], stdout: `${JSON.stringify({ closingIssuesReferences: [{ number: 999, repository: { name: "repo", owner: { login: "owner" } } }] })}\n` },
       { assertArgs: ["api"], stdout: "[]\n" },
       { assertArgs: ["issue", "comment", "999"], stdout: "https://github.com/owner/repo/issues/999#issuecomment-1\n" },
     ]);
