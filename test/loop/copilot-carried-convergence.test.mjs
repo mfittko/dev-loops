@@ -903,6 +903,29 @@ describe("converged-once: a later Copilot review wins over an earlier convergenc
     assert.equal(merged.copilotDisposition, "converged_once");
     assert.equal(merged.copilotCarriedConvergence.sourceReviewId, "PRR_prior");
   });
+
+  it("a clean current-head review does not stand over a later body-only changes-recommended review on an earlier commit until a record names it", async () => {
+    const currentHeadClean = { id: "PRR_head", author: { login: COPILOT }, state: "COMMENTED", body: "", commit: { oid: HEAD }, submittedAt: "2026-09-22T09:30:00Z" };
+    const laterYellow = { id: "PRR_prior", author: { login: COPILOT }, state: "COMMENTED", body: YELLOW, commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" };
+    const shape = (dispositions) => ({ reviews: [currentHeadClean, laterYellow], delta: CODE_DELTA, dispositions });
+
+    const blocked = await runDetector(scenario(shape([])), { root: convergedOnceWideRoot });
+    assert.ok(blocked.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    for (const action of [PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]) {
+      assert.ok(!blocked.allowedNextActions.includes(action), action);
+    }
+    assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert.equal(blocked.copilotBodyDispositionRequired.reviewId, "PRR_prior");
+    const refused = await runMerge(scenario(shape([])), shape([]), { strict: false });
+    assert.equal(refused.merged, false);
+    assert.ok(refused.failures.some((failure) => failure.precondition === "copilot_convergence"));
+
+    const recorded = shape([dispositionComment({ reviewId: "PRR_prior" })]);
+    const opened = await runDetector(scenario(recorded), { root: convergedOnceWideRoot });
+    assert.equal(opened.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+    const merged = await runMerge(scenario(recorded), recorded, { strict: false });
+    assert.equal(merged.merged, true, JSON.stringify(merged.failures));
+  });
 });
 
 describe("resolveCarriedConvergence converged-once predicate", () => {

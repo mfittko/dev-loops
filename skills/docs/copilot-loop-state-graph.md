@@ -89,7 +89,7 @@ The snapshot is the set of observable facts that the interpreter uses to determi
 | `unresolvedThreadCount` | `number` | Total unresolved review-thread count |
 | `actionableThreadCount` | `number` | Unresolved threads with non-bot actionable comments |
 | `copilotBodyFeedbackUnresolved` | `boolean` | Whether the latest current-head Copilot review carries an unresolved BODY-level finding (a `CHANGES_REQUESTED` review, or a `COMMENTED` review whose body signals "Changes recommended"), independent of inline threads. Unioned with `unresolvedThreadCount` so a body-only finding with zero inline threads still routes to unresolved feedback. A trusted disposition record for the current head clears it (`COPILOT-STATE-BODY-DISPOSITION-RECORD`) |
-| `copilotPriorHeadBodyFeedbackUnresolved` | `boolean` | Whether the latest Copilot review sits on an earlier head and is a body-only changes-recommended or unrecognized review (no thread of its own) that no trusted disposition record names (`COPILOT-STATE-BODY-DISPOSITION-RECORD`). Read only at the round cap, where it blocks `round_cap_clean_fallback` |
+| `copilotPriorHeadBodyFeedbackUnresolved` | `boolean` | Whether the latest Copilot review sits on an earlier head and is a body-only changes-recommended or unrecognized review (no thread of its own) that no trusted disposition record names (`COPILOT-STATE-BODY-DISPOSITION-RECORD`). At the round cap it blocks `round_cap_clean_fallback`. Below the cap, with a submitted current-head review, it routes to `blocked_needs_user_decision` (rule 9) |
 | `ciStatus` | `"success" \| "failure" \| "pending" \| "none"` | Current CI check rollup; `none` means no usable CI readiness signal yet and is not treated as green |
 | `agentFixStatus` | `"applied" \| null` | Agent-provided: `"applied"` when code has been fixed |
 
@@ -129,7 +129,8 @@ The interpreter applies rules in priority order. The first matching rule wins.
    *(Unresolved feedback always takes priority over any wait/watch path. A body-only Copilot finding — `copilotBodyFeedbackUnresolved` true with zero inline threads — routes here too, and likewise keeps the round-cap `cleanThreads` check and `ready_to_rerequest_review` clean-convergence from treating the head as clean)*
 8. `copilotReviewRequestStatus === "requested" || copilotReviewRequestStatus === "already-requested"` → `waiting_for_copilot_review`
    *(A current-head Copilot review request is still active or pending; the wait is not concluded until that request status settles, even when a submitted current-head review is already visible.)*
-9. `copilotReviewPresent && ciStatus === "failure"` → `blocked_needs_user_decision`
+9. `copilotReviewPresent && (ciStatus === "failure" || (copilotReviewOnCurrentHead && copilotPriorHeadBodyFeedbackUnresolved))` → `blocked_needs_user_decision`
+   *(The second clause: a later body-only finding on an earlier commit outranks a clean current-head review. A re-request stops at the same-head clean suppression, so the loop reports blocked and `copilotBodyDispositionRequired` names the review a record must name. The CI opt-out below does not skip this clause.)*
 10. `copilotReviewPresent && (ciStatus === "pending" || ciStatus === "none")` → `waiting_for_ci`
 11. `copilotReviewPresent` → `ready_to_rerequest_review`
 12. `ciStatus === "failure"` → `blocked_needs_user_decision`
