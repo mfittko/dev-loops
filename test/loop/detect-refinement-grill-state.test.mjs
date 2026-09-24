@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { runCli } from "../../scripts/loop/detect-refinement-grill-state.mjs";
+import { evaluateJqFilter } from "../../scripts/lib/jq-output.mjs";
 
 // Minimal writable that accumulates written strings, matching how the detector
 // writes JSON to `stdout` / errors to `stderr` via emitResult.
@@ -38,6 +39,28 @@ const PROSE_BODY = [
   "",
 ].join("\n");
 
+const RESULTS_TITLE = "🔬 Grill / refinement results";
+
+const NO_GAPS_COMMENT = [
+  `## ${RESULTS_TITLE}`,
+  "",
+  "source: auto (codebase, docs)",
+  "",
+  "No gaps were found on this pass. Verdict: grill-clean.",
+].join("\n");
+
+const GAP_FILLING_COMMENT = [
+  `## ${RESULTS_TITLE}`,
+  "",
+  "source: auto (codebase, docs)",
+  "",
+  "### Gaps found and filled",
+  "",
+  "1. Missing scope boundary — filled from the codebase.",
+  "",
+  "Verdict: grill-clean.",
+].join("\n");
+
 test("--input snapshot mode returns the interpreted state", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-input-"));
   try {
@@ -50,15 +73,207 @@ test("--input snapshot mode returns the interpreted state", async () => {
   }
 });
 
-test("--body-file with an already-refined body seeds grill_clean", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-refined-"));
+test("--body-file with an already-refined body but no recorded provenance stays at detect_gaps (the semantic pass is still owed)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-refined-noprov-"));
   try {
     const bodyPath = path.join(tempDir, "body.md");
     await writeFile(bodyPath, REFINED_BODY, "utf8");
     const { stdout } = await runDetect(["--body-file", bodyPath]);
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.snapshot.openGapCount, 0);
+    assert.equal(parsed.snapshot.provenanceRecorded, false);
+    assert.equal(parsed.state, "detect_gaps");
+    assert.equal(parsed.reason, "provenance_missing");
+    assert.match(parsed.nextAction, /🔬 Grill \/ refinement results/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--body-file with an already-refined body AND a recorded no-gap results comment seeds grill_clean", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-refined-prov-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    await writeFile(commentsPath, JSON.stringify([{ body: NO_GAPS_COMMENT }]), "utf8");
+    const { stdout } = await runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]);
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.snapshot.openGapCount, 0);
+    assert.equal(parsed.snapshot.provenanceRecorded, true);
     assert.equal(parsed.state, "grill_clean");
+    assert.equal(parsed.reason, "provenance_recorded");
+    assert.equal(parsed.bypass, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--comments-file accepts a { comments: [...] } wrapper object", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-comments-wrapper-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    await writeFile(commentsPath, JSON.stringify({ comments: [{ body: NO_GAPS_COMMENT }] }), "utf8");
+    const { stdout } = await runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]);
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.state, "grill_clean");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--body-file with a bypass-recorded results comment seeds grill_clean flagged as bypass", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-bypass-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    await writeFile(
+      commentsPath,
+      JSON.stringify([{ body: `## ${RESULTS_TITLE}\n\nbypass: operator-authorized by mfittko\n\nRan anyway; no gaps found.` }]),
+      "utf8",
+    );
+    const { stdout } = await runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]);
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.state, "grill_clean");
+    assert.equal(parsed.reason, "provenance_bypass_recorded");
+    assert.equal(parsed.bypass, true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--body-file with a refined body on a plan surface seeds grill_clean with no comments-file (shape-only)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-plan-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    const { stdout } = await runDetect(["--body-file", bodyPath, "--surface", "plan"]);
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.state, "grill_clean");
+    assert.equal(parsed.reason, "plan_shape_only");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--comments-file fails closed on a wrong-shape JSON payload", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-comments-badshape-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    await writeFile(commentsPath, JSON.stringify({ notComments: [] }), "utf8");
+    await assert.rejects(
+      runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]),
+      /--comments-file must be a JSON array or \{ "comments": \[\.\.\.\] \}/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--comments-file fails closed on a bare string JSON payload", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-comments-string-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    await writeFile(commentsPath, JSON.stringify("not comments"), "utf8");
+    await assert.rejects(
+      runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]),
+      /--comments-file must be a JSON array or \{ "comments": \[\.\.\.\] \}/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("--comments-file is rejected in --input mode, same as --surface", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-comments-input-mode-"));
+  try {
+    const snapshotPath = path.join(tempDir, "snapshot.json");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(snapshotPath, JSON.stringify({ loaded: true }), "utf8");
+    await writeFile(commentsPath, JSON.stringify([]), "utf8");
+    await assert.rejects(
+      runDetect(["--input", snapshotPath, "--comments-file", commentsPath]),
+      /--comments-file applies only to --body-file mode/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("detector round-trip: a hand-authored matrix with no comments gets a real semantic pass (detect_gaps), then a zero-gap results comment reaches grill_clean, and a gap-filling results comment also reaches grill_clean", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-e2e-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+
+    // Pass 1: no comments recorded yet -- the detector refuses the zero-iteration
+    // exit and routes back to the semantic gap pass instead of a silent no-op.
+    const first = JSON.parse((await runDetect(["--body-file", bodyPath])).stdout);
+    assert.equal(first.state, "detect_gaps");
+    assert.equal(first.reason, "provenance_missing");
+
+    // Pass 2: the semantic pass ran, found no gaps, and recorded its own
+    // provenance by posting a results comment stating so.
+    const noGapsCommentsPath = path.join(tempDir, "comments-no-gaps.json");
+    await writeFile(noGapsCommentsPath, JSON.stringify([{ body: NO_GAPS_COMMENT }]), "utf8");
+    const second = JSON.parse((await runDetect(["--body-file", bodyPath, "--comments-file", noGapsCommentsPath])).stdout);
+    assert.equal(second.state, "grill_clean");
+    assert.equal(second.reason, "provenance_recorded");
+
+    // Alternative pass: the semantic pass found and filled a gap, and recorded
+    // that outcome instead -- also a recorded pass, also grill_clean on a re-check.
+    const gapFillingCommentsPath = path.join(tempDir, "comments-gap-filling.json");
+    await writeFile(gapFillingCommentsPath, JSON.stringify([{ body: GAP_FILLING_COMMENT }]), "utf8");
+    const third = JSON.parse((await runDetect(["--body-file", bodyPath, "--comments-file", gapFillingCommentsPath])).stdout);
+    assert.equal(third.state, "grill_clean");
+    assert.equal(third.reason, "provenance_recorded");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("the documented view-issue.mjs --jq extraction bridges the real wrapper envelope into --comments-file", async () => {
+  // Real-shaped view-issue.mjs --json comments stdout: { ok, issue: { comments: [...] } },
+  // each comment carrying the fields `gh issue view --json comments` actually returns
+  // (author, body, createdAt, id, url), not just `body`. Step 1 documents extracting past
+  // this envelope with `--jq '.issue.comments'` before handing the file to --comments-file
+  // (the wrapper's raw output fails closed there) -- this proves that documented path,
+  // using the SAME evaluateJqFilter engine emitResult's own --jq option runs, actually
+  // reaches grill_clean end to end.
+  const viewIssueWrapperOutput = {
+    ok: true,
+    issue: {
+      comments: [
+        {
+          id: "IC_kwABC",
+          url: "https://github.com/mfittko/dev-loops/issues/2364#issuecomment-1",
+          author: { login: "mfittko" },
+          createdAt: "2026-09-23T12:00:00Z",
+          body: `## ${RESULTS_TITLE}\n\nsource: auto (codebase, docs)\n\nNo gaps were found on this pass. Verdict: grill-clean.`,
+        },
+      ],
+    },
+  };
+  const [extractedComments] = evaluateJqFilter(viewIssueWrapperOutput, ".issue.comments");
+  assert.ok(Array.isArray(extractedComments), "the documented .issue.comments extraction yields the comments array");
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-real-envelope-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    await writeFile(commentsPath, JSON.stringify(extractedComments), "utf8");
+    const { stdout } = await runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]);
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.state, "grill_clean");
+    assert.equal(parsed.reason, "provenance_recorded");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
