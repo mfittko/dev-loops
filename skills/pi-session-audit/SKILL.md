@@ -1,7 +1,7 @@
 ---
 name: pi-session-audit
 description: >-
-  Audit Pi session transcripts (.jsonl files) via `dev-loops loop audit-session` to measure token efficiency,
+  Audit Pi or Claude Code session transcripts via `dev-loops loop audit-session` to measure token efficiency,
   identify context snowballing in coordinators, verify cache hit ratios, and report
   per-agent and per-model token breakdowns across runs.
 allowed-tools: read bash
@@ -11,7 +11,7 @@ claude-sync: false
 
 # Pi Session Audit
 
-The `pi-session-audit` skill inspects Pi session usage transcripts (`session.jsonl` files) to measure token efficiency, detect coordinator context snowballing, and report per-agent/per-unit token breakdowns.
+The `pi-session-audit` skill inspects Pi or Claude Code session usage transcripts to measure token efficiency, detect coordinator context snowballing, and report per-agent/per-unit token breakdowns. It is harness-agnostic: the snowball and threshold code is shared; each extractor supplies the per-turn prompt size (Pi input+cacheRead, Claude input+cacheRead+cacheCreate); see [Pi vs Claude Code](#pi-vs-claude-code). Harness is auto-detected from the record schema unless `--harness` overrides it.
 
 ## Motivation & Context
 
@@ -45,11 +45,42 @@ node scripts/loop/audit-pi-session.mjs --latest --jq '.summary.totalTokens'
 # cacheHitRatio is a 0-1 fraction in JSON (Markdown renders it as a percentage)
 node scripts/loop/audit-pi-session.mjs --latest --jq '.summary.cacheHitRatio'
 node scripts/loop/audit-pi-session.mjs --latest --jq '.sessions[] | select(.snowball.promptGrowthFactor > 10)'
+
+# Audit a Claude Code transcript directory (agent-<id>.jsonl / .output files); harness
+# auto-detects from the record schema, so --harness is only needed to force a mode:
+node scripts/loop/audit-pi-session.mjs --harness claude path/to/claude-transcripts --json
 ```
+
+## Pi vs Claude Code
+
+Harness auto-detects per record from the usage envelope's field-naming shape (Claude's
+`input_tokens`/`output_tokens`/... vs Pi's `input`/`output`/...); pass `--harness pi` or
+`--harness claude` only to force a mode. A file with both shapes reports its harness as
+`mixed`. If a forced `--harness` mode finds zero usage turns while the other shape was
+present, the error names the detected shape and suggests `--harness auto`.
+
+Claude Code streams one JSONL record per content block; records sharing one `message.id`
+(including interleaved, not just adjacent, repeats) are deduped to a single turn in
+first-appearance order, keeping the last record's usage. A resumed Claude session can also
+replay prior history across files sharing one `message.id` + `requestId`; the file whose
+earliest usage turn is chronologically first wins a shared `message.id`:`requestId` pair
+(path order as tie-breaker), so later replays of the same turn in other files are skipped
+regardless of the files' name-sorted order. A Claude Code
+transcript's prompt size is `input + cacheRead + cacheCreate` on its first/last
+turn (Pi's is `input + cacheRead`, unchanged); this is the only place the two harnesses'
+metric definitions differ, per the issue that introduced Claude support. Role and session
+name come from the sibling `agent-<id>.meta.json` (`agentType` / `description`) when
+present; a Claude `agent-<id>.jsonl` transcript without a meta sidecar defaults to
+`subagent` instead, since the `coordinator` fallback is reserved for main-session Claude
+transcripts (`<uuid>.jsonl`). A background-task `.output` file is only
+collected when its first non-empty line parses as a JSON object shaped like a transcript
+record (a string `type`, or an object `message`); a plain-text or non-transcript-JSON
+`.output` file (e.g. `{"ok":true}`) is skipped rather than surfaced as malformed lines.
 
 ## Interpreting Output
 
 ### 1. Overall Summary
+- **Harness**: Top-level `harness` field reports `pi`, `claude`, or `mixed`. `mixed` covers both a single file whose records match both shapes and a directory audit whose transcript files individually resolve to different harnesses. The Markdown heading follows this value (`Pi Session Token Audit`, `Claude Code Session Token Audit`, or `Session Token Audit` for `mixed`). Claude transcripts never report a cost, so **Estimated Cost** is always `n/a` (`unavailable`) in pure Claude mode; in `mixed` mode the Pi turns still carry cost, so it reports a `partial` sum covering only those turns.
 - **Resolved Target**: Absolute session path selected by `--latest` or supplied explicitly. A single transcript file target is audited alone; **Transcript Files Examined** makes that scope visible in Markdown.
 - **Total Turns**: Sum of assistant turns carrying a non-zero usage envelope (any of `input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, or `cost`). For a genuine fork transcript (its `session` header has a non-empty string `parentSession`), this excludes the inherited replay prefix and includes the fork's own turns; multiple `session_info` records in an ordinary transcript are all retained.
 - **Total Tokens**: Sum of `input + output + cacheRead + cacheWrite` when those provider dimensions are reported.
@@ -66,7 +97,7 @@ Breaks down token volume and cache ratios per model provider (e.g., `gemini-3.8-
 Each row represents one `session_info` agent segment within a transcript, so multiple rows can share the same `file`. In JSON, `file` identifies the transcript, `sessionName` preserves the segment's `session_info.name` (or is `null` when absent), and top-level `activeSessionsCount` is the number of emitted segment rows. Each row includes:
 - **Role**: Inferred agent role (`dev-loop`, `review`, `fixer`, etc.).
 - **Turns**: Count of assistant turns carrying a non-zero usage envelope (any of `input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, or `cost`) for that specific agent segment. In a fork snapshot, inherited replay turns are excluded when its timestamp boundary is resolved.
-- **Init Prompt**: Size of the prompt (input + cacheRead) on the first prompt-bearing turn (the first post-fork prompt-bearing turn for a fork snapshot).
+- **Init Prompt**: Size of the prompt on the first prompt-bearing turn (the first post-fork prompt-bearing turn for a fork snapshot): `input + cacheRead` for Pi, `input + cacheRead + cacheCreate` for Claude Code (see [Pi vs Claude Code](#pi-vs-claude-code)).
 - **Final Prompt**: Size of the prompt on the final prompt-bearing turn.
 - **Growth**: Growth factor `finalPromptTokens / initialPromptTokens`.
 

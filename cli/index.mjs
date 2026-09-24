@@ -421,7 +421,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "ui-review-report": "Post the UI-review findings as a pending PR review",
     "ui-review-teardown": "Tear down the UI-review worktree/app and emit the side-effect ledger",
     "visual-grill-capture": "Drive a headless browser to a described screen and capture it for loop-grill",
-    "audit-session": "Audit Pi session transcripts to measure token efficiency and context snowballing",
+    "audit-session": "Audit Pi or Claude Code session transcripts to measure token efficiency and context snowballing",
   },
   pr: {
     create: "Create PR (always draft, self-assigned by default)",

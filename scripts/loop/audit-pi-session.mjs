@@ -2,14 +2,16 @@
 /**
  * audit-pi-session.mjs
  *
- * Audits Pi session transcripts (.jsonl files) to measure token efficiency,
- * detect coordinator context snowballing, and report per-agent/per-unit token breakdowns.
+ * Audits Pi or Claude Code session transcripts (.jsonl/.output files) to measure token
+ * efficiency, detect coordinator context snowballing, and report per-agent/per-unit
+ * token breakdowns. Harness is auto-detected from the record schema by default.
  *
  * Usage:
  *   node scripts/loop/audit-pi-session.mjs [path/to/session.jsonl | path/to/session_dir]
  *   node scripts/loop/audit-pi-session.mjs --latest
  *   node scripts/loop/audit-pi-session.mjs --json
  *   node scripts/loop/audit-pi-session.mjs --jq '.summary.totalTokens'
+ *   node scripts/loop/audit-pi-session.mjs --harness claude path/to/claude-transcripts
  */
 import { parseArgs } from "node:util";
 import path from "node:path";
@@ -28,8 +30,9 @@ import {
 
 const USAGE = `Usage: audit-pi-session.mjs [session-path] [options]
 
-Audit Pi session transcripts (.jsonl files) to measure token efficiency,
-detect context snowballing, and report per-agent token breakdowns.
+Audit Pi or Claude Code session transcripts (.jsonl/.output files) to measure token
+efficiency, detect context snowballing, and report per-agent token breakdowns.
+Harness is auto-detected from the record schema unless --harness overrides it.
 
 Arguments:
   [session-path]    Path to a session directory, coordinator session.jsonl,
@@ -39,10 +42,13 @@ Arguments:
 Options:
   --latest          Automatically find and inspect the latest session for this
                     repository, including its tmp/worktrees session directories
+  --harness <mode>  Force the record extractor: auto (default), pi, or claude
   --json            Emit raw structured JSON instead of human-readable Markdown
   --help, -h        Show this help
 
 ${JQ_OUTPUT_USAGE}`;
+
+const VALID_HARNESS_VALUES = ["auto", "pi", "claude"];
 
 export async function runAuditCli(
   args = process.argv.slice(2),
@@ -60,6 +66,7 @@ export async function runAuditCli(
     jq: undefined,
     silent: false,
     fields: undefined,
+    harness: "auto",
   };
 
   try {
@@ -69,6 +76,7 @@ export async function runAuditCli(
         help: { type: "boolean", short: "h" },
         json: { type: "boolean" },
         latest: { type: "boolean" },
+        harness: { type: "string" },
         ...JQ_OUTPUT_PARSE_OPTIONS,
       },
       allowPositionals: true,
@@ -84,6 +92,14 @@ export async function runAuditCli(
     options.jq = values.jq;
     options.silent = !!values.silent;
     options.fields = values.fields;
+
+    if (values.harness !== undefined) {
+      if (!VALID_HARNESS_VALUES.includes(values.harness)) {
+        stderr.write(`${formatCliError(`Invalid --harness value "${values.harness}". Expected one of: ${VALID_HARNESS_VALUES.join(", ")}.`, { usage: USAGE })}\n`);
+        return 2;
+      }
+      options.harness = values.harness;
+    }
 
     if (positionals.length > 1) {
       stderr.write(`${formatCliError("Pass at most one session path.", { usage: USAGE })}\n`);
@@ -116,7 +132,7 @@ export async function runAuditCli(
     }
 
     targetPath = path.resolve(cwd, targetPath);
-    result = await auditPiSession(targetPath);
+    result = await auditPiSession(targetPath, { harness: options.harness });
   } catch (error) {
     stderr.write(`${formatCliError(error.message, { usage: USAGE })}\n`);
     return 1;
