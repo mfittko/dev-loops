@@ -13,11 +13,15 @@ import {
 
 // A git stub that logs its args to a file and exits with `exitCode`. With
 // `failSubcommand`, that subcommand fails and every other call runs real git.
-function writeGitStub(dir, { exitCode = 0, logFile, failSubcommand } = {}) {
+// With `emptySubcommand`, that subcommand prints nothing and exits 0 and every
+// other call runs real git.
+function writeGitStub(dir, { exitCode = 0, logFile, failSubcommand, emptySubcommand } = {}) {
   const gitPath = path.join(dir, "git");
-  const tail = failSubcommand === undefined
-    ? [`exit ${exitCode}`]
-    : [`if [ "$1" = ${JSON.stringify(failSubcommand)} ]; then echo "fatal: stub ${failSubcommand} failure" >&2; exit 1; fi`, 'exec git "$@"'];
+  const tail = emptySubcommand !== undefined
+    ? [`if [ "$1" = ${JSON.stringify(emptySubcommand)} ]; then exit 0; fi`, 'exec git "$@"']
+    : failSubcommand === undefined
+      ? [`exit ${exitCode}`]
+      : [`if [ "$1" = ${JSON.stringify(failSubcommand)} ]; then echo "fatal: stub ${failSubcommand} failure" >&2; exit 1; fi`, 'exec git "$@"'];
   const lines = [
     "#!/usr/bin/env sh",
     `echo "$@" >> ${JSON.stringify(logFile)}`,
@@ -371,6 +375,27 @@ test("cleanup --branch: a failed git status skips the removal (fail safe)", () =
     assert.match(log, /^status --porcelain --untracked-files=normal --ignore-submodules=none$/m, "the status call ran");
     assert.doesNotMatch(log, /worktree remove/);
     assert.ok(existsSync(paths["issue-7"]));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("cleanup --branch: removes without --force, so git refuses an untracked file the pre-check missed", () => {
+  const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);
+  try {
+    const logFile = path.join(base, "git.log");
+    const gitPath = writeGitStub(base, { logFile, emptySubcommand: "status" });
+    const edit = path.join(paths["issue-7"], "untracked.txt");
+    writeFileSync(edit, "local work\n");
+    const res = cleanupWorktree({ repoRoot: main, branch: "issue-7" }, { gitCommand: gitPath });
+    assert.equal(res.ok, true);
+    assert.equal(res.removed, null);
+    assert.match(res.reason, /^skipped:/);
+    assert.ok(existsSync(paths["issue-7"]), "the worktree stays");
+    assert.ok(listedPaths(main).includes(paths["issue-7"]));
+    assert.equal(readFileSync(edit, "utf8"), "local work\n");
+    const removeLine = readFileSync(logFile, "utf8").split("\n").find((l) => l.startsWith("worktree remove"));
+    assert.equal(removeLine, `worktree remove ${paths["issue-7"]}`);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

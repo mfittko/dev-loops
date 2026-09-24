@@ -4,8 +4,10 @@
  *
  * Resolves the target worktree (the canonical path via the shared resolver, an
  * explicit path, or the linked worktree that has a given branch checked out),
- * then runs `git worktree remove --force <path>` + `git worktree prune` from
- * the main checkout (so it never removes the cwd).
+ * then runs `git worktree remove <path>` + `git worktree prune` from the main
+ * checkout (so it never removes the cwd). The --issue, --pr and --path
+ * selectors pass `--force`. The automated --branch path does not, so git
+ * refuses a dirty, untracked or locked worktree and the removal is skipped.
  *
  * CLEANUP-SAFETY INVARIANT: refuses to remove any path NOT under
  * `tmp/worktrees/dev-loops/`. A hand-made `tmp/worktrees/my-experiment` can
@@ -33,7 +35,8 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 
 const USAGE = `Usage:
   cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p> | --branch <name>) [--head-sha <sha>]
-Remove a loop-owned worktree after merge: git worktree remove --force + prune.
+Remove a loop-owned worktree after merge: git worktree remove + prune
+(--force for --issue/--pr/--path; never for --branch).
 Refuses any path not under ${WORKTREE_NAMESPACE}/.
 Skips a worktree that holds any file under <worktree>/tmp/gate-findings/.
 Required:
@@ -254,18 +257,24 @@ export function cleanupWorktree(
   }
 
   // The automated --branch path runs after every merge with no operator in the
-  // loop, and `remove --force` would discard uncommitted work. Gitignored
-  // content (tmp/) does not show in --porcelain, so it never blocks removal.
+  // loop, so it must never discard uncommitted work. The status pre-check gives
+  // a readable reason; removing without --force makes git's own refusal
+  // (dirty, untracked, locked) the backstop. Gitignored content (tmp/) does not
+  // show in --porcelain and git removes it without --force.
   if (branch !== undefined) {
     const dirtySkip = dirtyTreeSkipReason(target, gitCommand);
     if (dirtySkip !== null) return { ok: true, removed: null, reason: dirtySkip };
   }
 
+  const removeArgs = branch !== undefined ? ["worktree", "remove", target] : ["worktree", "remove", "--force", target];
   try {
-    execFileSync(gitCommand, ["worktree", "remove", "--force", target], { ...gitOptions(), cwd: root });
+    execFileSync(gitCommand, removeArgs, { ...gitOptions(), cwd: root });
   } catch (err) {
     // Fail-soft: never break a merge-completion flow on a git error.
     const detail = (err.stderr ?? err.message ?? "").toString().trim();
+    if (branch !== undefined) {
+      return { ok: true, removed: null, reason: `skipped: git did not remove ${target} without --force: ${detail}` };
+    }
     return { ok: true, removed: null, reason: `git error (non-fatal): ${detail}` };
   } finally {
     try {

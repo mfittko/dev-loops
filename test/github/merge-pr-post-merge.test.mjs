@@ -181,13 +181,13 @@ test("AC6: a fast-forward git error is recorded and the other steps still run", 
   assert.ok(existsSync(path.join(repo.mainCheckout, MARKER)));
 }));
 
-test("AC6: a cleanup git error is recorded and the other steps still run", withRepo({ actions: ACTIONS }, async (repo) => {
+test("AC6: a cleanup git refusal is recorded and the other steps still run", withRepo({ actions: ACTIONS }, async (repo) => {
   git(repo.mainCheckout, ["worktree", "lock", repo.worktree]);
   const result = await mergePr(OPTIONS, makeRuntime(repo));
   assert.equal(result.ok, true);
   assert.equal(result.merged, true);
   assert.equal(result.postMerge.worktreeCleanup.removed, null);
-  assert.match(result.postMerge.worktreeCleanup.reason, /git error/);
+  assert.match(result.postMerge.worktreeCleanup.reason, /^skipped: .*locked working tree/s);
   assert.ok(existsSync(repo.worktree));
   assert.equal(result.postMerge.fastForward.status, "fast_forwarded");
   assert.ok(existsSync(path.join(repo.mainCheckout, MARKER)));

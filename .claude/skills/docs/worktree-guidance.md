@@ -258,8 +258,11 @@ checkout at the `Edit`/`Write` before it ever reaches a commit.
 `WORKTREE-CLEANUP`: After a successful merge, the canonical worktree MUST be
 removed via this entrypoint, which resolves the path through the shared
 resolver or, with `--branch`, selects the linked worktree that has the branch
-checked out at the merged head, runs `git worktree remove --force` + `git worktree prune` from the
-main checkout, and MUST NOT touch any path outside `tmp/worktrees/dev-loops/`:
+checked out at the merged head, runs `git worktree remove` + `git worktree prune` from the
+main checkout, and MUST NOT touch any path outside `tmp/worktrees/dev-loops/`.
+The `--issue`, `--pr` and `--path` selectors run `git worktree remove --force`. The automated
+`--branch` removal runs without `--force`, so git refuses a dirty, untracked or
+locked worktree and the cleanup reports a skip:
 
 ```sh
 node scripts/loop/cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p> | --branch <name> [--head-sha <sha>])
