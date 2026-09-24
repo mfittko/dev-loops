@@ -27,7 +27,7 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { resolveWorktreePath, WORKTREE_NAMESPACE } from "@dev-loops/core/loop/handoff-envelope";
 import { canonicalize } from "./_worktree-path.mjs";
-import { listWorktreeEntries } from "./_repo-root-resolver.mjs";
+import { gitEnvNoDirOverrides, listWorktreeEntries } from "./_repo-root-resolver.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -146,7 +146,8 @@ function isUnderNamespace(target, repoRoot) {
   return within(nsRoot, realRoot) && within(real, nsRoot);
 }
 
-const GIT_OPTIONS = { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] };
+// Every cleanup git call drops GIT_DIR/GIT_WORK_TREE so it targets the repo listWorktreeEntries enumerated.
+const gitOptions = () => ({ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnvNoDirOverrides() });
 
 /**
  * The LINKED worktree entry under the namespace that has `branch` checked
@@ -238,14 +239,14 @@ export function cleanupWorktree(
   }
 
   try {
-    execFileSync(gitCommand, ["worktree", "remove", "--force", target], { ...GIT_OPTIONS, cwd: root });
+    execFileSync(gitCommand, ["worktree", "remove", "--force", target], { ...gitOptions(), cwd: root });
   } catch (err) {
     // Fail-soft: never break a merge-completion flow on a git error.
     const detail = (err.stderr ?? err.message ?? "").toString().trim();
     return { ok: true, removed: null, reason: `git error (non-fatal): ${detail}` };
   } finally {
     try {
-      execFileSync(gitCommand, ["worktree", "prune"], { ...GIT_OPTIONS, cwd: root });
+      execFileSync(gitCommand, ["worktree", "prune"], { ...gitOptions(), cwd: root });
     } catch { /* fail-soft: a failed prune leaves stale admin entries only */ }
   }
 

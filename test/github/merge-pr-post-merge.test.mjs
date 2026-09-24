@@ -17,8 +17,11 @@ const BRANCH = "issue-7";
 const OPTIONS = { repo: "mfittko/dev-loops", pr: 7, humanApprovedBy: "mfittko", method: "squash", stableRelease: false, standingAuthorization: true };
 const MARKER = "action-ran.txt";
 
+// Host git config (for example a global pushInsteadOf) must not reach fixture git.
+const FIXTURE_GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+
 function git(cwd, args) {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: FIXTURE_GIT_ENV }).trim();
 }
 
 // A bare origin, a main checkout on `main`, and a linked worktree
@@ -29,11 +32,11 @@ function git(cwd, args) {
 function makeRepo({ behind = true, actions = null } = {}) {
   const base = realpathSync(mkdtempSync(path.join(tmpdir(), "merge-post-")));
   const origin = path.join(base, "origin.git");
-  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env: FIXTURE_GIT_ENV });
   const mainCheckout = path.join(base, "main");
   mkdirSync(mainCheckout);
   initGitFixture(mainCheckout, { branch: "main", remote: origin });
-  git(mainCheckout, ["push", "-q", "-u", "origin", "main"]);
+  git(mainCheckout, ["push", "-q", "-u", "origin", "main"]); // origin still is the bare path here
   // origin names the --repo slug; insteadOf routes it to the local bare repo.
   git(mainCheckout, ["remote", "set-url", "origin", ORIGIN_URL]);
   git(mainCheckout, ["config", `url.${origin}.insteadOf`, ORIGIN_URL]);
@@ -41,7 +44,7 @@ function makeRepo({ behind = true, actions = null } = {}) {
   git(mainCheckout, ["worktree", "add", "-q", "-b", BRANCH, worktree]);
   if (behind) {
     git(worktree, ["commit", "-q", "--allow-empty", "-m", "merged work"]);
-    git(worktree, ["push", "-q", "origin", `${BRANCH}:main`]);
+    git(worktree, ["push", "-q", origin, `${BRANCH}:main`]);
   }
   if (actions) {
     const lines = ["version: 1", "postMerge:", "  actions:"];

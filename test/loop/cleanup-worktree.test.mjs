@@ -66,6 +66,26 @@ test("cleanup: removes a path under the namespace", () => {
   }
 });
 
+test("cleanup: remove and prune drop an inherited GIT_DIR/GIT_WORK_TREE", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "wt-clean-"));
+  const saved = { dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE };
+  try {
+    const logFile = path.join(dir, "git.log");
+    const gitPath = path.join(dir, "git");
+    writeFileSync(gitPath, `#!/usr/bin/env sh\necho "$1 $2 dir=\${GIT_DIR-unset} tree=\${GIT_WORK_TREE-unset}" >> ${JSON.stringify(logFile)}\n`, { mode: 0o755 });
+    process.env.GIT_DIR = "/elsewhere/.git";
+    process.env.GIT_WORK_TREE = "/elsewhere";
+    cleanupWorktree({ repoRoot: dir, issue: 909 }, { gitCommand: gitPath });
+    assert.equal(readFileSync(logFile, "utf8"), "worktree remove dir=unset tree=unset\nworktree prune dir=unset tree=unset\n");
+  } finally {
+    for (const [k, v] of [["GIT_DIR", saved.dir], ["GIT_WORK_TREE", saved.tree]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Safety invariant: refuse paths outside the namespace
 // ---------------------------------------------------------------------------
