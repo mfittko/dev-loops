@@ -205,6 +205,24 @@ for (const strict of [false, true]) {
     assert.equal(result.merged, true);
     assert.equal(result.copilotConvergenceState, "current_head_clean");
   });
+
+  test(`${mode}: a later clean review on an older commit refuses while a Copilot review is outstanding on the current head`, async () => {
+    const pending = { user: { login: "copilot-pull-request-reviewer[bot]" }, state: "PENDING", commit_id: HEAD, body: "", submitted_at: null };
+    for (const [label, extra] of [
+      ["Copilot requested", { requestedReviewers: { users: [{ login: "Copilot" }], teams: [] } }],
+      ["pending current-head review", { reviews: [...laterOnOlder("### 🟢 Approval recommended"), pending] }],
+      ["requested-reviewers read failure", { requestedReviewers: new Error("gh failed") }],
+    ]) {
+      const { runtime, calls } = makeRuntime({ maxCopilotRounds: 5, strict, reviews: laterOnOlder("### 🟢 Approval recommended"), ...extra });
+      let threw = null;
+      try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+      assert.ok(threw, `${label}: an outstanding current-head request must refuse`);
+      const failure = threw.mergePrFailure.failures.find((f) => f.precondition === "copilot_convergence");
+      assert.ok(failure, `${label}: ${JSON.stringify(threw.mergePrFailure.failures)}`);
+      assert.match(failure.reason, /Copilot review is outstanding on the current head/);
+      assert.equal(calls.runChild.filter((c) => c.args[0] === "pr" && c.args[1] === "merge").length, 0);
+    }
+  });
 }
 
 test("no current-head Copilot review with the Copilot gate disabled merges via copilot_gate_disabled", async () => {

@@ -277,15 +277,20 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
 
 // Returns a copilot_convergence refusal reason when a current-head Copilot
 // review exists but the latest submitted Copilot review sits on an earlier
-// commit and is not converged by the shared predicate; null otherwise.
+// commit and is not converged by the shared predicate, or is converged while a
+// Copilot review is outstanding on the current head; null otherwise.
 async function resolveLaterCopilotReviewRefusal({ repo, pr, currentHeadSha, rawReviews, rawConvergenceState }, runtime) {
   if (rawConvergenceState === null || rawConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW) return null;
   const prData = { reviews: toSharedReviewShape(rawReviews) };
   const latestHead = getLastCopilotReviewHeadSha(prData);
   if (latestHead === null || latestHead === currentHeadSha) return null;
   const carried = await resolveCarriedConvergence({ repo, pr, currentHeadSha, prData, copilotReviewRequestStatus: "none" }, runtime);
-  if (carried.carried) return null;
-  return `a later Copilot review ${getLastCopilotReview(prData)?.id ?? "(unknown id)"} on an earlier commit (${latestHead}) is not converged and supersedes the current-head review: ${carried.reason}`;
+  const later = `a later Copilot review ${getLastCopilotReview(prData)?.id ?? "(unknown id)"} on an earlier commit (${latestHead})`;
+  if (!carried.carried) return `${later} is not converged and supersedes the current-head review: ${carried.reason}`;
+  // The carry reads the request status as "none"; check it here with the fail-closed reads.
+  return (await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))
+    ? `${later} is converged, but a Copilot review is outstanding on the current head`
+    : null;
 }
 
 // The shared loop helpers read the GraphQL review shape (`id` is the review's
@@ -458,7 +463,7 @@ export async function mergePr(options, runtime = {}) {
   // both modes: the current head has its own review, so no delta is carried.
   const copilotLaterReviewRefusal = await resolveLaterCopilotReviewRefusal(
     { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, rawConvergenceState },
-    { env, ghCommand, runChild },
+    { env, ghCommand, runChild, ghJson },
   );
 
   const verdict = evaluateMergePreconditions({
