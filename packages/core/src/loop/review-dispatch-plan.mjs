@@ -819,10 +819,8 @@ export const DEFAULT_DIFF_EXCLUDE_GLOBS = Object.freeze([
   "composer.lock", "**/composer.lock",
   // Generated/vendored trees.
   "dist/**", "**/dist/**",
-  "lib/**", "**/lib/**",
   "coverage/**", "**/coverage/**",
   "node_modules/**", "**/node_modules/**",
-  ".claude/**", "**/.claude/**",
 ]);
 
 function escapeDiffGlobLiteral(ch) {
