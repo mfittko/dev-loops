@@ -170,7 +170,9 @@ sequence is:
    `locally_clear`, the fixer resolves each thread. On `bounded_out`, the fixer
    resolves only the threads of act items with status `resolved`. For
    `not_resolved` and `cannot_verify` items, it replies with the residual delta
-   status and leaves the thread unresolved.
+   status and leaves the thread unresolved. The fixer MUST NOT mark these
+   residual threads `tackled`; its handoff disposition records them as
+   `deferred`.
 
 Each delta review, including a re-review of the current head, consumes one
 invocation. The dev-loop coordinator owns the invocation count and passes it to

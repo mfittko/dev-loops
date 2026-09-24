@@ -267,6 +267,13 @@ test("the gate fix pass and the fixer cross-reference delta mode between the fix
   assert.match(fixer.slice(commitIdx, pushIdx), /hand back the commit SHA unpushed/);
 });
 
+test("bounded_out residual threads are handed off as deferred, never tackled", () => {
+  // evaluateFixerDisposition blocks the gate on a tackled-but-unresolved thread.
+  const residual = /MUST NOT mark these\s+residual threads `tackled`; its handoff disposition records them as\s+`deferred`/;
+  assert.match(readRepo(CONTRACT), residual);
+  assert.match(readRepo("agents/fixer.agent.md"), residual);
+});
+
 test("no pre-PR-reviewer role key remains in config, code or contract prose (no alias)", () => {
   const oldRole = ["pre", "PR", "reviewer"].join("-");
   const out = spawnSync(
