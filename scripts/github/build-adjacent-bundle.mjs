@@ -167,13 +167,14 @@ function isSourceFile(relPath) {
 
 /**
  * Recursively list repo-relative POSIX paths under repoRoot, skipping
- * generated/vendored dirs and the tmp/ scratch tree for determinism+speed.
+ * build/vendored dirs and the tmp/ scratch tree for determinism+speed.
+ * Hand-written `lib/` and `.claude/` source stays indexed.
  * @param {string} repoRoot
  * @returns {Promise<string[]>} sorted repo-relative POSIX paths
  */
 export async function listRepoFiles(repoRoot) {
   const out = [];
-  const skipDir = new Set([".git", "node_modules", "dist", "lib", ".claude", "coverage", "tmp"]);
+  const skipDir = new Set([".git", "node_modules", "dist", "coverage", "tmp"]);
   async function walk(absDir, relDir) {
     let entries;
     try {

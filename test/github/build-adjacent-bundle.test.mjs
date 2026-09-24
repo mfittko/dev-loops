@@ -8,6 +8,7 @@ import {
   buildAdjacentBundle,
   classifyStripReason,
   extractImportSpecifiers,
+  listRepoFiles,
   resolveRelativeImport,
   resolveSafeRepoPath,
   DEFAULT_MAX_FILE_BYTES,
@@ -267,6 +268,24 @@ test("buildAdjacentBundle records a deleted changed file as missing, not an erro
     const bundle = await buildAdjacentBundle({ changedFiles: ["src/deleted.mjs", "src/kept.mjs"], repoRoot: root });
     assert.ok(bundle.missing.includes("src/deleted.mjs"));
     assert.ok(fileByPath(bundle, "src/kept.mjs"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("listRepoFiles indexes scripts/lib/ and .claude/ but skips node_modules/ and dist/", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "adj-bundle-"));
+  try {
+    await writeFiles(root, {
+      "scripts/lib/util.mjs": "export const u = 1;\n",
+      ".claude/hooks/guard.mjs": "export const g = 1;\n",
+      "node_modules/pkg/index.js": "module.exports = 1;\n",
+      "dist/out.js": "export const d = 1;\n",
+    });
+    const files = await listRepoFiles(root);
+    assert.ok(files.includes("scripts/lib/util.mjs"));
+    assert.ok(files.includes(".claude/hooks/guard.mjs"));
+    assert.ok(!files.some((f) => f.startsWith("node_modules/") || f.startsWith("dist/")));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
