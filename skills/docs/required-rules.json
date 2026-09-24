@@ -530,6 +530,11 @@
       "id": "LOCAL-TRACKER-NO-DIRECT-MERGE"
     },
     {
+      "id": "MAIN-AGENT-FILING-BLOCKER-ONLY",
+      "enforcement": "agent",
+      "enforcementNote": "Judging whether a runner finding is a blocker is orchestrator judgment; no script can classify it."
+    },
+    {
       "id": "MERGE-PRECOND-REQUIRED"
     },
     {

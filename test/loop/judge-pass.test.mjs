@@ -323,10 +323,10 @@ test("judgePassCli --out is deduped to one remediation per acted cluster; --ledg
     ),
   );
   const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
-  // Index 3 defers with a followUpDraft, which drives applyFollowUpIssues; stub
-  // the issue deps (as the sibling tests do) so it never hits the real GitHub
-  // API — unstubbed it fails closed in CI and would file a real issue locally.
-  const { createIssue, commentIssue, listIssues } = stubIssueDeps();
+  // Index 3 defers with a followUpDraft, which drives applyDeferralComment; stub
+  // the gh deps (as the sibling tests do) so it never hits the real GitHub
+  // API.
+  const { deps } = stubDeferralDeps();
   const payload = await judgePassCli(
     {
       repo: "mfittko/dev-loops",
@@ -338,7 +338,7 @@ test("judgePassCli --out is deduped to one remediation per acted cluster; --ledg
       out: "./act.json",
       ledgerOut: "./enriched.json",
     },
-    { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
+    { repoRoot: tmpDir, ...deps },
   );
   assert.equal(payload.ok, true);
   // Raw tally: both duplicate-cluster members (0, 1 via projection) plus the
@@ -519,19 +519,19 @@ test("judgePassCli fails closed when the gate config cannot be loaded (#2246)", 
 });
 
 // FIX D (#2156): the clean+act invariant must fail BEFORE any durable side
-// effect — neither the approvals record nor a follow-up GitHub issue may be
-// written/created for a round that is about to be rejected. Combines a clean
+// effect — neither the approvals record nor a deferral comment may be
+// written for a round that is about to be rejected. Combines a clean
 // ledger + nonzero act count (as above) with BOTH side-effect seams engaged
 // (--approvals-out via --spec-file, and a deferred finding that would
-// otherwise drive applyFollowUpIssues) to prove the ordering, not just the
+// otherwise drive applyDeferralComment) to prove the ordering, not just the
 // throw.
-test("judgePassCli: rejecting a clean+act round creates no follow-up issue and writes no approvals record (#2156)", async () => {
+test("judgePassCli: rejecting a clean+act round posts no deferral comment and writes no approvals record (#2156)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-clean-act-no-side-effects-"));
   const { specDigest, contentDigest, criterionIds } = await specDigests();
   const findings = [finding(), finding({ severity: "low", summary: "would-be follow-up", disposition: "deferred" })];
   // A "clean" overallVerdict paired with an act-disposed finding (index 0) —
   // the invalid combination. Index 1 defers with a followUpDraft, which
-  // would (pre-fix) reach applyFollowUpIssues before the assertion threw.
+  // would (pre-fix) reach applyDeferralComment before the assertion threw.
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "clean", findings }));
   await writeFile(
     path.join(tmpDir, "judge-verdict.json"),
@@ -551,7 +551,7 @@ test("judgePassCli: rejecting a clean+act round creates no follow-up issue and w
     ] }),
   );
   const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
-  const { createIssue, commentIssue, listIssues, createCalls, commentCalls } = stubIssueDeps();
+  const { deps, runCalls, commentCalls } = stubDeferralDeps();
   const approvalsPath = path.join(tmpDir, "approvals.json");
   await assert.rejects(
     judgePassCli(
@@ -567,155 +567,130 @@ test("judgePassCli: rejecting a clean+act round creates no follow-up issue and w
         specAuthorityVerdict: "./spec-authority.json",
         approvalsOut: "./approvals.json",
       },
-      { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
+      { repoRoot: tmpDir, ...deps },
     ),
     /clean verdict is invalid with .* at a blocking severity/,
   );
-  assert.equal(createCalls.length, 0, "no follow-up issue created before the round is rejected");
-  assert.equal(commentCalls.length, 0, "no follow-up issue comment posted before the round is rejected");
+  assert.equal(runCalls.length, 0, "no gh call before the round is rejected");
+  assert.equal(commentCalls.length, 0, "no deferral comment posted before the round is rejected");
   assert.equal(existsSync(approvalsPath), false, "no approvals record written before the round is rejected");
 });
 
-// #1807: a `defer` disposition creates (or appends to) the PR's ONE tracked
-// follow-up GitHub issue. Stub `createIssue`/`commentIssue` — the same
-// dependency-injection seam create-issue.test.mjs/comment-issue.test.mjs stub
-// — so this never hits the real API.
-function stubIssueDeps({ issueNumber = 9001, existingGithubIssues = [] } = {}) {
-  const createCalls = [];
+// A `defer` disposition goes as ONE batched comment on the deferral comment
+// target. `run` answers only the two reads (the closing-reference lookup and
+// the target's comment list); any other gh call — `gh issue create` included —
+// throws, so no test here can create an issue. `commentIssue` is stubbed so
+// nothing hits the real API. `closing` lists the PR's closing issue numbers;
+// `listed` holds the target's existing comment bodies.
+function stubDeferralDeps({ closing = [], listed = [] } = {}) {
+  const runCalls = [];
   const commentCalls = [];
-  const listCalls = [];
-  const createIssue = async (opts) => {
-    createCalls.push(opts);
-    return { ok: true, issueNumber, url: `https://github.com/${opts.repo}/issues/${issueNumber}` };
+  const run = async (_cmd, args) => {
+    runCalls.push(args);
+    if (args[0] === "pr" && args[1] === "view") {
+      return { code: 0, stdout: JSON.stringify({ closingIssuesReferences: closing.map((number) => ({ number, repository: { name: "dev-loops", owner: { login: "mfittko" } } })) }), stderr: "" };
+    }
+    if (args[0] === "api" && args.some((arg) => /\/issues\/\d+\/comments/.test(arg))) {
+      return { code: 0, stdout: JSON.stringify([listed.map((body) => ({ body }))]), stderr: "" };
+    }
+    throw new Error(`unexpected gh call: ${args.join(" ")}`);
   };
   const commentIssue = async (opts) => {
     commentCalls.push(opts);
     return { ok: true, repo: opts.repo, issue: opts.issue, commentUrl: `https://github.com/${opts.repo}/issues/${opts.issue}#issuecomment-1` };
   };
-  // #1809: ensureFollowUpIssue now searches GitHub before creating whenever the
-  // caller's own local ledger cache doesn't already know a follow-up issue
-  // number — stub it to "no match" by default (returning `existingGithubIssues`
-  // otherwise) so a test never hits the real API.
-  const listIssues = async (opts) => {
-    listCalls.push(opts);
-    return { ok: true, issues: existingGithubIssues };
-  };
-  return { createIssue, commentIssue, listIssues, createCalls, commentCalls, listCalls };
+  return { deps: { run, commentIssue }, runCalls, commentCalls };
 }
 
-test("judgePassCli writes the act list and enriched ledger for a wrapped ledger", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-"));
-  const ledgerPath = path.join(tmpDir, "ledger.json");
-  const verdictPath = path.join(tmpDir, "judge-verdict.json");
-  const actPath = path.join(tmpDir, "act.json");
-  const outLedgerPath = path.join(tmpDir, "enriched.json");
-  await writeFile(
-    ledgerPath,
-    JSON.stringify({
-      overallVerdict: "findings_present",
-      findings: [finding({ summary: "fix this" }), finding({ summary: "defer this", severity: "medium" })],
-    }),
-  );
-  await writeFile(
-    verdictPath,
-    JSON.stringify(
-      verdict({
-        dispositions: [
-          { index: 0, disposition: "act", rationale: "in scope" },
-          { index: 1, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
-        ],
-      }),
-    ),
-  );
+async function runDeferRound({ findings, dispositions, deps, config, pr = "1658" }) {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-defer-"));
+  if (config) await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify(config));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions })));
   const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
-  const { createIssue, commentIssue, listIssues, createCalls, commentCalls } = stubIssueDeps();
   const payload = await judgePassCli(
-    {
-      repo: "mfittko/dev-loops",
-      pr: "1658",
-      gate: "draft_gate",
-      headSha: HEAD,
-      findingsFile: ledgerPath,
-      judgeVerdict: verdictPath,
-      out: actPath,
-      ledgerOut: outLedgerPath,
-    },
-    { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
+    { repo: "mfittko/dev-loops", pr, gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...deps },
   );
+  const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8"));
+  return { payload, enriched, tmpDir };
+}
+
+const DEFER = { disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } };
+
+function assertNoIssueCreate(runCalls) {
+  assert.equal(runCalls.some((args) => args.includes("create")), false, "no gh issue-create call");
+}
+
+test("judgePassCli: GitHub tracker + one closing reference — one batched comment on that issue, followUpIssueNumber is the issue", async () => {
+  const { deps, runCalls, commentCalls } = stubDeferralDeps({ closing: [2425] });
+  const { payload, enriched } = await runDeferRound({
+    findings: [finding({ summary: "fix this" }), finding({ summary: "defer this", severity: "medium" }), finding({ summary: "defer that too", severity: "low" })],
+    dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }, { index: 1, ...DEFER }, { index: 2, ...DEFER }],
+    deps,
+  });
   assert.equal(payload.ok, true);
   assert.equal(payload.actCount, 1);
   assert.deepEqual(payload.scopeDrift, { verdict: "within_scope", rationale: "within AC", driftedAreas: [] });
-  const act = JSON.parse(await readFile(actPath, "utf8"));
-  assert.equal(act.length, 1);
-  assert.equal(act[0].summary, "fix this");
-  const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
-  assert.equal(enriched.overallVerdict, "findings_present");
+  assert.equal(enriched.scopeDrift.verdict, "within_scope");
+  assert.equal(commentCalls.length, 1, "ONE batched comment for the round's defers");
+  assert.equal(commentCalls[0].issue, 2425);
+  assert.match(commentCalls[0].body, /defer this/);
+  assert.match(commentCalls[0].body, /defer that too/);
   assert.equal(enriched.findings[0].judgeDisposition, "act");
   assert.strictEqual(typeof enriched.findings[0].fingerprint, "string");
-  assert.equal(enriched.findings[1].judgeDisposition, "defer");
-  assert.equal(enriched.findings[1].followUpIssueNumber, 9001);
-  assert.equal(enriched.scopeDrift.verdict, "within_scope");
-  // ONE issue created for the round's batch of defers; no comment-append call
-  // on a first-ever run (nothing prior to append to).
-  assert.equal(createCalls.length, 1);
-  assert.equal(commentCalls.length, 0);
-  assert.match(createCalls[0].body, /defer this/);
+  assert.equal(enriched.findings[1].followUpIssueNumber, 2425);
+  assert.equal(enriched.findings[2].followUpIssueNumber, 2425);
+  assertNoIssueCreate(runCalls);
 });
 
-// #1807 idempotency: re-running the pass over the SAME --ledger-out path
-// (a retry, or the next round re-linking the same PR) must not create a
-// duplicate issue for a finding it already linked.
-test("judgePassCli defer is idempotent across a re-run: the already-linked finding reuses its issue with no gh call", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-idempotent-"));
-  const ledgerPath = path.join(tmpDir, "ledger.json");
-  const verdictPath = path.join(tmpDir, "judge-verdict.json");
-  const outLedgerPath = path.join(tmpDir, "enriched.json");
-  const deferredFinding = finding({ summary: "defer this", severity: "medium" });
-  await writeFile(ledgerPath, JSON.stringify({ overallVerdict: "findings_present", findings: [deferredFinding] }));
-  await writeFile(
-    verdictPath,
-    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } }] })),
-  );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
-  const first = stubIssueDeps({ issueNumber: 4242 });
-  await judgePassCli(
-    { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
-    { repoRoot: tmpDir, createIssue: first.createIssue, commentIssue: first.commentIssue, listIssues: first.listIssues },
-  );
-  assert.equal(first.createCalls.length, 1);
+for (const [label, closing] of [["no closing reference", []], ["more than one closing reference", [2425, 2426]]]) {
+  test(`judgePassCli: ${label} — the comment goes to the PR, followUpIssueNumber is the PR number`, async () => {
+    const { deps, runCalls, commentCalls } = stubDeferralDeps({ closing });
+    const { enriched } = await runDeferRound({ findings: [finding({ summary: "defer this", severity: "low" })], dispositions: [{ index: 0, ...DEFER }], deps });
+    assert.equal(commentCalls.length, 1);
+    assert.equal(commentCalls[0].issue, 1658);
+    assert.equal(enriched.findings[0].followUpIssueNumber, 1658);
+    assertNoIssueCreate(runCalls);
+  });
+}
 
-  // Re-run with the SAME inputs (same fresh findings-file, same verdict) —
-  // the prior enriched.json already links fingerprint -> 4242.
-  const second = stubIssueDeps({ issueNumber: 9999 });
-  await judgePassCli(
-    { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
-    { repoRoot: tmpDir, createIssue: second.createIssue, commentIssue: second.commentIssue, listIssues: second.listIssues },
-  );
-  assert.equal(second.createCalls.length, 0, "no duplicate issue created on re-run");
-  assert.equal(second.commentCalls.length, 0, "nothing new to append on a pure retry");
-  assert.equal(second.listCalls.length, 0, "a pure retry with a known prior issue number never searches GitHub");
-  const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
-  assert.equal(enriched.findings[0].followUpIssueNumber, 4242, "reuses the FIRST run's issue number");
+test("judgePassCli: tracker.provider other than github — the comment goes to the PR, with no closing-reference lookup", async () => {
+  const { deps, runCalls, commentCalls } = stubDeferralDeps({ closing: [2425] });
+  const { enriched } = await runDeferRound({
+    findings: [finding({ summary: "defer this", severity: "low" })],
+    dispositions: [{ index: 0, ...DEFER }],
+    deps,
+    config: { version: 1, tracker: { provider: "jira" } },
+  });
+  assert.equal(runCalls.some((args) => args[0] === "pr"), false, "no closing-reference lookup for a non-GitHub tracker");
+  assert.equal(commentCalls.length, 1);
+  assert.equal(commentCalls[0].issue, 1658);
+  assert.equal(enriched.findings[0].followUpIssueNumber, 1658);
+  assertNoIssueCreate(runCalls);
+});
+
+test("judgePassCli: a re-run does not re-append a fingerprint the target already lists", async () => {
+  const deferred = finding({ summary: "defer this", severity: "medium" });
+  const fp = fingerprintFinding(deferred);
+  const { deps, runCalls, commentCalls } = stubDeferralDeps({ closing: [2425], listed: [`<!-- dev-loops:deferred-summary -->\nGate findings deferred:\n\n- \`${fp}\` **medium** (\`correctness\`): defer this`] });
+  const { enriched } = await runDeferRound({ findings: [deferred], dispositions: [{ index: 0, ...DEFER }], deps });
+  assert.equal(commentCalls.length, 0, "nothing new to append on a pure retry");
+  assert.equal(enriched.findings[0].followUpIssueNumber, 2425, "still records the target");
+  assertNoIssueCreate(runCalls);
 });
 
 // #1807 AC3: a `reject` disposition records fingerprint/severity/angle in the
-// ledger and creates no issue.
-test("judgePassCli reject records a fingerprint audit entry and creates no issue", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-reject-"));
-  const ledgerPath = path.join(tmpDir, "ledger.json");
-  const verdictPath = path.join(tmpDir, "judge-verdict.json");
-  const outLedgerPath = path.join(tmpDir, "enriched.json");
-  await writeFile(ledgerPath, JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "out of scope" })] }));
-  await writeFile(verdictPath, JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "below the defer bar", criterion: "NG-1" }] })));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
-  const { createIssue, commentIssue, listIssues, createCalls, commentCalls } = stubIssueDeps();
-  await judgePassCli(
-    { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
-    { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
-  );
-  assert.equal(createCalls.length, 0);
+// ledger and makes no gh call at all.
+test("judgePassCli reject records a fingerprint audit entry and posts no comment", async () => {
+  const { deps, runCalls, commentCalls } = stubDeferralDeps();
+  const { enriched } = await runDeferRound({
+    findings: [finding({ summary: "out of scope" })],
+    dispositions: [{ index: 0, disposition: "reject", rationale: "below the defer bar", criterion: "NG-1" }],
+    deps,
+  });
+  assert.equal(runCalls.length, 0);
   assert.equal(commentCalls.length, 0);
-  const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
   const [entry] = enriched.findings;
   assert.equal(entry.judgeDisposition, "reject");
   assert.equal(typeof entry.fingerprint, "string");
@@ -792,68 +767,6 @@ test("runJudgePass two-round rehearsal: an unchanged coverage demand stays rejec
   // and judge enrichment (adding judgeDisposition) does not perturb it — so the
   // prior-round ledger alone lets the judge recognize the repeat.
   assert.equal(fingerprintFinding(round1.enriched[0]), fingerprintFinding(round2.enriched[0]));
-});
-
-// #1809: cross-path convergence — close-gate-findings.mjs's severity/round
-// defer may have already created this PR's follow-up issue via a thread
-// marker judge-pass never sees. judge-pass's OWN --ledger-out cache is empty
-// (first-ever run of THIS pass), so it must resolve the existing issue via
-// GitHub itself rather than mint a duplicate.
-test("judgePassCli: no local prior issue, but GitHub already has this PR's follow-up issue — appends instead of creating a duplicate", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-cross-path-"));
-  const ledgerPath = path.join(tmpDir, "ledger.json");
-  const verdictPath = path.join(tmpDir, "judge-verdict.json");
-  const outLedgerPath = path.join(tmpDir, "enriched.json");
-  await writeFile(ledgerPath, JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "defer this", severity: "low" })] }));
-  await writeFile(verdictPath, JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } }] })));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
-  const { createIssue, commentIssue, listIssues, createCalls, commentCalls, listCalls } = stubIssueDeps({
-    existingGithubIssues: [{ number: 6500, title: "Deferred gate findings for mfittko/dev-loops#1658", state: "open", labels: [] }],
-  });
-  await judgePassCli(
-    { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
-    { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
-  );
-  assert.equal(createCalls.length, 0, "must not create a duplicate — close-gate-findings already created one");
-  assert.equal(commentCalls.length, 1);
-  assert.equal(commentCalls[0].issue, 6500);
-  assert.equal(listCalls.length, 1, "searches GitHub exactly once since the local cache is empty");
-  const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
-  assert.equal(enriched.findings[0].followUpIssueNumber, 6500);
-});
-
-// #1809 finding 4 (coverage gap): the branch where a prior --ledger-out
-// already links a follow-up issue AND this round defers a NEW (not
-// previously linked) finding — must append to that same issue via
-// commentIssue, using the local fast path (no GitHub search needed since the
-// issue number is already known).
-test("judgePassCli: a NEW deferral in a later round appends to the PR's already-linked follow-up issue (no search, no duplicate)", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-append-round-"));
-  const ledgerPath = path.join(tmpDir, "ledger.json");
-  const verdictPath = path.join(tmpDir, "judge-verdict.json");
-  const outLedgerPath = path.join(tmpDir, "enriched.json");
-  // Simulate a prior round's own output: one finding already linked to issue 7000.
-  const priorFinding = finding({ summary: "already deferred", severity: "low" });
-  await writeFile(outLedgerPath, JSON.stringify({
-    overallVerdict: "findings_present",
-    findings: [{ ...priorFinding, judgeDisposition: "defer", fingerprint: fingerprintFinding(priorFinding), followUpIssueNumber: 7000 }],
-  }));
-  // This round's fresh findings-file carries a DIFFERENT finding (distinct
-  // summary -> distinct fingerprint), disposed defer.
-  await writeFile(ledgerPath, JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "a new finding to defer", severity: "low" })] }));
-  await writeFile(verdictPath, JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } }] })));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
-  const { createIssue, commentIssue, listIssues, createCalls, commentCalls, listCalls } = stubIssueDeps();
-  await judgePassCli(
-    { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: ledgerPath, judgeVerdict: verdictPath, ledgerOut: outLedgerPath },
-    { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
-  );
-  assert.equal(createCalls.length, 0, "must not create a second issue for the same PR");
-  assert.equal(commentCalls.length, 1);
-  assert.equal(commentCalls[0].issue, 7000);
-  assert.equal(listCalls.length, 0, "the local ledger already knows the issue number — no GitHub search needed");
-  const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
-  assert.equal(enriched.findings[0].followUpIssueNumber, 7000);
 });
 
 // --- Immutable spec-authority enforcement (opt-in via --spec-file) ---
@@ -1156,14 +1069,15 @@ test("judgePassCli rejects a finding_conflicts finding even when its relevance d
     ] }),
   );
   const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
-  // Stub issue deps: a finding_conflicts finding must NOT spawn a follow-up.
-  const deps = stubIssueDeps();
+  // Stub deferral deps: a finding_conflicts finding must NOT reach the deferral comment.
+  const { deps, runCalls, commentCalls } = stubDeferralDeps();
   const [opts] = specAuthorityArgs(tmpDir, contentDigest);
   const payload = await judgePassCli(opts, { repoRoot: tmpDir, ...deps });
   assert.equal(payload.ok, true);
   assert.equal(payload.counts.reject, 1);
   assert.equal(payload.counts.defer, 0, "the defer was overridden to reject by finding_conflicts");
-  assert.equal(deps.createCalls.length, 0, "no follow-up issue for a spec-rejected finding");
+  assert.equal(runCalls.length, 0, "no gh call for a spec-rejected finding");
+  assert.equal(commentCalls.length, 0, "no deferral comment for a spec-rejected finding");
 });
 
 test("judgePassCli flags a remediation_conflicts finding as remediationRejected but keeps it actionable", async () => {
