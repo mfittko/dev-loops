@@ -1,6 +1,6 @@
 import { describe, it, test } from "bun:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -521,6 +521,29 @@ describe("fragment format rule", () => {
       const output = log.lines.join("\n");
       assert.match(output, /changes\/old\.md: no-bold-lead rule/);
       assert.doesNotMatch(output, /changes\/consumed\.md/);
+    });
+  });
+
+  it("fails closed when changes/ exists but cannot be listed", async () => {
+    // root ignores directory permissions, so the unreadable case cannot be built.
+    if (process.getuid?.() === 0) return;
+    await withTempChangelog(async (root) => {
+      const dir = path.join(root, "changes");
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, "new.md"), "- Conforming note (#3)\n", "utf8");
+      await chmod(dir, 0o300); // search+write, no read: lstat works, readdir fails
+      try {
+        const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+          logSubjects: async () => ["feat: x"],
+          diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+          diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+        });
+        const log = capturingLog();
+        assert.equal(await main({ root, git, env: {}, log }), 1);
+        assert.match(log.lines.join("\n"), /changes\/: cannot list pending fragments \(EACCES\)/);
+      } finally {
+        await chmod(dir, 0o755);
+      }
     });
   });
 

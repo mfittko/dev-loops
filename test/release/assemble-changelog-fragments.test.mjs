@@ -43,8 +43,8 @@ test("assembleFragments appends fragment bodies to the Unreleased section, prese
   const { changelog, consumed } = assembleFragments({
     changelog: CHANGELOG,
     fragments: [
-      { name: "b-second", content: "- Second change.\n" },
-      { name: "a-first", content: "- First change.\n" },
+      { name: "b-second", content: "- Second change (#2)\n" },
+      { name: "a-first", content: "- First change (#1)\n" },
     ],
   });
   assert.deepEqual(consumed, ["b-second", "a-first"]);
@@ -75,9 +75,9 @@ test("assembleFragments creates an Unreleased section when none exists", () => {
   const noUnreleased = "# Changelog\n\n## 1.0.3\n\n- Old.\n";
   const { changelog } = assembleFragments({
     changelog: noUnreleased,
-    fragments: [{ name: "x", content: "- New change.\n" }],
+    fragments: [{ name: "x", content: "- New change (#1)\n" }],
   });
-  assert.match(changelog, /## Unreleased\n\n### Changed\n\n- New change\./);
+  assert.match(changelog, /## Unreleased\n\n### Changed\n\n- New change \(#1\)/);
   assert.ok(changelog.indexOf("## Unreleased") < changelog.indexOf("## 1.0.3"));
 });
 
@@ -246,9 +246,16 @@ test("readFragments fails closed on a fragment containing a level-2 heading (wou
 test("assembleFragments creates an Unreleased section at EOF when the changelog has no headings", () => {
   const { changelog } = assembleFragments({
     changelog: "# Changelog\n\nAll notable changes.\n",
-    fragments: [{ name: "x", content: "- New change.\n" }],
+    fragments: [{ name: "x", content: "- New change (#1)\n" }],
   });
-  assert.match(changelog, /## Unreleased\n\n### Changed\n\n- New change\./);
+  assert.match(changelog, /## Unreleased\n\n### Changed\n\n- New change \(#1\)/);
+});
+
+test("assembleFragments validates each fragment's format, naming the fragment", () => {
+  assert.throws(
+    () => assembleFragments({ changelog: CHANGELOG, fragments: [{ name: "bad", content: "- **Bold lead.** no link\n" }] }),
+    /changeset fragment bad breaks the fragment format: .*no-bold-lead rule/,
+  );
 });
 
 test("readFragments fails closed when changes/ is a file, not a directory", () => {

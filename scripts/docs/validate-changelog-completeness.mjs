@@ -227,8 +227,15 @@ export async function main({ root, env = process.env, log = console, git = creat
   // plus every fragment path in the diff (for the regular-file rule). A fragment
   // consumed into CHANGELOG.md is deleted, so history is never re-checked.
   if (changesDirIsReal) {
-    const pending = (await readdir(path.join(root, FRAGMENTS_DIR)).catch(() => []))
-      .map((name) => `${FRAGMENTS_DIR}/${name}`);
+    // Only a missing changes/ dir means "no pending fragments"; any other read
+    // failure fails closed so pending fragments are never silently unchecked.
+    let names = [];
+    try {
+      names = await readdir(path.join(root, FRAGMENTS_DIR));
+    } catch (err) {
+      if (err?.code !== "ENOENT") errors.push(`${FRAGMENTS_DIR}/: cannot list pending fragments (${err?.code ?? err}); refusing to skip the format check`);
+    }
+    const pending = names.map((name) => `${FRAGMENTS_DIR}/${name}`);
     const fragmentPaths = [...new Set([...files, ...pending])].filter((file) => isChangelogFragmentPath(file)).sort();
     for (const f of fragmentPaths) {
       const stat = await lstat(path.join(root, f)).catch(() => null);

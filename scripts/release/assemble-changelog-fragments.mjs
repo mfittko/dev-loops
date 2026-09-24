@@ -277,6 +277,10 @@ export function assembleFragments({ changelog, fragments }) {
     throw new Error(`${errors[0]}; fold it by hand before assembling fragments`);
   }
   for (const f of frags) {
+    const formatErrors = fragmentFormatErrors(f.content);
+    if (formatErrors.length > 0) {
+      throw new Error(`changeset fragment ${f.name} breaks the fragment format: ${formatErrors.join("; ")}`);
+    }
     const { section, lines: body } = parseFragment(f.content);
     bySection.get(section).push(...body);
   }
