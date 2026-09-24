@@ -176,8 +176,9 @@ test("parseCleanupWorktreeCliArgs: parses --branch and counts it as a selector",
   assert.throws(() => parseCleanupWorktreeCliArgs(["--repo-root", "/r", "--branch", "b", "--pr", "2"]), /exactly one/);
 });
 
+// An ambient GIT_DIR/GIT_WORK_TREE (git hook, rebase --exec) would redirect fixture git into the real checkout.
 function git(cwd, args) {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
 }
 
 // A main checkout with one linked worktree per `{ dir, branch }` under the

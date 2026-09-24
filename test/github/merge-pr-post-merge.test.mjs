@@ -18,7 +18,8 @@ const OPTIONS = { repo: "mfittko/dev-loops", pr: 7, humanApprovedBy: "mfittko", 
 const MARKER = "action-ran.txt";
 
 // Host git config (for example a global pushInsteadOf) must not reach fixture git.
-const FIXTURE_GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+// An ambient GIT_DIR/GIT_WORK_TREE (git hook, rebase --exec) would redirect fixture git into the real checkout.
+const FIXTURE_GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: FIXTURE_GIT_ENV }).trim();
