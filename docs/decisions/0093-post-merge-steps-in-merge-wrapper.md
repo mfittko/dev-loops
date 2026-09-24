@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-09-24 ([issue 2207](https://github.com/mfittko/dev-loops/issues/2207))
+Accepted — 2026-09-24 ([PR 2440](https://github.com/mfittko/dev-loops/pull/2440))
 
 Amends [0014](./0014-managed-worktree-isolation.md): its clause that `cleanup-worktree.mjs` resolves paths through `resolveWorktreePath` from the issue or PR number. It keeps the rest of that decision unchanged. The namespace-only removal safety of 0014 and [0067](./0067-worktree-isolation-core-invariant-not-path-prefix.md) is unchanged: cleanup never removes a path outside `tmp/worktrees/dev-loops/`.
 
