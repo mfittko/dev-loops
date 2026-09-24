@@ -1562,8 +1562,8 @@ machine-authored gate artifact and hide it from the checkpoint-evidence scanner
 `summarizeGateReviewCommentMarkers` helpers every gate-evidence reader calls through); the
 producer-owned verdict header (`### Gate review: \`<gate>\``) on the same body overrides that, so
 the round's single surface stays readable AS the verdict. Only a marker-bearing body with no
-genuine verdict header — a historical standalone findings review, a historical
-`<!-- dev-loops:deferred-summary -->` comment, or the current opt-in findings comment
+genuine verdict header — a historical standalone findings review, the batched deferral
+comment (`<!-- dev-loops:deferred-summary -->`, `GATE-EXEC-DEFERRAL-RECORD`), or the current opt-in findings comment
 (`dev-loops:gate-findings gate=`, `GATE-COMMENT-IDENTITY-DISJOINT`) — stays excluded and can
 never win the newest-gate-marker tie-break over a real verdict.
 
@@ -1777,12 +1777,12 @@ feeds this evaluation into coordination. Without a current-head checkpoint, exis
 behavior is unchanged.
 
 <!-- rule: GATE-EXEC-DEFERRAL-RECORD -->
-`GATE-EXEC-DEFERRAL-RECORD`: A deferred finding's record lives in up to THREE places, never a
-standalone summary comment as an extra: the finding's own posted surface — the resolving reply on
+`GATE-EXEC-DEFERRAL-RECORD`: A deferred finding's record lives in up to THREE places, with no summary comment beyond the
+one batched deferral comment: the finding's own posted surface — the resolving reply on
 its thread for a locatable finding, or its body-filed entry on the round's review for a
-non-locatable one — the durable findings-log ledger under `tmp/gate-findings/...`, and the round's
-ONE batched deferral comment on the comment target, the durable record that survives a `tmp/`
-wipe. The comment target is the PR's linked spec issue when `tracker.provider` resolves to
+non-locatable one — the durable findings-log ledger under `tmp/gate-findings/...`, and ONE batched
+deferral comment per tool run on the comment target (at most one from `judge-pass.mjs` and one
+from `close-gate-findings.mjs` in a round), the durable record that survives a `tmp/` wipe. The comment target is the PR's linked spec issue when `tracker.provider` resolves to
 `github` and the PR has exactly one closing issue reference; otherwise it is the PR itself (no
 linked issue, more than one closing reference, or a tracker other than GitHub). No tool creates
 an issue for a deferred finding: each of `judge-pass.mjs` and `close-gate-findings.mjs` never
@@ -1827,12 +1827,13 @@ exception above.)
 A `defer` is never parked ONLY in the thread marker and the ephemeral tmp findings ledger: it is
 ALWAYS listed in the round's deferral comment on the comment target. A round's deferred findings —
 a newly out-of-window medium, a fixer-triaged operator-visible low, an operator-visible folded low,
-or a judge `defer` — go as ONE batched comment listing each finding's fingerprint/severity/angle;
+or a judge `defer` — go as ONE batched comment per tool run listing each finding's fingerprint/severity/angle;
 the tool never creates an issue. Both the thread marker (`issue=<n>`) and the durable ledger entry
 (`followUpIssueNumber`) record the target's number (a PR number is a valid comment target) — the
 re-attachment pointer that lets a reader recover the record even after the ephemeral ledger is
 gone. Idempotency is per fingerprint: before posting, `commentDeferredFindings`
-(`scripts/github/_gate-finding-surface.mjs`) reads the target's existing comments, and a finding
+(`scripts/github/_gate-finding-surface.mjs`) reads the target's existing deferral comments (first line
+`<!-- dev-loops:deferred-summary -->`; a bullet in any other comment is not counted), and a finding
 whose fingerprint the target already lists is not appended again, so a re-run of either pass posts
 nothing new. The judge's own bridge (`judge-pass.mjs`) and `close-gate-findings.mjs`'s
 severity/round-based defer resolve the same target from the same PR facts, so both paths converge.

@@ -671,7 +671,7 @@ test("judgePassCli: tracker.provider other than github — the comment goes to t
 test("judgePassCli: a re-run does not re-append a fingerprint the target already lists", async () => {
   const deferred = finding({ summary: "defer this", severity: "medium" });
   const fp = fingerprintFinding(deferred);
-  const { deps, runCalls, commentCalls } = stubDeferralDeps({ closing: [2425], listed: [`Gate findings deferred:\n\n- \`${fp}\` **medium** (\`correctness\`): defer this`] });
+  const { deps, runCalls, commentCalls } = stubDeferralDeps({ closing: [2425], listed: [`<!-- dev-loops:deferred-summary -->\nGate findings deferred:\n\n- \`${fp}\` **medium** (\`correctness\`): defer this`] });
   const { enriched } = await runDeferRound({ findings: [deferred], dispositions: [{ index: 0, ...DEFER }], deps });
   assert.equal(commentCalls.length, 0, "nothing new to append on a pure retry");
   assert.equal(enriched.findings[0].followUpIssueNumber, 2425, "still records the target");

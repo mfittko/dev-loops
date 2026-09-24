@@ -1446,7 +1446,7 @@ test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
       // The target already lists this fingerprint, so no comment is posted.
       prViewEntry([9500]),
-      targetCommentsEntry(9500, [{ body: "- `1111000011110000` **medium** (`perf`): stale cache" }]),
+      targetCommentsEntry(9500, [{ body: "<!-- dev-loops:deferred-summary -->\n- `1111000011110000` **medium** (`perf`): stale cache" }]),
       getReviewCommentEntry(6501, alreadyStamped),
       // No patchReviewCommentEntry: a PATCH here would overflow the stub and
       // fail the test — the already-stamped guard must skip straight to
@@ -1458,6 +1458,32 @@ test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.followUpIssueNumber, 9500);
+    },
+  ));
+});
+
+// ADR 0092 Consequences: a legacy stamp (issue=<old follow-up issue>) whose
+// target now resolves elsewhere fails closed: isolated into
+// dispositionFailures, no PATCH, reply or resolve, the thread stays unresolved.
+test("stampDeferredDisposition fails closed when an already-stamped issue= differs from the resolved target", async () => {
+  const legacyStamped = `${buildFindingMarker({ fp: "1111000011110000", severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache`;
+  const thread = threadNode({ id: "THREAD_LEGACY", path: "src/cache.mjs", line: 9, commentId: 6502, body: legacyStamped });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      // No closing reference: the target resolves to the PR, not 9500.
+      prViewEntry([]),
+      targetCommentsEntry(PR, [{ body: "<!-- dev-loops:deferred-summary -->\n- `1111000011110000` **medium** (`perf`): stale cache" }]),
+      getReviewCommentEntry(6502, legacyStamped),
+      // No PATCH, reply or resolve entries: any of them overflows the stub.
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.equal(result.dispositionFailures.length, 1);
+      assert.equal(result.dispositionFailures[0].commentId, 6502);
+      assert.match(result.dispositionFailures[0].error, /refuse to overwrite the existing link/);
     },
   ));
 });
@@ -1477,7 +1503,7 @@ test("a disposition pass whose every fingerprint the target already lists posts 
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [threadA, threadB] }),
       prViewEntry([9500]),
-      targetCommentsEntry(9500, [{ body: "Gate findings deferred:\n\n- `aaaa1111aaaa1111` **medium** (`perf`): A\n- `bbbb2222bbbb2222` **low** (`naming`): B" }]),
+      targetCommentsEntry(9500, [{ body: "<!-- dev-loops:deferred-summary -->\nGate findings deferred:\n\n- `aaaa1111aaaa1111` **medium** (`perf`): A\n- `bbbb2222bbbb2222` **low** (`naming`): B" }]),
       getReviewCommentEntry(6801, first),
       postReplyEntry(6801, { id: 7801 }),
       resolveThreadEntry("THREAD_A"),
@@ -1505,7 +1531,7 @@ test("a mixed disposition pass comments once, for only the not-yet-listed finger
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [threadStamped, threadUnstamped] }),
       ...deferralCommentEntries(9500, {
-        listed: [{ body: "- `cccc3333cccc3333` **medium** (`perf`): stale cache C" }],
+        listed: [{ body: "<!-- dev-loops:deferred-summary -->\n- `cccc3333cccc3333` **medium** (`perf`): stale cache C" }],
         contains: ["dddd4444dddd4444"],
         notContains: ["cccc3333cccc3333"],
       }),
@@ -2162,7 +2188,7 @@ test("#2263: re-running the folded filing does not re-append a fingerprint the t
     [
       ...roundEntries({ threads: [] }),
       prViewEntry([9500]),
-      targetCommentsEntry(9500, [{ body: `- \`${fp}\` **low** (\`naming\`): casing nit in a local constant` }]),
+      targetCommentsEntry(9500, [{ body: `<!-- dev-loops:deferred-summary -->\n- \`${fp}\` **low** (\`naming\`): casing nit in a local constant` }]),
       // No appendFollowUpIssueEntry: the fingerprint is already listed.
     ],
     async ({ env, ghCommand, runChild, repoRoot }) => {

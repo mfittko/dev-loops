@@ -279,10 +279,12 @@ function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, ref
   return `- \`${sanitizeCodeSpan(fingerprint)}\` **${sanitizeInline(normalizeSeverity(severity))}** (\`${safeAngle}\`): ${detail}`;
 }
 
+const DEFERRED_SUMMARY_MARKER = "<!-- dev-loops:deferred-summary -->";
+
 export function buildDeferredFindingsComment({ repo, pr, entries }) {
   return [
     // Machine marker: isGateMachineArtifactBody excludes this comment from PR-comment scans.
-    "<!-- dev-loops:deferred-summary -->",
+    DEFERRED_SUMMARY_MARKER,
     `Gate findings deferred from https://github.com/${repo}/pull/${pr} (recorded as a comment; no issue is created for a deferred finding):`,
     "",
     ...entries.map(formatDeferredFindingEntry),
@@ -337,7 +339,9 @@ export async function fetchListedFingerprints(
   const fingerprints = new Set();
   const comments = await listIssueComments({ repo, pr: target }, { env, ghCommand, runChild: run });
   for (const comment of comments) {
-    if (typeof comment?.body !== "string") continue;
+    // Only a deferral comment (marker on its first line) counts; a bullet in any
+    // other comment on a shared issue or PR must never suppress an entry.
+    if (typeof comment?.body !== "string" || !comment.body.startsWith(DEFERRED_SUMMARY_MARKER)) continue;
     for (const match of comment.body.matchAll(LISTED_FINGERPRINT_RE)) fingerprints.add(match[1]);
   }
   return fingerprints;

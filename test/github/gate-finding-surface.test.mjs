@@ -1246,12 +1246,20 @@ test("resolveDeferralCommentTarget: a tracker other than github -> the PR, with 
 test("fetchListedFingerprints: reads only leading-bullet fingerprints from the target's comments", async () => {
   const { run } = fakeGh({
     listedComments: [
-      "Gate findings deferred:\n\n- `2222222222222222` **low** (`perf`): stale cache",
+      "<!-- dev-loops:deferred-summary -->\nGate findings deferred:\n\n- `2222222222222222` **low** (`perf`): stale cache",
       "See commit `0123456789abcdef` for context — not a listed fingerprint.",
     ],
   });
   const result = await fetchListedFingerprints({ repo: "o/r", target: 101 }, { run });
   assert.deepEqual([...result], ["2222222222222222"]);
+});
+
+test("fetchListedFingerprints: a bullet in a comment without the deferral marker is not counted", async () => {
+  const { run } = fakeGh({
+    listedComments: ["Quoting the last deferral list:\n\n- `3333333333333333` **low** (`perf`): stale cache"],
+  });
+  const result = await fetchListedFingerprints({ repo: "o/r", target: 101 }, { run });
+  assert.equal(result.size, 0);
 });
 
 test("commentDeferredFindings: one closing reference -> ONE batched comment on that issue, never an issue create", async () => {
@@ -1277,14 +1285,14 @@ test("commentDeferredFindings: no closing reference -> the comment goes to the P
 });
 
 test("commentDeferredFindings: a fingerprint the target already lists is not appended again; nothing new posts nothing", async () => {
-  const { run, calls } = fakeGh({ closing: [{ number: 77, repository: { name: "r", owner: { login: "o" } } }], listedComments: ["- `1111111111111111` **low** (`naming`): casing nit"] });
+  const { run, calls } = fakeGh({ closing: [{ number: 77, repository: { name: "r", owner: { login: "o" } } }], listedComments: ["<!-- dev-loops:deferred-summary -->\n- `1111111111111111` **low** (`naming`): casing nit"] });
   const first = await commentDeferredFindings({ repo: "o/r", pr: 42, entries: deferralEntries() }, { run });
   assert.deepEqual([...first.appendedFingerprints], ["2222222222222222"]);
   const bodyArg = calls.at(-1)[calls.at(-1).indexOf("--body") + 1];
   assert.doesNotMatch(bodyArg, /1111111111111111/);
   assert.match(bodyArg, /2222222222222222/);
 
-  const retry = fakeGh({ closing: [{ number: 77, repository: { name: "r", owner: { login: "o" } } }], listedComments: ["- `1111111111111111` x", "- `2222222222222222` y"] });
+  const retry = fakeGh({ closing: [{ number: 77, repository: { name: "r", owner: { login: "o" } } }], listedComments: ["<!-- dev-loops:deferred-summary -->\n- `1111111111111111` x\n- `2222222222222222` y"] });
   const second = await commentDeferredFindings({ repo: "o/r", pr: 42, entries: deferralEntries() }, { run: retry.run });
   assert.equal(second.issueNumber, 77);
   assert.equal(second.appendedFingerprints.size, 0);
