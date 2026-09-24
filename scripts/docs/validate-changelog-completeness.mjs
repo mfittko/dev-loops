@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,7 +9,9 @@ import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import {
   FRAGMENTS_DIR,
   fragmentBodyClosesSection,
+  fragmentFormatErrors,
   isChangelogFragmentPath,
+  unreleasedFormatErrors,
 } from "../release/assemble-changelog-fragments.mjs";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
@@ -217,6 +219,35 @@ export async function main({ root, env = process.env, log = console, git = creat
     commitSubjects,
     files,
   });
+
+  // A direct `## Unreleased` edit uses the same line format assembly groups by.
+  errors.push(...unreleasedFormatErrors(headChangelog).map((e) => `${CHANGELOG_PATH}: ${e}`));
+
+  // Format rule for every pending fragment at HEAD (release assembles them all)
+  // plus every fragment path in the diff (for the regular-file rule). A fragment
+  // consumed into CHANGELOG.md is deleted, so history is never re-checked.
+  if (changesDirIsReal) {
+    // Only a missing changes/ dir means "no pending fragments"; any other read
+    // failure fails closed so pending fragments are never silently unchecked.
+    let names = [];
+    try {
+      names = await readdir(path.join(root, FRAGMENTS_DIR));
+    } catch (err) {
+      if (err?.code !== "ENOENT") errors.push(`${FRAGMENTS_DIR}/: cannot list pending fragments (${err?.code ?? err}); refusing to skip the format check`);
+    }
+    const pending = names.map((name) => `${FRAGMENTS_DIR}/${name}`);
+    const fragmentPaths = [...new Set([...files, ...pending])].filter((file) => isChangelogFragmentPath(file)).sort();
+    for (const f of fragmentPaths) {
+      const stat = await lstat(path.join(root, f)).catch(() => null);
+      if (!stat) continue; // deleted at HEAD
+      if (!stat.isFile()) {
+        errors.push(`${f}: regular-file rule: a fragment must be a regular file, not a symlink or other file type`);
+        continue;
+      }
+      const body = await readFile(path.join(root, f), "utf8").catch(() => "");
+      for (const error of fragmentFormatErrors(body)) errors.push(`${f}: ${error}`);
+    }
+  }
   if (errors.length > 0) {
     log.error("CHANGELOG completeness check failed (issue #1864):");
     for (const error of errors) log.error(`  - ${error}`);

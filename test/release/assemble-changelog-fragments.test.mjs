@@ -8,8 +8,10 @@ import path from "node:path";
 import {
   assembleFragments,
   fragmentBodyClosesSection,
+  fragmentFormatErrors,
   isChangelogFragmentPath,
   readFragments,
+  unreleasedFormatErrors,
 } from "../../scripts/release/assemble-changelog-fragments.mjs";
 
 const CHANGELOG = `# Changelog
@@ -41,8 +43,8 @@ test("assembleFragments appends fragment bodies to the Unreleased section, prese
   const { changelog, consumed } = assembleFragments({
     changelog: CHANGELOG,
     fragments: [
-      { name: "b-second", content: "- Second change.\n" },
-      { name: "a-first", content: "- First change.\n" },
+      { name: "b-second", content: "- Second change (#2)\n" },
+      { name: "a-first", content: "- First change (#1)\n" },
     ],
   });
   assert.deepEqual(consumed, ["b-second", "a-first"]);
@@ -73,23 +75,125 @@ test("assembleFragments creates an Unreleased section when none exists", () => {
   const noUnreleased = "# Changelog\n\n## 1.0.3\n\n- Old.\n";
   const { changelog } = assembleFragments({
     changelog: noUnreleased,
-    fragments: [{ name: "x", content: "- New change.\n" }],
+    fragments: [{ name: "x", content: "- New change (#1)\n" }],
   });
-  assert.match(changelog, /## Unreleased\n\n- New change\./);
+  assert.match(changelog, /## Unreleased\n\n### Changed\n\n- New change \(#1\)/);
   assert.ok(changelog.indexOf("## Unreleased") < changelog.indexOf("## 1.0.3"));
+});
+
+test("assembleFragments merges repeated and missing section lines into one Added, Changed, Fixed in order", () => {
+  const { changelog } = assembleFragments({
+    changelog: "# Changelog\n\n## 1.0.3\n\n- Old.\n",
+    fragments: [
+      { name: "a", content: "### Fixed\n\n- Fix one (#1)\n" },
+      { name: "b", content: "- Default change (#2)\n" },
+      { name: "c", content: "### Added\n\n- Add one (#3)\n" },
+      { name: "d", content: "### Fixed\n\n- Fix two (#4)\n" },
+      { name: "e", content: "### Changed\n- Change two (#5)\n" },
+    ],
+  });
+  const section = changelog.slice(changelog.indexOf("## Unreleased"), changelog.indexOf("## 1.0.3"));
+  assert.deepEqual(section.match(/^### .*$/gm), ["### Added", "### Changed", "### Fixed"]);
+  assert.equal(
+    section.trim(),
+    "## Unreleased\n\n### Added\n\n- Add one (#3)\n\n### Changed\n\n- Default change (#2)\n- Change two (#5)\n\n### Fixed\n\n- Fix one (#1)\n- Fix two (#4)",
+  );
+});
+
+test("assembleFragments merges existing Unreleased headings with fragment sections", () => {
+  const { changelog } = assembleFragments({
+    changelog: "# Changelog\n\n## Unreleased\n\n### Fixed\n- legacy (#9)\n\n## 1.0.3\n\n- Old.\n",
+    fragments: [
+      { name: "a", content: "### Fixed\n- new fix (#10)\n" },
+      { name: "b", content: "### Added\n- new add (#11)\n" },
+    ],
+  });
+  const section = changelog.slice(changelog.indexOf("## Unreleased"), changelog.indexOf("## 1.0.3"));
+  assert.deepEqual(section.match(/^### .*$/gm), ["### Added", "### Fixed"]);
+  assert.equal(section, "## Unreleased\n\n### Added\n\n- new add (#11)\n\n### Fixed\n\n- legacy (#9)\n- new fix (#10)\n\n");
+});
+
+test("assembleFragments fails closed on existing Unreleased content it cannot group", () => {
+  const frag = [{ name: "a", content: "- x (#1)\n" }];
+  assert.throws(
+    () => assembleFragments({ changelog: "## Unreleased\n\n### Security\n- y (#2)\n", fragments: frag }),
+    /existing "## Unreleased" section/,
+  );
+  assert.throws(
+    () => assembleFragments({ changelog: "## Unreleased\n\nSome paragraph.\n", fragments: frag }),
+    /existing "## Unreleased" section/,
+  );
+});
+
+test("assembleFragments omits empty section headings", () => {
+  const { changelog } = assembleFragments({
+    changelog: "# Changelog\n",
+    fragments: [{ name: "a", content: "### Fixed\n- Only a fix (#1)\n" }],
+  });
+  assert.deepEqual(changelog.match(/^### .*$/gm), ["### Fixed"]);
+});
+
+test("fragmentFormatErrors names the rule for each violation and passes a conforming fragment", () => {
+  assert.deepEqual(fragmentFormatErrors("### Added\n\n- New command (#2429)\n"), []);
+  assert.match(fragmentFormatErrors(`- ${"x".repeat(200)} (#1)`).join("\n"), /200-character rule/);
+  assert.match(fragmentFormatErrors("- a (#1)\n  more").join("\n"), /one-line rule/);
+  assert.match(fragmentFormatErrors("- **b.** a (#1)").join("\n"), /no-bold-lead rule/);
+  assert.match(fragmentFormatErrors("- a").join("\n"), /link rule/);
+  assert.match(fragmentFormatErrors("### Added\n- a (#1)\n### Fixed\n- b (#2)").join("\n"), /more than one section heading/);
+  assert.match(fragmentFormatErrors("- a (#1)\n### Fixed").join("\n"), /section-heading rule/);
+  assert.match(fragmentFormatErrors("### Fixed\n").join("\n"), /no entries/);
+  assert.match(fragmentFormatErrors("- see (#1) for x").join("\n"), /link rule/);
+  assert.match(fragmentFormatErrors("- __Bold__ x (#1)").join("\n"), /no-bold-lead rule/);
+  assert.match(fragmentFormatErrors("-  **Bold** x (#1)").join("\n"), /entry-prefix rule/);
+  assert.match(fragmentFormatErrors("-  **Bold** x (#1)").join("\n"), /no-bold-lead rule/);
+  assert.match(fragmentFormatErrors("- (#1)").join("\n"), /entry-text rule/);
+});
+
+test("fragmentFormatErrors pins the 200-character boundary", () => {
+  const exactly200 = `- ${"x".repeat(193)} (#1)`;
+  assert.equal(exactly200.length, 200);
+  assert.deepEqual(fragmentFormatErrors(exactly200), []);
+  assert.match(fragmentFormatErrors(`- ${"x".repeat(194)} (#1)`).join("\n"), /200-character rule: entry is 201 characters/);
+});
+
+test("assembleFragments files a headingless existing Unreleased entry under Changed, ahead of fragment entries", () => {
+  const { changelog } = assembleFragments({
+    changelog: "# Changelog\n\n## Unreleased\n\n- existing (#9)\n\n## 1.0.3\n\n- Old.\n",
+    fragments: [{ name: "a", content: "- new change (#10)\n" }],
+  });
+  const section = changelog.slice(changelog.indexOf("## Unreleased"), changelog.indexOf("## 1.0.3"));
+  assert.equal(section, "## Unreleased\n\n### Changed\n\n- existing (#9)\n- new change (#10)\n\n");
+});
+
+test("unreleasedFormatErrors names the rule for lines assembly cannot group", () => {
+  assert.deepEqual(unreleasedFormatErrors("## Unreleased\n\n### Fixed\n- a (#1)\n\n## 1.0.0\n\nold prose\n"), []);
+  assert.deepEqual(unreleasedFormatErrors("# Changelog\n"), []);
+  assert.match(unreleasedFormatErrors("## Unreleased\n\n* star item\n").join("\n"), /unreleased-line rule/);
+  assert.match(unreleasedFormatErrors("## Unreleased\n\n- a\n  wrapped\n").join("\n"), /unreleased-line rule/);
+});
+
+test("readFragments fails closed on a fragment that breaks the format, naming its path", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "frag-format-"));
+  try {
+    mkdirSync(path.join(root, "changes"));
+    writeFileSync(path.join(root, "changes", "nolink.md"), "- A change with no link\n");
+    assert.throws(() => readFragments(root), /changes\/nolink\.md breaks the fragment format: .*link rule/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("readFragments reads changes/*.md sorted, skipping README and non-md", () => {
   const root = mkdtempSync(path.join(tmpdir(), "frag-read-"));
   try {
     mkdirSync(path.join(root, "changes"));
-    writeFileSync(path.join(root, "changes", "zeta.md"), "- z\n");
-    writeFileSync(path.join(root, "changes", "alpha.md"), "- a\n");
+    writeFileSync(path.join(root, "changes", "zeta.md"), "- z (#1)\n");
+    writeFileSync(path.join(root, "changes", "alpha.md"), "- a (#2)\n");
     writeFileSync(path.join(root, "changes", "README.md"), "docs\n");
     writeFileSync(path.join(root, "changes", "notes.txt"), "nope\n");
     const frags = readFragments(root);
     assert.deepEqual(frags.map((f) => f.name), ["alpha", "zeta"]);
-    assert.equal(frags[0].content, "- a\n");
+    assert.equal(frags[0].content, "- a (#2)\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -111,7 +215,7 @@ test("readFragments EXCLUDES a symlinked fragment (never follows it — security
   try {
     mkdirSync(path.join(root, "changes"));
     writeFileSync(path.join(root, "real-note.md"), "- Linked note.\n");
-    writeFileSync(path.join(root, "changes", "real.md"), "- A regular note.\n");
+    writeFileSync(path.join(root, "changes", "real.md"), "- A regular note (#1)\n");
     symlinkSync(path.join(root, "real-note.md"), path.join(root, "changes", "linked.md"));
     const frags = readFragments(root);
     assert.deepEqual(frags.map((f) => f.name), ["real"]); // linked symlink excluded
@@ -142,9 +246,16 @@ test("readFragments fails closed on a fragment containing a level-2 heading (wou
 test("assembleFragments creates an Unreleased section at EOF when the changelog has no headings", () => {
   const { changelog } = assembleFragments({
     changelog: "# Changelog\n\nAll notable changes.\n",
-    fragments: [{ name: "x", content: "- New change.\n" }],
+    fragments: [{ name: "x", content: "- New change (#1)\n" }],
   });
-  assert.match(changelog, /## Unreleased\n\n- New change\./);
+  assert.match(changelog, /## Unreleased\n\n### Changed\n\n- New change \(#1\)/);
+});
+
+test("assembleFragments validates each fragment's format, naming the fragment", () => {
+  assert.throws(
+    () => assembleFragments({ changelog: CHANGELOG, fragments: [{ name: "bad", content: "- **Bold lead.** no link\n" }] }),
+    /changeset fragment bad breaks the fragment format: .*no-bold-lead rule/,
+  );
 });
 
 test("readFragments fails closed when changes/ is a file, not a directory", () => {
