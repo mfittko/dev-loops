@@ -246,7 +246,7 @@ test("a worktree HEAD past the merged head (unpushed commits) is kept", withRepo
 
 for (const [label, arrange, pattern] of [
   ["an origin naming another repo", (repo) => git(repo.mainCheckout, ["remote", "set-url", "origin", "https://github.com/someone/else.git"]), /has origin someone\/else, not --repo mfittko\/dev-loops/],
-  ["no origin remote", (repo) => git(repo.mainCheckout, ["remote", "remove", "origin"]), /no readable github\.com origin remote/],
+  ["no origin remote", (repo) => git(repo.mainCheckout, ["remote", "remove", "origin"]), /no readable origin remote/],
 ]) {
   test(`${label} skips every step, injected or default, with a reason`, withRepo({ actions: ACTIONS }, async (repo) => {
     arrange(repo);
@@ -260,6 +260,15 @@ for (const [label, arrange, pattern] of [
     assert.equal(existsSync(path.join(repo.mainCheckout, MARKER)), false);
   }));
 }
+
+test("an SSH host-alias origin naming --repo still runs the post-merge steps", withRepo({}, async (repo) => {
+  const alias = "git@github-work:mfittko/dev-loops.git";
+  git(repo.mainCheckout, ["remote", "set-url", "origin", alias]);
+  git(repo.mainCheckout, ["config", `url.${repo.origin}.insteadOf`, alias]);
+  const result = await mergePr(OPTIONS, makeRuntime(repo));
+  assert.equal(result.postMerge.worktreeCleanup.removed, repo.worktree);
+  assert.equal(localMain(repo), originMain(repo));
+}));
 
 test("in test mode the default steps refuse a main checkout outside the tmp dir; injected steps still run", withRepo({}, async (repo) => {
   const saved = process.env.TMPDIR;

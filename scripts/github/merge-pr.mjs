@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { parseGitHubRemoteSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
+import { parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { ghJson as defaultGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
@@ -387,9 +387,12 @@ async function isInternalOnlyPr({ repo, pr, patterns }, { env, ghCommand, runChi
 const POST_MERGE_ACTIONS_PATH = fileURLToPath(new URL("../loop/run-post-merge-actions.mjs", import.meta.url));
 const SELF_PATH = fileURLToPath(import.meta.url);
 
+// Every post-merge git call targets the main checkout the origin check validated.
+const scrubGitEnv = (env) => ({ ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined });
+
 async function defaultFastForward({ mainCheckout, env }) {
   const run = (command) => new Promise((resolve) => {
-    exec(command, { cwd: mainCheckout, env, timeout: MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS }, (error, stdout, stderr) => {
+    exec(command, { cwd: mainCheckout, env: scrubGitEnv(env), timeout: MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS }, (error, stdout, stderr) => {
       resolve(error ? { ok: false, reason: String(stderr || error.message).trim() } : { ok: true, stdout });
     });
   });
@@ -409,7 +412,7 @@ function defaultPostMergeActions({ mainCheckout, pr, env }) {
     execFile(
       process.execPath,
       [POST_MERGE_ACTIONS_PATH, "--repo-root", mainCheckout, "--pr", String(pr)],
-      { cwd: mainCheckout, env, timeout: POST_MERGE_ACTIONS_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
+      { cwd: mainCheckout, env: scrubGitEnv(env), timeout: POST_MERGE_ACTIONS_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (!stdout.trim()) {
           resolve(error ? { ok: false, results: [], reason: String(stderr || error.message).trim() } : { ok: true, results: [] });
@@ -439,16 +442,19 @@ const STEP_RESULT = {
 };
 
 // The configured origin URL, read before any insteadOf rewrite, names the repo.
+// Only its trailing owner/name path is compared, so SSH host aliases and
+// GitHub Enterprise hosts match too.
 function originMismatchReason({ mainCheckout, repo, env }) {
   let slug = null;
   try {
     const url = execFileSync("git", ["config", "--get", "remote.origin.url"], {
       cwd: mainCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-      env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined },
+      env: scrubGitEnv(env),
     }).trim();
-    slug = parseGitHubRemoteSlug(url);
+    const seg = url.match(/([^/:]+)\/([^/]+?)(?:\.git)?\/?$/);
+    slug = seg ? `${seg[1]}/${seg[2]}` : null;
   } catch { /* no origin or not a git repo: slug stays null */ }
-  if (slug === null) return `skipped: the main checkout ${mainCheckout} has no readable github.com origin remote to match --repo ${repo}`;
+  if (slug === null) return `skipped: the main checkout ${mainCheckout} has no readable origin remote to match --repo ${repo}`;
   if (!repoSlugEquals(slug, repo)) return `skipped: the main checkout ${mainCheckout} has origin ${slug}, not --repo ${repo}`;
   return null;
 }
