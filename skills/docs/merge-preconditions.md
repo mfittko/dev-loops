@@ -499,7 +499,7 @@ human(s).
 
 ## Post-merge
 
-After a confirmed merge, `merge-pr.mjs` runs three steps itself and reports them under `postMerge`: the main-checkout fast-forward below, the branch-keyed worktree removal below, and the repo's `postMerge.actions`. Each step is fail-soft. All three skip with a reason when the main checkout's `origin` is not `--repo`. Run a step manually only as the fallback when its result reports a skip or an error.
+After a confirmed merge, `merge-pr.mjs` runs three steps itself and reports them under `postMerge`: the main-checkout fast-forward below, the branch-keyed worktree removal below, and the repo's `postMerge.actions`. Each step is fail-soft. All three skip with a reason when the main checkout's `origin` is not `--repo`. Run a step manually only as the fallback when its result reports a skip or an error. The actions step can run for up to `POST_MERGE_ACTIONS_TIMEOUT_MS` (900s), so give the command a tool timeout above that budget. If the caller still times out, the merge state stays readable from GitHub, and `merge-pr.mjs` writes one stderr line with the PR and merge commit before the steps run.
 
 - Fast-forward the main checkout's local `main` to `origin/main` (#1596): resolve the main (primary) checkout via `git worktree list` (first entry) from the current cwd, then run this guarded step-wise sync (best-effort, `|| true`), which merges only when the checkout is on `main` — never on a detached or off-`main` checkout:
 

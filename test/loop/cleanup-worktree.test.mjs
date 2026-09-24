@@ -249,6 +249,18 @@ test("cleanup: skips a worktree holding gate findings ledgers, for every selecto
   }
 });
 
+test("cleanup: a gate-findings tree with only empty directories holds no ledger and is removed", () => {
+  const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);
+  try {
+    mkdirSync(path.join(paths["issue-7"], "tmp/gate-findings/owner-repo/pr-7"), { recursive: true });
+    const res = cleanupWorktree({ repoRoot: main, branch: "issue-7" });
+    assert.equal(res.removed, paths["issue-7"]);
+    assert.equal(existsSync(paths["issue-7"]), false);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("cleanup: an unreadable gate-findings dir counts as holding ledgers and names the error", () => {
   if (process.getuid?.() === 0) return; // root bypasses file perms
   const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);

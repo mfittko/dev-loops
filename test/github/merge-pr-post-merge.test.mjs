@@ -232,6 +232,16 @@ test("the steps run in the hooks' order against the main checkout with the head 
   }
 }));
 
+test("the merge is recorded on stderr before any post-merge step runs", withRepo({}, async (repo) => {
+  const stderr = captureStream();
+  const seen = [];
+  const spy = () => async () => { seen.push(stderr.get()); return null; };
+  const runtime = makeRuntime(repo, { postMergeSteps: { fastForward: spy(), worktreeCleanup: spy(), actions: spy() } });
+  await mergePr(OPTIONS, { ...runtime, stderr });
+  assert.equal(seen.length, 3);
+  assert.match(seen[0], new RegExp(`merged ${OPTIONS.repo}#${OPTIONS.pr} \\(merge commit ${MERGE_COMMIT}\\)`));
+}));
+
 const STEP_NAMES = ["fastForward", "worktreeCleanup", "actions"];
 const reasons = (postMerge) => STEP_NAMES.map((name) => postMerge[name].reason);
 

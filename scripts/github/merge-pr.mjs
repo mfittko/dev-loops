@@ -505,6 +505,7 @@ export async function mergePr(options, runtime = {}) {
     loadConfig = loadDevLoopConfig,
     detectInternalOnlyPr = detectInternalOnly,
     postMergeSteps = {},
+    stderr = process.stderr,
   } = runtime;
 
   assertGithubWriteStubbedInTestMode(runChild, "pr merge", { env });
@@ -703,7 +704,11 @@ export async function mergePr(options, runtime = {}) {
     throw new Error(`gh pr merge exited 0 but PR #${options.pr} is not MERGED (state=${merged?.state ?? "unknown"}); refusing to report a false success`);
   }
 
-  // Only a confirmed MERGED postcondition reaches the post-merge steps.
+  // Only a confirmed MERGED postcondition reaches the post-merge steps. Record
+  // the merge on stderr first: the actions step can outlast a caller's tool
+  // timeout, and a killed process must still leave the merge visible.
+  const mergeCommit = typeof merged?.mergeCommit?.oid === "string" ? merged.mergeCommit.oid : null;
+  stderr.write(`merge-pr: merged ${options.repo}#${options.pr} (merge commit ${mergeCommit ?? "unknown"}); running post-merge steps\n`);
   const headRefName = typeof prView?.headRefName === "string" && prView.headRefName.trim().length > 0 ? prView.headRefName.trim() : null;
   const postMerge = await runPostMergeSteps(
     { mainCheckout: resolveMainWorktreeRoot(cwd), repo: options.repo, pr: options.pr, branch: headRefName, headSha: currentHeadSha, env },
@@ -713,7 +718,7 @@ export async function mergePr(options, runtime = {}) {
   return {
     ok: true,
     merged: true,
-    mergeCommit: typeof merged?.mergeCommit?.oid === "string" ? merged.mergeCommit.oid : null,
+    mergeCommit,
     approvedBy: options.humanApprovedBy,
     mergeClass: verdict.mergeClass,
     approvalVia: verdict.approvalVia,

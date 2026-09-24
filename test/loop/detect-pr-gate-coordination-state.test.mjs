@@ -3389,9 +3389,10 @@ test("detect-pr-gate-coordination-state routes to pre_approval_gate when a linge
 // a blocked complete_fixer_disposition boundary ahead of ordinary routing.
 // ---------------------------------------------------------------------------
 
-// The checkpoint sits in the main worktree's tmp/ and the detector runs from a
-// linked worktree, as verify-fixer-disposition.mjs anchors it.
-test("detect-pr-gate-coordination-state blocks on an incomplete fixer-disposition checkpoint for the current head", async () => {
+// The detector runs from a linked worktree. The checkpoint sits in the main
+// worktree's tmp/ (as verify-fixer-disposition.mjs anchors it) or, as a legacy
+// in-flight checkpoint, only in the linked worktree's own tmp/.
+for (const location of ["main", "linked"]) test(`detect-pr-gate-coordination-state blocks on an incomplete fixer-disposition checkpoint for the current head (checkpoint in ${location} worktree)`, async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-disposition-"));
   const REPO = "owner/repo";
   const PR = 3001;
@@ -3405,7 +3406,7 @@ test("detect-pr-gate-coordination-state blocks on an incomplete fixer-dispositio
     const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
     const { normalizeFixerDispositionHandoff } = await import("@dev-loops/core/loop/fixer-disposition");
     const logPath = buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: HEAD_SHA, tmpRoot: "tmp" });
-    const fullPath = path.join(tempDir, logPath);
+    const fullPath = path.join(location === "linked" ? linked : tempDir, logPath);
     await mkdir(path.dirname(fullPath), { recursive: true });
     const handoff = normalizeFixerDispositionHandoff({
       headSha: HEAD_SHA,
