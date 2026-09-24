@@ -6,7 +6,7 @@ Accepted — 2026-09-24 ([issue 2425](https://github.com/mfittko/dev-loops/issue
 
 Amends [ADR 0051](./0051-net-reduction-disposition-policy.md): that record lets the conductor file a new issue for a deferred finding when no open issue covers it. This record narrows filing further. A runner finding becomes a new issue only when it is a blocker. No tool creates an issue for a deferred finding. The batched comment goes to the linked spec issue or the PR, following the configured tracker. ADR 0051's defer bar for nits and lows is unchanged.
 
-Amends [ADR 0046](./0046-one-review-surface-per-gate-round.md): a gate round still produces one verdict review. The batched deferral comment is the one allowed extra surface; it goes on the PR when the PR is the comment target. ADR 0046's body is unchanged.
+Amends [ADR 0046](./0046-one-review-surface-per-gate-round.md): a gate round still produces one verdict review. The batched deferral comment is an allowed extra surface; it goes on the PR when the PR is the comment target. ADR 0046's body is unchanged.
 
 ## Context
 

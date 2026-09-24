@@ -631,6 +631,8 @@ test("judgePassCli: GitHub tracker + one closing reference — one batched comme
   });
   assert.equal(payload.ok, true);
   assert.equal(payload.actCount, 1);
+  assert.deepEqual(payload.scopeDrift, { verdict: "within_scope", rationale: "within AC", driftedAreas: [] });
+  assert.equal(enriched.scopeDrift.verdict, "within_scope");
   assert.equal(commentCalls.length, 1, "ONE batched comment for the round's defers");
   assert.equal(commentCalls[0].issue, 2425);
   assert.match(commentCalls[0].body, /defer this/);

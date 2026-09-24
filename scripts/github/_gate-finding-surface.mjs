@@ -282,13 +282,14 @@ function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, ref
 const DEFERRED_SUMMARY_MARKER = "<!-- dev-loops:deferred-summary -->";
 
 export function buildDeferredFindingsComment({ repo, pr, entries }) {
-  return [
+  // The body can land on the PR conversation, so neutralize @copilot / /copilot like the sibling PR-surface renderers.
+  return sanitizeCopilotSummonTokens([
     // Machine marker: isGateMachineArtifactBody excludes this comment from PR-comment scans.
     DEFERRED_SUMMARY_MARKER,
     `Gate findings deferred from https://github.com/${repo}/pull/${pr} (recorded as a comment; no issue is created for a deferred finding):`,
     "",
     ...entries.map(formatDeferredFindingEntry),
-  ].join("\n");
+  ].join("\n"));
 }
 
 /**

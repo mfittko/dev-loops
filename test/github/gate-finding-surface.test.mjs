@@ -1224,6 +1224,18 @@ test("buildDeferredFindingsComment: every entry listed, the PR linked, no issue-
   assert.doesNotThrow(() => guardCommentBodyNoIssuePrIds(body, { ref: "test deferral comment" }));
 });
 
+test("buildDeferredFindingsComment: summaries quoting @copilot and /copilot never summon Copilot", () => {
+  const body = buildDeferredFindingsComment({
+    repo: "o/r",
+    pr: 42,
+    entries: [
+      { fingerprint: "1111111111111111", severity: "medium", angle: "copilot", summary: "a bare @copilot mention in a reply" },
+      { fingerprint: "2222222222222222", severity: "low", angle: "copilot", summary: "/copilot review is posted as a comment" },
+    ],
+  });
+  assert.equal(containsBareCopilotSummon(body), false);
+});
+
 test("resolveDeferralCommentTarget: github tracker + exactly one same-repo closing reference -> that issue", async () => {
   const { run, calls } = fakeGh({ closing: [{ number: 77, repository: { name: "r", owner: { login: "o" } } }] });
   assert.equal(await resolveDeferralCommentTarget({ repo: "o/r", pr: 42, trackerProvider: "github" }, { run }), 77);
@@ -1246,8 +1258,7 @@ test("resolveDeferralCommentTarget: a tracker other than github -> the PR, with 
 test("fetchListedFingerprints: reads only leading-bullet fingerprints from the target's comments", async () => {
   const { run } = fakeGh({
     listedComments: [
-      "<!-- dev-loops:deferred-summary -->\nGate findings deferred:\n\n- `2222222222222222` **low** (`perf`): stale cache",
-      "See commit `0123456789abcdef` for context — not a listed fingerprint.",
+      "<!-- dev-loops:deferred-summary -->\nSee commit `0123456789abcdef` for context — not a listed fingerprint.\n\n- `2222222222222222` **low** (`perf`): stale cache",
     ],
   });
   const result = await fetchListedFingerprints({ repo: "o/r", target: 101 }, { run });
