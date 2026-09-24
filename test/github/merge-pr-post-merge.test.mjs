@@ -187,7 +187,7 @@ test("AC6: a cleanup git refusal is recorded and the other steps still run", wit
   assert.equal(result.ok, true);
   assert.equal(result.merged, true);
   assert.equal(result.postMerge.worktreeCleanup.removed, null);
-  assert.match(result.postMerge.worktreeCleanup.reason, /^skipped: .*locked working tree/s);
+  assert.match(result.postMerge.worktreeCleanup.reason, /^skipped: git did not remove /);
   assert.ok(existsSync(repo.worktree));
   assert.equal(result.postMerge.fastForward.status, "fast_forwarded");
   assert.ok(existsSync(path.join(repo.mainCheckout, MARKER)));
