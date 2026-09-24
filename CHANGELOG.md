@@ -27,6 +27,7 @@ Gate review rounds cost about 30% less (lead agent about 50% less) and finish ab
 - `dev-loops loop audit-session` now reads Claude Code transcripts (#2322)
 - The grill step counts as clean only after a recorded grill results comment; a bypass line marks a skipped zero-iteration exit (#2364)
 - `dev-loops loop startup` now briefs the orchestrator on the commands it may run (#2351)
+- After upgrading, run `dev-loops inspect restart` once if an inspect viewer from an older version is still running (#2247)
 
 ### Added
 
@@ -49,16 +50,15 @@ Gate review rounds cost about 30% less (lead agent about 50% less) and finish ab
 - The diff analyzer classifies files in all common languages, including Ruby and Rails, so those diffs can prune angles (#2266)
 - `dev-loops pr create` rejects a tracker-backed PR body that lacks the required spec sections (#2320)
 - The pre-PR review runs on every route that creates a PR (#2357)
-- The dev-loop coordinator waits on CI and Copilot with a bounded foreground probe; the orchestrator owns merge, retro and issue creation (#2176)
 - The inspect-run viewer renders in about 1 second instead of 36, loads round metrics after first paint and defaults the inbox to 3 days (#2247)
 - Changelog entries use one line per change under one Added, Changed and Fixed heading, and the changelog check enforces it (#2429)
-- Internal contract, prose and test updates, including independent code-span coverage for the approval gate (#2286)
+- Internal contract, prose and test updates, including independent code-span coverage for the approval gate (#2176, #2286)
 
 ### Fixed
 
-- Merge checks Copilot convergence and refuses a current-head "Changes recommended" or unrecognized Copilot disposition (#2299)
+- Merge refuses when no Copilot review covers the head, or on a current-head "Changes recommended" or unrecognized disposition (#2299, #2400)
 - Copilot dispositions are read from the header text, and a thread-clean "Needs a closer look" review no longer blocks pre-approval (#2290, #2345)
-- The pre-approval gate fails closed when Copilot is enabled but no Copilot round ran for the current head (#2146)
+- The pre-approval gate fails closed when Copilot is enabled but no Copilot review covers the current head (#2146)
 - Docs-only or base-only changes after Copilot converged, and body-only feedback at the round cap, no longer deadlock the gate (#2401)
 - Ready PRs at the Copilot round cap no longer deadlock, and all gate tools agree when clean draft-gate evidence is missing (#2354, #2375)
 - A Copilot body disposition record clears a merge finding only for the review it names (#2427)
@@ -84,8 +84,8 @@ Gate review rounds cost about 30% less (lead agent about 50% less) and finish ab
 ### Known issues
 
 - Reviewers may skim very large required reads (#2268)
-- Inline mode reads the filtered diff twice (#2268)
-- ADR 0086 states a wrong reason for the unhashed `context` read; the next amending ADR corrects it (#2385)
+- In inline reviewer mode, reviewers read the filtered diff twice (#2268)
+- ADR 0086 states a wrong reason for the unhashed `context` read; the next amending ADR corrects it (#2268)
 - The default diff exclude for `lib` directories strips hand-written `scripts/lib` source from the reviewers' filtered diff (#1889)
 - `judge-pass` files an issue for every deferred finding (#2425)
 
