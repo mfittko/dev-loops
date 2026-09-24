@@ -6493,8 +6493,12 @@ test("writeGateContext request-plan honors a per-angle tier override (harness-aw
       "--head-sha", "abc1234567890",
       "--angles", '["docs"]',
     ]);
-    // "low" tier maps to "sonnet" on the claude harness (BUILTIN_TIERS.low).
-    options.config = { gates: { draft: { angles: [{ name: "docs", tier: "low" }] } } };
+    // Built-in low and high are both opus on claude; a distinct low id makes
+    // the per-angle tier override observable.
+    options.config = {
+      models: { tiers: { low: { claude: "sonnet" } } },
+      gates: { draft: { angles: [{ name: "docs", tier: "low" }] } },
+    };
     const result = await writeGateContext(options, { repoRoot });
 
     assert.equal(result.requestPlan.requestGroups.length, 1);
