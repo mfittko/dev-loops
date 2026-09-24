@@ -43,13 +43,17 @@ test("GATE-EXEC-THREAD-DISPOSITION states the act-thread exclusion and the fixer
   assert.doesNotMatch(section, /PR's tracked follow-up issue/);
 });
 
-test("the judge-pass paragraph names the comment target and states judge-pass never creates an issue", async () => {
+test("the judge-pass paragraph names the comment target, the act-thread exclusion, and states judge-pass never creates an issue", async () => {
   const text = await readFile(`${repoRoot}${CONTRACT}`, "utf8");
   const start = text.indexOf("`judge-pass` is also where a judge `defer` is recorded");
   assert.notEqual(start, -1, "the judge-pass deferral paragraph must exist");
   const paragraph = text.slice(start, text.indexOf("\n\n", start));
   assert.match(paragraph, /`judge-pass` never\s+creates\s+an\s+issue/);
   assert.match(paragraph, /linked spec issue[\s\S]{0,120}otherwise it is the PR itself/);
+  assert.match(
+    paragraph,
+    /A thread whose finding the judge disposes\s+`act` is never defer-closed[\s\S]{0,160}fixer replies with the fixing commit or a\s+decline reason and resolves it \(see `GATE-EXEC-THREAD-DISPOSITION`\)/,
+  );
   assert.doesNotMatch(paragraph, /ensureFollowUpIssue|createIssue/);
 });
 

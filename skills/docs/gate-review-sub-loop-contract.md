@@ -1200,7 +1200,9 @@ converge on the same target. Each `defer` finding's ledger entry carries `follow
 the target's number (a PR number is a valid comment target); a `reject` carries neither a target
 link nor a follow-up draft, only its `fingerprint` and rationale (the one-line audit entry).
 Re-running `judge-pass` for the same round reads the target's existing comments first and does
-not append a fingerprint the target already lists.
+not append a fingerprint the target already lists. A thread whose finding the judge disposes
+`act` is never defer-closed; it stays open until the fixer replies with the fixing commit or a
+decline reason and resolves it (see `GATE-EXEC-THREAD-DISPOSITION`).
 
 <!-- rule: GATE-EXEC-JUDGE-AUTHORITY-SPLIT -->
 `GATE-EXEC-JUDGE-AUTHORITY-SPLIT`: The judge owns **relevance** (is this finding for this
