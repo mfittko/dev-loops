@@ -323,6 +323,40 @@ test("cleanup --branch --head-sha: removes on a HEAD match, skips a worktree who
   }
 });
 
+test("cleanup --branch --head-sha: an uncommitted edit at the merged head skips the removal and survives", () => {
+  const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);
+  try {
+    const merged = git(paths["issue-7"], ["rev-parse", "HEAD"]).trim();
+    const edit = path.join(paths["issue-7"], "wip.txt");
+    writeFileSync(edit, "local work\n");
+    const res = cleanupWorktree({ repoRoot: main, branch: "issue-7", headSha: merged });
+    assert.deepEqual({ ok: res.ok, removed: res.removed }, { ok: true, removed: null });
+    assert.ok(res.reason.includes(paths["issue-7"]), res.reason);
+    assert.match(res.reason, /uncommitted changes/);
+    assert.equal(readFileSync(edit, "utf8"), "local work\n");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("cleanup --branch: gitignored content under tmp/ does not block the removal", () => {
+  const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);
+  try {
+    const wt = paths["issue-7"];
+    writeFileSync(path.join(wt, ".gitignore"), "tmp/\n");
+    git(wt, ["add", ".gitignore"]);
+    git(wt, ["commit", "-q", "-m", "ignore tmp"]);
+    mkdirSync(path.join(wt, "tmp/scratch"), { recursive: true });
+    writeFileSync(path.join(wt, "tmp/scratch/notes.txt"), "scratch\n");
+    const merged = git(wt, ["rev-parse", "HEAD"]).trim();
+    const res = cleanupWorktree({ repoRoot: main, branch: "issue-7", headSha: merged });
+    assert.equal(res.removed, wt, res.reason);
+    assert.equal(existsSync(wt), false);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("cleanup: skips a target that contains a protected path", () => {
   const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);
   try {

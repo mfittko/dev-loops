@@ -44,7 +44,8 @@ Required:
   --path <p>        Explicit worktree path (must be under the namespace).
   --branch <name>   Branch name: selects the linked worktree (never the main
                     checkout) under the namespace that has it checked out.
-                    No match is a skip with a reason.
+                    No match is a skip with a reason. A worktree with
+                    uncommitted, non-gitignored changes is skipped too.
 Optional:
   --head-sha <sha>  With --branch: remove only when the selected worktree's
                     HEAD equals this full SHA; otherwise skip with a reason.
@@ -175,6 +176,20 @@ function gateFindingsLedgerSkipReason(ledgerDir) {
 }
 
 /**
+ * Skip reason when `target` has tracked or untracked non-ignored changes, else
+ * null. A failed status call also skips (fail safe).
+ */
+function dirtyTreeSkipReason(target, gitCommand) {
+  try {
+    const status = execFileSync(gitCommand, ["status", "--porcelain"], { ...gitOptions(), cwd: target });
+    return status.trim() === "" ? null : `skipped: ${target} has uncommitted changes`;
+  } catch (err) {
+    const detail = (err.stderr ?? err.message ?? "").toString().trim();
+    return `skipped: cannot read git status of ${target} (${detail}); treating it as having uncommitted changes`;
+  }
+}
+
+/**
  * `protectedPaths` are paths the calling process runs from (its cwd, its own
  * script file); a target containing any of them is skipped. `headSha` (branch
  * selector only) must equal the selected worktree's HEAD, so a worktree with
@@ -236,6 +251,14 @@ export function cleanupWorktree(
   const ledgerSkip = gateFindingsLedgerSkipReason(path.join(target, "tmp", "gate-findings"));
   if (ledgerSkip !== null) {
     return { ok: true, removed: null, reason: ledgerSkip };
+  }
+
+  // The automated --branch path runs after every merge with no operator in the
+  // loop, and `remove --force` would discard uncommitted work. Gitignored
+  // content (tmp/) does not show in --porcelain, so it never blocks removal.
+  if (branch !== undefined) {
+    const dirtySkip = dirtyTreeSkipReason(target, gitCommand);
+    if (dirtySkip !== null) return { ok: true, removed: null, reason: dirtySkip };
   }
 
   try {

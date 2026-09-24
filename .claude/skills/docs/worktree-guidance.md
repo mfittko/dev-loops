@@ -269,7 +269,8 @@ Git errors are logged but never fatal, so cleanup can't break a
 merge-completion flow. `--branch` selects the linked worktree under the
 namespace that has the branch checked out. `--head-sha` removes it only when
 its HEAD equals that SHA. A worktree that holds any file under
-`tmp/gate-findings/` is skipped.
+`tmp/gate-findings/` is skipped. With `--branch`, a worktree with uncommitted
+changes (tracked or untracked, not gitignored) is skipped too.
 
 `merge-pr.mjs` runs this cleanup itself after a confirmed merge, keyed on the
 merged head branch and head SHA. It skips the cleanup when its own cwd or
