@@ -13,7 +13,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
-import { createIssue as coreCreateIssue, commentIssue as coreCommentIssue, listIssues as coreListIssues } from "@dev-loops/core/github/issue-ops";
+import { commentIssue as coreCommentIssue } from "@dev-loops/core/github/issue-ops";
 import { JUDGE_DISPOSITIONS, SEVERITY_ORDER, VALID_SEVERITIES, hasLocatableShape, normalizeSeverity, resolveFindingFile } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
@@ -100,7 +100,7 @@ export function isDeferredAtRound(severity, round, mediumFixWindow = MEDIUM_FIX_
 }
 
 // The net-reduction filing bar: resolving a thread (isDeferredAtRound)
-// and FILING it on the follow-up issue are different decisions. `nit` is
+// and FILING it on the deferral comment target are different decisions. `nit` is
 // NEVER fileable — resolved-with-rationale in-thread only, a resolved nit is
 // cosmetic, not a backlog item. `low` is fileable ONLY when its own marker
 // carries the explicit `operatorVisible` signal (`ov=1`, set from the
@@ -108,7 +108,7 @@ export function isDeferredAtRound(severity, round, mediumFixWindow = MEDIUM_FIX_
 // conservative, net-negative-backlog choice. `medium` past its fix window is
 // always fileable. `high`/`question` are never resolved here to begin with,
 // so never fileable. Governs whether close-gate-findings.mjs's disposition
-// pass calls ensureFollowUpIssue/stampDeferredDisposition, and (via
+// pass calls commentDeferredFindings/stampDeferredDisposition, and (via
 // detectContractViolatingDeferredStamps) whether an already-stamped
 // `disposition=deferred` marker is legitimate.
 export function isFileableDeferral(severity, operatorVisible, round, mediumFixWindow = MEDIUM_FIX_WINDOW) {
@@ -153,8 +153,9 @@ export function isBelowInlineFloor(severity, floor) {
 // marker is built rather than let a producer and reader disagree.
 const VALID_MARKER_DISPOSITIONS = new Set(["deferred"]);
 
-// `issue` is the follow-up GitHub issue number a `disposition=deferred`
-// finding is tracked on (GATE-EXEC-DEFERRAL-RECORD): a deferral must
+// `issue` is the number of the deferral comment target (the linked spec issue
+// or the PR) a `disposition=deferred` finding is recorded on
+// (GATE-EXEC-DEFERRAL-RECORD): a deferral must
 // never live only in the thread marker and the ephemeral tmp ledger, so the
 // marker itself carries the re-attachment pointer.
 //
@@ -239,24 +240,24 @@ export function collectFingerprints(text, set) {
 }
 
 // ---------------------------------------------------------------------------
-// Follow-up issue for deferred findings (GATE-EXEC-DEFERRAL-RECORD)
+// Deferral comment target for deferred findings (GATE-EXEC-DEFERRAL-RECORD)
 // ---------------------------------------------------------------------------
 //
 // A `defer` disposition (judge-pass.mjs's relevance defer, or
-// close-gate-findings.mjs's severity/round auto-defer) always creates or
-// appends to ONE tracked GitHub issue per PR — batched, never one issue per
-// finding. `existingIssueNumber`, when the caller already knows one, is
-// reused instead of minting a second issue.
+// close-gate-findings.mjs's severity/round auto-defer) is recorded as ONE
+// batched comment per tool run (at most one from judge-pass.mjs and one from
+// close-gate-findings.mjs per round) on the comment target: the PR's linked spec issue
+// when the configured tracker is GitHub and the PR has exactly one closing
+// issue reference, otherwise the PR itself. No tool creates an issue here.
 
-// A finding's summary/angle is untrusted free text. Both the append path
-// (guarded via commentIssue's guardCommentBodyNoIssuePrIds) and the create
-// path (unguarded) render through formatDeferredFindingEntry, which strips a
-// literal leading `#` off a bare digit token rather than entity-encoding it:
-// entity-encoding still decodes back to a bare `#` immediately followed by digits under the guard's own
+// A finding's summary/angle is untrusted free text. The comment body is
+// guarded by commentIssue's guardCommentBodyNoIssuePrIds and renders through
+// formatDeferredFindingEntry, which strips a literal leading `#` off a bare
+// digit token rather than entity-encoding it: entity-encoding still decodes
+// back to a bare `#` immediately followed by digits under the guard's own
 // decode-aware scan, but stripping the `#` means no decode path can ever
 // reassemble one, and it makes GitHub's own auto-linker a non-issue too
-// (auto-link syntax requires the leading `#`). Both paths render through
-// this one function, so they stay guard-safe symmetrically by construction.
+// (auto-link syntax requires the leading `#`).
 //
 // ponytail: this strips only a literal `#` before digits, not the guard's
 // full HTML-entity decode surface (e.g. `&num;123`). That input is
@@ -279,128 +280,100 @@ function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, ref
   return `- \`${sanitizeCodeSpan(fingerprint)}\` **${sanitizeInline(normalizeSeverity(severity))}** (\`${safeAngle}\`): ${detail}`;
 }
 
-export function buildFollowUpIssueTitle({ repo, pr }) {
-  return `Deferred gate findings for ${repo}#${pr}`;
-}
+const DEFERRED_SUMMARY_MARKER = "<!-- dev-loops:deferred-summary -->";
 
-export function buildFollowUpIssueBody({ repo, pr, entries }) {
-  const lines = [
-    `Gate review findings deferred out of https://github.com/${repo}/pull/${pr}, tracked here instead of only in the gate's thread markers and the ephemeral tmp findings ledger.`,
+export function buildDeferredFindingsComment({ repo, pr, entries }) {
+  // The body can land on the PR conversation, so neutralize @copilot / /copilot like the sibling PR-surface renderers.
+  return sanitizeCopilotSummonTokens([
+    // Machine marker: isGateMachineArtifactBody excludes this comment from PR-comment scans.
+    DEFERRED_SUMMARY_MARKER,
+    `Gate findings deferred from https://github.com/${repo}/pull/${pr} (recorded as a comment; no issue is created for a deferred finding):`,
     "",
     ...entries.map(formatDeferredFindingEntry),
-  ];
-  return lines.join("\n");
-}
-
-export function buildFollowUpIssueAppendComment({ entries }) {
-  return [
-    "Additional gate finding(s) deferred to this issue:",
-    "",
-    ...entries.map(formatDeferredFindingEntry),
-  ].join("\n");
+  ].join("\n"));
 }
 
 /**
- * Resolve the PR's ONE tracked follow-up issue via GitHub search, not a
- * caller's own local cache: judge-pass.mjs and close-gate-findings.mjs each
- * cache the link in a disjoint local store, so only GitHub is shared between
- * them. Requires an EXACT title match against `buildFollowUpIssueTitle`
- * (gh's `--search` is fuzzy, so a substring/reordered-word hit must not
- * count). Returns the lowest matching issue number, or `null` if none exists.
+ * Resolve the comment target for a round's deferred findings. The target is
+ * the PR's linked spec issue when `trackerProvider` is `github` and the PR has
+ * exactly one closing issue reference in this repo; otherwise it is the PR
+ * itself (no linked issue, more than one, a cross-repo reference, or a tracker
+ * other than GitHub). Never creates anything. Returns the target number.
  */
-export async function findFollowUpIssueOnGitHub(
-  { repo, pr },
-  { env = process.env, ghCommand = "gh", run = defaultRunChild, listIssues = coreListIssues } = {},
+export async function resolveDeferralCommentTarget(
+  { repo, pr, trackerProvider = "github" },
+  { env = process.env, ghCommand = "gh", run = defaultRunChild } = {},
 ) {
-  const title = buildFollowUpIssueTitle({ repo, pr });
-  const { issues } = await listIssues(
-    { repo, state: "open", search: `"${title}" in:title`, limit: 10 },
-    { env, ghCommand, run },
+  if (trackerProvider !== "github") return pr;
+  const view = await runGhJson(
+    ["pr", "view", String(pr), "--repo", repo, "--json", "closingIssuesReferences"],
+    { env, ghCommand, runChild: run },
   );
-  const matches = issues.filter((issue) => issue.title === title).map((issue) => issue.number);
-  return matches.length > 0 ? Math.min(...matches) : null;
+  const refs = Array.isArray(view?.closingIssuesReferences) ? view.closingIssuesReferences : [];
+  if (refs.length !== 1) return pr;
+  const [ref] = refs;
+  const owner = ref?.repository?.owner?.login;
+  const name = ref?.repository?.name;
+  // A reference with no repository data is treated as foreign (fail closed to the PR).
+  const sameRepo = Boolean(owner && name) && `${owner}/${name}`.toLowerCase() === repo.toLowerCase();
+  return sameRepo && Number.isInteger(ref?.number) && ref.number > 0 ? ref.number : pr;
 }
 
-/**
- * Create (or, when `existingIssueNumber` is already known, append a comment
- * to) the ONE tracked follow-up issue for a batch of `defer`-disposed
- * findings on one PR. Returns `{ issueNumber, created }`. Dependencies
- * default to the sanctioned core wrappers (`@dev-loops/core/github/issue-ops`,
- * never a raw `gh` call) and are injectable for tests. An absent
- * `existingIssueNumber` resolves against GitHub itself
- * (`findFollowUpIssueOnGitHub`) before creating, rather than assuming no
- * issue exists yet.
- *
- * ponytail: a crash between `createIssue` returning and the caller
- * persisting its own link no longer orphans a duplicate — retry's
- * search-before-create finds it on GitHub and appends instead. Residual
- * risk: GitHub search's own indexing lag on an immediate retry.
- */
-export async function ensureFollowUpIssue(
-  { repo, pr, entries, existingIssueNumber },
-  { env = process.env, ghCommand = "gh", run = defaultRunChild, createIssue = coreCreateIssue, commentIssue = coreCommentIssue, listIssues = coreListIssues } = {},
-) {
-  if (!Array.isArray(entries) || entries.length === 0) {
-    throw new Error("ensureFollowUpIssue: entries must be a non-empty array");
-  }
-  const resolvedIssueNumber = Number.isInteger(existingIssueNumber) && existingIssueNumber > 0
-    ? existingIssueNumber
-    : await findFollowUpIssueOnGitHub({ repo, pr }, { env, ghCommand, run, listIssues });
-  if (resolvedIssueNumber !== null) {
-    await commentIssue(
-      { repo, issue: resolvedIssueNumber, body: buildFollowUpIssueAppendComment({ entries }) },
-      { env, ghCommand, run },
-    );
-    return { issueNumber: resolvedIssueNumber, created: false };
-  }
-  // commentIssue (append path, above) runs guardCommentBodyNoIssuePrIds
-  // internally; createIssue does not. Guard the create body explicitly here
-  // too, on top of (never instead of) formatDeferredFindingEntry's own
-  // guard-safe rendering, so a future rendering regression fails closed on
-  // both paths identically.
-  const createBody = buildFollowUpIssueBody({ repo, pr, entries });
-  guardCommentBodyNoIssuePrIds(createBody, { ref: "follow-up issue body" });
-  const result = await createIssue(
-    { repo, title: buildFollowUpIssueTitle({ repo, pr }), body: createBody },
-    { env, ghCommand, run },
-  );
-  return { issueNumber: result.issueNumber, created: true };
-}
-
-// A filed fingerprint always renders as the LEADING token of a list bullet —
+// A listed fingerprint always renders as the LEADING token of a list bullet —
 // `- \`<16hex>\` **<severity>** ...` (formatDeferredFindingEntry). Anchor to
 // that exact line-start bullet shape (multiline `m`), never a bare
 // backtick-wrapped 16-hex anywhere in the prose: a commit short-hash or an
 // unrelated code span that happened to be exactly 16 lowercase-hex chars would
-// otherwise be misread as an already-filed fingerprint and silently skip a
-// genuinely-fileable folded finding (a fail-toward-under-filing bug). Tightening
-// the match can at worst re-file a duplicate (harmless dup entry), never drop a
-// filing.
-const ISSUE_FINGERPRINT_RE = /^- `([0-9a-f]{16})`/gm;
-
-function collectIssueFingerprints(text, set) {
-  if (typeof text !== "string") return;
-  for (const match of text.matchAll(ISSUE_FINGERPRINT_RE)) {
-    set.add(match[1]);
-  }
-}
+// otherwise be misread as an already-listed fingerprint and silently drop a
+// deferred finding. Tightening the match can at worst list a duplicate
+// (harmless dup entry), never drop one.
+const LISTED_FINGERPRINT_RE = /^- `([0-9a-f]{16})`/gm;
 
 /**
- * Read the fingerprints already listed on the PR's tracked follow-up issue
- * (body + comments), so the folded-filing pass never re-files one across a
- * close-gate re-run or a re-listed ledger. Fingerprints render as
- * `- \`<16hex>\`` (formatDeferredFindingEntry). Returns a Set<string>.
+ * Read the fingerprints already listed in the comment target's existing
+ * comments, so a re-run never appends one twice. Works for an issue or a PR
+ * number (the REST issue-comments endpoint serves both). Returns a Set<string>.
  */
-export async function fetchFollowUpIssueFingerprints(
-  { repo, issueNumber },
+export async function fetchListedFingerprints(
+  { repo, target },
   { env = process.env, ghCommand = "gh", run = defaultRunChild } = {},
 ) {
   const fingerprints = new Set();
-  const issue = await runGhJson(["api", `repos/${repo}/issues/${issueNumber}`], { env, ghCommand, runChild: run });
-  collectIssueFingerprints(issue?.body, fingerprints);
-  const comments = await listIssueComments({ repo, pr: issueNumber }, { env, ghCommand, runChild: run });
-  for (const comment of comments) collectIssueFingerprints(comment?.body, fingerprints);
+  const comments = await listIssueComments({ repo, pr: target }, { env, ghCommand, runChild: run });
+  for (const comment of comments) {
+    // Only a deferral comment (marker on its first line) counts; a bullet in any
+    // other comment on a shared issue or PR must never suppress an entry.
+    if (typeof comment?.body !== "string" || !comment.body.startsWith(DEFERRED_SUMMARY_MARKER)) continue;
+    for (const match of comment.body.matchAll(LISTED_FINGERPRINT_RE)) fingerprints.add(match[1]);
+  }
   return fingerprints;
+}
+
+/**
+ * Post a round's deferred findings as ONE batched comment on the comment
+ * target (resolveDeferralCommentTarget). Entries whose fingerprint the target
+ * already lists are skipped; nothing is posted when none remain. Returns
+ * `{ issueNumber, appendedFingerprints }` where `issueNumber` is the target's
+ * number (an issue or the PR). Dependencies are injectable for tests;
+ * `commentIssue` defaults to the sanctioned core wrapper, never a raw `gh`.
+ */
+export async function commentDeferredFindings(
+  { repo, pr, entries, trackerProvider = "github" },
+  { env = process.env, ghCommand = "gh", run = defaultRunChild, commentIssue = coreCommentIssue } = {},
+) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new Error("commentDeferredFindings: entries must be a non-empty array");
+  }
+  const target = await resolveDeferralCommentTarget({ repo, pr, trackerProvider }, { env, ghCommand, run });
+  const listed = await fetchListedFingerprints({ repo, target }, { env, ghCommand, run });
+  const fresh = entries.filter((entry) => !listed.has(entry.fingerprint));
+  if (fresh.length > 0) {
+    await commentIssue(
+      { repo, issue: target, body: buildDeferredFindingsComment({ repo, pr, entries: fresh }) },
+      { env, ghCommand, run },
+    );
+  }
+  return { issueNumber: target, appendedFingerprints: new Set(fresh.map((entry) => entry.fingerprint)) };
 }
 
 // ---------------------------------------------------------------------------

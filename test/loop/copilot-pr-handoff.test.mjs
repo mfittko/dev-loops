@@ -2214,6 +2214,37 @@ test("detectRecentHumanComments skips gate-pattern human comments", async () => 
   }
 });
 
+test("detectRecentHumanComments skips a User-authored deferred-summary comment after claimedAt", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-deferral-"));
+
+  try {
+    const { detectRecentHumanComments } = await import("../../scripts/loop/copilot-pr-handoff.mjs");
+
+    const DEFERRAL = JSON.stringify({
+      id: 102,
+      body: "<!-- dev-loops:deferred-summary -->\nGate findings deferred from https://github.com/owner/repo/pull/17:\n\n- `0123456789abcdef` **low** (`angle`): x",
+      user: { login: "operator", type: "User" },
+      created_at: "2026-06-07T10:00:00Z",
+    });
+
+    const { env } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"],
+        stdout: DEFERRAL + "\n",
+      },
+    ]);
+
+    const result = await detectRecentHumanComments(
+      { repo: "owner/repo", pr: 17, claimedAtMs: Date.parse("2026-06-07T09:00:00Z") },
+      { env },
+    );
+
+    assert.equal(result.paused, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detectRecentHumanComments skips Gate review: format gate comments", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-gate-format-"));
 

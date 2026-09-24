@@ -30,7 +30,7 @@ Required:
   --findings <json>              JSON array of finding objects with severity, disposition, angle, summary, and optional positive-integer line
                                  A "low" finding may also carry operatorVisible: true (net-reduction policy, #1846) — the
                                  explicit signal close-gate-findings.mjs's disposition pass requires before filing a "low"
-                                 to the PR's tracked follow-up issue; absent/false is the conservative default (resolved
+                                 to the deferral comment; absent/false is the conservative default (resolved
                                  in-thread, never filed). A "nit" is never filed regardless of operatorVisible.
                                  operatorVisible on any OTHER severity fails closed (exit 2) — it has no meaning there.
   --findings-file <path>         Read the --findings JSON array from a file instead of an inline argument
@@ -215,8 +215,8 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     // GATE-EXEC-DEFERRAL-RECORD: a judge-pass-enriched finding may carry a stable `fingerprint`
     // ([0-9a-f]{16}, matching the finding-marker regex) and a `defer` finding
-    // additionally carries `followUpIssueNumber` (the PR's one tracked
-    // follow-up issue). Both optional; a malformed fingerprint fails closed.
+    // additionally carries `followUpIssueNumber` (the deferral comment
+    // target number: the linked spec issue or the PR). Both optional; a malformed fingerprint fails closed.
     if (typeof f.fingerprint === "string" && f.fingerprint.trim().length > 0) {
       const fp = f.fingerprint.trim();
       if (!/^[0-9a-f]{16}$/.test(fp)) {
