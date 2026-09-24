@@ -63,8 +63,10 @@ export function toDeltaActItems(actList) {
     if (entry.judgeDisposition !== "act") {
       throw new Error(`act list entry ${index} has judgeDisposition ${JSON.stringify(entry.judgeDisposition)}, expected "act"`);
     }
+    // Real judge act entries carry the ledger `fingerprint`; `ref` wins when set.
+    const ledgerRef = [entry.ref, entry.fingerprint].find(nonEmpty);
     const item = {
-      ref: nonEmpty(entry.ref) ? entry.ref.trim() : `act-${index + 1}`,
+      ref: ledgerRef ? ledgerRef.trim() : `act-${index + 1}`,
       angle: nonEmpty(entry.angle) ? entry.angle.trim() : null,
       severity: normalizeSeverity(entry.severity) ?? null,
       summary: nonEmpty(entry.summary) ? entry.summary.trim() : "",
@@ -206,7 +208,9 @@ export function isDeltaResultFresh(result, currentHead) {
  * - fresh, valid, locally_clear: push.
  * - otherwise, below the bound: fix (or re-review a moved head) and review again.
  * - otherwise, at the bound: bounded_out; push the committed candidate into the
- *   normal gate path with the residual evidence. No fourth review runs.
+ *   normal gate path with the residual evidence. No fourth review runs. The
+ *   bound takes precedence over freshness: a stale result at the bound also
+ *   ends bounded_out, which authorizes nothing and claims no success.
  * @param {{ sequence: ReturnType<typeof startDeltaSequence>, result: unknown, invocation: number, currentHead: string }} input
  */
 export function decideDeltaNextStep({ sequence, result, invocation, currentHead } = {}) {

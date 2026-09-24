@@ -276,6 +276,8 @@ test("no pre-PR-reviewer role key remains in config, code or contract prose (no 
     { cwd: repoRoot, encoding: "utf8" },
   );
   assert.equal(out.stdout.trim(), "", `old role key found in: ${out.stdout}`);
+  // git grep exits 1 on no match; any other status (e.g. 128) means the guard did not run.
+  assert.equal(out.status, 1, `git grep failed: ${out.stderr}`);
 });
 
 test("main-agent contract cites the route-neutral PRE-PR-BEFORE-FIRST-PUSH scope", () => {

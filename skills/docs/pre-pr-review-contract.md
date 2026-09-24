@@ -190,7 +190,7 @@ DeltaPrePushReviewResult {
 ```
 
 <!-- rule: PRE-PUSH-DELTA-EXIT-BOUND -->
-`PRE-PUSH-DELTA-EXIT-BOUND`: `locally_clear` MUST require every claimed act item `resolved`, none `cannot_verify`, and no new finding of severity medium or higher. Medium or higher means `high`, `question` or `medium`. A sequence MUST NOT exceed three delta review invocations, one fresh reviewer each, with no fan-out. When the third review is not locally clear, the outcome is `bounded_out` with the residual evidence: no fourth review runs, the committed candidate is pushed into the normal gate path, and no success is claimed.
+`PRE-PUSH-DELTA-EXIT-BOUND`: `locally_clear` MUST require every claimed act item `resolved`, none `cannot_verify`, and no new finding of severity medium or higher. Medium or higher means `high`, `question` or `medium`. A sequence MUST NOT exceed three delta review invocations, one fresh reviewer each, with no fan-out. When the third review is not locally clear, the outcome is `bounded_out` with the residual evidence: no fourth review runs, the committed candidate is pushed into the normal gate path, and no success is claimed. At the third review the bound takes precedence over `PRE-PUSH-DELTA-FRESHNESS`: a stale result also ends `bounded_out`, and the current worktree head is pushed into the normal gate path, because `bounded_out` authorizes nothing and claims no success.
 
 <!-- rule: PRE-PUSH-DELTA-FRESHNESS -->
 `PRE-PUSH-DELTA-FRESHNESS`: before each invocation the fix MUST be committed and `candidateHead` read from the worktree. A result whose `candidateHead` differs from the current worktree head MUST NOT authorize the push; a head change outside the loop needs a new review against the current candidate.

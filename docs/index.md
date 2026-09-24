@@ -8,7 +8,7 @@ Start here for repository documentation.
 - [Implementation Workflow](./IMPLEMENTATION_WORKFLOW.md) — workflow/process authority boundaries
 - [Conductor Routing Contract](../skills/docs/conductor-routing-contract.md) — canonical outer-loop routing contract
 - [PR Lifecycle Contract](../skills/docs/pr-lifecycle-contract.md) — canonical family-local PR lifecycle contract
-- [Pre-PR Review Contract](../skills/docs/pre-pr-review-contract.md) — developer-briefed fresh-context general-purpose review before the first push; ephemeral, bounded, config-resolved model, pre-filter to the fan-out gate (issue #2305)
+- [Pre-push Review Contract](../skills/docs/pre-pr-review-contract.md) — developer-briefed fresh-context general-purpose review before the first push; ephemeral, bounded, config-resolved model, pre-filter to the fan-out gate (issue #2305); plus bounded delta mode before a gate act-list fix push (issue #2423)
 - [Artifact Authority Contract](../skills/docs/artifact-authority-contract.md) — canonical artifact-selection model (tracker-first, local-planning, and PR-body-as-spec) and the local-first plan-file flow
 - [Tracker Seam Contract](../skills/docs/tracker-seam-contract.md) — the `Tracker` provider interface/registry (issue #1408); GitHub is the built-in default, external providers are a post-1.0 drop-in
 - [Local Planning](../skills/docs/local-planning.md) — plan-file contract, operator sequence for the local-first plan-file flow, and a worked example of one plan file through every stage

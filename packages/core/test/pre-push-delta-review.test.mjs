@@ -228,6 +228,48 @@ describe("three-review bound", () => {
     assert.equal(decision.locallyClear, false);
     assert.throws(() => decideDeltaNextStep({ sequence: seq, result: result(), invocation: 4, currentHead: B }), /1\.\.3/);
   });
+
+  test("a fresh, valid locally_clear result at the third review pushes, not bounded_out", () => {
+    const decision = decideDeltaNextStep({ sequence: sequence(), result: result(), invocation: DELTA_MAX_INVOCATIONS, currentHead: B });
+    assert.equal(decision.outcome, "locally_clear");
+    assert.equal(decision.nextStep, "push");
+  });
+
+  test("the bound takes precedence over freshness: a stale result at the third review ends bounded_out", () => {
+    const decision = decideDeltaNextStep({ sequence: sequence(), result: result(), invocation: DELTA_MAX_INVOCATIONS, currentHead: C });
+    assert.equal(decision.fresh, false);
+    assert.equal(decision.outcome, "bounded_out");
+    assert.equal(decision.nextStep, "push_to_gate");
+    assert.equal(decision.locallyClear, false);
+  });
+});
+
+describe("invalid locally_clear", () => {
+  const cases = [
+    ["cannot_verify item", { actionableItems: [{ ref: "act-1", status: "cannot_verify", evidence: ["e"] }, { ref: "act-2", status: "resolved", evidence: ["e"] }] }],
+    ["unknown new-finding severity", { newFindings: [{ severity: "critical", summary: "s", evidence: ["e"] }] }],
+    ["wrong actSetId", { actSetId: "0000000000000000" }],
+  ];
+  for (const [name, overrides] of cases) {
+    test(`a fresh result claiming locally_clear with a ${name} does not push`, () => {
+      const decision = decideDeltaNextStep({ sequence: sequence(), result: result(overrides), invocation: 1, currentHead: B });
+      assert.equal(decision.fresh, true);
+      assert.ok(decision.errors.length > 0);
+      assert.equal(decision.locallyClear, false);
+      assert.notEqual(decision.nextStep, "push");
+    });
+  }
+});
+
+describe("ledger act refs", () => {
+  test("a real judge-pass act entry is referenced by its ledger fingerprint, independent of order", () => {
+    const withFingerprints = [{ ...ACT_LIST[0], fingerprint: "b1a52cfd23cd9144" }, { ...ACT_LIST[1], fingerprint: "364d03ab5babb8f5" }];
+    const seq = startDeltaSequence({ reviewBaselineHead: A, actList: withFingerprints });
+    assert.deepEqual(seq.actItems.map((i) => i.ref), ["b1a52cfd23cd9144", "364d03ab5babb8f5"]);
+    const reversed = startDeltaSequence({ reviewBaselineHead: A, actList: [...withFingerprints].reverse() });
+    assert.deepEqual(reversed.actItems.map((i) => i.ref), ["364d03ab5babb8f5", "b1a52cfd23cd9144"]);
+    assert.equal(startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...withFingerprints[0], ref: "r1" }] }).actItems[0].ref, "r1");
+  });
 });
 
 describe("freshness", () => {
