@@ -158,12 +158,22 @@ sequence is:
    commits the fix and hands back the commit SHA unpushed.
 2. The dev-loop coordinator dispatches one fresh delta reviewer for the current
    worktree head.
-3. On `needs_fix`, it dispatches a fresh fixer again, commit-only, and returns
-   to step 2.
-4. On `locally_clear` or `bounded_out`, it dispatches the fixer to push, reply
-   to each gate thread with the fixing commit, and resolve that thread.
+3. The coordinator follows the CLI `nextStep`. On `nextStep: fix_and_rereview`,
+   it dispatches a fresh fixer again, commit-only, and returns to step 2. That
+   fixer receives the delta result's `not_resolved` and `cannot_verify` act
+   refs with their evidence, plus the result's medium-or-higher `newFindings`.
+   On `nextStep: rereview_current_head`, the result is stale for the current
+   head; the coordinator returns to step 2 without a fixer.
+4. On `nextStep: push` (`locally_clear`) or `nextStep: push_to_gate`
+   (`bounded_out`), it dispatches
+   the fixer to push and reply to each gate thread with the fixing commit. On
+   `locally_clear`, the fixer resolves each thread. On `bounded_out`, the fixer
+   resolves only the threads of act items with status `resolved`. For
+   `not_resolved` and `cannot_verify` items, it replies with the residual delta
+   status and leaves the thread unresolved.
 
-The dev-loop coordinator owns the invocation count and passes it to
+Each delta review, including a re-review of the current head, consumes one
+invocation. The dev-loop coordinator owns the invocation count and passes it to
 `dev-loops loop pre-push-delta --invocation` monotonically, starting at 1 for
 each sequence.
 

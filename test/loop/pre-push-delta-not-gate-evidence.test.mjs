@@ -55,7 +55,7 @@ test("gate fan-in: a delta result in the findings dir fails closed and never yie
 test("gate fan-in: a delta result alone never counts as an angle", async () => {
   await withTmp(async (dir) => {
     await writeFile(path.join(dir, "pre-push-delta.json"), JSON.stringify(deltaResult()));
-    await assert.rejects(consolidateGateFanin({ findingsDir: dir, headSha: HEAD }));
+    await assert.rejects(consolidateGateFanin({ findingsDir: dir, headSha: HEAD }), /pre-push-delta\.json/);
   });
 });
 

@@ -188,6 +188,11 @@ describe("result schema", () => {
     const dup = result({ actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["e"] }, { ref: "act-1", status: "resolved", evidence: ["e"] }] });
     assert.match(validateDeltaResult(dup, { sequence: sequence() }).join("\n"), /"act-1" is a duplicate/);
   });
+
+  test("suffixes a repeated ledger fingerprint instead of rejecting the act list", () => {
+    const { actItems } = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], fingerprint: "f" }, { ...ACT_LIST[1], fingerprint: "f" }] });
+    assert.deepEqual(actItems.map(({ ref }) => ref), ["f", "f#2"]);
+  });
 });
 
 describe("exit rule", () => {

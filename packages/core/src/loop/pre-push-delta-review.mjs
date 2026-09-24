@@ -77,11 +77,20 @@ export function toDeltaActItems(actList) {
     if (Number.isInteger(entry.line)) item.line = entry.line;
     return item;
   });
+  // A fingerprint hashes only file and summary, so entries from different clusters
+  // can share one; suffix the repeats deterministically. Explicit refs stay unique.
   const refs = new Set();
-  for (const { ref } of items) {
-    if (refs.has(ref)) throw new Error(`act list has duplicate ref ${JSON.stringify(ref)}`);
-    refs.add(ref);
-  }
+  const fingerprintCounts = new Map();
+  items.forEach((item, index) => {
+    const entry = actList[index];
+    if (!nonEmpty(entry.ref) && nonEmpty(entry.fingerprint)) {
+      const count = (fingerprintCounts.get(item.ref) ?? 0) + 1;
+      fingerprintCounts.set(item.ref, count);
+      if (count > 1) item.ref = `${item.ref}#${count}`;
+    }
+    if (refs.has(item.ref)) throw new Error(`act list has duplicate ref ${JSON.stringify(item.ref)}`);
+    refs.add(item.ref);
+  });
   return items;
 }
 
