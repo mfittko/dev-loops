@@ -226,7 +226,7 @@ finding, mismatched spec-authority identity) means re-run the judge at the curre
 silent severity-only fallback or a silent skip of spec authority. See Gate Review Sub-Loop Contract
 Phase 3.5 and `skills/docs/spec-authority-contract.md` for the enforcement rules these flags carry.
 
-After the fixer commits the act-list fix and before it pushes, the gate coordinator runs the
+After the fixer commits the act-list fix and before it pushes, the dev-loop coordinator runs the
 delta-mode pre-push review (`PRE-PUSH-DELTA-TRIGGER` in the
 [Pre-push review contract](../docs/pre-pr-review-contract.md#delta-mode)), which owns the
 baseline, input, result, three-review bound and freshness rules. `dev-loops-run cli/index.mjs loop pre-push-delta`

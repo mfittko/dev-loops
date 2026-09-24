@@ -148,7 +148,24 @@ gate round, CI run and review cycle. It resolves the same `pre-push-reviewer`
 role and tier as full mode (`PRE-PR-MODEL-CONFIG-RESOLVED`) and uses the same
 harness dispatch. The only delta source is the gate judge's act list. The
 deterministic checks live in `@dev-loops/core/loop/pre-push-delta-review`; the
-coordinator runs them through `dev-loops loop pre-push-delta`.
+dev-loop coordinator runs them through `dev-loops loop pre-push-delta`.
+
+The dev-loop coordinator owns delta mode, because it dispatches the Phase 4
+fixer and owns the push; the gate coordinator has returned by then. The
+sequence is:
+
+1. The dev-loop coordinator dispatches the fixer with the act list. The fixer
+   commits the fix and hands back the commit SHA unpushed.
+2. The dev-loop coordinator dispatches one fresh delta reviewer for the current
+   worktree head.
+3. On `needs_fix`, it dispatches a fresh fixer again, commit-only, and returns
+   to step 2.
+4. On `locally_clear` or `bounded_out`, it dispatches the fixer to push, reply
+   to each gate thread with the fixing commit, and resolve that thread.
+
+The dev-loop coordinator owns the invocation count and passes it to
+`dev-loops loop pre-push-delta --invocation` monotonically, starting at 1 for
+each sequence.
 
 <!-- rule: PRE-PUSH-DELTA-TRIGGER -->
 `PRE-PUSH-DELTA-TRIGGER`: delta mode MUST run after the gate Phase 4 fixer commits a fix for a judge act list and before that fix is pushed. A push with no act-list fix MUST NOT get a delta review, even when a PR exists. Standalone implementation pushes and the full-mode first push are unaffected.
@@ -160,11 +177,11 @@ coordinator runs them through `dev-loops loop pre-push-delta`.
 `PRE-PUSH-DELTA-INPUT`: the reviewer input MUST carry `reviewBaselineHead` and `candidateHead`, the act-item refs with their judge dispositions from the gate findings ledger, the current spec identity, the act items' angle names as surface hints, and the adversarial-enumeration checklist. The reviewer reads the cumulative diff from the worktree; the coordinator MUST NOT inline diff bytes. The input MUST NOT carry sibling reviewer verdicts or "clean" claims. The reviewer MAY widen to surrounding code, spec or prior finding evidence when a concrete dependency requires it, and it MUST record each widened read in `widenedReads[]`.
 
 <!-- rule: PRE-PUSH-DELTA-RESULT -->
-`PRE-PUSH-DELTA-RESULT`: the reviewer MUST return a `DeltaPrePushReviewResult` bound to the baseline, candidate and act set, with a status and evidence for every claimed act item. The status MUST be `resolved`, `not_resolved` or `cannot_verify`; `cannot_verify` stays distinct from `not_resolved`. `widenedReads[]` is required, and empty when nothing was widened. A result with a missing or unknown status is rejected.
+`PRE-PUSH-DELTA-RESULT`: the reviewer MUST return a `DeltaPrePushReviewResult` bound to the baseline, candidate and act set, with a status and evidence for every claimed act item. The `actSetId` MUST equal the sequence's id, which hashes each act item's ref, angle, severity, file, line and summary. Each act item ref appears once, in the act list and in the result. The status MUST be `resolved`, `not_resolved` or `cannot_verify`; `cannot_verify` stays distinct from `not_resolved`. Every `evidence[]` entry, for act items and new findings, MUST be a non-empty string, and each list MUST be non-empty. `widenedReads[]` is required, and empty when nothing was widened. A result with a missing or unknown status is rejected.
 
 ```text
 DeltaPrePushReviewResult {
-  reviewBaselineHead, candidateHead
+  reviewBaselineHead, candidateHead, actSetId
   actionableItems[] { ref, status: resolved | not_resolved | cannot_verify, evidence[] }
   newFindings[] { severity, summary, evidence[] }
   widenedReads[] { path, reason }
@@ -173,7 +190,7 @@ DeltaPrePushReviewResult {
 ```
 
 <!-- rule: PRE-PUSH-DELTA-EXIT-BOUND -->
-`PRE-PUSH-DELTA-EXIT-BOUND`: `locally_clear` MUST require every claimed act item `resolved`, none `cannot_verify`, and no new finding of severity medium or higher. A sequence MUST NOT exceed three delta review invocations, one fresh reviewer each, with no fan-out. When the third review is not locally clear, the outcome is `bounded_out` with the residual evidence: no fourth review runs, the committed candidate is pushed into the normal gate path, and no success is claimed.
+`PRE-PUSH-DELTA-EXIT-BOUND`: `locally_clear` MUST require every claimed act item `resolved`, none `cannot_verify`, and no new finding of severity medium or higher. Medium or higher means `high`, `question` or `medium`. A sequence MUST NOT exceed three delta review invocations, one fresh reviewer each, with no fan-out. When the third review is not locally clear, the outcome is `bounded_out` with the residual evidence: no fourth review runs, the committed candidate is pushed into the normal gate path, and no success is claimed.
 
 <!-- rule: PRE-PUSH-DELTA-FRESHNESS -->
 `PRE-PUSH-DELTA-FRESHNESS`: before each invocation the fix MUST be committed and `candidateHead` read from the worktree. A result whose `candidateHead` differs from the current worktree head MUST NOT authorize the push; a head change outside the loop needs a new review against the current candidate.

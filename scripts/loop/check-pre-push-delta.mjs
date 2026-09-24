@@ -3,7 +3,7 @@
  * check-pre-push-delta
  *
  * Shell entry for the pre-push reviewer's delta mode
- * (skills/docs/pre-pr-review-contract.md, PRE-PUSH-DELTA-* rules). The gate
+ * (skills/docs/pre-pr-review-contract.md, PRE-PUSH-DELTA-* rules). The dev-loop
  * coordinator runs it between the fixer's act-list fix commit and its push:
  *
  * - without --result: prints the neutral reviewer input for the current
@@ -20,7 +20,14 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
-import { buildDeltaInput, decideDeltaNextStep, startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
+import {
+  DELTA_MAX_INVOCATIONS,
+  buildDeltaInput,
+  decideDeltaNextStep,
+  resolveDeltaTrigger,
+  startDeltaSequence,
+} from "@dev-loops/core/loop/pre-push-delta-review";
+import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
@@ -31,7 +38,7 @@ const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha
 Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
   --act-list <path>       The judge-pass --out act list the fix resolves
-  --baseline <sha>        reviewBaselineHead: the head the gate round reviewed
+  --baseline <sha>        reviewBaselineHead: the head the gate round reviewed (hex SHA)
   --spec-identity <id>    Current spec identity passed to the reviewer
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
   --invocation <n>        1-based delta review invocation in this sequence (max 3)
@@ -45,7 +52,8 @@ Output (stdout, JSON):
 
 ${JQ_OUTPUT_USAGE}
 
-Exit codes: 0 decision printed; 2 argument or runtime error, or invalid --jq filter.`;
+Exit codes: 0 decision printed; 2 argument or runtime error (including HEAD equal
+to the baseline), or invalid --jq filter.`;
 
 const parseError = buildParseError(USAGE);
 
@@ -72,12 +80,17 @@ export function parseCheckPrePushDeltaArgs(argv) {
   if (values.help) return { help: true };
   if (!values["act-list"]) throw parseError("--act-list <path> is required");
   if (!values.baseline) throw parseError("--baseline <sha> is required");
+  const baseline = values.baseline.trim().toLowerCase();
+  if (!HEAD_SHA_RE.test(baseline)) throw parseError("--baseline must be a hex commit SHA (7-64 hex characters)");
   const invocation = values.invocation === undefined ? null : Number(values.invocation);
-  if (values.result && !Number.isInteger(invocation)) throw parseError("--result requires --invocation <1-3>");
+  if (invocation !== null && !(Number.isInteger(invocation) && invocation >= 1 && invocation <= DELTA_MAX_INVOCATIONS)) {
+    throw parseError(`--invocation must be an integer in 1..${DELTA_MAX_INVOCATIONS}`);
+  }
+  if (values.result && invocation === null) throw parseError("--result requires --invocation <1-3>");
   return {
     help: false,
     actList: values["act-list"],
-    baseline: values.baseline,
+    baseline,
     specIdentity: values["spec-identity"] ?? null,
     result: values.result ?? null,
     invocation,
@@ -88,23 +101,28 @@ export function parseCheckPrePushDeltaArgs(argv) {
   };
 }
 
-function readWorktreeHead(worktree) {
-  const out = spawnSync("git", ["-C", worktree, "rev-parse", "HEAD"], { encoding: "utf8" });
-  if (out.status !== 0) throw new Error(`git rev-parse HEAD failed in ${worktree}: ${out.stderr.trim()}`);
+function gitRevParse(worktree, rev) {
+  const out = spawnSync("git", ["-C", worktree, "rev-parse", "--verify", `${rev}^{commit}`], { encoding: "utf8" });
+  if (out.status !== 0) throw new Error(`git rev-parse ${rev} failed in ${worktree}: ${out.stderr.trim()}`);
   return out.stdout.trim();
 }
 
-export function runCli(argv = process.argv.slice(2), { readHead = readWorktreeHead, stdout = process.stdout } = {}) {
+export function runCli(argv = process.argv.slice(2), { revParse = gitRevParse, stdout = process.stdout } = {}) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
     return { ok: true, help: true };
   }
   const sequence = startDeltaSequence({
-    reviewBaselineHead: options.baseline,
+    reviewBaselineHead: revParse(options.worktree, options.baseline),
     actList: JSON.parse(readFileSync(options.actList, "utf8")),
   });
-  const currentHead = readHead(options.worktree);
+  const currentHead = revParse(options.worktree, "HEAD");
+  // The CLI runs before the push, so the fix is unpushed by construction.
+  const fixCommitted = currentHead !== sequence.reviewBaselineHead;
+  if (resolveDeltaTrigger({ actItemCount: sequence.actItems.length, fixCommitted }) !== "delta") {
+    throw new Error(`worktree HEAD ${currentHead} equals the baseline: commit the act-list fix before the delta review`);
+  }
   const payload = options.result
     ? {
         ok: true,

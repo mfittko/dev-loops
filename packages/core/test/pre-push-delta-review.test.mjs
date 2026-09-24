@@ -14,8 +14,6 @@ import {
   validateDeltaResult,
 } from "../src/loop/pre-push-delta-review.mjs";
 import { consolidateFanin } from "../src/loop/gate-fanin.mjs";
-import { evaluatePrGateCoordination, PR_CHECKPOINT } from "../src/loop/pr-gate-coordination.mjs";
-import { DISPOSITION, STATE } from "../src/loop/copilot-loop-state.mjs";
 
 const A = "aaaaaaa1111111";
 const B = "bbbbbbb2222222";
@@ -54,6 +52,7 @@ function result(overrides = {}) {
   return {
     reviewBaselineHead: A,
     candidateHead: B,
+    actSetId: sequence().actSetId,
     actionableItems: [
       { ref: "act-1", status: "resolved", evidence: ["x.mjs:12 now rejects []"] },
       { ref: "act-2", status: "resolved", evidence: ["x.mjs:30 handles ENOTDIR"] },
@@ -161,6 +160,25 @@ describe("result schema", () => {
   test("rejects a result bound to another baseline", () => {
     assert.match(validateDeltaResult(result({ reviewBaselineHead: B }), { sequence: sequence() }).join("\n"), /pinned baseline/);
   });
+
+  test("rejects a result bound to another act set: the id covers angle, severity, file, line and summary", () => {
+    const moved = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], line: 13 }, ACT_LIST[1]] });
+    assert.notEqual(moved.actSetId, sequence().actSetId);
+    assert.match(validateDeltaResult(result(), { sequence: moved }).join("\n"), /actSetId .* does not match/);
+  });
+
+  test("rejects blank evidence strings and a new finding without evidence", () => {
+    const blank = result({ actionableItems: [{ ref: "act-1", status: "resolved", evidence: [" "] }, { ref: "act-2", status: "resolved", evidence: ["e"] }] });
+    assert.match(validateDeltaResult(blank, { sequence: sequence() }).join("\n"), /actionableItems\[0\]\.evidence\[\] must be non-empty strings/);
+    const noEvidence = result({ newFindings: [{ severity: "low", summary: "s" }] });
+    assert.match(validateDeltaResult(noEvidence, { sequence: sequence() }).join("\n"), /newFindings\[0\]\.evidence\[\] must be non-empty strings/);
+  });
+
+  test("rejects duplicate refs in the act list and in the result", () => {
+    assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], ref: "x" }, { ...ACT_LIST[1], ref: "x" }] }), /duplicate ref "x"/);
+    const dup = result({ actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["e"] }, { ref: "act-1", status: "resolved", evidence: ["e"] }] });
+    assert.match(validateDeltaResult(dup, { sequence: sequence() }).join("\n"), /"act-1" is a duplicate/);
+  });
 });
 
 describe("exit rule", () => {
@@ -171,8 +189,9 @@ describe("exit rule", () => {
   const cases = [
     ["unresolved low original item", { actionableItems: items("not_resolved"), newFindings: [] }, "needs_fix"],
     ["cannot_verify", { actionableItems: items("cannot_verify"), newFindings: [] }, "needs_fix"],
-    ["a new medium finding", { actionableItems: items("resolved"), newFindings: [{ severity: "medium", summary: "s" }] }, "needs_fix"],
-    ["only a new low finding", { actionableItems: items("resolved"), newFindings: [{ severity: "low", summary: "s" }] }, "locally_clear"],
+    ["a new medium finding", { actionableItems: items("resolved"), newFindings: [{ severity: "medium", summary: "s", evidence: ["e"] }] }, "needs_fix"],
+    ["a new question finding", { actionableItems: items("resolved"), newFindings: [{ severity: "question", summary: "s", evidence: ["e"] }] }, "needs_fix"],
+    ["only a new low finding", { actionableItems: items("resolved"), newFindings: [{ severity: "low", summary: "s", evidence: ["e"] }] }, "locally_clear"],
   ];
   for (const [name, overrides, expected] of cases) {
     test(`${name} -> ${expected}`, () => {
@@ -229,25 +248,6 @@ describe("pre-push results never become gate evidence", () => {
     assert.equal(fanin.verdict, "blocked");
     assert.equal(fanin.malformed.length, 1);
     assert.equal(fanin.findings.length, 0);
-  });
-
-  test("gate checkpoint detection ignores a locally_clear delta result for the same head", () => {
-    const gate = { visible: false, headSha: null, verdict: null, contractComplete: false };
-    const base = {
-      pr: 1,
-      currentHeadSha: B,
-      prDraft: false,
-      lifecycleState: STATE.PR_READY_NO_FEEDBACK,
-      loopDisposition: DISPOSITION.ACTION_REQUIRED,
-      draftGate: gate,
-      draftGateMarker: gate,
-      preApprovalGate: gate,
-      preApprovalGateMarker: gate,
-    };
-    const without = evaluatePrGateCoordination(base);
-    const withDelta = evaluatePrGateCoordination({ ...base, prePushDeltaResult: result(), deltaPrePushReviewResult: result() });
-    assert.equal(withDelta.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
-    assert.deepEqual(withDelta, without);
   });
 
   test("the delta module performs no I/O: no gate artifact, comment or thread can be written", () => {

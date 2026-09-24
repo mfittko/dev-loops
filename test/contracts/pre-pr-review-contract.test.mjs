@@ -264,13 +264,15 @@ test("the gate fix pass and the fixer cross-reference delta mode between the fix
   const fixerDeltaIdx = fixer.indexOf("PRE-PUSH-DELTA-TRIGGER");
   const pushIdx = fixer.indexOf("8. Push the commit");
   assert.ok(commitIdx < fixerDeltaIdx && fixerDeltaIdx < pushIdx, "fixer must run delta mode after the commit and before the push");
+  assert.match(fixer.slice(commitIdx, pushIdx), /hand back the commit SHA unpushed/);
 });
 
 test("no pre-PR-reviewer role key remains in config, code or contract prose (no alias)", () => {
   const oldRole = ["pre", "PR", "reviewer"].join("-");
   const out = spawnSync(
     "git",
-    ["grep", "-l", oldRole, "--", ".devloops", "packages", "scripts", "cli", "skills", "agents", ".claude", ":!packages/*/test"],
+    // config.mjs names the old key only in its rename diagnostic.
+    ["grep", "-l", oldRole, "--", ".devloops", "packages", "scripts", "cli", "skills", "agents", ".claude", ":(exclude,glob)packages/*/test/**", ":!packages/core/src/config/config.mjs"],
     { cwd: repoRoot, encoding: "utf8" },
   );
   assert.equal(out.stdout.trim(), "", `old role key found in: ${out.stdout}`);

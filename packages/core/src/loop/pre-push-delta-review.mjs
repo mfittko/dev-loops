@@ -58,7 +58,7 @@ export function toDeltaActItems(actList) {
   if (!Array.isArray(actList) || actList.length === 0) {
     throw new Error("delta review requires a non-empty judge act list");
   }
-  return actList.map((entry, index) => {
+  const items = actList.map((entry, index) => {
     if (!entry || typeof entry !== "object") throw new Error(`act list entry ${index} is not an object`);
     if (entry.judgeDisposition !== "act") {
       throw new Error(`act list entry ${index} has judgeDisposition ${JSON.stringify(entry.judgeDisposition)}, expected "act"`);
@@ -75,6 +75,16 @@ export function toDeltaActItems(actList) {
     if (Number.isInteger(entry.line)) item.line = entry.line;
     return item;
   });
+  const refs = new Set();
+  for (const { ref } of items) {
+    if (refs.has(ref)) throw new Error(`act list has duplicate ref ${JSON.stringify(ref)}`);
+    refs.add(ref);
+  }
+  return items;
+}
+
+function nonEmptyStrings(value) {
+  return Array.isArray(value) && value.length > 0 && value.every(nonEmpty);
 }
 
 /**
@@ -87,7 +97,7 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
   if (!nonEmpty(reviewBaselineHead)) throw new Error("delta sequence requires reviewBaselineHead");
   const actItems = toDeltaActItems(actList);
   const actSetId = createHash("sha256")
-    .update(JSON.stringify(actItems.map(({ ref, summary }) => [ref, summary])))
+    .update(JSON.stringify(actItems.map(({ ref, angle, severity, file, line, summary }) => [ref, angle, severity, file ?? null, line ?? null, summary])))
     .digest("hex")
     .slice(0, 16);
   return Object.freeze({ reviewBaselineHead: reviewBaselineHead.trim(), actSetId, actItems });
@@ -144,6 +154,9 @@ export function validateDeltaResult(result, { sequence } = {}) {
     errors.push(`reviewBaselineHead ${JSON.stringify(result.reviewBaselineHead)} does not match the pinned baseline ${JSON.stringify(sequence?.reviewBaselineHead)}`);
   }
   if (!nonEmpty(result.candidateHead)) errors.push("candidateHead is required");
+  if (result.actSetId !== sequence?.actSetId) {
+    errors.push(`actSetId ${JSON.stringify(result.actSetId)} does not match the sequence act set ${JSON.stringify(sequence?.actSetId)}`);
+  }
 
   const items = Array.isArray(result.actionableItems) ? result.actionableItems : null;
   if (!items) errors.push("actionableItems[] is required");
@@ -151,10 +164,11 @@ export function validateDeltaResult(result, { sequence } = {}) {
   const seen = new Set();
   for (const [i, item] of (items ?? []).entries()) {
     if (!expectedRefs.has(item?.ref)) errors.push(`actionableItems[${i}].ref ${JSON.stringify(item?.ref)} is not in the act set`);
+    else if (seen.has(item.ref)) errors.push(`actionableItems[${i}].ref ${JSON.stringify(item.ref)} is a duplicate`);
     else seen.add(item.ref);
     if (item?.status === undefined) errors.push(`actionableItems[${i}].status is missing`);
     else if (!DELTA_ITEM_STATUSES.includes(item.status)) errors.push(`actionableItems[${i}].status ${JSON.stringify(item.status)} is unknown`);
-    if (!Array.isArray(item?.evidence) || item.evidence.length === 0) errors.push(`actionableItems[${i}].evidence[] must be non-empty`);
+    if (!nonEmptyStrings(item?.evidence)) errors.push(`actionableItems[${i}].evidence[] must be non-empty strings`);
   }
   for (const ref of expectedRefs) if (!seen.has(ref)) errors.push(`act item ${ref} has no status`);
 
@@ -163,6 +177,7 @@ export function validateDeltaResult(result, { sequence } = {}) {
   for (const [i, f] of (findings ?? []).entries()) {
     if (!VALID_SEVERITIES.has(normalizeSeverity(f?.severity))) errors.push(`newFindings[${i}].severity ${JSON.stringify(f?.severity)} is unknown`);
     if (!nonEmpty(f?.summary)) errors.push(`newFindings[${i}].summary is required`);
+    if (!nonEmptyStrings(f?.evidence)) errors.push(`newFindings[${i}].evidence[] must be non-empty strings`);
   }
 
   if (!Array.isArray(result.widenedReads)) errors.push("widenedReads[] is required (empty when nothing was widened)");

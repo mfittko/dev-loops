@@ -7077,6 +7077,14 @@ describe("models.tiers / models.roleTiers schema validation", () => {
     assert.match(bad.error.issues.map((i) => i.message).join(" "), /unknown model tier alias "mid"/);
   });
 
+  test("rejects the retired pre-PR-reviewer role key with a rename diagnostic", () => {
+    for (const models of [{ roleTiers: { "pre-PR-reviewer": "high" } }, { roles: { "pre-PR-reviewer": "opus" } }]) {
+      const bad = DevLoopConfigSchema.safeParse({ version: 1, models });
+      assert.equal(bad.success, false);
+      assert.match(bad.error.issues.map((i) => i.message).join(" "), /renamed to "pre-push-reviewer"/);
+    }
+  });
+
   test("accepts a custom tier alias when defined under models.tiers", () => {
     const ok = DevLoopConfigSchema.safeParse({
       version: 1,

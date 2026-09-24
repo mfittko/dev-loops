@@ -83,6 +83,15 @@ const ModelTierMapping = z
  * @param {z.RefinementCtx} ctx
  */
 function refineRoleTiers(models, ctx) {
+  for (const key of ["roleTiers", "roles"]) {
+    if (Object.hasOwn(models?.[key] ?? {}, "pre-PR-reviewer")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key, "pre-PR-reviewer"],
+        message: `role "pre-PR-reviewer" was renamed to "pre-push-reviewer"; update models.${key}`,
+      });
+    }
+  }
   const known = new Set([...BUILTIN_TIER_ALIASES, ...Object.keys(models?.tiers ?? {})]);
   for (const [role, tier] of Object.entries(models?.roleTiers ?? {})) {
     if (tier !== "inherit" && !known.has(tier)) {
