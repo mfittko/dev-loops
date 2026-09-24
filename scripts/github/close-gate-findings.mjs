@@ -35,7 +35,9 @@ comments). Its only other comment is ONE batched deferral comment per tool run
 (below). Here, every unresolved gate-authored finding thread is reconciled
 against the current round. A thread whose finding the judge disposed \`act\`
 (current ledger first; on no match, the prior local ledgers, then the thread's
-rendered judge suffix; an ambiguous prior result also skips) is never
+rendered judge suffix; an ambiguous result at either ledger tier, meaning
+current-ledger duplicate-fingerprint entries that disagree or prior ledgers
+that disagree, also skips) is never
 selected, at any severity and round (ADR 0089): it gets no
 stamp, no reply, no resolve, and no deferral entry, and stays open until the fixer
 replies with the fixing commit or a decline reason and resolves it. Otherwise: high always stays open (it never defers, forcing

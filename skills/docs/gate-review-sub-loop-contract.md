@@ -1678,8 +1678,8 @@ above. A nit thread is
 resolved-with-rationale immediately at round 1 by `close-gate-findings.mjs` — the fixer owes it no
 triage cycle (unlike low, it is not handed to the fixer as a fix/triage target on the severity
 axis; the one exception is a judge `act` on a nit, which reaches the fixer through judge-pass's
-severity-blind act filter); the closing sweep resolves a still-unresolved nit thread regardless of
-whether the fixer looked at it. A nit is NEVER filed to the deferral comment and NEVER stamped
+severity-blind act filter); the closing sweep resolves a still-unresolved nit thread the judge did
+not dispose `act`, regardless of whether the fixer looked at it. A nit is NEVER filed to the deferral comment and NEVER stamped
 `disposition=deferred` (#1846, net-reduction disposition policy) — its resolving reply names the
 rationale in-thread and nothing more; this is unconditional, unlike the low gate above, which at
 least has an opt-in path. Every resolve-without-fix reply the disposition pass posts for a low,
@@ -1707,8 +1707,9 @@ blocks gate close until the fixer/fix-loop resolves them). The disposition pass 
 thread whose finding the judge disposed `act`, whatever its severity and round (ADR 0089). The
 current round's ledger decides first. When it has no finding with the thread's fingerprint (a
 posted finding is suppressed from later ledgers), the prior local ledgers decide, then the
-thread's rendered ` — judge: <disposition>` suffix. An ambiguous prior-ledger result also skips
-the thread (fail closed). The judge `act` overrides the medium fix window, so that thread gets no stamp,
+thread's rendered ` — judge: <disposition>` suffix. An ambiguous result at either ledger tier
+also skips the thread (fail closed): current-ledger entries with the thread's fingerprint whose
+dispositions disagree (mixed or partly missing), or prior ledgers that disagree. The judge `act` overrides the medium fix window, so that thread gets no stamp,
 no reply, no resolve, and no deferral comment entry, and it stays open until the fixer closes it
 with a fixing commit or a decline reason, or a judge rerun at the current head changes the disposition. The fixer
 replies to every gate thread whose finding it fixed or declined on reproduction grounds, of any severity and including a judge `act`
@@ -1803,6 +1804,9 @@ filing bar (`isFileableDeferral`) the thread pass uses — an operator-visible `
 marker's `ov=1`) joins the tool run's ONE deferral comment together with the fileable thread targets;
 a `nit` or a non-operator-visible `low` files nothing, on the theory that it is already recorded,
 visible, in the folded `<details>` block itself — that IS its resolved-with-rationale record.
+A folded finding the current ledger disposes `act`, or holds ambiguously (duplicate-fingerprint
+entries whose dispositions disagree), is left out of the deferral comment
+(`selectFoldedFileableEntries`).
 
 The posted surface and the ledger both carry the finding marker's optional `disposition=deferred`
 field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ ov=1][ disposition=deferred][ issue=<n>] -->`
