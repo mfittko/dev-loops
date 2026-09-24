@@ -40,9 +40,7 @@ const SOURCE_EXTENSIONS = [".mjs", ".js", ".cjs"];
 
 /** Directory prefixes treated as generated / vendored and skipped. */
 const GENERATED_DIR_PREFIXES = [
-  ".claude/",
   "dist/",
-  "lib/",
   "node_modules/",
   "coverage/",
   ".git/",

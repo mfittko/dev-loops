@@ -33,10 +33,13 @@ test("classifyStripReason flags lockfiles, generated trees, binary, minified", (
   assert.equal(classifyStripReason("bun.lock"), "lockfile");
   assert.equal(classifyStripReason("package-lock.json"), "lockfile");
   assert.equal(classifyStripReason("pnpm-lock.yaml"), "lockfile");
-  assert.equal(classifyStripReason(".claude/agents/review.md"), "generated");
+  assert.equal(classifyStripReason(".claude/agents/review.md"), null);
   assert.equal(classifyStripReason("dist/bundle.js"), "generated");
-  assert.equal(classifyStripReason("lib/core.js"), "generated");
+  assert.equal(classifyStripReason("lib/core.js"), null);
+  assert.equal(classifyStripReason("scripts/lib/audit-pi-session.mjs"), null);
   assert.equal(classifyStripReason("node_modules/x/index.js"), "generated");
+  assert.equal(classifyStripReason("coverage/lcov.info"), "generated");
+  assert.equal(classifyStripReason(".git/config"), "generated");
   assert.equal(classifyStripReason("assets/logo.png"), "binary");
   assert.equal(classifyStripReason("public/app.min.js"), "minified");
   assert.equal(classifyStripReason("scripts/github/write-gate-context.mjs"), null);
