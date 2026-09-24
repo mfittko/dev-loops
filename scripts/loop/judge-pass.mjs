@@ -15,7 +15,7 @@ import {
   dedupeActListByCluster,
   projectClusterDisposition,
 } from "@dev-loops/core/loop/finding-cluster";
-import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveGateConfig, resolveTrackerProvider } from "@dev-loops/core/config";
 import {
   SPEC_AUTHORITY_OUTCOMES,
   buildRevisionIdentity,
@@ -26,7 +26,7 @@ import {
   stampSpecAuthorityIdentity,
   validateSpecAuthorityVerdict,
 } from "@dev-loops/core/loop/spec-authority";
-import { ensureFollowUpIssue, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
+import { commentDeferredFindings, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import {
@@ -68,10 +68,12 @@ Inputs:
                                carries what the judge consciously marked act/defer/reject.
                                Every disposed finding also carries a \`fingerprint\`; a
                                \`defer\` finding additionally carries \`followUpIssueNumber\`
-                               — the PR's ONE tracked follow-up GitHub issue (created or
-                               appended to, batched across every defer in the round; never
-                               one issue per finding). A re-run reads this same path back
-                               first, so an already-linked finding is not re-created (#1807).
+                               — the deferral comment target's number: the PR's linked
+                               spec issue when tracker.provider is github and the PR has
+                               exactly one closing reference, otherwise the PR itself.
+                               The round's defers go as ONE batched comment on that
+                               target; this tool never creates an issue. A re-run does
+                               not append a fingerprint the target already lists.
   --repo-root <path>           Root used to resolve relative --findings-file /
                                --judge-verdict / --out / --ledger-out paths
                                (default: process.cwd()).
@@ -478,76 +480,28 @@ function validateFindingsArray(parsed, flagLabel) {
   });
 }
 
-// Best-effort read of a prior --ledger-out artifact (the same path this run
-// is about to overwrite) to recover the PR's already-linked follow-up issue:
-// a re-run of the judge pass over the same round must reuse the PR's ONE
-// tracked follow-up issue rather than
-// mint a duplicate, and must not re-append fingerprints it already recorded
-// there. Tolerates a missing/malformed prior artifact (first-ever run) by
-// returning an empty link set — never fails the pass over a stale/partial
-// read of its own prior output.
-//
-// This is a FAST-PATH cache only, not the authority: this pass's own
-// --ledger-out is a disjoint store from close-gate-findings.mjs's thread
-// markers, so a `null` here does not mean no follow-up issue exists — it only
-// means this run doesn't know of one locally. `ensureFollowUpIssue`
-// (_gate-finding-surface.mjs) resolves against GitHub itself before creating
-// whenever the number passed in here is `null`, which is what actually closes
-// the cross-path duplicate-issue gap between the two independent defer paths.
-async function readPriorFollowUpLinks(ledgerOutPath) {
-  if (!ledgerOutPath) return { issueNumber: null, linkedFingerprints: new Set() };
-  let parsed;
-  try {
-    parsed = JSON.parse(await readFile(ledgerOutPath, "utf8"));
-  } catch {
-    return { issueNumber: null, linkedFingerprints: new Set() };
-  }
-  const priorFindings = Array.isArray(parsed?.findings) ? parsed.findings : [];
-  const issueNumber = priorFindings
-    .map((f) => f?.followUpIssueNumber)
-    .find((n) => Number.isInteger(n) && n > 0) ?? null;
-  const linkedFingerprints = new Set(
-    issueNumber === null
-      ? []
-      : priorFindings.filter((f) => f?.followUpIssueNumber === issueNumber).map((f) => f.fingerprint),
-  );
-  return { issueNumber, linkedFingerprints };
-}
-
 /**
  * Attach a stable per-finding `fingerprint` to every judge-disposed finding
- * (act/defer/reject — the one-line reject audit entry keys on it too),
- * then — for every `defer` disposition — create or append to the PR's ONE
- * tracked follow-up GitHub issue (batched: never one issue per finding).
- * Mutates `enriched` in place (each element already the judge-pass's own
- * fresh copy from `applyJudgeDispositions`). A re-run over the same
- * `ledgerOutPath` links the already-linked findings without creating a
- * duplicate issue or re-appending fingerprints already recorded on it.
+ * (act/defer/reject — the one-line reject audit entry keys on it too), then
+ * post every `defer` disposition as ONE batched comment on the deferral
+ * comment target (the linked spec issue or the PR, per the configured
+ * tracker). Never creates an issue. Mutates `enriched` in place (each element
+ * already the judge-pass's own fresh copy from `applyJudgeDispositions`). A
+ * re-run does not append a fingerprint the target already lists.
  */
-async function applyFollowUpIssues(enriched, { repo, pr, ledgerOutPath }, deps) {
+async function applyDeferralComment(enriched, { repo, pr, trackerProvider }, deps) {
   for (const f of enriched) {
     f.fingerprint = fingerprintFinding(f);
   }
   const deferred = enriched.filter((f) => f.judgeDisposition === "defer");
   if (deferred.length === 0) return;
-  const { issueNumber: priorIssueNumber, linkedFingerprints } = await readPriorFollowUpLinks(ledgerOutPath);
-  const newlyDeferred = deferred.filter((f) => !linkedFingerprints.has(f.fingerprint));
-  if (priorIssueNumber !== null && newlyDeferred.length === 0) {
-    // Every currently-deferred finding is already linked to the PR's
-    // follow-up issue — a pure retry. No gh call at all.
-    for (const f of deferred) f.followUpIssueNumber = priorIssueNumber;
-    return;
-  }
-  const entries = (newlyDeferred.length > 0 ? newlyDeferred : deferred).map((f) => ({
+  const entries = deferred.map((f) => ({
     fingerprint: f.fingerprint,
     severity: f.severity,
     angle: f.angle,
     summary: f.summary,
   }));
-  const { issueNumber } = await ensureFollowUpIssue(
-    { repo, pr, entries, existingIssueNumber: priorIssueNumber },
-    deps,
-  );
+  const { issueNumber } = await commentDeferredFindings({ repo, pr, entries, trackerProvider }, deps);
   for (const f of deferred) f.followUpIssueNumber = issueNumber;
 }
 
@@ -771,7 +725,7 @@ async function writeApprovalsRecord(approvalsPath, specAuthority, roundClean) {
  * an `errors` array — so a failed load is failed closed here rather than silently
  * degraded to the ["high"] default, mirroring consolidate-fanin.mjs.
  */
-async function resolveBlockingSeverities(options, resolvedRoot) {
+async function resolveGateSettings(options, resolvedRoot) {
   const { config, errors } = await loadDevLoopConfig({ repoRoot: resolvedRoot });
   if (Array.isArray(errors) && errors.length > 0) {
     throw new Error(
@@ -787,12 +741,12 @@ async function resolveBlockingSeverities(options, resolvedRoot) {
   // consolidate-fanin.mjs's `=== "draft_gate" ? "draft" : "preApproval"` also
   // takes for review. options.gate is validated against GATE_NAMES above.
   const gateKey = GATE_CONFIG_KEY[options.gate] ?? "preApproval";
-  return resolveGateConfig(config, gateKey).blockCleanOnFindingSeverities;
+  return { blockingSeverities: resolveGateConfig(config, gateKey).blockCleanOnFindingSeverities, trackerProvider: resolveTrackerProvider(config) };
 }
 
 export async function judgePassCli(
   options,
-  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, createIssue, commentIssue, listIssues } = {},
+  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue } = {},
 ) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
   const { findings, overallVerdict } = await resolvePayload(options, resolvedRoot);
@@ -823,7 +777,7 @@ export async function judgePassCli(
   // Spec-authority outcomes ENFORCE against the act list, not just record it:
   //  - `finding_conflicts`: the finding conflicts with the spec and is rejected
   //    regardless of its relevance disposition (act OR defer) — it must neither
-  //    reach the fixer nor spawn a follow-up issue merely by existing.
+  //    reach the fixer nor land in the deferral comment merely by existing.
   //  - `remediation_conflicts`: the finding is valid and stays actionable, but
   //    its PROPOSED remedy is rejected — the act entry is flagged so the fixer
   //    routes to a spec-compliant alternative instead of applying it as written.
@@ -846,11 +800,11 @@ export async function judgePassCli(
   // (a medium in the fix window, a low the fixer triages), while the posted
   // review verdict is composed with the act list (ADR 0089).
   // Fail closed here, BEFORE any durable side effect (the approvals record or a
-  // follow-up GitHub issue) is written, using the RAW (un-deduped) act list so
+  // deferral comment) is written, using the RAW (un-deduped) act list so
   // any acted blocking finding, clustered or not, prevents clean. The gate's
   // blocking severities come from the same config the consolidator used to
   // compute overallVerdict, so the two cannot disagree on what "blocking" means.
-  const blockingSeverities = await resolveBlockingSeverities(options, resolvedRoot);
+  const { blockingSeverities, trackerProvider } = await resolveGateSettings(options, resolvedRoot);
   assertCleanImpliesNoBlockingAct(overallVerdict, result.act, blockingSeverities);
 
   // Persist the durable approval record AFTER the act list is finalized, so a
@@ -863,13 +817,13 @@ export async function judgePassCli(
     );
   }
 
-  // A `defer` disposition always tracks a GitHub issue — never only the
-  // ephemeral tmp ledger. One issue per PR, batched; idempotent across re-runs
-  // via the prior --ledger-out artifact this run is about to overwrite.
-  await applyFollowUpIssues(
+  // A `defer` disposition is recorded as one batched comment on the deferral
+  // comment target — never only the ephemeral tmp ledger, and never a new
+  // issue. Idempotent across re-runs via the target's listed fingerprints.
+  await applyDeferralComment(
     result.enriched,
-    { repo: options.repo, pr: Number(options.pr), ledgerOutPath: options.ledgerOut ? path.resolve(resolvedRoot, options.ledgerOut) : null },
-    { env, ghCommand, run, createIssue, commentIssue, listIssues },
+    { repo: options.repo, pr: Number(options.pr), trackerProvider },
+    { env, ghCommand, run, commentIssue },
   );
 
   // ADR 0061 AC1: when spec-authority is engaged, both the
