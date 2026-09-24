@@ -113,6 +113,15 @@ describe("delta input", () => {
     assert.deepEqual(input.checklist, [...DELTA_CHECKLIST]);
   });
 
+  test("carries the result shape with widenedReads entries as { path, reason } objects", () => {
+    const { resultShape } = buildDeltaInput({ sequence: sequence(), candidateHead: B });
+    assert.equal(resultShape.reviewBaselineHead, A);
+    assert.equal(resultShape.candidateHead, B);
+    assert.equal(resultShape.actSetId, sequence().actSetId);
+    assert.deepEqual(Object.keys(resultShape.widenedReads[0]).sort(), ["path", "reason"]);
+    assert.deepEqual(Object.keys(resultShape.actionableItems[0]).sort(), ["evidence", "ref", "status"]);
+  });
+
   test("carries no sibling verdict text and no inlined diff bytes", () => {
     const text = JSON.stringify(buildDeltaInput({ sequence: sequence(), candidateHead: B }));
     for (const banned of ["overallVerdict", "reviewerVerdict", "findings_present", "\"clean\"", "@@ -1", "+new"]) {

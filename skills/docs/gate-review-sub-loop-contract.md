@@ -1237,7 +1237,8 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 - apply only the accepted narrow fixes on the same branch
 - do not broaden scope or touch unrelated files
 - run the smallest honest validation for the accepted fix scope
-- commit and push fixes on the branch
+- commit and push fixes on the branch; for a judge act-list fix, push only after the
+  delta pre-push review (`PRE-PUSH-DELTA-TRIGGER` in [Pre-push review contract](pre-pr-review-contract.md#delta-mode))
 - <!-- rule: GATE-EXEC-BLOCKING-ONLY-FIX --> `GATE-EXEC-BLOCKING-ONLY-FIX`: At every round,
   the fix cycle covers every finding whose severity is in the gate's
   `blockCleanOnFindingSeverities` set. Through this gate's configured medium fix

@@ -125,6 +125,16 @@ export function buildDeltaInput({ sequence, candidateHead, specIdentity = null }
     specIdentity: nonEmpty(specIdentity) ? specIdentity.trim() : null,
     surfaceHints: [...new Set(sequence.actItems.map((item) => item.angle).filter(Boolean))],
     checklist: [...DELTA_CHECKLIST],
+    // The DeltaPrePushReviewResult template the reviewer fills in; validateDeltaResult checks it.
+    resultShape: {
+      reviewBaselineHead: sequence.reviewBaselineHead,
+      candidateHead: head,
+      actSetId: sequence.actSetId,
+      actionableItems: [{ ref: "<act item ref>", status: DELTA_ITEM_STATUSES.join("|"), evidence: ["<non-empty string>"] }],
+      newFindings: [{ severity: [...VALID_SEVERITIES].join("|"), summary: "<non-empty string>", evidence: ["<non-empty string>"] }],
+      widenedReads: [{ path: "<widened path>", reason: "<why the read was needed>" }],
+      outcome: DELTA_OUTCOMES.join("|"),
+    },
   };
 }
 

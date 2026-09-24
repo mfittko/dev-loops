@@ -45,7 +45,16 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
 
 Output (stdout, JSON):
-  without --result: { "ok": true, "input": { ... } }
+  without --result: { "ok": true, "input": { ..., "resultShape": { ... } } }
+                    input.resultShape is the template the reviewer fills in.
+
+Result JSON (--result, DeltaPrePushReviewResult):
+  { "reviewBaselineHead": "<sha>", "candidateHead": "<sha>", "actSetId": "<input.actSetId>",
+    "actionableItems": [{ "ref", "status": "resolved|not_resolved|cannot_verify", "evidence": ["..."] }],
+    "newFindings": [{ "severity", "summary", "evidence": ["..."] }],
+    "widenedReads": [{ "path": "...", "reason": "..." }],   (objects, not strings; [] when none)
+    "outcome": "locally_clear|needs_fix|bounded_out" }
+
   with --result:    { "ok": true, "outcome": "locally_clear|needs_fix|bounded_out",
                       "nextStep": "push|fix_and_rereview|rereview_current_head|push_to_gate",
                       "locallyClear": bool, "fresh": bool, "errors": [...] }
