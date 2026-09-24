@@ -6,9 +6,10 @@ import { afterAll, beforeAll, describe, it, test } from "bun:test";
 import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
+import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
 import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -314,6 +315,9 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
         linkedIssues: [],
         reason: "No deterministically resolvable linked issue (no closingIssuesReferences and no Closes/Fixes/Resolves #n reference in body).",
       },
+      carriedConvergence: null,
+      copilotBodyDisposition: null,
+      copilotBodyDispositionRequired: null,
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -950,7 +954,14 @@ test("detect-pr-gate-coordination-state output equals a direct evaluatePrGateCoo
     assert.equal(parsed.draftGateAlreadySatisfied, directResult.draftGateAlreadySatisfied);
     assert.ok("gateEvidenceNote" in parsed);
     assert.equal(parsed.gateEvidenceNote ?? null, directResult.gateEvidenceNote ?? null);
-    assert.deepEqual({ ...parsed, copilotReviewRoundCount: directResult.copilotReviewRoundCount }, directResult);
+    // carriedConvergence, copilotBodyDisposition, and
+    // copilotBodyDispositionRequired are detector-owned records (null here: no
+    // prior-head review and no body finding).
+    assert.equal(parsed.carriedConvergence, null);
+    assert.equal(parsed.copilotBodyDisposition, null);
+    assert.equal(parsed.copilotBodyDispositionRequired, null);
+    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, ...evaluatorOwned } = parsed;
+    assert.deepEqual({ ...evaluatorOwned, copilotReviewRoundCount: directResult.copilotReviewRoundCount }, directResult);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -3083,10 +3094,10 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
         },
       ]);
       const suppressed = await resolvePostConvergenceReviewSuppressed(
-        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot, prData: prDataWithLastReview("oldsha") },
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", ...snapshot, prData: prDataWithLastReview("oldsha") },
         { env: {}, ghCommand: "gh", runChild, checkpointDir },
       );
-      assert.equal(suppressed, true);
+      assert.equal(suppressed.carried, true);
     });
   });
 
@@ -3101,10 +3112,10 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
         // Copilot's live last submitted review is actually on "othersha", not
         // the marker's claimed "oldsha" — a stale/hand-edited marker must not
         // shrink the compare window it feeds to the classifier.
-        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot, prData: prDataWithLastReview("othersha") },
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", ...snapshot, prData: prDataWithLastReview("othersha") },
         { env: {}, ghCommand: "gh", runChild, checkpointDir },
       );
-      assert.equal(suppressed, false);
+      assert.equal(suppressed.carried, false);
       assert.equal(calls.length, 0, "must not classify a delta from an unverified base");
     });
   });
@@ -3113,10 +3124,10 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
     await withTempCheckpointDir(async (checkpointDir) => {
       const { runChild, calls } = makeGhMock([]);
       const suppressed = await resolvePostConvergenceReviewSuppressed(
-        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot },
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", ...snapshot },
         { env: {}, ghCommand: "gh", runChild, checkpointDir },
       );
-      assert.equal(suppressed, false);
+      assert.equal(suppressed.carried, false);
       assert.equal(calls.length, 0, "must not call gh when no marker is present");
     });
   });
@@ -3129,10 +3140,10 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
       );
       const { runChild, calls } = makeGhMock([]);
       const suppressed = await resolvePostConvergenceReviewSuppressed(
-        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot },
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", ...snapshot },
         { env: {}, ghCommand: "gh", runChild, checkpointDir },
       );
-      assert.equal(suppressed, false);
+      assert.equal(suppressed.carried, false);
       assert.equal(calls.length, 0);
     });
   });
@@ -3145,17 +3156,17 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
       );
       const { runChild } = makeGhMock([]);
       assert.equal(
-        await resolvePostConvergenceReviewSuppressed(
-          { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: { copilotReviewRequestStatus: "requested", unresolvedThreadCount: 0 } },
+        (await resolvePostConvergenceReviewSuppressed(
+          { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", copilotReviewRequestStatus: "requested", unresolvedThreadCount: 0 },
           { env: {}, ghCommand: "gh", runChild, checkpointDir },
-        ),
+        )).carried,
         false,
       );
       assert.equal(
-        await resolvePostConvergenceReviewSuppressed(
-          { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: { copilotReviewRequestStatus: "none", unresolvedThreadCount: 1 } },
+        (await resolvePostConvergenceReviewSuppressed(
+          { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", copilotReviewRequestStatus: "none", unresolvedThreadCount: 1 },
           { env: {}, ghCommand: "gh", runChild, checkpointDir },
-        ),
+        )).carried,
         false,
       );
     });

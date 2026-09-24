@@ -13,7 +13,7 @@ import {
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
+import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
@@ -30,9 +30,9 @@ import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "../github/_gate-
 import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
-import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
 import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
-import { readSuppressionMarker } from "./_post-convergence-review-suppression.mjs";
+import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
+import { resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
@@ -757,39 +757,6 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
   }
   return parseGitStatusConflictFiles(result.stdout);
 }
-// Operator-authorized post-convergence suppression: a prior EXPLICIT
-// run of withdraw-copilot-review-request.mjs recorded a marker, scoped to an
-// exact head, after withdrawing a stranded request on a head that has advanced
-// past Copilot's last submitted review with a provable pure doc/prose delta
-// since then. Never derived from live snapshot facts alone — the marker only
-// exists because a human ran that withdrawal — and re-verified live here
-// (rather than trusting the marker's stored reason) as defense in depth. Any
-// further push changes the current head, the marker no longer matches, and
-// this resolves to false — the normal round-reopening behavior applies exactly
-// as before.
-export async function resolvePostConvergenceReviewSuppressed({ repo, pr, currentHeadSha, snapshot, prData }, runtime = {}) {
-  if (snapshot.copilotReviewRequestStatus !== "none" || snapshot.unresolvedThreadCount !== 0) {
-    return false;
-  }
-  const marker = await readSuppressionMarker({ repo, pr, headSha: currentHeadSha }, runtime);
-  if (!marker || marker.headSha !== currentHeadSha) {
-    return false;
-  }
-  // Re-derive the compare BASE live too, not just the classification below —
-  // defense in depth against a stale or hand-edited marker whose
-  // lastReviewedHeadSha no longer names Copilot's actual last submitted
-  // review. A marker that disagrees with the live value must not suppress.
-  const liveLastReviewedHeadSha = getLastCopilotReviewHeadSha(prData);
-  if (!liveLastReviewedHeadSha || liveLastReviewedHeadSha !== marker.lastReviewedHeadSha) {
-    return false;
-  }
-  const reverified = await classifyDeltaSinceLastReview(
-    { repo, base: marker.lastReviewedHeadSha, head: currentHeadSha },
-    runtime,
-  );
-  return reverified.carryForward === true;
-}
-
 // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY surface: read the durable checkpoint
 // (if any) verify-fixer-disposition.mjs wrote for this exact head and
 // re-verify it against LIVE thread state, never the checkpoint's own claims.
@@ -918,10 +885,26 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // (🟡 / unrecognized / unknown head) — fail closed. Unresolved THREADS still
   // block independently via unresolvedThreadCount, so a 🔵/🟡 with an open thread
   // still blocks (no regression).
-  const copilotBodyConvergence = evaluateCopilotConvergence({
+  //
+  // A trusted copilot-body-disposition record naming the review that raised
+  // the body finding clears both the loop's body-feedback signal and this
+  // gate-entry block. The resolver is shared with detect-copilot-loop-state.mjs
+  // and request-copilot-review.mjs so all three agree. An earlier-head
+  // body-only finding without a record also fails the convergence check, so
+  // the round-cap grant in the evaluator cannot pass it.
+  const bodyFeedback = await resolveCurrentHeadBodyFeedback(
+    { repo: options.repo, pr: options.pr, headSha: currentHeadSha, reviewSummary, reviewThreads: parsedThreads.threads },
+    runtime,
+  );
+  const evaluatedBodyConvergence = evaluateCopilotConvergence({
     currentHeadSha,
     reviews: reviewSummary.effectiveCopilotReviews,
   });
+  const copilotBodyConvergence = bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved
+    ? { ...evaluatedBodyConvergence, ok: false, reason: "the latest Copilot review, on an earlier head, carries body-only feedback with no trusted copilot-body-disposition record" }
+    : (bodyFeedback.bodyDisposition && !evaluatedBodyConvergence.ok
+      ? { ...evaluatedBodyConvergence, ok: true, reason: "body finding cleared by a recorded copilot-body-disposition", bodyDisposition: bodyFeedback.bodyDisposition }
+      : evaluatedBodyConvergence);
   const reviewRequestStatus = await resolveCopilotReviewRequestStatus(
     { repo: options.repo, pr: options.pr, reviewSummary, copilotRequested },
     runtime,
@@ -935,7 +918,8 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
     actionableThreadCount: parsedThreads.summary.actionableThreads,
     copilotReviewRoundCount: reviewSummary.completedCopilotReviewRounds,
-    copilotBodyFeedbackUnresolved: reviewSummary.hasBodyFindingOnCurrentHead,
+    copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved,
+    copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved,
   });
   if (snapshot.unresolvedThreadCount > 0
       && !snapshot.copilotReviewOnCurrentHead
@@ -986,10 +970,35 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     { repo: options.repo, prData, prDraft: isDraft, prClosed: isClosed, prMerged: isMerged, expectedIssue: options.expectedIssue },
     runtime,
   );
-  const postConvergenceReviewSuppressed = await resolvePostConvergenceReviewSuppressed(
-    { repo: options.repo, pr: options.pr, currentHeadSha, snapshot, prData },
-    runtime,
-  );
+  // postConvergenceReviewSuppressed comes from the shared
+  // _copilot-convergence-carry.mjs resolvers (operator marker path, then
+  // carried convergence) with the same request-status and thread facts the
+  // request tool sees, so the detector never reports carried on a head where
+  // request-copilot-review.mjs would re-request.
+  const suppressionFacts = {
+    repo: options.repo,
+    pr: options.pr,
+    currentHeadSha,
+    prData,
+    copilotReviewRequestStatus: snapshot.copilotReviewRequestStatus,
+    unresolvedThreadCount: snapshot.unresolvedThreadCount,
+    reviewThreads: parsedThreads.threads,
+  };
+  // ponytail: the carry predicate re-reads the disposition comment stream the
+  // body-feedback resolver above already read; share the result if gh call
+  // volume matters.
+  const markerCarry = await resolvePostConvergenceReviewSuppressed(suppressionFacts, runtime);
+  const carried = markerCarry.carried ? markerCarry : await resolveCarriedConvergence(suppressionFacts, runtime);
+  const carriedConvergence = carried.carried
+    ? {
+        source: carried.source,
+        sourceReviewId: carried.sourceReviewId,
+        sourceHeadSha: carried.sourceHeadSha,
+        reason: carried.reason,
+        bodyDisposition: carried.bodyDisposition,
+      }
+    : null;
+  const postConvergenceReviewSuppressed = carried.carried;
   const fixerDisposition = await resolveFixerDispositionInput(
     { repo: options.repo, pr: options.pr, currentHeadSha, parsedThreads },
     runtime,
@@ -1011,6 +1020,9 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     refinementArtifact,
     refinementConfig: interpreterRefinementConfig,
     postConvergenceReviewSuppressed,
+    carriedConvergence,
+    copilotBodyDisposition: bodyFeedback.bodyDisposition,
+    copilotBodyDispositionRequired: bodyFeedback.dispositionRequired,
     fixerDisposition,
   };
 }
@@ -1098,8 +1110,10 @@ export function buildGateCoordinationEvaluatorInput({
     // the absent/never-driven entry guard keys on a round driven for THIS head
     // (never a raw across-PR copilotReviewRoundCount, which counts prior-head rounds).
     copilotReviewOnCurrentHead: context.snapshot?.copilotReviewOnCurrentHead === true,
-    // Operator-authorized post-convergence suppression: see
-    // resolvePostConvergenceReviewSuppressed above for how this is verified.
+    // Blocks the evaluator's absent-review round-cap grant.
+    copilotPriorHeadBodyFeedbackUnresolved: context.snapshot?.copilotPriorHeadBodyFeedbackUnresolved ?? null,
+    // Operator-marker suppression OR carried convergence: see
+    // loadPrGateCoordinationContext and _copilot-convergence-carry.mjs.
     postConvergenceReviewSuppressed: context.postConvergenceReviewSuppressed === true,
     // Independent gate-ENTRY re-check: fed alongside (not derived from)
     // sameHeadCleanConverged, so an outstanding request on the current head refuses
@@ -1156,13 +1170,23 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       currentHeadSha: context.currentHeadSha,
       reviews: context.prData?.reviews,
       changedFiles: context.prData?.files,
-      roundCapReached: roundCapReached && context.interpretation?.roundCapCleanEligible === true,
+      roundCapReached: roundCapReached && context.interpretation?.roundCapReopenEligible === true,
       regularCopilotRounds: (context.snapshot?.copilotReviewRoundCount ?? 0) > 0,
     },
     runtime,
   );
+  // An earlier-head body-only finding blocks the clean fallback at the cap, but
+  // a significant post-convergence change opens a new Copilot cycle instead,
+  // matching the cap reopen in copilot-pr-handoff.mjs.
+  const reopenedInterpretation = postConvergenceSignificantChange
+    && context.interpretation?.state === STATE.ROUND_CAP_REACHED
+    ? reopenRoundCapCycle(context.interpretation)
+    : null;
+  const evaluatorContext = reopenedInterpretation
+    ? { ...context, interpretation: reopenedInterpretation, disposition: summarizeLoopInterpretation(reopenedInterpretation) }
+    : context;
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
-    context,
+    context: evaluatorContext,
     maxCopilotRounds,
     draftGateConfig,
     preApprovalGateConfig,
@@ -1252,6 +1276,13 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   }
   // Expose effective round count in output for testability
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
+  // Recorded dispositions: the carried convergence (source review and head)
+  // and the body-feedback disposition record, each null when none applies.
+  // copilotBodyDispositionRequired names the review a disposition record must
+  // name while a body-feedback flag blocks; null otherwise.
+  result.carriedConvergence = context.carriedConvergence ?? null;
+  result.copilotBodyDisposition = context.copilotBodyDisposition ?? null;
+  result.copilotBodyDispositionRequired = context.copilotBodyDispositionRequired ?? null;
   // Auto-release the runner-coordination lock at gate-coordination terminal stop
   // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
   // (success-or-stop release vs 30-min TTL; env-aware, best-effort,

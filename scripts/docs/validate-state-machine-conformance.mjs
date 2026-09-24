@@ -1013,7 +1013,7 @@ const REFINEMENT_GRILL_TO_FIXTURE = new Map([
   [GRILL_STATE.AWAIT_ANSWERS, () => ({ loaded: true, detectRan: true, openGapCount: 2 })],
   [GRILL_STATE.SYNTHESIZE, () => ({ loaded: true, detectRan: true, answersReady: true })],
   [GRILL_STATE.RE_GRILL, () => ({ loaded: true, synthesized: true, reGrillRan: false })],
-  [GRILL_STATE.GRILL_CLEAN, () => ({ loaded: true, detectRan: true, openGapCount: 0 })],
+  [GRILL_STATE.GRILL_CLEAN, () => ({ loaded: true, detectRan: true, openGapCount: 0, provenanceRecorded: true })],
   [GRILL_STATE.NEEDS_HUMAN_HANDOFF, () => ({ loaded: true, detectRan: true, unresolvedGapCount: 1 })],
   [GRILL_STATE.BLOCKED_NEEDS_USER_DECISION, () => ({ loadFailed: true })],
 ]);

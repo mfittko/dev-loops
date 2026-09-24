@@ -1,3 +1,0 @@
-### Fixed
-
-- **Review-gate verdicts now fold locatable `low`/`nit` findings below the inline severity floor instead of posting them as inline comments (issue [#2263](https://github.com/mfittko/dev-loops/issues/2263)).** The `review` gate's hardcoded active-gate config carried only `blockCleanOnFindingSeverities`, so `activeGateConfig.inlineSeverityFloor` was `undefined` and `isBelowInlineFloor` failed open — every locatable finding on a `review` round posted inline, contradicting the documented `medium` default of `GATE-COMMENT-INLINE-SEVERITY-FLOOR`. The review gate now carries `inlineSeverityFloor: "medium"`, so sub-floor findings fold into the verdict body's collapsed `<details>` block exactly like the draft and pre-approval gates.

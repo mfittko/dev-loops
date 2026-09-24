@@ -286,6 +286,7 @@ export const SUBCOMMAND_ROUTES = {
     "reply-resolve":      "scripts/github/reply-resolve-review-threads.mjs",
     "offer-human-handoff": "scripts/github/offer-human-handoff.mjs",
     "size-budget":        "scripts/loop/check-size-budget.mjs",
+    "resolve-role":       "scripts/loop/resolve-reviewer-role.mjs",
   },
   loop: {
     startup:        "scripts/loop/resolve-dev-loop-startup.mjs",
@@ -395,6 +396,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "reply-resolve": "Reply and resolve review threads",
     "offer-human-handoff": "Offer to assign PR to a human reviewer/assignee",
     "size-budget": "Compute PR size/tier budget outcome (pass/escalate/block; pure computation, no enforcement)",
+    "resolve-role": "Resolve a review-operation angle's authoritative reviewer role (persona/prompt/model)",
   },
   loop: {
     startup: "Resolve dev-loop startup bundle",

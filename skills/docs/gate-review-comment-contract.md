@@ -247,7 +247,7 @@ This section owns only the comment-visible ledger path per gate:
 
 ## Review-angle ownership and non-substitution rules
 
-Each gate's review angles are defined in the project config (`gates.draft.angles` and `gates.preApproval.angles` in `.pi/dev-loop/defaults.yaml`). The reviewer persona for each angle is resolved via `resolveReviewerRole` from the gate's own angle entry, falling back to the built-in persona registry (`packages/core/src/config/config.mjs`). Consumer repos may override an angle's persona/prompt via its own `gates.<gate>.angles[]` entry in their config.
+Each gate's review angles are defined in the project config (`gates.draft.angles` and `gates.preApproval.angles` in `.pi/dev-loop/defaults.yaml`). A reviewer resolves each angle's authoritative persona, focus prompt, and model from the fully merged config with `dev-loops gate resolve-role --gate <draft_gate|pre_approval_gate> --angle <name>` — never by reading `packages/core/src/config/extension-defaults.yaml` directly, which carries only the shipped default and misses a consumer repo's `.devloops` override. Use the returned payload only on exit 0; a nonzero exit means stop and treat the angle as blocked. The owning definition of this rule is the Persona mapping bullet under [Pre-approval gate contract](../copilot-pr-followup/SKILL.md#pre-approval-gate-contract) in `skills/copilot-pr-followup/SKILL.md`. Consumer repos may override an angle's persona/prompt via its own `gates.<gate>.angles[]` entry in their config.
 
 Resolve angles at runtime with `resolveGateAngles(config, "draft")` and `resolveGateAngles(config, "preApproval")` from `@dev-loops/core/config`. Do not hardcode angle names in skill procedures or review prompts.
 
@@ -322,21 +322,24 @@ with the fixed meaning below:
 
 | Verdict | Meaning |
 |---|---|
-| `clean` | No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain |
-| `findings_present` | The gate found issues at blocking severities; fixes are required before the gate boundary can be crossed |
+| `clean` | No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain, and the judge act list is empty |
+| `findings_present` | The gate found issues at blocking severities, or the judge act list is not empty; fixes are required before the gate boundary can be crossed |
 | `blocked` | The gate could not complete or a hard blocker prevented a verdict |
 
 This rule is enforced at write time and at post time, not just documented:
 `write-gate-findings-log.mjs` refuses a `--verdict` that contradicts the
 `--findings`/`--findings-file` wrapper's `overallVerdict` before any ledger is
 written, and `upsert-checkpoint-verdict.mjs` refuses a `--verdict` that
-contradicts the consolidated ledger's `overallVerdict` for the same head and
-gate (#1616). The consolidator (`consolidate-fanin.mjs`) already computes
-`overallVerdict` from this rule's definitions; it threads through
-`--ledger-out`'s `{ overallVerdict, findings }` wrapper into the durable ledger
-(`write-gate-findings-log.mjs`), and `upsert-checkpoint-verdict.mjs` reads it
-and derives the verdict by default (passing no `--verdict` is valid), accepts
-a matching explicit value, and refuses a contradiction citing this rule. No
+contradicts the consolidated ledger's `overallVerdict` composed with the
+ledger's judge act list (ADR 0089) for the same head and gate (#1616). The
+consolidator (`consolidate-fanin.mjs`) computes the severity `overallVerdict`;
+it threads through `--ledger-out`'s `{ overallVerdict, findings }` wrapper into
+the durable ledger (`write-gate-findings-log.mjs`). `upsert-checkpoint-verdict.mjs`
+composes it with the ledger's open judge act items, derives the verdict by
+default (passing no `--verdict` is valid), accepts a matching explicit value,
+and refuses a contradiction citing this rule. A ledger without
+`overallVerdict` still refuses an explicit `clean` while its act list is not
+empty. No
 override flag — a round whose verdict genuinely differs from the computed one
 is a consolidator bug to fix, not an operator decision to override.
 A `blocked` verdict may sit over a completed `clean` or `findings_present`
@@ -349,8 +352,11 @@ compares `--verdict` against the wrapper's `overallVerdict` — the
 consolidator's computed round verdict — whether or not `--judge-verdict` was
 also supplied. The judge only enriches findings with `act`/`defer`/`reject`
 dispositions (see [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525));
-it never revises the round verdict, so a `--judge-verdict` run is held to the
-exact same contradiction check as a run without one.
+it never revises the ledger's `overallVerdict`, so a `--judge-verdict` run is held to the
+exact same contradiction check as a run without one. The ledger's `overallVerdict`
+stays the consolidator's severity verdict; `upsert-checkpoint-verdict.mjs` composes
+the review verdict with the act list, so a non-empty act list yields
+`findings_present` (ADR 0089).
 
 ## Disposition ledger
 

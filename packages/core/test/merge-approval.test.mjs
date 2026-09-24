@@ -492,6 +492,26 @@ test("evaluateMergePreconditions: a current-head Copilot 🟡 refuses via the na
   assert.ok(res.failures.some((f) => f.precondition === "copilot_convergence"), JSON.stringify(res.failures));
 });
 
+test("evaluateMergePreconditions: a body-disposition record for another head does not clear current_head_findings", () => {
+  const res = evaluateMergePreconditions(greenFacts({
+    reviews: [copilotReview({ body: "### 🟡 Changes recommended\n\nfix this." })],
+    copilotBodyDisposition: { headSha: OLD, reviewId: 1 },
+  }));
+  assert.equal(res.copilotConvergenceState, COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_FINDINGS);
+  assert.deepEqual(res.failures.map((f) => f.precondition), ["copilot_convergence"]);
+  assert.equal(res.copilotBodyDisposition, null);
+});
+
+test("evaluateMergePreconditions: a body-disposition record does not satisfy no_current_head_review", () => {
+  const res = evaluateMergePreconditions(greenFacts({
+    copilotAbsentReviewDisposition: null,
+    copilotBodyDisposition: { headSha: HEAD, reviewId: 1 },
+  }));
+  assert.equal(res.copilotConvergenceState, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+  assert.deepEqual(res.failures.map((f) => f.precondition), ["copilot_convergence"]);
+  assert.equal(res.copilotBodyDisposition, null);
+});
+
 test("evaluateMergePreconditions: a current-head Copilot 🔵 does not block (conductor-overridable)", () => {
   const res = evaluateMergePreconditions(greenFacts({
     reviews: [copilotReview({ body: "### 🔵 Needs a closer look\n\nhave a look." })],

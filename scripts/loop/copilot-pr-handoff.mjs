@@ -9,7 +9,7 @@ import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement }
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import { performCopilotReviewRequest } from "../github/request-copilot-review.mjs";
 import { detectInternalOnly as detectPrInternalOnly } from "./detect-internal-only-pr.mjs";
-import { applyConfirmedReviewRequest, interpretLoopState, NEXT_ACTIONS, STATE, summarizeLoopInterpretation, toSharedRequestStatus, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
+import { applyConfirmedReviewRequest, interpretLoopState, NEXT_ACTIONS, reopenRoundCapCycle, STATE, summarizeLoopInterpretation, toSharedRequestStatus, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
 import { PR_LIFECYCLE_STATE } from "@dev-loops/core/loop/pr-lifecycle";
 import { ensureAsyncRunnerOwnership, releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
@@ -668,6 +668,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       nextAction: NEXT_ACTIONS[STATE.WAITING_FOR_COPILOT_REVIEW],
       allowedTransitions: [...(TRANSITIONS[STATE.WAITING_FOR_COPILOT_REVIEW] || [])],
       roundCapCleanEligible: false,
+      roundCapReopenEligible: false,
     };
   }
 
@@ -682,7 +683,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   let reopenedCapCycle = false;
   if (!internalOnlySkipCopilot
       && options.watchStatus === undefined
-      && interpretation.state === STATE.ROUND_CAP_CLEAN_FALLBACK) {
+      && interpretation.roundCapReopenEligible === true) {
     const reopenFacts = await fetchReopenCycleFacts(options, { env, ghCommand, runChild });
     const significant = await detectPostConvergenceSignificantChange(
       {
@@ -698,14 +699,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     );
     if (significant) {
       reopenedCapCycle = true;
-      interpretation = {
-        ...interpretation,
-        state: STATE.READY_TO_REREQUEST_REVIEW,
-        nextAction: NEXT_ACTIONS[STATE.READY_TO_REREQUEST_REVIEW],
-        allowedTransitions: [...(TRANSITIONS[STATE.READY_TO_REREQUEST_REVIEW] || [])],
-        autoRerequestEligible: true,
-        roundCapCleanEligible: false,
-      };
+      interpretation = reopenRoundCapCycle(interpretation);
     }
   }
 

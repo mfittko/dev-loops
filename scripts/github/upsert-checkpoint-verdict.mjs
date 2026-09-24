@@ -4,7 +4,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
-import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, composeReviewVerdict, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -1857,8 +1857,10 @@ export function buildCoordinationEvaluatorInput({
     // the absent/never-driven entry guard keys on a round driven for THIS head
     // (never a raw across-PR copilotReviewRoundCount, which counts prior-head rounds).
     copilotReviewOnCurrentHead: coordinationContext.snapshot?.copilotReviewOnCurrentHead === true,
-    // Operator-authorized post-convergence suppression: computed and
-    // verified once in loadPrGateCoordinationContext (resolvePostConvergenceReviewSuppressed)
+    // Blocks the evaluator's absent-review round-cap grant.
+    copilotPriorHeadBodyFeedbackUnresolved: coordinationContext.snapshot?.copilotPriorHeadBodyFeedbackUnresolved ?? null,
+    // Operator-marker suppression or carried convergence: computed and
+    // verified once in loadPrGateCoordinationContext (_copilot-convergence-carry.mjs)
     // — see detect-pr-gate-coordination-state.mjs.
     postConvergenceReviewSuppressed: coordinationContext.postConvergenceReviewSuppressed === true,
     // Independent gate-ENTRY re-check: fed alongside (not derived from)
@@ -2436,7 +2438,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // render records both layers. The ledger object itself is never mutated.
   let checkpointComposition = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
-    const ledgerVerdict = preloadedFindingsLedger.overallVerdict;
+    // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
+    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, preloadedFindingsLedger.findings);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
     const gateBlockers = collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact);
@@ -2458,8 +2461,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         : (options.verdict === "blocked"
           ? ` No deterministic pre-approval blocker is proven, so "blocked" cannot sit over this completed ledger; the composed checkpoint verdict is "${composedVerdict}".`
           : "");
+      const actNote = ledgerVerdict !== preloadedFindingsLedger.overallVerdict
+        ? ` The ledger's severity overallVerdict "${preloadedFindingsLedger.overallVerdict}" is composed with ${listOpenActItems(preloadedFindingsLedger.findings).length} open judge act item(s) (ADR 0089).`
+        : "";
       throw new Error(
-        `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}).${compositionNote} The verdict must match the fan-in consolidator's computed value composed with any deterministic gate blocker — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = no findings at a blocking severity remain; "findings_present" = the gate found issues at blocking severities; "blocked" = the fan-in could not complete or a proven deterministic gate blocker (unchecked AC/DoD) prevents crossing. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or omit --verdict to post the composed verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
+        `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}).${actNote}${compositionNote} The verdict must match the fan-in consolidator's computed value composed with any deterministic gate blocker — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = no findings at a blocking severity remain and the judge act list is empty; "findings_present" = the gate found issues at blocking severities or the judge act list is not empty; "blocked" = the fan-in could not complete or a proven deterministic gate blocker (unchecked AC/DoD) prevents crossing. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or omit --verdict to post the composed verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
       );
     }
     // else: a matching explicit --verdict is accepted unchanged.
@@ -2474,6 +2480,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     throw new Error(
       `--verdict is required for ${options.gate} @ ${canonicalHeadSha}${options.findingsLedger ? `: --findings-ledger "${options.findingsLedger}" carries no overallVerdict to derive it from` : ""}. Pass --verdict, or supply a --findings-ledger written from a consolidate-fanin --ledger-out that carries overallVerdict.`,
     );
+  } else if (options.verdict === "clean" && listOpenActItems(preloadedFindingsLedger?.findings).length > 0) {
+    // ADR 0089: a ledger without overallVerdict still carries its judge act list.
+    const actItems = listOpenActItems(preloadedFindingsLedger.findings);
+    throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-ledger "${options.findingsLedger}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
   }
   if (
     options.verdict === "clean"
@@ -2591,6 +2601,19 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     if (!structuredFindings) {
       throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
+    }
+    // ADR 0089: without a ledger, the structured findings carry the judge act list.
+    // Read the RAW entries: normalization turns an unparseable finding into a bare marker and drops its judgeDisposition.
+    const flatFindings = preloadedFindingsLedger ? [] : candidate.flatMap((e) => (looksLikePerAngleEntry(e) ? e.findings : [e])).map((f) => ({
+      severity: f?.severity,
+      summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
+      judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
+    }));
+    const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
+    if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
+    const actItems = listOpenActItems(flatFindings);
+    if (options.verdict === "clean" && actItems.length > 0) {
+      throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
     }
   }
   // The clean-verdict guard above trusts --findings-severity-counts alone, so a

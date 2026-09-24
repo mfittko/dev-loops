@@ -150,6 +150,7 @@ test("capture-review-threads exposes numeric comment database ids in normalized 
       {
         id: "THREAD_123",
         isResolved: false,
+        reviewId: null,
         isActionable: true,
         commentIds: ["PRRC_node_456"],
         commentDatabaseIds: ["456"],
@@ -321,7 +322,7 @@ test("a lone --unresolved or --bodies flag fails closed, and the default shape i
 });
 
 test("the live GraphQL query fetches the working-set location fields and the pagination block", () => {
-  for (const field of ["path", "line", "isOutdated", "pageInfo", "hasNextPage", "endCursor", "after: $after"]) {
+  for (const field of ["path", "line", "isOutdated", "pageInfo", "hasNextPage", "endCursor", "after: $after", "pullRequestReview"]) {
     assert.equal(REVIEW_THREADS_QUERY.includes(field), true, `query must fetch ${field}`);
   }
 });

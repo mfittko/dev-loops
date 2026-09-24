@@ -28,6 +28,7 @@ import {
 import { observeHeadCiSignals } from "../github/observe-head-ci.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
+import { resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage:
   detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>
@@ -295,11 +296,13 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   let unresolvedThreadCount = 0;
   let actionableThreadCount = 0;
   let lastCopilotRoundMaxSignal = null;
+  let reviewThreads = [];
   try {
     const threadsPayload = await fetchGithubReviewThreadsPayload({ repo, pr }, { env, ghCommand, runChild });
     const parsed = parseReviewThreads(threadsPayload);
     unresolvedThreadCount = parsed.summary.unresolvedThreads;
     actionableThreadCount = parsed.summary.actionableThreads;
+    reviewThreads = parsed.threads;
     lastCopilotRoundMaxSignal = classifyReviewThreadsSignal(parsed, isCopilotLogin);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -336,6 +339,12 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
       currentHeadCiStatus = "crediblyGreen";
     }
   }
+  // Shared with detect-pr-gate-coordination-state.mjs and the request tool: a
+  // trusted copilot-body-disposition record clears the body finding.
+  const bodyFeedback = await resolveCurrentHeadBodyFeedback(
+    { repo, pr, headSha: prHeadSha, reviewSummary, reviewThreads },
+    { env, ghCommand, runChild },
+  );
   const snapshot = buildSnapshotFromPrFacts({
     prData,
     prNumber: pr,
@@ -349,7 +358,8 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     ciStatus: currentHeadCiStatus,
     failureDetails,
     excludedFailureDetails,
-    copilotBodyFeedbackUnresolved: reviewSummary.hasBodyFindingOnCurrentHead,
+    copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved,
+    copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved,
   });
   // Merge-state facts drive the base-integration preflight (never CI-wait on a
   // CONFLICTING/DIRTY branch — GitHub cannot dispatch CI there). Carried as

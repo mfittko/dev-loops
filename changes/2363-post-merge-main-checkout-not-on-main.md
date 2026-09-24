@@ -1,3 +1,0 @@
-### Fixed
-
-- **Post-merge main-checkout sync now surfaces a detached or non-`main` checkout as an action-required signal instead of silently reusing the generic warning (issue [#2363](https://github.com/mfittko/dev-loops/issues/2363)).** The shared `syncMainCheckout` flow inspects the checkout's ref before submitting any merge command; a proven detached or other-branch checkout is never switched, reset, or merged — it reports the stable `main_checkout_not_on_main` diagnostic (absolute path, branch or `detached@<short-sha>`, and the post-fetch `HEAD..origin/main` behind count) at `error` severity. Claude surfaces it as a structured PostToolUse `systemMessage`; Pi surfaces it via `ctx.ui.notify(..., "error")`, falling back to stderr with no UI. The action stays non-fatal.
