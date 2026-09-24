@@ -1641,6 +1641,22 @@ test("an act-disposed medium past the fix window and an act-disposed low are NOT
   ));
 });
 
+// An act thread from an earlier round is suppressed from later ledgers, so the
+// current ledger has no match: the rendered ` — judge: act` suffix keeps it open.
+test("a round-4 medium thread with an empty current ledger and a rendered 'judge: act' suffix is NOT selected", async () => {
+  const body = `${buildFindingMarker({ fp: "a0a0a0a0a0a0a0a0", severity: "medium", angle: "perf", round: 1 })}\n**medium** (\`perf\`): stale cache not invalidated — judge: act`;
+  const thread = threadNode({ id: "THREAD_PRIOR_ACT", path: "src/cache.mjs", line: 9, commentId: 6603, body });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.round, 4);
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
 for (const [mediumDisposition, lowDisposition] of [["defer", "reject"], ["reject", "defer"]]) {
   test(`the same threads with a ${mediumDisposition} medium and a ${lowDisposition} low ARE still selected`, async () => {
     const { findings, threads, mediumFp, mediumBody } = actExclusionFixtures(mediumDisposition, lowDisposition);
@@ -2172,6 +2188,18 @@ test("#2263: a nit and a non-operator-visible low fold with no filing (net-reduc
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [nitFinding, quietLowFinding] }), (ledgerPath) => withGhStub(
     // No deferralCommentEntries here: an all-unfileable folded batch must
     // never even look up the comment target.
+    roundEntries({ threads: [] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.foldedFiled, 0);
+      assert.equal(result.followUpIssueNumber, undefined);
+    },
+  ));
+});
+
+test("an operator-visible folded low the judge disposed act is not listed — no deferral-comment calls", async () => {
+  const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true, judgeDisposition: "act" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [] }),
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });

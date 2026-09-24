@@ -245,7 +245,8 @@ export function collectFingerprints(text, set) {
 //
 // A `defer` disposition (judge-pass.mjs's relevance defer, or
 // close-gate-findings.mjs's severity/round auto-defer) is recorded as ONE
-// batched comment per round on the comment target: the PR's linked spec issue
+// batched comment per tool run (at most one from judge-pass.mjs and one from
+// close-gate-findings.mjs per round) on the comment target: the PR's linked spec issue
 // when the configured tracker is GitHub and the PR has exactly one closing
 // issue reference, otherwise the PR itself. No tool creates an issue here.
 

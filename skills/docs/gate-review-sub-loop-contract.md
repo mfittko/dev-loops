@@ -1704,8 +1704,11 @@ triage — it never fix-closes, and it deliberately leaves high, question (excep
 answered, judge-rejected question, which it reject-closes per ADR 0088), and in-window
 medium threads unresolved (they keep `unresolvedGateThreadCount` non-zero, which
 blocks gate close until the fixer/fix-loop resolves them). The disposition pass never selects a
-thread whose finding the current round's ledger disposes judge `act`, whatever its severity and
-round (ADR 0089): the judge `act` overrides the medium fix window, so that thread gets no stamp,
+thread whose finding the judge disposed `act`, whatever its severity and round (ADR 0089). The
+current round's ledger decides first. When it has no finding with the thread's fingerprint (a
+posted finding is suppressed from later ledgers), the prior local ledgers decide, then the
+thread's rendered ` — judge: <disposition>` suffix. An ambiguous prior-ledger result also skips
+the thread (fail closed). The judge `act` overrides the medium fix window, so that thread gets no stamp,
 no reply, no resolve, and no deferral comment entry, and it stays open until the fixer closes it
 with a fixing commit or a judge rerun at the current head changes the disposition. The fixer
 replies to every gate thread whose finding it fixed, of any severity and including a judge `act`
@@ -1797,7 +1800,7 @@ A FOLDED finding (#2263, `GATE-COMMENT-INLINE-SEVERITY-FLOOR`) is NOT this discl
 `close-gate-findings.mjs` recomputes the round's folded findings directly from the ledger (they
 carry no thread to select a disposition target from) and applies the exact same net-reduction
 filing bar (`isFileableDeferral`) the thread pass uses — an operator-visible `low` (its own
-marker's `ov=1`) joins the round's ONE deferral comment together with the fileable thread targets;
+marker's `ov=1`) joins the tool run's ONE deferral comment together with the fileable thread targets;
 a `nit` or a non-operator-visible `low` files nothing, on the theory that it is already recorded,
 visible, in the folded `<details>` block itself — that IS its resolved-with-rationale record.
 
@@ -1837,14 +1840,16 @@ gone. Idempotency is per fingerprint: before posting, `commentDeferredFindings`
 whose fingerprint the target already lists is not appended again, so a re-run of either pass posts
 nothing new. The judge's own bridge (`judge-pass.mjs`) and `close-gate-findings.mjs`'s
 severity/round-based defer resolve the same target from the same PR facts, so both paths converge.
-The disposition pass never selects a thread whose finding the current round's ledger disposes
-judge `act` (`GATE-EXEC-THREAD-DISPOSITION`), so an open act thread is never defer-closed.
+The disposition pass never selects a thread whose finding the judge disposed `act` in the current
+or a prior round (`GATE-EXEC-THREAD-DISPOSITION`), so an open act thread is never defer-closed.
 A `disposition=deferred` thread marker with no linked `issue=<n>` is a `GATE-EXEC-THREAD-DISPOSITION`
 contract violation, refused fail-closed exactly like an out-of-window stamp.
 
-A `reject` (the judge's relevance axis only — see Phase 3.5 above) is never a deferral and writes
-nothing to the deferral comment: it records a one-line audit entry in the durable ledger
-(fingerprint, severity, angle, `judgeDisposition: "reject"`, rationale) and nothing else.
+A `reject` (the judge's relevance axis only — see Phase 3.5 above) is never a deferral, and
+`judge-pass.mjs` writes nothing to the deferral comment for it: it records a one-line audit entry
+in the durable ledger (fingerprint, severity, angle, `judgeDisposition: "reject"`, rationale).
+`close-gate-findings.mjs`'s severity/round disposition still lists a past-window `medium` or an
+operator-visible `low` in the deferral comment, whatever its `reject` disposition.
 
 ## Execution mode and fan-out evidence enforcement
 

@@ -26,13 +26,14 @@ test("GATE-EXEC-DEFERRAL-RECORD names the comment target and states no tool crea
   assert.match(section, /linked spec issue when `tracker\.provider` resolves to\s+`github`[\s\S]{0,120}exactly one closing issue reference/);
   assert.match(section, /otherwise it is the PR itself/);
   assert.match(section, /ONE batched\s+comment/);
-  assert.match(section, /never selects a thread whose finding the current round's ledger disposes\s+judge `act`/);
+  assert.match(section, /never selects a thread whose finding the judge disposed `act` in the current\s+or a prior round/);
   assert.doesNotMatch(section, /ONE tracked (GitHub )?follow-up issue/, "the old one-follow-up-issue wording must not return");
 });
 
 test("GATE-EXEC-THREAD-DISPOSITION states the act-thread exclusion and the fixer reply-and-resolve sentence", async () => {
   const section = ruleSection(await readFile(`${repoRoot}${CONTRACT}`, "utf8"), "GATE-EXEC-THREAD-DISPOSITION");
-  assert.match(section, /never selects a\s+thread whose finding the current round's ledger disposes judge `act`, whatever its severity and\s+round/);
+  assert.match(section, /never selects a\s+thread whose finding the judge disposed `act`, whatever its severity and round/);
+  assert.match(section, /current round's ledger decides first[\s\S]{0,200}prior local ledgers decide, then the\s+thread's rendered ` — judge: <disposition>` suffix/);
   assert.match(section, /no stamp,\s+no reply, no resolve, and no deferral comment entry/);
   assert.match(
     section,

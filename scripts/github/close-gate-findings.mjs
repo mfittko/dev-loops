@@ -31,10 +31,12 @@ const USAGE = `Usage: close-gate-findings.mjs --ledger <findings-log path> [--tm
 Run a closed gate round's THREAD DISPOSITION pass. This helper posts NO review of
 its own: the round's single visible surface is the one PR review
 upsert-checkpoint-verdict.mjs already posted (verdict-marker body + inline finding
-comments). Its only other comment is the round's ONE batched deferral comment
+comments). Its only other comment is ONE batched deferral comment per tool run
 (below). Here, every unresolved gate-authored finding thread is reconciled
-against the current round. A thread whose finding the current ledger disposes
-judge \`act\` is never selected, at any severity and round (ADR 0089): it gets no
+against the current round. A thread whose finding the judge disposed \`act\`
+(current ledger first; on no match, the prior local ledgers, then the thread's
+rendered judge suffix; an ambiguous prior result also skips) is never
+selected, at any severity and round (ADR 0089): it gets no
 stamp, no reply, no resolve, and no deferral entry, and stays open until the fixer
 replies with the fixing commit and resolves it. Otherwise: high always stays open (it never defers, forcing
 per-gate continuation until the gate round cap escalates); medium stays
@@ -265,12 +267,25 @@ function unfiledResolutionMessage({ fp, severity, angle, round, body, operatorVi
 // or carried open from an earlier one — is reconciled against the CURRENT
 // round, not the round recorded on its own marker.
 //
-// A thread whose finding the current round's ledger disposes `act` is never
-// selected, whatever its severity and round (ADR 0089): the judge `act`
-// overrides the medium fix window, so the thread stays open until the fixer
-// replies with the fixing commit and resolves it, or a judge rerun at the
-// current head changes the disposition. It gets no stamp, reply, or resolve.
-function selectDispositionTargets(threads, round, login, mediumFixWindow, findings = []) {
+// A thread whose finding the judge disposed `act` is never selected, whatever
+// its severity and round (ADR 0089): the judge `act` overrides the medium fix
+// window, so the thread stays open until the fixer replies with the fixing
+// commit and resolves it, or a judge rerun at the current head changes the
+// disposition. It gets no stamp, reply, or resolve. The disposition comes
+// from the current ledger first. On no current-ledger match, the prior local
+// ledgers and then the thread's rendered ` — judge: <disposition>` suffix
+// decide (a posted finding is suppressed from later ledgers). An ambiguous
+// prior-ledger result also skips the thread (fail closed).
+async function isJudgeActThread({ fp, threadBody, findings, lookup }) {
+  const currentMatches = findings.filter((f) => f && findingFingerprintMatches(f, fp));
+  if (currentMatches.length > 0) return currentMatches.some((f) => f.judgeDisposition === "act");
+  const prior = await findJudgeDispositionForFingerprint({ ...lookup, fp });
+  if (prior?.ambiguous) return true;
+  if (prior) return prior.disposition === "act";
+  return parseRenderedJudgeDisposition(threadBody) === "act";
+}
+
+async function selectDispositionTargets(threads, round, login, mediumFixWindow, findings = [], lookup = {}) {
   const targets = [];
   for (const thread of threads) {
     if (thread.isResolved) continue;
@@ -282,7 +297,7 @@ function selectDispositionTargets(threads, round, login, mediumFixWindow, findin
     const marker = parseFindingMarker(thread.body);
     if (!marker) continue; // author matches, but carries no parseable finding marker
     if (!isDeferredAtRound(marker.severity, round, mediumFixWindow)) continue;
-    if (findings.some((f) => f?.judgeDisposition === "act" && findingFingerprintMatches(f, marker.fp))) continue;
+    if (await isJudgeActThread({ fp: marker.fp, threadBody: thread.body, findings, lookup })) continue;
     // commentId is null whenever list-review-threads.mjs could not resolve a
     // finite databaseId for the thread's first comment. Reject it here (named
     // by threadId) rather than let it reach stampDeferredDisposition and
@@ -357,11 +372,11 @@ async function stampDeferredDisposition({ repo, commentId, round, mediumFixWindo
 // are the folded findings that clear the filing bar
 // (selectFoldedFileableEntries); they share the round's ONE batched deferral
 // comment with the fileable thread targets.
-async function runDispositionPass({ repo, pr, round, threads, snapshot, login, mediumFixWindow, findings = [], foldedEntries = [], trackerProvider, allowedRefs = [] }, { env, ghCommand, runChild }) {
+async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, round, threads, snapshot, login, mediumFixWindow, findings = [], foldedEntries = [], trackerProvider, allowedRefs = [] }, { env, ghCommand, runChild }) {
   // GATE-EXEC-THREAD-DISPOSITION: Before stamping, detect any contract-violating disposition=deferred
   // stamps already present on gate-authored threads (a subagent bypass).
   detectContractViolatingDeferredStamps(threads, login, round, mediumFixWindow);
-  const targets = selectDispositionTargets(threads, round, login, mediumFixWindow, findings);
+  const targets = await selectDispositionTargets(threads, round, login, mediumFixWindow, findings, { repo, pr, gate, headSha, tmpRoot, repoRoot });
   // Net-reduction filing bar: every target in `targets` gets RESOLVED this
   // round, but only the FILEABLE subset is recorded on the deferral comment
   // target and stamped disposition=deferred — a nit is never fileable; a low
@@ -676,6 +691,7 @@ async function runQuestionRejectClosePass({ repo, pr, gate, headSha, round, thre
 function selectFoldedFileableEntries({ findings, round, floor, mediumFixWindow }) {
   return findings
     .filter((f) => isBelowInlineFloor(f.severity, floor))
+    .filter((f) => f.judgeDisposition !== "act") // an act finding goes to the fixer, never the deferral record (ADR 0089)
     .filter((f) => isFileableDeferral(f.severity, f.operatorVisible === true, round, mediumFixWindow))
     .map((f) => ({ fingerprint: fingerprintFinding(f), severity: f.severity, angle: f.angle, summary: f.summary }));
 }
@@ -788,7 +804,7 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   const foldedEntries = selectFoldedFileableEntries({ findings, round, floor: inlineSeverityFloor, mediumFixWindow });
   const trackerProvider = errors.length > 0 ? null : resolveTrackerProvider(config);
   const { deferredResolved, foldedFiled, followUpIssueNumber, dispositionFailures } = await runDispositionPass(
-    { repo, pr, round, threads, snapshot, login, mediumFixWindow, findings, foldedEntries, trackerProvider, allowedRefs: options.allowedRefs ?? [] },
+    { repo, pr, gate, headSha, tmpRoot, repoRoot, round, threads, snapshot, login, mediumFixWindow, findings, foldedEntries, trackerProvider, allowedRefs: options.allowedRefs ?? [] },
     gh,
   );
 
