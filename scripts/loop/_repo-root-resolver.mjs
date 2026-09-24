@@ -27,7 +27,7 @@ import { parseAllWorktreePaths, parseMainWorktreePath } from "@dev-loops/core/lo
 // operation — mis-anchoring the ledger for the writer AND letting the merge-time
 // reader (resolveLedgerCheckouts) enumerate the wrong repo and report missing
 // provenance. Mirrors write-gate-context.mjs's gitEnvWithoutDirOverrides.
-function gitEnvNoDirOverrides() {
+export function gitEnvNoDirOverrides() {
   return { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
 }
 

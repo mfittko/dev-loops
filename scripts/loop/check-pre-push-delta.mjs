@@ -31,6 +31,7 @@ import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> [--worktree <dir>]
@@ -113,13 +114,17 @@ export function parseCheckPrePushDeltaArgs(argv) {
 }
 
 function gitRevParse(worktree, rev) {
-  const out = spawnSync("git", ["-C", worktree, "rev-parse", "--verify", `${rev}^{commit}`], { encoding: "utf8" });
+  const out = spawnSync("git", ["-C", worktree, "rev-parse", "--verify", `${rev}^{commit}`], {
+    encoding: "utf8", env: gitEnvNoDirOverrides(),
+  });
   if (out.status !== 0) throw new Error(`git rev-parse ${rev} failed in ${worktree}: ${out.stderr.trim()}`);
   return out.stdout.trim();
 }
 
 function gitIsAncestor(worktree, ancestor, descendant) {
-  const out = spawnSync("git", ["-C", worktree, "merge-base", "--is-ancestor", ancestor, descendant], { encoding: "utf8" });
+  const out = spawnSync("git", ["-C", worktree, "merge-base", "--is-ancestor", ancestor, descendant], {
+    encoding: "utf8", env: gitEnvNoDirOverrides(),
+  });
   if (out.status === 0) return true;
   if (out.status === 1) return false;
   throw new Error(`git merge-base --is-ancestor failed in ${worktree}: ${out.stderr.trim()}`);
