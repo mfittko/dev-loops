@@ -3404,7 +3404,7 @@ for (const location of ["main", "linked", "both"]) test(`detect-pr-gate-coordina
   try {
     initGitFixture(tempDir);
     const linked = path.join(tempDir, "tmp/worktrees/dev-loops/pr-3001");
-    execFileSync("git", ["worktree", "add", "-q", "-b", "pr-3001", linked], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "pr-3001", linked], { cwd: tempDir, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
     const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
     const { normalizeFixerDispositionHandoff } = await import("@dev-loops/core/loop/fixer-disposition");
     const logPath = buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: HEAD_SHA, tmpRoot: "tmp" });

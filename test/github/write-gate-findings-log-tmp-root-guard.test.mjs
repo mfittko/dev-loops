@@ -23,7 +23,7 @@ function makeRepo() {
   mkdirSync(main);
   initGitFixture(main);
   const linked = path.join(base, "linked");
-  execFileSync("git", ["worktree", "add", "-q", "-b", "feature", linked], { cwd: main, stdio: "ignore" });
+  execFileSync("git", ["worktree", "add", "-q", "-b", "feature", linked], { cwd: main, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
   return { rawBase, base, main, linked };
 }
 
@@ -55,9 +55,9 @@ test("with a bare main repo, --tmp-root inside the first linked worktree is stil
   const { base, main } = makeRepo();
   try {
     const bare = path.join(base, "bare.git");
-    execFileSync("git", ["clone", "-q", "--bare", main, bare], { stdio: "ignore" });
+    execFileSync("git", ["clone", "-q", "--bare", main, bare], { stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
     const first = path.join(base, "first");
-    execFileSync("git", ["worktree", "add", "-q", "-b", "first", first], { cwd: bare, stdio: "ignore" });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "first", first], { cwd: bare, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
     const result = await write(first, path.join(first, "tmp"));
     assert.equal(result.code, 1, result.stderr);
     assert.match(result.stderr, /linked worktree/);

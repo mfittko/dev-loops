@@ -317,7 +317,7 @@ test("the checkpoint defaults to the main worktree's tmp/ and a --tmp-root in a 
     await mkdir(main);
     initGitFixture(main);
     const linked = path.join(main, "tmp/worktrees/dev-loops/issue-1");
-    execFileSync("git", ["worktree", "add", "-q", "-b", "issue-1", linked], { cwd: main, stdio: "ignore" });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "issue-1", linked], { cwd: main, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
     const { deps } = runtime([], linked);
     await assert.rejects(
       verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA }, deps),
