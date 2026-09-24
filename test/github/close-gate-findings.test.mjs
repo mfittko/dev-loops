@@ -1641,6 +1641,22 @@ test("an act-disposed medium past the fix window and an act-disposed low are NOT
   ));
 });
 
+// Fingerprints are not unique per ledger: two angles can share one. When the
+// current ledger's matches disagree (here a missing disposition plus defer),
+// the result is ambiguous and the thread stays open (fail closed).
+test("a round-4 medium thread whose duplicate-fingerprint current-ledger entries disagree (missing + defer) is NOT selected", async () => {
+  const { findings, threads } = actExclusionFixtures(undefined, "act");
+  const duplicate = { ...findings[0], angle: "correctness", judgeDisposition: "defer" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [...findings, duplicate] }), (ledgerPath) => withGhStub(
+    roundEntries({ issueComments: roundHistory("draft_gate", 4), threads }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.unresolvedGateThreadCount, 2);
+    },
+  ));
+});
+
 // An act thread from an earlier round is suppressed from later ledgers, so the
 // current ledger has no match: the rendered ` — judge: act` suffix keeps it open.
 test("a round-4 medium thread with an empty current ledger and a rendered 'judge: act' suffix is NOT selected", async () => {
@@ -2244,6 +2260,24 @@ test("an operator-visible folded low the judge disposed act is not listed — no
     },
   ));
 });
+
+for (const [label, dispositions] of [["act + defer", ["act", "defer"]], ["missing + defer", [undefined, "defer"]]]) {
+  test(`an operator-visible folded low whose duplicate-fingerprint ledger entries disagree (${label}) is not listed`, async () => {
+    const base = { severity: "low", summary: "casing nit in a local constant", operatorVisible: true };
+    const findings = [
+      { ...base, angle: "naming", judgeDisposition: dispositions[0] },
+      { ...base, angle: "scope", judgeDisposition: dispositions[1] },
+    ];
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings }), (ledgerPath) => withGhStub(
+      roundEntries({ threads: [] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.foldedFiled, 0);
+        assert.equal(result.followUpIssueNumber, undefined);
+      },
+    ));
+  });
+}
 
 test("#2263: re-running the folded filing does not re-append a fingerprint the target already lists (idempotency)", async () => {
   const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true };

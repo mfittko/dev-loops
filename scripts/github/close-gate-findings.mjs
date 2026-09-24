@@ -276,9 +276,22 @@ function unfiledResolutionMessage({ fp, severity, angle, round, body, operatorVi
 // ledgers and then the thread's rendered ` — judge: <disposition>` suffix
 // decide (a posted finding is suppressed from later ledgers). An ambiguous
 // prior-ledger result also skips the thread (fail closed).
-async function isJudgeActThread({ fp, threadBody, findings, lookup }) {
+//
+// Fingerprints are not unique per ledger (two angles can share one), so the
+// current-ledger tier keeps the thread open when any match is `act` OR the
+// matches disagree (mixed or partly missing dispositions): an ambiguous
+// current result fails closed, like the prior-ledger tier. Returns null when
+// the current ledger has no match.
+function currentLedgerActOrAmbiguous(findings, fp) {
   const currentMatches = findings.filter((f) => f && findingFingerprintMatches(f, fp));
-  if (currentMatches.length > 0) return currentMatches.some((f) => f.judgeDisposition === "act");
+  if (currentMatches.length === 0) return null;
+  const dispositions = new Set(currentMatches.map((f) => (typeof f.judgeDisposition === "string" ? f.judgeDisposition.trim() : "")));
+  return dispositions.has("act") || dispositions.size > 1;
+}
+
+async function isJudgeActThread({ fp, threadBody, findings, lookup }) {
+  const current = currentLedgerActOrAmbiguous(findings, fp);
+  if (current !== null) return current;
   const prior = await findJudgeDispositionForFingerprint({ ...lookup, fp });
   if (prior?.ambiguous) return true;
   if (prior) return prior.disposition === "act";
@@ -691,8 +704,10 @@ async function runQuestionRejectClosePass({ repo, pr, gate, headSha, round, thre
 function selectFoldedFileableEntries({ findings, round, floor, mediumFixWindow }) {
   return findings
     .filter((f) => isBelowInlineFloor(f.severity, floor))
-    .filter((f) => f.judgeDisposition !== "act") // an act finding goes to the fixer, never the deferral record (ADR 0089)
+    // An act finding goes to the fixer, never the deferral record (ADR 0089);
+    // a fingerprint whose ledger entries disagree is ambiguous and fails closed.
     .filter((f) => isFileableDeferral(f.severity, f.operatorVisible === true, round, mediumFixWindow))
+    .filter((f) => !currentLedgerActOrAmbiguous(findings, fingerprintFinding(f)))
     .map((f) => ({ fingerprint: fingerprintFinding(f), severity: f.severity, angle: f.angle, summary: f.summary }));
 }
 
