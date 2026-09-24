@@ -50,6 +50,8 @@ function makeRuntime(detectEvidence) {
       // Copilot review converges via copilot_gate_disabled, isolating gate_evidence.
       loadConfig: async () => ({ config: { autonomy: { humanMergeOnly: false }, refinement: { maxCopilotRounds: 0 } }, errors: [] }),
       cwd: process.cwd(),
+      // No-op post-merge steps: the real ones would fast-forward and prune the test checkout.
+      postMergeSteps: { fastForward: async () => null, worktreeCleanup: async () => null, actions: async () => null },
     },
   };
 }

@@ -778,6 +778,8 @@ async function runMerge(fixture, { threads = [], delta = DOCS_DELTA, prOwn = del
       loadConfig: async () => ({ config: { refinement: { maxCopilotRounds: 5, requireCopilotConvergenceAtLatestHead: strict } }, errors: [] }),
       detectInternalOnlyPr: async () => ({ ok: true, internalOnly: false, files: [] }),
       cwd: process.cwd(),
+      // No-op post-merge steps: the real ones would fast-forward and prune the test checkout.
+      postMergeSteps: { fastForward: async () => null, worktreeCleanup: async () => null, actions: async () => null },
     });
   } catch (error) {
     if (error?.mergePrFailure) return error.mergePrFailure;

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { execFile } from "node:child_process";
+import { exec, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -8,7 +8,9 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as defaultGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
-import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
+import { resolveMainWorktreeRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
+import { cleanupWorktree } from "../loop/cleanup-worktree.mjs";
+import { syncMainCheckout, MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS, POST_MERGE_ACTIONS_TIMEOUT_MS } from "@dev-loops/core/loop/main-checkout-ff";
 import {
   evaluateMergePreconditions,
   evaluateCopilotConvergence,
@@ -102,7 +104,7 @@ Merge classes:
              satisfy it. Fresh approval = a head-pinned APPROVED review by
              <login>, else a head-pinned operator comment "approve merge <headSha>".
 
-Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition, copilotCarriedConvergence, copilotBodyDisposition }
+Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition, copilotCarriedConvergence, copilotBodyDisposition, postMerge }
   copilotConvergenceState: current_head_clean | current_head_findings | no_current_head_review,
   or null when the current head SHA is unknown
   copilotDisposition: the current-head review disposition, or for
@@ -111,6 +113,13 @@ Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approv
   { source, sourceReviewId, sourceHeadSha, bodyDisposition }; else null
   copilotBodyDisposition: the copilot-body-disposition record that cleared a
   current-head body finding; else null
+  postMerge: { fastForward, worktreeCleanup: { ok, removed, reason }, actions }, the
+  results of the post-merge steps run after a confirmed MERGED state, in order:
+  fast-forward the main checkout's main to origin/main (a not_on_main result
+  carries its diagnostic message), remove the linked worktree under
+  tmp/worktrees/dev-loops/ that has the PR's head branch checked out, and run
+  the repo's postMerge.actions. Each step is fail-soft and independent; none
+  changes ok, merged, or the exit code.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Merge succeeded
@@ -368,6 +377,71 @@ async function isInternalOnlyPr({ repo, pr, patterns }, { env, ghCommand, runChi
   }
 }
 
+// Post-merge steps, in the harness hooks' order: fast-forward the main
+// checkout, remove the merged branch's linked worktree, run the repo's
+// postMerge.actions. Each step receives { mainCheckout, pr, branch, env } and
+// resolves its own result; runPostMergeSteps records a thrown step as a failed
+// result, so every step is fail-soft and independent of the others.
+const POST_MERGE_ACTIONS_PATH = fileURLToPath(new URL("../loop/run-post-merge-actions.mjs", import.meta.url));
+
+async function defaultFastForward({ mainCheckout, env }) {
+  const run = (command) => new Promise((resolve) => {
+    exec(command, { cwd: mainCheckout, env, timeout: MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS }, (error, stdout, stderr) => {
+      resolve(error ? { ok: false, reason: String(stderr || error.message).trim() } : { ok: true, stdout });
+    });
+  });
+  return syncMainCheckout(mainCheckout, run);
+}
+
+function defaultWorktreeCleanup({ mainCheckout, branch }) {
+  if (!branch) return { ok: true, removed: null, reason: "skipped: the merged PR reported no head branch" };
+  return cleanupWorktree({ repoRoot: mainCheckout, branch });
+}
+
+// The runner prints nothing when the repo declares no postMerge.actions, so
+// empty stdout is an empty result. A non-zero exit with a JSON result (a
+// failed action) is still that result.
+function defaultPostMergeActions({ mainCheckout, pr, env }) {
+  return new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      [POST_MERGE_ACTIONS_PATH, "--repo-root", mainCheckout, "--pr", String(pr)],
+      { cwd: mainCheckout, env, timeout: POST_MERGE_ACTIONS_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (!stdout.trim()) {
+          resolve(error ? { ok: false, results: [], reason: String(stderr || error.message).trim() } : { ok: true, results: [] });
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout));
+        } catch {
+          resolve({ ok: false, results: [], reason: `unreadable post-merge actions output: ${stdout.trim().slice(0, 200)}` });
+        }
+      },
+    );
+  });
+}
+
+const DEFAULT_POST_MERGE_STEPS = {
+  fastForward: defaultFastForward,
+  worktreeCleanup: defaultWorktreeCleanup,
+  actions: defaultPostMergeActions,
+};
+
+async function runPostMergeSteps(context, steps) {
+  const attempt = async (step, onError) => {
+    try {
+      return await step(context);
+    } catch (error) {
+      return onError(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const fastForward = await attempt(steps.fastForward, (reason) => ({ status: "skipped", reason }));
+  const worktreeCleanup = await attempt(steps.worktreeCleanup, (reason) => ({ ok: false, removed: null, reason }));
+  const actions = await attempt(steps.actions, (reason) => ({ ok: false, results: [], reason }));
+  return { fastForward, worktreeCleanup, actions };
+}
+
 export async function mergePr(options, runtime = {}) {
   const {
     env = process.env,
@@ -378,12 +452,13 @@ export async function mergePr(options, runtime = {}) {
     detectEvidence = defaultDetectEvidence,
     loadConfig = loadDevLoopConfig,
     detectInternalOnlyPr = detectInternalOnly,
+    postMergeSteps = {},
   } = runtime;
 
   assertGithubWriteStubbedInTestMode(runChild, "pr merge", { env });
 
   const prView = await ghJson(
-    ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "mergeable,mergeStateStatus,title,headRefOid,url,statusCheckRollup"],
+    ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "mergeable,mergeStateStatus,title,headRefOid,headRefName,url,statusCheckRollup"],
     { env, ghCommand, runChild },
   );
   const currentHeadSha = typeof prView?.headRefOid === "string" && prView.headRefOid.trim().length > 0 ? prView.headRefOid.trim() : null;
@@ -576,6 +651,13 @@ export async function mergePr(options, runtime = {}) {
     throw new Error(`gh pr merge exited 0 but PR #${options.pr} is not MERGED (state=${merged?.state ?? "unknown"}); refusing to report a false success`);
   }
 
+  // Only a confirmed MERGED postcondition reaches the post-merge steps.
+  const headRefName = typeof prView?.headRefName === "string" && prView.headRefName.trim().length > 0 ? prView.headRefName.trim() : null;
+  const postMerge = await runPostMergeSteps(
+    { mainCheckout: resolveMainWorktreeRoot(cwd), pr: options.pr, branch: headRefName, env },
+    { ...DEFAULT_POST_MERGE_STEPS, ...postMergeSteps },
+  );
+
   return {
     ok: true,
     merged: true,
@@ -591,6 +673,7 @@ export async function mergePr(options, runtime = {}) {
     copilotDisposition: verdict.copilotDisposition,
     copilotCarriedConvergence: copilotAbsentReviewDisposition?.carriedConvergence ?? null,
     copilotBodyDisposition: verdict.copilotBodyDisposition,
+    postMerge,
   };
 }
 

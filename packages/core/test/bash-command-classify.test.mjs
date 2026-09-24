@@ -144,6 +144,8 @@ test("isMergeCapableCommand detects gh pr merge / git merge, ignores aborts and 
   assert.equal(isMergeCapableCommand("git merge --abort"), false);
   assert.equal(isMergeCapableCommand("gh pr merge --help"), false);
   assert.equal(isMergeCapableCommand("npm test"), false);
+  // merge-pr.mjs runs the post-merge steps itself; the hooks must not re-run them.
+  assert.equal(isMergeCapableCommand("node scripts/github/merge-pr.mjs --repo o/r --pr 5 --human-approved-by mfittko"), false);
 });
 
 test("commandContainsGhPrCreate (all-segments, PreToolUse gate) detects create in any segment", () => {
