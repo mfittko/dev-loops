@@ -11,13 +11,17 @@ import {
   parseCleanupWorktreeCliArgs,
 } from "../../scripts/loop/cleanup-worktree.mjs";
 
-// A git stub that logs its args to a file and exits with `exitCode`.
-function writeGitStub(dir, { exitCode = 0, logFile } = {}) {
+// A git stub that logs its args to a file and exits with `exitCode`. With
+// `failSubcommand`, that subcommand fails and every other call runs real git.
+function writeGitStub(dir, { exitCode = 0, logFile, failSubcommand } = {}) {
   const gitPath = path.join(dir, "git");
+  const tail = failSubcommand === undefined
+    ? [`exit ${exitCode}`]
+    : [`if [ "$1" = ${JSON.stringify(failSubcommand)} ]; then echo "fatal: stub ${failSubcommand} failure" >&2; exit 1; fi`, 'exec git "$@"'];
   const lines = [
     "#!/usr/bin/env sh",
     `echo "$@" >> ${JSON.stringify(logFile)}`,
-    `exit ${exitCode}`,
+    ...tail,
   ];
   writeFileSync(gitPath, lines.join("\n"), { mode: 0o755 });
   return gitPath;
@@ -334,6 +338,23 @@ test("cleanup --branch --head-sha: an uncommitted edit at the merged head skips 
     assert.ok(res.reason.includes(paths["issue-7"]), res.reason);
     assert.match(res.reason, /uncommitted changes/);
     assert.equal(readFileSync(edit, "utf8"), "local work\n");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("cleanup --branch: a failed git status skips the removal (fail safe)", () => {
+  const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);
+  try {
+    const logFile = path.join(base, "git.log");
+    const gitPath = writeGitStub(base, { logFile, failSubcommand: "status" });
+    const res = cleanupWorktree({ repoRoot: main, branch: "issue-7" }, { gitCommand: gitPath });
+    assert.deepEqual({ ok: res.ok, removed: res.removed }, { ok: true, removed: null });
+    assert.match(res.reason, /cannot read git status/);
+    const log = readFileSync(logFile, "utf8");
+    assert.match(log, /^status --porcelain$/m, "the status call ran");
+    assert.doesNotMatch(log, /worktree remove/);
+    assert.ok(existsSync(paths["issue-7"]));
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

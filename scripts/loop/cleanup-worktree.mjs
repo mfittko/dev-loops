@@ -32,7 +32,7 @@ import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
-  cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p> | --branch <name>)
+  cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p> | --branch <name>) [--head-sha <sha>]
 Remove a loop-owned worktree after merge: git worktree remove --force + prune.
 Refuses any path not under ${WORKTREE_NAMESPACE}/.
 Skips a worktree that holds any file under <worktree>/tmp/gate-findings/.
