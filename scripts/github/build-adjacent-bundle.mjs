@@ -40,9 +40,7 @@ const SOURCE_EXTENSIONS = [".mjs", ".js", ".cjs"];
 
 /** Directory prefixes treated as generated / vendored and skipped. */
 const GENERATED_DIR_PREFIXES = [
-  ".claude/",
   "dist/",
-  "lib/",
   "node_modules/",
   "coverage/",
   ".git/",
@@ -169,13 +167,17 @@ function isSourceFile(relPath) {
 
 /**
  * Recursively list repo-relative POSIX paths under repoRoot, skipping
- * generated/vendored dirs and the tmp/ scratch tree for determinism+speed.
+ * build/vendored dirs and the tmp/ scratch tree for determinism+speed.
+ * Hand-written `lib/` and `.claude/` source stays indexed. Skips `.venv`
+ * by name and the nested Claude Code checkouts under `.claude/worktrees`
+ * by path.
  * @param {string} repoRoot
  * @returns {Promise<string[]>} sorted repo-relative POSIX paths
  */
 export async function listRepoFiles(repoRoot) {
   const out = [];
-  const skipDir = new Set([".git", "node_modules", "dist", "lib", ".claude", "coverage", "tmp"]);
+  const skipDir = new Set([".git", "node_modules", "dist", "coverage", "tmp", ".venv"]);
+  const skipPath = new Set([".claude/worktrees"]);
   async function walk(absDir, relDir) {
     let entries;
     try {
@@ -187,7 +189,7 @@ export async function listRepoFiles(repoRoot) {
       if (ent.isSymbolicLink()) continue;
       const relPath = relDir ? `${relDir}/${ent.name}` : ent.name;
       if (ent.isDirectory()) {
-        if (skipDir.has(ent.name)) continue;
+        if (skipDir.has(ent.name) || skipPath.has(relPath)) continue;
         await walk(path.join(absDir, ent.name), relPath);
       } else if (ent.isFile()) {
         out.push(relPath);
