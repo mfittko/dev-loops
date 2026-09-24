@@ -281,11 +281,15 @@ test("listRepoFiles indexes scripts/lib/ and .claude/ but skips node_modules/ an
       ".claude/hooks/guard.mjs": "export const g = 1;\n",
       "node_modules/pkg/index.js": "module.exports = 1;\n",
       "dist/out.js": "export const d = 1;\n",
+      ".claude/worktrees/x/a.mjs": "export const a = 1;\n",
+      ".venv/lib/m.py": "x = 1\n",
     });
     const files = await listRepoFiles(root);
     assert.ok(files.includes("scripts/lib/util.mjs"));
     assert.ok(files.includes(".claude/hooks/guard.mjs"));
     assert.ok(!files.some((f) => f.startsWith("node_modules/") || f.startsWith("dist/")));
+    assert.ok(!files.includes(".claude/worktrees/x/a.mjs"));
+    assert.ok(!files.some((f) => f.startsWith(".venv/")));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
