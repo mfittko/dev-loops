@@ -11,7 +11,7 @@ claude-sync: false
 
 # Pi Session Audit
 
-The `pi-session-audit` skill inspects Pi or Claude Code session usage transcripts to measure token efficiency, detect coordinator context snowballing, and report per-agent/per-unit token breakdowns. It is harness-agnostic: the metric and threshold logic is identical for both harnesses; only transcript-record extraction (field names and streaming-record dedupe) differs per harness, and harness is auto-detected from the record schema unless `--harness` overrides it.
+The `pi-session-audit` skill inspects Pi or Claude Code session usage transcripts to measure token efficiency, detect coordinator context snowballing, and report per-agent/per-unit token breakdowns. It is harness-agnostic: the snowball and threshold code is shared; each extractor supplies the per-turn prompt size (Pi input+cacheRead, Claude input+cacheRead+cacheCreate); see [Pi vs Claude Code](#pi-vs-claude-code). Harness is auto-detected from the record schema unless `--harness` overrides it.
 
 ## Motivation & Context
 
