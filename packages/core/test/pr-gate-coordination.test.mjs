@@ -3208,6 +3208,17 @@ test("shouldGuardCopilotReviewRequest returns true when copilot reviewed without
   }), true);
 });
 
+test("guard returns false when the caller verified a carried convergence", () => {
+  assert.equal(shouldGuardCopilotReviewRequest({
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 1,
+    maxCopilotRounds: 5,
+    sameHeadCleanConverged: false,
+    postConvergenceReviewSuppressed: true,
+    gateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+  }), false);
+});
+
 test("guard returns false when formal request was made (requested)", () => {
   assert.equal(shouldGuardCopilotReviewRequest({
     copilotReviewRequestStatus: "requested",

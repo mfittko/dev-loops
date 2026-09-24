@@ -11,7 +11,7 @@ import {
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -983,6 +983,11 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     copilotReviewRequestStatus: snapshot.copilotReviewRequestStatus,
     unresolvedThreadCount: snapshot.unresolvedThreadCount,
     reviewThreads: parsedThreads.threads,
+    // Same resolver and fallback as the interpreter config above: an
+    // unreadable config keeps the default converged-once mode.
+    requireCopilotConvergenceAtLatestHead: interpreterConfigHasErrors
+      ? false
+      : resolveRequireCopilotConvergenceAtLatestHead(interpreterConfigResult.config),
   };
   // ponytail: the carry predicate re-reads the disposition comment stream the
   // body-feedback resolver above already read; share the result if gh call
@@ -1163,7 +1168,12 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // absent it, the evaluator fails closed (a rendered-artifact change blocks
   // until recorded evidence is supplied).
   const designerReviewEvidence = await loadRecordedDesignerEvidence(options.designerReviewEvidence);
-  const postConvergenceSignificantChange = await detectPostConvergenceSignificantChange(
+  // Converged-once mode: a converged latest review stands for this head, so a
+  // post-convergence change never reopens a Copilot cycle (the request tool
+  // and the handoff suppress the same head). Strict mode keeps the ADR 0012
+  // round-cap reopen on a significant change.
+  const convergedOnce = context.carriedConvergence?.source === "converged_once";
+  const postConvergenceSignificantChange = !convergedOnce && await detectPostConvergenceSignificantChange(
     {
       repo: context.repo,
       pr: context.pr,
@@ -1231,6 +1241,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     // returns false here — skip the timeline fetch it would never need.
     // (Restores the suppression the roundCapReached predicate swap dropped.)
     && maxCopilotRounds !== 0
+    // A carried convergence exempts the guard, so skip its timeline fetch too.
+    && context.postConvergenceReviewSuppressed !== true
     && !(roundCapReached
       && (sameHeadCleanConverged || roundCapCleanFallback)
       && !postConvergenceSignificantChange)
@@ -1247,6 +1259,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     sameHeadCleanConverged,
     roundCapCleanFallback,
     postConvergenceSignificantChange,
+    postConvergenceReviewSuppressed: context.postConvergenceReviewSuppressed === true,
     gateBoundary: result.gateBoundary,
   })) {
     result.gateBoundary = PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW;

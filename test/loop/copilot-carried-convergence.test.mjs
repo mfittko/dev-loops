@@ -12,7 +12,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
 import { makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import { performCopilotReviewRequest } from "../../scripts/github/request-copilot-review.mjs";
+import { mergePr } from "../../scripts/github/merge-pr.mjs";
 import { detectPrGateCoordinationState, loadPrGateCoordinationContext } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
 import { autoDetectSnapshot } from "../../scripts/loop/detect-copilot-loop-state.mjs";
 import { buildCoordinationEvaluatorInput } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import {
@@ -40,21 +42,33 @@ const CODE_DELTA = { status: "ahead", files: [{ filename: "scripts/loop/foo.mjs"
 // Large enough for the round-cap significant-change check.
 const SIGNIFICANT_CODE_DELTA = { status: "ahead", files: [{ filename: "scripts/loop/foo.mjs", status: "modified", changes: 40 }] };
 
+// capRoot and wideRoot pin the strict mode
+// (refinement.requireCopilotConvergenceAtLatestHead: true), the docs-only carry
+// these tables were written against. The converged-once roots pin the default.
 let capRoot = null;
 // Round cap 5: multi-round scenarios stay below the cap.
 let wideRoot = null;
+let convergedOnceCapRoot = null;
+let convergedOnceWideRoot = null;
 let checkpointDir = null;
 beforeAll(async () => {
   capRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-carried-convergence-"));
   wideRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-carried-convergence-wide-"));
   const devloops = await readFile(path.resolve(".devloops"), "utf8");
-  await writeFile(path.join(capRoot, ".devloops"), devloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2"), "utf8");
-  await writeFile(path.join(wideRoot, ".devloops"), devloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 5"), "utf8");
+  const strict = "\n  requireCopilotConvergenceAtLatestHead: true";
+  await writeFile(path.join(capRoot, ".devloops"), devloops.replace(/maxCopilotRounds: *\d+/, `maxCopilotRounds: 2${strict}`), "utf8");
+  await writeFile(path.join(wideRoot, ".devloops"), devloops.replace(/maxCopilotRounds: *\d+/, `maxCopilotRounds: 5${strict}`), "utf8");
+  convergedOnceCapRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-carried-convergence-once-cap-"));
+  convergedOnceWideRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-carried-convergence-once-wide-"));
+  await writeFile(path.join(convergedOnceCapRoot, ".devloops"), devloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2"), "utf8");
+  await writeFile(path.join(convergedOnceWideRoot, ".devloops"), devloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 5"), "utf8");
   checkpointDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-carried-convergence-markers-"));
 });
 afterAll(async () => {
   await rm(capRoot, { recursive: true, force: true });
   await rm(wideRoot, { recursive: true, force: true });
+  await rm(convergedOnceCapRoot, { recursive: true, force: true });
+  await rm(convergedOnceWideRoot, { recursive: true, force: true });
   await rm(checkpointDir, { recursive: true, force: true });
 });
 
@@ -152,7 +166,7 @@ function requestEntries({ reviews, shared }) {
   ];
 }
 
-function detectorEntries({ reviews, shared }, { extra = [], files } = {}) {
+function detectorEntries({ reviews, shared }, { extra = [], files, formallyRequested = true } = {}) {
   return [
     {
       matchByClaims: true,
@@ -163,7 +177,7 @@ function detectorEntries({ reviews, shared }, { extra = [], files } = {}) {
     { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "headRefOid"], stdout: line({ headRefOid: HEAD }) },
     gateEvidenceEntry(),
     REVIEWS_ENTRY,
-    { matchByClaims: true, assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: `${COPILOT}\n` },
+    { matchByClaims: true, assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: formallyRequested ? `${COPILOT}\n` : "" },
     ...shared,
     ...extra,
   ];
@@ -720,5 +734,290 @@ describe("fetchDeltaChangedFiles fails closed on a malformed compare payload", (
   it("returns null when any entry lacks a valid filename", async () => {
     assert.equal(await fetchFor({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }, { status: "modified" }] }), null);
     assert.equal(await fetchFor({ status: "ahead", files: [{ filename: "  ", status: "modified" }] }), null);
+  });
+});
+
+// ── Converged-once default vs the strict opt-in ─────────────────────────────
+//
+// One fixture table drives the request tool, the gate coordination detector,
+// and merge-pr under both values of
+// refinement.requireCopilotConvergenceAtLatestHead, so the three agree on
+// every head in both modes.
+
+const BLUE = "### 🔵 Needs a closer look\n\nHave a look.";
+
+// merge-pr reads REST-shaped reviews (node_id is the id a record names).
+const toRestReview = (review) => ({ node_id: review.id, user: { login: review.author.login }, state: review.state, commit_id: review.commit.oid, body: review.body, submitted_at: review.submittedAt });
+
+async function runMerge(fixture, { threads = [], delta = DOCS_DELTA, prOwn = delta, dispositions = [] }, { strict }) {
+  const ok = (value) => ({ code: 0, stdout: typeof value === "string" ? value : JSON.stringify(value), stderr: "" });
+  const runChild = async (_cmd, args) => {
+    const joined = args.join(" ");
+    if (args[0] === "pr" && args[1] === "view" && joined.includes("mergeable")) {
+      return ok({ mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", title: "feat: converged-once", headRefOid: HEAD, url: "https://example.test/pr", statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }] });
+    }
+    if (args[0] === "pr" && args[1] === "view" && joined.includes("baseRefName")) return ok("main\n");
+    if (args[0] === "pr" && args[1] === "view" && joined.includes("mergeCommit")) return ok({ mergeCommit: { oid: FIX }, state: "MERGED" });
+    if (args[0] === "pr" && args[1] === "merge") return ok("");
+    if (joined.includes(`pulls/${PR}/reviews`)) return ok([fixture.reviews.map(toRestReview)]);
+    if (joined.includes(`issues/${PR}/comments?per_page`)) return ok([[]]);
+    if (joined.includes(`issues/${PR}/comments`)) return ok(dispositions.map((d) => JSON.stringify(d)).join("\n"));
+    if (joined.includes("requested_reviewers")) return ok({ users: [], teams: [] });
+    if (args[1] === "graphql" && joined.includes("reviewThreads")) return ok({ data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } } });
+    if (args[1] === "graphql") return ok({ data: { repository: { pullRequest: { reviewRequests: { nodes: [] }, reviews: { nodes: [] } } } } });
+    if (joined.includes(`compare/main...${HEAD}`)) return ok(prOwn);
+    if (joined.includes(`compare/${PRIOR}...${HEAD}`)) return ok(delta);
+    return { code: 97, stdout: "", stderr: `unexpected gh call: ${joined}` };
+  };
+  try {
+    return await mergePr({ repo: REPO, pr: PR, humanApprovedBy: "maintainer", method: "squash", stableRelease: false, standingAuthorization: true }, {
+      env: {},
+      ghCommand: "gh",
+      runChild,
+      detectEvidence: async () => ({ ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], currentHeadSha: HEAD, draftGate: null }),
+      loadConfig: async () => ({ config: { refinement: { maxCopilotRounds: 5, requireCopilotConvergenceAtLatestHead: strict } }, errors: [] }),
+      detectInternalOnlyPr: async () => ({ ok: true, internalOnly: false, files: [] }),
+      cwd: process.cwd(),
+    });
+  } catch (error) {
+    if (error?.mergePrFailure) return error.mergePrFailure;
+    throw error;
+  }
+}
+
+const MODE_CASES = [
+  { name: "clean review, code delta", fixture: { delta: CODE_DELTA }, once: true, strict: false },
+  { name: "clean review, docs-only delta", fixture: {}, once: true, strict: true },
+  { name: "needs-a-closer-look review, code delta", fixture: { priorBody: BLUE, delta: CODE_DELTA }, once: true, strict: false },
+  { name: "changes-recommended review with its own resolved thread, code delta", fixture: { priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_prior" })] }, once: true, strict: false },
+  { name: "unrecognized review with a trusted operator record, code delta", fixture: { priorBody: "### 🟣 Something new\n\nBody.", delta: CODE_DELTA, dispositions: [dispositionComment({ reviewId: "PRR_prior" })] }, once: true, strict: false },
+  { name: "body-only changes-recommended review, no thread, no record, code delta", fixture: { priorBody: YELLOW, delta: CODE_DELTA }, once: false, strict: false },
+  { name: "clean review with an unresolved thread, code delta", fixture: { delta: CODE_DELTA, threads: [thread({ isResolved: false, reviewId: "PRR_prior" })] }, once: false, strict: false },
+];
+
+describe("loop and merge agree in both Copilot convergence modes", () => {
+  for (const { name, fixture, once, strict: strictCarried } of MODE_CASES) {
+    for (const strict of [false, true]) {
+      const carried = strict ? strictCarried : once;
+      const mode = strict ? "strict" : "converged-once";
+      it(`${mode}: ${name}`, async () => {
+        const root = strict ? wideRoot : convergedOnceWideRoot;
+        const request = await runRequestTool(scenario(fixture), { root });
+        const detected = await runDetector(scenario(fixture), { root });
+        const merged = await runMerge(scenario(fixture), fixture, { strict });
+        const expectedStatus = strict ? "suppressed_post_convergence_docs_only" : "suppressed_post_convergence";
+        const expectedDisposition = strict ? "docs_only_suppression" : "converged_once";
+        assert.equal(request.status === expectedStatus, carried, `request tool status ${request.status}`);
+        assert.equal(detected.carriedConvergence !== null, carried, "detector carriedConvergence");
+        assert.equal(merged.merged === true, carried, `merge ${JSON.stringify(merged.failures ?? merged.copilotDisposition)}`);
+        if (carried) {
+          const source = strict ? "carried" : "converged_once";
+          assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+          assert.equal(detected.carriedConvergence.source, source);
+          assert.equal(merged.copilotDisposition, expectedDisposition);
+          assert.equal(merged.copilotConvergenceState, "no_current_head_review");
+          assert.equal(merged.copilotCarriedConvergence.source, source);
+          for (const carry of [detected.carriedConvergence, merged.copilotCarriedConvergence]) {
+            assert.equal(carry.sourceReviewId, "PRR_prior");
+            assert.equal(carry.sourceHeadSha, PRIOR);
+          }
+        } else {
+          assert.notEqual(request.status, "suppressed_post_convergence");
+          assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+          assert.ok(merged.failures.some((failure) => failure.precondition === "copilot_convergence"));
+        }
+      });
+    }
+  }
+});
+
+// The handoff reads the loop snapshot first, then calls the request tool.
+function handoffEntries(fixture) {
+  const ciRun = { status: "COMPLETED", conclusion: "SUCCESS", name: "ci" };
+  return [
+    { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--repo", REPO], assertArgContains: ["baseRefName"], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, reviews: fixture.reviews, statusCheckRollup: [ciRun] }) },
+    { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: line({ users: [], teams: [] }) },
+    { matchByClaims: true, assertArgs: ["api", "graphql"], stdout: line({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
+    { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/commits/${HEAD}/check-runs?per_page=100`], stdout: line({ check_runs: [ciRun] }) },
+    { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/commits/${HEAD}/status?per_page=100`], stdout: line({ statuses: [] }) },
+    ...requestEntries(fixture),
+  ];
+}
+
+async function runHandoffTool(fixture, { root }) {
+  const { runChild, unmatched } = strictRunChild(handoffEntries(fixture));
+  const result = await runHandoff({ repo: REPO, pr: PR }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "", GH_SEQUENCE_PATH: "1" }), ghCommand: "gh", runChild, repoRoot: root });
+  assert.deepEqual(unmatched, [], "handoff made an undeclared gh call");
+  return result;
+}
+
+describe("below the cap, the handoff, the detector, and merge agree on a post-convergence suppression", () => {
+  const ROWS = [
+    { mode: "converged-once", fixture: { delta: CODE_DELTA }, strict: false, status: "suppressed_post_convergence", flag: "suppressedPostConvergence" },
+    { mode: "strict", fixture: {}, strict: true, status: "suppressed_post_convergence_docs_only", flag: "suppressedPostConvergenceDocsOnly" },
+  ];
+  for (const { mode, fixture, strict, status, flag } of ROWS) {
+    it(`${mode}: the handoff routes to pre_approval_gate, never to a re-request`, async () => {
+      const root = strict ? wideRoot : convergedOnceWideRoot;
+      const handoff = await runHandoffTool(scenario(fixture), { root });
+      const detected = await runDetector(scenario(fixture), { root });
+      const merged = await runMerge(scenario(fixture), fixture, { strict });
+
+      assert.equal(handoff.reviewRequestStatus, status);
+      assert.equal(handoff[flag], true);
+      assert.equal(handoff.action, "stop");
+      assert.equal(handoff.terminal, true);
+      assert.equal(handoff.loopDisposition, "done");
+      assert.notEqual(handoff.state, "ready_to_rerequest_review");
+      assert.match(handoff.nextAction, /pre_approval_gate/);
+      assert.doesNotMatch(handoff.nextAction, /Re-request/);
+      assert.equal(handoff.requestWatchContract.requestStatus, "none");
+      assert.notEqual(handoff.requestWatchContract.routingState, "ready_state_needs_copilot_request");
+
+      assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+      assert.equal(merged.merged, true, JSON.stringify(merged.failures));
+    });
+  }
+});
+
+describe("converged-once: the detector routes a post-convergence change to pre_approval_gate below and at the cap", () => {
+  const NEVER = [PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW];
+  const clean = (id, submittedAt) => ({ id, author: { login: COPILOT }, state: "COMMENTED", body: "", commit: { oid: PRIOR }, submittedAt });
+  // The strict run reads the delta a second time for the significant-change check.
+  const reread = [{ matchByClaims: true, assertArgs: ["api", `repos/${REPO}/compare/${PRIOR}...${HEAD}`], stdout: line(SIGNIFICANT_CODE_DELTA) }];
+  const fixture = (reviews) => scenario({ reviews, delta: SIGNIFICANT_CODE_DELTA, extraShared: reread });
+  const files = [{ path: "scripts/loop/foo.mjs" }];
+
+  for (const [label, reviews, root] of [
+    ["below the cap", [clean("PRR_prior", "2026-09-22T10:00:00Z")], () => convergedOnceWideRoot],
+    ["at the cap", [clean("PRR_round1", "2026-09-22T09:00:00Z"), clean("PRR_prior", "2026-09-22T10:00:00Z")], () => convergedOnceCapRoot],
+  ]) {
+    it(label, async () => {
+      const detected = await runDetector(fixture(reviews), { root: root(), files });
+      assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+      assert.ok(detected.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+      for (const action of NEVER) assert.ok(!detected.allowedNextActions.includes(action), action);
+      assert.equal(detected.carriedConvergence.source, "converged_once");
+      assert.equal(detected.carriedConvergence.sourceReviewId, "PRR_prior");
+    });
+  }
+
+  it("a ruleset auto-review with no formal Copilot request still routes to pre_approval_gate", async () => {
+    const detected = await runDetector(fixture([clean("PRR_prior", "2026-09-22T10:00:00Z")]), { root: convergedOnceWideRoot, files, formallyRequested: false });
+    assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+    for (const action of NEVER) assert.ok(!detected.allowedNextActions.includes(action), action);
+    assert.equal(detected.carriedConvergence.source, "converged_once");
+  });
+
+  it("strict mode at the cap still reopens the cycle on a significant change", async () => {
+    const detected = await runDetector(fixture([clean("PRR_round1", "2026-09-22T09:00:00Z"), clean("PRR_prior", "2026-09-22T10:00:00Z")]), { files });
+    assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+    assert.equal(detected.carriedConvergence, null);
+  });
+
+  it("the checkpoint-verdict gate-entry re-check accepts pre_approval_gate after a code change", async () => {
+    const { runtime } = runtimeFor(detectorEntries(fixture([clean("PRR_prior", "2026-09-22T10:00:00Z")])), { root: convergedOnceWideRoot });
+    const coordinationContext = await loadPrGateCoordinationContext({ repo: REPO, pr: PR }, runtime);
+    assert.equal(coordinationContext.postConvergenceReviewSuppressed, true);
+    const coordination = evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+      coordinationContext,
+      maxCopilotRounds: 5,
+      draftGateConfig: resolveGateConfig({}, "draft"),
+      preApprovalGateConfig: resolveGateConfig({}, "preApproval"),
+      reviewMode: null,
+    }));
+    assert.ok(coordination.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    assert.ok(!coordination.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  });
+});
+
+describe("converged-once: a later Copilot review wins over an earlier convergence", () => {
+  const cleanOlder = { ...OLDER_REVIEW, body: "### 🟢 Approval recommended" };
+  const later = (isResolved) => ({ olderReviews: [cleanOlder], priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved, reviewId: "PRR_prior" })] });
+
+  it("the detector and merge refuse while the later review's thread is unresolved", async () => {
+    const detected = await runDetector(scenario(later(false)), { root: convergedOnceWideRoot });
+    assert.equal(detected.carriedConvergence, null);
+    assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    const merged = await runMerge(scenario(later(false)), later(false), { strict: false });
+    assert.equal(merged.merged, false);
+    assert.ok(merged.failures.some((failure) => failure.precondition === "copilot_convergence"));
+  });
+
+  it("both pass once the thread is resolved, naming the later review", async () => {
+    const detected = await runDetector(scenario(later(true)), { root: convergedOnceWideRoot });
+    assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+    assert.equal(detected.carriedConvergence.sourceReviewId, "PRR_prior");
+    const merged = await runMerge(scenario(later(true)), later(true), { strict: false });
+    assert.equal(merged.merged, true);
+    assert.equal(merged.copilotDisposition, "converged_once");
+    assert.equal(merged.copilotCarriedConvergence.sourceReviewId, "PRR_prior");
+  });
+
+  it("a clean current-head review does not stand over a later body-only changes-recommended review on an earlier commit until a record names it", async () => {
+    const currentHeadClean = { id: "PRR_head", author: { login: COPILOT }, state: "COMMENTED", body: "", commit: { oid: HEAD }, submittedAt: "2026-09-22T09:30:00Z" };
+    const laterYellow = { id: "PRR_prior", author: { login: COPILOT }, state: "COMMENTED", body: YELLOW, commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" };
+    const shape = (dispositions) => ({ reviews: [currentHeadClean, laterYellow], delta: CODE_DELTA, dispositions });
+
+    const blocked = await runDetector(scenario(shape([])), { root: convergedOnceWideRoot });
+    assert.ok(blocked.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    for (const action of [PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]) {
+      assert.ok(!blocked.allowedNextActions.includes(action), action);
+    }
+    assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert.equal(blocked.copilotBodyDispositionRequired.reviewId, "PRR_prior");
+    const refused = await runMerge(scenario(shape([])), shape([]), { strict: false });
+    assert.equal(refused.merged, false);
+    assert.ok(refused.failures.some((failure) => failure.precondition === "copilot_convergence"));
+
+    const recorded = shape([dispositionComment({ reviewId: "PRR_prior" })]);
+    const opened = await runDetector(scenario(recorded), { root: convergedOnceWideRoot });
+    assert.equal(opened.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+    const merged = await runMerge(scenario(recorded), recorded, { strict: false });
+    assert.equal(merged.merged, true, JSON.stringify(merged.failures));
+  });
+});
+
+describe("resolveCarriedConvergence converged-once predicate", () => {
+  const carry = async (fixture, extra = {}) => {
+    const { reviews, shared } = scenario(fixture);
+    const { runtime, calls } = runtimeFor(shared);
+    const result = await resolveCarriedConvergence(
+      { repo: REPO, pr: PR, currentHeadSha: HEAD, prData: { reviews }, copilotReviewRequestStatus: "none", ...extra },
+      runtime,
+    );
+    return { result, calls };
+  };
+
+  it("carries a clean latest review across a code delta without a compare call", async () => {
+    const { result, calls } = await carry({ delta: CODE_DELTA });
+    assert.equal(result.carried, true);
+    assert.equal(result.source, "converged_once");
+    assert.equal(result.sourceReviewId, "PRR_prior");
+    assert.equal(result.sourceHeadSha, PRIOR);
+    assert.equal(calls.some((call) => call.args.some((arg) => String(arg).includes("/compare/"))), false);
+  });
+
+  it("carries the three converged shapes: needs-a-closer-look, own resolved thread, trusted record", async () => {
+    assert.equal((await carry({ priorBody: BLUE, delta: CODE_DELTA })).result.carried, true);
+    assert.equal((await carry({ priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_prior" })] })).result.carried, true);
+    const recorded = (await carry({ priorBody: YELLOW, delta: CODE_DELTA, dispositions: [dispositionComment({ reviewId: "PRR_prior" })] })).result;
+    assert.equal(recorded.carried, true);
+    assert.equal(recorded.bodyDisposition.reviewId, "PRR_prior");
+  });
+
+  it("refuses a never-reviewed PR, an unresolved thread, a body-only finding with no record, and an outstanding request", async () => {
+    assert.equal((await carry({ reviews: [] })).result.carried, false);
+    assert.equal((await carry({ delta: CODE_DELTA, threads: [thread({ isResolved: false })] })).result.carried, false);
+    assert.equal((await carry({ priorBody: YELLOW, delta: CODE_DELTA })).result.carried, false);
+    assert.equal((await carry({ delta: CODE_DELTA }, { copilotReviewRequestStatus: "requested" })).result.carried, false);
+  });
+
+  it("strict mode keeps the docs-only delta condition", async () => {
+    const strict = { requireCopilotConvergenceAtLatestHead: true };
+    assert.equal((await carry({ delta: CODE_DELTA }, strict)).result.carried, false);
+    const docs = (await carry({}, strict)).result;
+    assert.equal(docs.carried, true);
+    assert.equal(docs.source, "carried");
   });
 });

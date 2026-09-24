@@ -168,8 +168,9 @@ export const COPILOT_CONVERGENCE_STATE = Object.freeze({
   NO_CURRENT_HEAD_REVIEW: "no_current_head_review",
 });
 
-/** ADR 0012 end states that may satisfy convergence without a current-head review. */
+/** ADR 0012 end states (amended by ADR 0090) that may satisfy convergence without a current-head review. */
 export const COPILOT_ABSENT_REVIEW_DISPOSITION = Object.freeze({
+  CONVERGED_ONCE: "converged_once",
   ROUND_CAP_CLEAN_FALLBACK: "round_cap_clean_fallback",
   DOCS_ONLY_SUPPRESSION: "docs_only_suppression",
   COPILOT_GATE_DISABLED: "copilot_gate_disabled",
@@ -231,6 +232,10 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
   // array order never silently drops a finding.
   let latestDisposition = null;
   let latestAt = null;
+  // The id of the review that owns latestDisposition: the review a
+  // copilot-body-disposition record must name to clear a finding. Null when two
+  // tied reviews both block, so no single record can clear the tie.
+  let latestReviewId = null;
   for (const entry of Array.isArray(reviews) ? reviews : []) {
     // Shape-tolerant Copilot-login + commit extraction: the merge gate feeds
     // REST-shaped reviews (user.login/commit_id) while the gate-ENTRY detector
@@ -246,16 +251,20 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
     const state = typeof entry?.state === "string" ? entry.state.toUpperCase() : "";
     if (state === "PENDING" || !SUBMITTED_REVIEW_STATES.has(state)) continue; // PENDING/unknown never sets the finding
     const disposition = classifyCopilotReviewBodyDisposition(state, entry?.body);
+    const reviewId = entry?.id !== null && entry?.id !== undefined ? String(entry.id) : null;
     const submittedAt = typeof entry?.submittedAt === "string"
       ? entry.submittedAt
       : (typeof entry?.submitted_at === "string" ? entry.submitted_at : null);
     if (submittedAt !== null && (latestAt === null || submittedAt > latestAt)) {
       latestDisposition = disposition; // a lexicographically-later submittedAt supersedes (matches summarize)
+      latestReviewId = reviewId;
       latestAt = submittedAt;
-    } else if (submittedAt !== null && submittedAt === latestAt) {
-      latestDisposition = latestDisposition === null ? disposition : moreBlockingDisposition(latestDisposition, disposition);
-    } else if (submittedAt === null && latestAt === null) {
-      latestDisposition = latestDisposition === null ? disposition : moreBlockingDisposition(latestDisposition, disposition);
+    } else if (submittedAt === latestAt) {
+      // Equal-string tie, or both null.
+      ({ disposition: latestDisposition, reviewId: latestReviewId } = foldTiedReview(
+        { disposition: latestDisposition, reviewId: latestReviewId },
+        { disposition, reviewId },
+      ));
     }
     // a null submittedAt once a non-null latest exists is ignored (mirrors summarize)
   }
@@ -275,13 +284,13 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
 
   const findings = COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_FINDINGS;
   if (latestDisposition === COPILOT_DISPOSITION.CHANGES_RECOMMENDED) {
-    return { ok: false, state: findings, disposition: latestDisposition, reason: `current-head Copilot review is "Changes recommended" (🟡, actionable non-approval); converge to "Approval recommended" (🟢) or resolve the feedback before merge` };
+    return { ok: false, state: findings, disposition: latestDisposition, reviewId: latestReviewId, reason: `current-head Copilot review is "Changes recommended" (🟡, actionable non-approval); converge to "Approval recommended" (🟢) or resolve the feedback before merge` };
   }
   if (latestDisposition === COPILOT_DISPOSITION.UNRECOGNIZED) {
-    return { ok: false, state: findings, disposition: latestDisposition, reason: `current-head Copilot review carries an unrecognized disposition header (fail closed); a recognized "Approval recommended" (🟢) is required` };
+    return { ok: false, state: findings, disposition: latestDisposition, reviewId: latestReviewId, reason: `current-head Copilot review carries an unrecognized disposition header (fail closed); a recognized "Approval recommended" (🟢) is required` };
   }
   // CLEAN, NONE, and NEEDS_CLOSER_LOOK (🔵, conductor-overridable) pass.
-  return { ok: true, state: COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN, disposition: latestDisposition, reason: null };
+  return { ok: true, state: COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN, disposition: latestDisposition, reviewId: latestReviewId, reason: null };
 }
 
 // Disposition blocking precedence, most-blocking first. Used to fold an
@@ -301,6 +310,19 @@ function moreBlockingDisposition(a, b) {
   const ra = ia === -1 ? COPILOT_DISPOSITION_BLOCKING_ORDER.length : ia;
   const rb = ib === -1 ? COPILOT_DISPOSITION_BLOCKING_ORDER.length : ib;
   return ra <= rb ? a : b;
+}
+
+// Fold one tied current-head review into the running latest. The disposition
+// folds toward the most blocking. The owning review id follows the blocking
+// review; two tied blocking reviews leave no single owner (null).
+const BLOCKING_CONVERGENCE_DISPOSITIONS = new Set([COPILOT_DISPOSITION.CHANGES_RECOMMENDED, COPILOT_DISPOSITION.UNRECOGNIZED]);
+function foldTiedReview(latest, next) {
+  if (latest.disposition === null) return next;
+  if (BLOCKING_CONVERGENCE_DISPOSITIONS.has(latest.disposition) && BLOCKING_CONVERGENCE_DISPOSITIONS.has(next.disposition)) {
+    return { disposition: moreBlockingDisposition(latest.disposition, next.disposition), reviewId: null };
+  }
+  const disposition = moreBlockingDisposition(latest.disposition, next.disposition);
+  return { disposition, reviewId: disposition === latest.disposition ? latest.reviewId : next.reviewId };
 }
 
 /**
@@ -382,6 +404,10 @@ export function evaluateMergePreconditions({
   stableRelease = false,
   copilotAbsentReviewDisposition = null,
   copilotBodyDisposition = null,
+  // Refusal reason when a Copilot review submitted after the current-head
+  // verdict review sits on an earlier commit and is not converged (the latest
+  // review decides); null otherwise.
+  copilotLaterReviewRefusal = null,
 } = {}) {
   const failures = [];
 
@@ -432,14 +458,19 @@ export function evaluateMergePreconditions({
   // body disposition, mirroring the loop's copilotBodyFeedbackUnresolved.
   // A trusted copilot-body-disposition record resolved for the current head
   // (`{ headSha, reviewId, ... }`) clears a current-head finding, as it does
-  // at gate entry.
+  // at gate entry, only when it names the review that raised the finding.
   const copilotConvergence = evaluateCopilotConvergence({ currentHeadSha, reviews, absentReviewDisposition: copilotAbsentReviewDisposition });
   const head = typeof currentHeadSha === "string" ? currentHeadSha.trim().toLowerCase() : "";
   const bodyCleared = copilotConvergence.state === COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_FINDINGS
     && head.length > 0
-    && typeof copilotBodyDisposition?.headSha === "string" && copilotBodyDisposition.headSha.toLowerCase() === head;
+    && typeof copilotBodyDisposition?.headSha === "string" && copilotBodyDisposition.headSha.toLowerCase() === head
+    // The record clears only the review that raised the current-head finding.
+    && copilotConvergence.reviewId !== null
+    && String(copilotBodyDisposition.reviewId) === copilotConvergence.reviewId;
   if (!copilotConvergence.ok && !bodyCleared) {
     failures.push({ precondition: "copilot_convergence", reason: copilotConvergence.reason });
+  } else if (typeof copilotLaterReviewRefusal === "string") {
+    failures.push({ precondition: "copilot_convergence", reason: copilotLaterReviewRefusal });
   }
 
   const mergeClass = resolveMergeClass({ sizeOutcome, touchesT1, stableRelease });

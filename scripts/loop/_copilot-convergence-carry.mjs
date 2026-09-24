@@ -1,18 +1,25 @@
 // Carried convergence: the ONE shared predicate deciding whether a
 // post-convergence head bump carries forward the prior converged Copilot
-// review instead of forcing a fresh blocking round (ADR 0012).
-// request-copilot-review.mjs (marker site, cap site, below-cap site) and
-// detect-pr-gate-coordination-state.mjs (postConvergenceReviewSuppressed) both
-// call the resolvers here. The request tool never re-requests on a head the
-// detector reports as carried, and the detector never reports carried on a
-// head where the request tool would re-request.
+// review instead of forcing a fresh blocking round (ADR 0012, amended by
+// ADR 0090). request-copilot-review.mjs (marker site, cap site, below-cap
+// site), copilot-pr-handoff.mjs (round-cap reopen),
+// detect-pr-gate-coordination-state.mjs (postConvergenceReviewSuppressed) and
+// merge-pr.mjs (converged_once / docs_only_suppression) all call the
+// resolvers here. The request tool never re-requests on a head the detector
+// reports as carried, and the detector never reports carried on a head where
+// the request tool would re-request.
+//
+// Two modes, selected by refinement.requireCopilotConvergenceAtLatestHead:
+// the default converged-once mode carries a converged latest review across
+// any delta; the strict mode carries it only across a docs-only or
+// integrate-only delta.
 //
 // FAIL CLOSED in every uncertain case: an outstanding request on the current
 // head, any unresolved review thread (or an unreadable thread list), no prior
-// submitted Copilot review on a strict ancestor head, an unproven or
-// non-docs-only delta, or a body-only changes-recommended/unrecognized prior
-// review with no thread of its own and no trusted disposition record all
-// refuse to carry.
+// submitted Copilot review on an earlier head, an unproven or non-docs-only
+// delta in strict mode, or a body-only changes-recommended/unrecognized
+// latest review with no thread of its own and no trusted disposition record
+// all refuse to carry.
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
@@ -189,23 +196,32 @@ async function finishCarry({ repo, pr, currentHeadSha, prData, sourceHeadSha, de
   return { ...carried, bodyDisposition: record.disposition };
 }
 
+const CONVERGED_ONCE_DELTA = Object.freeze({
+  reason: "the latest Copilot review converged on an earlier head; converged-once mode does not check the delta, and pre_approval_gate covers the current head",
+});
+
 /**
  * The carried-convergence predicate. All of the following must hold:
  *  1. no Copilot review request is outstanding on the current head;
- *  2. a prior submitted Copilot review exists on a head other than the current
- *     head, and the compare call proves a linear advance from it;
- *  3. the delta since that head is provably docs-only or integrate-only
- *     (resolveConvergenceCarry);
+ *  2. the latest submitted Copilot review exists on a head other than the
+ *     current head;
+ *  3. strict mode only (`requireCopilotConvergenceAtLatestHead: true`): the
+ *     compare call proves a linear advance from that head, and the delta is
+ *     provably docs-only or integrate-only (resolveConvergenceCarry);
  *  4. zero unresolved review threads;
- *  5. the prior review's body is not changes-recommended/unrecognized, OR that
- *     review opened at least one (now resolved) thread of its own, OR a trusted
- *     disposition record names that review for the current head.
+ *  5. the latest review's body is not changes-recommended/unrecognized, OR
+ *     that review opened at least one (now resolved) thread of its own, OR a
+ *     trusted disposition record names that review for the current head.
+ *
+ * The default mode (converged-once) skips condition 3: a converged latest
+ * review stands for every later head, whatever the delta. The result then
+ * carries `source: "converged_once"`; strict mode carries `source: "carried"`.
  *
  * `reviewThreads` is the parsed thread list (parseReviewThreads().threads).
  * Thread facts are fetched live only when the caller does not pass them and
  * only after the delta carries, so a non-carrying delta costs no thread read.
  *
- * @returns {Promise<{ carried: true, source: "carried", sourceReviewId: string|null, sourceHeadSha: string, reason: string, bodyDisposition: object|null }
+ * @returns {Promise<{ carried: true, source: "carried"|"converged_once", sourceReviewId: string|null, sourceHeadSha: string, reason: string, bodyDisposition: object|null }
  *   | { carried: false, reason: string }>}
  */
 export async function resolveCarriedConvergence({
@@ -216,6 +232,7 @@ export async function resolveCarriedConvergence({
   copilotReviewRequestStatus,
   unresolvedThreadCount,
   reviewThreads,
+  requireCopilotConvergenceAtLatestHead = false,
 }, runtime = {}) {
   if (copilotReviewRequestStatus !== "none") {
     return { carried: false, reason: "a Copilot review request is outstanding on the current head" };
@@ -227,6 +244,12 @@ export async function resolveCarriedConvergence({
   const lastReviewSha = getLastCopilotReviewHeadSha(prData);
   if (!priorReview || !lastReviewSha || !currentHeadSha || lastReviewSha === currentHeadSha) {
     return { carried: false, reason: "no prior submitted Copilot review on an earlier head" };
+  }
+  if (requireCopilotConvergenceAtLatestHead !== true) {
+    return finishCarry(
+      { repo, pr, currentHeadSha, prData, sourceHeadSha: lastReviewSha, delta: CONVERGED_ONCE_DELTA, source: "converged_once", unresolvedThreadCount, reviewThreads },
+      runtime,
+    );
   }
   const delta = await resolveConvergenceCarry({ repo, pr }, runtime, { lastReviewSha, currentHeadSha });
   if (!delta) {

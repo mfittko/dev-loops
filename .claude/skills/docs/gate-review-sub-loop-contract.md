@@ -1401,9 +1401,16 @@ Each gate chain exits when one of these conditions is met:
 ## Copilot round-cap interplay
 
 The gate chain can complete cleanly at a head that was accepted via round-cap fallback.
-The post-convergence carve-out — significant post-convergence changes on a newer head open
-a new Copilot cycle that requires another round before pre-approval — is owned by
-`COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md).
+By default (converged-once, ADR 0090), a converged latest Copilot review stands for later
+heads whatever the delta: the loop opens no new Copilot cycle, and `pre_approval_gate`
+reviews the current head. The request tool returns `suppressed_post_convergence` below the
+cap, at the cap, and under `--force-rerequest-review`, and merge grants `converged_once`.
+With `refinement.requireCopilotConvergenceAtLatestHead: true` (strict mode), the
+post-convergence carve-out applies: significant post-convergence changes on a newer head
+open a new Copilot cycle that requires another round before pre-approval. Both modes are
+owned by `COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)
+and `COPILOT-STATE-CARRIED-CONVERGENCE` in [Copilot Loop State Graph](copilot-loop-state-graph.md).
+The seam below is the strict-mode carry.
 
 **Convergence carry-forward decision seam (fail-closed, AC2).** A pure doc/prose head bump
 after convergence should not need to re-open a blocking Copilot cycle.

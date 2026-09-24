@@ -445,8 +445,12 @@ export function interpretLoopState(snapshot, refinementConfig) {
       // A current-head Copilot request is still active/pending and must settle before gate progression.
       state = STATE.WAITING_FOR_COPILOT_REVIEW;
     } else if (s.copilotReviewPresent) {
-      // Copilot has reviewed at least once; all threads resolved
-      if (ciBlocks) {
+      // Copilot has reviewed at least once; all threads resolved. A later
+      // body-only finding on an earlier commit outranks a clean current-head
+      // review, and merge refuses on it. A re-request would stop at the
+      // same-head clean suppression, so only a copilot-body-disposition record
+      // naming that review clears it.
+      if (ciBlocks || (s.copilotReviewOnCurrentHead && s.copilotPriorHeadBodyFeedbackUnresolved)) {
         state = STATE.BLOCKED_NEEDS_USER_DECISION;
       } else if (ciWaits) {
         state = STATE.WAITING_FOR_CI;

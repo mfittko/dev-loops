@@ -22,11 +22,14 @@ import { EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY } from "@dev-loops/core/loop/timeo
 // (the repo pins maxCopilotRounds to 2 for test isolation). Assertions are
 // unchanged. runWatchCycle does not
 // forward a repoRoot to runHandoff, so inject it through a runHandoffImpl wrapper.
+// The fixture pins the strict Copilot convergence mode
+// (refinement.requireCopilotConvergenceAtLatestHead: true): the re-request
+// scenarios below were written against it.
 let capFixtureRepoRoot = null;
 beforeAll(async () => {
   capFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-cycle-cap-fixture-"));
   const realDevloops = await readFile(path.resolve(".devloops"), "utf8");
-  await writeFile(path.join(capFixtureRepoRoot, ".devloops"), realDevloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2"), "utf8");
+  await writeFile(path.join(capFixtureRepoRoot, ".devloops"), realDevloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2\n  requireCopilotConvergenceAtLatestHead: true"), "utf8");
 });
 afterAll(async () => {
   if (capFixtureRepoRoot) await rm(capFixtureRepoRoot, { recursive: true, force: true });

@@ -120,6 +120,11 @@
           "type": "integer",
           "minimum": 0
         },
+        "requireCopilotConvergenceAtLatestHead": {
+          "default": false,
+          "description": "Require a converged Copilot review at the latest head. False (default): one converged Copilot review stands for later heads, which pre_approval_gate covers. True: a significant change after convergence opens a new Copilot cycle.",
+          "type": "boolean"
+        },
         "lowSignal": {
           "description": "Early-stop policy for low-signal Copilot rounds.",
           "type": "object",

@@ -18,13 +18,21 @@ const GH_ENTRIES = Symbol("request-copilot-review gh entries");
 // instead of the ambient .devloops (the repo pins maxCopilotRounds to 2 for
 // test isolation). Assertions are
 // unchanged; the suite simply owns its cap instead of inheriting the shipped one.
+// The fixture also pins the strict Copilot convergence mode
+// (refinement.requireCopilotConvergenceAtLatestHead: true), the behavior these
+// tests were written against. convergedOnceFixtureRepoRoot pins the default
+// converged-once mode for the tests that cover it.
 let capFixtureRepoRoot = null;
+let convergedOnceFixtureRepoRoot = null;
 beforeAll(async () => {
   capFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-cap-fixture-"));
-  await writeFile(path.join(capFixtureRepoRoot, ".devloops"), "version: 1\nrefinement:\n  maxCopilotRounds: 2\n", "utf8");
+  await writeFile(path.join(capFixtureRepoRoot, ".devloops"), "version: 1\nrefinement:\n  maxCopilotRounds: 2\n  requireCopilotConvergenceAtLatestHead: true\n", "utf8");
+  convergedOnceFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-converged-once-fixture-"));
+  await writeFile(path.join(convergedOnceFixtureRepoRoot, ".devloops"), "version: 1\nrefinement:\n  maxCopilotRounds: 2\n", "utf8");
 });
 afterAll(async () => {
   if (capFixtureRepoRoot) await rm(capFixtureRepoRoot, { recursive: true, force: true });
+  if (convergedOnceFixtureRepoRoot) await rm(convergedOnceFixtureRepoRoot, { recursive: true, force: true });
 });
 
 async function runNode(args = [], options = {}) {
@@ -108,11 +116,11 @@ async function unexpectedDelay(ms) {
   throw new Error(`runInProcess: unexpected delay(${ms}ms) — this test path must not enter the verification retry loop`);
 }
 
-async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" }, delayImpl = unexpectedDelay } = {}) {
+async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" }, delayImpl = unexpectedDelay, repoRoot = capFixtureRepoRoot } = {}) {
   const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
   const options = parseRequestCliArgs(args);
   try {
-    const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild, delayImpl, repoRoot: capFixtureRepoRoot });
+    const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild, delayImpl, repoRoot });
     return { result, calls };
   } catch (error) {
     // Attach the recorded gh calls to a rejection too, so a test asserting
@@ -1792,6 +1800,7 @@ test("request-copilot-review --lightweight enforces the composed cap: light PR a
       "",
       "refinement:",
       "  maxCopilotRounds: 5",
+      "  requireCopilotConvergenceAtLatestHead: true",
       "",
       "localImplementation:",
       "  lightMode:",
@@ -1950,8 +1959,9 @@ test("request-copilot-review --lightweight with an unloadable config falls back 
     const parsed = JSON.parse(result.stdout);
     // Before the fix, a config load failure with --lightweight silently kept
     // the built-in full-PR default of 5 instead of failing toward the safer
-    // lightweight default of 1.
-    assert.equal(parsed.status, "round_cap_reached");
+    // lightweight default of 1. The unloadable config also keeps the default
+    // converged-once mode, so the converged review at the cap is suppressed.
+    assert.equal(parsed.status, "suppressed_post_convergence");
     assert.equal(parsed.completedRounds, 1);
     assert.equal(parsed.maxRounds, 1);
     assert.match(parsed.configWarning, /lightweight default cap of 1/);
@@ -1969,6 +1979,7 @@ test("request-copilot-review respects low-signal refinement config before auto r
       "",
       "refinement:",
       "  maxCopilotRounds: 2",
+      "  requireCopilotConvergenceAtLatestHead: true",
       "  lowSignal:",
       "    enabled: true",
       "    roundThreshold: 1",
@@ -2185,6 +2196,7 @@ test("request-copilot-review --force-rerequest-review suppresses a pure doc/pros
     ]);
 
   assert.equal(result.status, "suppressed_post_convergence_docs_only");
+  assert.match(result.detail, /review surface \([^)]+\); no fresh/);
   assert.equal(result.completedRounds, 5);
   assert.equal(result.maxRounds, 2);
   // No fresh blocking round was placed: the requested_reviewers POST never ran.
@@ -2463,33 +2475,40 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
     }
   }
 
-  it("returns suppressed_post_convergence_docs_only BELOW the round cap when the marker matches the current head", async () => {
-    await withTempCheckpointDir(async (checkpointDir) => {
-      await writeSuppressionMarker(
-        { repo: "owner/repo", pr: 17, headSha: "newsha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump", operatorReason: "Copilot declined a converged reword" },
-        { checkpointDir },
-      );
-      const { runChild, calls } = makeGhMock([
-        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
-        {
-          assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
-          stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"oldsha"}}]}\n',
-        },
-        {
-          assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
-          stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/adr-0041.md", status: "modified" }] }) + "\n",
-        },
-        NO_BASE_REF_ENTRY,
-        NO_THREADS_ENTRY,
-      ], { repeatLastOnOverflow: true });
-      const result = await performCopilotReviewRequest(
-        { repo: "owner/repo", pr: 17, checkpointDir },
-        { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild, repoRoot: capFixtureRepoRoot },
-      );
-      assert.equal(result.status, "suppressed_post_convergence_docs_only");
-      assert.equal(calls.some(isCopilotRequestCall), false, "no fresh request should be placed");
+  // The status names the mode: strict keeps the docs-only status, the default
+  // converged-once mode reports the plain post-convergence status.
+  for (const [mode, root, expectedStatus] of [
+    ["strict", () => capFixtureRepoRoot, "suppressed_post_convergence_docs_only"],
+    ["converged-once", () => convergedOnceFixtureRepoRoot, "suppressed_post_convergence"],
+  ]) {
+    it(`${mode}: returns ${expectedStatus} BELOW the round cap when the marker matches the current head`, async () => {
+      await withTempCheckpointDir(async (checkpointDir) => {
+        await writeSuppressionMarker(
+          { repo: "owner/repo", pr: 17, headSha: "newsha", lastReviewedHeadSha: "oldsha", reason: "pure doc/prose bump", operatorReason: "Copilot declined a converged reword" },
+          { checkpointDir },
+        );
+        const { runChild, calls } = makeGhMock([
+          { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+          {
+            assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+            stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"oldsha"}}]}\n',
+          },
+          {
+            assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
+            stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/adr-0041.md", status: "modified" }] }) + "\n",
+          },
+          NO_BASE_REF_ENTRY,
+          NO_THREADS_ENTRY,
+        ], { repeatLastOnOverflow: true });
+        const result = await performCopilotReviewRequest(
+          { repo: "owner/repo", pr: 17, checkpointDir },
+          { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild, repoRoot: root() },
+        );
+        assert.equal(result.status, expectedStatus);
+        assert.equal(calls.some(isCopilotRequestCall), false, "no fresh request should be placed");
+      });
     });
-  });
+  }
 
   it("ignores a marker for a DIFFERENT head — falls through to a normal request", async () => {
     await withTempCheckpointDir(async (checkpointDir) => {
@@ -2582,5 +2601,109 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
       assert.equal(result.status, "requested");
       assert.ok(calls.some(isCopilotRequestCall), "a real request must still be placed");
     });
+  });
+});
+
+// Converged-once mode (refinement.requireCopilotConvergenceAtLatestHead:
+// false, the default): a converged latest Copilot review on an earlier head
+// stands for the current head, whatever the delta. No compare call runs.
+describe("converged-once mode suppresses a post-convergence request as suppressed_post_convergence", () => {
+  const convergedOnce = { repoRoot: null };
+  beforeAll(() => { convergedOnce.repoRoot = convergedOnceFixtureRepoRoot; });
+  const REQUESTED_NONE_ENTRY = { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' };
+  const isCompareCall = (call) => call.args.some((arg) => typeof arg === "string" && arg.includes("/compare/"));
+
+  it("below the round cap", async () => {
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      REQUESTED_NONE_ENTRY,
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","body":"","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha2"}}]}\n',
+      },
+      NO_THREADS_ENTRY,
+    ], convergedOnce);
+    assert.equal(result.status, "suppressed_post_convergence");
+    assert.match(result.detail, /earlier head \(the latest Copilot review converged on an earlier head; converged-once mode does not check the delta/);
+    assert.equal(result.completedRounds, undefined);
+    assert.equal(calls.some(isCopilotRequestCall), false);
+    assert.equal(calls.some(isCompareCall), false);
+  });
+
+  it("at the round cap, where the automatic re-request is decided", async () => {
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      REQUESTED_NONE_ENTRY,
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
+      NO_THREADS_ENTRY,
+    ], convergedOnce);
+    assert.equal(result.status, "suppressed_post_convergence");
+    assert.equal(result.completedRounds, 5);
+    assert.equal(result.maxRounds, 2);
+    assert.equal(calls.some(isCopilotRequestCall), false);
+    assert.equal(calls.some(isCompareCall), false);
+  });
+
+  it("under --force-rerequest-review at the round cap", async () => {
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      REQUESTED_NONE_ENTRY,
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
+      NO_THREADS_ENTRY,
+    ], convergedOnce);
+    assert.equal(result.status, "suppressed_post_convergence");
+    assert.equal(calls.some(isCopilotRequestCall), false);
+    assert.equal(calls.some(isCompareCall), false);
+  });
+
+  it("still requests when the latest review is not converged (an unresolved thread)", async () => {
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      REQUESTED_NONE_ENTRY,
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","body":"","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"sha2"}}]}\n',
+      },
+      { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"t-1","isResolved":false,"comments":{"nodes":[]}}]}}}}}\n' },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: '{"headRefOid":"newsha","reviews":[]}\n' },
+    ], convergedOnce);
+    assert.equal(result.status, "requested");
+    assert.equal(calls.some(isCopilotRequestCall), true);
+  });
+
+  // At the cap, an unconverged latest review falls through to the existing
+  // round-cap paths: round_cap_reached without the force flag, and the
+  // --force-rerequest-review reopen with it.
+  const UNRESOLVED_THREAD_ENTRY = { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"t-1","isResolved":false,"comments":{"nodes":[]}}]}}}}}\n' };
+
+  it("at the round cap with an unconverged latest review returns round_cap_reached", async () => {
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      REQUESTED_NONE_ENTRY,
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
+      UNRESOLVED_THREAD_ENTRY,
+    ], convergedOnce);
+    assert.notEqual(result.status, "suppressed_post_convergence");
+    assert.equal(result.status, "round_cap_reached");
+    assert.equal(calls.some(isCopilotRequestCall), false);
+  });
+
+  it("at the round cap with an unconverged latest review, --force-rerequest-review reopens the round", async () => {
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      REQUESTED_NONE_ENTRY,
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
+      UNRESOLVED_THREAD_ENTRY,
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+    ], convergedOnce);
+    assert.notEqual(result.status, "suppressed_post_convergence");
+    assert.equal(result.status, "requested");
+    assert.equal(calls.some(isCopilotRequestCall), true);
   });
 });

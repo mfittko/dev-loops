@@ -194,8 +194,10 @@ export function reviewHasOwnThread(reviewThreads, reviewId) {
  * body feedback stays unresolved (`copilotPriorHeadBodyFeedbackUnresolved`)
  * until a trusted record names it: a `fix` record whose commit is after that
  * review's commit and in the head, or an `operator` record for the current
- * head. The loop interpreter consumes this only at the round cap, where no
- * fresh Copilot review can supersede the earlier one.
+ * head. The loop interpreter consumes this at the round cap, where no fresh
+ * Copilot review can supersede the earlier one, and below the cap when a
+ * clean current-head review exists, where a re-request stops at the same-head
+ * clean suppression.
  *
  * The comment stream is read only when one of those two findings exists.
  *
