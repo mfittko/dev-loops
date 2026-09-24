@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, normalizeTimestamp, parseJsonText } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, isGateMachineArtifactBody, normalizeTimestamp, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { resolveCarriedConvergence } from "./_copilot-convergence-carry.mjs";
@@ -303,7 +303,7 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
       }
       // Skip if comment body is a gate verdict comment (system action, not operator input)
       const body = typeof comment?.body === "string" ? comment.body : "";
-      if (body.includes("Gate review:") || body.includes("**draft_gate**") || body.includes("**pre_approval_gate**")) {
+      if (body.includes("Gate review:") || body.includes("**draft_gate**") || body.includes("**pre_approval_gate**") || isGateMachineArtifactBody(body)) {
         continue;
       }
       const createdAt = normalizeTimestamp(comment?.created_at);

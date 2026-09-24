@@ -55,3 +55,13 @@ guidance in `AGENTS.md`.
 Every `ok: true` result of `dev-loops loop startup` carries an `operatorBriefing` field that points
 to the index and to this section.
 
+## Filing from runner findings
+
+<!-- rule: MAIN-AGENT-FILING-BLOCKER-ONLY -->
+`MAIN-AGENT-FILING-BLOCKER-ONLY`: The orchestrator files a new issue from a runner finding only
+when the finding is a blocker, that is, when it blocks a merge or deadlocks a PR. Every other
+runner finding goes as a comment on an existing issue or epic. The gate tools follow the same
+bar: `judge-pass.mjs` and `close-gate-findings.mjs` never create an issue for a deferred finding
+(see `GATE-EXEC-DEFERRAL-RECORD` in the
+[Gate review sub-loop contract](gate-review-sub-loop-contract.md)).
+
