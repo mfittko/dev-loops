@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync, existsSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { initGitFixture } from "../_helpers.mjs";
@@ -137,6 +137,7 @@ test("cleanup: fails soft on a git error (ok true, removed null)", () => {
     assert.equal(res.ok, true);
     assert.equal(res.removed, null);
     assert.match(res.reason, /git error/);
+    assert.match(readFileSync(logFile, "utf8"), /worktree prune/, "prune still runs after a failed remove");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -243,6 +244,61 @@ test("cleanup: skips a worktree holding gate findings ledgers, for every selecto
     }
     assert.ok(existsSync(ledger), "the ledger survives");
     assert.ok(listedPaths(main).includes(paths["issue-7"]));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("cleanup: an unreadable gate-findings dir counts as holding ledgers and names the error", () => {
+  if (process.getuid?.() === 0) return; // root bypasses file perms
+  const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);
+  const ledgerDir = path.join(paths["issue-7"], "tmp/gate-findings");
+  try {
+    mkdirSync(ledgerDir, { recursive: true });
+    chmodSync(ledgerDir, 0o000);
+    const res = cleanupWorktree({ repoRoot: main, branch: "issue-7" });
+    assert.deepEqual({ ok: res.ok, removed: res.removed }, { ok: true, removed: null });
+    assert.match(res.reason, /EACCES/);
+    assert.ok(existsSync(paths["issue-7"]));
+  } finally {
+    chmodSync(ledgerDir, 0o755);
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("parseCleanupWorktreeCliArgs: --head-sha needs --branch and a full SHA", () => {
+  const sha = "a".repeat(40);
+  assert.equal(parseCleanupWorktreeCliArgs(["--repo-root", "/r", "--branch", "b", "--head-sha", sha]).headSha, sha);
+  assert.throws(() => parseCleanupWorktreeCliArgs(["--repo-root", "/r", "--issue", "1", "--head-sha", sha]), /requires --branch/);
+  assert.throws(() => parseCleanupWorktreeCliArgs(["--repo-root", "/r", "--branch", "b", "--head-sha", "abc1234"]), /FULL head commit SHA/);
+});
+
+test("cleanup --branch --head-sha: removes on a HEAD match, skips a worktree whose HEAD moved on", () => {
+  const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }, { dir: "issue-8", branch: "issue-8" }]);
+  try {
+    const merged7 = git(paths["issue-7"], ["rev-parse", "HEAD"]).trim();
+    const res7 = cleanupWorktree({ repoRoot: main, branch: "issue-7", headSha: merged7 });
+    assert.equal(res7.removed, paths["issue-7"]);
+
+    const merged8 = git(paths["issue-8"], ["rev-parse", "HEAD"]).trim();
+    git(paths["issue-8"], ["commit", "-q", "--allow-empty", "-m", "unpushed"]);
+    const res8 = cleanupWorktree({ repoRoot: main, branch: "issue-8", headSha: merged8 });
+    assert.deepEqual({ ok: res8.ok, removed: res8.removed }, { ok: true, removed: null });
+    assert.match(res8.reason, /does not match the merged head/);
+    assert.ok(existsSync(paths["issue-8"]));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("cleanup: skips a target that contains a protected path", () => {
+  const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);
+  try {
+    const inside = path.join(paths["issue-7"], "scripts/github/merge-pr.mjs");
+    const res = cleanupWorktree({ repoRoot: main, branch: "issue-7", protectedPaths: [main, inside] });
+    assert.deepEqual({ ok: res.ok, removed: res.removed }, { ok: true, removed: null });
+    assert.ok(res.reason.includes(inside), res.reason);
+    assert.ok(existsSync(paths["issue-7"]));
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

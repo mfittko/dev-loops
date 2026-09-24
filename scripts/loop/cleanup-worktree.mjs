@@ -27,6 +27,8 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { resolveWorktreePath, WORKTREE_NAMESPACE } from "@dev-loops/core/loop/handoff-envelope";
 import { canonicalize } from "./_worktree-path.mjs";
+import { listWorktreeEntries } from "./_repo-root-resolver.mjs";
+import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -44,6 +46,8 @@ Required:
                     checkout) under the namespace that has it checked out.
                     No match is a skip with a reason.
 Optional:
+  --head-sha <sha>  With --branch: remove only when the selected worktree's
+                    HEAD equals this full SHA; otherwise skip with a reason.
   -h, --help        Show this help.
 Output (stdout, JSON):
   { "ok": bool, "removed": <path>|null, "reason": "<why>" }
@@ -61,7 +65,7 @@ function parsePositiveInt(value, flag) {
 }
 
 export function parseCleanupWorktreeCliArgs(argv) {
-  const options = { help: false, repoRoot: undefined, issue: undefined, pr: undefined, path: undefined, branch: undefined };
+  const options = { help: false, repoRoot: undefined, issue: undefined, pr: undefined, path: undefined, branch: undefined, headSha: undefined };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
@@ -71,6 +75,7 @@ export function parseCleanupWorktreeCliArgs(argv) {
       pr: { type: "string" },
       path: { type: "string" },
       branch: { type: "string" },
+      "head-sha": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -104,6 +109,11 @@ export function parseCleanupWorktreeCliArgs(argv) {
       options.branch = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
+    if (token.name === "head-sha") {
+      options.headSha = normalizeFullHeadSha(requireTokenValue(token, parseError, { flagPattern: /^-/u }));
+      if (options.headSha === null) throw parseError(FULL_HEAD_SHA_ERROR);
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -112,6 +122,7 @@ export function parseCleanupWorktreeCliArgs(argv) {
   const selectors = [options.issue, options.pr, options.path, options.branch].filter((v) => v !== undefined);
   if (selectors.length === 0) throw parseError("One of --issue, --pr, --path, or --branch is required");
   if (selectors.length > 1) throw parseError("Provide exactly one of --issue, --pr, --path, or --branch");
+  if (options.headSha !== undefined && options.branch === undefined) throw parseError("--head-sha requires --branch");
   return options;
 }
 
@@ -124,11 +135,12 @@ export function parseCleanupWorktreeCliArgs(argv) {
  * the resolved repo-root, and (2) the resolved target must live inside the
  * resolved namespace.
  */
+const within = (child, parent) => child === parent || child.startsWith(parent + path.sep);
+
 function isUnderNamespace(target, repoRoot) {
   const realRoot = canonicalize(repoRoot);
   const nsRoot = canonicalize(path.join(repoRoot, WORKTREE_NAMESPACE));
   const real = canonicalize(target);
-  const within = (child, parent) => child === parent || child.startsWith(parent + path.sep);
   // Namespace must resolve inside the repo (refuses a symlinked-out namespace),
   // and the target must resolve inside that namespace.
   return within(nsRoot, realRoot) && within(real, nsRoot);
@@ -137,50 +149,66 @@ function isUnderNamespace(target, repoRoot) {
 const GIT_OPTIONS = { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] };
 
 /**
- * Path of the LINKED worktree under the namespace that has `branch` checked
- * out, or null. The first porcelain entry is the main checkout and is never a
- * candidate.
+ * The LINKED worktree entry under the namespace that has `branch` checked
+ * out, or null. The first porcelain entry is the main checkout (or a bare
+ * repo) and is never a candidate.
  */
 function findLinkedWorktreeForBranch(root, branch, gitCommand) {
-  const listing = execFileSync(gitCommand, ["worktree", "list", "--porcelain"], { ...GIT_OPTIONS, cwd: root });
-  const entries = listing.split(/\n\s*\n/u).map((block) => {
-    const lines = block.split("\n");
-    return {
-      path: lines.find((l) => l.startsWith("worktree "))?.slice("worktree ".length),
-      ref: lines.find((l) => l.startsWith("branch "))?.slice("branch ".length),
-    };
-  }).filter((e) => e.path);
-  const match = entries.slice(1).find((e) => e.ref === `refs/heads/${branch}` && isUnderNamespace(e.path, root));
-  return match?.path ?? null;
+  const entries = listWorktreeEntries(root, { gitCommand });
+  return entries.slice(1).find((e) => e.branch === `refs/heads/${branch}` && isUnderNamespace(e.path, root)) ?? null;
 }
 
-/** True when `<target>/tmp/gate-findings/` holds any non-directory entry, at any depth. */
-function hasGateFindingsLedger(ledgerDir) {
+/**
+ * Skip reason when `<target>/tmp/gate-findings/` holds any non-directory entry
+ * at any depth, else null. Only a missing dir (ENOENT, ENOTDIR) counts as no
+ * ledger; any other read error counts as a ledger present.
+ */
+function gateFindingsLedgerSkipReason(ledgerDir) {
   try {
-    return readdirSync(ledgerDir, { recursive: true, withFileTypes: true }).some((e) => !e.isDirectory());
-  } catch {
-    return false;
+    const present = readdirSync(ledgerDir, { recursive: true, withFileTypes: true }).some((e) => !e.isDirectory());
+    return present ? `skipped: ${ledgerDir} holds gate findings ledgers` : null;
+  } catch (err) {
+    if (err?.code === "ENOENT" || err?.code === "ENOTDIR") return null;
+    return `skipped: cannot read ${ledgerDir} (${err?.code ?? err?.message}); treating it as holding gate findings ledgers`;
   }
 }
 
-export function cleanupWorktree({ repoRoot, issue, pr, path: explicitPath, branch }, { gitCommand = "git" } = {}) {
+/**
+ * `protectedPaths` are paths the calling process runs from (its cwd, its own
+ * script file); a target containing any of them is skipped. `headSha` (branch
+ * selector only) must equal the selected worktree's HEAD, so a worktree with
+ * unpushed local commits or a foreign checkout of the same branch name stays.
+ */
+export function cleanupWorktree(
+  { repoRoot, issue, pr, path: explicitPath, branch, headSha, protectedPaths = [] },
+  { gitCommand = "git" } = {},
+) {
   const root = path.resolve(repoRoot);
 
   let target;
   if (branch !== undefined) {
+    let entry;
     try {
-      target = findLinkedWorktreeForBranch(root, branch, gitCommand);
+      entry = findLinkedWorktreeForBranch(root, branch, gitCommand);
     } catch (err) {
       const detail = (err.stderr ?? err.message ?? "").toString().trim();
       return { ok: true, removed: null, reason: `git error (non-fatal): ${detail}` };
     }
-    if (target === null) {
+    if (entry === null) {
       return {
         ok: true,
         removed: null,
         reason: `skipped: no linked worktree under ${WORKTREE_NAMESPACE}/ has branch ${branch} checked out`,
       };
     }
+    if (headSha !== undefined && entry.head !== headSha) {
+      return {
+        ok: true,
+        removed: null,
+        reason: `skipped: ${entry.path} HEAD ${entry.head ?? "unknown"} does not match the merged head ${headSha}`,
+      };
+    }
+    target = entry.path;
   } else if (explicitPath !== undefined) {
     target = path.resolve(root, explicitPath);
   } else {
@@ -198,18 +226,27 @@ export function cleanupWorktree({ repoRoot, issue, pr, path: explicitPath, branc
     };
   }
 
-  const ledgerDir = path.join(target, "tmp", "gate-findings");
-  if (hasGateFindingsLedger(ledgerDir)) {
-    return { ok: true, removed: null, reason: `skipped: ${ledgerDir} holds gate findings ledgers` };
+  const realTarget = canonicalize(target);
+  const inside = protectedPaths.find((p) => within(canonicalize(p), realTarget));
+  if (inside !== undefined) {
+    return { ok: true, removed: null, reason: `skipped: ${inside} is inside ${target}` };
+  }
+
+  const ledgerSkip = gateFindingsLedgerSkipReason(path.join(target, "tmp", "gate-findings"));
+  if (ledgerSkip !== null) {
+    return { ok: true, removed: null, reason: ledgerSkip };
   }
 
   try {
     execFileSync(gitCommand, ["worktree", "remove", "--force", target], { ...GIT_OPTIONS, cwd: root });
-    execFileSync(gitCommand, ["worktree", "prune"], { ...GIT_OPTIONS, cwd: root });
   } catch (err) {
     // Fail-soft: never break a merge-completion flow on a git error.
     const detail = (err.stderr ?? err.message ?? "").toString().trim();
     return { ok: true, removed: null, reason: `git error (non-fatal): ${detail}` };
+  } finally {
+    try {
+      execFileSync(gitCommand, ["worktree", "prune"], { ...GIT_OPTIONS, cwd: root });
+    } catch { /* fail-soft: a failed prune leaves stale admin entries only */ }
   }
 
   return { ok: true, removed: target, reason: "removed" };

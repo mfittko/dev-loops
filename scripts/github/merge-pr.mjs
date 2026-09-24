@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { exec, execFile } from "node:child_process";
+import { exec, execFile, execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { parseGitHubRemoteSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { ghJson as defaultGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { resolveMainWorktreeRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { cleanupWorktree } from "../loop/cleanup-worktree.mjs";
+import { canonicalize } from "../loop/_worktree-path.mjs";
 import { syncMainCheckout, MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS, POST_MERGE_ACTIONS_TIMEOUT_MS } from "@dev-loops/core/loop/main-checkout-ff";
 import {
   evaluateMergePreconditions,
@@ -117,9 +120,13 @@ Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approv
   results of the post-merge steps run after a confirmed MERGED state, in order:
   fast-forward the main checkout's main to origin/main (a not_on_main result
   carries its diagnostic message), remove the linked worktree under
-  tmp/worktrees/dev-loops/ that has the PR's head branch checked out, and run
-  the repo's postMerge.actions. Each step is fail-soft and independent; none
-  changes ok, merged, or the exit code.
+  tmp/worktrees/dev-loops/ that has the PR's head branch checked out at the
+  merged head SHA, and run the repo's postMerge.actions. Each step is
+  fail-soft and independent; none changes ok, merged, or the exit code. All
+  three steps skip with a reason when the main checkout's origin remote is not
+  --repo. The cleanup skips when this process's cwd or script file is inside
+  the worktree. After a successful merge the command waits for these steps, so
+  it can run for up to the postMerge.actions time budget.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Merge succeeded
@@ -377,12 +384,8 @@ async function isInternalOnlyPr({ repo, pr, patterns }, { env, ghCommand, runChi
   }
 }
 
-// Post-merge steps, in the harness hooks' order: fast-forward the main
-// checkout, remove the merged branch's linked worktree, run the repo's
-// postMerge.actions. Each step receives { mainCheckout, pr, branch, env } and
-// resolves its own result; runPostMergeSteps records a thrown step as a failed
-// result, so every step is fail-soft and independent of the others.
 const POST_MERGE_ACTIONS_PATH = fileURLToPath(new URL("../loop/run-post-merge-actions.mjs", import.meta.url));
+const SELF_PATH = fileURLToPath(import.meta.url);
 
 async function defaultFastForward({ mainCheckout, env }) {
   const run = (command) => new Promise((resolve) => {
@@ -393,9 +396,9 @@ async function defaultFastForward({ mainCheckout, env }) {
   return syncMainCheckout(mainCheckout, run);
 }
 
-function defaultWorktreeCleanup({ mainCheckout, branch }) {
+function defaultWorktreeCleanup({ mainCheckout, branch, headSha }) {
   if (!branch) return { ok: true, removed: null, reason: "skipped: the merged PR reported no head branch" };
-  return cleanupWorktree({ repoRoot: mainCheckout, branch });
+  return cleanupWorktree({ repoRoot: mainCheckout, branch, headSha, protectedPaths: [process.cwd(), SELF_PATH] });
 }
 
 // The runner prints nothing when the repo declares no postMerge.actions, so
@@ -428,18 +431,61 @@ const DEFAULT_POST_MERGE_STEPS = {
   actions: defaultPostMergeActions,
 };
 
-async function runPostMergeSteps(context, steps) {
-  const attempt = async (step, onError) => {
-    try {
-      return await step(context);
-    } catch (error) {
-      return onError(error instanceof Error ? error.message : String(error));
+// Result shape of a skipped (ok true) or thrown (ok false) step.
+const STEP_RESULT = {
+  fastForward: (reason) => ({ status: "skipped", reason }),
+  worktreeCleanup: (reason, ok) => ({ ok, removed: null, reason }),
+  actions: (reason, ok) => ({ ok, results: [], reason }),
+};
+
+// The configured origin URL, read before any insteadOf rewrite, names the repo.
+function originMismatchReason({ mainCheckout, repo, env }) {
+  let slug = null;
+  try {
+    const url = execFileSync("git", ["config", "--get", "remote.origin.url"], {
+      cwd: mainCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined },
+    }).trim();
+    slug = parseGitHubRemoteSlug(url);
+  } catch { /* no origin or not a git repo: slug stays null */ }
+  if (slug === null) return `skipped: the main checkout ${mainCheckout} has no readable github.com origin remote to match --repo ${repo}`;
+  if (!repoSlugEquals(slug, repo)) return `skipped: the main checkout ${mainCheckout} has origin ${slug}, not --repo ${repo}`;
+  return null;
+}
+
+// In test mode the default steps only touch a main checkout under the OS tmp dir.
+function testModeSkipReason(mainCheckout) {
+  if (process.env.NODE_ENV !== "test") return null;
+  const tmp = canonicalize(tmpdir());
+  if (canonicalize(mainCheckout).startsWith(tmp + path.sep)) return null;
+  return `skipped: test mode and the main checkout ${mainCheckout} is outside ${tmp}`;
+}
+
+// Post-merge steps, in the harness hooks' order: fast-forward the main
+// checkout, remove the merged branch's linked worktree, run the repo's
+// postMerge.actions. Each step receives { mainCheckout, repo, pr, branch,
+// headSha, env } and resolves its own result; a thrown step is recorded as a
+// failed result, so every step is fail-soft and independent of the others.
+// No step runs when the main checkout's origin is not --repo. In test mode a
+// default (non-injected) step also refuses a main checkout outside the tmp dir.
+async function runPostMergeSteps(context, injected = {}) {
+  const steps = { ...DEFAULT_POST_MERGE_STEPS, ...injected };
+  const originSkip = originMismatchReason(context);
+  const testModeSkip = testModeSkipReason(context.mainCheckout);
+  const result = {};
+  for (const name of ["fastForward", "worktreeCleanup", "actions"]) {
+    const skip = originSkip ?? (name in injected ? null : testModeSkip);
+    if (skip !== null) {
+      result[name] = STEP_RESULT[name](skip, true);
+      continue;
     }
-  };
-  const fastForward = await attempt(steps.fastForward, (reason) => ({ status: "skipped", reason }));
-  const worktreeCleanup = await attempt(steps.worktreeCleanup, (reason) => ({ ok: false, removed: null, reason }));
-  const actions = await attempt(steps.actions, (reason) => ({ ok: false, results: [], reason }));
-  return { fastForward, worktreeCleanup, actions };
+    try {
+      result[name] = await steps[name](context);
+    } catch (error) {
+      result[name] = STEP_RESULT[name](error instanceof Error ? error.message : String(error), false);
+    }
+  }
+  return result;
 }
 
 export async function mergePr(options, runtime = {}) {
@@ -654,8 +700,8 @@ export async function mergePr(options, runtime = {}) {
   // Only a confirmed MERGED postcondition reaches the post-merge steps.
   const headRefName = typeof prView?.headRefName === "string" && prView.headRefName.trim().length > 0 ? prView.headRefName.trim() : null;
   const postMerge = await runPostMergeSteps(
-    { mainCheckout: resolveMainWorktreeRoot(cwd), pr: options.pr, branch: headRefName, env },
-    { ...DEFAULT_POST_MERGE_STEPS, ...postMergeSteps },
+    { mainCheckout: resolveMainWorktreeRoot(cwd), repo: options.repo, pr: options.pr, branch: headRefName, headSha: currentHeadSha, env },
+    postMergeSteps,
   );
 
   return {

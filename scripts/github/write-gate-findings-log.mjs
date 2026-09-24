@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { parseAllWorktreePaths, realpathNearestExisting, resolveContainingWorktreeRoot } from "@dev-loops/core/loop/worktree-guard";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
 import { isDeepStrictEqual, parseArgs } from "node:util";
@@ -19,7 +17,7 @@ const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -675,33 +673,9 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
     .map((d) => d.index);
   return rejectFindingConflicts(findings, conflicts);
 }
-/**
- * Refuse an explicit tmp root inside a LINKED worktree of the repo at
- * `repoRoot`: a ledger written there is lost on prune and unreadable by the
- * merge. The main checkout and paths outside every checkout stay allowed. The
- * first `git worktree list` entry is the main checkout. A git failure leaves
- * nothing to compare against and allows the write.
- */
-function assertTmpRootOutsideLinkedWorktree(tmpRoot, repoRoot) {
-  let listing;
-  try {
-    listing = execFileSync("git", ["worktree", "list"], {
-      cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-      env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined },
-    });
-  } catch {
-    return;
-  }
-  const linked = parseAllWorktreePaths(listing).slice(1);
-  const resolved = realpathNearestExisting(path.resolve(repoRoot, tmpRoot));
-  const containing = resolveContainingWorktreeRoot(resolved, linked);
-  if (containing !== null) {
-    throw new Error(`--tmp-root ${tmpRoot} resolves inside the linked worktree ${containing}; gate findings ledgers must stay out of linked worktrees. Omit --tmp-root to use the main-anchored default ${resolveGateArtifactTmpRoot(repoRoot)}`);
-  }
-}
-
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
-  if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(options.tmpRoot, repoRoot);
+  // The ledger write resolves against repoRoot (process.cwd() on the CLI), so the guard does too.
+  if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
   const { findings: rawFindings, overallVerdict, provenance: wrapperProvenance } = await resolveFindings(options);
   // When a judge verdict artifact is supplied, enrich the findings with the
   // judge's relevance-based dispositions (GATE-EXEC-JUDGE-PHASE) before writing the ledger:

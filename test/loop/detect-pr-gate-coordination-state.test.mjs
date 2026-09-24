@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
-import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { execFileSync } from "node:child_process";
+import { initGitFixture, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
 import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
@@ -3388,6 +3389,8 @@ test("detect-pr-gate-coordination-state routes to pre_approval_gate when a linge
 // a blocked complete_fixer_disposition boundary ahead of ordinary routing.
 // ---------------------------------------------------------------------------
 
+// The checkpoint sits in the main worktree's tmp/ and the detector runs from a
+// linked worktree, as verify-fixer-disposition.mjs anchors it.
 test("detect-pr-gate-coordination-state blocks on an incomplete fixer-disposition checkpoint for the current head", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-disposition-"));
   const REPO = "owner/repo";
@@ -3396,6 +3399,9 @@ test("detect-pr-gate-coordination-state blocks on an incomplete fixer-dispositio
   const FIX_SHA = "fed9876543";
 
   try {
+    initGitFixture(tempDir);
+    const linked = path.join(tempDir, "tmp/worktrees/dev-loops/pr-3001");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "pr-3001", linked], { cwd: tempDir, stdio: "ignore" });
     const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
     const { normalizeFixerDispositionHandoff } = await import("@dev-loops/core/loop/fixer-disposition");
     const logPath = buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: HEAD_SHA, tmpRoot: "tmp" });
@@ -3479,7 +3485,7 @@ test("detect-pr-gate-coordination-state blocks on an incomplete fixer-dispositio
       },
     ]);
 
-    const runtime = buildMockRuntime(env, { repoRoot: tempDir });
+    const runtime = buildMockRuntime(env, { repoRoot: linked });
     const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR }, runtime);
 
     assert.equal(result.ok, true);

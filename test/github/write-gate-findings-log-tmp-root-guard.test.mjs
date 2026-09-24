@@ -51,6 +51,35 @@ test("--tmp-root inside a linked worktree exits non-zero, names the main-anchore
   }
 });
 
+test("with a bare main repo, --tmp-root inside the first linked worktree is still refused", async () => {
+  const { base, main } = makeRepo();
+  try {
+    const bare = path.join(base, "bare.git");
+    execFileSync("git", ["clone", "-q", "--bare", main, bare], { stdio: "ignore" });
+    const first = path.join(base, "first");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "first", first], { cwd: bare, stdio: "ignore" });
+    const result = await write(first, path.join(first, "tmp"));
+    assert.equal(result.code, 1, result.stderr);
+    assert.match(result.stderr, /linked worktree/);
+    assert.equal(existsSync(ledgerPath(path.join(first, "tmp"))), false);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("a --tmp-root run from a non-git dir still writes the ledger", async () => {
+  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), "ledger-non-git-")));
+  try {
+    for (const tmpRoot of ["tmp", path.join(dir, "abs-tmp")]) {
+      const result = await write(dir, tmpRoot);
+      assert.equal(result.code, 0, `${tmpRoot}: ${result.stderr}`);
+      assert.ok(existsSync(path.resolve(dir, ledgerPath(tmpRoot))), tmpRoot);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("an absolute --tmp-root outside any linked worktree still writes the ledger", async () => {
   const { base, main, linked } = makeRepo();
   const outside = realpathSync(mkdtempSync(path.join(os.tmpdir(), "ledger-outside-")));

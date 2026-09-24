@@ -87,7 +87,7 @@ export function dedupeRepoSlugOptions(options) {
 // remotes. The URI form (scheme://[user@]host[:port]/path) is checked before
 // the scp form (host:path), because the scp regex also matches URIs like
 // https://... — checking scp first would misparse the host out of the scheme.
-function parseGitHubRemoteSlug(url) {
+export function parseGitHubRemoteSlug(url) {
   let host, path;
   const uri = url.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/);
   const scp = url.match(/^(?:[^@/]+@)?([^/:]+):(.+)$/);

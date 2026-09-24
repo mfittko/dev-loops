@@ -33,7 +33,7 @@ import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.m
 import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
 import { resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
-import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { existsSync } from "node:fs";
@@ -763,8 +763,10 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // No checkpoint recorded for this head means nothing to enforce here (a PR
 // with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
-async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedThreads, tmpRoot = "tmp" }, runtime = {}) {
+async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
+  // Same main-anchored default verify-fixer-disposition.mjs writes under.
+  const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   const logPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   let raw;

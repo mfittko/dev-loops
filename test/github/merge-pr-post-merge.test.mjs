@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mergePr, main } from "../../scripts/github/merge-pr.mjs";
@@ -11,7 +11,7 @@ import { captureStream, initGitFixture } from "../_helpers.mjs";
 // origin, a main checkout, a linked worktree under tmp/worktrees/dev-loops/),
 // with a stubbed gh runtime.
 
-const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
+const ORIGIN_URL = "https://github.com/mfittko/dev-loops.git";
 const MERGE_COMMIT = "aaaa1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 const BRANCH = "issue-7";
 const OPTIONS = { repo: "mfittko/dev-loops", pr: 7, humanApprovedBy: "mfittko", method: "squash", stableRelease: false, standingAuthorization: true };
@@ -34,6 +34,9 @@ function makeRepo({ behind = true, actions = null } = {}) {
   mkdirSync(mainCheckout);
   initGitFixture(mainCheckout, { branch: "main", remote: origin });
   git(mainCheckout, ["push", "-q", "-u", "origin", "main"]);
+  // origin names the --repo slug; insteadOf routes it to the local bare repo.
+  git(mainCheckout, ["remote", "set-url", "origin", ORIGIN_URL]);
+  git(mainCheckout, ["config", `url.${origin}.insteadOf`, ORIGIN_URL]);
   const worktree = path.join(mainCheckout, "tmp/worktrees/dev-loops/issue-7");
   git(mainCheckout, ["worktree", "add", "-q", "-b", BRANCH, worktree]);
   if (behind) {
@@ -52,12 +55,14 @@ const localMain = (repo) => git(repo.mainCheckout, ["rev-parse", "refs/heads/mai
 const originMain = (repo) => git(repo.origin, ["rev-parse", "refs/heads/main"]);
 const listed = (repo) => git(repo.mainCheckout, ["worktree", "list", "--porcelain"]);
 
+// The PR head is the worktree's HEAD, so the cleanup's head-SHA match holds.
 function makeRuntime(repo, { prView = {}, mergeCode = 0, postMergeState = "MERGED", postMergeSteps } = {}) {
+  const head = git(repo.worktree, ["rev-parse", "HEAD"]);
   const view = {
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
     title: "fix: post-merge steps",
-    headRefOid: HEAD,
+    headRefOid: head,
     headRefName: BRANCH,
     url: "https://github.com/mfittko/dev-loops/pull/7",
     statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
@@ -74,7 +79,7 @@ function makeRuntime(repo, { prView = {}, mergeCode = 0, postMergeState = "MERGE
     runChild: async (cmd, args) => (args[0] === "pr" && args[1] === "merge"
       ? { stdout: "", stderr: mergeCode ? "merge blocked" : "", code: mergeCode }
       : { stdout: "", stderr: "", code: 0 }),
-    detectEvidence: async () => ({ ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], currentHeadSha: HEAD }),
+    detectEvidence: async () => ({ ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], currentHeadSha: head }),
     loadConfig: async () => ({ config: { autonomy: { humanMergeOnly: false }, refinement: { maxCopilotRounds: 0 } }, errors: [] }),
   };
   if (postMergeSteps) runtime.postMergeSteps = postMergeSteps;
@@ -162,7 +167,7 @@ for (const { name, overrides, error } of NOT_MERGED_CASES) {
 const ACTIONS = [{ name: "touch-marker", run: `touch ${MARKER}` }];
 
 test("AC6: a fast-forward git error is recorded and the other steps still run", withRepo({ actions: ACTIONS }, async (repo) => {
-  git(repo.mainCheckout, ["remote", "set-url", "origin", path.join(repo.base, "missing.git")]);
+  renameSync(repo.origin, `${repo.origin}.gone`);
   const result = await mergePr(OPTIONS, makeRuntime(repo));
   assert.equal(result.ok, true);
   assert.equal(result.merged, true);
@@ -222,6 +227,70 @@ test("the steps run in the hooks' order against the main checkout with the head 
     assert.equal(realpathSync(context.mainCheckout), repo.mainCheckout, "resolved from the linked worktree cwd");
     assert.equal(context.branch, BRANCH);
     assert.equal(context.pr, OPTIONS.pr);
+    assert.equal(context.repo, OPTIONS.repo);
+    assert.equal(context.headSha, git(repo.worktree, ["rev-parse", "HEAD"]));
+  }
+}));
+
+const STEP_NAMES = ["fastForward", "worktreeCleanup", "actions"];
+const reasons = (postMerge) => STEP_NAMES.map((name) => postMerge[name].reason);
+
+test("a worktree HEAD past the merged head (unpushed commits) is kept", withRepo({}, async (repo) => {
+  const runtime = makeRuntime(repo);
+  git(repo.worktree, ["commit", "-q", "--allow-empty", "-m", "unpushed"]);
+  const result = await mergePr(OPTIONS, runtime);
+  assert.equal(result.postMerge.worktreeCleanup.removed, null);
+  assert.match(result.postMerge.worktreeCleanup.reason, /does not match the merged head/);
+  assert.ok(existsSync(repo.worktree));
+}));
+
+for (const [label, arrange, pattern] of [
+  ["an origin naming another repo", (repo) => git(repo.mainCheckout, ["remote", "set-url", "origin", "https://github.com/someone/else.git"]), /has origin someone\/else, not --repo mfittko\/dev-loops/],
+  ["no origin remote", (repo) => git(repo.mainCheckout, ["remote", "remove", "origin"]), /no readable github\.com origin remote/],
+]) {
+  test(`${label} skips every step, injected or default, with a reason`, withRepo({ actions: ACTIONS }, async (repo) => {
+    arrange(repo);
+    const calls = [];
+    const result = await mergePr(OPTIONS, makeRuntime(repo, { postMergeSteps: { actions: async () => { calls.push("actions"); return null; } } }));
+    assert.equal(result.ok, true);
+    assert.equal(result.merged, true);
+    for (const reason of reasons(result.postMerge)) assert.match(reason, pattern);
+    assert.deepEqual(calls, []);
+    assert.ok(existsSync(repo.worktree));
+    assert.equal(existsSync(path.join(repo.mainCheckout, MARKER)), false);
+  }));
+}
+
+test("in test mode the default steps refuse a main checkout outside the tmp dir; injected steps still run", withRepo({}, async (repo) => {
+  const saved = process.env.TMPDIR;
+  const elsewhere = realpathSync(mkdtempSync(path.join(tmpdir(), "merge-post-elsewhere-")));
+  const mainBefore = localMain(repo);
+  try {
+    process.env.TMPDIR = elsewhere;
+    const calls = [];
+    const result = await mergePr(OPTIONS, makeRuntime(repo, { postMergeSteps: { actions: async () => { calls.push("actions"); return { ok: true, results: [] }; } } }));
+    assert.match(result.postMerge.fastForward.reason, /test mode/);
+    assert.match(result.postMerge.worktreeCleanup.reason, /test mode/);
+    assert.deepEqual(calls, ["actions"]);
+    assert.ok(existsSync(repo.worktree));
+    assert.equal(localMain(repo), mainBefore);
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = saved;
+    rmSync(elsewhere, { recursive: true, force: true });
+  }
+}));
+
+test("the cleanup keeps the worktree the merge runs from", withRepo({}, async (repo) => {
+  const saved = process.cwd();
+  try {
+    process.chdir(repo.worktree);
+    const result = await mergePr(OPTIONS, makeRuntime(repo));
+    assert.equal(result.postMerge.worktreeCleanup.removed, null);
+    assert.match(result.postMerge.worktreeCleanup.reason, /is inside/);
+    assert.ok(existsSync(repo.worktree));
+  } finally {
+    process.chdir(saved);
   }
 }));
 

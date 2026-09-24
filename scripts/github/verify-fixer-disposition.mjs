@@ -8,6 +8,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { captureParsedReviewThreads, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
 import { buildContainmentMap } from "./_commit-containment.mjs";
@@ -34,7 +35,10 @@ Optional:
                                (over)writes the durable checkpoint for --head-sha before
                                verifying. Mutually exclusive with --dispositions-file.
   --dispositions-file <path>  Same shape, read from a file instead of an inline argument.
-  --tmp-root <path>            Root tmp directory (default: tmp/)
+  --tmp-root <path>            Root tmp directory (default: the main git
+                               worktree's tmp/, so a prune of a linked worktree
+                               never takes the checkpoint with it). A path
+                               inside a linked worktree is refused (exit 1).
 Idempotent: on re-entry (no --dispositions), the existing checkpoint is read and
 live GitHub state is re-verified; a thread already replied with its commit's
 evidence is never replied to twice, and a thread already resolved live is left
@@ -80,7 +84,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
     headSha: undefined,
     dispositions: undefined,
     dispositionsFile: undefined,
-    tmpRoot: "tmp",
+    tmpRoot: undefined,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -204,7 +208,8 @@ export async function verifyFixerDisposition(
   options,
   { env = process.env, ghCommand = "gh", runChild, repoRoot = process.cwd() } = {},
 ) {
-  const tmpRoot = options.tmpRoot || "tmp";
+  if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
+  const tmpRoot = options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot);
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const handoff = await loadOrWriteCheckpoint(options, fullPath, logPath);

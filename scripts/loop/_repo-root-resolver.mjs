@@ -19,7 +19,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { parseAllWorktreePaths, parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
+import { parseAllWorktreePaths, parseMainWorktreePath, realpathNearestExisting, resolveContainingWorktreeRoot } from "@dev-loops/core/loop/worktree-guard";
 
 // Scrub GIT_DIR/GIT_WORK_TREE for every git call in this module: an inherited
 // pointer to a DIFFERENT repo overrides `cwd` outright, so `git rev-parse` /
@@ -111,6 +111,45 @@ export function resolveMainWorktreeRoot(cwd, { gitCommand = "git" } = {}) {
  */
 export function resolveGateArtifactTmpRoot(cwd, { gitCommand = "git" } = {}) {
   return path.join(resolveMainWorktreeRoot(cwd, { gitCommand }), "tmp");
+}
+
+/**
+ * Entries of `git worktree list --porcelain` run in `cwd`, in listing order:
+ * `{ path, head, branch }` (`branch` is the full `refs/heads/...` ref, absent
+ * on a detached or bare entry). The first entry is the main checkout, or the
+ * bare repo when the main is bare. Throws on a git failure.
+ */
+export function listWorktreeEntries(cwd, { gitCommand = "git" } = {}) {
+  const listing = execFileSync(gitCommand, ["worktree", "list", "--porcelain"], {
+    cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnvNoDirOverrides(),
+  });
+  return listing.split(/\n\s*\n/u).map((block) => {
+    const lines = block.split("\n");
+    const field = (key) => lines.find((l) => l.startsWith(`${key} `))?.slice(key.length + 1);
+    return { path: field("worktree"), head: field("HEAD"), branch: field("branch") };
+  }).filter((e) => e.path);
+}
+
+/**
+ * Refuse a gate findings ledger tmp root inside a LINKED worktree of the repo
+ * at `repoRoot`: a ledger written there is lost on prune and unreadable by the
+ * merge. `absTmpRoot` must already be resolved against the base the caller
+ * writes under. The main checkout and paths outside every checkout stay
+ * allowed. A git failure (e.g. `repoRoot` is not a git repo) leaves nothing to
+ * compare against and allows the write.
+ */
+export function assertTmpRootOutsideLinkedWorktree(absTmpRoot, repoRoot, { gitCommand = "git" } = {}) {
+  let entries;
+  try {
+    entries = listWorktreeEntries(repoRoot, { gitCommand });
+  } catch {
+    return;
+  }
+  const linked = entries.slice(1).map((e) => e.path);
+  const containing = resolveContainingWorktreeRoot(realpathNearestExisting(absTmpRoot), linked);
+  if (containing !== null) {
+    throw new Error(`--tmp-root ${absTmpRoot} resolves inside the linked worktree ${containing}; gate findings ledgers must stay out of linked worktrees. Omit --tmp-root to use the main-anchored default ${resolveGateArtifactTmpRoot(repoRoot, { gitCommand })}`);
+  }
 }
 
 export function resolveLedgerCheckouts(cwd, { gitCommand = "git" } = {}) {
