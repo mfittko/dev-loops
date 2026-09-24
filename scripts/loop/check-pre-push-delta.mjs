@@ -32,14 +32,14 @@ import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> [--spec-identity <id>] [--worktree <dir>]
+const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> [--worktree <dir>]
 
 Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
   --act-list <path>       The judge-pass --out act list the fix resolves
   --baseline <sha>        reviewBaselineHead: the head the gate round reviewed (hex SHA)
-  --spec-identity <id>    Current spec identity passed to the reviewer
+  --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
   --invocation <n>        1-based delta review invocation in this sequence (max 3)
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
@@ -96,11 +96,13 @@ export function parseCheckPrePushDeltaArgs(argv) {
     throw parseError(`--invocation must be an integer in 1..${DELTA_MAX_INVOCATIONS}`);
   }
   if (values.result && invocation === null) throw parseError("--result requires --invocation <1-3>");
+  const specIdentity = values["spec-identity"]?.trim() || null;
+  if (!values.result && !specIdentity) throw parseError("--spec-identity <id> is required without --result");
   return {
     help: false,
     actList: values["act-list"],
     baseline,
-    specIdentity: values["spec-identity"] ?? null,
+    specIdentity,
     result: values.result ?? null,
     invocation,
     worktree: values.worktree ?? process.cwd(),

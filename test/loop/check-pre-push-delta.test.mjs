@@ -54,8 +54,9 @@ test("the baseline resolves to a full SHA, and HEAD equal to the baseline fails"
   const { actList } = fixture();
   const full = `${A}${"0".repeat(26)}`;
   const resolve = (head) => ({ ...quiet, revParse: (_worktree, rev) => (rev === "HEAD" ? head : full), isAncestor: () => true });
-  assert.equal(runCli(["--act-list", actList, "--baseline", A], resolve(B)).input.reviewBaselineHead, full);
-  assert.throws(() => runCli(["--act-list", actList, "--baseline", A], resolve(full)), /equals the baseline/);
+  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"];
+  assert.equal(runCli(args, resolve(B)).input.reviewBaselineHead, full);
+  assert.throws(() => runCli(args, resolve(full)), /equals the baseline/);
 });
 
 test("a baseline that is not an ancestor of HEAD fails", () => {
@@ -68,7 +69,7 @@ test("a baseline that is not an ancestor of HEAD fails", () => {
       return false;
     },
   };
-  assert.throws(() => runCli(["--act-list", actList, "--baseline", A], seam), /is not an ancestor of worktree HEAD/);
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"], seam), /is not an ancestor of worktree HEAD/);
   assert.deepEqual(calls, [[A, B]]);
 });
 
@@ -77,6 +78,9 @@ test("argument errors fail closed", () => {
   assert.throws(() => parseCheckPrePushDeltaArgs(["--act-list", "x", "--baseline", A, "--result", "r"]), /--invocation/);
   assert.throws(() => parseCheckPrePushDeltaArgs(["--act-list", "x", "--baseline", A, "--bogus"]), /bogus/);
   assert.throws(() => parseCheckPrePushDeltaArgs(["--act-list", "x", "--baseline", "HEAD~1"]), /hex commit SHA/);
+  for (const extra of [[], ["--spec-identity", "  "]]) {
+    assert.throws(() => parseCheckPrePushDeltaArgs(["--act-list", "x", "--baseline", A, ...extra]), /--spec-identity/);
+  }
   for (const n of ["0", "4", "1.5"]) {
     assert.throws(() => parseCheckPrePushDeltaArgs(["--act-list", "x", "--baseline", A, "--result", "r", "--invocation", n]), /1\.\.3/, n);
   }
