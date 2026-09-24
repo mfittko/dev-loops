@@ -7011,6 +7011,15 @@ describe("resolveRoleModel — angle vs role disambiguation (kind)", () => {
     });
   }
 
+  test("a models.tiers.low.claude override moves every routine role back to sonnet on Claude", () => {
+    // ADR 0091: built-in low is opus on Claude; one line restores sonnet.
+    const config = { models: { tiers: { low: { claude: "sonnet" } } } };
+    for (const role of ["developer", "docs", "fixer", "quality"]) {
+      assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "sonnet", role);
+    }
+    assert.equal(resolveRoleModel(config, { role: "review", harness: "claude" }), "opus");
+  });
+
   test("on Pi with distinct tier ids, the docs ANGLE takes the high tier and the docs ROLE the low tier", () => {
     // Zero-config maps both low and high to null on Pi, so a regression where
     // the angle wrongly took the docs (low) tier would still pass (null===null).
