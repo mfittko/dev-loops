@@ -181,7 +181,7 @@ function gateFindingsLedgerSkipReason(ledgerDir) {
  */
 function dirtyTreeSkipReason(target, gitCommand) {
   try {
-    const status = execFileSync(gitCommand, ["status", "--porcelain"], { ...gitOptions(), cwd: target });
+    const status = execFileSync(gitCommand, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"], { ...gitOptions(), cwd: target });
     return status.trim() === "" ? null : `skipped: ${target} has uncommitted changes`;
   } catch (err) {
     const detail = (err.stderr ?? err.message ?? "").toString().trim();

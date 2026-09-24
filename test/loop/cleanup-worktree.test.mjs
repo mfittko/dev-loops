@@ -344,6 +344,21 @@ test("cleanup --branch --head-sha: an uncommitted edit at the merged head skips 
   }
 });
 
+test("cleanup --branch: status.showUntrackedFiles=no does not hide an untracked file from the dirty-tree guard", () => {
+  const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);
+  try {
+    git(main, ["config", "status.showUntrackedFiles", "no"]);
+    const edit = path.join(paths["issue-7"], "untracked.txt");
+    writeFileSync(edit, "local work\n");
+    const res = cleanupWorktree({ repoRoot: main, branch: "issue-7" });
+    assert.deepEqual({ ok: res.ok, removed: res.removed }, { ok: true, removed: null });
+    assert.match(res.reason, /uncommitted changes/);
+    assert.equal(readFileSync(edit, "utf8"), "local work\n");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("cleanup --branch: a failed git status skips the removal (fail safe)", () => {
   const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);
   try {
@@ -353,7 +368,7 @@ test("cleanup --branch: a failed git status skips the removal (fail safe)", () =
     assert.deepEqual({ ok: res.ok, removed: res.removed }, { ok: true, removed: null });
     assert.match(res.reason, /cannot read git status/);
     const log = readFileSync(logFile, "utf8");
-    assert.match(log, /^status --porcelain$/m, "the status call ran");
+    assert.match(log, /^status --porcelain --untracked-files=normal --ignore-submodules=none$/m, "the status call ran");
     assert.doesNotMatch(log, /worktree remove/);
     assert.ok(existsSync(paths["issue-7"]));
   } finally {
