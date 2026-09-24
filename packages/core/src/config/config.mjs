@@ -49,12 +49,13 @@ const BUILTIN_ROLE_TIERS = Object.freeze({
   quality: "low",
   refiner: "high",
   review: "high",
-  // The pre-PR review pass (skills/docs/pre-pr-review-contract.md) runs one
-  // fresh-context general-purpose reviewer before the first push. Default tier
+  // The pre-push reviewer (skills/docs/pre-pr-review-contract.md) runs one
+  // fresh-context general-purpose reviewer before the first push (full mode)
+  // and before a gate act-list fix push (delta mode). Default tier
   // is high (strongest): with zero config that resolves to opus on Claude and
   // null (inherit) on Pi. Operators opt into a concrete strong model per
   // harness via models.tiers/roleTiers.
-  "pre-PR-reviewer": "high",
+  "pre-push-reviewer": "high",
   "dev-loop": "inherit",
 });
 

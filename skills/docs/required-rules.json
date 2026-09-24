@@ -575,6 +575,34 @@
       "enforcement": "doc"
     },
     {
+      "id": "PRE-PUSH-DELTA-EXIT-BOUND",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PUSH-DELTA-FRESHNESS",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PUSH-DELTA-INPUT",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PUSH-DELTA-NOT-GATE-EVIDENCE",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PUSH-DELTA-PINNED-BASELINE",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PUSH-DELTA-RESULT",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PUSH-DELTA-TRIGGER",
+      "enforcement": "doc"
+    },
+    {
       "id": "QUEUE-BOARD-DEVLOOPS-RESOLUTION"
     },
     {

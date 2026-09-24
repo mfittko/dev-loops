@@ -1,8 +1,12 @@
-# Pre-PR review contract
+# Pre-push review contract
 
-Canonical owner for the pre-PR review phase: a developer-briefed, fresh-context,
+Canonical owner for the `pre-push-reviewer` role and its two bounded modes. Full
+mode is the pre-PR review phase: a developer-briefed, fresh-context,
 general-purpose review pass that runs before the first push and fixes findings
-in-tree. Other docs MAY link this contract; they MUST NOT redefine it.
+in-tree. Delta mode (see [Delta mode](#delta-mode)) reviews a gate act-list fix
+before its push. Other docs MAY link this contract; they MUST NOT redefine it.
+Full mode is unchanged by delta mode. The sections up to Delta mode describe full
+mode.
 
 ## Why this phase exists
 
@@ -49,7 +53,7 @@ a fixed angle: it reviews holistically per the brief. Fresh context is required,
 because the implementer rationalizes their own code and a same-context
 self-review is near-worthless. This is distinct from the single developer
 self-check (`LOCAL-DEV-SELF-CHECK-NO-FANOUT`), which the implementer runs against
-the plan; the pre-PR reviewer MUST be a separate fresh-context agent. The
+the plan; the pre-push reviewer MUST be a separate fresh-context agent. The
 reviewer returns findings only and MUST NOT edit the tree; the implementer
 applies the fixes.
 
@@ -65,7 +69,7 @@ task and the config-resolved model (see below) passed only when non-null:
   brief as its prompt and the resolved model as the Agent `model` parameter.
 - Pi: dispatch one fresh subagent with the brief as its task (a general-purpose
   reviewer; the PR-bound `review` gate procedure does not apply). The model stays
-  keyed on the `pre-PR-reviewer` role.
+  keyed on the `pre-push-reviewer` role.
 
 ### Adversarial-enumeration checklist
 
@@ -85,14 +89,14 @@ to name it too.
 ## Reviewer model (harness-agnostic, config-resolved)
 
 <!-- rule: PRE-PR-MODEL-CONFIG-RESOLVED -->
-`PRE-PR-MODEL-CONFIG-RESOLVED`: the pre-PR reviewer's model MUST be resolved
-through `resolveRoleModel(config, { role: "pre-PR-reviewer", harness })` from
+`PRE-PR-MODEL-CONFIG-RESOLVED`: the pre-push reviewer's model, in both modes, MUST be resolved
+through `resolveRoleModel(config, { role: "pre-push-reviewer", harness })` from
 `@dev-loops/core/config`. No model literal is hardcoded in this phase's prose,
 tooling, or dispatch. The resolved model MUST be passed to the dispatch only when
 it is non-null (the existing tier-at-dispatch contract); a `null` resolution
 passes no override and inherits the session model. Operators opt into a concrete
 strong model per harness in `.devloops` via `models.tiers.<alias>.<harness>`
-mapped through `models.roleTiers.pre-PR-reviewer` (or a direct `models.roles`
+mapped through `models.roleTiers.pre-push-reviewer` (or a direct `models.roles`
 override). Each harness value MUST be a model token that harness's dispatch
 accepts. On the Claude Code harness the Agent-tool `model` enum accepts only
 `sonnet|opus|haiku|fable`, so an operator opting into Fable sets `fable` (the
@@ -135,6 +139,48 @@ ledger, no gate verdict comment. It is consistent with
 The pre-PR pass is one general-purpose reviewer, not the angle set the fan-out
 gate uses.
 
+## Delta mode
+
+Delta mode is one fresh holistic review of a gate act-list fix before that fix
+is pushed. It checks the cumulative fix delta against the act items the fix
+claims to resolve, so a fix-induced regression is caught before it costs another
+gate round, CI run and review cycle. It resolves the same `pre-push-reviewer`
+role and tier as full mode (`PRE-PR-MODEL-CONFIG-RESOLVED`) and uses the same
+harness dispatch. The only delta source is the gate judge's act list. The
+deterministic checks live in `@dev-loops/core/loop/pre-push-delta-review`; the
+coordinator runs them through `dev-loops loop pre-push-delta`.
+
+<!-- rule: PRE-PUSH-DELTA-TRIGGER -->
+`PRE-PUSH-DELTA-TRIGGER`: delta mode MUST run after the gate Phase 4 fixer commits a fix for a judge act list and before that fix is pushed. A push with no act-list fix MUST NOT get a delta review, even when a PR exists. Standalone implementation pushes and the full-mode first push are unaffected.
+
+<!-- rule: PRE-PUSH-DELTA-PINNED-BASELINE -->
+`PRE-PUSH-DELTA-PINNED-BASELINE`: every delta sequence MUST bind `reviewBaselineHead..candidateHead`, where `reviewBaselineHead` is the head the gate round reviewed and stays pinned for the whole sequence. A second local fix `C` after candidate `B` MUST be reviewed as `A..C`, never only `B..C`, with the same act-set identity. A new gate round starts a new sequence.
+
+<!-- rule: PRE-PUSH-DELTA-INPUT -->
+`PRE-PUSH-DELTA-INPUT`: the reviewer input MUST carry `reviewBaselineHead` and `candidateHead`, the act-item refs with their judge dispositions from the gate findings ledger, the current spec identity, the act items' angle names as surface hints, and the adversarial-enumeration checklist. The reviewer reads the cumulative diff from the worktree; the coordinator MUST NOT inline diff bytes. The input MUST NOT carry sibling reviewer verdicts or "clean" claims. The reviewer MAY widen to surrounding code, spec or prior finding evidence when a concrete dependency requires it, and it MUST record each widened read in `widenedReads[]`.
+
+<!-- rule: PRE-PUSH-DELTA-RESULT -->
+`PRE-PUSH-DELTA-RESULT`: the reviewer MUST return a `DeltaPrePushReviewResult` bound to the baseline, candidate and act set, with a status and evidence for every claimed act item. The status MUST be `resolved`, `not_resolved` or `cannot_verify`; `cannot_verify` stays distinct from `not_resolved`. `widenedReads[]` is required, and empty when nothing was widened. A result with a missing or unknown status is rejected.
+
+```text
+DeltaPrePushReviewResult {
+  reviewBaselineHead, candidateHead
+  actionableItems[] { ref, status: resolved | not_resolved | cannot_verify, evidence[] }
+  newFindings[] { severity, summary, evidence[] }
+  widenedReads[] { path, reason }
+  outcome: locally_clear | needs_fix | bounded_out
+}
+```
+
+<!-- rule: PRE-PUSH-DELTA-EXIT-BOUND -->
+`PRE-PUSH-DELTA-EXIT-BOUND`: `locally_clear` MUST require every claimed act item `resolved`, none `cannot_verify`, and no new finding of severity medium or higher. A sequence MUST NOT exceed three delta review invocations, one fresh reviewer each, with no fan-out. When the third review is not locally clear, the outcome is `bounded_out` with the residual evidence: no fourth review runs, the committed candidate is pushed into the normal gate path, and no success is claimed.
+
+<!-- rule: PRE-PUSH-DELTA-FRESHNESS -->
+`PRE-PUSH-DELTA-FRESHNESS`: before each invocation the fix MUST be committed and `candidateHead` read from the worktree. A result whose `candidateHead` differs from the current worktree head MUST NOT authorize the push; a head change outside the loop needs a new review against the current candidate.
+
+<!-- rule: PRE-PUSH-DELTA-NOT-GATE-EVIDENCE -->
+`PRE-PUSH-DELTA-NOT-GATE-EVIDENCE`: a delta result is ephemeral local evidence. It MUST NOT become a gate verdict, findings ledger entry, PR review, comment, thread or merge-readiness signal. The delta reviewer MUST NOT run gate fan-out, write the findings ledger, post a verdict, resolve threads, satisfy a gate requirement or authorize merge. The pushed fix still gets the full gate round (`PRE-PR-GATE-STILL-AUTHORITY`).
+
 ## Cross-references
 
 - [Local Implementation](../local-implementation/SKILL.md): `LOCAL-PRE-PR-REVIEW-BEFORE-PUSH` wires this phase into the implementation loop; `LOCAL-DEV-SELF-CHECK-NO-FANOUT` and `LOCAL-COMMIT-BEFORE-EXIT` are the adjacent steps.
@@ -142,3 +188,4 @@ gate uses.
 - [Main-agent contract](main-agent-contract.md): model tier at dispatch (`resolveRoleModel`, pass the override only when non-null).
 - [PR Lifecycle Contract](pr-lifecycle-contract.md): the post-push gate/Copilot/approval sequence this pass pre-filters.
 - [Gate Review Sub-Loop Contract](gate-review-sub-loop-contract.md): the fan-out gate that remains the authority.
+- [dev-loop SKILL](../dev-loop/SKILL.md) and the fixer agent (`agents/fixer.agent.md`): the gate fix pass reaches delta mode between the act-list fix commit and its push.

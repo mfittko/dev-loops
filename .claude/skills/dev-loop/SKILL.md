@@ -226,6 +226,12 @@ finding, mismatched spec-authority identity) means re-run the judge at the curre
 silent severity-only fallback or a silent skip of spec authority. See Gate Review Sub-Loop Contract
 Phase 3.5 and `skills/docs/spec-authority-contract.md` for the enforcement rules these flags carry.
 
+After the fixer commits the act-list fix and before it pushes, the gate coordinator runs the
+delta-mode pre-push review (`PRE-PUSH-DELTA-TRIGGER` in the
+[Pre-push review contract](../docs/pre-pr-review-contract.md#delta-mode)), which owns the
+baseline, input, result, three-review bound and freshness rules. `dev-loops-run cli/index.mjs loop pre-push-delta`
+builds the reviewer input and checks each result against the current worktree head.
+
 Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md) and Phase 3 of [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) for the full refusal conditions.
 
 **Bounded test runs (enforced — #1650):** Bound every directly launched focused suite containing gh mocks with `timeout 90 bun test <file>` (or an equivalent hard timeout). Output truncation does not bound execution. `bun run verify` already bounds its suites. Bun is the development runner; Node `>=24` consumer-runtime and npm publication checks remain explicit exceptions.

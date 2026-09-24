@@ -169,14 +169,14 @@ localImplementation:
 # The tier sets `claude` to `opus` and `pi` to openai-codex/gpt-5.6-sol — a
 # native OpenAI-Codex child model served by pi's own openai-codex (Codex
 # Responses) provider. The model is never hardcoded in phase prose/tooling — it
-# is resolved via resolveRoleModel(config, { role: "pre-PR-reviewer", harness }).
+# is resolved via resolveRoleModel(config, { role: "pre-push-reviewer", harness }).
 models:
   tiers:
     pre-pr-strong:
       claude: opus
       pi: openai-codex/gpt-5.6-sol
   roleTiers:
-    pre-PR-reviewer: pre-pr-strong
+    pre-push-reviewer: pre-pr-strong
 
 tracker:
   board:
