@@ -930,7 +930,7 @@ describe("matchesDiffExcludeGlob / classifyDiffFileExclusion — diff-inline exc
     for (const p of ["bun.lock", "packages/app/bun.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json", "packages/core/package-lock.json"]) {
       assert.equal(classifyDiffFileExclusion(p), "default", p);
     }
-    for (const p of ["dist/index.js", "node_modules/x/index.js", ".claude/agents/foo.md"]) {
+    for (const p of ["dist/index.js", "node_modules/x/index.js", "coverage/x.json"]) {
       assert.equal(classifyDiffFileExclusion(p), "default", p);
     }
   });
@@ -939,10 +939,18 @@ describe("matchesDiffExcludeGlob / classifyDiffFileExclusion — diff-inline exc
     assert.equal(classifyDiffFileExclusion("packages/core/src/loop/review-dispatch-plan.mjs"), null);
   });
 
+  test("classifyDiffFileExclusion: hand-written .claude/ and lib/ source is not excluded by default", () => {
+    for (const p of [".claude/agents/foo.md", "lib/x.js", "scripts/lib/audit-pi-session.mjs"]) {
+      assert.equal(classifyDiffFileExclusion(p), null, p);
+    }
+  });
+
   test("classifyDiffFileExclusion: a caller excludeGlobs entry is 'configured', layered on top of the default set (never replacing it)", () => {
     assert.equal(classifyDiffFileExclusion("dist/index.js"), "default"); // still excluded even with no excludeGlobs
     assert.equal(classifyDiffFileExclusion("vendor/generated.rb", { excludeGlobs: ["vendor/**"] }), "configured");
     assert.equal(classifyDiffFileExclusion("package-lock.json", { excludeGlobs: [] }), "default");
+    assert.equal(classifyDiffFileExclusion(".claude/agents/foo.md", { excludeGlobs: [".claude/**"] }), "configured");
+    assert.equal(classifyDiffFileExclusion("lib/x.js", { excludeGlobs: ["lib/**"] }), "configured");
   });
 
   test("DEFAULT_DIFF_EXCLUDE_GLOBS is frozen and non-empty", () => {
@@ -982,6 +990,24 @@ describe("filterDiffForInline — filtered diff for the shared per-head block (i
     assert.ok(filteredDiff.includes("new line"));
     assert.deepEqual(excludedFiles, [{ path: "package-lock.json", reason: "default" }]);
     assert.deepEqual(includedFiles, ["src/foo.mjs"]);
+  });
+
+  test("scripts/lib/ and .claude/ file blocks stay in filteredDiff byte-for-byte; only the lockfile is excluded", () => {
+    const blockFor = (p) => [
+      `diff --git a/${p} b/${p}`,
+      `--- a/${p}`,
+      `+++ b/${p}`,
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+    ].join("\n");
+    const libBlock = blockFor("scripts/lib/a.mjs");
+    const claudeBlock = blockFor(".claude/hooks/b.mjs");
+    const { filteredDiff, excludedFiles, includedFiles } = filterDiffForInline(`${libBlock}\n${claudeBlock}\n${LOCKFILE_HUNK}\n`);
+    assert.ok(filteredDiff.includes(libBlock));
+    assert.ok(filteredDiff.includes(claudeBlock));
+    assert.deepEqual(includedFiles, ["scripts/lib/a.mjs", ".claude/hooks/b.mjs"]);
+    assert.deepEqual(excludedFiles, [{ path: "package-lock.json", reason: "default" }]);
   });
 
   test("a non-excluded file's block passes through byte-for-byte unchanged", () => {
