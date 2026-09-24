@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.4-pre.2
+
+### Added
+
+- `dev-loops loop audit-session` now audits Claude Code transcripts too, sharing Pi's snowball/threshold metrics via each harness's own per-turn prompt-size extraction (#2322)
+- New `dev-loops gate resolve-role` command prints the reviewer role for a gate angle and exits nonzero when the angle is not allowed for that gate (#2336)
+
+### Changed
+
+- One converged Copilot review now covers later heads; a later code fix needs only the pre-approval gate review, below or at the round cap (#2427)
+- A new config setting, `refinement.requireCopilotConvergenceAtLatestHead: true`, restores the rule that each significant change needs a new converged Copilot review (#2427)
+- A Copilot body disposition record now clears a merge finding only for the review it names (#2427)
+- Release notes list one line per change under one Added, Changed and Fixed heading, and the changelog gate enforces the fragment format (#2429)
+
+### Fixed
+
+- The grill step no longer counts as clean from a well-formed AC/DoD matrix alone; it needs a posted grill results comment or an operator bypass first (#2364)
+
 ## 1.0.4-pre.1
 
 ### Added
