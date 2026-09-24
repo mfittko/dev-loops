@@ -61,3 +61,16 @@ test("MAIN-AGENT-FILING-BLOCKER-ONLY lives in the main-agent contract: new issue
   assert.match(section, /blocks a merge or deadlocks a PR/);
   assert.match(section, /comment on an existing issue or epic/);
 });
+
+test("the judge `defer` bullets file a new issue only for a blocker, never via create-issue.mjs", async () => {
+  for (const file of [CONTRACT, "agents/judge.agent.md"]) {
+    const text = await readFile(`${repoRoot}${file}`, "utf8");
+    const start = text.indexOf("- `defer` — ");
+    assert.notEqual(start, -1, `${file}: the judge defer bullet must exist`);
+    const bullet = text.slice(start, text.indexOf("- `reject` — ", start));
+    assert.match(bullet, /batched deferral comment/, `${file}`);
+    assert.match(bullet, /only when the finding is a blocker/, `${file}`);
+    assert.match(bullet, /MAIN-AGENT-FILING-BLOCKER-ONLY/, `${file}`);
+    assert.doesNotMatch(bullet, /create-issue\.mjs|files it by hand|new issue is warranted/, `${file}`);
+  }
+});

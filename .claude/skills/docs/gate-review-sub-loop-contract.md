@@ -1065,8 +1065,8 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
   is `act` regardless of its severity label. Round 1 is the cheapest fix point, so a real
   AC-relevant `low` is acted up front, never auto-deferred on its label.
 - `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract):
-  the draft is the durable ledger record, and the conductor consuming the verdict appends or
-  files it by hand. The defer bar is high (net-reduction policy): a `nit` MUST NOT get
+  the draft is the durable ledger record, and `judge-pass`'s batched deferral comment on the
+  comment target records the deferral (`GATE-EXEC-DEFERRAL-RECORD`). The defer bar is high (net-reduction policy): a `nit` MUST NOT get
   a verdict `disposition` of `defer` (merged into the ledger as `judgeDisposition`; `act` —
   only when it rides an already-planned fix pass — or `reject`, and the resolved thread note
   is its record; this governs the relevance/filing axis only, while the severity-derived
@@ -1078,10 +1078,10 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
   demonstrable bug), and a genuinely non-blocking/cosmetic `low` that clears none of those
   defaults to `reject`. When the judge's briefing
   names an existing open issue covering the finding's territory, the `followUpDraft` MUST be
-  titled `Append to issue N: ...`; coverage resolution is otherwise the conductor's job — the
-  conductor MUST check the open issues (via `list-issues.mjs`) before filing and append a
-  comment to a covering issue (via `comment-issue.mjs`) instead of filing a new one (via
-  `create-issue.mjs`); a new issue is warranted only when none covers the territory.
+  titled `Append to issue N: ...`. Beyond that record, the conductor at most appends a comment
+  to an existing covering issue (via `comment-issue.mjs`), and it files a new issue from a
+  deferred finding only when the finding is a blocker (`MAIN-AGENT-FILING-BLOCKER-ONLY` in the
+  [main-agent contract](main-agent-contract.md)).
 - `reject` — out-of-scope against a named non-goal or scope boundary, or below the defer
   bar; this PR is not the place, and a follow-up is not warranted.
 - `rationale` MUST name the criterion, non-goal, scope boundary, or defer-bar test the
