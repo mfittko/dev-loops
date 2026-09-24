@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.4-pre.3
+
+### Changed
+
+- Routine subagents (developer, docs, fixer, quality) now default to opus on Claude; set `models.tiers.low.claude` to pick a cheaper model (#2433)
+
 ## 1.0.4-pre.2
 
 ### Added
