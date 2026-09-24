@@ -28,6 +28,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { resolveWorktreePath, WORKTREE_NAMESPACE } from "@dev-loops/core/loop/handoff-envelope";
+import { WORKTREE_CLEANUP_TIMEOUT_MS } from "@dev-loops/core/loop/main-checkout-ff";
 import { canonicalize } from "./_worktree-path.mjs";
 import { gitEnvNoDirOverrides, listWorktreeEntries } from "./_repo-root-resolver.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -150,16 +151,21 @@ function isUnderNamespace(target, repoRoot) {
   return within(nsRoot, realRoot) && within(real, nsRoot);
 }
 
-// Every cleanup git call drops GIT_DIR/GIT_WORK_TREE so it targets the repo listWorktreeEntries enumerated.
-const gitOptions = () => ({ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnvNoDirOverrides() });
+// Every cleanup git call drops GIT_DIR/GIT_WORK_TREE so it targets the repo
+// listWorktreeEntries enumerated, and is bounded by the remaining budget so a hung git
+// cannot block the merge flow that runs the cleanup.
+const gitOptions = (timeoutMs) => ({ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnvNoDirOverrides(), timeout: timeoutMs });
+
+// execFileSync kills a call that outlives its timeout with SIGTERM.
+const timedOut = (err) => err?.code === "ETIMEDOUT" || err?.signal === "SIGTERM";
 
 /**
  * The LINKED worktree entry under the namespace that has `branch` checked
  * out, or null. The first porcelain entry is the main checkout (or a bare
  * repo) and is never a candidate.
  */
-function findLinkedWorktreeForBranch(root, branch, gitCommand) {
-  const entries = listWorktreeEntries(root, { gitCommand });
+function findLinkedWorktreeForBranch(root, branch, gitCommand, timeoutMs) {
+  const entries = listWorktreeEntries(root, { gitCommand, timeout: timeoutMs });
   return entries.slice(1).find((e) => e.branch === `refs/heads/${branch}` && isUnderNamespace(e.path, root)) ?? null;
 }
 
@@ -182,11 +188,14 @@ function gateFindingsLedgerSkipReason(ledgerDir) {
  * Skip reason when `target` has tracked or untracked non-ignored changes, else
  * null. A failed status call also skips (fail safe).
  */
-function dirtyTreeSkipReason(target, gitCommand) {
+function dirtyTreeSkipReason(target, gitCommand, timeoutMs) {
   try {
-    const status = execFileSync(gitCommand, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"], { ...gitOptions(), cwd: target });
+    const status = execFileSync(gitCommand, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"], { ...gitOptions(timeoutMs), cwd: target });
     return status.trim() === "" ? null : `skipped: ${target} has uncommitted changes`;
   } catch (err) {
+    if (timedOut(err)) {
+      return `skipped: git status of ${target} timed out; treating it as having uncommitted changes`;
+    }
     const detail = (err.stderr ?? err.message ?? "").toString().trim();
     return `skipped: cannot read git status of ${target} (${detail}); treating it as having uncommitted changes`;
   }
@@ -200,16 +209,23 @@ function dirtyTreeSkipReason(target, gitCommand) {
  */
 export function cleanupWorktree(
   { repoRoot, issue, pr, path: explicitPath, branch, headSha, protectedPaths = [] },
-  { gitCommand = "git" } = {},
+  { gitCommand = "git", timeoutMs = WORKTREE_CLEANUP_TIMEOUT_MS } = {},
 ) {
   const root = path.resolve(repoRoot);
+  // One budget for the whole cleanup, as the former hook path bounded it: each
+  // git call gets only the time left, so hung calls cannot add up.
+  const deadline = Date.now() + timeoutMs;
+  const left = () => Math.max(1, deadline - Date.now());
 
   let target;
   if (branch !== undefined) {
     let entry;
     try {
-      entry = findLinkedWorktreeForBranch(root, branch, gitCommand);
+      entry = findLinkedWorktreeForBranch(root, branch, gitCommand, left());
     } catch (err) {
+      if (timedOut(err)) {
+        return { ok: true, removed: null, reason: `skipped: git worktree list timed out within the ${timeoutMs} ms cleanup budget` };
+      }
       const detail = (err.stderr ?? err.message ?? "").toString().trim();
       return { ok: true, removed: null, reason: `git error (non-fatal): ${detail}` };
     }
@@ -262,25 +278,33 @@ export function cleanupWorktree(
   // (dirty, untracked, locked) the backstop. Gitignored content (tmp/) does not
   // show in --porcelain and git removes it without --force.
   if (branch !== undefined) {
-    const dirtySkip = dirtyTreeSkipReason(target, gitCommand);
+    const dirtySkip = dirtyTreeSkipReason(target, gitCommand, left());
     if (dirtySkip !== null) return { ok: true, removed: null, reason: dirtySkip };
   }
 
   const removeArgs = branch !== undefined ? ["worktree", "remove", target] : ["worktree", "remove", "--force", target];
+  const prune = () => {
+    try {
+      execFileSync(gitCommand, ["worktree", "prune"], { ...gitOptions(left()), cwd: root });
+    } catch { /* fail-soft: a failed prune leaves stale admin entries only */ }
+  };
   try {
-    execFileSync(gitCommand, removeArgs, { ...gitOptions(), cwd: root });
+    execFileSync(gitCommand, removeArgs, { ...gitOptions(left()), cwd: root });
   } catch (err) {
     // Fail-soft: never break a merge-completion flow on a git error.
+    if (timedOut(err)) {
+      // A killed remove may have deleted part of the tree. Prune is skipped so
+      // the admin entry survives, and the reason says the state is unknown.
+      return { ok: true, removed: null, reason: `git worktree remove ${target} timed out within the ${timeoutMs} ms cleanup budget; worktree state unknown, it may be partially removed` };
+    }
+    prune();
     const detail = (err.stderr ?? err.message ?? "").toString().trim();
     if (branch !== undefined) {
       return { ok: true, removed: null, reason: `skipped: git did not remove ${target} without --force: ${detail}` };
     }
     return { ok: true, removed: null, reason: `git error (non-fatal): ${detail}` };
-  } finally {
-    try {
-      execFileSync(gitCommand, ["worktree", "prune"], { ...gitOptions(), cwd: root });
-    } catch { /* fail-soft: a failed prune leaves stale admin entries only */ }
   }
+  prune();
 
   return { ok: true, removed: target, reason: "removed" };
 }

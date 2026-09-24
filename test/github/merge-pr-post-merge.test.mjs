@@ -60,7 +60,7 @@ const originMain = (repo) => git(repo.origin, ["rev-parse", "refs/heads/main"]);
 const listed = (repo) => git(repo.mainCheckout, ["worktree", "list", "--porcelain"]);
 
 // The PR head is the worktree's HEAD, so the cleanup's head-SHA match holds.
-function makeRuntime(repo, { prView = {}, mergeCode = 0, postMergeState = "MERGED", postMergeSteps } = {}) {
+function makeRuntime(repo, { prView = {}, mergeCode = 0, postMergeState = "MERGED", postMergeSteps, cwd = repo.mainCheckout } = {}) {
   const head = git(repo.worktree, ["rev-parse", "HEAD"]);
   const view = {
     mergeable: "MERGEABLE",
@@ -74,7 +74,7 @@ function makeRuntime(repo, { prView = {}, mergeCode = 0, postMergeState = "MERGE
   };
   const runtime = {
     env: process.env,
-    cwd: repo.worktree,
+    cwd,
     ghJson: async (args) => {
       if (args.join(" ").includes("/pulls/") || args.join(" ").includes("/issues/")) return [];
       if (args.includes("mergeCommit,state")) return { mergeCommit: { oid: MERGE_COMMIT }, state: postMergeState };
@@ -225,10 +225,11 @@ test("AC6: a thrown step records its reason, later steps still run, and the CLI 
 test("the steps run in the hooks' order against the main checkout with the head branch", withRepo({}, async (repo) => {
   const calls = [];
   const spy = (step) => async (context) => { calls.push({ step, context }); return null; };
-  await mergePr(OPTIONS, makeRuntime(repo, { postMergeSteps: { fastForward: spy("fastForward"), worktreeCleanup: spy("worktreeCleanup"), actions: spy("actions") } }));
+  await mergePr(OPTIONS, makeRuntime(repo, { cwd: repo.worktree, postMergeSteps: { fastForward: spy("fastForward"), worktreeCleanup: spy("worktreeCleanup"), actions: spy("actions") } }));
   assert.deepEqual(calls.map((c) => c.step), ["fastForward", "worktreeCleanup", "actions"]);
   for (const { context } of calls) {
     assert.equal(realpathSync(context.mainCheckout), repo.mainCheckout, "resolved from the linked worktree cwd");
+    assert.equal(context.cwd, repo.worktree);
     assert.equal(context.branch, BRANCH);
     assert.equal(context.pr, OPTIONS.pr);
     assert.equal(context.repo, OPTIONS.repo);
@@ -304,17 +305,13 @@ test("in test mode the default steps refuse a main checkout outside the tmp dir;
   }
 }));
 
-test("the cleanup keeps the worktree the merge runs from", withRepo({}, async (repo) => {
-  const saved = process.cwd();
-  try {
-    process.chdir(repo.worktree);
-    const result = await mergePr(OPTIONS, makeRuntime(repo));
-    assert.equal(result.postMerge.worktreeCleanup.removed, null);
-    assert.match(result.postMerge.worktreeCleanup.reason, /is inside/);
-    assert.ok(existsSync(repo.worktree));
-  } finally {
-    process.chdir(saved);
-  }
+test("the cleanup keeps the worktree the merge runs from (the injected runtime.cwd)", withRepo({}, async (repo) => {
+  assert.ok(!process.cwd().startsWith(repo.base), "process.cwd() stays outside the worktree");
+  const result = await mergePr(OPTIONS, makeRuntime(repo, { cwd: repo.worktree }));
+  assert.equal(result.postMerge.worktreeCleanup.removed, null);
+  assert.match(result.postMerge.worktreeCleanup.reason, /is inside/);
+  assert.ok(result.postMerge.worktreeCleanup.reason.includes(repo.worktree), "the reason names the worktree");
+  assert.ok(existsSync(repo.worktree));
 }));
 
 test("a merged PR without a reported head branch skips the cleanup with a reason", withRepo({}, async (repo) => {

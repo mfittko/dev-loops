@@ -124,7 +124,7 @@ Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approv
   merged head SHA, and run the repo's postMerge.actions. Each step is
   fail-soft and independent; none changes ok, merged, or the exit code. All
   three steps skip with a reason when the main checkout's origin remote is not
-  --repo. The cleanup skips when this process's cwd or script file is inside
+  --repo. The cleanup skips when the merge's cwd or this script file is inside
   the worktree. After a successful merge the command waits for these steps, so
   it can run for up to the postMerge.actions time budget.
 ${JQ_OUTPUT_USAGE}
@@ -399,9 +399,9 @@ async function defaultFastForward({ mainCheckout, env }) {
   return syncMainCheckout(mainCheckout, run);
 }
 
-function defaultWorktreeCleanup({ mainCheckout, branch, headSha }) {
+function defaultWorktreeCleanup({ mainCheckout, cwd, branch, headSha }) {
   if (!branch) return { ok: true, removed: null, reason: "skipped: the merged PR reported no head branch" };
-  return cleanupWorktree({ repoRoot: mainCheckout, branch, headSha, protectedPaths: [process.cwd(), SELF_PATH] });
+  return cleanupWorktree({ repoRoot: mainCheckout, branch, headSha, protectedPaths: [cwd, SELF_PATH] });
 }
 
 // The runner prints nothing when the repo declares no postMerge.actions, so
@@ -469,7 +469,7 @@ function testModeSkipReason(mainCheckout) {
 
 // Post-merge steps, in the harness hooks' order: fast-forward the main
 // checkout, remove the merged branch's linked worktree, run the repo's
-// postMerge.actions. Each step receives { mainCheckout, repo, pr, branch,
+// postMerge.actions. Each step receives { mainCheckout, cwd, repo, pr, branch,
 // headSha, env } and resolves its own result; a thrown step is recorded as a
 // failed result, so every step is fail-soft and independent of the others.
 // No step runs when the main checkout's origin is not --repo. In test mode a
@@ -711,7 +711,7 @@ export async function mergePr(options, runtime = {}) {
   stderr.write(`merge-pr: merged ${options.repo}#${options.pr} (merge commit ${mergeCommit ?? "unknown"}); running post-merge steps\n`);
   const headRefName = typeof prView?.headRefName === "string" && prView.headRefName.trim().length > 0 ? prView.headRefName.trim() : null;
   const postMerge = await runPostMergeSteps(
-    { mainCheckout: resolveMainWorktreeRoot(cwd), repo: options.repo, pr: options.pr, branch: headRefName, headSha: currentHeadSha, env },
+    { mainCheckout: resolveMainWorktreeRoot(cwd), cwd, repo: options.repo, pr: options.pr, branch: headRefName, headSha: currentHeadSha, env },
     postMergeSteps,
   );
 
