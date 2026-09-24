@@ -219,3 +219,183 @@ test("interactive answers attribute to the resolved operator handle, with human 
   // The resolved-handle acceptance shape is pinned (exit 0, non-empty, not null, plain handle).
   assert.match(skill, /\^\[A-Za-z0-9-\]\{1,39\}\$/, "the handle allowlist shape is documented");
 });
+
+// Zero-gap provenance (#2364): the zero-iteration exit and the owed semantic-pass
+// comment are both load-bearing contract statements, not incidental prose --
+// pin stable phrases (not whole sentences) so wording can still shift.
+test("Step 1 states the zero-iteration grill_clean exit requires recorded provenance", () => {
+  const step1 = skill.split("## Step 1 — Load the target")[1]?.split("## Step 1b")[0] ?? "";
+  assert.match(
+    step1,
+    /zero-iteration `grill_clean` exit requires BOTH a shape-clean artifact AND recorded provenance/i,
+    "Step 1 must state recorded provenance is required, not shape-clean alone",
+  );
+});
+
+// Provenance detection (#2364): the detector recognizes a results comment only
+// by its exact first line, so the contract must pin that literal form, not
+// just "titled" prose that a bold or suffixed heading would also satisfy.
+test("Step 4 and the Output artifact format pin the results comment's exact required first line", () => {
+  const step4 = skill.split("## Step 4 — Write back")[1]?.split("## Output artifact format")[0] ?? "";
+  const outputFormat = skill.split("## Output artifact format")[1]?.split("## Step 5")[0] ?? "";
+  for (const section of [step4, outputFormat]) {
+    assert.match(
+      section,
+      /FIRST LINE MUST be exactly `## 🔬 Grill \/ refinement results`/,
+      "the exact required first line of the results comment must be pinned",
+    );
+  }
+  assert.match(
+    step4,
+    /Any `source:` and `bypass:` line comes immediately AFTER that first line/,
+    "Step 4 must state that source:/bypass: lines follow the title, never precede it",
+  );
+});
+
+// Determinism (#2364): Step 1 must name the exact deterministic invocation
+// (the --jq envelope extraction, the detector call, and the state==grill_clean
+// gate), not leave the provenance decision to agent judgment of raw comments.
+test("Step 1 names the deterministic comments fetch, the detector invocation, and the state==grill_clean gate", () => {
+  const step1 = skill.split("## Step 1 — Load the target")[1]?.split("## Step 1b")[0] ?? "";
+  assert.match(
+    step1,
+    /view-issue\.mjs --repo <owner\/repo> --issue <n> --json comments --jq '\.issue\.comments' > <comments-path>/,
+    "Step 1 must name the exact view-issue.mjs --jq extraction into a comments file",
+  );
+  assert.match(
+    step1,
+    /view-pr\.mjs.*--jq '\.pr\.comments' > <comments-path>/,
+    "Step 1 must name the exact view-pr.mjs --jq extraction into a comments file",
+  );
+  assert.match(
+    step1,
+    /view-issue\.mjs --repo <owner\/repo> --issue <n> --json body --jq '\.issue\.body' > <body-path>/,
+    "Step 1 must name the exact view-issue.mjs --jq extraction into a body file",
+  );
+  assert.match(
+    step1,
+    /view-pr\.mjs --repo <owner\/repo> --pr <n> --json body --jq '\.pr\.body' > <body-path>/,
+    "Step 1 must name the exact view-pr.mjs --jq extraction into a body file",
+  );
+  assert.match(
+    step1,
+    /node scripts\/loop\/detect-refinement-grill-state\.mjs --body-file <body-path> --surface <issue\|pr> --comments-file <comments-path>/,
+    "Step 1 must name the exact detector invocation",
+  );
+  assert.match(
+    step1,
+    /Take the zero-iteration exit ONLY when the detector's output has `state == grill_clean`/,
+    "Step 1 must key the zero-iteration exit on the detector's state==grill_clean output, not agent judgment",
+  );
+});
+
+// Operator-authorized bypass exception (#2364 round 4): Step 1 item 4 and
+// Step 4's bypass definition must not contradict each other. The exit is
+// unconditional UNLESS the operator explicitly authorizes a re-grill of an
+// already-provenanced target (a bypass), in which case Steps 2-4 run and the
+// results comment records the bypass line.
+test("Step 1 names the operator-authorized bypass exception to the grill_clean exit", () => {
+  const step1 = skill.split("## Step 1 — Load the target")[1]?.split("## Step 1b")[0] ?? "";
+  assert.match(
+    step1,
+    /UNLESS the operator explicitly authorizes a re-grill of this already-provenanced target, which is a bypass \(Step 4\)/,
+    "Step 1 must name the operator-authorized re-grill exception as a bypass deferring to Step 4",
+  );
+  assert.match(
+    step1,
+    /run Steps 2–4 anyway, and the results comment records the `bypass: operator-authorized by <handle>` line per Step 4/,
+    "Step 1 must state the bypassed run proceeds through Steps 2-4 and records the bypass line",
+  );
+  assert.match(
+    step1,
+    /Without that explicit authorization, the exit is unconditional/,
+    "Step 1 must state the exit is unconditional absent explicit operator authorization",
+  );
+});
+
+// No-rewrite/no-comment on the zero-iteration exit (#2382 round 2): the
+// provenance-recorded exit's no-mutation contract must be pinned in Step 1
+// (no body rewrite, no new comment) and Step 4 (no rationale to post, skips
+// the step) so a re-run can never loop or mutate an already-clean target.
+test("Step 1 states the provenance-recorded grill_clean exit does not rewrite the body or post a new comment", () => {
+  const step1 = skill.split("## Step 1 — Load the target")[1]?.split("## Step 1b")[0] ?? "";
+  assert.match(
+    step1,
+    /does not rewrite the body/,
+    "Step 1 must state the zero-iteration exit does not rewrite the body",
+  );
+  assert.match(
+    step1,
+    /posts no new results comment/,
+    "Step 1 must state the zero-iteration exit posts no new results comment",
+  );
+});
+
+test("Step 4 states the provenance-recorded zero-iteration exit has no rationale to post and skips this step", () => {
+  const step4 = skill.split("## Step 4 — Write back")[1]?.split("## Output artifact format")[0] ?? "";
+  assert.match(
+    step4,
+    /has no rationale to post and skips this step/,
+    "Step 4 must state the provenance-recorded zero-iteration exit skips the write-back step",
+  );
+});
+
+// Bypass definition (#2364): a bypass is skipping an AVAILABLE zero-iteration
+// exit (already shape-clean AND already provenanced), never the now-mandated
+// first pass on an unprovenanced shape-clean target.
+test("the bypass definition is keyed on skipping an available zero-iteration exit, not on shape-clean alone", () => {
+  const step4 = skill.split("## Step 4 — Write back")[1]?.split("## Output artifact format")[0] ?? "";
+  assert.match(
+    step4,
+    /Bypass means skipping an AVAILABLE zero-iteration exit/,
+    "Step 4 must define bypass as skipping an available zero-iteration exit",
+  );
+  assert.match(
+    step4,
+    /A first pass on a shape-clean target with no recorded results comment is the normal REQUIRED pass.*carries no bypass line/,
+    "Step 4 must state a first pass on an unprovenanced shape-clean target is normal, not a bypass",
+  );
+
+  const adr = readFileSync(
+    fileURLToPath(new URL("../../docs/decisions/0084-grill-clean-requires-recorded-provenance.md", import.meta.url)),
+    "utf8",
+  );
+  assert.match(
+    adr,
+    /Bypass means skipping an AVAILABLE zero-iteration exit/,
+    "ADR 0084 must carry the same corrected bypass definition as SKILL.md, since accepted ADRs are immutable",
+  );
+  assert.match(
+    adr,
+    /normal REQUIRED pass this record mandates, not a bypass/,
+    "ADR 0084 must state the mandated first pass is not a bypass",
+  );
+});
+
+test("Step 5 applies write-back verification to tracker-first or PR-body alike", () => {
+  const step5 = skill.split("## Step 5 — Emit verdict")[1] ?? "";
+  assert.match(
+    step5,
+    /for tracker-first or PR-body, after the above verification passes/,
+    "Step 5 must cover PR-body, not only tracker-first",
+  );
+});
+
+test("Step 4 states a zero-gap semantic pass MUST post the results comment, and documents the bypass line", () => {
+  const step4 = skill.split("## Step 4 — Write back")[1]?.split("## Output artifact format")[0] ?? "";
+  assert.match(
+    step4,
+    /Every semantic pass \(Steps 2–4 actually ran\) MUST post this results comment/i,
+    "Step 4 must require every semantic pass to post the results comment",
+  );
+  assert.match(
+    step4,
+    /including a zero-gap pass that finds no gaps to fill/i,
+    "Step 4 must call out the zero-gap case explicitly, not just the general rule",
+  );
+  assert.match(
+    step4,
+    /`bypass: operator-authorized by <handle>` line/,
+    "Step 4 must document the recorded bypass line format",
+  );
+});
