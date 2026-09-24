@@ -3165,8 +3165,12 @@ test("copilot-pr-handoff in converged-once mode places no request below the cap 
     const output = JSON.parse(result.stdout);
     assert.equal(output.reviewRequestStatus, "suppressed_post_convergence");
     assert.equal(output.suppressedPostConvergence, true);
-    assert.notEqual(output.action, "watch");
-    assert.notEqual(output.state, "waiting_for_copilot_review");
+    // Same converged/proceed disposition as the clean round-cap fallback.
+    assert.equal(output.action, "stop");
+    assert.equal(output.state, "round_cap_clean_fallback");
+    assert.equal(output.loopDisposition, "done");
+    assert.equal(output.terminal, true);
+    assert.match(output.nextAction, /pre_approval_gate/);
     assert.equal(output.requestWatchContract.requestStatus, "none");
     const log = await readFile(logPath, "utf8");
     assert.ok(log.includes("headRefOid,isDraft,state,number,reviews,statusCheckRollup"), "the request tool ran");

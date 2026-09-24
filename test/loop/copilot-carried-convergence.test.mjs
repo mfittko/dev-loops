@@ -14,6 +14,7 @@ import { makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import { performCopilotReviewRequest } from "../../scripts/github/request-copilot-review.mjs";
 import { mergePr } from "../../scripts/github/merge-pr.mjs";
 import { detectPrGateCoordinationState, loadPrGateCoordinationContext } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
 import { autoDetectSnapshot } from "../../scripts/loop/detect-copilot-loop-state.mjs";
 import { buildCoordinationEvaluatorInput } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import {
@@ -827,6 +828,55 @@ describe("loop and merge agree in both Copilot convergence modes", () => {
         }
       });
     }
+  }
+});
+
+// The handoff reads the loop snapshot first, then calls the request tool.
+function handoffEntries(fixture) {
+  const ciRun = { status: "COMPLETED", conclusion: "SUCCESS", name: "ci" };
+  return [
+    { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--repo", REPO], assertArgContains: ["baseRefName"], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, reviews: fixture.reviews, statusCheckRollup: [ciRun] }) },
+    { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: line({ users: [], teams: [] }) },
+    { matchByClaims: true, assertArgs: ["api", "graphql"], stdout: line({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
+    { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/commits/${HEAD}/check-runs?per_page=100`], stdout: line({ check_runs: [ciRun] }) },
+    { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/commits/${HEAD}/status?per_page=100`], stdout: line({ statuses: [] }) },
+    ...requestEntries(fixture),
+  ];
+}
+
+async function runHandoffTool(fixture, { root }) {
+  const { runChild, unmatched } = strictRunChild(handoffEntries(fixture));
+  const result = await runHandoff({ repo: REPO, pr: PR }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "", GH_SEQUENCE_PATH: "1" }), ghCommand: "gh", runChild, repoRoot: root });
+  assert.deepEqual(unmatched, [], "handoff made an undeclared gh call");
+  return result;
+}
+
+describe("below the cap, the handoff, the detector, and merge agree on a post-convergence suppression", () => {
+  const ROWS = [
+    { mode: "converged-once", fixture: { delta: CODE_DELTA }, strict: false, status: "suppressed_post_convergence", flag: "suppressedPostConvergence" },
+    { mode: "strict", fixture: {}, strict: true, status: "suppressed_post_convergence_docs_only", flag: "suppressedPostConvergenceDocsOnly" },
+  ];
+  for (const { mode, fixture, strict, status, flag } of ROWS) {
+    it(`${mode}: the handoff routes to pre_approval_gate, never to a re-request`, async () => {
+      const root = strict ? wideRoot : convergedOnceWideRoot;
+      const handoff = await runHandoffTool(scenario(fixture), { root });
+      const detected = await runDetector(scenario(fixture), { root });
+      const merged = await runMerge(scenario(fixture), fixture, { strict });
+
+      assert.equal(handoff.reviewRequestStatus, status);
+      assert.equal(handoff[flag], true);
+      assert.equal(handoff.action, "stop");
+      assert.equal(handoff.terminal, true);
+      assert.equal(handoff.loopDisposition, "done");
+      assert.notEqual(handoff.state, "ready_to_rerequest_review");
+      assert.match(handoff.nextAction, /pre_approval_gate/);
+      assert.doesNotMatch(handoff.nextAction, /Re-request/);
+      assert.equal(handoff.requestWatchContract.requestStatus, "none");
+      assert.notEqual(handoff.requestWatchContract.routingState, "ready_state_needs_copilot_request");
+
+      assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+      assert.equal(merged.merged, true, JSON.stringify(merged.failures));
+    });
   }
 });
 

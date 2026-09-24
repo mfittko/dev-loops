@@ -71,8 +71,9 @@ Actions:
   fix     Unresolved feedback exists; address it before re-requesting review
   stop    No automatic next step; report the current state (terminal, blocked, or operator-decision-required) and do not proceed
 suppressedPostConvergenceDocsOnly:
-  Present (true) only when the round cap was reached and the post-convergence head
-  bump was a provable pure doc/prose delta, so no fresh Copilot round was placed.
+  Present (true) only when strict mode found the post-convergence head bump, at or
+  below the round cap, to be a provable pure doc/prose or integrate-only delta, so
+  no fresh Copilot round was placed.
   This is a converged/proceed outcome (action=stop, terminal): route to the
   pre-approval gate exactly as a clean round-cap fallback — never enter a Copilot
   wait. requestWatchContract.requestStatus is "none" for this case (the shared
@@ -101,6 +102,7 @@ Exit codes:
   0  Success
   1  Argument error or gh failure
   2  Invalid --jq filter`.trim();
+const POST_CONVERGENCE_SUPPRESSED_NEXT_ACTION = "The converged Copilot review stands for this head, so no Copilot round was placed; continue to pre_approval_gate instead of re-requesting Copilot review";
 const WATCH_STATES = new Set([
   STATE.WAITING_FOR_COPILOT_REVIEW,
 ]);
@@ -774,6 +776,21 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         nextAction: NEXT_ACTIONS[STATE.WAITING_FOR_COPILOT_REVIEW],
         allowedTransitions: [...(TRANSITIONS[STATE.WAITING_FOR_COPILOT_REVIEW] || [])],
         roundCapCleanEligible: false,
+      };
+    }
+    // A post-convergence suppression means the converged review stands for this
+    // head. Below the cap the re-interpretation still reads READY_TO_REREQUEST_REVIEW,
+    // so route it to the same converged/proceed disposition as the clean
+    // round-cap fallback: stop, terminal, next boundary pre_approval_gate.
+    if ((reviewRequestStatus === "suppressed_post_convergence"
+        || reviewRequestStatus === "suppressed_post_convergence_docs_only")
+        && interpretation.state === STATE.READY_TO_REREQUEST_REVIEW) {
+      interpretation = {
+        ...interpretation,
+        state: STATE.ROUND_CAP_CLEAN_FALLBACK,
+        nextAction: POST_CONVERGENCE_SUPPRESSED_NEXT_ACTION,
+        allowedTransitions: [...(TRANSITIONS[STATE.ROUND_CAP_CLEAN_FALLBACK] || [])],
+        autoRerequestEligible: false,
       };
     }
   }
