@@ -4,123 +4,39 @@ All notable changes to this project will be documented in this file.
 
 ## 1.0.4-pre.1
 
-### Fixed
-
-- **`bun run verify` no longer runs a nested repo-root `worktrees/<name>/` checkout's test copies as this checkout's own (PR [#2250](https://github.com/mfittko/dev-loops/pull/2250)).** `scripts/run-bun-test.mjs` now passes `--path-ignore-patterns=worktrees/**` alongside the existing `tmp/**`, so a primary-checkout verify stops reporting another branch's test failures as its own. A caller-supplied copy of either pattern is still de-duplicated.
-
 ### Added
 
-- **Pi session token audit skill, offline transcript parser, and Claude skill exclusion (`dev-loops loop audit-session`).** Added `skills/pi-session-audit/SKILL.md` backed by `scripts/loop/audit-pi-session.mjs` and `scripts/lib/audit-pi-session.mjs` to measure token efficiency, detect context snowballing, and break down token consumption across models and roles from Pi session transcripts. Added skill exclusion support in `@dev-loops/core/claude/asset-generation` (`isSkillExcludedFromClaude`) honoring `claude-sync: false`, `pi-only: true`, and `harness: pi` so Pi-specific skills are not mirrored to `.claude/skills/`.
-
-### Fixed
-
-- **`detect-checkpoint-evidence.mjs` no longer fail-opens on a missing or malformed `unresolvedThreads` payload (issue [#2310](https://github.com/mfittko/dev-loops/issues/2310)).** It previously defaulted a missing/malformed `unresolvedThreads` payload to `0` — a fail-open the Copilot merge-disposition policy leans on for its zero-unresolved-threads requirement. A new exported `coerceUnresolvedThreadCount` helper now coerces a missing/undefined/non-numeric/negative value to `-1`, the existing "unknown thread state" sentinel `buildPreMergeGateCheck` already fails closed on, while a genuine non-negative integer count (including a real `0`) passes through unchanged.
-
-### Fixed
-
-- **`request-copilot-review` now honors the Copilot convergence carry-forward decision BELOW the round cap, not only at it (issue [#2316](https://github.com/mfittko/dev-loops/issues/2316)).** The convergence carry-forward suppression (an integrate-only base-move or a pure doc/prose delta provably outside Copilot's review surface) was previously consumed only inside the round-cap branch, so an integrate-only base-move on a fresh head below the cap still forced a redundant Copilot review round. The same delta basis is now consumed on the below-cap forced-round path too, through a shared `resolveConvergenceCarry` helper, returning `suppressed_post_convergence_docs_only` without forcing a round. A genuine PR-own change across the base-move still requests review (fail-safe). Scope: consumption wiring only; the delta-basis computation and carry eligibility are unchanged.
-
-### Fixed
-
-- **The pre_approval gate-entry coordinator now uses the merge gate's shared Copilot convergence evaluation (issue [#2345](https://github.com/mfittko/dev-loops/issues/2345)).** A thread-clean current-head 🔵 "Needs a closer look" review no longer forbids pre_approval entry, while unresolved threads and a 🟡 "Changes recommended" review still block it. The shared evaluator accepts the REST and GraphQL review shapes used by both production call sites.
-
-### Fixed
-
-- **Review-gate verdicts now fold locatable `low`/`nit` findings below the inline severity floor instead of posting them as inline comments (issue [#2263](https://github.com/mfittko/dev-loops/issues/2263)).** The `review` gate's hardcoded active-gate config carried only `blockCleanOnFindingSeverities`, so `activeGateConfig.inlineSeverityFloor` was `undefined` and `isBelowInlineFloor` failed open — every locatable finding on a `review` round posted inline, contradicting the documented `medium` default of `GATE-COMMENT-INLINE-SEVERITY-FLOOR`. The review gate now carries `inlineSeverityFloor: "medium"`, so sub-floor findings fold into the verdict body's collapsed `<details>` block exactly like the draft and pre-approval gates.
-
-- **Docs: name the one-call gate-fan-out wave shape (issue #2350).** The
-  gate-fan-out dispatch discipline in `skills/dev-loop/SKILL.md` and the
-  per-harness delivery table in `skills/docs/gate-review-sub-loop-contract.md`
-  now state that, under Pi, a wave is ONE `subagent` call returning a single
-  `runs.all([...])` with a unique non-empty `key` per unit — never N separate
-  blocking per-unit calls for one wave, which Pi's foreground guard rejects and
-  which silently serializes a round. Prose-only; no behavior change.
-
-### Added
-
-- **`dev-loops loop startup` now briefs the orchestrator on the sanctioned tooling surface (issue [2351](https://github.com/mfittko/dev-loops/issues/2351)).** Every `ok: true` startup result carries a static `operatorBriefing` field. The field points to `scripts/loop/sanctioned-commands.mjs` and to the new `## Sanctioned tooling` section of `skills/docs/main-agent-contract.md`. Both harnesses receive that section. It names the orchestrator-owned operations: merge, board status transitions, and issue creation. The Pi-only lines of the contract that contradicted the index now name the sanctioned wrappers.
-
-### Fixed
-
-- **The Copilot round cap no longer forces `draftGateAlreadySatisfied: true` without clean `draft_gate` evidence, which deadlocked ready PRs at the cap (issue [#2354](https://github.com/mfittko/dev-loops/issues/2354)).** `evaluatePrGateCoordination` derived a truthful `draftGateAlreadySatisfied` flag from `draftGate.cleanEvidenceExists`, but the round-cap return sites then overrode it to `true` regardless of evidence, and `upsert-checkpoint-verdict.mjs` treated that forced `true` as an idempotent noop instead of routing through the reconcile draft-transition path. The evaluator now always reports the evidence-derived flag, and a round-cap PR without clean `draft_gate` evidence reconciles the draft gate exactly like any other state (no gate exemptions).
-
-### Added
-
-- **New sanctioned `dev-loops pr convert-to-draft` and `dev-loops pr restore-ready` CLI commands close the ready<->draft reconcile-draft-gate.mjs remedy's missing seam (issue [#2355](https://github.com/mfittko/dev-loops/issues/2355)).** `convert-to-draft.mjs` is an idempotent wrapper around the existing `convertPrToDraft` helper and reports `alreadyDraft` in its JSON output; `restore-ready.mjs` reuses every `ready-for-review.mjs` guard except the CI precondition, which it disables through an internal runtime-only seam (no CLI flag). Because `restore-ready` skips the CI precondition, it requires `currentHeadClean` specifically: an exact full current-head SHA match against a contract-complete `draft_gate` marker verdict; the legacy plain-text fallback (`legacyHeadMatch`, an abbreviated-SHA prefix match) does not qualify, and ordinary `ready-for-review` is unchanged. `restore-ready` also re-reads the PR head immediately before `gh pr ready` and refuses on a mismatch, so a push landing mid-run can never restore ready on stale evidence. Both commands are registered in `SANCTIONED_COMMANDS.lifecycle`, and `gh pr ready --undo` is now a forbidden raw command. `reconcile-draft-gate.mjs`'s and `upsert-checkpoint-verdict.mjs`'s remedy text now names only these sanctioned commands.
-
-### Fixed
-
-- **The pre-PR review now runs on every route that creates a PR (issue [#2357](https://github.com/mfittko/dev-loops/issues/2357)).** `PRE-PR-BEFORE-FIRST-PUSH` is route-neutral, and GitHub-first sessions that create their own branch and PR reach the step at `OPS-DRAFT-FIRST-PR`, before the first push and before `create-pr.mjs`. The review itself is unchanged. ADR 0085 (`docs/decisions/0085-pre-pr-review-route-neutral-trigger.md`) records the change and amends ADR 0079.
-
-### Fixed
-
-- **Uncertain gate-angle resolution now fails cheap instead of expanding to the full untriered pool (issue [#2361](https://github.com/mfittko/dev-loops/issues/2361), Phase 1).** Ambiguous or category-empty dynamic classification now selects the mandatory floor plus the best-effort category/kind and always-include lenses, with explicit uncertainty reasons for every skipped candidate and a live additive path. Risk-path, size-outcome, missing-evidence, and unclassifiable floors still force `full_fanout` dispatch and still refuse an explicit `--angles` override, but no longer widen the angle set beyond the matched tier or the best-effort selection. The `gate:full` escape hatch still forces the full configured pool. A floor-aware caller with no diff to select on likewise gets the mandatory floor plus justified lenses instead of the whole pool.
-- **A mixed diff with no full-diff capture stays fail-closed at the size gate while still classifying for angle selection (issue [#2361](https://github.com/mfittko/dev-loops/issues/2361)).** `analyzeDiff` now derives the T0 surface categories (plus `LOGIC_CHANGE` when code is present) for a hunk-less mixed diff, so best-effort angle selection keeps the code-review core. Because that makes the angle classifier's `ambiguous` flag `false`, `computeSizeBudget` gained its OWN evidence-availability signal (`fullDiffMissing`): an absent full diff for a mixed change keeps the unwaivable "no waiver possible" block instead of silently downgrading to `pass` with a `wholeLogicLoc` of 0.
-- **Zero resolved gate angles can no longer be persisted as a hollow gate-context bundle (issue [#2361](https://github.com/mfittko/dev-loops/issues/2361)).** The zero-review-coverage refusal moved from the CLI entry point to the shared `writeGateContext` boundary, so the CLI dynamic path, `--gate review --angles '[]'`, and the programmatic `buildGateContext`/`writeGateContext` API all fail closed (exit 1, no artifact) rather than writing a bundle with no review angles and no dispatch groups. A non-empty explicit `--angles` list keeps its verbatim behavior.
-
-### Fixed
-
-- **Post-merge main-checkout sync now surfaces a detached or non-`main` checkout as an action-required signal instead of silently reusing the generic warning (issue [#2363](https://github.com/mfittko/dev-loops/issues/2363)).** The shared `syncMainCheckout` flow inspects the checkout's ref before submitting any merge command; a proven detached or other-branch checkout is never switched, reset, or merged — it reports the stable `main_checkout_not_on_main` diagnostic (absolute path, branch or `detached@<short-sha>`, and the post-fetch `HEAD..origin/main` behind count) at `error` severity. Claude surfaces it as a structured PostToolUse `systemMessage`; Pi surfaces it via `ctx.ui.notify(..., "error")`, falling back to stderr with no UI. The action stays non-fatal.
+- New `dev-loops loop audit-session` command and skill measure token use in Pi session transcripts; Pi-only skills are no longer copied to Claude (#2271)
+- New `dev-loops pr convert-to-draft` and `dev-loops pr restore-ready` commands move a PR between ready and draft; raw `gh pr ready --undo` is forbidden (#2355)
+- `dev-loops loop startup` now tells the orchestrator which commands it may run (#2351)
+- Every gate angle now ships a default review prompt (#2374)
 
 ### Changed
 
-- **Raised the Claude-harness gate fan-out concurrency cap from 2 to 4 (issue [#2366](https://github.com/mfittko/dev-loops/issues/2366)).** `CLAUDE_MAX_EFFECTIVE_CONCURRENT` (`resolveFanoutEffectiveConcurrency`, `packages/core/src/config/config.mjs`) gated a single-driver Claude session's per-wave dispatch burst at 2 (ADR 0069) to avoid 429s. The retry/backoff policy (`GATE-EXEC-DISPATCH-RETRY-BACKOFF`, introduced by ADR 0056 and turned into the tested `planDispatchRetry` by ADR 0069) already turns a 429 into a delayed retry on the same unit instead of a failed drive, so the cap now serializes gate rounds more than needed. This repo's `.devloops` `gates.fanout.maxConcurrent` stays 3, so its Claude effective value rises from 2 to 3 (driver + 3). See ADR 0083.
-
-### Changed
-
-- **The Claude-harness pre-PR reviewer model in this repo's `.devloops` is now `opus` (Opus 5.5) instead of `fable` (issue [#2367](https://github.com/mfittko/dev-loops/issues/2367)).** Opus 5.5 reviews code at the level of Fable at lower cost. The `pre-pr-strong` tier keeps an explicit pin, and the Pi-harness value is unchanged. ADR 0082 (`docs/decisions/0082-pre-pr-reviewer-opus.md`) records the change and amends ADR 0079.
-
-### Changed
-
-- **Every gate review round now runs in a dedicated fresh-context gate coordinator agent (issue [2370](https://github.com/mfittko/dev-loops/issues/2370)).** The gate-review sub-loop contract adds `GATE-EXEC-GATE-COORDINATOR` as the only sanctioned round shape, and the dev-loop agent's sub-loop line now names the gate coordinator explicitly.
+- Gate reviewers get a short work order with hashed file pointers instead of the diff and PR text pasted inline (#2385)
+- Each gate review round runs in its own fresh-context coordinator agent (#2370)
+- An uncertain gate-angle choice now runs the mandatory angles plus best-effort lenses instead of the full pool (#2361)
+- Claude gate fan-out runs up to 4 reviewers at once, up from 2 (#2366)
+- The pre-PR review runs on every route that creates a PR (#2357)
+- Internal contract and prose updates, including the Claude pre-PR reviewer model for this repo (#2350, #2367)
 
 ### Fixed
 
-- Fixed an auto-chunked fan-out group deriving a reviewer scope with a doubled
-  `group-group-` prefix, and the composed reviewer prompt never stating the
-  exact `--scope` value to pass to `verify-fresh-review-context.mjs`, forcing
-  a reviewer to hand-derive it. `dispatchUnitScope` now drops the auto-chunk
-  unit's leading `group:` marker before sanitizing, and each dispatch unit's
-  prompt now states its own emitted scope verbatim, per issue
-  [#2372](https://github.com/mfittko/dev-loops/issues/2372).
-
-- **Every resolved gate angle now ships a default review prompt (issue #2374).**
-  `contradiction-lens`, `code-conformance`, `semantic-drift`, `correctness-final`
-  and `ui-validation` previously resolved with no prompt. Each now carries a
-  default `persona: review` prompt in the shipped extension defaults.
-
-### Fixed
-
-- **`evaluatePrGateCoordination` now owns the "no clean `draft_gate` evidence" rule directly, so the core and the detector script can no longer disagree (issue [#2375](https://github.com/mfittko/dev-loops/issues/2375)).** Previously, with no clean `draft_gate` evidence, the core evaluator allowed `run_pre_approval_gate` at several boundaries and only `scripts/loop/detect-pr-gate-coordination-state.mjs`'s own post-pass rewrote that to `reconcile_draft_gate`; a direct caller of the core evaluator (`scripts/github/upsert-checkpoint-verdict.mjs`) saw the un-rewritten, non-compliant answer. The core evaluator now applies the same rewrite itself at `post_draft_external_review`, `feedback_resolution`, `pre_approval_gate_needed`, `pre_approval_gate_window`, and `final_approval_ready`, so `upsert-checkpoint-verdict.mjs` refuses a `pre_approval_gate` post and self-heals a `draft_gate` post in those states, matching the detector exactly. The detector's own post-pass for this rule is now redundant and has been removed.
-
-### Fixed
-
-- **An answered, judge-rejected `question` gate finding now has a sanctioned resolution path, so the PR carrying it can reach `ready-for-review` without manual thread resolution (issue [#2381](https://github.com/mfittko/dev-loops/issues/2381)).** `close-gate-findings.mjs` reject-closes a gate-authored `question` thread when it carries a resolving answer reply and the judge's own disposition for that finding was `reject`, citing the judge's rejection rationale in the closing reply. An unanswered question, or one the judge did not reject, still blocks exactly as before. `ready-for-review.mjs`'s refusal text now names the remedy specific to each reported blocking reason (an unresolved question, an open nit, or an open defect thread) instead of one generic instruction that could not clear every case, and `scripts/loop/pre-pr-ready-gate.mjs`'s raw `gh pr ready` path shares the same per-reason text. `detect-pr-gate-coordination-state.mjs` now folds the same gate-authored unresolved-thread count into its own `mark_ready_for_review` decision, so it can no longer disagree with `detect-checkpoint-evidence.mjs` about the same PR state; when the round's `draft_gate` verdict is already clean but a gate-authored thread still dangles, the evaluator now names that thread blocker directly instead of re-running the draft gate or blocking on CI.
-
-### Changed
-
-- **Gate fan-out reviewers get a bounded work order instead of the inlined review corpus (issue [#2385](https://github.com/mfittko/dev-loops/issues/2385)).** `write-gate-context.mjs` writes the PR and issue bodies, the diff, the changed-files summary and the validation pointer to `<gate>-<headSha>.briefing-evidence.txt` and records a `requiredReads` manifest (path, sha256, bytes) on the context artifact. The briefing prefix ends with a `## Required reads` section that binds those hashes. `emit-fanout-dispatch.mjs` emits a `workOrder` (with `angleInstructions`, each angle's resolved persona and prompt), `promptBytes` and `sectionBytes` per unit, and refuses (exit 1) a work order over 30 KB, one with an inline `diff --git` line, or an angle with no resolvable prompt. `verify-fresh-review-context.mjs --context-path` now refuses when a hashed required read is missing, unreadable or changed, or a required read without a hash is unreadable. On a head-bump re-gate the prior-round dispositions are written in full to `<gate>-<headSha>.prior-dispositions.json`, bound as a required read, instead of a truncated inline block. Known findings are passed with `write-gate-context.mjs --known-findings <path>` and written in full to `<gate>-<headSha>.known-findings.json`, bound as a required read, and the conductor no longer appends a known-findings block after the work order. The required `diff` read is the filtered diff, written to `<gate>-<headSha>.filtered.diff` in both inline and pointer mode, so lockfile and generated-tree changes never enter it; the unfiltered `.diff` is the optional `raw-diff` read. The `requiredReads` kinds are `evidence`, `diff`, `raw-diff`, `validation`, `context`, `scoped-evidence`, `prior-dispositions` and `known-findings`. `--validation-posture` is refused past 500 chars. ADR 0086 (`docs/decisions/0086-gate-fanout-reference-seeded-work-orders.md`) records the change and amends ADRs 0021 and 0070.
-
-### Fixed
-
-- **A clean fan-in review over unchecked PR AC/DoD items now posts a `blocked` `pre_approval_gate` checkpoint instead of deadlocking (issue [#2389](https://github.com/mfittko/dev-loops/issues/2389)).** `upsert-checkpoint-verdict.mjs` treats the consolidated ledger's `overallVerdict` as the review verdict and composes it with the deterministic pre-approval blockers (unticked spec-of-record AC, unchecked PR-body AC, unchecked PR-body DoD): a blocked review or any proven blocker yields `blocked`, otherwise the review verdict stands. With a ledger and no `--verdict`, the composed verdict is derived; an explicit `--verdict` must equal it. The posted comment records the underlying `**Review verdict:**` and the named `**Gate blockers:**`. `findings_present` over a clean ledger, `clean` over a findings ledger, and `blocked` without a proven blocker are still refused. Step 8 of `acceptance-criteria-verification.md` now uses the composition table.
-
-### Fixed
-
-- **`copilot_convergence` no longer passes because no current-head Copilot review exists (issue [#2392](https://github.com/mfittko/dev-loops/issues/2392)).** `evaluateCopilotConvergence` now distinguishes three states (`current_head_clean`, `current_head_findings`, `no_current_head_review`) and reports them as `state`. A head without a current-head Copilot review converges only through a sanctioned disposition recorded for that head: `copilot_gate_disabled` (round cap 0, or an internal-only PR), `round_cap_clean_fallback` (round cap reached, unless the last review was clean and a significant change landed since), or `docs_only_suppression` (the last reviewed head was clean, the delta since then is outside Copilot's review surface, and no Copilot review is outstanding on the current head). A new `merge-pr.mjs --lightweight` flag resolves the composed lightweight round cap, as the loop does, and a `copilot_convergence` refusal without it names `--lightweight` as the remedy for a light-dispatched PR when the composed cap is lower than the full cap. Internal-only requires both the loop's own internal-only detector verdict and a match against the `internalPathPatterns` of the config `merge-pr.mjs` loads for its repo root. Otherwise `merge-pr.mjs` refuses via `copilot_convergence`. The merge result and refusal now record `copilotConvergenceState` and the disposition that satisfied it, so `copilotDisposition: null` no longer appears on a merged PR. Clean, 🔵, 🟡, and unrecognized current-head reviews keep their existing decisions, and the round-cap gate-entry grant is unchanged.
-
-### Fixed
-
-- **`dev-loops queue move` and `queue reorder` find items that the lagging board listing omits (issue [#2397](https://github.com/mfittko/dev-loops/issues/2397)).** A number ref is now looked up from the issue side (`issueOrPullRequest(number).projectItems`) and a node ID ref with `node(id)`, both scoped to the configured project and repository. A nonexistent number or unknown node ID fails closed with `ITEM_NOT_FOUND` (exit 3). `ghGraphql` with `allowErrors` now returns the GraphQL `errors` payload when `gh api graphql` exits non-zero with that JSON on stdout. As a result, `dev-loops queue add` with a nonexistent issue or PR number now reports `CONTENT_NOT_FOUND` (exit 3) instead of `GH_API_ERROR`. Other GraphQL errors on that lookup keep their message and fail as `GRAPHQL_ERROR` (exit 2).
-
-### Fixed
-
-- **A docs-only fix after a converged Copilot review no longer deadlocks the gate (issue [#2401](https://github.com/mfittko/dev-loops/issues/2401)).** `request-copilot-review.mjs` and `detect-pr-gate-coordination-state.mjs` now decide carried convergence through one shared predicate (`scripts/loop/_copilot-convergence-carry.mjs`). When no request is outstanding, no review thread is unresolved, and the delta since the last Copilot-reviewed head is provably docs-only or integrate-only, the request tool returns `suppressed_post_convergence_docs_only` and the detector feeds `postConvergenceReviewSuppressed` to the evaluator, so `pre_approval_gate` can start and `upsert-checkpoint-verdict.mjs` accepts the verdict. The detector output records the carried convergence as `carriedConvergence` (source review id, source head SHA, reason, body disposition). An unresolved thread now re-opens the round instead of being suppressed. `merge-pr.mjs` grants `docs_only_suppression` through the same predicate and names the carried review in the merge result as `copilotCarriedConvergence` (`source`, `sourceReviewId`, `sourceHeadSha`, `bodyDisposition`).
-- **Body-only Copilot feedback at the round cap has a recorded exit (issue [#2401](https://github.com/mfittko/dev-loops/issues/2401)).** A trusted PR comment with `<!-- dev-loops:copilot-body-disposition review=<id> head=<sha> fix=<sha> -->` or `... operator -->` for the current head names the dispositioned review. The `operator` form clears `copilotBodyFeedbackUnresolved` and the gate-entry body block, so `round_cap_clean_fallback` becomes reachable. The `fix` form needs a fix commit after the review commit, so it clears only an earlier-head review. At the round cap, a body-only earlier-head latest review with no record now blocks `round_cap_clean_fallback` too; both detectors and the request tool read it through the same resolver. `merge-pr.mjs` reads the same record through the same resolver, so a current-head finding cleared by an `operator` record no longer blocks `copilot_convergence`, and the merge result names the record as `copilotBodyDisposition`. Only `OWNER`, `MEMBER`, or `COLLABORATOR` humans are trusted. Without such a record the finding still blocks. The format is owned by `COPILOT-STATE-BODY-DISPOSITION-RECORD` in `skills/docs/copilot-loop-state-graph.md`.
-
-### Fixed
-
-- **A gate round with a non-empty judge act list no longer posts `clean`, and merge refuses it (issue [#2409](https://github.com/mfittko/dev-loops/issues/2409)).** `upsert-checkpoint-verdict.mjs` composes the ledger's severity `overallVerdict` with the judge act list (`composeReviewVerdict` in `@dev-loops/core/loop/gate-fanin`): a `clean` severity verdict with any finding disposed `act` becomes `findings_present`, and an explicit `--verdict clean` is refused. `blockCleanOnFindingSeverities` stays a floor. `detect-checkpoint-evidence.mjs`, the evidence probe `merge-pr.mjs` runs, refuses a current-head `pre_approval_gate` ledger with open act items and names them and the ledger copy that holds them. It also refuses any existing ledger copy that does not parse, and refuses unjudged findings unless the posted `pre_approval_gate` marker's `executionMode` is `inline_single_agent` (the ledger's own `executionMode` never exempts it), and each refusal names the ledger copy. The act-item refusal names the recovery path for an item closed without a commit: rerun the judge at the current head, rewrite the ledger with `--judge-verdict`, and re-post the verdict. `write-gate-findings-log.mjs` given `--judge-verdict` and `--spec-authority` validates the sibling `spec-authority-verdict.json` and writes each spec-authority `finding_conflicts` finding as `reject`, so such a finding no longer counts as an open act item. The `blockCleanOnFindingSeverities` floor still applies to it. The check runs client-side whether or not `gates.requireFanoutEvidence` is on, and is skipped on the stateless CI gate-evidence path. ADR 0089 records the decision as an amendment of ADR 0078.
+- Merge no longer passes Copilot convergence without a current-head Copilot review or a recorded disposition for that head (#2392)
+- A docs-only or base-only change after a converged Copilot review no longer forces a new review round or deadlocks the gate (#2316, #2401)
+- Body-only Copilot feedback at the round cap can be cleared by a trusted disposition comment (#2401)
+- A thread-clean "Needs a closer look" Copilot review no longer blocks the pre-approval gate (#2345)
+- Ready PRs at the Copilot round cap no longer deadlock, and all gate tools agree when clean draft-gate evidence is missing (#2354, #2375)
+- A gate round with open judge act items no longer posts `clean`, and merge refuses it (#2409)
+- A clean review over unchecked AC or DoD items posts a `blocked` pre-approval checkpoint instead of deadlocking (#2389)
+- An answered question finding that the judge rejected can be closed, so the PR can become ready (#2381)
+- A missing or malformed unresolved-thread count now fails closed (#2310)
+- The review gate folds low and nit findings into the verdict body instead of posting inline comments (#2263)
+- The size gate stays closed for a mixed diff without a full diff, and a gate context with zero angles is refused (#2361)
+- Fan-out reviewer scopes no longer get a doubled `group-group-` prefix, and each prompt states its scope (#2372)
+- Post-merge sync reports a main checkout that is detached or on another branch as an error (#2363)
+- `dev-loops queue move` and `dev-loops queue reorder` find items that the board listing omits (#2397)
+- `bun run verify` no longer runs test copies from a nested `worktrees/` checkout (#2250)
 
 ## 1.0.4-pre.0
 

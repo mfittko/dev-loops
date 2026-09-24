@@ -1,6 +1,6 @@
 import { describe, it, test } from "bun:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -339,7 +339,7 @@ describe("main()", () => {
     await withTempChangelog(async (root) => {
       const dir = path.join(root, "changes");
       await mkdir(dir, { recursive: true });
-      await writeFile(path.join(dir, "new.md"), "- A real note.\n", "utf8");
+      await writeFile(path.join(dir, "new.md"), "- A real note. (#1)\n", "utf8");
       const added = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
         logSubjects: async () => ["feat: x"],
         diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/new.md"],
@@ -415,6 +415,143 @@ describe("main()", () => {
       assert.equal(await main({ root, git: passing, env: {}, log: log2 }), 0);
       assert.ok(log2.lines.some((l) => l.includes("check passed")));
     }, headChangelogWith(["New entry"]));
+  });
+});
+
+// --- fragment format rule: one-line entries, 200 chars, no bold lead, a link, one section ---
+
+async function runWithFragment(body, { added = true, changelog } = {}) {
+  let result;
+  await withTempChangelog(async (root) => {
+    await mkdir(path.join(root, "changes"), { recursive: true });
+    await writeFile(path.join(root, "changes", "frag.md"), body, "utf8");
+    const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+      logSubjects: async () => ["feat: x"],
+      diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/frag.md"],
+      diffAddedFiles: async () => (added ? ["packages/core/src/x.mjs", "changes/frag.md"] : ["packages/core/src/x.mjs"]),
+    });
+    const log = capturingLog();
+    const code = await main({ root, git, env: {}, log });
+    result = { code, output: log.lines.join("\n") };
+  }, changelog);
+  return result;
+}
+
+describe("fragment format rule", () => {
+  it("passes a conforming fragment", async () => {
+    const { code, output } = await runWithFragment("### Fixed\n\n- Merge no longer passes without a review (#2429)\n- Another fix (#1, #2)\n");
+    assert.equal(code, 0, output);
+  });
+
+  it("passes a conforming fragment with no section line (default Changed)", async () => {
+    assert.equal((await runWithFragment("- Release notes are one line per change (#2429)\n")).code, 0);
+  });
+
+  const cases = [
+    ["an entry over 200 characters", `- ${"x".repeat(200)} (#1)\n`, /200-character rule/],
+    ["a continuation line", "- A change (#1)\n  that wraps onto a second line\n", /one-line rule/],
+    ["a bold lead", "- **Bold lead.** A change (#1)\n", /no-bold-lead rule/],
+    ["a missing link", "- A change with no link\n", /link rule/],
+    ["two section headings", "### Added\n\n- A (#1)\n\n### Fixed\n\n- B (#2)\n", /section-heading rule/],
+    ["an entry with only a link", "- (#1)\n", /entry-text rule/],
+  ];
+  for (const [name, body, rule] of cases) {
+    it(`rejects ${name} with a message naming the rule`, async () => {
+      const { code, output } = await runWithFragment(body);
+      assert.equal(code, 1);
+      assert.match(output, rule);
+      assert.match(output, /changes\/frag\.md/);
+    });
+  }
+
+  it("checks a modified (not only added) fragment", async () => {
+    const { code, output } = await runWithFragment("- **Bold.** x (#1)\n", { added: false });
+    assert.equal(code, 1);
+    assert.match(output, /no-bold-lead rule/);
+  });
+
+  it("rejects a fragment in the diff that is a symlink at HEAD with a named error", async () => {
+    await withTempChangelog(async (root) => {
+      await mkdir(path.join(root, "changes"), { recursive: true });
+      await writeFile(path.join(root, "changes", "new.md"), "- Conforming note (#3)\n", "utf8");
+      await writeFile(path.join(root, "target.md"), "- Linked note (#4)\n", "utf8");
+      await symlink(path.join(root, "target.md"), path.join(root, "changes", "linked.md"));
+      const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/linked.md", "changes/new.md"],
+        diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+      });
+      const log = capturingLog();
+      assert.equal(await main({ root, git, env: {}, log }), 1);
+      assert.match(log.lines.join("\n"), /changes\/linked\.md: regular-file rule/);
+    });
+  });
+
+  it("does not re-check consumed history in CHANGELOG.md or deleted fragments", async () => {
+    const legacy = BASE_CHANGELOG.replace(
+      "## 1.0.0-rc.7",
+      "## 1.0.0-rc.8\n\n### Fixed\n\n- **Bold legacy entry.** wraps\n  onto a continuation line\n\n### Fixed\n\n## 1.0.0-rc.7",
+    );
+    await withTempChangelog(async (root) => {
+      await mkdir(path.join(root, "changes"), { recursive: true });
+      await writeFile(path.join(root, "changes", "new.md"), "- Conforming note (#3)\n", "utf8");
+      const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        // changes/consumed.md is in the diff (deleted at release) but absent at HEAD.
+        diffNameOnly: async () => ["packages/core/src/x.mjs", "CHANGELOG.md", "changes/consumed.md", "changes/new.md"],
+        diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+      });
+      const log = capturingLog();
+      assert.equal(await main({ root, git, env: {}, log }), 0, log.lines.join("\n"));
+    }, legacy);
+  });
+
+  it("checks an unchanged pending fragment at HEAD, but not a consumed (deleted) one", async () => {
+    await withTempChangelog(async (root) => {
+      await mkdir(path.join(root, "changes"), { recursive: true });
+      await writeFile(path.join(root, "changes", "new.md"), "- Conforming note (#3)\n", "utf8");
+      await writeFile(path.join(root, "changes", "old.md"), "- **Old format.** no link\n", "utf8");
+      const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/consumed.md", "changes/new.md"],
+        diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+      });
+      const log = capturingLog();
+      assert.equal(await main({ root, git, env: {}, log }), 1);
+      const output = log.lines.join("\n");
+      assert.match(output, /changes\/old\.md: no-bold-lead rule/);
+      assert.doesNotMatch(output, /changes\/consumed\.md/);
+    });
+  });
+
+  it("fails closed when changes/ exists but cannot be listed", async () => {
+    // root ignores directory permissions, so the unreadable case cannot be built.
+    if (process.getuid?.() === 0) return;
+    await withTempChangelog(async (root) => {
+      const dir = path.join(root, "changes");
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, "new.md"), "- Conforming note (#3)\n", "utf8");
+      await chmod(dir, 0o300); // search+write, no read: lstat works, readdir fails
+      try {
+        const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+          logSubjects: async () => ["feat: x"],
+          diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+          diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+        });
+        const log = capturingLog();
+        assert.equal(await main({ root, git, env: {}, log }), 1);
+        assert.match(log.lines.join("\n"), /changes\/: cannot list pending fragments \(EACCES\)/);
+      } finally {
+        await chmod(dir, 0o755);
+      }
+    });
+  });
+
+  it("rejects a direct Unreleased edit that assembly cannot group, naming the rule", async () => {
+    const wrapped = BASE_CHANGELOG.replace("- Existing entry two", "- Existing entry two\n  wraps onto a second line");
+    const { code, output } = await runWithFragment("- Conforming note (#3)\n", { changelog: wrapped });
+    assert.equal(code, 1);
+    assert.match(output, /CHANGELOG\.md: unreleased-line rule/);
   });
 });
 

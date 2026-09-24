@@ -32,6 +32,73 @@ export function fragmentBodyClosesSection(content) {
   return /^##\s/m.test(String(content ?? ""));
 }
 
+/** Section headings a fragment may declare, in release order. */
+export const FRAGMENT_SECTIONS = ["Added", "Changed", "Fixed"];
+const DEFAULT_SECTION = "Changed";
+const SECTION_LINE_RE = /^###\s+(Added|Changed|Fixed)\s*$/;
+const HEADING_RE = /^#{1,6}\s/;
+export const MAX_ENTRY_CHARS = 200;
+const ENTRY_LINK_RE = /\(#\d+(?:,\s*#\d+)*\)$/;
+const BOLD_LEAD_RE = /^-\s+(\*\*|__)/;
+
+/**
+ * Split a fragment into its section and its non-blank body lines. The section
+ * comes from a `### Added|Changed|Fixed` first line; it defaults to `Changed`.
+ *
+ * @param {string} content
+ * @returns {{ section: string, lines: string[] }}
+ */
+export function parseFragment(content) {
+  const lines = String(content ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim() !== "");
+  const match = lines.length > 0 ? SECTION_LINE_RE.exec(lines[0]) : null;
+  return match
+    ? { section: match[1], lines: lines.slice(1) }
+    : { section: DEFAULT_SECTION, lines };
+}
+
+/**
+ * Format violations of a fragment body. Each entry is one `- <effect> (#NNN)`
+ * line of at most MAX_ENTRY_CHARS characters with no bold lead, under at most
+ * one leading `### Added|Changed|Fixed` section line. Each message names its rule.
+ *
+ * @param {string} content
+ * @returns {string[]}
+ */
+export function fragmentFormatErrors(content) {
+  const errors = [];
+  const all = String(content ?? "").split(/\r?\n/).filter((l) => l.trim() !== "");
+  const headings = all.filter((l) => HEADING_RE.test(l));
+  const { lines } = parseFragment(content);
+  if (headings.length > 1) {
+    errors.push("section-heading rule: more than one section heading; use one ### Added, ### Changed or ### Fixed line at the top");
+  } else if (headings.length === 1 && lines.length === all.length) {
+    errors.push("section-heading rule: the only allowed heading is a first-line ### Added, ### Changed or ### Fixed");
+  }
+  if (lines.length === 0) errors.push("one-line rule: the fragment has no entries");
+  for (const line of lines) {
+    if (HEADING_RE.test(line)) continue; // reported by the section-heading rule
+    const excerpt = line.slice(0, 60);
+    if (!line.startsWith("-")) {
+      errors.push(`one-line rule: continuation or non-entry line (each entry is one "- " line): ${excerpt}`);
+      continue;
+    }
+    if (!/^- \S/.test(line)) {
+      errors.push(`entry-prefix rule: an entry starts with exactly "- " and then text: ${excerpt}`);
+    } else if (line.slice(2).replace(ENTRY_LINK_RE, "").trim() === "") {
+      errors.push(`entry-text rule: an entry has text before its (#NNN) link: ${excerpt}`);
+    }
+    if (line.length > MAX_ENTRY_CHARS) {
+      errors.push(`200-character rule: entry is ${line.length} characters: ${excerpt}`);
+    }
+    if (BOLD_LEAD_RE.test(line)) errors.push(`no-bold-lead rule: entry opens with bold text: ${excerpt}`);
+    if (!ENTRY_LINK_RE.test(line)) errors.push(`link rule: entry does not end with an (#NNN) issue or PR link: ${excerpt}`);
+  }
+  return errors;
+}
+
 /**
  * Whether a path is a changeset fragment: `changes/<slug>.md`, excluding the
  * convention `changes/README.md` (which documents the directory, not a change).
@@ -103,6 +170,12 @@ export function readFragments(repoRoot) {
           `changeset fragment ${FRAGMENTS_DIR}/${e.name} contains a level-2 "## " heading, which would truncate the assembled release section; fragments must be bullet lines (level-3 "### " is allowed)`,
         );
       }
+      const formatErrors = fragmentFormatErrors(content);
+      if (formatErrors.length > 0) {
+        throw new Error(
+          `changeset fragment ${FRAGMENTS_DIR}/${e.name} breaks the fragment format: ${formatErrors.join("; ")}`,
+        );
+      }
       return { name: e.name.replace(/\.md$/, ""), content };
     })
     // Byte-wise name sort (not localeCompare): a locale-independent order so the
@@ -111,8 +184,74 @@ export function readFragments(repoRoot) {
 }
 
 /**
- * Splice pending fragment bodies into the `## Unreleased` section, preserving
- * any existing Unreleased entries and the rest of the file. Fragments with
+ * Index of the `## Unreleased` heading (-1 when absent) and the end of its body:
+ * just before the next `## ` heading (or EOF), trailing blank lines excluded.
+ *
+ * @param {string[]} lines
+ * @returns {{ headingIdx: number, tail: number }}
+ */
+function locateUnreleased(lines) {
+  const headingIdx = lines.findIndex((l) => /^##\s+Unreleased\b/i.test(l));
+  let tail = lines.length;
+  if (headingIdx !== -1) {
+    for (let i = headingIdx + 1; i < lines.length; i += 1) {
+      if (/^##\s/.test(lines[i])) {
+        tail = i;
+        break;
+      }
+    }
+    while (tail > headingIdx + 1 && lines[tail - 1].trim() === "") tail -= 1;
+  }
+  return { headingIdx, tail };
+}
+
+/**
+ * Group `## Unreleased` body lines by section. A `### Added|Changed|Fixed` line
+ * switches section; entries before any heading are `Changed`. Every other
+ * non-blank, non-`- ` line is an error naming the unreleased-line rule.
+ *
+ * @param {string[]} bodyLines
+ * @returns {{ bySection: Map<string, string[]>, errors: string[] }}
+ */
+function groupUnreleasedLines(bodyLines) {
+  const bySection = new Map(FRAGMENT_SECTIONS.map((name) => [name, []]));
+  const errors = [];
+  let section = DEFAULT_SECTION;
+  for (const raw of bodyLines) {
+    const line = raw.trimEnd();
+    if (line === "") continue;
+    const match = SECTION_LINE_RE.exec(line);
+    if (match) section = match[1];
+    else if (line.startsWith("- ")) bySection.get(section).push(line);
+    else {
+      errors.push(
+        `unreleased-line rule: the existing "## Unreleased" section has a line that is neither a "- " entry nor a ### Added, ### Changed or ### Fixed heading: ${line.slice(0, 60)}`,
+      );
+    }
+  }
+  return { bySection, errors };
+}
+
+/**
+ * Lines in the `## Unreleased` section of a changelog that assembly cannot
+ * group. The validator and `assembleFragments` share this parsing, so a
+ * changelog the PR gate accepts never stops the release.
+ *
+ * @param {string} changelog
+ * @returns {string[]}
+ */
+export function unreleasedFormatErrors(changelog) {
+  const lines = String(changelog ?? "").split("\n");
+  const { headingIdx, tail } = locateUnreleased(lines);
+  return headingIdx === -1 ? [] : groupUnreleasedLines(lines.slice(headingIdx + 1, tail)).errors;
+}
+
+/**
+ * Merge pending fragment bodies into the `## Unreleased` section, preserving
+ * any existing Unreleased entries and the rest of the file. Existing entries are
+ * grouped like fragments (a `### Added|Changed|Fixed` line switches section;
+ * entries before any heading are `Changed`) and precede fragment entries. An
+ * existing line that cannot be grouped throws instead of being guessed. Fragments with
  * empty content are ignored (an empty fragment documents nothing). When no
  * `## Unreleased` section exists it is created above the first version heading.
  *
@@ -127,11 +266,29 @@ export function assembleFragments({ changelog, fragments }) {
     .filter((f) => f && typeof f.content === "string" && f.content.trim() !== "");
   if (frags.length === 0) return { changelog: String(changelog ?? ""), consumed: [] };
 
-  const block = frags.map((f) => f.content.trim()).join("\n\n");
   const consumed = frags.map((f) => f.name);
   const lines = String(changelog ?? "").split("\n");
+  const { headingIdx, tail } = locateUnreleased(lines);
 
-  const headingIdx = lines.findIndex((l) => /^##\s+Unreleased\b/i.test(l));
+  // One heading per section, in FRAGMENT_SECTIONS order; empty sections omitted.
+  // Existing Unreleased entries come first, then fragment entries.
+  const { bySection, errors } = groupUnreleasedLines(headingIdx === -1 ? [] : lines.slice(headingIdx + 1, tail));
+  if (errors.length > 0) {
+    throw new Error(`${errors[0]}; fold it by hand before assembling fragments`);
+  }
+  for (const f of frags) {
+    const formatErrors = fragmentFormatErrors(f.content);
+    if (formatErrors.length > 0) {
+      throw new Error(`changeset fragment ${f.name} breaks the fragment format: ${formatErrors.join("; ")}`);
+    }
+    const { section, lines: body } = parseFragment(f.content);
+    bySection.get(section).push(...body);
+  }
+  const block = FRAGMENT_SECTIONS
+    .filter((name) => bySection.get(name).length > 0)
+    .map((name) => `### ${name}\n\n${bySection.get(name).join("\n")}`)
+    .join("\n\n");
+
   if (headingIdx === -1) {
     // No Unreleased section: create one above the first version heading (or at
     // EOF when the file has no `## ` heading yet).
@@ -141,17 +298,7 @@ export function assembleFragments({ changelog, fragments }) {
     return { changelog: lines.join("\n"), consumed };
   }
 
-  // Append the fragment block at the tail of the Unreleased section, just before
-  // the next `## ` heading (or EOF), after any existing entries.
-  let end = lines.length;
-  for (let i = headingIdx + 1; i < lines.length; i += 1) {
-    if (/^##\s/.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-  let tail = end;
-  while (tail > headingIdx + 1 && lines[tail - 1].trim() === "") tail -= 1;
-  lines.splice(tail, 0, "", block);
+  // Replace the Unreleased body with the merged block.
+  lines.splice(headingIdx + 1, tail - headingIdx - 1, "", block);
   return { changelog: lines.join("\n"), consumed };
 }

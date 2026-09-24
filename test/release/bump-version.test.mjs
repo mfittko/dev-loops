@@ -204,8 +204,8 @@ test("bumpVersion assembles pending changeset fragments into the release section
   try {
     mkdirSync(path.join(dir, "changes"));
     writeFileSync(path.join(dir, "changes", "README.md"), "fragments live here\n");
-    writeFileSync(path.join(dir, "changes", "b-second.md"), "- Second fragment change.\n");
-    writeFileSync(path.join(dir, "changes", "a-first.md"), "- First fragment change.\n");
+    writeFileSync(path.join(dir, "changes", "b-second.md"), "- Second fragment change (#2)\n");
+    writeFileSync(path.join(dir, "changes", "a-first.md"), "- First fragment change (#1)\n");
 
     const { run, calls } = makeRegenRunner(dir, PRERELEASE);
     const result = bumpVersion({ repoRoot: dir, version: PRERELEASE, run });
@@ -243,7 +243,7 @@ test("bumpVersion fails closed on an already-stamped tree with pending fragments
       `# Changelog\n\n## ${PRERELEASE}\n\n- Already released.\n\n## 1.0.0-pre.0 - 2026-01-01\n\n- Prior.\n`,
     );
     mkdirSync(path.join(dir, "changes"));
-    writeFileSync(path.join(dir, "changes", "late.md"), "- A note added after the stamp.\n");
+    writeFileSync(path.join(dir, "changes", "late.md"), "- A note added after the stamp (#3)\n");
     assert.throws(
       () => bumpVersion({ repoRoot: dir, version: PRERELEASE, stage: false, run: () => {} }),
       /already has a "## .*" section/,
