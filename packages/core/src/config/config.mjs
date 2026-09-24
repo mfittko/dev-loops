@@ -31,8 +31,11 @@ const InputSourceConfig = z.enum(["tracker", "phase-docs"]).describe("Where loca
 // resolution is a no-op on Pi until an operator sets concrete Pi ids.
 export const BUILTIN_TIER_ALIASES = Object.freeze(["low", "high"]);
 
+// Both Claude tiers resolve to opus: Opus 5.5 is currently the most
+// cost-efficient Claude model per task (fewer turns than sonnet on fixer runs).
+// The low/high split stays so operators can retarget `low` with one line.
 const BUILTIN_TIERS = Object.freeze({
-  low: Object.freeze({ claude: "sonnet", pi: null }),
+  low: Object.freeze({ claude: "opus", pi: null }),
   high: Object.freeze({ claude: "opus", pi: null }),
 });
 

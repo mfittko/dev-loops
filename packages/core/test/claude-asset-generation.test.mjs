@@ -122,8 +122,8 @@ You are a focused implementation agent.
 
 test("transformAgent maps tools (comma), drops Pi-only fields, keeps the body + generated note", () => {
   const out = transformAgent({ source: "agents/developer.agent.md", raw: AGENT_SRC });
-  // `developer` is a low-tier role, so `model: "sonnet"` is stamped after tools (#1134).
-  assert.match(out, /^---\nname: "developer"\ndescription: "Implements code\."\ntools: Read, Grep, Glob, Bash, Edit, Write\nmodel: "sonnet"\n---\n/);
+  // `developer` is a low-tier role, so `model: "opus"` is stamped after tools (#1134).
+  assert.match(out, /^---\nname: "developer"\ndescription: "Implements code\."\ntools: Read, Grep, Glob, Bash, Edit, Write\nmodel: "opus"\n---\n/);
   // Pi-only fields must be gone.
   for (const dropped of ["argument-hint", "systemPromptMode", "inheritProjectContext", "user-invocable", "maxSubagentDepth"]) {
     assert.equal(out.includes(`${dropped}:`), false, `${dropped} should be dropped`);
@@ -214,10 +214,10 @@ test("transformSkill preserves user-invocable: true for the public entry skill",
 const agentSrcFor = (name) =>
   `---\nname: "${name}"\ndescription: "d"\ntools: [read]\n---\nBody.\n`;
 
-test("transformAgent stamps the low tier (sonnet) for routine roles", () => {
+test("transformAgent stamps the low tier (opus) for routine roles", () => {
   for (const role of ["developer", "docs", "fixer", "quality"]) {
     const out = transformAgent({ source: `agents/${role}.agent.md`, raw: agentSrcFor(role) });
-    assert.match(out, /\nmodel: "sonnet"\n/, `${role} should carry model: "sonnet"`);
+    assert.match(out, /\nmodel: "opus"\n/, `${role} should carry model: "opus"`);
   }
 });
 

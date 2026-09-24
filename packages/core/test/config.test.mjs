@@ -6877,10 +6877,10 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
   // Zero-config resolution table: 7 roles + a critical angle, on claude and pi.
   const cases = [
     // [role, claude, pi]
-    ["developer", "sonnet", null],
-    ["docs", "sonnet", null],
-    ["fixer", "sonnet", null],
-    ["quality", "sonnet", null],
+    ["developer", "opus", null],
+    ["docs", "opus", null],
+    ["fixer", "opus", null],
+    ["quality", "opus", null],
     ["refiner", "opus", null],
     ["review", "opus", null],
     // Pre-PR reviewer (issue #2305): built-in high tier, so opus/null with zero
@@ -6919,7 +6919,9 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
   });
 
   test("models.roleTiers override retargets a role's tier", () => {
-    const config = { models: { roleTiers: { developer: "high", review: "low" } } };
+    // Built-in low and high both map to opus on Claude; a distinct low id makes
+    // the retarget observable.
+    const config = { models: { tiers: { low: { claude: "sonnet" } }, roleTiers: { developer: "high", review: "low" } } };
     assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), "opus");
     assert.equal(resolveRoleModel(config, { role: "review", harness: "claude" }), "sonnet");
   });
@@ -6928,7 +6930,7 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     // Default: correctness stays high.
     assert.equal(resolveRoleModel({}, { role: "correctness", harness: "claude" }), "opus");
     // Explicit opt-in only.
-    const config = { models: { roleTiers: { correctness: "low" } } };
+    const config = { models: { tiers: { low: { claude: "sonnet" } }, roleTiers: { correctness: "low" } } };
     assert.equal(resolveRoleModel(config, { role: "correctness", harness: "claude" }), "sonnet");
   });
 
@@ -6945,7 +6947,7 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     // for that tier — the two harness keys are deep-merged per alias.
     const config = { models: { tiers: { low: { pi: "somePiId" } } } };
     assert.equal(resolveRoleModel(config, { role: "developer", harness: "pi" }), "somePiId");
-    assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), "sonnet");
+    assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), "opus");
   });
 
   test("pre-PR-reviewer role: per-harness opt-in via tiers/roleTiers (issue #2305)", () => {
@@ -6977,19 +6979,21 @@ describe("resolveRoleModel — angle vs role disambiguation (kind)", () => {
   // the `docs` writer role's low tier; kind:"angle" forces review quality.
   for (const harness of ["claude", "pi"]) {
     test(`docs ANGLE resolves via the review tier (high), not the docs role — ${harness}`, () => {
-      const angle = resolveRoleModel({}, { role: "docs", harness, kind: "angle" });
-      const reviewTier = resolveRoleModel({}, { role: "review", harness });
-      const docsRole = resolveRoleModel({}, { role: "docs", harness });
+      // Built-in low and high are both opus on Claude; a distinct low id makes
+      // the provenance observable. Pi: null high-tier no-op, still distinct in
+      // provenance from the docs role which is also null on Pi.
+      const config = { models: { tiers: { low: { claude: "sonnet" } } } };
+      const angle = resolveRoleModel(config, { role: "docs", harness, kind: "angle" });
+      const reviewTier = resolveRoleModel(config, { role: "review", harness });
+      const docsRole = resolveRoleModel(config, { role: "docs", harness });
       assert.equal(angle, reviewTier, "docs angle must match the review (high) tier");
-      // Claude: opus (high) not sonnet (low); Pi: null high-tier no-op, still
-      // distinct in provenance from the docs role which is also null on Pi.
       if (harness === "claude") assert.notEqual(angle, docsRole);
     });
 
     test(`docs ROLE still resolves low (unchanged) — ${harness}`, () => {
       assert.equal(
         resolveRoleModel({}, { role: "docs", harness }),
-        harness === "claude" ? "sonnet" : null,
+        harness === "claude" ? "opus" : null,
       );
     });
 
@@ -7002,7 +7006,7 @@ describe("resolveRoleModel — angle vs role disambiguation (kind)", () => {
     test(`developer ROLE stays low — ${harness}`, () => {
       assert.equal(
         resolveRoleModel({}, { role: "developer", harness }),
-        harness === "claude" ? "sonnet" : null,
+        harness === "claude" ? "opus" : null,
       );
     });
   }
@@ -7030,7 +7034,10 @@ describe("resolveRoleModel — angle vs role disambiguation (kind)", () => {
     // this fails if the entry.tier override is ignored. Angle-level tier
     // overrides now live on the gate's own angle entry (D4), not the removed
     // angle-keyed models.roleTiers map.
-    const config = { gates: { draft: { angles: [{ name: "docs", tier: "low" }] } } };
+    const config = {
+      models: { tiers: { low: { claude: "sonnet" } } },
+      gates: { draft: { angles: [{ name: "docs", tier: "low" }] } },
+    };
     assert.equal(resolveRoleModel(config, { role: "docs", harness: "claude", kind: "angle" }), "sonnet");
     // The role path is unaffected — models.roleTiers (role-keyed) still governs it,
     // and docs already resolves low there by default.
