@@ -31,7 +31,7 @@ import { parseArgs } from "node:util";
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, orderAnglesByCatalog, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -1875,12 +1875,13 @@ function normalizeCarriedAnglesArg(carriedAngles) {
  * no I/O. `config` may be null (a `--angles` override with no loaded config);
  * in that case grouping degrades to auto-chunked singletons under the built-in
  * defaults and `maxConcurrent`/`maxAnglesPerGroup` fall back to their
- * shipped defaults (5/5). When the round's FULL resolved angle set would
+ * shipped defaults (5/5). When the round's resolved angle set would
  * cap-split into more units than the effective concurrency, whole base units
- * are packed into one wave (see the packing block below); if the full set
- * cannot pack, the DISPATCHABLE set (resolved units minus fully-carried
- * groups) is packed and emitted instead, and only a dispatchable plan that
- * itself cannot fit throws `GATE-EXEC-FANOUT-CAPACITY`.
+ * of the DISPATCHABLE set (resolved units minus fully-carried groups) are
+ * packed into one wave (see the packing block below), so a carried-forward
+ * unit is never re-dispatched; a fully-carried round (an empty dispatchable
+ * set) keeps the full grouping for the emitter's zero-unit path, and only a
+ * dispatchable plan that itself cannot fit throws `GATE-EXEC-FANOUT-CAPACITY`.
  *
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
@@ -1973,49 +1974,49 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
     const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
     const baseUnits = expandDispatchUnits(groups, configuredGroupNames);
     if (baseUnits.length > effectiveConcurrency) {
-      const packed = packDispatchUnits(baseUnits, effectiveConcurrency);
-      if (packed === null) {
-        // The full resolved set can never shrink below the angles Phase 1.2
-        // already proved carried, so keying the refusal on it refused every
-        // carry-forward round above capacity even when the plan actually
-        // dispatched fit one wave. Re-check the DISPATCHABLE set: the resolved
-        // units minus every group whose angles are ALL carried forward — a set
-        // fixed for the whole round (proven for this head), so wave 1 and every
-        // same-head resume derive the IDENTICAL dispatchable plan. It
-        // deliberately excludes ONLY carried angles, never the completed set
-        // (that grows after a partial wave, and re-planning on it recorded a
-        // different membership — the round-2 regression this derivation avoids),
-        // and never drops carried angles from a group that still has fresh ones
-        // (a partially-carried group is dispatched whole, so its unit
-        // membership must keep every angle).
-        const carriedKeys = new Set(carriedAnglesList.map((a) => baseAngleName(a).trim().toLowerCase()));
-        const dispatchableGroups = groups.filter((g) => !(Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase()))));
-        const dispatchableUnits = expandDispatchUnits(dispatchableGroups, configuredGroupNames);
-        if (dispatchableUnits.length > 0) {
-          const packedDispatchable = dispatchableUnits.length > effectiveConcurrency ? packDispatchUnits(dispatchableUnits, effectiveConcurrency) : null;
-          if (dispatchableUnits.length > effectiveConcurrency && packedDispatchable === null) {
-            // The dispatchable plan itself cannot fit one wave: refuse and name
-            // the set actually counted (the resolved count and the fresh subset)
-            // so a carry-forward round is never mislabeled as all-fresh.
-            const resolvedAngleCount = baseUnits.reduce((sum, unit) => sum + unit.angles.length, 0);
-            const freshAngleCount = dispatchableUnits.reduce((sum, unit) => sum + unit.angles.filter((a) => !carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase())).length, 0);
-            const capacity = effectiveConcurrency * REVIEWER_UNIT_MAX_ANGLES;
-            throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves ${resolvedAngleCount} angles (${freshAngleCount} fresh, ${resolvedAngleCount - freshAngleCount} carried forward) in ${dispatchableUnits.length} base dispatch units that do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${REVIEWER_UNIT_MAX_ANGLES} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
-          }
-          // Emit the dispatchable plan — it IS what will be dispatched, so it is
-          // what the recorded membership must name. Packed base units when
-          // packing ran; the unsplit dispatchable grouping when it already fits
-          // (mirrors the full-set path, which records `resolveFanoutGroups`
-          // output and lets the emitter cap-split it).
-          groups = packedDispatchable ?? dispatchableGroups;
+      // The DISPATCHABLE set: the resolved units minus every group whose angles
+      // are ALL carried forward — a set fixed for the whole round (proven for
+      // this head), so wave 1 and every same-head resume derive the IDENTICAL
+      // dispatchable plan. It deliberately excludes ONLY carried angles, never
+      // the completed set (that grows after a partial wave, and re-planning on
+      // it recorded a different membership — the round-2 regression this
+      // derivation avoids), and never drops carried angles from a group that
+      // still has fresh ones (a partially-carried group is dispatched whole, so
+      // its unit membership must keep every angle).
+      const carriedKeys = new Set(carriedAnglesList.map((a) => baseAngleName(a).trim().toLowerCase()));
+      const dispatchableGroups = groups.filter((g) => !(Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase()))));
+      const dispatchableUnits = expandDispatchUnits(dispatchableGroups, configuredGroupNames);
+      if (dispatchableUnits.length > 0) {
+        // Pack the DISPATCHABLE set, NEVER the full resolved set. The full set
+        // still holds every fully-carried base unit, so packing it and
+        // assigning `groups = packed` re-dispatched a fully-carried unit that a
+        // full-set pack had merged with a fresh one — re-reviewing carried
+        // angles on every packed re-gate and contradicting the carry-forward
+        // rule ("subtract, never substitute: dispatch every current-head
+        // resolved angle minus the plan's `carried` angles"). Carried angles
+        // are round-stable (proven for this head), so packing them out keeps
+        // this a round-stable packing input: a same-head resume re-derives the
+        // IDENTICAL units (the growing COMPLETED set is still excluded).
+        const packedDispatchable = dispatchableUnits.length > effectiveConcurrency ? packDispatchUnits(dispatchableUnits, effectiveConcurrency) : null;
+        if (dispatchableUnits.length > effectiveConcurrency && packedDispatchable === null) {
+          // The dispatchable plan itself cannot fit one wave: refuse and name
+          // the set actually counted (the resolved count and the fresh subset)
+          // so a carry-forward round is never mislabeled as all-fresh.
+          const resolvedAngleCount = baseUnits.reduce((sum, unit) => sum + unit.angles.length, 0);
+          const freshAngleCount = dispatchableUnits.reduce((sum, unit) => sum + unit.angles.filter((a) => !carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase())).length, 0);
+          const capacity = effectiveConcurrency * REVIEWER_UNIT_MAX_ANGLES;
+          throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves ${resolvedAngleCount} angles (${freshAngleCount} fresh, ${resolvedAngleCount - freshAngleCount} carried forward) in ${dispatchableUnits.length} base dispatch units that do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${REVIEWER_UNIT_MAX_ANGLES} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
         }
-        // A fully-carried round (`dispatchableUnits` empty) keeps the full
-        // grouping: nothing is dispatched, and the emitter's all-carried
-        // zero-unit path keys on `fanout.groups` seeing every angle.
-      } else {
-        // Packing covers every resolved unit, so it replaces `groups` outright.
-        groups = packed;
+        // Emit the dispatchable plan — it IS what will be dispatched, so it is
+        // what the recorded membership must name. Packed base units when
+        // packing ran; the unsplit dispatchable grouping when it already fits
+        // (mirrors the full-set path, which records `resolveFanoutGroups`
+        // output and lets the emitter cap-split it).
+        groups = packedDispatchable ?? dispatchableGroups;
       }
+      // A fully-carried round (`dispatchableUnits` empty) keeps the full
+      // grouping: nothing is dispatched, and the emitter's all-carried
+      // zero-unit path keys on `fanout.groups` seeing every angle.
     }
   }
   const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
@@ -2971,8 +2972,10 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // understands "draft"/"preApproval"); its angle scope/fanout lookups below
   // fall back to draft's config shape — a reasonable default since neither
   // gate config exists for it — while its ANGLE SET is the dedicated union
-  // resolver below, never resolveGateAnglesDynamic.
-  const configKey = isReviewGate ? "draft" : mapGateToConfigKey(input.gate);
+  // resolver below, never resolveGateAnglesDynamic. resolveGateAngleCatalogKey
+  // owns that review -> draft fallback so the ledger's write/read-side
+  // re-derivation orders angles exactly as this dispatch does.
+  const configKey = resolveGateAngleCatalogKey(input.gate);
   // input.hasFullLabel is an ATTESTATION about the live PR's gate:full label,
   // not a preference: only an explicit `false` (caller checked the labels and
   // the label is absent) enables diff-class tier reduction. An omitted or
@@ -3564,7 +3567,7 @@ export async function main(
       const scopeConfig = config;
       // review has no config key of its own; scope/fanout lookups fall back
       // to draft's config shape (see buildGateContext's own configKey note).
-      const scopeConfigKey = options.gate === "review" ? "draft" : mapGateToConfigKey(options.gate);
+      const scopeConfigKey = resolveGateAngleCatalogKey(options.gate);
       options.angleScopes = Object.fromEntries(
         options.angles.map((name) => [name, resolveGateAngleScope(scopeConfig, scopeConfigKey, name)]),
       );

@@ -12,6 +12,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, test } from "bun:test";
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract } from "@dev-loops/core/config";
+import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
+import { resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { expandDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
@@ -595,5 +597,89 @@ describe("fanoutReviewerPairingError is independent of ledger order", () => {
         assert.match(read ?? "", /does not place all of them in one group \(no recorded dispatch membership\)/, label);
       }
     });
+  });
+});
+
+// Act index 1: the standalone `review` gate has no config section of its own,
+// and its dispatch resolves the DRAFT catalog (write-gate-context.mjs maps
+// review -> draft for its scope/fanout/catalog lookups). The write-side pairing
+// re-derivation must order the ledger's angles by that SAME catalog before
+// resolveFanoutGroups auto-chunks the leftovers, or the re-derived base units
+// differ from the emitted ones and the writer refuses a legitimate shared
+// auto-chunk reviewer — the review gate could then not persist its durable
+// ledger at all (skills/review/SKILL.md Phase 3 always writes it with
+// --provenance). Before the fix the write side used
+// `GATE_CONFIG_KEY["review"] ?? "review"` -> an empty catalog -> lexicographic
+// order, which chunked [zeta, alpha] as [alpha, beta] + [zeta].
+const REVIEW_DEVLOOPS = [
+  "version: 1",
+  "gates:",
+  "  requireFanoutEvidence: true",
+  "  requireFanoutProvenance: true",
+  "  draft:",
+  "    angles:",
+  "      - zeta",
+  "      - alpha",
+  "  preApproval:",
+  "    angles:",
+  "      - beta",
+  "  fanout:",
+  "    maxAnglesPerGroup: 2",
+  "",
+].join("\n");
+
+// Dispatch the round exactly as write-gate-context.mjs does for the gate, then
+// write the ledger through the real writer with one reviewer per emitted unit.
+async function writeDispatched(dir, gate, configGate, angles) {
+  const { config } = await loadDevLoopConfig({ repoRoot: dir });
+  const plan = resolveFanoutDispatch(config, configGate, angles, { env: {}, singleWave: false });
+  const units = expandDispatchUnits(plan.groups, new Set((config.gates.fanout.groups ?? []).map((g) => g.name)));
+  const perAngle = perUnitProvenance(units);
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 5, gate, headSha: HEAD_SHA, verdict: "clean", findings: "[]",
+      executionMode: "fanout_fanin",
+      provenance: JSON.stringify({ distinctReviewers: countIds(perAngle), perAngle }),
+      tmpRoot: OUT,
+    }, { repoRoot: dir });
+    return { error: null, plan, provenance: result.log.provenance };
+  } catch (error) {
+    return { error: error.message, plan, provenance: null };
+  }
+}
+
+describe("standalone review gate: the write-side pairing re-derivation mirrors the dispatch catalog", () => {
+  test("resolveGateAngleCatalogKey maps the standalone review gate to the draft catalog (and leaves mapGateToConfigKey strict)", () => {
+    assert.equal(resolveGateAngleCatalogKey("review"), "draft");
+    assert.equal(resolveGateAngleCatalogKey("draft_gate"), "draft");
+    assert.equal(resolveGateAngleCatalogKey("pre_approval_gate"), "preApproval");
+  });
+
+  test("ACCEPT: a review-gate round whose leftover angles auto-chunk shares one reviewer, and the real writer persists the ledger", async () => {
+    await withConfig(REVIEW_DEVLOOPS, async (dir) => {
+      const { config } = await loadDevLoopConfig({ repoRoot: dir });
+      const union = resolveOperationAnglePool(config, "review");
+      const { error, plan, provenance } = await writeDispatched(dir, "review", "draft", union);
+      assert.equal(error, null, error ?? "");
+      // The dispatch ordered the leftover custom angles by the DRAFT catalog
+      // (zeta before alpha), so they auto-chunk into ONE shared unit.
+      assert.ok(
+        plan.groups.some((g) => g.name === "group:zeta+alpha"),
+        `expected the draft-catalog auto-chunk unit, got: ${plan.groups.map((g) => g.name).join(" | ")}`,
+      );
+      assert.ok(provenance && Array.isArray(provenance.perAngle), "the ledger records the provenance");
+    });
+  });
+
+  test("the same-shape draft and pre-approval auto-chunk rounds stay green", async () => {
+    for (const [gate, configGate] of [["draft_gate", "draft"], ["pre_approval_gate", "preApproval"]]) {
+      await withConfig(REVIEW_DEVLOOPS, async (dir) => {
+        const { config } = await loadDevLoopConfig({ repoRoot: dir });
+        const { pool, mandatoryAngles } = resolveGateAngleContract(config, configGate);
+        const angles = [...new Set([...mandatoryAngles, ...pool])];
+        const { error } = await writeDispatched(dir, gate, configGate, angles);
+        assert.equal(error, null, `${gate}: ${error ?? ""}`);
+      });
+    }
   });
 });

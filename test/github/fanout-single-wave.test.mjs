@@ -196,6 +196,38 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
     }
   }
 
+  // Act index 2 (round 4): a packed re-gate must not re-dispatch a
+  // fully-carried base unit. The full resolved set still holds it, but the
+  // dispatch plan is packed from the DISPATCHABLE set (resolved units minus
+  // fully-carried groups), so a fully-carried group is never merged into a
+  // fresh unit and re-reviewed. A partially-carried group is still dispatched
+  // WHOLE, so its unit membership keeps every angle.
+  test("packed re-gate drops a fully-carried group and keeps a partially-carried group whole", () => {
+    const { pool } = resolveGateAngleContract(REPO_CONFIG, "draft");
+    const fullUnits = expandDispatchUnits(resolveFanoutGroups(REPO_CONFIG, "draft", pool), configuredNames(REPO_CONFIG));
+    assert.ok(fullUnits.length > 5, "the full resolved round exceeds one wave (6 base units)");
+
+    // correctness-input is a configured 2-angle group, so carrying both angles
+    // makes it a FULLY-carried base unit the plan must not dispatch at all.
+    const fullyCarried = ["correctness", "input-validation"];
+    const dropped = resolveFanoutDispatch(REPO_CONFIG, "draft", pool, { env: {}, carriedAngles: fullyCarried });
+    const dispatched = dropped.pendingGroups.flatMap((u) => u.angles);
+    for (const angle of fullyCarried) assert.ok(!dispatched.includes(angle), `fully-carried ${angle} is not re-dispatched`);
+    assert.ok(
+      !dropped.groups.some((g) => g.angles.every((a) => fullyCarried.includes(a))),
+      "the fully-carried group is absent from the dispatch plan",
+    );
+    assertSingleWave(REPO_CONFIG, expandDispatchUnits(dropped.pendingGroups, configuredNames(REPO_CONFIG)), {}, "fully-carried dropped");
+
+    // Carrying only one angle of the group keeps it partially fresh: the unit
+    // is dispatched whole (its carried angle stays in the same unit as the
+    // fresh one), never split.
+    const partial = resolveFanoutDispatch(REPO_CONFIG, "draft", pool, { env: {}, carriedAngles: ["correctness"] });
+    const partialUnit = partial.groups.find((g) => g.angles.includes("input-validation"));
+    assert.ok(partialUnit, "the partially-carried group's fresh angle is dispatched");
+    assert.ok(partialUnit.angles.includes("correctness"), "the partially-carried group is dispatched whole (its carried angle stays in the unit)");
+  });
+
   // Act index 2 (round 3): a carry-forward round whose FULL resolved set exceeds
   // capacity but whose DISPATCHABLE plan fits one wave is not refused. Before
   // this, the refusal keyed on the full resolved set — which can never shrink

@@ -218,6 +218,30 @@ export const NON_DEFECT_SEVERITIES = Object.freeze(new Set(["question", "nit"]))
 // resolveFanoutGroups maps the same way; passing the marker name verbatim
 // resolves no groups and silently downgrades pairing enforcement.
 export const GATE_CONFIG_KEY = Object.freeze({ draft_gate: "draft", pre_approval_gate: "preApproval" });
+
+/**
+ * Resolve the config section whose ANGLE CATALOG (pool order) a gate's
+ * dispatch resolved against, so every write/read-side pairing re-derivation
+ * orders angles exactly as the emitter did before `resolveFanoutGroups`
+ * auto-chunks them.
+ *
+ * The two lifecycle gates map through {@link GATE_CONFIG_KEY}. The standalone
+ * `review` gate has no config section of its own: its dispatch resolves the
+ * DRAFT catalog (write-gate-context.mjs maps review → draft for its
+ * scope/fanout/catalog lookups), so its ledger re-derivation must use the same
+ * key — otherwise the re-derived auto-chunk boundaries differ from the emitted
+ * ones and a legitimate shared auto-chunk reviewer is refused by
+ * `fanoutReviewerPairingError` ("is not a union of whole base units" /
+ * "does not place all of them in one group"). An unrecognized gate falls back
+ * to its own name, preserving the pre-existing `GATE_CONFIG_KEY[gate] ?? gate`
+ * read/write behavior.
+ *
+ * @param {string} gate marker gate name (`draft_gate` | `pre_approval_gate` | `review`)
+ * @returns {string}
+ */
+export function resolveGateAngleCatalogKey(gate) {
+  return gate === "review" ? "draft" : GATE_CONFIG_KEY[gate] ?? gate;
+}
 export const VALID_SEVERITIES = Object.freeze(new Set(SEVERITY_ORDER));
 
 // Pre-rename spellings. Old ledgers, markers, and configs still carry them;

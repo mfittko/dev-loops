@@ -27,7 +27,7 @@ import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, isSizeOutcomeT1Clean, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance, touchesRiskPath } from "@dev-loops/core/config";
-import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, JUDGE_DISPOSITIONS, VALID_SEVERITIES, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, ledgerAngleNames, listOpenActItems, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, ledgerAngleNames, listOpenActItems, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseChangedFiles, detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
@@ -676,7 +676,7 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
     // carried angles in angle-pool order, matching the emitted chunking) — per
     // candidate, not once up front, since a stale checkout can record a
     // different fresh angle set than the worktree ledger.
-    const resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[gateKey] ?? gateKey, ledgerAngleNames(prov.perAngle, anglePool ?? []), { fullLabel: hasFullLabel });
+    const resolvedGroups = resolveFanoutGroups(config, resolveGateAngleCatalogKey(gateKey), ledgerAngleNames(prov.perAngle, anglePool ?? []), { fullLabel: hasFullLabel });
     if (requireProvenance && prov.distinctReviewers < Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, countFreshDispatchUnits(prov.perAngle))) return false;
     if (requireProvenance && fanoutReviewerPairingError(prov.perAngle, resolvedGroups, prov.dispatchUnits) !== null) return false;
     const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(prov.perAngle, { mandatoryAngles, pool: anglePool });
@@ -1014,7 +1014,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       // re-validates the cardinality floor and the pairing exception against
       // this, so both agree with what readLedgerProvenanceInAny already used
       // to pick this ledger.
-      resolvedGroups: resolveFanoutGroups(angleConfig, GATE_CONFIG_KEY[spec.name] ?? spec.name, ledgerAngleNames(provenance?.perAngle, angleFields.anglePool ?? []), { fullLabel: hasFullLabel }),
+      resolvedGroups: resolveFanoutGroups(angleConfig, resolveGateAngleCatalogKey(spec.name), ledgerAngleNames(provenance?.perAngle, angleFields.anglePool ?? []), { fullLabel: hasFullLabel }),
       ...angleFields,
     });
   }
