@@ -1,0 +1,28 @@
+{
+  "targets": [
+    {
+      "kind": "agent",
+      "id": "f3e38c47-8e2c-4336-bfd7-6ebc572825a2",
+      "label": "agent:dev-loop",
+      "source": ".claude/agents/dev-loop.md"
+    },
+    {
+      "kind": "skill",
+      "id": "e67c4ac0-0b90-4e05-b04f-97e03647eed1",
+      "label": "skill:dev-loop",
+      "source": ".claude/skills/dev-loop/SKILL.md"
+    },
+    {
+      "kind": "skill",
+      "id": "7d309cb2-bb50-4ac6-b839-736741076b1c",
+      "label": "skill:copilot-pr-followup",
+      "source": ".claude/skills/copilot-pr-followup/SKILL.md"
+    },
+    {
+      "kind": "skill",
+      "id": "9de12d5a-f937-4846-8367-cbda558e3096",
+      "label": "skill:final-approval",
+      "source": ".claude/skills/final-approval/SKILL.md"
+    }
+  ]
+}

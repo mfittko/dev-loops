@@ -26,3 +26,6 @@ worktrees/
 
 # local-only scratch (never commit)
 .pi-subagents/
+
+# sync-multica backup snapshots (timestamped pre-images; never commit)
+.multica-sync-backups/
