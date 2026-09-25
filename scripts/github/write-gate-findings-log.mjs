@@ -19,6 +19,7 @@ import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resol
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { buildGateContextPath, buildLogPath } from "./_gate-artifact-paths.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -628,19 +629,12 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
   }
   return options;
 }
-export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
-  const parts = repo.split("/");
-  if (parts.length !== 2 || parts.some(p => p.length === 0)) {
-    throw new Error(`--repo must be in owner/name format, got: ${JSON.stringify(repo)}`);
-  }
-  for (const p of parts) {
-    if (p === "." || p === ".." || /[\s\\]/.test(p)) {
-      throw new Error(`--repo segment ${JSON.stringify(p)} contains unsafe characters (dots, whitespace, or backslashes)`);
-    }
-  }
-  const repoSlug = parts.join("-");
-  return path.join(tmpRoot, "gate-findings", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
-}
+// The gate-artifact path scheme lives in the leaf module _gate-artifact-paths.mjs
+// (see its header): write-gate-context.mjs imports it too, so neither consumer
+// imports the other and this CLI entry can never deadlock on an ESM cycle while
+// its own top-level `await main()` is pending. Re-exported so the existing
+// consumers keep resolving buildLogPath from this writer.
+export { buildLogPath };
 /**
  * ADR 0089: carry the judge pass's spec-authority `finding_conflicts` reject
  * into the durable ledger. The spec-authority verdict is the fixed sibling
@@ -693,8 +687,6 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
  * @returns {Promise<{ name: string, angles: string[] }[]|null>}
  */
 export async function readContextDispatchUnits({ repo, pr, gate, headSha, tmpRoot }, config, repoRoot) {
-  // Dynamic import: write-gate-context.mjs statically imports this module.
-  const { buildGateContextPath } = await import("./write-gate-context.mjs");
   const contextPath = path.resolve(repoRoot, buildGateContextPath({ repo, pr, gate, headSha, tmpRoot: tmpRoot || path.join(repoRoot, "tmp") }));
   let raw;
   try {

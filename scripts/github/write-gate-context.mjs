@@ -51,7 +51,7 @@ import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_c
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
-import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { buildGateArtifactPath, buildGateContextPath, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 
@@ -583,32 +583,11 @@ export function parseWriteGateContextCliArgs(argv) {
   return options;
 }
 
-/**
- * Internal deterministic-path builder shared by every gate-artifact path
- * function below (buildGateContextPath, buildGateReviewsDir, buildGateDiffPath,
- * buildGateBriefingPrefixPath, buildGateBriefingScopePath,
- * buildValidationResultsPath): validates/sanitizes the repo/pr/gate/headSha
- * segments once and joins `<tmpRoot>/<dir>/<repo-slug>/pr-<N>/<gate>-<headSha><suffix>`.
- * `dir` distinguishes the "gate-context" artifact family from the
- * "gate-reviews" per-angle findings directory; `suffix` (empty for the
- * directory case) distinguishes the file extension within a family.
- *
- * @param {string} [input.dir] — top-level artifact-family directory, default "gate-context"
- * @param {string} [input.suffix] — filename suffix (extension), default ""
- */
-function buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot = "tmp", dir = "gate-context", suffix = "" }) {
-  const repoSlug = repoSlugFor(repo);
-  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
-  return path.join(tmpRoot, dir, repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}${suffix}`);
-}
-
-// Deterministic artifact path for a gate-review context handoff. Mirrors
-// write-gate-findings-log.mjs buildLogPath. Exported for reuse by the fork
-// fan-out reviewers so producer and consumer agree on the path. Param shapes:
-// see buildGateArtifactPath above.
-export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".json" });
-}
+// Deterministic artifact path for a gate-review context handoff — re-exported
+// from the leaf path-scheme module (see its header for why the scheme must not
+// live in either consumer). Exported for reuse by the fork fan-out reviewers so
+// producer and consumer agree on the path.
+export { buildGateContextPath };
 
 // Deterministic per-angle findings-artifact directory a gate-review fan-out
 // writes to (one `<angle>.json` per angle). Mirrors the path
@@ -663,62 +642,6 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
     }
   }
   return completed;
-}
-
-/**
- * Validate the non-repo path components (gate, pr, headSha) that are
- * interpolated into a filesystem path which is later `path.resolve()`d and
- * read/written. Mirrors the repo-segment safety check in {@link repoSlugFor} so
- * both path builders reject traversal sequences and odd filenames coming from
- * untrusted inputs. Returns sanitized values for interpolation.
- *
- * @param {object} input
- * @param {number|string} input.pr — must coerce to a positive integer
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha — 7-64 char hex SHA
- * @returns {{ pr: number, gate: string, headSha: string }}
- */
-function validatePathSegments({ pr, gate, headSha }) {
-  if (!GATE_NAMES.includes(gate)) {
-    throw new Error(`--gate segment ${JSON.stringify(gate)} is unsafe (expected ${GATE_NAMES.join(" or ")})`);
-  }
-  // Require a CANONICAL positive integer: the trimmed string must be all digits
-  // (`/^\d+$/`) and > 0. This mirrors the CLI's parsePrNumber rule so the path
-  // builder cannot accept non-canonical numeric forms ("1e3" → 1000, "0x10" →
-  // 16, "1.5") that Number() would coerce to a DIFFERENT pr-<N> segment than the
-  // operator/CLI intended, breaking the deterministic producer/consumer
-  // round-trip. " 9 " trims to "9" and stays valid; numbers are stringified first.
-  const prStr = String(pr).trim();
-  const prNum = Number(prStr);
-  if (!/^\d+$/.test(prStr) || !Number.isInteger(prNum) || prNum <= 0) {
-    throw new Error(`--pr segment ${JSON.stringify(pr)} is unsafe (expected a positive integer)`);
-  }
-  // Lowercase the validated SHA so the path segment is case-canonical regardless
-  // of caller casing, matching the CLI's normalizeHeadSha. A mixed-case
-  // headRefOid (e.g. ABC123) must compute the SAME filename as its lowercase
-  // form (abc123) or readGateContext / the .diff lookup would miss it — a
-  // determinism bug.
-  const sha = String(headSha).trim().toLowerCase();
-  if (!/^[0-9a-f]{7,64}$/i.test(sha)) {
-    throw new Error(`--head-sha segment ${JSON.stringify(headSha)} is unsafe (expected a 7-64 character hex SHA)`);
-  }
-  return { pr: prNum, gate, headSha: sha };
-}
-
-// Validate the repo string and return its `owner-name` slug, applying the same
-// safety checks (no `.`/`..` segments, no whitespace/backslashes) shared by the
-// artifact and diff path builders.
-function repoSlugFor(repo) {
-  const parts = String(repo).split("/");
-  if (parts.length !== 2 || parts.some((p) => p.length === 0)) {
-    throw new Error(`--repo must be in owner/name format, got: ${JSON.stringify(repo)}`);
-  }
-  for (const p of parts) {
-    if (p === "." || p === ".." || /[\s\\]/.test(p)) {
-      throw new Error(`--repo segment ${JSON.stringify(p)} is unsafe (a "." or ".." path segment, or contains whitespace/backslashes)`);
-    }
-  }
-  return parts.join("-");
 }
 
 // Deterministic path for the FULL diff captured alongside the gate context
