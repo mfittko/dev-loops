@@ -6,14 +6,14 @@
 // round above maxConcurrent x 5 angles. The same holds under the Claude clamp
 // (5) and a Pi env (one runs.all call per wave).
 import assert from "node:assert/strict";
-import { copyFile, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
 import { expandDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
-import { mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildGateContextPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import {
   loadDevLoopConfig,
   resolveFanoutEffectiveConcurrency,
@@ -433,5 +433,78 @@ describe("emitter-side GATE-EXEC-FANOUT-CAPACITY is scoped to a cross-harness pa
     assert.equal(plan.effectiveConcurrency, 1);
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.equal(JSON.parse(result.stdout).count, 3);
+  });
+
+  test("a plan recorded above this harness's bound but emitting within it is not refused", async () => {
+    // Pi plans maxConcurrent 8: 20 angles at 5/group resolve to 4 base units and
+    // record effectiveConcurrency 8 (packing never ran — 4 <= 8). Emitted under
+    // the Claude clamp (5) those 4 units still fit one wave, so a refusal keyed
+    // on the recorded bound alone would be a false positive.
+    const devloops = "version: 1\ngates:\n  fanout:\n    maxConcurrent: 8\n    maxAnglesPerGroup: 5\n    groups: []\n";
+    const probeDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-capacity-probe-"));
+    await writeFile(path.join(probeDir, ".devloops"), devloops, "utf8");
+    const { config: probeConfig } = await loadDevLoopConfig({ repoRoot: probeDir });
+    await rm(probeDir, { recursive: true, force: true }).catch(() => {});
+    const angles = resolveGateAngleContract(probeConfig, "draft").pool.slice(0, 20);
+    const { result, plan } = await emitCase(devloops, angles, piEnv(), claudeEnv());
+    assert.equal(plan.effectiveConcurrency, 8);
+    assert.equal(plan.groups.length, 4);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.maxConcurrent, 5);
+    assert.equal(payload.count, 4);
+  });
+
+  test("mode: per-angle keeps its multi-wave plan emittable across harnesses", async () => {
+    // per-angle is the gate-review contract's explicit multi-wave opt-out: the
+    // writer never packs it, so a recorded bound above this harness's must not
+    // refuse the emitted singleton units under the tighter harness.
+    const devloops = "version: 1\ngates:\n  fanout:\n    mode: per-angle\n    maxConcurrent: 8\n    maxAnglesPerGroup: 5\n    groups: []\n";
+    const probeDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-capacity-probe-"));
+    await writeFile(path.join(probeDir, ".devloops"), devloops, "utf8");
+    const { config: probeConfig } = await loadDevLoopConfig({ repoRoot: probeDir });
+    await rm(probeDir, { recursive: true, force: true }).catch(() => {});
+    const angles = resolveGateAngleContract(probeConfig, "draft").pool.slice(0, 9);
+    const pi = await emitCase(devloops, angles, piEnv(), piEnv());
+    assert.equal(pi.result.status, 0, pi.result.stderr || pi.result.stdout);
+    assert.equal(JSON.parse(pi.result.stdout).count, 9);
+    const claude = await emitCase(devloops, angles, piEnv(), claudeEnv());
+    assert.equal(claude.plan.effectiveConcurrency, 8);
+    assert.equal(claude.result.status, 0, claude.result.stderr || claude.result.stdout);
+    assert.equal(JSON.parse(claude.result.stdout).count, 9);
+  });
+
+  test("a present-but-non-integer effectiveConcurrency refuses as malformed instead of failing open", async () => {
+    const devloops = "version: 1\ngates:\n  fanout:\n    maxConcurrent: 8\n    maxAnglesPerGroup: 1\n    groups: []\n";
+    const probeDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-capacity-probe-"));
+    await writeFile(path.join(probeDir, ".devloops"), devloops, "utf8");
+    const { config: probeConfig } = await loadDevLoopConfig({ repoRoot: probeDir });
+    await rm(probeDir, { recursive: true, force: true }).catch(() => {});
+    const angles = resolveGateAngleContract(probeConfig, "draft").pool.slice(0, 6);
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-capacity-"));
+    try {
+      await writeFile(path.join(tmpDir, ".devloops"), devloops, "utf8");
+      const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
+      const options = parseWriteGateContextCliArgs([
+        "--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA,
+        "--angles", JSON.stringify(angles),
+      ]);
+      options.config = config;
+      options.fanoutDispatch = resolveFanoutDispatch(config, "draft", angles, { env: piEnv() });
+      await writeGateContext(options, { repoRoot: tmpDir });
+      const artifactPath = path.join(tmpDir, buildGateContextPath({ repo: REPO, pr: PR, gate: "draft_gate", headSha: HEAD_SHA }));
+      const artifact = JSON.parse(await readFile(artifactPath, "utf8"));
+      artifact.fanout.effectiveConcurrency = "8";
+      await writeFile(artifactPath, JSON.stringify(artifact), "utf8");
+      const result = spawnSync("node", [emitCliPath, "--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA], {
+        cwd: tmpDir,
+        encoding: "utf8",
+        env: claudeEnv(),
+      });
+      assert.equal(result.status, 1, result.stderr || result.stdout);
+      assert.match(`${result.stdout}${result.stderr}`, /effectiveConcurrency is present but not an integer/);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
   });
 });
