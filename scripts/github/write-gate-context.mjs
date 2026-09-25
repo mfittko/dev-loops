@@ -32,6 +32,8 @@ import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGro
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
@@ -1949,16 +1951,19 @@ function normalizeCarriedAnglesArg(carriedAngles) {
  * no angle resolution (it consumes the already-resolved `resolvedAngles`) and
  * no I/O. `config` may be null (a `--angles` override with no loaded config);
  * in that case grouping degrades to auto-chunked singletons under the built-in
- * defaults and `maxConcurrent`/`maxAnglesPerGroup` fall back to 4/3.
+ * defaults and `maxConcurrent`/`maxAnglesPerGroup` fall back to their
+ * shipped defaults (5/5). When the pending units exceed the effective
+ * concurrency, whole base units are packed into one wave (see the packing
+ * block below); an unpackable round throws `GATE-EXEC-FANOUT-CAPACITY`.
  *
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
- * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined> }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment.
+ * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined>, singleWave?: boolean }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment. `singleWave` (default true) enables packing and the capacity refusal; the review gate passes false.
  * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
-export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env } = {}) {
-  const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env, singleWave = true } = {}) {
+  let groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
   // Serial (one-at-a-time) dispatch of heavy reviewers when
   // `gates.fanout.sequential` is set — effective concurrency is 1 unit per wave
@@ -1969,7 +1974,6 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   const sequential = resolveFanoutSequential(config);
   const maxConcurrent = resolveFanoutMaxConcurrent(config);
   const effectiveConcurrency = resolveFanoutEffectiveConcurrency(config, env);
-  const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   // Mirrors consolidate-fanin.mjs's own --carried-angles mandatory-angle
   // refusal: a name whose review surface always re-runs (a configured
   // mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/
@@ -2017,7 +2021,31 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // `carriedAnglesList`, not the raw `carriedAngles` option: the latter may be
   // a one-shot iterable already exhausted by the spread above, which would
   // silently exclude nothing and record empty provenance.
-  const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
+  let preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
+  // Single-wave packing: when the emitter would cap-split the pending units into
+  // more than effectiveConcurrency dispatch units, merge whole base units
+  // (packDispatchUnits) so the round stays one wave. It never runs when the
+  // count already fits, under sequential dispatch, or in per-angle mode (both
+  // explicit opt-outs). No fit refuses fail-closed before any artifact write.
+  // `singleWave: false` (the standalone review gate, whose full-PR angle set
+  // exceeds single-wave capacity) keeps the multi-wave plan unchanged.
+  const perAngleMode = config?.gates?.fanout?.mode === "per-angle";
+  if (singleWave && !sequential && !perAngleMode) {
+    const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
+    const baseUnits = expandDispatchUnits(preflight.pendingGroups, configuredGroupNames);
+    if (baseUnits.length > effectiveConcurrency) {
+      const packed = packDispatchUnits(baseUnits, effectiveConcurrency);
+      if (packed === null) {
+        const freshAngleCount = baseUnits.reduce((sum, unit) => sum + unit.angles.length, 0);
+        const capacity = effectiveConcurrency * REVIEWER_UNIT_MAX_ANGLES;
+        throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — ${freshAngleCount} fresh angles in ${baseUnits.length} base dispatch units do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${REVIEWER_UNIT_MAX_ANGLES} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
+      }
+      const pendingNames = new Set(preflight.pendingGroups.map((g) => g.name));
+      groups = [...packed, ...groups.filter((g) => !pendingNames.has(g.name))];
+      preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
+    }
+  }
+  const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   const pendingGroups = preflight.pendingGroups;
   const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);
   return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, preflight, pendingGroups, pendingWavePlan };
@@ -3027,7 +3055,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot }, { repoRoot });
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: input.carriedAngles ?? null });
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: input.carriedAngles ?? null, singleWave: !isReviewGate });
 
   const writeResult = await writeGateContext(
     {
@@ -3574,7 +3602,7 @@ export async function main(
       // AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
       const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles });
+      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review" });
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

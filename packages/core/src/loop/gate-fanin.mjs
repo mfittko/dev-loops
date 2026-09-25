@@ -29,6 +29,7 @@
 
 import { scheduleParallelWaves } from "./queue-parallel.mjs";
 import { trimmedOrNull } from "./normalize.mjs";
+import { REVIEWER_UNIT_MAX_ANGLES } from "./reviewer-unit-bound.mjs";
 
 /**
  * Schedule fan-out dispatch units into bounded-concurrency waves: each wave
@@ -41,12 +42,12 @@ import { trimmedOrNull } from "./normalize.mjs";
  * same head+config.
  *
  * @param {{ name: string, angles: string[] }[]} dispatchGroups — `resolveFanoutGroups` output
- * @param {number} [maxConcurrent] — `gates.fanout.maxConcurrent` (default 4, min 1)
+ * @param {number} [maxConcurrent] — `gates.fanout.maxConcurrent` (default 5, min 1)
  * @returns {{ name: string, angles: string[] }[][]} waves of dispatch units (at most `maxConcurrent` per wave)
  */
-export function scheduleFanoutWaves(dispatchGroups, maxConcurrent = 4) {
+export function scheduleFanoutWaves(dispatchGroups, maxConcurrent = 5) {
   const groups = Array.isArray(dispatchGroups) ? dispatchGroups : [];
-  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 4;
+  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 5;
   if (groups.length === 0) return [];
   return scheduleParallelWaves(groups, cap);
 }
@@ -64,7 +65,7 @@ export function scheduleFanoutWaves(dispatchGroups, maxConcurrent = 4) {
  * @returns {number}
  */
 export function backoffMaxConcurrent(maxConcurrent) {
-  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 4;
+  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 5;
   return Math.max(1, Math.floor(cap / 2));
 }
 
@@ -577,15 +578,39 @@ export function countFreshDispatchUnits(perAngle) {
  * group. Omitting `resolvedGroups` keeps the permissive behavior (any one shared
  * non-null `group` accepted) for callers that don't load config.
  *
+ * Membership is checked against BASE units: `resolvedGroups` cap-split in
+ * order into chunks of at most `REVIEWER_UNIT_MAX_ANGLES` (the emitter's own
+ * cap-split). Base units do not depend on the harness concurrency clamp. An
+ * optional `dispatchUnits` (the findings ledger's recorded dispatch membership,
+ * copied from the context artifact's packed `fanout.groups`) replaces the base
+ * units as the membership source. A malformed recording or an angle recorded
+ * twice is an error. A shared reviewer is honored only inside ONE recorded
+ * unit, and that unit must be a union of whole base units with at most
+ * `REVIEWER_UNIT_MAX_ANGLES` angles. A ledger without recorded membership falls
+ * back to the base units, so an unpacked round still passes and a packed round
+ * fails closed.
+ *
  * @param {unknown} perAngle
  * @param {{name: string, angles: string[]}[]|null} [resolvedGroups]
+ * @param {unknown} [dispatchUnits] recorded `{ name, angles }[]` membership
  * @returns {string|null}
  */
-export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
+export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, dispatchUnits = null) {
   if (!Array.isArray(perAngle)) return null;
-  const configuredGroupOf = new Map();
+  const baseUnits = [];
   for (const g of Array.isArray(resolvedGroups) ? resolvedGroups : []) {
-    for (const a of Array.isArray(g?.angles) ? g.angles : []) configuredGroupOf.set(a, g.name);
+    const angles = Array.isArray(g?.angles) ? g.angles : [];
+    for (let i = 0; i < angles.length; i += REVIEWER_UNIT_MAX_ANGLES) baseUnits.push(angles.slice(i, i + REVIEWER_UNIT_MAX_ANGLES));
+  }
+  const baseOf = new Map();
+  baseUnits.forEach((angles, index) => angles.forEach((a) => baseOf.set(a, index)));
+  const useRecorded = baseOf.size > 0 && dispatchUnits !== null && dispatchUnits !== undefined;
+  let configuredGroupOf = baseOf;
+  if (useRecorded) {
+    const shapeError = dispatchUnitsShapeError(dispatchUnits);
+    if (shapeError !== null) return `fan-out provenance records invalid dispatch unit membership: ${shapeError}`;
+    configuredGroupOf = new Map();
+    dispatchUnits.forEach((unit, index) => unit.angles.forEach((a) => configuredGroupOf.set(a.trim(), index)));
   }
   const freshAngles = new Set();
   const anglesByIdentity = new Map();
@@ -624,7 +649,12 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
     if (configuredGroupOf.size > 0) {
       const configuredGroups = new Set([...angles].map((a) => configuredGroupOf.get(a) ?? null));
       if (configuredGroups.size !== 1 || configuredGroups.has(null)) {
-        details.push(`${label} "${id}" declares group "${[...groups][0]}" for fresh angles: ${[...angles].join(", ")}, but the configured gates.fanout.groups table does not place all of them in one group`);
+        details.push(`${label} "${id}" declares group "${[...groups][0]}" for fresh angles: ${[...angles].join(", ")}, but the ${useRecorded ? "recorded dispatch units" : "configured gates.fanout.groups table"} does not place all of them in one group`);
+      } else if (useRecorded) {
+        // The recorded unit hosting this shared reviewer must itself be a
+        // legitimate packing: a union of whole base units of at most 5 angles.
+        const unitError = recordedUnitError(dispatchUnits[[...configuredGroups][0]], baseUnits, baseOf);
+        if (unitError !== null) details.push(`${label} "${id}" shares recorded dispatch unit membership that is invalid: ${unitError}`);
       }
     }
   }
@@ -633,6 +663,50 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
   }
   if (details.length === 0) return null;
   return `fan-out provenance violates the one-scoped-reviewer-per-angle contract (${distinctFreshReviewers} distinct reviewer(s) for ${freshAngleCount} fresh angle(s)): ${details.join("; ")} — use executionMode inline_single_agent + --inline-reason for a sanctioned single-reviewer run`;
+}
+
+/**
+ * Shape check for recorded dispatch membership: an array of `{ name, angles }`
+ * with a non-empty name, non-empty angle names, and no angle recorded in two
+ * units. Returns an error string or null. Pure.
+ * @param {unknown} dispatchUnits
+ * @returns {string|null}
+ */
+function dispatchUnitsShapeError(dispatchUnits) {
+  if (!Array.isArray(dispatchUnits)) return "dispatchUnits must be an array";
+  const seen = new Set();
+  for (const unit of dispatchUnits) {
+    const name = typeof unit?.name === "string" ? unit.name.trim() : "";
+    const angles = Array.isArray(unit?.angles) ? unit.angles.map((a) => (typeof a === "string" ? a.trim() : "")) : [];
+    if (!name || angles.length === 0 || angles.some((a) => !a)) return "every dispatch unit needs a non-empty name and non-empty angle names";
+    for (const angle of angles) {
+      if (seen.has(angle)) return `angle "${angle}" is recorded in more than one dispatch unit`;
+      seen.add(angle);
+    }
+  }
+  return null;
+}
+
+/**
+ * A recorded unit that hosts a shared reviewer is legitimate only when it holds
+ * at most `REVIEWER_UNIT_MAX_ANGLES` angles and, over the angles the ledger
+ * records, is exactly a union of whole re-derived base units. A recorded angle
+ * absent from the ledger (a carried unit the provenance omits) is outside the
+ * re-derivation and is skipped. Returns an error string or null. Pure.
+ * @param {{ name: string, angles: string[] }} unit shape-checked recorded unit
+ * @param {string[][]} baseUnits
+ * @param {Map<string, number>} baseOf angle -> base unit index
+ * @returns {string|null}
+ */
+function recordedUnitError(unit, baseUnits, baseOf) {
+  const angles = unit.angles.map((a) => a.trim());
+  if (angles.length > REVIEWER_UNIT_MAX_ANGLES) return `unit "${unit.name}" holds ${angles.length} angles, above the ${REVIEWER_UNIT_MAX_ANGLES}-angle unit bound`;
+  const members = new Set(angles);
+  const bases = new Set(angles.filter((a) => baseOf.has(a)).map((a) => baseOf.get(a)));
+  for (const index of bases) {
+    if (!baseUnits[index].every((a) => members.has(a))) return `unit "${unit.name}" is not a union of whole base units: it splits base unit ${baseUnits[index].join("+")}`;
+  }
+  return null;
 }
 
 /**

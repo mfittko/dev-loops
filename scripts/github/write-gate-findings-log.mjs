@@ -2,6 +2,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
+import { expandDispatchUnits } from "./_dispatch-units.mjs";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -264,9 +265,11 @@ function resolveFindings(options) {
  * Validate + normalize the fan-out provenance object (distinctReviewers +
  * perAngle). Rejects malformed or self-inconsistent provenance; this raises
  * the bar but does not make provenance unforgeable (see the Pi-harness
- * subagent-tool bridge for that).
+ * subagent-tool bridge for that). `dispatchUnits` is the round's recorded
+ * dispatch membership (readContextDispatchUnits); a caller-supplied
+ * `dispatchUnits` key in `raw` is dropped, never trusted.
  */
-export function parseProvenanceJson(raw, resolvedGroups = null) {
+export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = null) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -336,11 +339,13 @@ export function parseProvenanceJson(raw, resolvedGroups = null) {
   // (non-carried) angles may share a reviewer identity, except fresh angles
   // sharing one under the SAME declared `group` (grouped fan-out dispatch —
   // see fanoutReviewerPairingError). `resolvedGroups` additionally rejects a
-  // claimed group the configured table does not actually place together.
-  const pairingError = fanoutReviewerPairingError(normalized.perAngle, resolvedGroups);
+  // claimed group the configured table does not actually place together, and
+  // `dispatchUnits` (when recorded) is the membership the reviewers shared.
+  const pairingError = fanoutReviewerPairingError(normalized.perAngle, resolvedGroups, dispatchUnits);
   if (pairingError) {
     throw parseError(`--provenance.perAngle ${pairingError}`);
   }
+  if (dispatchUnits !== null) normalized.dispatchUnits = dispatchUnits;
   return normalized;
 }
 /**
@@ -673,6 +678,40 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
     .map((d) => d.index);
   return rejectFindingConflicts(findings, conflicts);
 }
+/**
+ * Read this round's dispatch membership from the keyed gate-context artifact
+ * (the same `<tmpRoot>/gate-context/...` path emit-fanout-dispatch.mjs reads:
+ * `--tmp-root` when given, else the worktree `tmp/`). The context's
+ * `fanout.groups` (packed when the round needed packing) expands through the
+ * emitter's own cap-split into the `{ name, angles }` dispatch units reviewers
+ * actually shared. Returns null when no context or no fanout plan exists, so
+ * the pairing guard falls back to re-derived base units. The path is keyed by
+ * repo, PR, gate and head, as in the emitter. A present but unreadable context
+ * fails closed.
+ * @returns {Promise<{ name: string, angles: string[] }[]|null>}
+ */
+export async function readContextDispatchUnits({ repo, pr, gate, headSha, tmpRoot }, config, repoRoot) {
+  // Dynamic import: write-gate-context.mjs statically imports this module.
+  const { buildGateContextPath } = await import("./write-gate-context.mjs");
+  const contextPath = path.resolve(repoRoot, buildGateContextPath({ repo, pr, gate, headSha, tmpRoot: tmpRoot || path.join(repoRoot, "tmp") }));
+  let raw;
+  try {
+    raw = await readFile(contextPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw parseError(`gate-context artifact ${contextPath} could not be read for dispatch membership: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let context;
+  try {
+    context = JSON.parse(raw);
+  } catch (error) {
+    throw parseError(`gate-context artifact ${contextPath} is not valid JSON, so its dispatch membership cannot be recorded: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!Array.isArray(context?.fanout?.groups)) return null;
+  const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
+  return expandDispatchUnits(context.fanout.groups, configuredGroupNames).map(({ name, angles }) => ({ name, angles }));
+}
+
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   // The ledger write resolves against repoRoot (process.cwd() on the CLI), so the guard does too.
   if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
@@ -759,14 +798,16 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // to a malformed --provenance flag — never a parallel validator.
   const resolveAndValidateProvenance = async (rawProvenanceJson) => {
     let resolvedGroups = null;
+    let config = null;
     try {
       const rawPerAngle = JSON.parse(rawProvenanceJson)?.perAngle;
-      const { config } = await loadDevLoopConfig({ repoRoot });
+      ({ config } = await loadDevLoopConfig({ repoRoot }));
       resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[options.gate] ?? options.gate, ledgerAngleNames(rawPerAngle), { fullLabel: options.fullLabel === true });
     } catch {
       resolvedGroups = null;
     }
-    return parseProvenanceJson(rawProvenanceJson, resolvedGroups);
+    const dispatchUnits = await readContextDispatchUnits(options, config, repoRoot);
+    return parseProvenanceJson(rawProvenanceJson, resolvedGroups, dispatchUnits);
   };
   let provenance;
   if (options.provenance !== undefined) {

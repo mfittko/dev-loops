@@ -216,11 +216,13 @@ gates:
   # Two orthogonal dispatch bounds (#1601):
   #   maxAnglesPerGroup (N, default 5, min 1) — leftover ungrouped angles
   #     auto-chunk into dispatch units of ≤N instead of singletons.
-  #   maxConcurrent (M, default 4, min 1) — at most M dispatch units per wave.
-  # Both count dispatch units (groups), not angles.
+  #   maxConcurrent (M, default 5, min 1) — at most M dispatch units per wave.
+  # Both count dispatch units (groups), not angles. When a round's units exceed
+  # M, write-gate-context.mjs packs whole units into one wave of at most M
+  # units x 5 angles (capacity 25) and refuses a round above that capacity.
   fanout:
     maxAnglesPerGroup: 5
-    maxConcurrent: 4
+    maxConcurrent: 5
     # The table is global; a group is only emitted for a gate that actually
     # resolves at least one of its angles, so a group naming preApproval-only
     # angles is inert for the draft/spike gates (their angle sets never include

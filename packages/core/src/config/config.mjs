@@ -290,14 +290,14 @@ const FanoutGroup = z.strictObject({
 // angle set upstream (resolveGateTier) and dispatches GROUPED here (ADR 0048).
 //   maxAnglesPerGroup (N, default 5, min 1) — leftover ungrouped angles
 //     auto-chunk into units of ≤N after configured groups match.
-//   maxConcurrent (M, default 4, min 1) — at most M dispatch units per wave
+//   maxConcurrent (M, default 5, min 1) — at most M dispatch units per wave
 //     (scheduleFanoutWaves).
 // An angle in no configured group joins the auto-chunked leftover pool.
 const FanoutConfig = z.strictObject({
   mode: z.enum(["grouped", "per-angle"]).default("grouped").describe("Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle bypasses the configured-groups table and emits one singleton unit per angle (the original full-scrutiny shape). per-angle is equivalent to maxAnglesPerGroup: 1 in dispatch unit size ONLY when no configured multi-angle group matches a resolved angle; otherwise per-angle bypasses configured groups while maxAnglesPerGroup: 1 honors them (matched first, never split)."),
   groups: z.array(FanoutGroup).optional().describe("Static named angle groups consulted in grouped mode. An angle absent from every group joins the auto-chunked leftover pool (chunked into units of ≤maxAnglesPerGroup)."),
   maxAnglesPerGroup: z.number().int().min(1).default(5).describe("Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 5, min 1). Configured groups are matched first and never split by this knob; mode: per-angle bypasses the table entirely (one singleton per angle)."),
-  maxConcurrent: z.number().int().min(1).default(4).describe("Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves). Ignored when sequential is true (which forces one unit per wave)."),
+  maxConcurrent: z.number().int().min(1).default(5).describe("Max dispatch units (groups) the conductor dispatches concurrently per wave (default 5, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves). Ignored when sequential is true (which forces one unit per wave)."),
   sequential: z.boolean().default(false).describe("Dispatch heavy reviewers one at a time (serial) instead of wave-by-wave parallel (issue #1726). When true, effective fan-out concurrency is one dispatch unit per wave regardless of maxConcurrent, so each heavy reviewer completes and writes its evidence artifact before the next starts. Distinct reviewers, real fan-in/ledger, and provenance are unchanged — this only bounds dispatch concurrency. Default false keeps shipped behaviour unchanged for other harnesses/repos (cross-harness non-regression #1086); a repo sets it in .devloops to bound concurrency for all its PRs."),
 });
 
@@ -2213,7 +2213,7 @@ export const DEFAULT_MAX_ANGLES_PER_GROUP = 5;
  * zod default on `gates.fanout.maxConcurrent`; consumed by
  * `scheduleFanoutWaves` (@dev-loops/core/loop/gate-fanin).
  */
-export const DEFAULT_FANOUT_MAX_CONCURRENT = 4;
+export const DEFAULT_FANOUT_MAX_CONCURRENT = 5;
 export const DEFAULT_FANOUT_SEQUENTIAL = false;
 
 /**
@@ -2232,14 +2232,16 @@ export function resolveFanoutSequential(config) {
 /**
  * Claude-harness-scoped cap on effective fan-out concurrency (per ADR
  * docs/decisions/0069-claude-harness-fanout-concurrency-clamp.md, amended by
- * docs/decisions/0083-raise-claude-fanout-concurrency-cap-to-4.md). The
+ * docs/decisions/0083-raise-claude-fanout-concurrency-cap-to-4.md and
+ * docs/decisions/0095-single-wave-gate-fanout.md). The
  * `GATE-EXEC-DISPATCH-RETRY-BACKOFF` retry/backoff policy turns a single 429
  * into latency instead of a failed drive, so this cap only bounds the
  * steady-state per-wave burst (driver + dispatch units) for a single-driver
  * Claude session; other harnesses (pi, unknown) are unaffected — see
- * `resolveFanoutEffectiveConcurrency`.
+ * `resolveFanoutEffectiveConcurrency`. At 5 it matches the shipped
+ * maxConcurrent default, so a full shipped round packs into one wave.
  */
-export const CLAUDE_MAX_EFFECTIVE_CONCURRENT = 4;
+export const CLAUDE_MAX_EFFECTIVE_CONCURRENT = 5;
 
 /**
  * Resolve the effective fan-out concurrency (dispatch units per wave): 1 when
@@ -2274,7 +2276,7 @@ export function resolveMaxAnglesPerGroup(config) {
 }
 
 /**
- * Resolve `gates.fanout.maxConcurrent` (default 4, min 1). The
+ * Resolve `gates.fanout.maxConcurrent` (default 5, min 1). The
  * max dispatch units (groups) the conductor dispatches concurrently per wave.
  * Defensive, independent of zod (same rationale as resolveMaxAnglesPerGroup).
  * @param {DevLoopConfig} config

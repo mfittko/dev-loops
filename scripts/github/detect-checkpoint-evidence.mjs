@@ -495,7 +495,7 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
           // fresh angles/groups). gate.resolvedGroups cross-checks a claimed
           // `group` against this round's actual dispatch-group resolution
           // (mode/gate:full-aware) rather than accepting any self-attested label.
-          const pairingErr = fanoutReviewerPairingError(prov.perAngle, gate.resolvedGroups);
+          const pairingErr = fanoutReviewerPairingError(prov.perAngle, gate.resolvedGroups, prov.dispatchUnits);
           if (reviewers === null || reviewers < requiredReviewers) {
             failures.push(
               `${gate.name}: requireFanoutProvenance is enabled but the findings-log ledger lacks valid fan-out provenance (need provenance.distinctReviewers >= ${requiredReviewers}${requiredReviewers > FANOUT_PROVENANCE_MIN_REVIEWERS ? ` [max(${FANOUT_PROVENANCE_MIN_REVIEWERS}, ${freshUnitCount} fresh dispatch unit(s))]` : ""}, got ${reviewers === null ? "none" : reviewers}); ${FANOUT_UNAVAILABLE_MESSAGE}`,
@@ -678,7 +678,7 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
     // angle set than the worktree ledger.
     const resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[gateKey] ?? gateKey, ledgerAngleNames(prov.perAngle), { fullLabel: hasFullLabel });
     if (requireProvenance && prov.distinctReviewers < Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, countFreshDispatchUnits(prov.perAngle))) return false;
-    if (requireProvenance && fanoutReviewerPairingError(prov.perAngle, resolvedGroups) !== null) return false;
+    if (requireProvenance && fanoutReviewerPairingError(prov.perAngle, resolvedGroups, prov.dispatchUnits) !== null) return false;
     const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(prov.perAngle, { mandatoryAngles, pool: anglePool });
     if (missingMandatory.length > 0) return false;
     if (foreignAngles.length > 0 && rejectForeignAngles) return false;

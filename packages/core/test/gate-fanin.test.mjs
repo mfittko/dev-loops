@@ -800,12 +800,22 @@ describe("fanoutReviewerPairingError × the shipped preApproval grouping (light-
 
   test("a light-track ledger recording one reviewer per resolved dispatch UNIT passes under the shipped grouped default", async () => {
     const { groups } = await shippedPreApprovalGroups();
-    // One distinct reviewer per resolved group; every angle in a group shares
-    // that group's reviewer + declared group name.
-    const perAngle = groups.flatMap((g, i) =>
-      g.angles.map((angle) => ({ angle, reviewer: `rev-${i}`, group: g.name })),
+    // One distinct reviewer per dispatch unit: each resolved group cap-split
+    // into chunks of at most 5 angles (the 6-angle design-solid group emits
+    // two units), every angle in a unit sharing that unit's reviewer + group.
+    const dispatchUnits = groups.flatMap((g) => {
+      const chunks = [];
+      for (let i = 0; i < g.angles.length; i += 5) chunks.push({ name: g.name, angles: g.angles.slice(i, i + 5) });
+      return chunks;
+    });
+    const perAngle = dispatchUnits.flatMap((u, i) =>
+      u.angles.map((angle) => ({ angle, reviewer: `rev-${i}`, group: u.name })),
     );
     assert.equal(fanoutReviewerPairingError(perAngle, groups), null);
+    // One reviewer across the whole 6-angle group spans two base units.
+    const solid = groups.find((g) => g.angles.length > 5);
+    const spanning = solid.angles.map((angle) => ({ angle, reviewer: "rev-solid", group: solid.name }));
+    assert.match(fanoutReviewerPairingError(spanning, groups), /does not place all of them in one group/);
     // The design-quality set collapses: fewer fresh dispatch units than fresh angles.
     assert.ok(countFreshDispatchUnits(perAngle) < freshAngleNames(perAngle).length);
   });
@@ -994,12 +1004,12 @@ describe("scheduleFanoutWaves (#1601 — bounded-concurrency wave plan via sched
     assert.deepEqual(waves[2].map((u) => u.name), ["e", "f"]);
   });
 
-  test("default cap is 4", () => {
-    const groups = units(["a", "b", "c", "d", "e"]);
+  test("default cap is 5", () => {
+    const groups = units(["a", "b", "c", "d", "e", "f"]);
     const waves = scheduleFanoutWaves(groups);
     assert.equal(waves.length, 2);
-    assert.deepEqual(waves[0].map((u) => u.name), ["a", "b", "c", "d"]);
-    assert.deepEqual(waves[1].map((u) => u.name), ["e"]);
+    assert.deepEqual(waves[0].map((u) => u.name), ["a", "b", "c", "d", "e"]);
+    assert.deepEqual(waves[1].map((u) => u.name), ["f"]);
   });
 
   test("cap 1 serializes heavy reviewers one at a time (#1726)", () => {
@@ -1016,8 +1026,8 @@ describe("scheduleFanoutWaves (#1601 — bounded-concurrency wave plan via sched
     assert.deepEqual(waves, [[{ name: "a", angles: ["a"] }]]);
   });
 
-  test("invalid maxConcurrent falls back to 4", () => {
-    const groups = units(["a", "b", "c", "d", "e"]);
+  test("invalid maxConcurrent falls back to 5", () => {
+    const groups = units(["a", "b", "c", "d", "e", "f"]);
     assert.equal(scheduleFanoutWaves(groups, 0).length, 2);
     assert.equal(scheduleFanoutWaves(groups, -1).length, 2);
     assert.equal(scheduleFanoutWaves(groups, 1.5).length, 2);

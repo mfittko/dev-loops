@@ -1038,8 +1038,8 @@
               "minimum": 1
             },
             "maxConcurrent": {
-              "default": 4,
-              "description": "Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves). Ignored when sequential is true (which forces one unit per wave).",
+              "default": 5,
+              "description": "Max dispatch units (groups) the conductor dispatches concurrently per wave (default 5, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves). Ignored when sequential is true (which forces one unit per wave).",
               "type": "integer",
               "minimum": 1
             },

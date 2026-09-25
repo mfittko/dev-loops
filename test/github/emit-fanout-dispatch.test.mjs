@@ -643,7 +643,11 @@ for (const configured of [true, false]) {
       const writeOptions = { repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA, verdict: "clean",
         findings: "[]", provenance: JSON.stringify(provenance), emitPlan, tmpRoot };
       const written = await writeGateFindingsLog(writeOptions, { repoRoot });
-      assert.deepEqual(written.log.provenance, provenance);
+      // The ledger records the context's dispatch membership next to the
+      // caller-supplied provenance.
+      const { dispatchUnits, ...recorded } = written.log.provenance;
+      assert.deepEqual(recorded, provenance);
+      assert.deepEqual(dispatchUnits.map((unit) => unit.angles), payload.units.map((unit) => unit.angles));
       for (const replacement of [undefined, "wrong-group"]) {
         const changed = structuredClone(provenance);
         changed.perAngle[5].group = replacement;
@@ -656,7 +660,10 @@ for (const configured of [true, false]) {
       const reusedIdentity = structuredClone(provenance);
       reusedIdentity.perAngle[5].reviewer = "review-0";
       reusedIdentity.distinctReviewers = 2;
-      await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(reusedIdentity) }, { repoRoot }), /smaller than/);
+      // One reviewer across the full-cap split sibling and its tail spans two
+      // recorded dispatch units, so the pairing guard refuses before the
+      // emit-plan reviewer-count check.
+      await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(reusedIdentity) }, { repoRoot }), /recorded dispatch units does not place all of them in one group/);
       const nullTail = structuredClone(payload);
       nullTail.units[1].group = null;
       await writeFile(emitPlan, JSON.stringify(nullTail));
@@ -735,13 +742,13 @@ test("main(): a no-config-table angle set dispatches ONE shared reviewer per aut
   });
 });
 
-// #1971 (cap raised 2 -> 4 by #2366) — caller-boundary coverage for the
+// #1971 (cap raised 2 -> 4 by #2366, 4 -> 5 by #2414) — caller-boundary coverage for the
 // Claude-harness concurrency clamp: this CLI is the second (of two)
 // resolveFanoutEffectiveConcurrency call sites, and reads process.env
 // directly rather than through an injectable seam, so a caller-level test
 // here has to pin the env at the OS-process boundary (spawnSync's own `env`
 // option) rather than via a function argument.
-test("emits maxConcurrent 4 (configured default, unchanged by the cap) under a Claude-harness env (#2366)", async () => {
+test("emits maxConcurrent 5 (configured default, unchanged by the cap) under a Claude-harness env (#2366)", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);
     const result = runEmitCli(
@@ -750,12 +757,12 @@ test("emits maxConcurrent 4 (configured default, unchanged by the cap) under a C
     );
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    // no .devloops in tmpDir → default gates.fanout.maxConcurrent (4); min(4, 4) = 4.
-    assert.equal(payload.maxConcurrent, 4);
+    // no .devloops in tmpDir → default gates.fanout.maxConcurrent (5); min(5, 5) = 5.
+    assert.equal(payload.maxConcurrent, 5);
   });
 });
 
-test("emits maxConcurrent clamped to 4 from a higher configured value under a Claude-harness env (#2366)", async () => {
+test("emits maxConcurrent clamped to 5 from a higher configured value under a Claude-harness env (#2366)", async () => {
   await withTmpDir(async (tmpDir) => {
     await writeFile(
       path.join(tmpDir, ".devloops"),
@@ -769,7 +776,7 @@ test("emits maxConcurrent clamped to 4 from a higher configured value under a Cl
     );
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    assert.equal(payload.maxConcurrent, 4);
+    assert.equal(payload.maxConcurrent, 5);
   });
 });
 
@@ -804,8 +811,8 @@ test("emits the configured (unclamped) maxConcurrent under a non-Claude env (#19
     );
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    // no config file in tmpDir → default gates.fanout.maxConcurrent (4), unclamped.
-    assert.equal(payload.maxConcurrent, 4);
+    // no config file in tmpDir → default gates.fanout.maxConcurrent (5), unclamped.
+    assert.equal(payload.maxConcurrent, 5);
   });
 });
 
