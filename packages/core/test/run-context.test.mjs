@@ -10,6 +10,7 @@ import {
   NATIVE_PI_CHILD_MARKER,
   NATIVE_PI_PARENT_SESSION_MARKER,
   NATIVE_PI_RUNNER_MARKER,
+  NATIVE_PI_SESSION_MARKER,
   NATIVE_PI_ASYNC_MARKERS,
   ASYNC_CONTEXT_ENV_MARKERS,
   resolveRunId,
@@ -127,6 +128,34 @@ test("resolveRunId synthesizes a stable id from the native Pi parent session", (
   assert.notEqual(resolveRunId(nativePiEnv({ [NATIVE_PI_PARENT_SESSION_MARKER]: "session-xyz" })), expected);
   // Trimmed, so whitespace padding does not mint a second identity.
   assert.equal(resolveRunId(nativePiEnv({ [NATIVE_PI_PARENT_SESSION_MARKER]: "  session-abc  " })), expected);
+});
+
+// Sibling regression: runner coordination treats an EQUAL run id as an authorized refresh
+// rather than a conflict, so two concurrent children of one parent session sharing an id would
+// silently bypass the one-runner-per-PR lease. The child's own session id keeps them distinct.
+test("resolveRunId gives sibling native Pi children of one parent session distinct ids", () => {
+  const parent = "session-abc";
+  const siblingA = nativePiEnv({ [NATIVE_PI_PARENT_SESSION_MARKER]: parent, [NATIVE_PI_SESSION_MARKER]: "child-a" });
+  const siblingB = nativePiEnv({ [NATIVE_PI_PARENT_SESSION_MARKER]: parent, [NATIVE_PI_SESSION_MARKER]: "child-b" });
+
+  assert.equal(resolveRunId(siblingA), "pi-session-child-a");
+  assert.equal(resolveRunId(siblingB), "pi-session-child-b");
+  assert.notEqual(resolveRunId(siblingA), resolveRunId(siblingB));
+  // Stable per child, and the parent session alone still yields the documented fallback id.
+  assert.equal(resolveRunId(siblingA), "pi-session-child-a");
+  assert.equal(resolveRunId(nativePiEnv({ [NATIVE_PI_PARENT_SESSION_MARKER]: parent })), `pi-session-${parent}`);
+  // Trimmed, so whitespace padding does not mint a second identity for the same child.
+  assert.equal(resolveRunId(nativePiEnv({ [NATIVE_PI_SESSION_MARKER]: "  child-a  " })), "pi-session-child-a");
+});
+
+test("the Pi per-child session id is not async-start evidence on its own", () => {
+  // The Pi runtime injects it into every Pi shell, the main agent's included.
+  assert.equal(isNativePiAsyncContext({ [NATIVE_PI_SESSION_MARKER]: "child-a" }), false);
+  assert.equal(resolveRunId({ [NATIVE_PI_SESSION_MARKER]: "child-a" }), null);
+  assert.equal(resolveRunId({ [NATIVE_PI_CHILD_MARKER]: "1", [NATIVE_PI_SESSION_MARKER]: "child-a" }), null);
+  // It is an identity, not a signal, so it is not part of the async-context marker set.
+  assert.ok(!NATIVE_PI_ASYNC_MARKERS.includes(NATIVE_PI_SESSION_MARKER));
+  assert.ok(!ASYNC_CONTEXT_ENV_MARKERS.includes(NATIVE_PI_SESSION_MARKER));
 });
 
 test("resolveRunId still returns null when no async-context marker is present", () => {

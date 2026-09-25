@@ -52,6 +52,15 @@ export const NATIVE_PI_CHILD_MARKER = "PI_SUBAGENT_CHILD";
 export const NATIVE_PI_PARENT_SESSION_MARKER = "PI_SUBAGENT_PARENT_SESSION";
 export const NATIVE_PI_RUNNER_MARKER = "PI_ASYNC_NATIVE_RUNNER";
 
+/**
+ * Pi's per-child session id. Deliberately NOT an async-context signal: the Pi runtime injects
+ * it into every Pi shell's env, the main agent's included, so on its own it proves nothing
+ * about being an async child. Inside a native async child it is what distinguishes sibling
+ * children of one parent session, so it is the preferred source for the synthesized run id
+ * and is kept out of `NATIVE_PI_ASYNC_MARKERS` on purpose.
+ */
+export const NATIVE_PI_SESSION_MARKER = "PI_SESSION_ID";
+
 /** Native Pi async-runner markers, in the order the async-start contract documents them. */
 export const NATIVE_PI_ASYNC_MARKERS = Object.freeze([
   NATIVE_PI_CHILD_MARKER,
@@ -113,32 +122,39 @@ export function isNativePiAsyncContext(env = process.env) {
 /**
  * Synthesize a stable run id for a native Pi async context.
  *
- * Same parent session -> same id, so run-id consumers key on one stable identity for the whole
- * session. The `pi-session-` prefix keeps a synthesized id distinguishable from a real
- * pi-subagents run id and from a dev-loops-minted `devloops-<uuid>`.
+ * Prefers the child's own session id so two sibling children of one parent session get distinct
+ * ids; runner coordination accepts an equal run id as an authorized refresh rather than a
+ * conflict, so a shared id would degrade the one-runner-per-PR lease. Falls back to the parent
+ * session id when the child session id is absent, which keeps the id stable per parent session
+ * (same parent session -> same id) rather than returning null.
  *
- * Known ceiling, deliberately not fixed here: the id is derived from the parent session alone,
- * so concurrent sibling native Pi children of one parent session share ONE run id. Runner
- * coordination treats an equal run id as an authorized refresh rather than a conflict, so the
- * one-runner-per-PR lease degrades from "conflict" to "refresh" between such siblings. This
- * is still strictly stronger than the pre-fix Pi state, where `resolveRunId` returned null and
- * the lease did not engage at all, and the stability is what the async-start contract requires.
- * Discriminating siblings needs a per-child identity the native runner does not currently
- * inject; sourcing the run id from a dev-loops-owned surface instead of a harness env var is
- * the decoupling follow-up tracked separately.
+ * The `pi-session-` prefix keeps a synthesized id distinguishable from a real pi-subagents run
+ * id and from a dev-loops-minted `devloops-<uuid>`.
  *
- * @param {string} parentSessionId
- * @returns {string} `pi-session-<parent-session-id>`
+ * @param {string} sessionId - The child's own session id, else the parent session id.
+ * @returns {string} `pi-session-<session-id>`
  */
-export function synthesizePiRunId(parentSessionId) {
-  return `pi-session-${parentSessionId.trim()}`;
+export function synthesizePiRunId(sessionId) {
+  return `pi-session-${sessionId.trim()}`;
+}
+
+/**
+ * The trimmed per-child Pi session id, or null when absent/blank.
+ *
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {string|null}
+ */
+function resolveNativePiChildSessionId(env) {
+  const value = env?.[NATIVE_PI_SESSION_MARKER];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 /**
  * Resolve the active run id from the environment.
  *
  * A run-id carrier wins when present. With none present, a native Pi async context synthesizes
- * a stable id from its parent session instead of returning null.
+ * a stable id: the child's own session id when available, else the parent session id. No
+ * async context at all still returns null.
  *
  * @param {Record<string, string|undefined>} [env]
  * @returns {string|null} The trimmed run id, or null when no async context is present.
@@ -151,7 +167,8 @@ export function resolveRunId(env = process.env) {
     }
   }
   if (isNativePiAsyncContext(env)) {
-    return synthesizePiRunId(env[NATIVE_PI_PARENT_SESSION_MARKER]);
+    const childSessionId = resolveNativePiChildSessionId(env);
+    return synthesizePiRunId(childSessionId ?? env[NATIVE_PI_PARENT_SESSION_MARKER]);
   }
   return null;
 }

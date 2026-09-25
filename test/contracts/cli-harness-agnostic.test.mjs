@@ -124,6 +124,10 @@ const HARNESS_RUNTIME_ENV = new Map([
     [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED],
   ],
   ["PI_ASYNC_NATIVE_RUNNER", [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED]],
+  // PI_SESSION_ID is Pi's per-child session id, injected into every Pi shell (the main agent's
+  // included), so it is not async-start evidence — the run-context module reads it only as the
+  // per-child identity that keeps sibling native children from sharing one synthesized run id.
+  ["PI_SESSION_ID", [RUN_CONTEXT, RUN_CONTEXT_TEST, RUN_CONTEXT_GENERATED]],
   ["PI_SESSION", [PI_ADAPTER, PI_ADAPTER_TEST]], // inside-Pi detection
   ["PI_INTERACTIVE", [PI_ADAPTER, PI_ADAPTER_TEST]], // interactivity override
   ["PI_AGENT_SESSIONS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi session dir

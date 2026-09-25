@@ -26,6 +26,7 @@ import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordinati
 import {
   NATIVE_PI_CHILD_MARKER,
   NATIVE_PI_PARENT_SESSION_MARKER,
+  NATIVE_PI_SESSION_MARKER,
   synthesizePiRunId,
 } from "@dev-loops/core/loop/run-context";
 
@@ -1032,6 +1033,39 @@ test("runner coordination claim succeeds from a native Pi async-runner env with 
 
     const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
     assert.equal(loaded.state.activeRun.runId, synthesizePiRunId(parentSession));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Sibling regression: runner coordination treats an EQUAL run id as an authorized refresh, not
+// a conflict, so two concurrent native Pi children of one parent session must NOT share an id —
+// otherwise the second silently takes over the first's lease on the same PR.
+test("two sibling native Pi children of one parent session cannot both claim the same PR", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const parentSession = "parent-session-shared";
+
+  try {
+    const siblingEnv = (childSession) => ({
+      [NATIVE_PI_CHILD_MARKER]: "1",
+      [NATIVE_PI_PARENT_SESSION_MARKER]: parentSession,
+      [NATIVE_PI_SESSION_MARKER]: childSession,
+    });
+
+    const first = await runPrRunnerCoordination(
+      { command: "claim", repo: "owner/repo", pr: 17 },
+      { env: siblingEnv("child-a"), cwd: tempDir },
+    );
+    assert.equal(first.ok, true);
+    assert.equal(first.activeRun.runId, "pi-session-child-a");
+
+    const second = await runPrRunnerCoordination(
+      { command: "claim", repo: "owner/repo", pr: 17 },
+      { env: siblingEnv("child-b"), cwd: tempDir },
+    );
+    assert.equal(second.ok, false, "the sibling must conflict, not refresh the first child's lease");
+    assert.equal(second.error, "active_run_exists");
+    assert.equal(second.activeRun.runId, "pi-session-child-a");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
