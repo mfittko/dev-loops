@@ -560,14 +560,19 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const dispatchUnits = expandDispatchUnits(units, configuredGroupNames);
 
   // GATE-EXEC-FANOUT-CAPACITY (emitter half): the emitted unit count is the wave
-  // width the coordinator uses. The plan was packed at write-gate-context time
-  // under THAT invocation's effective concurrency, but maxConcurrent here is
-  // re-resolved from THIS process's env — so a plan packed for one harness could
-  // emit above this harness's bound and force a second wave, the exact
-  // "never planned as an extra wave" outcome the AC forbids. Refuse before
-  // composing any prompt (emitted.length would equal dispatchUnits.length).
-  if (dispatchUnits.length > maxConcurrent) {
-    return finish({ ok: false, error: `GATE-EXEC-FANOUT-CAPACITY: refusing — the fanout plan emits ${dispatchUnits.length} dispatch units, above this harness's effective maxConcurrent ${maxConcurrent}; the artifact was packed for a different effective concurrency (fanout.effectiveConcurrency ${artifact.fanout?.effectiveConcurrency ?? "unknown"}) — re-run write-gate-context.mjs under this harness so the round packs into one wave` }, false);
+  // width the coordinator uses. Refuse ONLY when the artifact was packed under a
+  // HIGHER effective concurrency than this harness resolves — the cross-harness
+  // mismatch this guard exists for (a plan packed for one harness's bound, then
+  // emitted under a tighter one, would be waved as a second wave). A round that
+  // deliberately keeps a multi-wave plan records an effectiveConcurrency this
+  // harness also resolves, so it is never refused here: `gates.fanout.sequential`
+  // (effective 1, one unit per wave), `mode: per-angle`, and the standalone
+  // `review` gate (never packed) all stay emittable, exactly as the gate-review
+  // contract's opt-out clause states. The single-wave case is already bounded by
+  // the writer's own packing.
+  const plannedConcurrency = artifact.fanout?.effectiveConcurrency;
+  if (Number.isInteger(plannedConcurrency) && plannedConcurrency > maxConcurrent) {
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-CAPACITY: refusing — the fanout plan emits ${dispatchUnits.length} dispatch units packed for effective maxConcurrent ${plannedConcurrency}, above this harness's effective maxConcurrent ${maxConcurrent}; re-run write-gate-context.mjs under this harness so the round packs into one wave` }, false);
   }
 
   // Round-level work-order identity shared by every unit: the required reads

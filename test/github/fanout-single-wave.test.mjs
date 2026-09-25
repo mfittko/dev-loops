@@ -376,3 +376,62 @@ describe("no primer or lead-reviewer serialization precedes the first wave", () 
     });
   }
 });
+
+// Act index 6 follow-up (round-2 findings): the emitter's GATE-EXEC-FANOUT-CAPACITY
+// half must be scoped to a genuinely cross-harness packed plan. An unconditional
+// `emitted > effectiveConcurrency` check refused the three multi-wave shapes the
+// gate-review contract exempts from packing/refusal — `gates.fanout.sequential`
+// (effective 1), `mode: per-angle`, and the standalone `review` gate.
+describe("emitter-side GATE-EXEC-FANOUT-CAPACITY is scoped to a cross-harness packed plan", () => {
+  async function emitCase(devloops, angles, writeEnv, emitEnv) {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-capacity-"));
+    try {
+      await writeFile(path.join(tmpDir, ".devloops"), devloops, "utf8");
+      const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
+      const options = parseWriteGateContextCliArgs([
+        "--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA,
+        "--angles", JSON.stringify(angles),
+      ]);
+      options.config = config;
+      options.fanoutDispatch = resolveFanoutDispatch(config, "draft", angles, { env: writeEnv });
+      await writeGateContext(options, { repoRoot: tmpDir });
+      const result = spawnSync("node", [emitCliPath, "--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA], {
+        cwd: tmpDir,
+        encoding: "utf8",
+        env: emitEnv,
+      });
+      return { result, plan: options.fanoutDispatch };
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  test("refuses a plan packed above this harness's effective concurrency", async () => {
+    // Pi packs for 8; the Claude clamp resolves 5, so this harness would wave a
+    // second wave. The refusal names the plan's bound and this harness's bound.
+    const devloops = "version: 1\ngates:\n  fanout:\n    maxConcurrent: 8\n    maxAnglesPerGroup: 1\n    groups: []\n";
+    const angles = ["a1", "a2", "a3", "a4", "a5", "a6"];
+    const { result, plan } = await emitCase(devloops, angles, piEnv(), claudeEnv());
+    assert.equal(plan.effectiveConcurrency, 8);
+    assert.equal(result.status, 1, result.stderr || result.stdout);
+    const output = `${result.stdout}${result.stderr}`;
+    assert.match(output, /GATE-EXEC-FANOUT-CAPACITY/);
+    assert.match(output, /effective maxConcurrent 8/);
+    assert.match(output, /effective maxConcurrent 5/);
+  });
+
+  test("sequential: true keeps its documented one-unit-per-wave plan emittable", async () => {
+    const devloops = "version: 1\ngates:\n  fanout:\n    sequential: true\n    maxAnglesPerGroup: 1\n    groups: []\n";
+    // Real gate-pool angles: the emitter resolves each angle's reviewer persona,
+    // so a synthetic name would fail past the capacity guard for an unrelated reason.
+    const tmpConfig = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-angles-"));
+    await writeFile(path.join(tmpConfig, ".devloops"), devloops, "utf8");
+    const { config: probeConfig } = await loadDevLoopConfig({ repoRoot: tmpConfig });
+    await rm(tmpConfig, { recursive: true, force: true }).catch(() => {});
+    const angles = resolveGateAngleContract(probeConfig, "draft").pool.slice(0, 3);
+    const { result, plan } = await emitCase(devloops, angles, piEnv(), piEnv());
+    assert.equal(plan.effectiveConcurrency, 1);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(JSON.parse(result.stdout).count, 3);
+  });
+});
