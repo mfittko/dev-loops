@@ -7027,9 +7027,17 @@ describe("this repo's .devloops — developer and fixer run on the strong tier (
 
     for (const role of ["docs", "quality"]) {
       assert.equal(config.models.roleTiers?.[role], undefined, `.devloops must not re-tier ${role}`);
-      // Builtin `low`: opus on Claude, inherit (null) on Pi — unchanged.
-      assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "opus");
-      assert.equal(resolveRoleModel(config, { role, harness: "pi" }), null);
+      // Unchanged-resolution proof: the repo config must resolve each role
+      // exactly as the built-in role policy does, so a legitimate low-tier
+      // retune never fails a test whose purpose is only to prove these two
+      // roles were NOT re-tiered.
+      for (const harness of ["claude", "pi"]) {
+        assert.equal(
+          resolveRoleModel(config, { role, harness }),
+          resolveRoleModel({}, { role, harness }),
+          `${role} must keep its built-in resolution on ${harness}`,
+        );
+      }
     }
   });
 });
