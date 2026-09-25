@@ -49,12 +49,13 @@ const BUILTIN_ROLE_TIERS = Object.freeze({
   quality: "low",
   refiner: "high",
   review: "high",
-  // The pre-PR review pass (skills/docs/pre-pr-review-contract.md) runs one
-  // fresh-context general-purpose reviewer before the first push. Default tier
+  // The pre-push reviewer (skills/docs/pre-pr-review-contract.md) runs one
+  // fresh-context general-purpose reviewer before the first push (full mode)
+  // and before a gate act-list fix push (delta mode). Default tier
   // is high (strongest): with zero config that resolves to opus on Claude and
   // null (inherit) on Pi. Operators opt into a concrete strong model per
   // harness via models.tiers/roleTiers.
-  "pre-PR-reviewer": "high",
+  "pre-push-reviewer": "high",
   "dev-loop": "inherit",
 });
 
@@ -82,6 +83,15 @@ const ModelTierMapping = z
  * @param {z.RefinementCtx} ctx
  */
 function refineRoleTiers(models, ctx) {
+  for (const key of ["roleTiers", "roles"]) {
+    if (Object.hasOwn(models?.[key] ?? {}, "pre-PR-reviewer")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key, "pre-PR-reviewer"],
+        message: `role "pre-PR-reviewer" was renamed to "pre-push-reviewer"; update models.${key}`,
+      });
+    }
+  }
   const known = new Set([...BUILTIN_TIER_ALIASES, ...Object.keys(models?.tiers ?? {})]);
   for (const [role, tier] of Object.entries(models?.roleTiers ?? {})) {
     if (tier !== "inherit" && !known.has(tier)) {

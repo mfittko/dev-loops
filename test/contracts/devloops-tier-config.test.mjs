@@ -38,22 +38,24 @@ test("every configured tier angle is inside its gate's resolved angle pool", asy
 
 // Pre-PR review phase (issue #2305): the reviewer model is config-resolved and
 // harness-agnostic — never hardcoded. THIS repo opts the Claude-Code harness's
-// pre-PR-reviewer role into Opus 5.5 and the Pi harness into the Codex child model.
+// pre-push-reviewer role into Opus 5.5 and the Pi harness into the Codex child model.
 // Pins the real merged .devloops so the opt-in cannot silently drift.
-test("this repo's .devloops resolves the pre-PR-reviewer to Opus on Claude and the Codex child model on Pi (issue #2305)", async () => {
+test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and the Codex child model on Pi (issue #2305)", async () => {
   const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
   assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
 
   assert.equal(
-    resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "claude" }),
+    resolveRoleModel(config, { role: "pre-push-reviewer", harness: "claude" }),
     "opus",
-    "Claude-Code harness pre-PR-reviewer must resolve to the Opus model token via .devloops",
+    "Claude-Code harness pre-push-reviewer must resolve to the Opus model token via .devloops",
   );
   assert.equal(
-    resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "pi" }),
+    resolveRoleModel(config, { role: "pre-push-reviewer", harness: "pi" }),
     "openai-codex/gpt-5.6-sol",
-    "Pi harness pre-PR-reviewer must resolve to the configured Codex child model",
+    "Pi harness pre-push-reviewer must resolve to the configured Codex child model",
   );
+  // The rename leaves no alias: the old role key is gone from the repo config.
+  assert.equal(config.models.roleTiers["pre-PR-reviewer"], undefined);
 });
 
 test("a synthetic matching diff resolves a non-empty tier angle set including the gate's mandatory angles", async () => {

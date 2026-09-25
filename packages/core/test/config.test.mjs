@@ -6885,7 +6885,7 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     ["review", "opus", null],
     // Pre-PR reviewer (issue #2305): built-in high tier, so opus/null with zero
     // config; operators opt into a concrete per-harness model in .devloops.
-    ["pre-PR-reviewer", "opus", null],
+    ["pre-push-reviewer", "opus", null],
     ["dev-loop", null, null], // inherit
     // A critical gate angle resolves high via its `review` persona.
     ["correctness", "opus", null],
@@ -6901,6 +6901,16 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
   test("zero-config on Pi is a genuine no-op for every role", () => {
     for (const [role] of cases) {
       assert.equal(resolveRoleModel({}, { role, harness: "pi" }), null, `${role} must be null on pi`);
+    }
+  });
+
+  test("the retired pre-PR-reviewer role has no built-in tier (resolves like an unknown role)", () => {
+    for (const harness of ["claude", "pi"]) {
+      assert.equal(
+        resolveRoleModel({}, { role: "pre-PR-reviewer", harness }),
+        resolveRoleModel({}, { role: "no-such-role", harness }),
+        `pre-PR-reviewer on ${harness}`,
+      );
     }
   });
 
@@ -6950,20 +6960,20 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), "opus");
   });
 
-  test("pre-PR-reviewer role: per-harness opt-in via tiers/roleTiers (issue #2305)", () => {
+  test("pre-push-reviewer role: per-harness opt-in via tiers/roleTiers (issue #2305)", () => {
     // Mirrors this repo's .devloops opt-in: Fable on Claude only, Pi inherits.
     const config = {
       models: {
         tiers: { "pre-pr-strong": { claude: "fable" } },
-        roleTiers: { "pre-PR-reviewer": "pre-pr-strong" },
+        roleTiers: { "pre-push-reviewer": "pre-pr-strong" },
       },
     };
-    assert.equal(resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "claude" }), "fable");
+    assert.equal(resolveRoleModel(config, { role: "pre-push-reviewer", harness: "claude" }), "fable");
     // Pi has no entry in the tier → null (inherit/default), keeping it harness-agnostic.
-    assert.equal(resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "pi" }), null);
+    assert.equal(resolveRoleModel(config, { role: "pre-push-reviewer", harness: "pi" }), null);
     // Zero config: built-in high tier is a null no-op on Pi, opus on Claude.
-    assert.equal(resolveRoleModel({}, { role: "pre-PR-reviewer", harness: "pi" }), null);
-    assert.equal(resolveRoleModel({}, { role: "pre-PR-reviewer", harness: "claude" }), "opus");
+    assert.equal(resolveRoleModel({}, { role: "pre-push-reviewer", harness: "pi" }), null);
+    assert.equal(resolveRoleModel({}, { role: "pre-push-reviewer", harness: "claude" }), "opus");
   });
 
   test("inherit tier resolves null on both harnesses", () => {
@@ -7075,6 +7085,14 @@ describe("models.tiers / models.roleTiers schema validation", () => {
     });
     assert.equal(bad.success, false);
     assert.match(bad.error.issues.map((i) => i.message).join(" "), /unknown model tier alias "mid"/);
+  });
+
+  test("rejects the retired pre-PR-reviewer role key with a rename diagnostic", () => {
+    for (const models of [{ roleTiers: { "pre-PR-reviewer": "high" } }, { roles: { "pre-PR-reviewer": "opus" } }]) {
+      const bad = DevLoopConfigSchema.safeParse({ version: 1, models });
+      assert.equal(bad.success, false);
+      assert.match(bad.error.issues.map((i) => i.message).join(" "), /renamed to "pre-push-reviewer"/);
+    }
   });
 
   test("accepts a custom tier alias when defined under models.tiers", () => {

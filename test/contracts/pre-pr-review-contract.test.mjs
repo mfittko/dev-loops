@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,7 +75,7 @@ test("each pre-PR rule states its invariant with RFC-2119 modality and the right
     ["PRE-PR-ONE-FRESH-REVIEWER", /MUST/, ["exactly ONE", "fresh-context", "general-purpose", "brief"]],
     ["PRE-PR-BOUNDED-TWO-ROUNDS", /MUST NOT/, ["one general-purpose reviewer per round", "two", "reviewer"]],
     ["PRE-PR-EPHEMERAL-NO-ARTIFACTS", /MUST NOT/, ["pull request", "comment", "review thread", "copilot"]],
-    ["PRE-PR-MODEL-CONFIG-RESOLVED", /MUST/, ["resolveRoleModel", "pre-PR-reviewer", "non-null"]],
+    ["PRE-PR-MODEL-CONFIG-RESOLVED", /MUST/, ["resolveRoleModel", "pre-push-reviewer", "non-null"]],
     ["PRE-PR-GATE-STILL-AUTHORITY", /MUST/, ["pre-filter", "draft_gate", "pre_approval_gate", "authority"]],
     ["PRE-PR-NOT-GATE-EVIDENCE", /MUST NOT/, ["gate evidence", "ledger"]],
   ];
@@ -109,14 +110,14 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
   const { config, errors } = await loadDevLoopConfig({ repoRoot });
   assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
   // Non-vacuity: the token set must come from THIS repo's opt-in, not the
-  // built-in fallback (`pre-PR-reviewer` -> high -> `opus`/null), which would
+  // built-in fallback (`pre-push-reviewer` -> high -> `opus`/null), which would
   // satisfy the floor below while leaving the opted-in Pi token unguarded.
   assert.ok(
     config?.models?.tiers?.["pre-pr-strong"]?.pi,
     "the guard must resolve this repo's .devloops opt-in, not a built-in fallback",
   );
   const resolvedModels = ["claude", "pi"]
-    .map((harness) => resolveRoleModel(config, { role: "pre-PR-reviewer", harness }))
+    .map((harness) => resolveRoleModel(config, { role: "pre-push-reviewer", harness }))
     .filter((model) => typeof model === "string" && model.length > 0);
   assert.ok(
     resolvedModels.length > 0,
@@ -222,6 +223,68 @@ test("every PR-creating route loads Copilot Loop Operations or the local SKILL",
     resolver.slice(intakeStart, resolver.indexOf("],", intakeStart)).includes('"skills/docs/pre-pr-review-contract.md"'),
     "issue_intake runtime requiredReads must include skills/docs/pre-pr-review-contract.md",
   );
+});
+
+// Delta mode: one fresh reviewer between the gate act-list fix commit and its
+// push. The contract owns the rules; the SKILL and fixer only cross-reference.
+const DELTA_RULES = [
+  ["PRE-PUSH-DELTA-TRIGGER", /MUST NOT/, ["act list", "before that fix is pushed", "no act-list fix"]],
+  ["PRE-PUSH-DELTA-PINNED-BASELINE", /MUST/, ["reviewBaselineHead..candidateHead", "A..C", "B..C", "new gate round"]],
+  ["PRE-PUSH-DELTA-INPUT", /MUST NOT/, ["judge dispositions", "spec identity", "surface hints", "checklist", "diff bytes", "sibling reviewer verdicts", "widenedReads[]"]],
+  ["PRE-PUSH-DELTA-RESULT", /MUST/, ["resolved", "not_resolved", "cannot_verify", "widenedReads[]", "{ path, reason }", "missing or unknown status"]],
+  ["PRE-PUSH-DELTA-EXIT-BOUND", /MUST NOT/, ["locally_clear", "medium or higher", "three", "bounded_out", "no fourth review", "normal gate path"]],
+  ["PRE-PUSH-DELTA-FRESHNESS", /MUST NOT/, ["candidateHead", "current worktree head", "authorize the push"]],
+  ["PRE-PUSH-DELTA-NOT-GATE-EVIDENCE", /MUST NOT/, ["gate verdict", "ledger", "thread", "fan-out", "authorize merge"]],
+];
+
+test("delta-mode rules are registered, owned by the contract, and state their invariant", () => {
+  const doc = readRepo(CONTRACT);
+  for (const [id, modal, keywords] of DELTA_RULES) {
+    assertRulePresent(id);
+    assertRuleOwned(id, CONTRACT);
+    const para = ruleParagraph(doc, id);
+    assert.match(para, modal, `${id} must carry RFC-2119 modality`);
+    for (const kw of keywords) {
+      assert.ok(para.toLowerCase().includes(kw.toLowerCase()), `${id} paragraph must mention "${kw}"`);
+    }
+  }
+  assert.ok(doc.includes("Full mode is unchanged by delta mode."), "contract must state full mode is unchanged");
+  assert.ok(doc.includes("`pre-push-reviewer` role and its two bounded modes"), "contract must name the one role with two modes");
+});
+
+test("the gate fix pass and the fixer cross-reference delta mode between the fix commit and the push", () => {
+  const skill = readRepo("skills/dev-loop/SKILL.md");
+  const actListIdx = skill.indexOf("The fix pass consumes ONLY `--out`'s act list");
+  const deltaIdx = skill.indexOf("`PRE-PUSH-DELTA-TRIGGER`");
+  assert.ok(actListIdx !== -1 && deltaIdx > actListIdx, "dev-loop SKILL must wire delta mode after the act-list fix pass");
+  assert.ok(skill.slice(deltaIdx - 400, deltaIdx + 400).includes("pre-pr-review-contract.md#delta-mode"));
+
+  const fixer = readRepo("agents/fixer.agent.md");
+  const commitIdx = fixer.indexOf("7. Create a focused commit");
+  const fixerDeltaIdx = fixer.indexOf("PRE-PUSH-DELTA-TRIGGER");
+  const pushIdx = fixer.indexOf("8. Push the commit");
+  assert.ok(commitIdx < fixerDeltaIdx && fixerDeltaIdx < pushIdx, "fixer must run delta mode after the commit and before the push");
+  assert.match(fixer.slice(commitIdx, pushIdx), /hand back the commit SHA unpushed/);
+});
+
+test("bounded_out residual threads are handed off as deferred, never tackled", () => {
+  // evaluateFixerDisposition blocks the gate on a tackled-but-unresolved thread.
+  const residual = /MUST NOT mark these\s+residual threads `tackled`; its handoff disposition records them as\s+`deferred`/;
+  assert.match(readRepo(CONTRACT), residual);
+  assert.match(readRepo("agents/fixer.agent.md"), residual);
+});
+
+test("no pre-PR-reviewer role key remains in config, code or contract prose (no alias)", () => {
+  const oldRole = ["pre", "PR", "reviewer"].join("-");
+  const out = spawnSync(
+    "git",
+    // config.mjs names the old key only in its rename diagnostic.
+    ["grep", "-l", oldRole, "--", ".devloops", "packages", "scripts", "cli", "skills", "agents", ".claude", ":(exclude,glob)packages/*/test/**", ":!packages/core/src/config/config.mjs"],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+  assert.equal(out.stdout.trim(), "", `old role key found in: ${out.stdout}`);
+  // git grep exits 1 on no match; any other status (e.g. 128) means the guard did not run.
+  assert.equal(out.status, 1, `git grep failed: ${out.stderr}`);
 });
 
 test("main-agent contract cites the route-neutral PRE-PR-BEFORE-FIRST-PUSH scope", () => {

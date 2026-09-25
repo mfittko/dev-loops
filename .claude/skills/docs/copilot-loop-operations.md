@@ -175,7 +175,7 @@ PR; otherwise reuse/update that PR. The wrapper preserves `gh pr create`'s outpu
 contract and defaults to self-assignment (`--assignee @me`).
 
 A session that creates the branch and PR itself MUST run the pre-PR review per
-`PRE-PR-BEFORE-FIRST-PUSH` in [Pre-PR review contract](./pre-pr-review-contract.md)
+`PRE-PR-BEFORE-FIRST-PUSH` in [Pre-push review contract](./pre-pr-review-contract.md)
 before the branch's first push and before `create-pr.mjs`; until then, the session
 and its sub-delegates commit locally and do not push.
 
