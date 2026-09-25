@@ -2461,7 +2461,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     // Reference seeding: the prefix binds every bulk artifact by sha256 and
     // byte count, so the sentinel's prefix-hash check and the
     // no-rebuild-mid-fan-out guard cover the referenced bytes transitively.
-    // The context JSON carries no hash because it embeds the prefix identity.
+    // The context JSON carries no hash, and it embeds no prefix identity
+    // (sharedPrefixHash lives only in the request plan and on sentinels). It
+    // is written LAST as the completion marker, and it contains this
+    // requiredReads manifest itself plus a per-write loggedAt, so the prefix
+    // cannot hash it. Consequence: the context JSON and its .adjacentCode are
+    // not tamper-bound.
     const hashed = (kind, readPath, bytes, required) => ({
       kind, path: readPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes), required,
     });
@@ -2991,7 +2996,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         // own --base-derived floor check (below). A caller that already has
         // sizeOutcome evidence to hand (e.g. it also ran check-size-budget.mjs
         // for this same diff) can request the SAME floor-vs-tier precedence the
-        // primer's dispatch decision uses; omitted, this resolves exactly as
+        // gate coordinator's dispatch decision uses; omitted, this resolves exactly as
         // before.
         checkFloors: input.checkFloors === true,
         sizeOutcome: input.sizeOutcome,
