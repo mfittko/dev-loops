@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 import { resolverTestEnv, writeGhStub } from "../_helpers.mjs";
-import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
+import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
 import { OPERATOR_BRIEFING } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 
 function assertOperatorBriefing(parsed) {
@@ -184,11 +184,13 @@ test("resolve-dev-loop-startup rejects async-required strategy via stderr contra
       // path AND its exact reason are exercised hermetically — independent of
       // the ambient harness. CLAUDECODE would relax the contract (#830);
       // DEVLOOPS_DETACHED would switch validateAsyncStartContext to a
-      // different rejection-reason branch.
+      // different rejection-reason branch. The native Pi async-runner markers
+      // (pi-subagents >= 0.65) count as async-context signals too, so they are
+      // stripped by the same shared list rather than left ambient.
       env: Object.fromEntries(
         Object.entries(process.env).filter(
           ([k]) =>
-            !RUN_ID_MARKERS.includes(k) &&
+            !ASYNC_CONTEXT_ENV_MARKERS.includes(k) &&
             k !== "CLAUDECODE" &&
             k !== "DEVLOOPS_DETACHED",
         ),

@@ -7,11 +7,18 @@
  * Code) that inject no native per-subagent run id. For those harnesses dev-loops itself mints
  * and sets `DEVLOOPS_RUN_ID` when dispatching an async subagent.
  *
- * Other harnesses may already inject their own run-id var: the Pi runtime injects
+ * Other harnesses may already inject their own run-id var: pi-subagents <= 0.64 injected
  * `PI_SUBAGENT_RUN_ID` (not `DEVLOOPS_RUN_ID`) into each async subagent's child env, so that
- * name is honored as a recognized run-id alias (precedence after the neutral primary). It is
- * an externally-injected Pi-runtime contract var, not a dev-loops-owned var — dev-loops still
- * mints/propagates only the neutral `DEVLOOPS_RUN_ID`.
+ * name is honored as a recognized legacy run-id alias (precedence after the neutral primary).
+ * It is an externally-injected Pi-runtime contract var, not a dev-loops-owned var — dev-loops
+ * still mints/propagates only the neutral `DEVLOOPS_RUN_ID`.
+ *
+ * pi-subagents 0.65 moved children to native in-process Pi `AgentSession`s and dropped the
+ * `PI_`-prefixed subprocess-env block entirely, so that legacy alias is no longer injected.
+ * The native async runner instead marks a child with `PI_SUBAGENT_CHILD=1` plus a non-empty
+ * `PI_SUBAGENT_PARENT_SESSION` (see `NATIVE_PI_ASYNC_MARKERS`). Those markers carry no run id,
+ * so `resolveRunId` synthesizes a stable one from the parent session rather than returning
+ * null and degrading every run-id consumer (runner ownership, checkpoint verdicts).
  *
  * This module is pure except for the explicit file/IO helpers (writeRunContext/readRunContext),
  * which take an injectable `fs` and `root` for testability.
@@ -23,13 +30,43 @@ import path from "node:path";
 
 /**
  * Env var names that carry the async-context run id, in resolution precedence order.
- * The neutral `DEVLOOPS_RUN_ID` is primary; `PI_SUBAGENT_RUN_ID` is the alias the Pi
- * runtime injects into async-subagent child envs (the only run-id marker present under Pi).
+ * The neutral `DEVLOOPS_RUN_ID` is primary; `PI_SUBAGENT_RUN_ID` is the legacy alias
+ * pi-subagents <= 0.64 injected into async-subagent child envs. pi-subagents >= 0.65 no
+ * longer injects it — see `NATIVE_PI_ASYNC_MARKERS` for the markers that replaced it.
+ * These are run-id *carriers* only; the native markers below carry no id and are deliberately
+ * kept out of this list so `resolveRunId` never returns a flag value like `"1"`.
  */
 export const RUN_ID_MARKERS = Object.freeze(["DEVLOOPS_RUN_ID", "PI_SUBAGENT_RUN_ID"]);
 
 /** Neutral env var name used when minting/propagating a run id. */
 export const NEUTRAL_RUN_ID_VAR = "DEVLOOPS_RUN_ID";
+
+/**
+ * Native Pi async-runner markers (pi-subagents >= 0.65), which carry no run id.
+ *
+ * The child flag plus a non-empty parent session id are the async-start evidence; the runner
+ * marker is set on the detached runner env and corroborates, but is never sufficient alone.
+ */
+export const NATIVE_PI_CHILD_MARKER = "PI_SUBAGENT_CHILD";
+export const NATIVE_PI_PARENT_SESSION_MARKER = "PI_SUBAGENT_PARENT_SESSION";
+export const NATIVE_PI_RUNNER_MARKER = "PI_ASYNC_NATIVE_RUNNER";
+
+/** Native Pi async-runner markers, in the order the async-start contract documents them. */
+export const NATIVE_PI_ASYNC_MARKERS = Object.freeze([
+  NATIVE_PI_CHILD_MARKER,
+  NATIVE_PI_PARENT_SESSION_MARKER,
+  NATIVE_PI_RUNNER_MARKER,
+]);
+
+/**
+ * Every env marker that evidences a harness-managed async context — the run-id carriers first,
+ * then the native Pi markers that carry no run id. Consumers that must build a deliberately
+ * async-signal-free env (test helpers) strip this whole set by name.
+ */
+export const ASYNC_CONTEXT_ENV_MARKERS = Object.freeze([
+  ...RUN_ID_MARKERS,
+  ...NATIVE_PI_ASYNC_MARKERS,
+]);
 
 /** State-file name (under `.pi/`, consistent with existing dev-loop checkpoint files). */
 export const RUN_CONTEXT_FILENAME = "dev-loop-run-context.json";
@@ -56,10 +93,44 @@ export function isClaudeHarness(env = process.env) {
 }
 
 /**
- * Resolve the active run id from the environment.
+ * True when the env carries the native Pi async-runner child markers (pi-subagents >= 0.65).
+ *
+ * Both the child flag and a non-empty parent-session id are required: the child flag is set
+ * in-process by the background async runner, and the parent session id is what makes the run
+ * inspectable. `NATIVE_PI_RUNNER_MARKER` is deliberately not required — it appears only on the
+ * detached runner env, so requiring it would fail closed for other native children.
  *
  * @param {Record<string, string|undefined>} [env]
- * @returns {string|null} The trimmed run id, or null when none is set.
+ * @returns {boolean}
+ */
+export function isNativePiAsyncContext(env = process.env) {
+  if (env?.[NATIVE_PI_CHILD_MARKER] !== "1") return false;
+  const parentSession = env?.[NATIVE_PI_PARENT_SESSION_MARKER];
+  return typeof parentSession === "string" && parentSession.trim().length > 0;
+}
+
+/**
+ * Synthesize a stable run id for a native Pi async context.
+ *
+ * Same parent session -> same id, so run-id consumers key on one stable identity for the whole
+ * session. The `pi-session-` prefix keeps a synthesized id distinguishable from a real
+ * pi-subagents run id and from a dev-loops-minted `devloops-<uuid>`.
+ *
+ * @param {string} parentSessionId
+ * @returns {string} `pi-session-<parent-session-id>`
+ */
+export function synthesizePiRunId(parentSessionId) {
+  return `pi-session-${parentSessionId.trim()}`;
+}
+
+/**
+ * Resolve the active run id from the environment.
+ *
+ * A run-id carrier wins when present. With none present, a native Pi async context synthesizes
+ * a stable id from its parent session instead of returning null.
+ *
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {string|null} The trimmed run id, or null when no async context is present.
  */
 export function resolveRunId(env = process.env) {
   for (const marker of RUN_ID_MARKERS) {
@@ -67,6 +138,9 @@ export function resolveRunId(env = process.env) {
     if (typeof value === "string" && value.trim().length > 0) {
       return value.trim();
     }
+  }
+  if (isNativePiAsyncContext(env)) {
+    return synthesizePiRunId(env[NATIVE_PI_PARENT_SESSION_MARKER]);
   }
   return null;
 }

@@ -31,7 +31,7 @@ Required installed runtime contract docs are shared bundled copies under `../doc
 
 The main agent must **always** dispatch the `dev-loop` async subagent for any dev-loop work.
 Do not run `dev-loops loop startup` or any startup resolver in the main agent.
-For async-required routes (config `workflow.asyncStartMode`, default `required`) the resolver needs an async run-id marker: the Pi runtime injects `PI_SUBAGENT_RUN_ID` into each async subagent's child env, or the main agent mints and propagates the neutral `DEVLOOPS_RUN_ID` before dispatch; under the Claude Code harness the requirement is relaxed automatically (no marker needed). The startup resolver also runs without a marker for non-async routes. Regardless, only the `dev-loop` subagent runs it — never the main agent.
+For async-required routes (config `workflow.asyncStartMode`, default `required`) the resolver needs async-context evidence: pi-subagents ≥ 0.65 marks each async child with `PI_SUBAGENT_CHILD=1` plus `PI_SUBAGENT_PARENT_SESSION` (pi-subagents ≤ 0.64 injected the legacy `PI_SUBAGENT_RUN_ID` alias instead), or the main agent mints and propagates the neutral `DEVLOOPS_RUN_ID` before dispatch; under the Claude Code harness the requirement is relaxed automatically (no marker needed). The startup resolver also runs without a marker for non-async routes. Regardless, only the `dev-loop` subagent runs it — never the main agent.
 
 After async dispatch, follow [Async dispatch posture](../docs/main-agent-contract.md#async-dispatch-posture-pi): return control to the user without `subagent_wait`, except for explicitly requested run-to-completion or a skill that must finish in one turn. Pi wakes the session on completion or needs-attention.
 <!-- /pi-only -->
@@ -110,7 +110,7 @@ Do not preload route packs before the resolver selects the strategy.
 
 ## Async dispatch
 
-**Async dispatch rule (enforced):** the resolver fails closed for GitHub-first strategies when `canonicalStateSummary.requiresAsyncDispatch` is `true` (default `required` mode) — inline invocation without an async run-id marker (`DEVLOOPS_RUN_ID` or `PI_SUBAGENT_RUN_ID`) is rejected for those routes. Under the Claude Code harness this requirement is relaxed automatically. See [Startup procedure](#startup-procedure).
+**Async dispatch rule (enforced):** the resolver fails closed for GitHub-first strategies when `canonicalStateSummary.requiresAsyncDispatch` is `true` (default `required` mode) — inline invocation without async-context evidence (`DEVLOOPS_RUN_ID`, the legacy `PI_SUBAGENT_RUN_ID` alias, or the native Pi async-runner markers `PI_SUBAGENT_CHILD=1` + `PI_SUBAGENT_PARENT_SESSION`) is rejected for those routes. Under the Claude Code harness this requirement is relaxed automatically. See [Startup procedure](#startup-procedure).
 
 
 ## Fallback gate-comment poster

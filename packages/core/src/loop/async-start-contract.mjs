@@ -13,7 +13,9 @@
  * Async context marker (required when workflow.asyncStartMode is `required`)
  * — see `@dev-loops/core/loop/run-context`:
  * - DEVLOOPS_RUN_ID env var (neutral, harness-agnostic)
- * - PI_SUBAGENT_RUN_ID env var (the alias the Pi runtime injects)
+ * - PI_SUBAGENT_RUN_ID env var (legacy alias injected by pi-subagents <= 0.64)
+ * - the native Pi async-runner markers (pi-subagents >= 0.65): PI_SUBAGENT_CHILD=1 together
+ *   with a non-empty PI_SUBAGENT_PARENT_SESSION
  *
  * Allowed modes:
  * - workflow.asyncStartMode: required | allowed
@@ -23,15 +25,23 @@
  * This module is intentionally pure and side-effect free.
  */
 
-import { RUN_ID_MARKERS, isClaudeHarness } from "./run-context.mjs";
+import {
+  NATIVE_PI_CHILD_MARKER,
+  NATIVE_PI_PARENT_SESSION_MARKER,
+  RUN_ID_MARKERS,
+  isClaudeHarness,
+  isNativePiAsyncContext,
+} from "./run-context.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 /**
- * Environment variable names that indicate an async context.
+ * Environment variable names that carry an async-context run id.
  * Sourced from the shared run-context contract so the markers stay in one place.
+ * The native Pi async-runner markers are checked separately (they carry no run id — see
+ * `validateAsyncStartContext`).
  */
 export const ASYNC_CONTEXT_MARKERS = RUN_ID_MARKERS;
 
@@ -139,6 +149,18 @@ export function validateAsyncStartContext({
         detectedMarker: marker,
       };
     }
+  }
+
+  // Native Pi async-runner markers (pi-subagents >= 0.65). They carry no run id, so they are
+  // checked after the run-id carriers: a real run id stays the preferred evidence, while the
+  // native markers keep the contract satisfiable now that the legacy alias is gone.
+  if (isNativePiAsyncContext(env)) {
+    return {
+      status: ASYNC_START_STATUS.VALID,
+      reason:
+        `Async context detected via ${NATIVE_PI_CHILD_MARKER}=1 + ${NATIVE_PI_PARENT_SESSION_MARKER}.`,
+      detectedMarker: NATIVE_PI_CHILD_MARKER,
+    };
   }
 
   if (asyncStartMode === ASYNC_START_MODE.ALLOWED) {

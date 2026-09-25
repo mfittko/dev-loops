@@ -7,7 +7,14 @@ import fs from "node:fs";
 import {
   RUN_ID_MARKERS,
   NEUTRAL_RUN_ID_VAR,
+  NATIVE_PI_CHILD_MARKER,
+  NATIVE_PI_PARENT_SESSION_MARKER,
+  NATIVE_PI_RUNNER_MARKER,
+  NATIVE_PI_ASYNC_MARKERS,
+  ASYNC_CONTEXT_ENV_MARKERS,
   resolveRunId,
+  isNativePiAsyncContext,
+  synthesizePiRunId,
   mintRunId,
   runContextEnv,
   runContextPath,
@@ -61,12 +68,76 @@ test("resolveRunId trims and treats blank/absent as null", () => {
   assert.equal(resolveRunId({}), null);
   // We deliberately do NOT call resolveRunId() with no argument here: the
   // default resolves from process.env, which carries the Pi-runtime-injected
-  // run-id alias under an async-subagent session (and no marker in CI). Pass an
+  // async-context markers under an async-subagent session (and none in CI). Pass an
   // explicitly marker-stripped env so this assertion is environment-independent
-  // (mirrors the CI guarantee).
+  // (mirrors the CI guarantee). Strip every async-context marker, not just the
+  // run-id carriers — the native pi-subagents >= 0.65 markers synthesize an id too.
   const ambientClean = { ...process.env };
-  for (const marker of RUN_ID_MARKERS) delete ambientClean[marker];
+  for (const marker of ASYNC_CONTEXT_ENV_MARKERS) delete ambientClean[marker];
   assert.equal(resolveRunId(ambientClean), null);
+});
+
+// ---------------------------------------------------------------------------
+// Native Pi async-runner markers (pi-subagents >= 0.65): they carry no run id,
+// so a stable one is synthesized from the parent session instead of returning null.
+// ---------------------------------------------------------------------------
+
+test("NATIVE_PI_ASYNC_MARKERS names the three native markers and stays out of RUN_ID_MARKERS", () => {
+  assert.deepEqual(NATIVE_PI_ASYNC_MARKERS, [
+    NATIVE_PI_CHILD_MARKER,
+    NATIVE_PI_PARENT_SESSION_MARKER,
+    NATIVE_PI_RUNNER_MARKER,
+  ]);
+  assert.deepEqual(ASYNC_CONTEXT_ENV_MARKERS, [...RUN_ID_MARKERS, ...NATIVE_PI_ASYNC_MARKERS]);
+  // The native markers carry no run id — folding them into RUN_ID_MARKERS would make
+  // resolveRunId return the child flag ("1") as if it were an id.
+  for (const marker of NATIVE_PI_ASYNC_MARKERS) {
+    assert.ok(!RUN_ID_MARKERS.includes(marker), `${marker} must not be a run-id carrier`);
+  }
+});
+
+const nativePiEnv = (overrides = {}) => ({
+  [NATIVE_PI_CHILD_MARKER]: "1",
+  [NATIVE_PI_PARENT_SESSION_MARKER]: "session-abc",
+  ...overrides,
+});
+
+test("isNativePiAsyncContext requires the child flag AND a non-empty parent session", () => {
+  assert.equal(isNativePiAsyncContext(nativePiEnv()), true);
+  // The runner marker corroborates but is never sufficient alone.
+  assert.equal(isNativePiAsyncContext({ [NATIVE_PI_RUNNER_MARKER]: "1" }), false);
+  // Neither half is sufficient on its own.
+  assert.equal(isNativePiAsyncContext({ [NATIVE_PI_CHILD_MARKER]: "1" }), false);
+  assert.equal(isNativePiAsyncContext({ [NATIVE_PI_PARENT_SESSION_MARKER]: "session-abc" }), false);
+  // A flag value other than exactly "1" is not the runner's contract value.
+  assert.equal(isNativePiAsyncContext(nativePiEnv({ [NATIVE_PI_CHILD_MARKER]: "true" })), false);
+  // Blank parent session ids are not inspectable.
+  assert.equal(isNativePiAsyncContext(nativePiEnv({ [NATIVE_PI_PARENT_SESSION_MARKER]: "   " })), false);
+  assert.equal(isNativePiAsyncContext({}), false);
+});
+
+test("resolveRunId synthesizes a stable id from the native Pi parent session", () => {
+  const expected = "pi-session-session-abc";
+  assert.equal(resolveRunId(nativePiEnv()), expected);
+  // Same parent session -> same id (repeated resolution is stable).
+  assert.equal(resolveRunId(nativePiEnv()), expected);
+  assert.equal(synthesizePiRunId("session-abc"), expected);
+  // A different parent session yields a different id.
+  assert.notEqual(resolveRunId(nativePiEnv({ [NATIVE_PI_PARENT_SESSION_MARKER]: "session-xyz" })), expected);
+  // Trimmed, so whitespace padding does not mint a second identity.
+  assert.equal(resolveRunId(nativePiEnv({ [NATIVE_PI_PARENT_SESSION_MARKER]: "  session-abc  " })), expected);
+});
+
+test("resolveRunId still returns null when no async-context marker is present", () => {
+  assert.equal(resolveRunId({}), null);
+  assert.equal(resolveRunId({ [NATIVE_PI_RUNNER_MARKER]: "1" }), null);
+  assert.equal(resolveRunId({ [NATIVE_PI_CHILD_MARKER]: "1" }), null);
+  assert.equal(resolveRunId({ [NATIVE_PI_PARENT_SESSION_MARKER]: "session-abc" }), null);
+});
+
+test("resolveRunId prefers a run-id carrier over the synthesized native Pi id", () => {
+  assert.equal(resolveRunId(nativePiEnv({ DEVLOOPS_RUN_ID: "neutral" })), "neutral");
+  assert.equal(resolveRunId(nativePiEnv({ PI_SUBAGENT_RUN_ID: "legacy" })), "legacy");
 });
 
 test("mintRunId returns a neutral, unique id", () => {

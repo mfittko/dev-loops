@@ -9,6 +9,11 @@ import {
   validateAsyncStartContext,
   resolveEffectiveAsyncStartMode,
 } from "../src/loop/async-start-contract.mjs";
+import {
+  NATIVE_PI_CHILD_MARKER,
+  NATIVE_PI_PARENT_SESSION_MARKER,
+  NATIVE_PI_RUNNER_MARKER,
+} from "../src/loop/run-context.mjs";
 
 // ---------------------------------------------------------------------------
 // validateAsyncStartContext: rejection (no markers present)
@@ -53,6 +58,48 @@ test("validateAsyncStartContext: valid under Pi when only PI_SUBAGENT_RUN_ID is 
   const result = validateAsyncStartContext({ env, asyncStartMode: ASYNC_START_MODE.REQUIRED });
   assert.equal(result.status, ASYNC_START_STATUS.VALID);
   assert.equal(result.detectedMarker, "PI_SUBAGENT_RUN_ID");
+});
+
+// pi-subagents 0.65 dropped the whole PI_-prefixed subprocess-env block, including the
+// PI_SUBAGENT_RUN_ID alias, and marks native in-process children with PI_SUBAGENT_CHILD=1 plus
+// PI_SUBAGENT_PARENT_SESSION instead. The startup gate must recognize that context: before
+// this, a Pi >= 0.65 startup returned REJECTED and no dev-loop work could start under Pi.
+test("validateAsyncStartContext: valid under Pi >= 0.65 native async-runner markers (required)", () => {
+  const env = { [NATIVE_PI_CHILD_MARKER]: "1", [NATIVE_PI_PARENT_SESSION_MARKER]: "session-abc" };
+  const result = validateAsyncStartContext({ env, asyncStartMode: ASYNC_START_MODE.REQUIRED });
+  assert.equal(result.status, ASYNC_START_STATUS.VALID);
+  assert.equal(result.detectedMarker, NATIVE_PI_CHILD_MARKER);
+  assert.ok(result.reason.includes(NATIVE_PI_PARENT_SESSION_MARKER));
+});
+
+test("validateAsyncStartContext: native Pi markers corroborate but never substitute for evidence", () => {
+  // The detached-runner marker alone must not satisfy the contract.
+  const runnerOnly = validateAsyncStartContext({
+    env: { [NATIVE_PI_RUNNER_MARKER]: "1" },
+    asyncStartMode: ASYNC_START_MODE.REQUIRED,
+  });
+  assert.equal(runnerOnly.status, ASYNC_START_STATUS.REJECTED);
+  // Neither half of the native pair is sufficient on its own.
+  for (const partial of [
+    { [NATIVE_PI_CHILD_MARKER]: "1" },
+    { [NATIVE_PI_PARENT_SESSION_MARKER]: "session-abc" },
+    { [NATIVE_PI_CHILD_MARKER]: "true", [NATIVE_PI_PARENT_SESSION_MARKER]: "session-abc" },
+    { [NATIVE_PI_CHILD_MARKER]: "1", [NATIVE_PI_PARENT_SESSION_MARKER]: "   " },
+  ]) {
+    const result = validateAsyncStartContext({ env: partial, asyncStartMode: ASYNC_START_MODE.REQUIRED });
+    assert.equal(result.status, ASYNC_START_STATUS.REJECTED, JSON.stringify(partial));
+  }
+});
+
+test("validateAsyncStartContext: a run-id carrier still wins over the native Pi markers", () => {
+  const env = {
+    [NATIVE_PI_CHILD_MARKER]: "1",
+    [NATIVE_PI_PARENT_SESSION_MARKER]: "session-abc",
+    DEVLOOPS_RUN_ID: "devloops-run-1",
+  };
+  const result = validateAsyncStartContext({ env, asyncStartMode: ASYNC_START_MODE.REQUIRED });
+  assert.equal(result.status, ASYNC_START_STATUS.VALID);
+  assert.equal(result.detectedMarker, "DEVLOOPS_RUN_ID");
 });
 
 // ---------------------------------------------------------------------------
