@@ -6983,6 +6983,57 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
   });
 });
 
+// ============================================================================
+// This repo's .devloops — developer/fixer run on the strong tier
+// ============================================================================
+
+describe("this repo's .devloops — developer and fixer run on the strong tier (#2457)", () => {
+  // Read THIS repo's real .devloops, not a synthetic fixture: the pin must fail
+  // when either roleTiers entry is dropped from the repo config.
+  const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+
+  test("developer and fixer are pinned to pre-pr-strong and resolve strongly on both harnesses", async () => {
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
+
+    const strongTier = config.models.tiers["pre-pr-strong"];
+    assert.ok(
+      strongTier?.claude && strongTier?.pi,
+      "the pre-pr-strong tier must define a concrete model for both harnesses",
+    );
+    // resolveRoleModel reads the merged role→tier map
+    // `{ ...BUILTIN_ROLE_TIERS, ...config.models.roleTiers }`. Pinning the
+    // config layer here means dropping either entry fails loudly instead of
+    // silently falling back to the builtin `low` alias (inherit on Pi).
+    for (const role of ["developer", "fixer"]) {
+      assert.equal(
+        config.models.roleTiers[role],
+        "pre-pr-strong",
+        `.devloops must pin ${role} to pre-pr-strong`,
+      );
+      for (const harness of ["claude", "pi"]) {
+        assert.equal(
+          resolveRoleModel(config, { role, harness }),
+          strongTier[harness],
+          `${role} must resolve the strong tier on ${harness}`,
+        );
+      }
+    }
+  });
+
+  test("docs and quality keep their builtin resolution (change scoped to the two implementation roles)", async () => {
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
+
+    for (const role of ["docs", "quality"]) {
+      assert.equal(config.models.roleTiers?.[role], undefined, `.devloops must not re-tier ${role}`);
+      // Builtin `low`: opus on Claude, inherit (null) on Pi — unchanged.
+      assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "opus");
+      assert.equal(resolveRoleModel(config, { role, harness: "pi" }), null);
+    }
+  });
+});
+
 describe("resolveRoleModel — angle vs role disambiguation (kind)", () => {
   // The `docs` name is BOTH a registered gate angle (persona `docs`) and a
   // routine role (→ low). Without a discriminator the angle silently inherited
