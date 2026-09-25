@@ -7025,17 +7025,19 @@ describe("this repo's .devloops — developer and fixer run on the strong tier (
     const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
     assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
 
+    // Expected resolution: the built-in role policy mapped through THIS repo's
+    // own tier mappings. Comparing against zero-config would instead false-fail
+    // on a documented repo-level retune of the shared `low` tier, even though
+    // neither role was re-tiered.
+    const builtinRolePolicyWithRepoTiers = { models: { tiers: config.models.tiers } };
     for (const role of ["docs", "quality"]) {
       assert.equal(config.models.roleTiers?.[role], undefined, `.devloops must not re-tier ${role}`);
-      // Unchanged-resolution proof: the repo config must resolve each role
-      // exactly as the built-in role policy does, so a legitimate low-tier
-      // retune never fails a test whose purpose is only to prove these two
-      // roles were NOT re-tiered.
+      assert.equal(config.models.roles?.[role], undefined, `.devloops must not pin a concrete ${role} model`);
       for (const harness of ["claude", "pi"]) {
         assert.equal(
           resolveRoleModel(config, { role, harness }),
-          resolveRoleModel({}, { role, harness }),
-          `${role} must keep its built-in resolution on ${harness}`,
+          resolveRoleModel(builtinRolePolicyWithRepoTiers, { role, harness }),
+          `${role} must keep its built-in tier resolution on ${harness}`,
         );
       }
     }
