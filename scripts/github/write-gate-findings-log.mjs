@@ -8,7 +8,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, freshAngleNames, hasLocatableShape, isDefaultDeferrableSeverity, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, hasLocatableShape, ledgerAngleNames, isDefaultDeferrableSeverity, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
@@ -762,7 +762,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     try {
       const rawPerAngle = JSON.parse(rawProvenanceJson)?.perAngle;
       const { config } = await loadDevLoopConfig({ repoRoot });
-      resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[options.gate] ?? options.gate, freshAngleNames(rawPerAngle), { fullLabel: options.fullLabel === true });
+      resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[options.gate] ?? options.gate, ledgerAngleNames(rawPerAngle), { fullLabel: options.fullLabel === true });
     } catch {
       resolvedGroups = null;
     }

@@ -5,7 +5,7 @@
 // The same holds under the Claude clamp (4) and a Pi env (one runs.all call per
 // wave). The full draft pool needs at most 2 waves.
 import assert from "node:assert/strict";
-import { copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -100,6 +100,35 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 4"
       assert.ok(scheduleFanoutWaves(units, resolveFanoutEffectiveConcurrency(REPO_CONFIG, env())).length <= 2);
     }
     assert.deepEqual(units.flatMap((u) => u.angles).sort(), [...pool].sort());
+  });
+
+  test("rollback: a repo gates.fanout.groups entry { name: holistic, angles: [holistic] } restores the holistic singleton unit", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-holistic-rollback-"));
+    try {
+      // gates.fanout.groups merges wholesale; a real override restates the
+      // shipped table too. The holistic entry alone is enough to pin placement.
+      await writeFile(path.join(tmpDir, ".devloops"), [
+        "version: 1",
+        "gates:",
+        "  fanout:",
+        "    groups:",
+        "      - name: holistic",
+        "        angles: [holistic]",
+        "",
+      ].join("\n"), "utf8");
+      const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+      assert.deepEqual(errors, []);
+      const angles = roundAngles("preApproval", 12);
+      const configured = new Set(config.gates.fanout.groups.map((g) => g.name));
+      const units = expandDispatchUnits(resolveFanoutGroups(config, "preApproval", angles), configured);
+      const holisticUnits = units.filter((u) => u.angles.includes("holistic"));
+      assert.equal(holisticUnits.length, 1);
+      assert.equal(holisticUnits[0].name, "holistic");
+      assert.deepEqual(holisticUnits[0].angles, ["holistic"]);
+      assert.deepEqual(units.flatMap((u) => u.angles).sort(), [...angles].sort());
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   test("a 6-unit round releases 4 units in wave 1 and the remaining 2 in wave 2", () => {

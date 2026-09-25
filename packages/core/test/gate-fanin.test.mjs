@@ -17,6 +17,7 @@ import {
   countFreshDispatchUnits,
   fanoutReviewerPairingError,
   freshAngleNames,
+  ledgerAngleNames,
   scheduleFanoutWaves,
   backoffMaxConcurrent,
   planDispatchRetry,
@@ -540,6 +541,16 @@ describe("freshAngleNames", () => {
       ["a", "b"],
     );
     assert.deepEqual(freshAngleNames(null), []);
+  });
+});
+
+describe("ledgerAngleNames", () => {
+  test("returns distinct angle names in ledger order, fresh and carried", () => {
+    assert.deepEqual(
+      ledgerAngleNames([{ angle: "a" }, { angle: "c", carriedFromHead: "abc1234" }, { angle: "a" }, { angle: " " }, null, { angle: "b" }]),
+      ["a", "c", "b"],
+    );
+    assert.deepEqual(ledgerAngleNames(null), []);
   });
 });
 

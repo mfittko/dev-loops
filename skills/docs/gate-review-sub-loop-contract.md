@@ -484,7 +484,8 @@ dispatch path, and it closes three failure modes prose discipline never held:
   bundle (both are "this round's resolved dispatch units"), so the emitter no longer draws one
   either. The merge guard (`fanoutReviewerPairingError` in `@dev-loops/core/loop/gate-fanin`) is
   the fail-closed authority for this: it re-derives this round's grouping independently via its
-  own `resolveFanoutGroups` call (`detect-checkpoint-evidence.mjs`) and accepts a shared identity
+  own `resolveFanoutGroups` call (`detect-checkpoint-evidence.mjs`) over the ledger's fresh and
+  carried angles (so a partially carried unit resolves to its emitted boundaries) and accepts a shared identity
   ONLY when every angle it covers is a member of that SAME re-derived unit — configured or
   auto-chunk — so a claimed group spanning angles the guard's own re-derivation places in
   different units (or an angle the re-derivation never resolves at all) still fails closed. The

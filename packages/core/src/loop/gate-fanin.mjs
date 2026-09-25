@@ -509,6 +509,28 @@ export function freshAngleNames(perAngle) {
 }
 
 /**
+ * Names of DISTINCT angles in a `perAngle` array, fresh AND carried, in ledger
+ * order. This is the angle set to pass to `resolveFanoutGroups` when a caller
+ * re-derives the round's dispatch units for {@link fanoutReviewerPairingError}:
+ * dispatch chunks the full resolved angle set (a partially carried unit is
+ * dispatched whole), so re-deriving from fresh angles alone can shift the
+ * auto-chunk boundaries and reject an honest shared reviewer. Pure.
+ *
+ * @param {unknown} perAngle
+ * @returns {string[]}
+ */
+export function ledgerAngleNames(perAngle) {
+  if (!Array.isArray(perAngle)) return [];
+  const angles = new Set();
+  for (const entry of perAngle) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const angle = typeof entry.angle === "string" ? entry.angle.trim() : "";
+    if (angle) angles.add(angle);
+  }
+  return [...angles];
+}
+
+/**
  * Count distinct FRESH dispatch units in a `perAngle` array: a fresh angle
  * declaring a `group` counts once per DISTINCT group name (its group is one
  * reviewer's dispatch), an ungrouped fresh angle counts as its own unit. Shared
