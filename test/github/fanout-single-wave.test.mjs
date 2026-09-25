@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
-import { expandDispatchUnits } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { expandDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
 import { mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import {
   loadDevLoopConfig,
@@ -193,6 +193,12 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
     const second = resolveFanoutDispatch(structuredClone(REPO_CONFIG), "draft", [...pool], { env: {} });
     assert.deepEqual(second.groups, first.groups);
     assert.deepEqual(second.pendingGroups, first.pendingGroups);
+    // Input order never moves a unit boundary: angles are ordered by the pool.
+    const reversed = resolveFanoutDispatch(REPO_CONFIG, "draft", [...pool].reverse(), { env: {} });
+    assert.deepEqual(reversed.groups, first.groups);
+    const unpackedAngles = pool.slice(0, 17);
+    const unpacked = resolveFanoutDispatch(REPO_CONFIG, "draft", unpackedAngles, { env: {} });
+    assert.deepEqual(resolveFanoutDispatch(REPO_CONFIG, "draft", [...unpackedAngles].reverse(), { env: {} }).groups, unpacked.groups);
   });
 
   // Property: for maxConcurrent 1..5 and 1..maxConcurrent x 5 fresh angles,

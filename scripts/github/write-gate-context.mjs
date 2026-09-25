@@ -31,7 +31,7 @@ import { parseArgs } from "node:util";
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, orderAnglesByCatalog, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -1963,7 +1963,11 @@ function normalizeCarriedAnglesArg(carriedAngles) {
  * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
 export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env, singleWave = true } = {}) {
-  let groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
+  // Angle-pool order, as the pairing guard re-derives it: auto-chunk
+  // boundaries must not depend on the order the angles arrived in.
+  const catalogOrder = resolveGateAngleContract(config, configGate).pool ?? [];
+  const orderedAngles = orderAnglesByCatalog((Array.isArray(resolvedAngles) ? resolvedAngles : []).filter((a) => typeof a === "string").map((a) => a.trim()), catalogOrder);
+  let groups = resolveFanoutGroups(config, configGate, orderedAngles, { fullLabel });
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
   // Serial (one-at-a-time) dispatch of heavy reviewers when
   // `gates.fanout.sequential` is set — effective concurrency is 1 unit per wave

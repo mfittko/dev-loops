@@ -393,3 +393,97 @@ describe("fanoutReviewerPairingError against recorded dispatch membership (packe
     });
   }
 });
+
+// Empty or malformed recorded membership never skips the membership check.
+describe("fanoutReviewerPairingError fails closed on empty recorded membership", () => {
+  // Two reviewers meet the distinctReviewers floor; one of them spans five
+  // angles across three base units, which only a skipped membership check passes.
+  const spanning = PACK_ANGLES.map((angle) => (angle === "pr-checklist" ? { angle, reviewer: "r-pr", group: "process" } : { angle, reviewer: "one", group: "all" }));
+  test("REJECT: dispatchUnits [] on the write side (context fanout.groups []) and on the read side", async () => {
+    await withConfig(PACK_DEVLOOPS, async (dir) => {
+      const perAngle = spanning;
+      const { error } = await writePacked(dir, "pre_approval_gate", [], perAngle);
+      assert.match(error ?? "", /invalid dispatch unit membership: dispatchUnits is empty/);
+      const read = await readPacked(dir, "pre_approval_gate", { distinctReviewers: 2, perAngle, dispatchUnits: [] });
+      assert.match(read ?? "", /invalid dispatch unit membership: dispatchUnits is empty/);
+    });
+  });
+
+  test("REJECT: a context whose fanout.groups holds only malformed or angle-less entries", async () => {
+    await withConfig(PACK_DEVLOOPS, async (dir) => {
+      const perAngle = spanning;
+      const { error } = await writePacked(dir, "pre_approval_gate", [null, "junk", { name: "x" }, { name: "y", angles: [] }, { angles: [" "] }], perAngle);
+      assert.match(error ?? "", /invalid dispatch unit membership: dispatchUnits is empty/);
+    });
+  });
+});
+
+// Base units are re-derived in angle-pool order, never ledger order, so a
+// reordered perAngle gives the same verdict as the dispatched order.
+const SHIPPED_DEVLOOPS = ["version: 1", "gates:", "  requireFanoutEvidence: true", "  requireFanoutProvenance: true", ""].join("\n");
+const reorderings = (entries) => [
+  ["reversed", [...entries].reverse()],
+  ["shuffled", [...entries.filter((_, i) => i % 3 === 2), ...entries.filter((_, i) => i % 3 === 0), ...entries.filter((_, i) => i % 3 === 1)]],
+];
+
+async function writeUnpacked(dir, gate, perAngle) {
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 5, gate, headSha: HEAD_SHA, verdict: "clean", findings: "[]",
+      provenance: JSON.stringify({ distinctReviewers: countIds(perAngle), perAngle }),
+      tmpRoot: OUT,
+    }, { repoRoot: dir });
+    return { error: null, provenance: result.log.provenance };
+  } catch (error) {
+    return { error: error.message, provenance: null };
+  }
+}
+
+describe("fanoutReviewerPairingError is independent of ledger order", () => {
+  test("22-angle packed draft round: reversed and shuffled perAngle pass both checks; a cross-unit share still fails", async () => {
+    await withConfig(SHIPPED_DEVLOOPS, async (dir, config) => {
+      const { pool } = resolveGateAngleContract(config, "draft");
+      assert.equal(pool.length, 22);
+      const plan = resolveFanoutDispatch(config, "draft", pool, { env: { CLAUDECODE: "1" } });
+      const units = expandDispatchUnits(plan.groups, new Set(config.gates.fanout.groups.map((g) => g.name)));
+      const perAngle = perUnitProvenance(units);
+      for (const [label, reordered] of reorderings(perAngle)) {
+        const { error, provenance } = await writePacked(dir, "draft_gate", plan.groups, reordered);
+        assert.equal(error, null, label);
+        assert.equal(await readPacked(dir, "draft_gate", provenance), null, label);
+      }
+      const [first, second] = units;
+      const shared = perAngle.map((e) => (e.angle === second.angles[0] ? { ...e, reviewer: "r0", group: first.group } : e));
+      for (const [label, reordered] of reorderings(shared)) {
+        const { error } = await writePacked(dir, "draft_gate", plan.groups, reordered);
+        assert.match(error ?? "", /recorded dispatch units does not place all of them in one group/, label);
+        const dispatchUnits = units.map(({ name, angles }) => ({ name, angles }));
+        const read = await readPacked(dir, "draft_gate", { distinctReviewers: countIds(reordered), perAngle: reordered, dispatchUnits });
+        assert.match(read ?? "", /recorded dispatch units does not place all of them in one group/, label);
+      }
+    });
+  });
+
+  test("17-angle unpacked draft round without recorded membership: reversed and shuffled perAngle pass both checks; a cross-unit share still fails", async () => {
+    await withConfig(SHIPPED_DEVLOOPS, async (dir, config) => {
+      const angles = resolveGateAngleContract(config, "draft").pool.slice(0, 17);
+      const units = expandDispatchUnits(resolveFanoutGroups(config, "draft", angles), new Set(config.gates.fanout.groups.map((g) => g.name)));
+      const perAngle = perUnitProvenance(units);
+      for (const [label, reordered] of reorderings(perAngle)) {
+        const { error, provenance } = await writeUnpacked(dir, "draft_gate", reordered);
+        assert.equal(error, null, label);
+        assert.equal(provenance.dispatchUnits, undefined, label);
+        assert.equal(await readPacked(dir, "draft_gate", provenance), null, label);
+      }
+      const multi = units.filter((u) => u.angles.length > 1);
+      const [host, other] = [multi[0], units.find((u) => u !== multi[0])];
+      const shared = perAngle.map((e) => (e.angle === other.angles[0] ? { ...e, reviewer: `r${units.indexOf(host)}`, group: host.group } : e));
+      for (const [label, reordered] of reorderings(shared)) {
+        const { error } = await writeUnpacked(dir, "draft_gate", reordered);
+        assert.match(error ?? "", /does not place all of them in one group \(no recorded dispatch membership\)/, label);
+        const read = await readPacked(dir, "draft_gate", { distinctReviewers: countIds(reordered), perAngle: reordered });
+        assert.match(read ?? "", /does not place all of them in one group \(no recorded dispatch membership\)/, label);
+      }
+    });
+  });
+});

@@ -489,12 +489,15 @@ dispatch path, and it closes three failure modes prose discipline never held:
   the fail-closed authority for this. It re-derives this round's base units independently via its
   own `resolveFanoutGroups` call (`detect-checkpoint-evidence.mjs`) over the ledger's fresh and
   carried angles (so a partially carried unit resolves to its emitted boundaries), cap-split at
-  `REVIEWER_UNIT_MAX_ANGLES`; base units never depend on the harness concurrency clamp.
+  `REVIEWER_UNIT_MAX_ANGLES`; base units never depend on the harness concurrency clamp. The
+  dispatch plan and this re-derivation both order angles by the gate's angle pool, so ledger order
+  never moves a unit boundary.
   `write-gate-findings-log.mjs` records each dispatch unit's membership (`name`, `angles`) from the
   keyed context artifact's `fanout.groups`, expanded through the emitter's cap-split, as
   `provenance.dispatchUnits`; a caller-supplied `dispatchUnits` is dropped. Both the write side and
   the read side accept a shared identity ONLY inside ONE recorded unit, and accept that unit only
-  when it is a union of whole base units with at most 5 angles. A ledger without recorded
+  when it is a union of whole base units with at most 5 angles. An empty recorded membership is
+  rejected, never read as "no check". A ledger without recorded
   membership falls back to the base units: an unpacked round still passes and a reviewer shared
   across a packed unit fails closed. A claimed group spanning angles the membership places in
   different units (or an angle it never places at all) still fails closed. The

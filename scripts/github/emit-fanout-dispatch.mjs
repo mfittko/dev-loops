@@ -16,8 +16,6 @@ import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveGateAngleC
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment, unitScopeSegment } from "./_dispatch-units.mjs";
 
-export { expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "./_dispatch-units.mjs";
-
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
 head whose write-gate-context.mjs bundle is already on disk, it reads the resolved

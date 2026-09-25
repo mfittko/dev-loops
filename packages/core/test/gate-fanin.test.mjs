@@ -552,6 +552,24 @@ describe("ledgerAngleNames", () => {
     );
     assert.deepEqual(ledgerAngleNames(null), []);
   });
+
+  test("with catalogOrder, follows catalog order and puts unknown angles last in lexicographic order", () => {
+    const perAngle = [{ angle: "z" }, { angle: "b" }, { angle: "y" }, { angle: "a" }];
+    assert.deepEqual(ledgerAngleNames(perAngle, ["a", "b"]), ["a", "b", "y", "z"]);
+    assert.deepEqual(ledgerAngleNames([...perAngle].reverse(), ["a", "b"]), ["a", "b", "y", "z"]);
+    assert.deepEqual(ledgerAngleNames(perAngle, []), ["a", "b", "y", "z"]);
+  });
+});
+
+describe("fanoutReviewerPairingError fails closed on empty membership", () => {
+  const shared = [{ angle: "a", reviewer: "x", group: "g" }, { angle: "b", reviewer: "x", group: "g" }];
+  test("an empty resolvedGroups array rejects a shared reviewer", () => {
+    assert.match(fanoutReviewerPairingError(shared, []), /does not place all of them in one group \(no recorded dispatch membership\)/);
+  });
+  test("an empty dispatchUnits array is a shape error", () => {
+    assert.match(fanoutReviewerPairingError(shared, [{ name: "g", angles: ["a", "b"] }], []), /dispatchUnits is empty/);
+    assert.match(fanoutReviewerPairingError(shared, null, []), /dispatchUnits is empty/);
+  });
 });
 
 describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh angle)", () => {

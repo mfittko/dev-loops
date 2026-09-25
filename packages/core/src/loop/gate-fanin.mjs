@@ -510,17 +510,24 @@ export function freshAngleNames(perAngle) {
 }
 
 /**
- * Names of DISTINCT angles in a `perAngle` array, fresh AND carried, in ledger
- * order. This is the angle set to pass to `resolveFanoutGroups` when a caller
- * re-derives the round's dispatch units for {@link fanoutReviewerPairingError}:
- * dispatch chunks the full resolved angle set (a partially carried unit is
- * dispatched whole), so re-deriving from fresh angles alone can shift the
- * auto-chunk boundaries and reject an honest shared reviewer. Pure.
+ * Names of DISTINCT angles in a `perAngle` array, fresh AND carried. This is the
+ * angle set to pass to `resolveFanoutGroups` when a caller re-derives the
+ * round's dispatch units for {@link fanoutReviewerPairingError}: dispatch
+ * chunks the full resolved angle set (a partially carried unit is dispatched
+ * whole), so re-deriving from fresh angles alone can shift the auto-chunk
+ * boundaries and reject an honest shared reviewer.
+ *
+ * Auto-chunk boundaries follow input order, so a re-deriving caller passes
+ * `catalogOrder` (the gate's resolved angle pool, the order dispatch resolves
+ * angles in). The result then follows that order, with angles outside it last
+ * in lexicographic order, and never depends on ledger order. Without
+ * `catalogOrder` the result keeps ledger order. Pure.
  *
  * @param {unknown} perAngle
+ * @param {string[]|null} [catalogOrder]
  * @returns {string[]}
  */
-export function ledgerAngleNames(perAngle) {
+export function ledgerAngleNames(perAngle, catalogOrder = null) {
   if (!Array.isArray(perAngle)) return [];
   const angles = new Set();
   for (const entry of perAngle) {
@@ -528,7 +535,24 @@ export function ledgerAngleNames(perAngle) {
     const angle = typeof entry.angle === "string" ? entry.angle.trim() : "";
     if (angle) angles.add(angle);
   }
-  return [...angles];
+  return Array.isArray(catalogOrder) ? orderAnglesByCatalog([...angles], catalogOrder) : [...angles];
+}
+
+/**
+ * Sort angle names into `catalogOrder`, with names outside it last in
+ * lexicographic order. The dispatch plan and the pairing re-derivation both
+ * order angles this way before `resolveFanoutGroups`, so auto-chunk
+ * boundaries never depend on caller or ledger order. Returns a new array. Pure.
+ *
+ * @param {string[]} angles
+ * @param {string[]} catalogOrder
+ * @returns {string[]}
+ */
+export function orderAnglesByCatalog(angles, catalogOrder) {
+  const rank = new Map();
+  (Array.isArray(catalogOrder) ? catalogOrder : []).forEach((angle, index) => { if (!rank.has(angle)) rank.set(angle, index); });
+  const rankOf = (angle) => rank.get(angle) ?? Number.MAX_SAFE_INTEGER;
+  return [...angles].sort((a, b) => rankOf(a) - rankOf(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /**
@@ -583,8 +607,8 @@ export function countFreshDispatchUnits(perAngle) {
  * cap-split). Base units do not depend on the harness concurrency clamp. An
  * optional `dispatchUnits` (the findings ledger's recorded dispatch membership,
  * copied from the context artifact's packed `fanout.groups`) replaces the base
- * units as the membership source. A malformed recording or an angle recorded
- * twice is an error. A shared reviewer is honored only inside ONE recorded
+ * units as the membership source. A malformed or empty recording, or an angle
+ * recorded twice, is an error. A shared reviewer is honored only inside ONE recorded
  * unit, and that unit must be a union of whole base units with at most
  * `REVIEWER_UNIT_MAX_ANGLES` angles. A ledger without recorded membership falls
  * back to the base units, so an unpacked round still passes and a packed round
@@ -604,7 +628,11 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, disp
   }
   const baseOf = new Map();
   baseUnits.forEach((angles, index) => angles.forEach((a) => baseOf.set(a, index)));
-  const useRecorded = baseOf.size > 0 && dispatchUnits !== null && dispatchUnits !== undefined;
+  // Recorded membership is validated whenever it is present, and membership is
+  // enforced whenever resolvedGroups or dispatchUnits is supplied. An empty
+  // map never skips the check: an angle absent from it fails closed.
+  const useRecorded = dispatchUnits !== null && dispatchUnits !== undefined;
+  const enforceMembership = useRecorded || Array.isArray(resolvedGroups);
   let configuredGroupOf = baseOf;
   if (useRecorded) {
     const shapeError = dispatchUnitsShapeError(dispatchUnits);
@@ -646,10 +674,10 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, disp
     // resolvedGroups supplied: the claimed group is honest only when every angle
     // it covers is a member of the SAME configured group — a claimed group
     // spanning angles the table splits apart fails closed.
-    if (configuredGroupOf.size > 0) {
+    if (enforceMembership) {
       const configuredGroups = new Set([...angles].map((a) => configuredGroupOf.get(a) ?? null));
       if (configuredGroups.size !== 1 || configuredGroups.has(null)) {
-        details.push(`${label} "${id}" declares group "${[...groups][0]}" for fresh angles: ${[...angles].join(", ")}, but the ${useRecorded ? "recorded dispatch units" : "configured gates.fanout.groups table"} does not place all of them in one group`);
+        details.push(`${label} "${id}" declares group "${[...groups][0]}" for fresh angles: ${[...angles].join(", ")}, but the ${useRecorded ? "recorded dispatch units" : "configured gates.fanout.groups table"} does not place all of them in one group${useRecorded ? "" : " (no recorded dispatch membership)"}`);
       } else if (useRecorded) {
         // The recorded unit hosting this shared reviewer must itself be a
         // legitimate packing: a union of whole base units of at most 5 angles.
@@ -666,7 +694,7 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, disp
 }
 
 /**
- * Shape check for recorded dispatch membership: an array of `{ name, angles }`
+ * Shape check for recorded dispatch membership: a non-empty array of `{ name, angles }`
  * with a non-empty name, non-empty angle names, and no angle recorded in two
  * units. Returns an error string or null. Pure.
  * @param {unknown} dispatchUnits
@@ -674,6 +702,7 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, disp
  */
 function dispatchUnitsShapeError(dispatchUnits) {
   if (!Array.isArray(dispatchUnits)) return "dispatchUnits must be an array";
+  if (dispatchUnits.length === 0) return "dispatchUnits is empty, so it records no unit for any fresh angle";
   const seen = new Set();
   for (const unit of dispatchUnits) {
     const name = typeof unit?.name === "string" ? unit.name.trim() : "";

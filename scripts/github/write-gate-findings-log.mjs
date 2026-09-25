@@ -686,8 +686,10 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
  * emitter's own cap-split into the `{ name, angles }` dispatch units reviewers
  * actually shared. Returns null when no context or no fanout plan exists, so
  * the pairing guard falls back to re-derived base units. The path is keyed by
- * repo, PR, gate and head, as in the emitter. A present but unreadable context
- * fails closed.
+ * repo, PR, gate and head, as in the emitter. A present but unreadable context,
+ * or a fanout plan without a `fanout.groups` array, fails closed. A plan whose
+ * groups yield no dispatch unit (empty, or only malformed or angle-less
+ * entries) returns `[]`, which the pairing guard rejects as a shape error.
  * @returns {Promise<{ name: string, angles: string[] }[]|null>}
  */
 export async function readContextDispatchUnits({ repo, pr, gate, headSha, tmpRoot }, config, repoRoot) {
@@ -707,7 +709,8 @@ export async function readContextDispatchUnits({ repo, pr, gate, headSha, tmpRoo
   } catch (error) {
     throw parseError(`gate-context artifact ${contextPath} is not valid JSON, so its dispatch membership cannot be recorded: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!Array.isArray(context?.fanout?.groups)) return null;
+  if (context?.fanout === undefined || context?.fanout === null) return null;
+  if (!Array.isArray(context.fanout.groups)) throw parseError(`gate-context artifact ${contextPath} has a fanout plan without a fanout.groups array, so its dispatch membership cannot be recorded`);
   const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
   return expandDispatchUnits(context.fanout.groups, configuredGroupNames).map(({ name, angles }) => ({ name, angles }));
 }
@@ -802,7 +805,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     try {
       const rawPerAngle = JSON.parse(rawProvenanceJson)?.perAngle;
       ({ config } = await loadDevLoopConfig({ repoRoot }));
-      resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[options.gate] ?? options.gate, ledgerAngleNames(rawPerAngle), { fullLabel: options.fullLabel === true });
+      const configGate = GATE_CONFIG_KEY[options.gate] ?? options.gate;
+      const anglePool = resolveGateAngleContract(config, configGate).pool ?? [];
+      resolvedGroups = resolveFanoutGroups(config, configGate, ledgerAngleNames(rawPerAngle, anglePool), { fullLabel: options.fullLabel === true });
     } catch {
       resolvedGroups = null;
     }

@@ -673,10 +673,10 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
     if (provenanceConsistencyError(prov) !== null) return false;
     // The floor and the pairing cross-check both key off this candidate
     // ledger's OWN angles/groups (resolveFanoutGroups over its fresh and
-    // carried angles, matching the emitted chunking) — per candidate,
-    // not once up front, since a stale checkout can record a different fresh
-    // angle set than the worktree ledger.
-    const resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[gateKey] ?? gateKey, ledgerAngleNames(prov.perAngle), { fullLabel: hasFullLabel });
+    // carried angles in angle-pool order, matching the emitted chunking) — per
+    // candidate, not once up front, since a stale checkout can record a
+    // different fresh angle set than the worktree ledger.
+    const resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[gateKey] ?? gateKey, ledgerAngleNames(prov.perAngle, anglePool ?? []), { fullLabel: hasFullLabel });
     if (requireProvenance && prov.distinctReviewers < Math.max(FANOUT_PROVENANCE_MIN_REVIEWERS, countFreshDispatchUnits(prov.perAngle))) return false;
     if (requireProvenance && fanoutReviewerPairingError(prov.perAngle, resolvedGroups, prov.dispatchUnits) !== null) return false;
     const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(prov.perAngle, { mandatoryAngles, pool: anglePool });
@@ -1014,7 +1014,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       // re-validates the cardinality floor and the pairing exception against
       // this, so both agree with what readLedgerProvenanceInAny already used
       // to pick this ledger.
-      resolvedGroups: resolveFanoutGroups(angleConfig, GATE_CONFIG_KEY[spec.name] ?? spec.name, ledgerAngleNames(provenance?.perAngle), { fullLabel: hasFullLabel }),
+      resolvedGroups: resolveFanoutGroups(angleConfig, GATE_CONFIG_KEY[spec.name] ?? spec.name, ledgerAngleNames(provenance?.perAngle, angleFields.anglePool ?? []), { fullLabel: hasFullLabel }),
       ...angleFields,
     });
   }

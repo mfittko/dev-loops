@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, listPriorFindingsLogHeads, main } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { expandDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
@@ -621,7 +622,10 @@ for (const configured of [true, false]) {
       const { config, errors } = await loadDevLoopConfig({ repoRoot });
       assert.deepEqual(errors, []);
       const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, {});
-      assert.deepEqual(fanout.groups.map((unit) => unit.angles), [angles.slice(0, 6), angles.slice(6)]);
+      // Dispatch orders angles by the gate pool: the mandatory pr-checklist leads
+      // the leftover auto-chunk, and a configured group resolves first.
+      const order = configured ? angles : ["pr-checklist", ...angles.slice(0, 6)];
+      assert.deepEqual(fanout.groups.map((unit) => unit.angles), [order.slice(0, 6), order.slice(6)]);
       const options = parseWriteGateContextCliArgs([
         "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
         "--angles", JSON.stringify(angles),
@@ -634,10 +638,10 @@ for (const configured of [true, false]) {
       const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
       assert.deepEqual(JSON.parse(await readFile(emitPlan, "utf8")), payload);
       assert.equal(payload.count, 3);
-      assert.deepEqual(payload.units.map((unit) => unit.angles), [angles.slice(0, 5), [angles[5]], [angles[6]]]);
+      assert.deepEqual(payload.units.map((unit) => unit.angles), [order.slice(0, 5), [order[5]], [order[6]]]);
       const group = fanout.groups[0].name;
       assert.deepEqual(payload.units.map((unit) => unit.group), [group, group, null]);
-      assert.equal(payload.units[1].scope, "pre-approval-gate-dip");
+      assert.equal(payload.units[1].scope, `pre-approval-gate-${order[5]}`);
       const provenance = { distinctReviewers: 3, perAngle: payload.units.flatMap((unit, index) =>
         unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, ...(unit.group === null ? {} : { group: unit.group }) }))) };
       const writeOptions = { repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA, verdict: "clean",
@@ -841,13 +845,13 @@ test("--pending emits only the pendingGroups subset", async () => {
 // --pending here emits ONLY the changed-input angles' units into the
 // persisted keyed emit-plan. Angles auto-chunk (unconfigured groups) into
 // units of <= maxAnglesPerGroup (default 5): the first five angles chunk
-// together and "determinism" chunks alone. Carrying the WHOLE first
-// chunk forward (a narrow bump whose delta provably never touched their
-// surface) excludes it entirely from pendingGroups; "determinism" (the
+// together and "yagni" chunks alone (with no configured angle pool the plan
+// orders angles lexicographically). Carrying the WHOLE first chunk forward (a narrow bump whose delta provably never touched their
+// surface) excludes it entirely from pendingGroups; "yagni" (the
 // changed-input angle) is the only unit left to dispatch.
 test("end-to-end: write-gate-context.mjs's --carried-angles narrows pendingGroups, and --pending emits only the changed-input angle's unit", async () => {
   await withTmpDir(async (tmpDir) => {
-    const angles = ["correctness", "coverage", "docs", "dry", "kiss", "determinism"];
+    const angles = ["correctness", "coverage", "docs", "dry", "kiss", "yagni"];
     const carriedAngles = ["correctness", "coverage", "docs", "dry", "kiss"];
     const options = parseWriteGateContextCliArgs([
       "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
@@ -874,7 +878,7 @@ test("end-to-end: write-gate-context.mjs's --carried-angles narrows pendingGroup
     const persisted = JSON.parse(await readFile(planPath, "utf8"));
     assert.equal(persisted.pending, true);
     const emittedAngles = persisted.units.flatMap((u) => u.angles).sort();
-    assert.deepEqual(emittedAngles, ["determinism"], "only the changed-input angle's unit is emitted — the carried angles never re-dispatch");
+    assert.deepEqual(emittedAngles, ["yagni"], "only the changed-input angle's unit is emitted — the carried angles never re-dispatch");
   });
 });
 
