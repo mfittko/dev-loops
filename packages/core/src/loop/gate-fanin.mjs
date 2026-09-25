@@ -611,8 +611,13 @@ export function countFreshDispatchUnits(perAngle) {
  * recorded twice, is an error. A shared reviewer is honored only inside ONE recorded
  * unit, and that unit must be a union of whole base units with at most
  * `REVIEWER_UNIT_MAX_ANGLES` angles. A ledger without recorded membership falls
- * back to the base units, so an unpacked round still passes and a packed round
- * fails closed.
+ * back to the base units re-derived at the CURRENT 5-angle bound: a round whose
+ * units were emitted under that bound still passes, and a reviewer shared
+ * across two base units fails closed. That fallback does NOT reproduce the
+ * pre-change 3-angle chunking, so a pre-change ledger (no recorded membership)
+ * whose shared reviewer covered a 3-angle chunk of a >5-angle group now maps to
+ * two base units and is refused — such an in-flight round needs a one-time
+ * re-gate under the 5-angle bound (recorded in ADR 0095 and the changelog).
  *
  * @param {unknown} perAngle
  * @param {{name: string, angles: string[]}[]|null} [resolvedGroups]

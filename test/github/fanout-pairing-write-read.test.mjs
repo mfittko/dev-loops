@@ -199,6 +199,29 @@ const PACK_DEVLOOPS = [
 ].join("\n");
 const PACK_ANGLES = ["pr-checklist", "holistic", "dry", "kiss", "yagni", "deep"];
 
+// A single configured group above the 5-angle unit bound, for the pre-change
+// cap-3 chunk shape: [design-a,b,c] + [design-d,e,f] under the old bound.
+const LEGACY_CAP3_DEVLOOPS = [
+  "version: 1",
+  "gates:",
+  "  requireFanoutEvidence: true",
+  "  requireFanoutProvenance: true",
+  "  preApproval:",
+  "    angles:",
+  "      - design-a",
+  "      - design-b",
+  "      - design-c",
+  "      - design-d",
+  "      - design-e",
+  "      - design-f",
+  "  fanout:",
+  "    maxConcurrent: 5",
+  "    groups:",
+  "      - name: design-solid",
+  "        angles: [design-a, design-b, design-c, design-d, design-e, design-f]",
+  "",
+].join("\n");
+
 async function withConfig(devloops, fn) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pack-pairing-"));
   try {
@@ -388,13 +411,36 @@ describe("fanoutReviewerPairingError against recorded dispatch membership (packe
     });
   });
 
-  test("a ledger without recorded membership falls back to base units: an unpacked round passes, a packed reviewer fails closed", async () => {
+  test("a ledger without recorded membership falls back to the CURRENT-cap base units: a cap-5 round passes, a packed reviewer fails closed", async () => {
     await withConfig(PACK_DEVLOOPS, async (dir, config) => {
       const unpacked = perUnitProvenance(expandDispatchUnits(resolveFanoutGroups(config, "preApproval", PACK_ANGLES), new Set()));
       assert.equal(await readPacked(dir, "pre_approval_gate", { distinctReviewers: countIds(unpacked), perAngle: unpacked }), null);
       const plan = resolveFanoutDispatch(config, "preApproval", PACK_ANGLES, { env: {} });
       const packed = perUnitProvenance(expandDispatchUnits(plan.groups, new Set()));
       assert.match(await readPacked(dir, "pre_approval_gate", { distinctReviewers: countIds(packed), perAngle: packed }) ?? "", /configured gates.fanout.groups table does not place all of them in one group/);
+    });
+  });
+
+  // Act index 6/3 (round 3): the no-recorded-membership fallback re-derives base
+  // units at the CURRENT 5-angle bound, so a pre-change ledger whose shared
+  // reviewer covered a 3-angle chunk of a >5-angle group is refused. This pins
+  // the documented one-time re-gate (ADR 0095 / the changelog fragment) as the
+  // intended verdict — the legacy shape is NOT silently accepted.
+  test("a pre-change ledger without recorded membership whose reviewer covered a cap-3 chunk is refused (one-time re-gate)", async () => {
+    await withConfig(LEGACY_CAP3_DEVLOOPS, async (dir) => {
+      // Pre-change chunking of the 6-angle group: [a,b,c] + [d,e,f]. The second
+      // reviewer shared the [d,e,f] chunk; the 5-angle fallback now splits the
+      // group as [a,b,c,d,e] + [f], so {d,e,f} spans two base units.
+      const perAngle = [
+        { angle: "design-a", reviewer: "r-first", group: "design-solid" },
+        { angle: "design-b", reviewer: "r-first", group: "design-solid" },
+        { angle: "design-c", reviewer: "r-first", group: "design-solid" },
+        { angle: "design-d", reviewer: "r-second", group: "design-solid" },
+        { angle: "design-e", reviewer: "r-second", group: "design-solid" },
+        { angle: "design-f", reviewer: "r-second", group: "design-solid" },
+      ];
+      assert.match(await writeCheck(dir, perAngle) ?? "", /does not place all of them in one group/);
+      assert.match(await readPacked(dir, "pre_approval_gate", { distinctReviewers: 2, perAngle }) ?? "", /does not place all of them in one group/);
     });
   });
 

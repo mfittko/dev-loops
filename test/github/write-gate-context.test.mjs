@@ -5596,7 +5596,7 @@ test("#2414 CLI refuses a round above single-wave capacity: exit 1, the angle co
     assert.equal(process.exitCode, 1);
     const stderrText = stderrChunks.join("");
     assert.match(stderrText, /GATE-EXEC-FANOUT-CAPACITY/);
-    assert.match(stderrText, /6 fresh angles/);
+    assert.match(stderrText, /the round resolves 6 angles \(6 fresh, 0 carried forward\)/);
     assert.match(stderrText, /capacity 5/);
     assert.match(stderrText, /raise gates\.fanout\.maxConcurrent, disable angles, or rely on dynamic pruning/);
     const artifact = await readGateContext({ repo: "owner/repo", pr: 44, gate: "draft_gate", headSha }, { repoRoot });

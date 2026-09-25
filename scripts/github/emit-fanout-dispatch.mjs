@@ -574,12 +574,17 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // emittable. `gates.fanout.sequential` is already covered by plannedConcurrency
   // resolving 1, but the live-config check keeps the mirror explicit.
   const plannedConcurrency = artifact.fanout?.effectiveConcurrency;
-  // A PRESENT-but-non-integer bound is a malformed plan and refuses fail-closed,
-  // matching this file's other malformed-plan handling (a present-but-non-array
-  // fanout.pendingGroups, an angle-less unit). Only a genuinely ABSENT field
-  // skips the guard.
-  if (plannedConcurrency !== undefined && !Number.isInteger(plannedConcurrency)) {
-    return finish({ ok: false, error: `GATE-EXEC-FANOUT-CAPACITY: refusing — fanout.effectiveConcurrency is present but not an integer (malformed plan); re-run write-gate-context.mjs` }, false);
+  // A PRESENT-but-non-integer OR non-positive bound is a malformed plan and
+  // refuses fail-closed, matching this file's other malformed-plan handling (a
+  // present-but-non-array fanout.pendingGroups, an angle-less unit). A `0` or
+  // negative value is an integer, so without the `< 1` clause it would pass this
+  // check and then skip the guard below (`plannedConcurrency > maxConcurrent` is
+  // false), silently emitting a genuinely over-capacity plan as multiple waves —
+  // the fail-open hole this clause closes. Every sanctioned producer clamps the
+  // bound to >= 1, so only a malformed artifact reaches it. Only a genuinely
+  // ABSENT field (a pre-change artifact) skips the guard.
+  if (plannedConcurrency !== undefined && (!Number.isInteger(plannedConcurrency) || plannedConcurrency < 1)) {
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-CAPACITY: refusing — fanout.effectiveConcurrency is present but not a positive integer (malformed plan); re-run write-gate-context.mjs` }, false);
   }
   const singleWave = gate !== "review";
   const perAngleMode = config?.gates?.fanout?.mode === "per-angle";

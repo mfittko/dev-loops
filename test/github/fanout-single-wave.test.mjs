@@ -184,6 +184,9 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
         const { plan, units } = plannedUnits(REPO_CONFIG, "draft", angles, env(), { carriedAngles: carried });
         assertSingleWave(REPO_CONFIG, units, env(), `carry-forward ${fresh}`);
         assert.ok(units.length >= 1 && units.length <= fresh);
+        // The name says "grouped": assert it, not just the unit/wave bounds —
+        // assertSingleWave alone passes with every fresh angle a singleton.
+        assert.ok(units.some((u) => u.angles.length > 1), "grouped dispatch: at least one emitted unit carries more than one angle");
         // Every fresh angle is dispatched exactly once; carried units stay out.
         const dispatched = units.flatMap((u) => u.angles);
         for (const angle of freshAngles) assert.equal(dispatched.filter((a) => a === angle).length, 1);
@@ -192,6 +195,53 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
       });
     }
   }
+
+  // Act index 2 (round 3): a carry-forward round whose FULL resolved set exceeds
+  // capacity but whose DISPATCHABLE plan fits one wave is not refused. Before
+  // this, the refusal keyed on the full resolved set — which can never shrink
+  // below the carried angles — so a legitimate carry-forward re-gate was refused
+  // fail-closed with no plan at all.
+  test("carry-forward round above the full-set capacity is planned when the dispatchable plan fits one wave", () => {
+    // Zero-padded so catalog-less ordering (lexicographic) matches the array.
+    const angles = Array.from({ length: 30 }, (_, i) => `angle-${String(i).padStart(2, "0")}`);
+    const carried = angles.slice(0, 25);
+    // Over-refusal trigger: the full resolved set (30 angles > capacity 25) cannot pack.
+    assert.throws(() => resolveFanoutDispatch(null, "draft", angles, { env: {} }), /GATE-EXEC-FANOUT-CAPACITY/);
+
+    const plan = resolveFanoutDispatch(null, "draft", angles, { env: {}, carriedAngles: carried });
+    const fresh = angles.slice(25);
+    assert.deepEqual(plan.groups, [{ name: `group:${fresh.join("+")}`, angles: fresh }], "only the dispatchable unit remains");
+    assert.deepEqual(plan.pendingGroups, plan.groups);
+    assertSingleWave(null, plan.pendingGroups, {}, "carry-forward above full capacity");
+    // The recorded membership admits the wave's shared reviewer against the
+    // ledger's re-derived base units (the fresh angles only).
+    const perAngle = plan.groups.flatMap((u) => u.angles.map((angle) => ({ angle, reviewer: "r-shared", group: u.name })));
+    assert.equal(fanoutReviewerPairingError(perAngle, resolveFanoutGroups(null, "draft", fresh), plan.groups), null, "the recorded dispatchable membership admits the wave's shared reviewer");
+
+    // Resume stability: a same-head resume after that unit completes re-derives
+    // the IDENTICAL dispatchable plan (carried is fixed for the round).
+    const resumed = resolveFanoutDispatch(null, "draft", angles, { env: {}, carriedAngles: carried, completedAngles: [...fresh] });
+    assert.deepEqual(resumed.groups, plan.groups, "the dispatchable membership is stable under a same-head resume");
+    assert.deepEqual(resumed.pendingGroups, [], "the completed unit leaves nothing pending");
+  });
+
+  // Act index 7 (round 3): the refusal names the set it actually counted — the
+  // resolved angle count and the fresh (non-carried) subset — never labeling
+  // carried angles as fresh.
+  test("capacity refusal names the resolved angle count and the fresh subset separately", () => {
+    const allFresh = Array.from({ length: 26 }, (_, i) => `angle-${String(i).padStart(2, "0")}`);
+    assert.throws(
+      () => resolveFanoutDispatch(null, "draft", allFresh, { env: {} }),
+      /GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves 26 angles \(26 fresh, 0 carried forward\) .*capacity 25\)/,
+    );
+    // A dispatchable plan that still cannot pack reports the carried subset too.
+    const config = { version: 1, gates: { fanout: { groups: [], maxAnglesPerGroup: 2, maxConcurrent: 5 } } };
+    const angles = Array.from({ length: 30 }, (_, i) => `angle-${String(i).padStart(2, "0")}`);
+    assert.throws(
+      () => resolveFanoutDispatch(config, "draft", angles, { env: {}, carriedAngles: angles.slice(0, 4) }),
+      /GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves 30 angles \(26 fresh, 4 carried forward\) .*capacity 25\)/,
+    );
+  });
 
   // One fresh angle in each of the 4 draft configured groups plus leftovers.
   function partialRound(config, leftoverCount) {
@@ -269,7 +319,7 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
           assert.deepEqual(units.flatMap((u) => u.angles).sort(), [...angles].sort());
         }
         const over = Array.from({ length: capacity + 1 }, (_, i) => `angle-${i}`);
-        assert.throws(() => resolveFanoutDispatch(config, "draft", over, { env: {} }), new RegExp(`GATE-EXEC-FANOUT-CAPACITY: refusing — ${capacity + 1} fresh angles .*capacity ${capacity}\\)`));
+        assert.throws(() => resolveFanoutDispatch(config, "draft", over, { env: {} }), new RegExp(`GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves ${capacity + 1} angles \\(${capacity + 1} fresh, 0 carried forward\\) .*capacity ${capacity}\\)`));
       }
     }
   });
@@ -474,13 +524,9 @@ describe("emitter-side GATE-EXEC-FANOUT-CAPACITY is scoped to a cross-harness pa
     assert.equal(JSON.parse(claude.result.stdout).count, 9);
   });
 
-  test("a present-but-non-integer effectiveConcurrency refuses as malformed instead of failing open", async () => {
-    const devloops = "version: 1\ngates:\n  fanout:\n    maxConcurrent: 8\n    maxAnglesPerGroup: 1\n    groups: []\n";
-    const probeDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-capacity-probe-"));
-    await writeFile(path.join(probeDir, ".devloops"), devloops, "utf8");
-    const { config: probeConfig } = await loadDevLoopConfig({ repoRoot: probeDir });
-    await rm(probeDir, { recursive: true, force: true }).catch(() => {});
-    const angles = resolveGateAngleContract(probeConfig, "draft").pool.slice(0, 6);
+  // Write a context artifact with the sanctioned producer, mutate its `fanout`
+  // record (to pin the guard's malformed/absent branches), then run the emitter.
+  async function emitMutatedContext(devloops, angles, mutate) {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-capacity-"));
     try {
       await writeFile(path.join(tmpDir, ".devloops"), devloops, "utf8");
@@ -494,17 +540,50 @@ describe("emitter-side GATE-EXEC-FANOUT-CAPACITY is scoped to a cross-harness pa
       await writeGateContext(options, { repoRoot: tmpDir });
       const artifactPath = path.join(tmpDir, buildGateContextPath({ repo: REPO, pr: PR, gate: "draft_gate", headSha: HEAD_SHA }));
       const artifact = JSON.parse(await readFile(artifactPath, "utf8"));
-      artifact.fanout.effectiveConcurrency = "8";
+      mutate(artifact);
       await writeFile(artifactPath, JSON.stringify(artifact), "utf8");
-      const result = spawnSync("node", [emitCliPath, "--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA], {
+      return spawnSync("node", [emitCliPath, "--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA], {
         cwd: tmpDir,
         encoding: "utf8",
         env: claudeEnv(),
       });
-      assert.equal(result.status, 1, result.stderr || result.stdout);
-      assert.match(`${result.stdout}${result.stderr}`, /effectiveConcurrency is present but not an integer/);
     } finally {
       await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
+  }
+
+  test("a present-but-non-positive-integer effectiveConcurrency refuses as malformed instead of failing open", async () => {
+    const devloops = "version: 1\ngates:\n  fanout:\n    maxConcurrent: 8\n    maxAnglesPerGroup: 1\n    groups: []\n";
+    const probeDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-capacity-probe-"));
+    await writeFile(path.join(probeDir, ".devloops"), devloops, "utf8");
+    const { config: probeConfig } = await loadDevLoopConfig({ repoRoot: probeDir });
+    await rm(probeDir, { recursive: true, force: true }).catch(() => {});
+    const angles = resolveGateAngleContract(probeConfig, "draft").pool.slice(0, 6);
+    // A non-integer, and the two present-but-non-positive integers (0, -1) that
+    // Number.isInteger alone would pass and then silently skip the guard.
+    for (const malformed of ["8", 0, -1]) {
+      const result = await emitMutatedContext(devloops, angles, (artifact) => { artifact.fanout.effectiveConcurrency = malformed; });
+      assert.equal(result.status, 1, `${JSON.stringify(malformed)}: ${result.stderr || result.stdout}`);
+      assert.match(`${result.stdout}${result.stderr}`, /effectiveConcurrency is present but not a positive integer/);
+    }
+  });
+
+  // Act index 4 (round 3): the guard's fail-open branch — a genuinely ABSENT
+  // field, i.e. a gate-context artifact written before this change — must stay
+  // emittable. Pinning it stops a future edit from flipping that boundary (to a
+  // refusal) with the suite still green.
+  test("an ABSENT fanout.effectiveConcurrency (a pre-change artifact) skips the guard: the legacy multi-wave plan stays emittable", async () => {
+    const devloops = "version: 1\ngates:\n  fanout:\n    maxConcurrent: 8\n    maxAnglesPerGroup: 1\n    groups: []\n";
+    const probeDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-capacity-probe-"));
+    await writeFile(path.join(probeDir, ".devloops"), devloops, "utf8");
+    const { config: probeConfig } = await loadDevLoopConfig({ repoRoot: probeDir });
+    await rm(probeDir, { recursive: true, force: true }).catch(() => {});
+    const angles = resolveGateAngleContract(probeConfig, "draft").pool.slice(0, 6);
+    const result = await emitMutatedContext(devloops, angles, (artifact) => { delete artifact.fanout.effectiveConcurrency; });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.count, 6, "the legacy plan emits all six units");
+    assert.equal(payload.maxConcurrent, 5, "this harness's clamp is still recorded");
+    assert.equal(scheduleFanoutWaves(payload.units, payload.maxConcurrent).length, 2, "the guard is skipped, so the multi-wave plan stays emittable");
   });
 });
