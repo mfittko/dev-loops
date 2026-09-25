@@ -20,7 +20,7 @@
 export const HARNESS_VALUES = Object.freeze(["pi", "claude", "codex"]);
 
 /** A reviewer unit is bounded to at most this many assigned angles. */
-export const REVIEWER_UNIT_MAX_ANGLES = 3;
+export const REVIEWER_UNIT_MAX_ANGLES = 5;
 
 /** The fixed execution budget for one scoped-reviewer dispatch unit. */
 export const REVIEWER_UNIT_BUDGET = Object.freeze({

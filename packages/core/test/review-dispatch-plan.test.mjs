@@ -6,8 +6,6 @@ import {
   CACHE_BOUNDARY_VALUES,
   HARNESS_DEFAULT_CAPABILITIES,
   INHERIT_MODEL_KEY,
-  PRIMER_FORM_DEDICATED,
-  PRIMER_FORM_LEAD_REVIEWER,
   TTL_INTENT_VALUES,
   buildAngleRequestGroups,
   buildReviewDispatchPlan,
@@ -17,8 +15,6 @@ import {
   fingerprintStablePrefix,
   normalizeHarnessCapabilities,
   opaqueMarker,
-  partitionPrimerGroups,
-  resolvePrimerForm,
   sha256Hex,
   DISPATCH_PROMPT_LEADING_CAP_BYTES,
   composeReviewerPromptText,
@@ -616,123 +612,6 @@ describe("buildAngleRequestGroups — angle -> model bucketing into requestGroup
     assert.notEqual(base, buildAngleRequestGroups(baseInput({ blockBoundaries: ["shared_prefix", "volatile_tail"] })).find((g) => g.model === "opus").requestPrefixFingerprint);
     assert.notEqual(base, buildAngleRequestGroups(baseInput({ sharedPrefixHash: "sha256:" + "0".repeat(64) })).find((g) => g.model === "opus").requestPrefixFingerprint);
     assert.notEqual(base, buildAngleRequestGroups(baseInput({ ttlIntent: "1h" })).find((g) => g.model === "opus").requestPrefixFingerprint);
-  });
-});
-
-describe("resolvePrimerForm — default by harness capability (Section C/AC-6)", () => {
-  test("completion_only + fixed TTL (no adequate declared TTL) -> dedicated primer", () => {
-    const caps = normalizeHarnessCapabilities({ harness: "claude" });
-    const r = resolvePrimerForm({ capabilities: caps, ttlIntent: "5m" });
-    assert.equal(r.primerForm, PRIMER_FORM_DEDICATED);
-  });
-
-  test("completion_only + 5m_1h TTL + explicit 1h intent -> lead reviewer may prime", () => {
-    const caps = normalizeHarnessCapabilities({
-      capabilities: { barrierSignal: "completion_only", cacheTtlControl: "5m_1h", breakpointControl: "explicit", usageTelemetry: "available" },
-    });
-    const r = resolvePrimerForm({ capabilities: caps, ttlIntent: "1h" });
-    assert.equal(r.primerForm, PRIMER_FORM_LEAD_REVIEWER);
-  });
-
-  test("first_output + adequate TTL -> lead reviewer", () => {
-    const caps = normalizeHarnessCapabilities({
-      capabilities: { barrierSignal: "first_output", cacheTtlControl: "5m_1h", breakpointControl: "explicit", usageTelemetry: "available" },
-    });
-    assert.equal(resolvePrimerForm({ capabilities: caps, ttlIntent: "5m" }).primerForm, PRIMER_FORM_LEAD_REVIEWER);
-  });
-
-  test("pi opaque posture defaults to dedicated primer (cannot observe barrier)", () => {
-    const caps = normalizeHarnessCapabilities({ harness: "pi" });
-    assert.equal(resolvePrimerForm({ capabilities: caps }).primerForm, PRIMER_FORM_DEDICATED);
-  });
-
-  test("first_output + 5m_1h TTL control + no adequate declared ttlIntent -> lead reviewer (second disjunct)", () => {
-    const caps = normalizeHarnessCapabilities({
-      capabilities: { barrierSignal: "first_output", cacheTtlControl: "5m_1h", breakpointControl: "explicit", usageTelemetry: "available" },
-    });
-    assert.equal(
-      resolvePrimerForm({ capabilities: caps, ttlIntent: "harness_managed" }).primerForm,
-      PRIMER_FORM_LEAD_REVIEWER,
-    );
-  });
-});
-
-describe("partitionPrimerGroups — one primer group per model/request-prefix (Section C)", () => {
-  test("distinct models -> distinct groups, never cross-warmed", () => {
-    const fp = "sha256:" + "b".repeat(64);
-    const groups = partitionPrimerGroups(
-      [
-        { model: "m1", requestPrefixFingerprint: fp, angles: ["a"], ttlIntent: "5m" },
-        { model: "m2", requestPrefixFingerprint: fp, angles: ["b"], ttlIntent: "5m" },
-      ],
-      normalizeHarnessCapabilities({ harness: "claude" }),
-    );
-    assert.equal(groups.length, 2);
-    assert.notEqual(groups[0].model, groups[1].model);
-  });
-
-  test("two groups resolving to the same model/prefix collapse to one primer group", () => {
-    const fp = "sha256:" + "c".repeat(64);
-    const groups = partitionPrimerGroups([
-      { model: "m1", requestPrefixFingerprint: fp, angles: ["a"], ttlIntent: "5m" },
-      { model: "m1", requestPrefixFingerprint: fp, angles: ["b"], ttlIntent: "5m" },
-    ]);
-    assert.equal(groups.length, 1);
-    assert.deepEqual([...groups[0].groups.flatMap((g) => g.angles)], ["a", "b"]);
-  });
-
-  test("model id containing '::' is not truncated by partition key parsing", () => {
-    const fp = "sha256:" + "d".repeat(64);
-    const groups = partitionPrimerGroups([
-      { model: "a::b:c", requestPrefixFingerprint: fp, angles: ["a"], ttlIntent: "5m" },
-      { model: "a::b:c", requestPrefixFingerprint: fp, angles: ["b"], ttlIntent: "5m" },
-    ]);
-    assert.equal(groups.length, 1);
-    assert.equal(groups[0].model, "a::b:c");
-    assert.equal(groups[0].requestPrefixFingerprint, fp);
-  });
-
-  test("collapsed groups with mixed TTL intents take the conservative dedicated primer", () => {
-    const foFixed = normalizeHarnessCapabilities({
-      capabilities: { barrierSignal: "first_output", cacheTtlControl: "fixed", breakpointControl: "explicit", usageTelemetry: "available" },
-    });
-    const fp = "sha256:" + "e".repeat(64);
-    // 5m -> lead; harness_managed -> dedicated under fixed TTL control.
-    const groups = partitionPrimerGroups([
-      { model: "m", requestPrefixFingerprint: fp, angles: ["a"], ttlIntent: "5m" },
-      { model: "m", requestPrefixFingerprint: fp, angles: ["b"], ttlIntent: "harness_managed" },
-    ], foFixed);
-    assert.equal(groups.length, 1);
-    assert.equal(groups[0].primerForm, PRIMER_FORM_DEDICATED);
-  });
-
-  test("collapsed groups all with adequate TTL -> lead reviewer primer", () => {
-    const foFixed = normalizeHarnessCapabilities({
-      capabilities: { barrierSignal: "first_output", cacheTtlControl: "fixed", breakpointControl: "explicit", usageTelemetry: "available" },
-    });
-    const fp = "sha256:" + "f".repeat(64);
-    const groups = partitionPrimerGroups([
-      { model: "m", requestPrefixFingerprint: fp, angles: ["a"], ttlIntent: "1h" },
-      { model: "m", requestPrefixFingerprint: fp, angles: ["b"], ttlIntent: "5m" },
-    ], foFixed);
-    assert.equal(groups.length, 1);
-    assert.equal(groups[0].primerForm, PRIMER_FORM_LEAD_REVIEWER);
-  });
-
-  test("groups lacking a requestPrefixFingerprint are NOT collapsed (fail-closed)", () => {
-    const groups = partitionPrimerGroups([
-      { model: "m", angles: ["a"], ttlIntent: "5m" },
-      { model: "m", angles: ["b"], ttlIntent: "5m" },
-      { model: "other", angles: ["c"], ttlIntent: "5m" },
-    ]);
-    // Each fingerprint-less group forms its own partition — without a proven
-    // prefix, two 'm' groups cannot be shown to share a cache-relevant prefix,
-    // so merging them would let one primer silently cover unknown prefixes.
-    assert.equal(groups.length, 3);
-    const mGroups = groups.filter((g) => g.model === "m");
-    assert.equal(mGroups.length, 2);
-    for (const g of groups) assert.equal(g.requestPrefixFingerprint, null);
-    assert.deepEqual([...mGroups.map((g) => g.groups[0].angles[0])].sort(), ["a", "b"]);
   });
 });
 

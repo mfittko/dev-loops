@@ -5578,9 +5578,9 @@ test("#1601 resolveFanoutDispatch: gate:full dispatches grouped (no per-angle re
 test("#1601 resolveFanoutDispatch: null config degrades to built-in defaults (auto-chunk singletons, cap 4)", () => {
   // env pinned non-Claude (#1971) — see the wave-shape rationale above.
   const plan = resolveFanoutDispatch(null, "draft", ["a", "b"], { env: {} });
-  // no configured groups, default N=3 → one chunk of 2.
+  // no configured groups, default N=5 → one chunk of 2.
   assert.deepEqual(plan.groups, [{ name: "group:a+b", angles: ["a", "b"] }]);
-  assert.equal(plan.maxAnglesPerGroup, 3);
+  assert.equal(plan.maxAnglesPerGroup, 5);
   assert.equal(plan.maxConcurrent, 4);
   assert.equal(plan.wavePlan.length, 1);
 });
@@ -5594,7 +5594,7 @@ test("#1601 buildGateContextArtifact records the fanout dispatch plan when suppl
     fanoutDispatch: plan,
   });
   assert.equal(artifact.fanout.maxConcurrent, 1);
-  assert.equal(artifact.fanout.maxAnglesPerGroup, 3);
+  assert.equal(artifact.fanout.maxAnglesPerGroup, 5);
   assert.deepEqual(artifact.fanout.groups, [{ name: "group:a+b", angles: ["a", "b"] }]);
   // cap 1 → 1 unit per wave → one wave.
   assert.equal(artifact.fanout.wavePlan.length, 1);
@@ -5631,12 +5631,12 @@ test("#2366 resolveFanoutDispatch: Claude-harness env clamps the emitted wave pl
 });
 
 test("#2366 resolveFanoutDispatch: Claude-harness env clamps the emitted wave plan to CLAUDE_MAX_EFFECTIVE_CONCURRENT (4) regardless of a higher configured cap — shipped grouped-dispatch default (one unit carries several angles)", () => {
-  // Shipped default maxAnglesPerGroup (3): 15 angles auto-chunk into 5 dispatch
+  // Shipped default maxAnglesPerGroup (5): 25 angles auto-chunk into 5 dispatch
   // units (each carrying several angles + one sentinel), more than the cap of 4.
   const config = { version: 1, gates: { fanout: { maxConcurrent: 8 } } };
-  const angles = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o"];
+  const angles = Array.from({ length: 25 }, (_, i) => String.fromCharCode(97 + i));
   const plan = resolveFanoutDispatch(config, "draft", angles, { fullLabel: false, env: { CLAUDECODE: "1" } });
-  assert.equal(plan.maxAnglesPerGroup, 3);
+  assert.equal(plan.maxAnglesPerGroup, 5);
   assert.equal(plan.groups.length, 5);
   assert.ok(plan.groups.every((g) => g.angles.length > 1));
   assert.equal(plan.maxConcurrent, 8); // configured cap is unchanged...
@@ -5675,8 +5675,8 @@ test("#1507 resolveFanoutDispatch emits a reviewer-budget preflight (unknown bud
 });
 
 test("#1507 resolveFanoutDispatch preflight blocks on an insufficient budget", () => {
-  // 5 angles, default N=3 → 2 dispatch units (group:a+b+c, group:d+e).
-  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, availableReviewers: 1 });
+  // 7 angles, default N=5 → 2 dispatch units (group:a+b+c+d+e, group:f+g).
+  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e", "f", "g"], { fullLabel: false, availableReviewers: 1 });
   assert.equal(plan.preflight.requiredReviewers, 2);
   assert.equal(plan.preflight.ok, false);
   assert.equal(plan.preflight.dispatch, false);
@@ -5686,23 +5686,23 @@ test("#1507 resolveFanoutDispatch preflight blocks on an insufficient budget", (
 });
 
 test("#1635 resolveFanoutDispatch threads carriedAngles into the preflight (head-bump shortfall computed over remaining groups only)", () => {
-  // 5 angles, default N=3 → 2 dispatch units (group:a+b+c, group:d+e). "d" and
-  // "e" were proven carried forward by Phase 1.2 (resolve-angle-carry-forward.mjs)
-  // for this head-bump re-gate, so group:d+e needs no reviewer.
-  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e"], {
+  // 7 angles, default N=5 → 2 dispatch units (group:a+b+c+d+e, group:f+g). "f"
+  // and "g" were proven carried forward by Phase 1.2 (resolve-angle-carry-forward.mjs)
+  // for this head-bump re-gate, so group:f+g needs no reviewer.
+  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e", "f", "g"], {
     fullLabel: false,
     availableReviewers: 1,
-    carriedAngles: ["d", "e"],
+    carriedAngles: ["f", "g"],
   });
   assert.equal(plan.preflight.requiredReviewers, 1);
   assert.equal(plan.preflight.dispatch, true);
   assert.equal(plan.preflight.shortfall, null);
   assert.equal(plan.preflight.reason, "budget_sufficient");
-  assert.deepEqual(plan.preflight.carriedAngles, ["d", "e"]);
+  assert.deepEqual(plan.preflight.carriedAngles, ["f", "g"]);
 });
 
 test("#1635 resolveFanoutDispatch: absent carriedAngles is unchanged from today's full-count behavior", () => {
-  const withoutCarried = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, availableReviewers: 1 });
+  const withoutCarried = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e", "f", "g"], { fullLabel: false, availableReviewers: 1 });
   assert.equal(withoutCarried.preflight.requiredReviewers, 2);
   assert.equal(withoutCarried.preflight.dispatch, false);
   assert.equal(withoutCarried.preflight.shortfall, 1);
@@ -5955,8 +5955,8 @@ test("buildGateContext threads input.availableReviewers into the persisted artif
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
   try {
     // Static pool, no tiers: 6 angles + the mandatory "gate-evidence" floor =
-    // 7 angles → default maxAnglesPerGroup 3 auto-chunks into 3 groups
-    // (3+3+1), so requiredReviewers is 3 and a budget of 2 is short by 1.
+    // 7 angles → default maxAnglesPerGroup 5 auto-chunks into 2 groups
+    // (5+2), so requiredReviewers is 2 and a budget of 1 is short by 1.
     const config = draftConfig({ dynamicAngles: false });
     const result = await buildGateContext(
       {
@@ -5966,12 +5966,12 @@ test("buildGateContext threads input.availableReviewers into the persisted artif
         repo: "owner/repo",
         pr: 50,
         headSha: "cafef00d1234",
-        availableReviewers: 2,
+        availableReviewers: 1,
       },
       { repoRoot },
     );
-    assert.equal(result.artifact.fanout.preflight.requiredReviewers, 3);
-    assert.equal(result.artifact.fanout.preflight.availableReviewers, 2);
+    assert.equal(result.artifact.fanout.preflight.requiredReviewers, 2);
+    assert.equal(result.artifact.fanout.preflight.availableReviewers, 1);
     assert.equal(result.artifact.fanout.preflight.dispatch, false);
     assert.equal(result.artifact.fanout.preflight.shortfall, 1);
     assert.equal(result.artifact.fanout.preflight.reason, "budget_shortfall");
@@ -5991,7 +5991,7 @@ test("main() threads --available-reviewers to the written artifact's fanout.pref
     await main([
       "--repo", "owner/repo", "--pr", "51", "--gate", "draft_gate",
       "--head-sha", headSha,
-      "--angles", '["a", "b", "c", "d", "e"]',
+      "--angles", '["a", "b", "c", "d", "e", "f", "g"]',
       "--available-reviewers", "1",
     ], { repoRoot, run: stubGhRun });
 
@@ -5999,7 +5999,7 @@ test("main() threads --available-reviewers to the written artifact's fanout.pref
       repo: "owner/repo", pr: 51, gate: "draft_gate", headSha,
     }, { repoRoot });
 
-    // 5 angles, default maxAnglesPerGroup 3 → 2 dispatch units; budget 1 is
+    // 7 angles, default maxAnglesPerGroup 5 → 2 dispatch units; budget 1 is
     // short by 1.
     assert.equal(artifact.fanout.preflight.requiredReviewers, 2);
     assert.equal(artifact.fanout.preflight.availableReviewers, 1);
@@ -6058,23 +6058,23 @@ test("main() threads --carried-angles to the written artifact's fanout.preflight
     await main([
       "--repo", "owner/repo", "--pr", "52", "--gate", "draft_gate",
       "--head-sha", headSha,
-      "--angles", '["a", "b", "c", "d", "e"]',
+      "--angles", '["a", "b", "c", "d", "e", "f", "g"]',
       "--available-reviewers", "1",
-      "--carried-angles", '["d", "e"]',
+      "--carried-angles", '["f", "g"]',
     ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 52, gate: "draft_gate", headSha,
     }, { repoRoot });
 
-    // 5 angles, default maxAnglesPerGroup 3 → 2 dispatch units (group:a+b+c,
-    // group:d+e). Carrying "d"/"e" forward drops requiredReviewers to 1, so a
+    // 7 angles, default maxAnglesPerGroup 5 → 2 dispatch units (group:a+b+c+d+e,
+    // group:f+g). Carrying "f"/"g" forward drops requiredReviewers to 1, so a
     // budget of 1 (which shortfalls by 1 in the --available-reviewers-only
     // test above) now dispatches clean.
     assert.equal(artifact.fanout.preflight.requiredReviewers, 1);
     assert.equal(artifact.fanout.preflight.dispatch, true);
     assert.equal(artifact.fanout.preflight.shortfall, null);
-    assert.deepEqual(artifact.fanout.preflight.carriedAngles, ["d", "e"]);
+    assert.deepEqual(artifact.fanout.preflight.carriedAngles, ["f", "g"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

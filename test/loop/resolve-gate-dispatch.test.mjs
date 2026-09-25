@@ -111,7 +111,7 @@ test("a diff touching a risk path forces full_fanout even though it is tiny and 
   }
 });
 
-test("the emitted plan carries angles + groups + floors (GATE-EXEC-PROPORTIONALITY, primer-owned deterministic plan)", async () => {
+test("the emitted plan carries angles + groups + floors (GATE-EXEC-PROPORTIONALITY, gate-coordinator-owned deterministic plan)", async () => {
   const { tmp, fixture } = await makeFixture({
     devloops: LIGHT_DEVLOOPS,
     headFiles: { "docs/note.md": "A trivial docs change.\n" },

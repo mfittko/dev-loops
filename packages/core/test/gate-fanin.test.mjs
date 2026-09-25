@@ -709,7 +709,7 @@ describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh an
     // emitter's singleton-split does not reopen the #2100/#2101 fail-open.
     test("(issue 2180 / ADR 0048) accepts a shared identity for a REAL resolveFanoutGroups auto-chunk bundle (positive)", async () => {
       const { resolveFanoutGroups } = await import("../src/config/config.mjs");
-      // No configured groups; default maxAnglesPerGroup (3) auto-chunks
+      // No configured groups; default maxAnglesPerGroup (5) auto-chunks
       // ["a", "b"] into ONE leftover bundle "group:a+b".
       const config = { version: 1 };
       const groups = resolveFanoutGroups(config, "preApproval", ["a", "b"]);
@@ -808,6 +808,30 @@ describe("fanoutReviewerPairingError × the shipped preApproval grouping (light-
       [
         { angle: simplicity.angles[0], reviewer: "x", group: "design-quality" },
         { angle: solid.angles[0], reviewer: "x", group: "design-quality" },
+      ],
+      groups,
+    );
+    assert.match(error, /does not place all of them in one group/);
+  });
+
+  test("holistic shares one reviewer identity with its leftover auto-chunk unit, and keeps its own per-angle entry", async () => {
+    const { groups } = await shippedPreApprovalGroups();
+    const holisticUnit = groups.find((g) => g.angles.includes("holistic"));
+    assert.match(holisticUnit.name, /^group:/);
+    assert.ok(holisticUnit.angles.length > 1 && holisticUnit.angles.length <= 5);
+    const perAngle = holisticUnit.angles.map((angle) => ({ angle, reviewer: "leftover-rev", group: holisticUnit.name }));
+    assert.equal(fanoutReviewerPairingError(perAngle, groups), null);
+    assert.equal(perAngle.filter((e) => e.angle === "holistic").length, 1);
+  });
+
+  test("regression: holistic sharing a reviewer with an angle in a DIFFERENT unit still fails closed", async () => {
+    const { groups } = await shippedPreApprovalGroups();
+    const holisticUnit = groups.find((g) => g.angles.includes("holistic"));
+    const solid = groups.find((g) => g.name === "design-solid");
+    const error = fanoutReviewerPairingError(
+      [
+        { angle: "holistic", reviewer: "x", group: holisticUnit.name },
+        { angle: solid.angles[0], reviewer: "x", group: holisticUnit.name },
       ],
       groups,
     );

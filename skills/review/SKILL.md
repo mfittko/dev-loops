@@ -39,7 +39,7 @@ bare `/loop-review` form is dev-loops-repo-local (repo-local
 
 ## What it runs
 
-Read [Gate-review sub-loop contract](../docs/gate-review-sub-loop-contract.md) before execution. Reuse its context, primer, fan-out and fan-in procedure with `--gate review` through every stage; stop after verdict-post and the submit choice, before judge, fix or repeat phases.
+Read [Gate-review sub-loop contract](../docs/gate-review-sub-loop-contract.md) before execution. Reuse its context, fan-out and fan-in procedure with `--gate review` through every stage; stop after verdict-post and the submit choice, before judge, fix or repeat phases.
 
 1. **Phase 1 — context-builder.** `node scripts/github/write-gate-context.mjs
    --repo <owner/repo> --pr <n> --gate review --head-sha <sha> --base <ref>
@@ -52,9 +52,9 @@ Read [Gate-review sub-loop contract](../docs/gate-review-sub-loop-contract.md) b
    rationale entry, reason `"no spec-of-record"`) only when the PR closes no
    issue AND its own body carries no AC checklist; all are KEPT when either
    is true.
-2. **Phase 1.5 — cache primer.** Same `GATE-EXEC-PRIME` contract as any other
-   gate fan-out — prime the shared prefix before releasing the rest of the
-   fan-out.
+2. **First-wave release.** Same `GATE-EXEC-FIRST-WAVE-RELEASE` contract as any
+   other gate fan-out: no primer and no lead reviewer; release the first wave
+   immediately after emission.
 3. **Phase 2 — fan-out.** One independent, fresh-context `review` agent — the
    `dev-loops:review` persona in scoped angle-review mode
    (`agents/review.agent.md`, generated to `.claude/agents/review.md`),

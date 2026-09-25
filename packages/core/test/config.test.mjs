@@ -3723,18 +3723,23 @@ describe("holistic reviewer angle (#2307)", () => {
       assert.ok(mandatoryAngles.includes("holistic"), `${gate}: "holistic" must be mandatory`);
     });
 
-    test(`AC1 — ${gate}: resolveFanoutGroups dispatches holistic as its own dedicated unit`, async () => {
+    test(`${gate}: resolveFanoutGroups places holistic in a leftover auto-chunk unit (no shipped singleton group)`, async () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
       assert.deepEqual(errors, []);
+      assert.equal(
+        (config.gates.fanout.groups ?? []).some((g) => g.angles.includes("holistic")),
+        false,
+        "no configured group names holistic",
+      );
       const { pool } = resolveGateAngleContract(config, gate);
       const units = resolveFanoutGroups(config, gate, pool);
-      const holisticUnit = units.find((u) => u.angles.includes("holistic"));
-      assert.deepEqual(
-        holisticUnit,
-        { name: "holistic", angles: ["holistic"] },
-        `${gate}: holistic must dispatch as its own singleton unit, never co-batched with another angle`,
-      );
+      const holisticUnits = units.filter((u) => u.angles.includes("holistic"));
+      assert.equal(holisticUnits.length, 1, `${gate}: holistic resolves into exactly one unit`);
+      const [holisticUnit] = holisticUnits;
+      assert.match(holisticUnit.name, /^group:/, `${gate}: holistic joins an auto-chunked leftover unit`);
+      assert.ok(holisticUnit.angles.length > 1, `${gate}: holistic shares its unit with other leftover angles`);
+      assert.ok(holisticUnit.angles.length <= 5, `${gate}: the shared unit stays within the 5-angle bound`);
     });
   }
 
@@ -4583,7 +4588,7 @@ describe("isSizeOutcomeT1Clean (GATE-EXEC-PROPORTIONALITY): the ONE shared size-
   });
 });
 
-describe("resolveReviewProportionality (#1984 — primer-owned deterministic plan)", () => {
+describe("resolveReviewProportionality (#1984 — gate-coordinator-owned deterministic plan)", () => {
   const preApprovalTierConfig = () => ({
     version: 1,
     localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
@@ -4937,17 +4942,17 @@ test("resolveFanoutGroups: gate:full no longer restores per-angle — dispatches
 
 test("resolveFanoutGroups: gate:full dispatches grouped with auto-chunked leftovers (#1601)", () => {
   // gate:full + no configured groups: the full angle set is auto-chunked into
-  // units of ≤ maxAnglesPerGroup (default 3) — NOT per-angle singletons.
-  const result = resolveFanoutGroups({ version: 1 }, "draft", ["a", "b", "c", "d"], { fullLabel: true });
+  // units of ≤ maxAnglesPerGroup (default 5) — NOT per-angle singletons.
+  const result = resolveFanoutGroups({ version: 1 }, "draft", ["a", "b", "c", "d", "e", "f"], { fullLabel: true });
   assert.deepEqual(result, [
-    { name: "group:a+b+c", angles: ["a", "b", "c"] },
-    { name: "d", angles: ["d"] },
+    { name: "group:a+b+c+d+e", angles: ["a", "b", "c", "d", "e"] },
+    { name: "f", angles: ["f"] },
   ]);
 });
 
-test("resolveFanoutGroups: absent gates.fanout config auto-chunks ungrouped angles into ≤maxAnglesPerGroup units (default 3, #1601)", () => {
+test("resolveFanoutGroups: absent gates.fanout config auto-chunks ungrouped angles into ≤maxAnglesPerGroup units (default 5, #1601)", () => {
   const result = resolveFanoutGroups({ version: 1 }, "draft", ["scope", "docs"]);
-  // No configured groups → both angles are leftovers, chunked into one unit of 2 (≤3).
+  // No configured groups → both angles are leftovers, chunked into one unit of 2 (≤5).
   assert.deepEqual(result, [
     { name: "group:scope+docs", angles: ["scope", "docs"] },
   ]);
@@ -4955,7 +4960,7 @@ test("resolveFanoutGroups: absent gates.fanout config auto-chunks ungrouped angl
 
 test("resolveFanoutGroups: duplicate resolvedAngles entries dedupe before auto-chunking (#1601)", () => {
   const result = resolveFanoutGroups({ version: 1 }, "draft", ["docs", "docs", "scope"]);
-  // dedupe → ["docs", "scope"], then auto-chunked into one unit (≤3).
+  // dedupe → ["docs", "scope"], then auto-chunked into one unit (≤5).
   assert.deepEqual(result, [
     { name: "group:docs+scope", angles: ["docs", "scope"] },
   ]);
@@ -5054,7 +5059,7 @@ test("resolveFanoutGroups is defensive against a malformed gates.fanout.groups e
     [{ name: "g", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
   );
   // A scalar `angles` (YAML string instead of a list) is treated as empty, dropping the group;
-  // both angles fall through to the leftover auto-chunk pool (≤3 → one unit).
+  // both angles fall through to the leftover auto-chunk pool (≤5 → one unit).
   assert.deepEqual(
     resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: "docs" }] } } }, "draft", angles),
     [{ name: "group:docs+scope", angles: ["docs", "scope"] }],
@@ -5085,9 +5090,9 @@ test("resolveFanoutGroups: the shipped default groups the preApproval design-qua
   try {
     const { loadDevLoopConfig } = await import("../src/config/config.mjs");
     const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
-    // Validate under the SHIPPED default (mode: grouped, maxAnglesPerGroup: 3), not a hand-built config.
+    // Validate under the SHIPPED default (mode: grouped, maxAnglesPerGroup: 5), not a hand-built config.
     assert.equal(config.gates.fanout.mode, "grouped");
-    assert.equal(config.gates.fanout.maxAnglesPerGroup, 3);
+    assert.equal(config.gates.fanout.maxAnglesPerGroup, 5);
 
     const preApprovalAngles = config.gates.preApproval.angles.map((a) => (typeof a === "string" ? a : a.name));
     const units = resolveFanoutGroups(config, "preApproval", preApprovalAngles);
@@ -5117,11 +5122,11 @@ test("resolveFanoutGroups: the shipped default groups the preApproval design-qua
     );
     // contradiction-lens is intentionally NOT in a configured group (it is also
     // a draft-gate angle, so grouping it globally would leak into the draft
-    // gate); it resolves as its own auto-chunk singleton unit here.
-    assert.deepEqual(
-      units.find((u) => u.angles.includes("contradiction-lens"))?.angles,
-      ["contradiction-lens"],
-    );
+    // gate); it resolves into an auto-chunked leftover unit here, which it may
+    // share with holistic and other leftover angles.
+    const contradictionUnit = units.find((u) => u.angles.includes("contradiction-lens"));
+    assert.match(contradictionUnit?.name ?? "", /^group:/);
+    assert.ok(contradictionUnit.angles.length <= 5);
     // Whole round: fewer dispatch units than resolved angles.
     assert.ok(units.length < preApprovalAngles.length);
   } finally {
@@ -5130,13 +5135,16 @@ test("resolveFanoutGroups: the shipped default groups the preApproval design-qua
 });
 
 test("resolveMaxAnglesPerGroup / resolveFanoutMaxConcurrent: defaults + config override + defensive fallback (#1601)", () => {
-  assert.equal(resolveMaxAnglesPerGroup({ version: 1 }), 3);
+  assert.equal(resolveMaxAnglesPerGroup({ version: 1 }), 5);
+  assert.equal(DEFAULT_MAX_ANGLES_PER_GROUP, 5);
   assert.equal(resolveFanoutMaxConcurrent({ version: 1 }), 4);
-  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 5 } } }), 5);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 3 } } }), 3);
   assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: 2 } } }), 2);
   // Defensive: non-integer / sub-1 fall back to defaults.
-  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 0 } } }), 3);
-  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 1.5 } } }), 3);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 0 } } }), 5);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: -2 } } }), 5);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 1.5 } } }), 5);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: "5" } } }), 5);
   assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: 0 } } }), 4);
   assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: "4" } } }), 4);
 });
@@ -5171,7 +5179,9 @@ test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp
   const piEnv = { [piMarker]: "pi-run-1" };
   // 1. Claude harness, default config → clamped to 4 (== the shipped default; min(4, 4)).
   assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, { CLAUDECODE: "1" }), 4);
-  // 2. Claude harness, .devloops-style maxConcurrent: 3 → stays 3 (min(3, 4)).
+  // 2. Claude harness, this repo's .devloops maxConcurrent: 4 → stays 4 (min(4, 4)); the clamp is a no-op.
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 4 } } }, { CLAUDECODE: "1" }), 4);
+  // 2b. Claude harness, maxConcurrent: 3 → stays 3 (min(3, 4)).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 3 } } }, { CLAUDECODE: "1" }), 3);
   // 3. Claude harness, maxConcurrent: 1 → stays 1 (min(1, 4)).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 1 } } }, { CLAUDECODE: "1" }), 1);

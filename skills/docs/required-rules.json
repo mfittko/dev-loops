@@ -317,6 +317,11 @@
       "id": "GATE-EXEC-FINDING-THREADS"
     },
     {
+      "id": "GATE-EXEC-FIRST-WAVE-RELEASE",
+      "enforcement": "agent",
+      "enforcementNote": "the gate coordinator releases the first emitted wave with no primer or lead-reviewer step; emit-fanout-dispatch.mjs emits no primer unit and its dispatch-sequence tests pin one-wave release under the Claude and Pi bounds"
+    },
+    {
       "id": "GATE-EXEC-FIXER-DISPOSITION-BOUNDARY",
       "enforcement": "runtime",
       "enforcementNote": "packages/core/src/loop/fixer-disposition.mjs's pure evaluateFixerDisposition + pr-gate-coordination.mjs's fixerDisposition input force a blocked feedback_resolution result (forbiddenActions including request/rerequest Copilot review and gate-dispatch tokens) while a fixer's claimed-tackled thread is incomplete; scripts/github/verify-fixer-disposition.mjs is the enforcement CLI"
@@ -349,10 +354,6 @@
       "enforcement": "runtime"
     },
     {
-      "id": "GATE-EXEC-PRIME",
-      "enforcement": "runtime"
-    },
-    {
       "id": "GATE-EXEC-PROPORTIONALITY",
       "enforcement": "doc",
       "enforcementNote": "the composite floors it describes are individually enforced: resolveGateDispatchMode's risk_path_touch/size_outcome_* reasons (packages/core/src/config/config.mjs), detect-checkpoint-evidence.mjs's scopeUnderThreshold re-derivation, and check-adr-tripwire.mjs's devloops-proportionality trigger"
@@ -361,11 +362,6 @@
       "id": "GATE-EXEC-CACHE-TELEMETRY",
       "enforcement": "runtime",
       "enforcementNote": "fan-in validates the recorded before/after cache-telemetry evidence via packages/core/src/loop/cache-telemetry-evidence.mjs validateCacheTelemetryEvidence"
-    },
-    {
-      "id": "GATE-EXEC-PRIMER-EVIDENCE",
-      "enforcement": "runtime",
-      "enforcementNote": "fan-in validates the recorded primer dispatch evidence via packages/core/src/loop/primer-evidence.mjs validatePrimerEvidence"
     },
     {
       "id": "GATE-EXEC-EXECUTION-RECORD",
