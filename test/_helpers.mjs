@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { RUN_ID_MARKERS, ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
+import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
 
 // Create an mkdtemp'd directory under os.tmpdir(), run `fn(dir)`, and always
 // remove it afterward (even on throw/rejection). Shared across suites so a
@@ -20,7 +20,7 @@ export async function withTempDir(fn, { prefix = "dev-loops-test-" } = {}) {
 
 // Build a test env that strips the ambient async-context markers from process.env.
 //
-// The dev-loop async path resolves an active run id from RUN_ID_MARKERS
+// The dev-loop async path resolves an active run id from the run-id carriers
 // (DEVLOOPS_RUN_ID, then the legacy pi-subagents <= 0.64 alias) in precedence order, and
 // synthesizes one from the native pi-subagents >= 0.65 markers when no run-id carrier is set
 // (see packages/core/src/loop/run-context.mjs). Under a Pi async-subagent session the runtime
@@ -374,7 +374,8 @@ export async function writeJson(filePath, data) {
 
 // Standard env for tests that spawn or in-process-call the dev-loop startup
 // resolver. The async-start contract (packages/core/src/loop/async-start-contract.mjs)
-// requires a recognized run-id marker (see run-context.mjs's RUN_ID_MARKERS)
+// requires a recognized async-context marker (see run-context.mjs's
+// ASYNC_CONTEXT_ENV_MARKERS)
 // for async-dispatch strategies; hand-rolled env objects that omit it are
 // green wherever an ambient marker happens to exist (a harness subagent
 // session) and red in CI (where none does). Route every resolver-spawning

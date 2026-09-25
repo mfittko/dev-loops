@@ -117,6 +117,16 @@ export function isNativePiAsyncContext(env = process.env) {
  * session. The `pi-session-` prefix keeps a synthesized id distinguishable from a real
  * pi-subagents run id and from a dev-loops-minted `devloops-<uuid>`.
  *
+ * Known ceiling, deliberately not fixed here: the id is derived from the parent session alone,
+ * so concurrent sibling native Pi children of one parent session share ONE run id. Runner
+ * coordination treats an equal run id as an authorized refresh rather than a conflict, so the
+ * one-runner-per-PR lease degrades from "conflict" to "refresh" between such siblings. This
+ * is still strictly stronger than the pre-fix Pi state, where `resolveRunId` returned null and
+ * the lease did not engage at all, and the stability is what the async-start contract requires.
+ * Discriminating siblings needs a per-child identity the native runner does not currently
+ * inject; sourcing the run id from a dev-loops-owned surface instead of a harness env var is
+ * the decoupling follow-up tracked separately.
+ *
  * @param {string} parentSessionId
  * @returns {string} `pi-session-<parent-session-id>`
  */
