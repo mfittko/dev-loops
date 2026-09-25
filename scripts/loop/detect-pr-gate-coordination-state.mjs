@@ -33,7 +33,7 @@ import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.m
 import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
 import { resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
-import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { existsSync } from "node:fs";
@@ -763,28 +763,39 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // No checkpoint recorded for this head means nothing to enforce here (a PR
 // with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
-async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedThreads, tmpRoot = "tmp" }, runtime = {}) {
+async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
+  // Same main-anchored default verify-fixer-disposition.mjs writes under.
+  const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   const logPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot });
-  const fullPath = path.resolve(repoRoot, logPath);
-  let raw;
-  try {
-    raw = await readFile(fullPath, "utf8");
-  } catch (error) {
-    // A genuine absence (no checkpoint was ever written) is the only case
-    // that behaves exactly as before — a PR with no checkpoint is unaffected
-    // by this boundary. Any OTHER read error (EACCES, EIO, transient FS
-    // error) must fail closed instead of silently looking like "no
-    // checkpoint": route it through the same shape used below for a
-    // recorded-but-malformed checkpoint.
-    if (error?.code === "ENOENT") {
-      return null;
+  // Main-anchored copy first, then a legacy checkpoint an in-flight PR wrote
+  // under a checkout's own tmp/ (the old cwd-relative default), so the
+  // boundary never fails open at upgrade time. Writes stay main-anchored.
+  const legacyLogPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot: "tmp" });
+  const candidates = [...new Set([
+    path.resolve(repoRoot, logPath),
+    ...resolveLedgerCheckouts(repoRoot).map((root) => path.resolve(root, legacyLogPath)),
+  ])];
+  let raw = null;
+  for (const candidate of candidates) {
+    try {
+      raw = await readFile(candidate, "utf8");
+      break;
+    } catch (error) {
+      // A genuine absence (no checkpoint was ever written) is the only case
+      // that behaves exactly as before — a PR with no checkpoint is unaffected
+      // by this boundary. Any OTHER read error (EACCES, EIO, transient FS
+      // error) must fail closed instead of silently looking like "no
+      // checkpoint": route it through the same shape used below for a
+      // recorded-but-malformed checkpoint.
+      if (error?.code === "ENOENT") continue;
+      return {
+        complete: false,
+        incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
+      };
     }
-    return {
-      complete: false,
-      incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
-    };
   }
+  if (raw === null) return null;
   let handoff;
   try {
     handoff = normalizeFixerDispositionHandoff(JSON.parse(raw));

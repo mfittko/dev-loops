@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
+import { initGitFixture, makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import {
   parseVerifyFixerDispositionCliArgs,
   verifyFixerDisposition,
@@ -309,6 +310,25 @@ test("deferred/foreign/newly-arrived threads are never replied to or resolved", 
 // ---------------------------------------------------------------------------
 // no checkpoint + no --dispositions fails closed
 // ---------------------------------------------------------------------------
+
+test("the checkpoint defaults to the main worktree's tmp/ and a --tmp-root in a linked worktree is refused", async () => {
+  await withRepoRoot(async (dir) => {
+    const main = path.join(await realpath(dir), "main");
+    await mkdir(main);
+    initGitFixture(main);
+    const linked = path.join(main, "tmp/worktrees/dev-loops/issue-1");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "issue-1", linked], { cwd: main, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+    const { deps } = runtime([], linked);
+    await assert.rejects(
+      verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA }, deps),
+      (error) => error.message.includes(`at ${path.join(main, "tmp", "gate-findings")}`),
+    );
+    await assert.rejects(
+      verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, tmpRoot: "tmp" }, deps),
+      /inside the linked worktree/,
+    );
+  });
+});
 
 test("fails closed with a clear error when no checkpoint exists and --dispositions is absent", async () => {
   await withRepoRoot(async (repoRoot) => {

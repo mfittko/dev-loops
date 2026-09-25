@@ -2,38 +2,57 @@
 /**
  * Namespace-scoped post-merge worktree cleanup.
  *
- * Resolves the canonical worktree path via the shared resolver, then runs
- * `git worktree remove --force <path>` + `git worktree prune` from the main
- * checkout (so it never removes the cwd).
+ * Resolves the target worktree (the canonical path via the shared resolver, an
+ * explicit path, or the linked worktree that has a given branch checked out),
+ * then runs `git worktree remove <path>` + `git worktree prune` from the main
+ * checkout (so it never removes the cwd). The --issue, --pr and --path
+ * selectors pass `--force`. The automated --branch path does not, so git
+ * refuses a dirty, untracked or locked worktree and the removal is skipped.
  *
  * CLEANUP-SAFETY INVARIANT: refuses to remove any path NOT under
  * `tmp/worktrees/dev-loops/`. A hand-made `tmp/worktrees/my-experiment` can
- * never be force-removed by the loop.
+ * never be force-removed by the loop. Branch selection only ever considers
+ * linked worktrees, never the main checkout.
+ *
+ * LEDGER INVARIANT: a target holding any file under `<target>/tmp/gate-findings/`
+ * is skipped, so merge-relevant gate evidence always survives the prune.
  *
  * FAIL-SOFT: a git error is logged and reported but does NOT fail the process
  * (exit 0 with a reason) so it never breaks a merge-completion flow. Prints a
  * JSON result to stdout.
  */
 import { execFileSync } from "node:child_process";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
 import { resolveWorktreePath, WORKTREE_NAMESPACE } from "@dev-loops/core/loop/handoff-envelope";
+import { WORKTREE_CLEANUP_TIMEOUT_MS } from "@dev-loops/core/loop/main-checkout-ff";
 import { canonicalize } from "./_worktree-path.mjs";
+import { gitEnvNoDirOverrides, listWorktreeEntries } from "./_repo-root-resolver.mjs";
+import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
-  cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p>)
-Remove a loop-owned worktree after merge: git worktree remove --force + prune.
+  cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p> | --branch <name>) [--head-sha <sha>]
+Remove a loop-owned worktree after merge: git worktree remove + prune
+(--force for --issue/--pr/--path; never for --branch).
 Refuses any path not under ${WORKTREE_NAMESPACE}/.
+Skips a worktree that holds any file under <worktree>/tmp/gate-findings/.
 Required:
   --repo-root <p>   Absolute path to the main checkout (git runs here).
-  one of:
+  exactly one of:
   --issue <n>       Issue number (resolves the canonical path).
   --pr <n>          PR number (resolves the canonical path).
   --path <p>        Explicit worktree path (must be under the namespace).
+  --branch <name>   Branch name: selects the linked worktree (never the main
+                    checkout) under the namespace that has it checked out.
+                    No match is a skip with a reason. A worktree with
+                    uncommitted, non-gitignored changes is skipped too.
 Optional:
+  --head-sha <sha>  With --branch: remove only when the selected worktree's
+                    HEAD equals this full SHA; otherwise skip with a reason.
   -h, --help        Show this help.
 Output (stdout, JSON):
   { "ok": bool, "removed": <path>|null, "reason": "<why>" }
@@ -51,7 +70,7 @@ function parsePositiveInt(value, flag) {
 }
 
 export function parseCleanupWorktreeCliArgs(argv) {
-  const options = { help: false, repoRoot: undefined, issue: undefined, pr: undefined, path: undefined };
+  const options = { help: false, repoRoot: undefined, issue: undefined, pr: undefined, path: undefined, branch: undefined, headSha: undefined };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
@@ -60,6 +79,8 @@ export function parseCleanupWorktreeCliArgs(argv) {
       issue: { type: "string" },
       pr: { type: "string" },
       path: { type: "string" },
+      branch: { type: "string" },
+      "head-sha": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -89,14 +110,24 @@ export function parseCleanupWorktreeCliArgs(argv) {
       options.path = requireTokenValue(token, parseError, { flagPattern: /^-/u });
       continue;
     }
+    if (token.name === "branch") {
+      options.branch = requireTokenValue(token, parseError, { flagPattern: /^-/u });
+      continue;
+    }
+    if (token.name === "head-sha") {
+      options.headSha = normalizeFullHeadSha(requireTokenValue(token, parseError, { flagPattern: /^-/u }));
+      if (options.headSha === null) throw parseError(FULL_HEAD_SHA_ERROR);
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.help) return options;
   if (!options.repoRoot) throw parseError("Missing required --repo-root");
-  const selectors = [options.issue, options.pr, options.path].filter((v) => v !== undefined);
-  if (selectors.length === 0) throw parseError("One of --issue, --pr, or --path is required");
-  if (selectors.length > 1) throw parseError("Provide exactly one of --issue, --pr, or --path");
+  const selectors = [options.issue, options.pr, options.path, options.branch].filter((v) => v !== undefined);
+  if (selectors.length === 0) throw parseError("One of --issue, --pr, --path, or --branch is required");
+  if (selectors.length > 1) throw parseError("Provide exactly one of --issue, --pr, --path, or --branch");
+  if (options.headSha !== undefined && options.branch === undefined) throw parseError("--head-sha requires --branch");
   return options;
 }
 
@@ -109,21 +140,111 @@ export function parseCleanupWorktreeCliArgs(argv) {
  * the resolved repo-root, and (2) the resolved target must live inside the
  * resolved namespace.
  */
+const within = (child, parent) => child === parent || child.startsWith(parent + path.sep);
+
 function isUnderNamespace(target, repoRoot) {
   const realRoot = canonicalize(repoRoot);
   const nsRoot = canonicalize(path.join(repoRoot, WORKTREE_NAMESPACE));
   const real = canonicalize(target);
-  const within = (child, parent) => child === parent || child.startsWith(parent + path.sep);
   // Namespace must resolve inside the repo (refuses a symlinked-out namespace),
   // and the target must resolve inside that namespace.
   return within(nsRoot, realRoot) && within(real, nsRoot);
 }
 
-export function cleanupWorktree({ repoRoot, issue, pr, path: explicitPath }, { gitCommand = "git" } = {}) {
+// Every cleanup git call drops GIT_DIR/GIT_WORK_TREE so it targets the repo
+// listWorktreeEntries enumerated, and is bounded by the remaining budget so a hung git
+// cannot block the merge flow that runs the cleanup.
+const gitOptions = (timeoutMs) => ({ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnvNoDirOverrides(), timeout: timeoutMs });
+
+// execFileSync kills a call that outlives its timeout with SIGTERM.
+const timedOut = (err) => err?.code === "ETIMEDOUT" || err?.signal === "SIGTERM";
+
+/**
+ * The LINKED worktree entry under the namespace that has `branch` checked
+ * out, or null. The first porcelain entry is the main checkout (or a bare
+ * repo) and is never a candidate.
+ */
+function findLinkedWorktreeForBranch(root, branch, gitCommand, timeoutMs) {
+  const entries = listWorktreeEntries(root, { gitCommand, timeout: timeoutMs });
+  return entries.slice(1).find((e) => e.branch === `refs/heads/${branch}` && isUnderNamespace(e.path, root)) ?? null;
+}
+
+/**
+ * Skip reason when `<target>/tmp/gate-findings/` holds any non-directory entry
+ * at any depth, else null. Only a missing dir (ENOENT, ENOTDIR) counts as no
+ * ledger; any other read error counts as a ledger present.
+ */
+function gateFindingsLedgerSkipReason(ledgerDir) {
+  try {
+    const present = readdirSync(ledgerDir, { recursive: true, withFileTypes: true }).some((e) => !e.isDirectory());
+    return present ? `skipped: ${ledgerDir} holds gate findings ledgers` : null;
+  } catch (err) {
+    if (err?.code === "ENOENT" || err?.code === "ENOTDIR") return null;
+    return `skipped: cannot read ${ledgerDir} (${err?.code ?? err?.message}); treating it as holding gate findings ledgers`;
+  }
+}
+
+/**
+ * Skip reason when `target` has tracked or untracked non-ignored changes, else
+ * null. A failed status call also skips (fail safe).
+ */
+function dirtyTreeSkipReason(target, gitCommand, timeoutMs) {
+  try {
+    const status = execFileSync(gitCommand, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"], { ...gitOptions(timeoutMs), cwd: target });
+    return status.trim() === "" ? null : `skipped: ${target} has uncommitted changes`;
+  } catch (err) {
+    if (timedOut(err)) {
+      return `skipped: git status of ${target} timed out; treating it as having uncommitted changes`;
+    }
+    const detail = (err.stderr ?? err.message ?? "").toString().trim();
+    return `skipped: cannot read git status of ${target} (${detail}); treating it as having uncommitted changes`;
+  }
+}
+
+/**
+ * `protectedPaths` are paths the calling process runs from (its cwd, its own
+ * script file); a target containing any of them is skipped. `headSha` (branch
+ * selector only) must equal the selected worktree's HEAD, so a worktree with
+ * unpushed local commits or a foreign checkout of the same branch name stays.
+ */
+export function cleanupWorktree(
+  { repoRoot, issue, pr, path: explicitPath, branch, headSha, protectedPaths = [] },
+  { gitCommand = "git", timeoutMs = WORKTREE_CLEANUP_TIMEOUT_MS } = {},
+) {
   const root = path.resolve(repoRoot);
+  // One budget for the whole cleanup, as the former hook path bounded it: each
+  // git call gets only the time left, so hung calls cannot add up.
+  const deadline = Date.now() + timeoutMs;
+  const left = () => Math.max(1, deadline - Date.now());
 
   let target;
-  if (explicitPath !== undefined) {
+  if (branch !== undefined) {
+    let entry;
+    try {
+      entry = findLinkedWorktreeForBranch(root, branch, gitCommand, left());
+    } catch (err) {
+      if (timedOut(err)) {
+        return { ok: true, removed: null, reason: `skipped: git worktree list timed out within the ${timeoutMs} ms cleanup budget` };
+      }
+      const detail = (err.stderr ?? err.message ?? "").toString().trim();
+      return { ok: true, removed: null, reason: `git error (non-fatal): ${detail}` };
+    }
+    if (entry === null) {
+      return {
+        ok: true,
+        removed: null,
+        reason: `skipped: no linked worktree under ${WORKTREE_NAMESPACE}/ has branch ${branch} checked out`,
+      };
+    }
+    if (headSha !== undefined && entry.head !== headSha) {
+      return {
+        ok: true,
+        removed: null,
+        reason: `skipped: ${entry.path} HEAD ${entry.head ?? "unknown"} does not match the merged head ${headSha}`,
+      };
+    }
+    target = entry.path;
+  } else if (explicitPath !== undefined) {
     target = path.resolve(root, explicitPath);
   } else {
     const kind = issue !== undefined ? "issue" : "pr";
@@ -140,22 +261,50 @@ export function cleanupWorktree({ repoRoot, issue, pr, path: explicitPath }, { g
     };
   }
 
+  const realTarget = canonicalize(target);
+  const inside = protectedPaths.find((p) => within(canonicalize(p), realTarget));
+  if (inside !== undefined) {
+    return { ok: true, removed: null, reason: `skipped: ${inside} is inside ${target}` };
+  }
+
+  const ledgerSkip = gateFindingsLedgerSkipReason(path.join(target, "tmp", "gate-findings"));
+  if (ledgerSkip !== null) {
+    return { ok: true, removed: null, reason: ledgerSkip };
+  }
+
+  // The automated --branch path runs after every merge with no operator in the
+  // loop, so it must never discard uncommitted work. The status pre-check gives
+  // a readable reason; removing without --force makes git's own refusal
+  // (dirty, untracked, locked) the backstop. Gitignored content (tmp/) does not
+  // show in --porcelain and git removes it without --force.
+  if (branch !== undefined) {
+    const dirtySkip = dirtyTreeSkipReason(target, gitCommand, left());
+    if (dirtySkip !== null) return { ok: true, removed: null, reason: dirtySkip };
+  }
+
+  const removeArgs = branch !== undefined ? ["worktree", "remove", target] : ["worktree", "remove", "--force", target];
+  const prune = () => {
+    try {
+      execFileSync(gitCommand, ["worktree", "prune"], { ...gitOptions(left()), cwd: root });
+    } catch { /* fail-soft: a failed prune leaves stale admin entries only */ }
+  };
   try {
-    execFileSync(gitCommand, ["worktree", "remove", "--force", target], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    execFileSync(gitCommand, ["worktree", "prune"], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    execFileSync(gitCommand, removeArgs, { ...gitOptions(left()), cwd: root });
   } catch (err) {
     // Fail-soft: never break a merge-completion flow on a git error.
+    if (timedOut(err)) {
+      // A killed remove may have deleted part of the tree. Prune is skipped so
+      // the admin entry survives, and the reason says the state is unknown.
+      return { ok: true, removed: null, reason: `git worktree remove ${target} timed out within the ${timeoutMs} ms cleanup budget; worktree state unknown, it may be partially removed` };
+    }
+    prune();
     const detail = (err.stderr ?? err.message ?? "").toString().trim();
+    if (branch !== undefined) {
+      return { ok: true, removed: null, reason: `skipped: git did not remove ${target} without --force: ${detail}` };
+    }
     return { ok: true, removed: null, reason: `git error (non-fatal): ${detail}` };
   }
+  prune();
 
   return { ok: true, removed: target, reason: "removed" };
 }

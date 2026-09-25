@@ -257,15 +257,28 @@ checkout at the `Edit`/`Write` before it ever reaches a commit.
 <!-- rule: WORKTREE-CLEANUP -->
 `WORKTREE-CLEANUP`: After a successful merge, the canonical worktree MUST be
 removed via this entrypoint, which resolves the path through the shared
-resolver, runs `git worktree remove --force` + `git worktree prune` from the
-main checkout, and MUST NOT touch any path outside `tmp/worktrees/dev-loops/`:
+resolver or, with `--branch`, selects the linked worktree that has the branch
+checked out at the merged head, runs `git worktree remove` + `git worktree prune` from the
+main checkout, and MUST NOT touch any path outside `tmp/worktrees/dev-loops/`.
+The `--issue`, `--pr` and `--path` selectors run `git worktree remove --force`. The automated
+`--branch` removal runs without `--force`, so git refuses a dirty, untracked or
+locked worktree and the cleanup reports a skip:
 
 ```sh
-node scripts/loop/cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p>)
+node scripts/loop/cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --path <p> | --branch <name> [--head-sha <sha>])
 ```
 
 Git errors are logged but never fatal, so cleanup can't break a
-merge-completion flow.
+merge-completion flow. `--branch` selects the linked worktree under the
+namespace that has the branch checked out. `--head-sha` removes it only when
+its HEAD equals that SHA. A worktree that holds any file under
+`tmp/gate-findings/` is skipped. With `--branch`, a worktree with uncommitted
+changes (tracked or untracked, not gitignored) is skipped too.
+
+`merge-pr.mjs` runs this cleanup itself after a confirmed merge, keyed on the
+merged head branch and head SHA. It skips the cleanup when its own cwd or
+script file is inside the worktree. Run the command above manually only as the
+fallback when that step reports a skip or an error.
 
 ## Default rule: use a worktree for mutating local work
 
@@ -334,12 +347,13 @@ branch when practical.
 
 ## Cleanup and prune flow
 
-**Default:** after a PR is merged (or the work is abandoned), run
-`cleanup-worktree.mjs` (`WORKTREE-CLEANUP`, see [Post-merge cleanup](#post-merge-cleanup)
-above):
+**Default:** a merge through `merge-pr.mjs` removes the merged branch's
+worktree. After a merge that reports a cleanup skip, or when the work is
+abandoned, run `cleanup-worktree.mjs` (`WORKTREE-CLEANUP`, see
+[Post-merge cleanup](#post-merge-cleanup) above):
 
 ```sh
-node scripts/loop/cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>)
+node scripts/loop/cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --branch <name> [--head-sha <sha>])
 ```
 
 Clean up promptly after merge so stale worktrees do not accumulate under

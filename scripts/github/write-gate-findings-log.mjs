@@ -17,7 +17,7 @@ const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -75,8 +75,9 @@ Optional:
                                  — the ledger is anchored at the primary git
                                  worktree so the merge (running from the main checkout)
                                  can read it and it survives linked-worktree pruning.
-                                 Do NOT pin this to a linked worktree's tmp/, or the
-                                 ledger is lost on prune and unreadable by the merge.
+                                 A path inside a linked (non-main) worktree is refused
+                                 (exit 1, no file written): the ledger would be lost on
+                                 prune and unreadable by the merge.
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                   (issue 2008 / ADR 0061 AC1). When supplied, stamps the log
                                   with the pinned revision identity via the ONE shared stamp
@@ -673,6 +674,8 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
   return rejectFindingConflicts(findings, conflicts);
 }
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
+  // The ledger write resolves against repoRoot (process.cwd() on the CLI), so the guard does too.
+  if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
   const { findings: rawFindings, overallVerdict, provenance: wrapperProvenance } = await resolveFindings(options);
   // When a judge verdict artifact is supplied, enrich the findings with the
   // judge's relevance-based dispositions (GATE-EXEC-JUDGE-PHASE) before writing the ledger:

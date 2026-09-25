@@ -17,9 +17,9 @@
  * from the checkout's git-toplevel so config resolves correctly.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
-import { parseAllWorktreePaths, parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
+import { parseAllWorktreePaths, parseMainWorktreePath, realpathNearestExisting, resolveContainingWorktreeRoot } from "@dev-loops/core/loop/worktree-guard";
 
 // Scrub GIT_DIR/GIT_WORK_TREE for every git call in this module: an inherited
 // pointer to a DIFFERENT repo overrides `cwd` outright, so `git rev-parse` /
@@ -27,7 +27,7 @@ import { parseAllWorktreePaths, parseMainWorktreePath } from "@dev-loops/core/lo
 // operation — mis-anchoring the ledger for the writer AND letting the merge-time
 // reader (resolveLedgerCheckouts) enumerate the wrong repo and report missing
 // provenance. Mirrors write-gate-context.mjs's gitEnvWithoutDirOverrides.
-function gitEnvNoDirOverrides() {
+export function gitEnvNoDirOverrides() {
   return { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
 }
 
@@ -111,6 +111,52 @@ export function resolveMainWorktreeRoot(cwd, { gitCommand = "git" } = {}) {
  */
 export function resolveGateArtifactTmpRoot(cwd, { gitCommand = "git" } = {}) {
   return path.join(resolveMainWorktreeRoot(cwd, { gitCommand }), "tmp");
+}
+
+/**
+ * Entries of `git worktree list --porcelain` run in `cwd`, in listing order:
+ * `{ path, head, branch }` (`branch` is the full `refs/heads/...` ref, absent
+ * on a detached or bare entry). The first entry is the main checkout, or the
+ * bare repo when the main is bare. Throws on a git failure.
+ */
+export function listWorktreeEntries(cwd, { gitCommand = "git", timeout } = {}) {
+  const listing = execFileSync(gitCommand, ["worktree", "list", "--porcelain"], {
+    cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnvNoDirOverrides(), timeout,
+  });
+  return listing.split(/\n\s*\n/u).map((block) => {
+    const lines = block.split("\n");
+    const field = (key) => lines.find((l) => l.startsWith(`${key} `))?.slice(key.length + 1);
+    return { path: field("worktree"), head: field("HEAD"), branch: field("branch") };
+  }).filter((e) => e.path);
+}
+
+/**
+ * Refuse a gate findings ledger tmp root inside a LINKED worktree of the repo
+ * at `repoRoot`: a ledger written there is lost on prune and unreadable by the
+ * merge. `absTmpRoot` must already be resolved against the base the caller
+ * writes under. The main checkout and paths outside every checkout stay
+ * allowed. The linked worktrees are listed from the tmp root's nearest existing
+ * directory AND from `repoRoot`, so a writer running outside the repo (a
+ * non-git cwd) still sees the worktree the tmp root sits in. Only when both
+ * listings fail is there nothing to compare against, and the write is allowed.
+ */
+function isDirectorySync(p) {
+  try { return statSync(p).isDirectory(); } catch { return false; }
+}
+
+export function assertTmpRootOutsideLinkedWorktree(absTmpRoot, repoRoot, { gitCommand = "git" } = {}) {
+  let anchor = absTmpRoot;
+  while (!isDirectorySync(anchor) && path.dirname(anchor) !== anchor) anchor = path.dirname(anchor);
+  const linked = [];
+  for (const cwd of [anchor, repoRoot]) {
+    try {
+      for (const e of listWorktreeEntries(cwd, { gitCommand }).slice(1)) if (!linked.includes(e.path)) linked.push(e.path);
+    } catch { /* not inside a git repo: this listing contributes nothing */ }
+  }
+  const containing = resolveContainingWorktreeRoot(realpathNearestExisting(absTmpRoot), linked);
+  if (containing !== null) {
+    throw new Error(`--tmp-root ${absTmpRoot} resolves inside the linked worktree ${containing}; gate findings ledgers must stay out of linked worktrees. Omit --tmp-root to use the main-anchored default ${resolveGateArtifactTmpRoot(repoRoot, { gitCommand })}`);
+  }
 }
 
 export function resolveLedgerCheckouts(cwd, { gitCommand = "git" } = {}) {

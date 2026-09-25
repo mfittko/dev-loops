@@ -49,7 +49,7 @@ function makeRuntime({
   baseRefName = "",
   prOwnFiles = [],
 } = {}) {
-  const calls = { ghJson: [], runChild: [] };
+  const calls = { ghJson: [], runChild: [], postMerge: [] };
   const view = {
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
@@ -107,6 +107,13 @@ function makeRuntime({
       detectInternalOnlyPr: async () => (prFilesCode ? { ok: false, error: "files read failed" } : { ok: true, internalOnly: detectorInternalOnly, files: prFiles }),
       loadConfig: async () => ({ config: { autonomy: { humanMergeOnly }, refinement: { maxCopilotRounds, requireCopilotConvergenceAtLatestHead: strict }, ...configExtra }, errors: [] }),
       cwd: process.cwd(),
+      // Recording no-op post-merge steps: the real ones would fast-forward and
+      // prune the checkout running the tests.
+      postMergeSteps: {
+        fastForward: async () => { calls.postMerge.push("fastForward"); return { status: "fast_forwarded" }; },
+        worktreeCleanup: async () => { calls.postMerge.push("worktreeCleanup"); return { ok: true, removed: null, reason: "stub" }; },
+        actions: async () => { calls.postMerge.push("actions"); return { ok: true, results: [] }; },
+      },
     },
   };
 }
