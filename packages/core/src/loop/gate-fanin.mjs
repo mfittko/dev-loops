@@ -627,7 +627,15 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, disp
     for (let i = 0; i < angles.length; i += REVIEWER_UNIT_MAX_ANGLES) baseUnits.push(angles.slice(i, i + REVIEWER_UNIT_MAX_ANGLES));
   }
   const baseOf = new Map();
-  baseUnits.forEach((angles, index) => angles.forEach((a) => baseOf.set(a, index)));
+  // Keyed on the BASE angle name: the ledger's perAngle vocabulary may spell an
+  // angle delta-suffixed ('<angle>-delta-at-<sha>') while the recorded units and
+  // the context artifact use the base spelling, and both sides must resolve to
+  // the same base unit for the union check below. For non-suffixed names this is
+  // the identity, so nothing changes for them.
+  baseUnits.forEach((angles, index) => angles.forEach((a) => {
+    const base = baseAngleName(a);
+    if (!baseOf.has(base)) baseOf.set(base, index);
+  }));
   // Recorded membership is validated whenever it is present, and membership is
   // enforced whenever resolvedGroups or dispatchUnits is supplied. An empty
   // map never skips the check: an angle absent from it fails closed.
@@ -638,7 +646,18 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, disp
     const shapeError = dispatchUnitsShapeError(dispatchUnits);
     if (shapeError !== null) return `fan-out provenance records invalid dispatch unit membership: ${shapeError}`;
     configuredGroupOf = new Map();
-    dispatchUnits.forEach((unit, index) => unit.angles.forEach((a) => configuredGroupOf.set(a.trim(), index)));
+    dispatchUnits.forEach((unit, index) => unit.angles.forEach((a) => {
+      const raw = a.trim();
+      configuredGroupOf.set(raw, index);
+      // A ledger perAngle name may be delta-suffixed ('<angle>-delta-at-<sha>')
+      // while recorded units are keyed on the context's base angle name — the
+      // same spelling resolveFanoutGroups grouped. Index the base form too, so a
+      // shared reviewer over a delta re-review resolves to the unit its base
+      // angle was dispatched in instead of failing closed; an angle whose base is
+      // genuinely unrecorded still resolves to null and is refused.
+      const base = baseAngleName(raw);
+      if (base !== raw && !configuredGroupOf.has(base)) configuredGroupOf.set(base, index);
+    }));
   }
   const freshAngles = new Set();
   const anglesByIdentity = new Map();
@@ -675,7 +694,7 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, disp
     // it covers is a member of the SAME configured group — a claimed group
     // spanning angles the table splits apart fails closed.
     if (enforceMembership) {
-      const configuredGroups = new Set([...angles].map((a) => configuredGroupOf.get(a) ?? null));
+      const configuredGroups = new Set([...angles].map((a) => configuredGroupOf.get(a) ?? configuredGroupOf.get(baseAngleName(a)) ?? null));
       if (configuredGroups.size !== 1 || configuredGroups.has(null)) {
         details.push(`${label} "${id}" declares group "${[...groups][0]}" for fresh angles: ${[...angles].join(", ")}, but the ${useRecorded ? "recorded dispatch units" : "configured gates.fanout.groups table"} does not place all of them in one group${useRecorded ? "" : " (no recorded dispatch membership)"}`);
       } else if (useRecorded) {
@@ -730,10 +749,13 @@ function dispatchUnitsShapeError(dispatchUnits) {
 function recordedUnitError(unit, baseUnits, baseOf) {
   const angles = unit.angles.map((a) => a.trim());
   if (angles.length > REVIEWER_UNIT_MAX_ANGLES) return `unit "${unit.name}" holds ${angles.length} angles, above the ${REVIEWER_UNIT_MAX_ANGLES}-angle unit bound`;
-  const members = new Set(angles);
-  const bases = new Set(angles.filter((a) => baseOf.has(a)).map((a) => baseOf.get(a)));
+  // Base-name comparison on both sides: a recorded unit keyed on base angle
+  // names is still a union of whole base units when the base units themselves
+  // were derived from a delta-suffixed ledger spelling (and vice versa).
+  const members = new Set(angles.map((a) => baseAngleName(a)));
+  const bases = new Set(angles.filter((a) => baseOf.has(baseAngleName(a))).map((a) => baseOf.get(baseAngleName(a))));
   for (const index of bases) {
-    if (!baseUnits[index].every((a) => members.has(a))) return `unit "${unit.name}" is not a union of whole base units: it splits base unit ${baseUnits[index].join("+")}`;
+    if (!baseUnits[index].every((a) => members.has(baseAngleName(a)))) return `unit "${unit.name}" is not a union of whole base units: it splits base unit ${baseUnits[index].join("+")}`;
   }
   return null;
 }

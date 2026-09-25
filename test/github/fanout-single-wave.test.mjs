@@ -21,7 +21,7 @@ import {
   resolveGateAngleContract,
 } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { fanoutReviewerPairingError, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { NEUTRAL_RUN_ID_VAR, RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 
@@ -124,6 +124,47 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
         assertCoverage(units, pool);
       });
     }
+  }
+
+  // Same-head resume after a partial wave: the packed grouping is derived from
+  // the round's FULL resolved angle set, so re-planning with some packed units
+  // already complete re-derives the IDENTICAL membership and the recorded
+  // provenance still admits the wave-1 reviewers. Before this, packing keyed on
+  // the pending set, so a resume re-planned the unpacked grouping, recorded it
+  // as provenance.dispatchUnits, and fanoutReviewerPairingError refused a
+  // legitimate round (the documented resume contract became unreachable).
+  for (const [harness, env] of HARNESS_ENVS) {
+    test(`same-head resume after a partial packed wave (${harness}): stable membership, one pending wave`, () => {
+      const { pool } = resolveGateAngleContract(REPO_CONFIG, "draft");
+      const first = resolveFanoutDispatch(REPO_CONFIG, "draft", pool, { env: env() });
+      const wave1 = expandDispatchUnits(first.pendingGroups, configuredNames(REPO_CONFIG));
+      const shared = wave1.find((u) => u.angles.length > 1);
+      assert.ok(shared, "the packed round shares at least one unit");
+
+      // Wave-1 provenance: one reviewer per emitted unit, the packed unit's own
+      // name as its recorded group (the emitter's rule for a packed unit).
+      const perAngle = wave1.flatMap((unit, index) => unit.angles.map((angle) => ({
+        angle,
+        reviewer: `r${index}`,
+        ...(unit.angles.length > 1 ? { group: unit.name } : {}),
+      })));
+      assert.equal(fanoutReviewerPairingError(perAngle, null, first.pendingGroups), null, "wave 1 records a membership that admits its own reviewers");
+
+      // Resume at the same head with that unit's angles already complete.
+      const resumed = resolveFanoutDispatch(REPO_CONFIG, "draft", pool, { env: env(), completedAngles: [...shared.angles] });
+      assert.deepEqual(resumed.groups, first.groups, "the packed membership is stable under a pending-set change");
+      assert.equal(fanoutReviewerPairingError(perAngle, null, resumed.groups), null, "the wave-1 reviewer is still admitted after the resume");
+
+      const wave2 = expandDispatchUnits(resumed.pendingGroups, configuredNames(REPO_CONFIG));
+      assertSingleWave(REPO_CONFIG, wave2, env(), `resume ${harness}`);
+      assert.equal(wave2.length, wave1.length - 1, "the shortfall is exactly the completed unit");
+      assert.equal(wave2.some((u) => u.name === shared.name), false);
+
+      // Differential: against the unpacked full grouping — what the pending-keyed
+      // packing recorded on a resume before this fix — the same provenance is refused.
+      const unpacked = expandDispatchUnits(resolveFanoutGroups(REPO_CONFIG, "draft", pool), configuredNames(REPO_CONFIG));
+      assert.notEqual(fanoutReviewerPairingError(perAngle, null, unpacked), null, "the unpacked grouping cannot admit the packed wave's shared reviewer");
+    });
   }
 
   // Carry-forward re-gate: the round resolves the full pool, the carry-forward

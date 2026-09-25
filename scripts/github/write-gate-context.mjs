@@ -1875,9 +1875,10 @@ function normalizeCarriedAnglesArg(carriedAngles) {
  * no I/O. `config` may be null (a `--angles` override with no loaded config);
  * in that case grouping degrades to auto-chunked singletons under the built-in
  * defaults and `maxConcurrent`/`maxAnglesPerGroup` fall back to their
- * shipped defaults (5/5). When the pending units exceed the effective
- * concurrency, whole base units are packed into one wave (see the packing
- * block below); an unpackable round throws `GATE-EXEC-FANOUT-CAPACITY`.
+ * shipped defaults (5/5). When the round's FULL resolved angle set would
+ * cap-split into more units than the effective concurrency, whole base units
+ * are packed into one wave (see the packing block below); an unpackable round
+ * throws `GATE-EXEC-FANOUT-CAPACITY`.
  *
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
@@ -1948,30 +1949,41 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // `carriedAnglesList`, not the raw `carriedAngles` option: the latter may be
   // a one-shot iterable already exhausted by the spread above, which would
   // silently exclude nothing and record empty provenance.
-  let preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
-  // Single-wave packing: when the emitter would cap-split the pending units into
-  // more than effectiveConcurrency dispatch units, merge whole base units
-  // (packDispatchUnits) so the round stays one wave. It never runs when the
-  // count already fits, under sequential dispatch, or in per-angle mode (both
-  // explicit opt-outs). No fit refuses fail-closed before any artifact write.
+  // Single-wave packing: when the round's FULL resolved angle set would
+  // cap-split into more than effectiveConcurrency dispatch units, merge whole
+  // base units (packDispatchUnits) so the round stays one wave. The packing is
+  // derived from the full resolved-angle grouping, NEVER from the
+  // completed/carried-filtered pending set: packDispatchUnits is a pure function
+  // of its input, so wave 1 and every same-head resume derive the IDENTICAL
+  // packed units and the recorded membership (readContextDispatchUnits) still
+  // admits the reviewers the completed wave was dispatched under — re-deriving
+  // the grouping from a shrunk pending set re-planned a different membership and
+  // refused a legitimate resume. The pending/shortfall subset is then whatever
+  // those same packed units leave after completed-or-carried exclusion (a
+  // partially-complete packed unit is re-dispatched whole — the unit-level
+  // membership the pairing guard needs). It never runs when the count already
+  // fits, under sequential dispatch, or in per-angle mode (both explicit
+  // opt-outs). No fit refuses fail-closed before any artifact write.
   // `singleWave: false` (the standalone review gate, whose full-PR angle set
   // exceeds single-wave capacity) keeps the multi-wave plan unchanged.
   const perAngleMode = config?.gates?.fanout?.mode === "per-angle";
   if (singleWave && !sequential && !perAngleMode) {
     const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
-    const baseUnits = expandDispatchUnits(preflight.pendingGroups, configuredGroupNames);
+    const baseUnits = expandDispatchUnits(groups, configuredGroupNames);
     if (baseUnits.length > effectiveConcurrency) {
       const packed = packDispatchUnits(baseUnits, effectiveConcurrency);
       if (packed === null) {
+        // Full-set count: the label "fresh angles" is truthful because this
+        // count spans the round being refused (not a shrunk pending subset).
         const freshAngleCount = baseUnits.reduce((sum, unit) => sum + unit.angles.length, 0);
         const capacity = effectiveConcurrency * REVIEWER_UNIT_MAX_ANGLES;
         throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — ${freshAngleCount} fresh angles in ${baseUnits.length} base dispatch units do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${REVIEWER_UNIT_MAX_ANGLES} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
       }
-      const pendingNames = new Set(preflight.pendingGroups.map((g) => g.name));
-      groups = [...packed, ...groups.filter((g) => !pendingNames.has(g.name))];
-      preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
+      // Packing covers every resolved unit, so it replaces `groups` outright.
+      groups = packed;
     }
   }
+  const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
   const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   const pendingGroups = preflight.pendingGroups;
   const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);

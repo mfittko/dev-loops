@@ -559,6 +559,17 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // well-formed by construction.
   const dispatchUnits = expandDispatchUnits(units, configuredGroupNames);
 
+  // GATE-EXEC-FANOUT-CAPACITY (emitter half): the emitted unit count is the wave
+  // width the coordinator uses. The plan was packed at write-gate-context time
+  // under THAT invocation's effective concurrency, but maxConcurrent here is
+  // re-resolved from THIS process's env — so a plan packed for one harness could
+  // emit above this harness's bound and force a second wave, the exact
+  // "never planned as an extra wave" outcome the AC forbids. Refuse before
+  // composing any prompt (emitted.length would equal dispatchUnits.length).
+  if (dispatchUnits.length > maxConcurrent) {
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-CAPACITY: refusing — the fanout plan emits ${dispatchUnits.length} dispatch units, above this harness's effective maxConcurrent ${maxConcurrent}; the artifact was packed for a different effective concurrency (fanout.effectiveConcurrency ${artifact.fanout?.effectiveConcurrency ?? "unknown"}) — re-run write-gate-context.mjs under this harness so the round packs into one wave` }, false);
+  }
+
   // Round-level work-order identity shared by every unit: the required reads
   // the context builder bound into the prefix, the merged-config hash, and the
   // absolute per-angle findings directory.

@@ -15,7 +15,7 @@ import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract } from
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { expandDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
-import { buildGateContextPath, resolveFanoutDispatch } from "../../scripts/github/write-gate-context.mjs";
+import { buildGateContextPath, parseWriteGateContextCliArgs, readGateContext, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 
 const HEAD_SHA = "d".repeat(40);
 // maxAnglesPerGroup 2 keeps the leftover pool small: the configured "process"
@@ -283,6 +283,70 @@ describe("fanoutReviewerPairingError against recorded dispatch membership (packe
       const units = expandDispatchUnits(plan.groups, new Set());
       const { error, provenance } = await writePacked(dir, "pre_approval_gate", plan.groups, perUnitProvenance(units));
       assert.equal(error, null);
+      assert.equal(await readPacked(dir, "pre_approval_gate", provenance), null);
+    });
+  });
+
+  // Act index 4: the packed membership must survive the REAL producer->writer
+  // seam. Every other packed test here hand-writes the context artifact; this
+  // one produces it with writeGateContext (the sanctioned producer) and writes
+  // the ledger from that artifact, so the tmp-root the writer resolves the
+  // context under (readContextDispatchUnits: tmpRoot || <repoRoot>/tmp, while
+  // the ledger is anchored separately) is exercised for the packed case too.
+  test("real producer->writer seam: a packed context written by writeGateContext is recorded by the ledger writer", async () => {
+    await withConfig(PACK_DEVLOOPS, async (dir, config) => {
+      const options = parseWriteGateContextCliArgs([
+        "--repo", "owner/repo", "--pr", "5", "--gate", "pre_approval_gate", "--head-sha", HEAD_SHA,
+        "--angles", JSON.stringify(PACK_ANGLES),
+      ]);
+      options.config = config;
+      options.fanoutDispatch = resolveFanoutDispatch(config, "preApproval", PACK_ANGLES, { env: {} });
+      await writeGateContext(options, { repoRoot: dir });
+
+      const artifact = await readGateContext({ repo: "owner/repo", pr: 5, gate: "pre_approval_gate", headSha: HEAD_SHA }, { repoRoot: dir });
+      assert.ok(artifact, "the producer wrote a context artifact at the default tmp root");
+      assert.deepEqual(artifact.fanout.groups, options.fanoutDispatch.groups);
+
+      const units = expandDispatchUnits(artifact.fanout.groups, new Set(["process", "alpha", "beta"]));
+      const perAngle = units.flatMap((unit, index) => unit.angles.map((angle) => ({
+        angle,
+        reviewer: `r${index}`,
+        ...(unit.angles.length > 1 ? { group: unit.name } : {}),
+      })));
+
+      const result = await writeGateFindingsLog({
+        repo: "owner/repo", pr: 5, gate: "pre_approval_gate", headSha: HEAD_SHA, verdict: "clean", findings: "[]",
+        provenance: JSON.stringify({ distinctReviewers: countIds(perAngle), perAngle }),
+      }, { repoRoot: dir });
+      assert.deepEqual(result.log.provenance.dispatchUnits, artifact.fanout.groups, "the recorded membership is the produced packed plan");
+    });
+  });
+
+  // Act index 9: a delta-suffixed re-review spelling ('<angle>-delta-at-<sha>') is
+  // the same angle for membership purposes — the recorded units are keyed on the
+  // context's base angle names, so the lookup resolves the base form too. Without
+  // that resolution this legitimate shared reviewer is refused (null membership).
+  test("ACCEPT: a delta-suffixed perAngle spelling resolves to the unit its base angle was dispatched in", async () => {
+    await withConfig(PACK_DEVLOOPS, async (dir, config) => {
+      const plan = resolveFanoutDispatch(config, "preApproval", PACK_ANGLES, { env: {} });
+      const units = expandDispatchUnits(plan.groups, new Set(["process", "alpha", "beta"]));
+      const packed = units.find((u) => u.angles.length > 1);
+      assert.ok(packed);
+      const [first, second] = packed.angles;
+      const perAngle = [
+        ...packed.angles.map((angle) => ({
+          angle: angle === second ? `${second}-delta-at-${HEAD_SHA}` : angle,
+          reviewer: "r-shared",
+          group: packed.name,
+        })),
+        ...units.filter((u) => u !== packed).flatMap((u, i) => u.angles.map((angle) => ({
+          angle,
+          reviewer: `r-other-${i}`,
+          ...(u.angles.length > 1 ? { group: u.name } : {}),
+        }))),
+      ];
+      const { error, provenance } = await writePacked(dir, "pre_approval_gate", plan.groups, perAngle);
+      assert.equal(error, null, error ?? "");
       assert.equal(await readPacked(dir, "pre_approval_gate", provenance), null);
     });
   });
