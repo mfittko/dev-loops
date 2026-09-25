@@ -9,6 +9,11 @@ import {
   validateAsyncStartContext,
   resolveEffectiveAsyncStartMode,
 } from "../src/loop/async-start-contract.mjs";
+import {
+  NATIVE_PI_CHILD_MARKER,
+  NATIVE_PI_PARENT_SESSION_MARKER,
+  NATIVE_PI_RUNNER_MARKER,
+} from "../src/loop/run-context.mjs";
 
 // ---------------------------------------------------------------------------
 // validateAsyncStartContext: rejection (no markers present)
@@ -44,15 +49,57 @@ test("validateAsyncStartContext: valid when the neutral DEVLOOPS_RUN_ID is set",
   assert.equal(result.detectedMarker, "DEVLOOPS_RUN_ID");
 });
 
-// #1008 regression: under Pi the runtime injects ONLY PI_SUBAGENT_RUN_ID (no
+// Historical (#1008), pi-subagents <= 0.64: the Pi runtime injected ONLY PI_SUBAGENT_RUN_ID (no
 // DEVLOOPS_RUN_ID). With asyncStartMode "required" the startup gate must recognize that
-// context instead of failing closed. Before restoring the alias this returned REJECTED and
-// no dev-loop work could start under Pi.
-test("validateAsyncStartContext: valid under Pi when only PI_SUBAGENT_RUN_ID is set (required)", () => {
+// context instead of failing closed. pi-subagents >= 0.65 stopped injecting it — the
+// native-marker cases below cover the current Pi context.
+test("validateAsyncStartContext: valid when only the legacy pi-subagents alias is set (required)", () => {
   const env = { PI_SUBAGENT_RUN_ID: "pi-run-1" };
   const result = validateAsyncStartContext({ env, asyncStartMode: ASYNC_START_MODE.REQUIRED });
   assert.equal(result.status, ASYNC_START_STATUS.VALID);
   assert.equal(result.detectedMarker, "PI_SUBAGENT_RUN_ID");
+});
+
+// pi-subagents 0.65 dropped the whole PI_-prefixed subprocess-env block, including the
+// PI_SUBAGENT_RUN_ID alias, and marks native in-process children with PI_SUBAGENT_CHILD=1 plus
+// PI_SUBAGENT_PARENT_SESSION instead. The startup gate must recognize that context: before
+// this, a Pi >= 0.65 startup returned REJECTED and no dev-loop work could start under Pi.
+test("validateAsyncStartContext: valid under Pi >= 0.65 native async-runner markers (required)", () => {
+  const env = { [NATIVE_PI_CHILD_MARKER]: "1", [NATIVE_PI_PARENT_SESSION_MARKER]: "session-abc" };
+  const result = validateAsyncStartContext({ env, asyncStartMode: ASYNC_START_MODE.REQUIRED });
+  assert.equal(result.status, ASYNC_START_STATUS.VALID);
+  assert.equal(result.detectedMarker, NATIVE_PI_CHILD_MARKER);
+  assert.ok(result.reason.includes(NATIVE_PI_PARENT_SESSION_MARKER));
+});
+
+test("validateAsyncStartContext: native Pi markers corroborate but never substitute for evidence", () => {
+  // The detached-runner marker alone must not satisfy the contract.
+  const runnerOnly = validateAsyncStartContext({
+    env: { [NATIVE_PI_RUNNER_MARKER]: "1" },
+    asyncStartMode: ASYNC_START_MODE.REQUIRED,
+  });
+  assert.equal(runnerOnly.status, ASYNC_START_STATUS.REJECTED);
+  // Neither half of the native pair is sufficient on its own.
+  for (const partial of [
+    { [NATIVE_PI_CHILD_MARKER]: "1" },
+    { [NATIVE_PI_PARENT_SESSION_MARKER]: "session-abc" },
+    { [NATIVE_PI_CHILD_MARKER]: "true", [NATIVE_PI_PARENT_SESSION_MARKER]: "session-abc" },
+    { [NATIVE_PI_CHILD_MARKER]: "1", [NATIVE_PI_PARENT_SESSION_MARKER]: "   " },
+  ]) {
+    const result = validateAsyncStartContext({ env: partial, asyncStartMode: ASYNC_START_MODE.REQUIRED });
+    assert.equal(result.status, ASYNC_START_STATUS.REJECTED, JSON.stringify(partial));
+  }
+});
+
+test("validateAsyncStartContext: a run-id carrier still wins over the native Pi markers", () => {
+  const env = {
+    [NATIVE_PI_CHILD_MARKER]: "1",
+    [NATIVE_PI_PARENT_SESSION_MARKER]: "session-abc",
+    DEVLOOPS_RUN_ID: "devloops-run-1",
+  };
+  const result = validateAsyncStartContext({ env, asyncStartMode: ASYNC_START_MODE.REQUIRED });
+  assert.equal(result.status, ASYNC_START_STATUS.VALID);
+  assert.equal(result.detectedMarker, "DEVLOOPS_RUN_ID");
 });
 
 // ---------------------------------------------------------------------------
@@ -113,7 +160,7 @@ test("buildAsyncStartRejection: builds error payload from rejected validation", 
   assert.equal(rejection.ok, false);
   assert.equal(rejection.asyncStartContract, "rejected");
   assert.ok(rejection.error.includes("No async context detected"));
-  // The rejection names both the neutral var and the Pi-injected alias (#830, restored #1008).
+  // The rejection names both the neutral var and the legacy pi-subagents alias (#830, restored #1008).
   assert.ok(rejection.error.includes("DEVLOOPS_RUN_ID"));
   assert.ok(rejection.error.includes("PI_SUBAGENT_RUN_ID"));
 });
@@ -122,7 +169,7 @@ test("buildAsyncStartRejection: builds error payload from rejected validation", 
 // Constants are correctly exported
 // ---------------------------------------------------------------------------
 
-test("ASYNC_CONTEXT_MARKERS contains the neutral primary then the Pi-injected alias", () => {
+test("ASYNC_CONTEXT_MARKERS contains the neutral primary then the legacy pi-subagents alias", () => {
   assert.deepEqual(ASYNC_CONTEXT_MARKERS, ["DEVLOOPS_RUN_ID", "PI_SUBAGENT_RUN_ID"]);
 });
 

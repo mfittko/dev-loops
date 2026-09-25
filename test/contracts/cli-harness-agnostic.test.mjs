@@ -108,14 +108,26 @@ const RUN_CONTEXT_GENERATED = path.join(".claude", "hooks", "_run-context.mjs");
  * outside a var's listed files couples core to a specific harness and is rejected.
  */
 const HARNESS_RUNTIME_ENV = new Map([
-  // PI_SUBAGENT_RUN_ID is the run-id marker the Pi runtime injects into async-subagent
-  // child envs (#1008): the only async-context marker present under Pi. dev-loops reads it
-  // as an externally-injected alias of the neutral DEVLOOPS_RUN_ID (it does not own/mint it),
-  // so it is honored in the run-context/async-start contract modules + their tests.
+  // PI_SUBAGENT_RUN_ID is the legacy run-id marker pi-subagents <= 0.64 injected into
+  // async-subagent child envs (#1008): honored as an externally-injected alias of the neutral
+  // DEVLOOPS_RUN_ID (it does not own/mint it). pi-subagents >= 0.65 dropped it; the native
+  // in-process async runner marks children with PI_SUBAGENT_CHILD + PI_SUBAGENT_PARENT_SESSION
+  // (and PI_ASYNC_NATIVE_RUNNER on the detached runner) instead, so all four names are read
+  // only in the run-context/async-start contract modules + their tests.
   [
     "PI_SUBAGENT_RUN_ID",
     [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED],
   ],
+  ["PI_SUBAGENT_CHILD", [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED]],
+  [
+    "PI_SUBAGENT_PARENT_SESSION",
+    [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED],
+  ],
+  ["PI_ASYNC_NATIVE_RUNNER", [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED]],
+  // PI_SESSION_ID is Pi's per-child session id, injected into every Pi shell (the main agent's
+  // included), so it is not async-start evidence — the run-context module reads it only as the
+  // per-child identity that keeps sibling native children from sharing one synthesized run id.
+  ["PI_SESSION_ID", [RUN_CONTEXT, RUN_CONTEXT_TEST, RUN_CONTEXT_GENERATED]],
   ["PI_SESSION", [PI_ADAPTER, PI_ADAPTER_TEST]], // inside-Pi detection
   ["PI_INTERACTIVE", [PI_ADAPTER, PI_ADAPTER_TEST]], // interactivity override
   ["PI_AGENT_SESSIONS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi session dir

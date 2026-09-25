@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
+import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
 
 // Create an mkdtemp'd directory under os.tmpdir(), run `fn(dir)`, and always
 // remove it afterward (even on throw/rejection). Shared across suites so a
@@ -18,27 +18,27 @@ export async function withTempDir(fn, { prefix = "dev-loops-test-" } = {}) {
   }
 }
 
-// Build a test env that strips the ambient async run-id markers from process.env.
+// Build a test env that strips the ambient async-context markers from process.env.
 //
-// The dev-loop async path resolves an active run id from RUN_ID_MARKERS
-// (DEVLOOPS_RUN_ID, then the Pi-runtime-injected alias) in precedence order (see
-// packages/core/src/loop/run-context.mjs). Under a Pi async-subagent session the
-// runtime injects its run-id alias into the child env, so a test env built via
-// `{ ...process.env, DEVLOOPS_RUN_ID: "" }` still resolves the Pi marker and the
-// suite behaves as if in a production async context — green in CI (no Pi marker),
-// failing in a local worktree under Pi. Route gh/run-id test env construction
-// through this helper so all ambient run-id markers (any DEVLOOPS marker and the
-// Pi-injected alias) are stripped, then apply explicit overrides on top. CI is
-// unaffected because it carries neither marker; overriding suites that intend an
-// active run id pass `DEVLOOPS_RUN_ID` explicitly in overrides and it wins. Marker
-// names come from the shared RUN_ID_MARKERS contract (the adapter boundary owns the
-// Pi marker literal), keeping this helper harness-agnostic.
+// The dev-loop async path resolves an active run id from the run-id carriers
+// (DEVLOOPS_RUN_ID, then the legacy pi-subagents <= 0.64 alias) in precedence order, and
+// synthesizes one from the native pi-subagents >= 0.65 markers when no run-id carrier is set
+// (see packages/core/src/loop/run-context.mjs). Under a Pi async-subagent session the runtime
+// injects those native markers into the child env, so a test env built via
+// `{ ...process.env, DEVLOOPS_RUN_ID: "" }` still resolves a run id and the suite behaves as
+// if in a production async context — green in CI (no Pi markers), failing in a local worktree
+// under Pi. Route gh/run-id test env construction through this helper so every ambient
+// async-context marker (any run-id carrier AND the native Pi markers) is stripped, then apply
+// explicit overrides on top. CI is unaffected because it carries none of them; overriding
+// suites that intend an active run id pass `DEVLOOPS_RUN_ID` explicitly in overrides and it
+// wins. Marker names come from the shared ASYNC_CONTEXT_ENV_MARKERS contract (the adapter
+// boundary owns the Pi marker literals), keeping this helper harness-agnostic.
 //
 // @param {Record<string, string|undefined>} [overrides]
 // @returns {Record<string, string|undefined>}
 export function runIdFreeEnv(overrides = {}) {
   const base = { ...process.env };
-  for (const marker of RUN_ID_MARKERS) delete base[marker];
+  for (const marker of ASYNC_CONTEXT_ENV_MARKERS) delete base[marker];
   const env = { ...base, ...overrides };
   // The adapter boundary owns the marker literals; overrides may also unset a
   // key by passing `undefined` (matching resolverTestEnv's established
@@ -374,7 +374,8 @@ export async function writeJson(filePath, data) {
 
 // Standard env for tests that spawn or in-process-call the dev-loop startup
 // resolver. The async-start contract (packages/core/src/loop/async-start-contract.mjs)
-// requires a recognized run-id marker (see run-context.mjs's RUN_ID_MARKERS)
+// requires a recognized async-context marker (see run-context.mjs's
+// ASYNC_CONTEXT_ENV_MARKERS)
 // for async-dispatch strategies; hand-rolled env objects that omit it are
 // green wherever an ambient marker happens to exist (a harness subagent
 // session) and red in CI (where none does). Route every resolver-spawning
