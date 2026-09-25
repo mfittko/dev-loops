@@ -283,6 +283,9 @@ To resume at the same head, rerun `write-gate-context.mjs` with the refreshed bu
 
 Resolve grouping through `resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel })` (`@dev-loops/core/config`), then dispatch through `GATE-EXEC-FANOUT-DISPATCH-EMIT` below. Do not treat the context's unsplit groups as the final emitted units.
 
+<!-- rule: GATE-EXEC-FANOUT-CAPACITY -->
+`GATE-EXEC-FANOUT-CAPACITY`: Every planned round MUST dispatch in exactly one wave. `write-gate-context.mjs` (`resolveFanoutDispatch`) derives the base units: the pending units after the emitter's cap-split at `REVIEWER_UNIT_MAX_ANGLES` (5). When the base units exceed the effective `maxConcurrent`, it packs whole base units first-fit decreasing by angle count, ties broken by unit name, into at most effective `maxConcurrent` units of at most 5 angles. A merged unit's name joins its member unit names in sorted order with `+`, and the emitter records that name as the provenance `group`. Packing never splits a base unit and never runs when the count already fits, so a restored `holistic` singleton stays alone in a round that fits. The packed list is recorded in the context artifact's `fanout.groups` and `pendingGroups`, which the emitter consumes. When no packing fits (fresh angles above effective `maxConcurrent` x 5, or base units that fragment), the writer MUST refuse with exit 1 before writing any artifact, naming the fresh angle count, the capacity and the remedies: raise `gates.fanout.maxConcurrent`, disable angles, or rely on dynamic pruning. It never plans a second wave. `gates.fanout.sequential: true` and `mode: per-angle` are explicit opt-outs that neither pack nor refuse. The standalone `review` gate is outside this rule: its full-PR angle set exceeds single-wave capacity, so it keeps its multi-wave plan.
+
 | Input | Resolver behavior |
 | --- | --- |
 | `gates.fanout.mode` unset or `grouped` (default) | Match configured `gates.fanout.groups` first; chunk remaining angles by `gates.fanout.maxAnglesPerGroup` (default 5). |
@@ -291,11 +294,11 @@ Resolve grouping through `resolveFanoutGroups(config, gate, resolvedAngles, { fu
 
 `gates.fanout.groups` is a global reviewer-identity table shared across gates. A group participates only when the gate resolves one of its angles. Grouping changes reviewer allocation, never the resolved angle set, per-angle evidence, or provenance requirement. The emitter shares every multi-angle resolved unit, whether configured or auto-chunked, and keeps only genuinely single-angle units as singletons; its units are the dispatch authority.
 
-Keep reviewer groups separate from `requestGroups`: the latter batch models/request fingerprints for caching, not reviewer identity. Validate provenance against resolved reviewer groups (`fanoutReviewerPairingError`), never against model/cache groups.
+Keep reviewer groups separate from `requestGroups`: the latter batch models/request fingerprints for caching, not reviewer identity. Validate provenance against the recorded dispatch units (`fanoutReviewerPairingError`), never against model/cache groups.
 
 The gate coordinator dispatches one independent, fresh-context `review` agent per emitted unit via the plain Agent tool — releasing the wave's units together (under Pi: ONE call per wave, the wave rule below), never N separate blocking calls — each given its unit's bounded work order, which references the neutral evidence and carries its angle prompts. Never inherit the gate coordinator's, the dev-loop coordinator's, or a sibling reviewer's context. Follow the [review agent's scoped angle-review mode](../../agents/review.md).
 
-Wave the emitted units under the emitter's `maxConcurrent` (`resolveFanoutEffectiveConcurrency`) in ONE call per wave — under Pi a single `subagent({ workflowScriptPath })` call whose script body returns ONE `runs.all([...])` with its own unique `key` per unit (this shape needs pi-subagents ≥0.57; `tasks: [...]` was removed in 0.41.0, and the repo's `Dockerfile` `PI_SUBAGENTS_VERSION` pin is below that floor and must be raised for the shape to run in the declared container) — then join that wave before releasing the next. Never issue N separate blocking per-unit calls for one wave: that is the shape Pi's foreground guard rejects, and it silently serializes the round. The configured cross-harness default is 4; this repo also configures 4, independent of `queue.maxParallel: 3`, so its combined peak is 3 runners x 4 = 12 concurrent reviewer units. It relies on `GATE-EXEC-DISPATCH-RETRY-BACKOFF` for transient 429s; if 429s rise, lower `queue.maxParallel` first and keep `maxConcurrent` at 4 so one round stays one wave. `gates.fanout.sequential: true` resolves to 1, so each reviewer completes and writes evidence before the next starts. Under the Claude harness the effective value is additionally capped at 4; Pi/unknown harnesses retain the configured value. These bounds never collapse independent review into inline review.
+Wave the emitted units under the emitter's `maxConcurrent` (`resolveFanoutEffectiveConcurrency`) in ONE call per wave — under Pi a single `subagent({ workflowScriptPath })` call whose script body returns ONE `runs.all([...])` with its own unique `key` per unit (this shape needs pi-subagents ≥0.57; `tasks: [...]` was removed in 0.41.0, and the repo's `Dockerfile` `PI_SUBAGENTS_VERSION` pin is below that floor and must be raised for the shape to run in the declared container) — then join that wave before releasing the next. Never issue N separate blocking per-unit calls for one wave: that is the shape Pi's foreground guard rejects, and it silently serializes the round. The configured cross-harness default is 5, so a full shipped round (capacity 5 x 5 = 25 angles) packs into one wave (`GATE-EXEC-FANOUT-CAPACITY`). This repo also configures 5, independent of `queue.maxParallel: 3`, so its combined peak is 3 runners x 5 = 15 concurrent reviewer units. It relies on `GATE-EXEC-DISPATCH-RETRY-BACKOFF` for transient 429s; if 429s rise, lower `queue.maxParallel` first and keep `maxConcurrent` at 5 so one round stays one wave. `gates.fanout.sequential: true` resolves to 1, so each reviewer completes and writes evidence before the next starts. Under the Claude harness the effective value is additionally capped at 5; Pi/unknown harnesses retain the configured value. These bounds never collapse independent review into inline review.
 
 If a dispatch still receives 429, follow `GATE-EXEC-DISPATCH-RETRY-BACKOFF` below: retry the same unit under the helper's policy, then halve the batch with `backoffMaxConcurrent` and recompute waves before foreground one-at-a-time fallback. Record degradation in gate evidence/provenance. Never launch all units and rely on retries to impose the bound.
 
@@ -483,12 +486,18 @@ dispatch path, and it closes three failure modes prose discipline never held:
   itself draws no dispatch-relevant distinction between a configured group and an auto-chunk
   bundle (both are "this round's resolved dispatch units"), so the emitter no longer draws one
   either. The merge guard (`fanoutReviewerPairingError` in `@dev-loops/core/loop/gate-fanin`) is
-  the fail-closed authority for this: it re-derives this round's grouping independently via its
+  the fail-closed authority for this. It re-derives this round's base units independently via its
   own `resolveFanoutGroups` call (`detect-checkpoint-evidence.mjs`) over the ledger's fresh and
-  carried angles (so a partially carried unit resolves to its emitted boundaries) and accepts a shared identity
-  ONLY when every angle it covers is a member of that SAME re-derived unit — configured or
-  auto-chunk — so a claimed group spanning angles the guard's own re-derivation places in
-  different units (or an angle the re-derivation never resolves at all) still fails closed. The
+  carried angles (so a partially carried unit resolves to its emitted boundaries), cap-split at
+  `REVIEWER_UNIT_MAX_ANGLES`; base units never depend on the harness concurrency clamp.
+  `write-gate-findings-log.mjs` records each dispatch unit's membership (`name`, `angles`) from the
+  keyed context artifact's `fanout.groups`, expanded through the emitter's cap-split, as
+  `provenance.dispatchUnits`; a caller-supplied `dispatchUnits` is dropped. Both the write side and
+  the read side accept a shared identity ONLY inside ONE recorded unit, and accept that unit only
+  when it is a union of whole base units with at most 5 angles. A ledger without recorded
+  membership falls back to the base units: an unpacked round still passes and a reviewer shared
+  across a packed unit fails closed. A claimed group spanning angles the membership places in
+  different units (or an angle it never places at all) still fails closed. The
   emitter no longer needs to be more conservative than the guard by splitting a sanctioned
   auto-chunk bundle to singletons. Provenance / distinct-reviewer / grouped-dispatch / fail-closed invariants
   are preserved (a singleton covering one fresh angle is never pair-checked, and a configured
@@ -597,7 +606,7 @@ reconciles and closes the records-floor residual carried on #1468.
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Bounded parallelism is the DEFAULT dispatch posture:
 fan-out dispatches up to `gates.fanout.maxConcurrent` dispatch units concurrently per wave
-(this repo: 4, with `queue.maxParallel: 3`, see Phase 2) in one wave (under Pi: ONE call per wave — one
+(this repo: 5, with `queue.maxParallel: 3`, see Phase 2) in one wave (under Pi: ONE call per wave — one
 `subagent`/`runs.all([...])` call, described above) — the gate coordinator awaits each wave before releasing
 the next. `gates.fanout.sequential:
 true` (effective concurrency 1, above) is the documented LOAD FALLBACK for an environment
@@ -2065,7 +2074,9 @@ are valid exactly when every entry sharing that identity declares the SAME `grou
 **AND** — whenever the caller supplies the round's resolved dispatch groups (both call
 sites do, `write-gate-findings-log.mjs` via its own `--full-label` flag threaded into
 `resolveFanoutGroups` just like `write-gate-context.mjs`'s) — every one of those fresh
-angles is a member of that SAME configured dispatch unit per `resolveFanoutGroups`. A
+angles is a member of that SAME dispatch unit: the recorded `provenance.dispatchUnits` unit
+(itself a union of whole cap-split `resolveFanoutGroups` base units of at most 5 angles) or,
+for a ledger without recorded membership, the same base unit (`GATE-EXEC-FANOUT-CAPACITY`). A
 self-attested `group` label spanning angles the
 configured table splits apart (or never groups together at all) fails closed even though
 the label itself is internally consistent; `resolveFanoutGroups` emits one-angle-per-unit
