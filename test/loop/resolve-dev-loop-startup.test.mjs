@@ -1830,7 +1830,11 @@ test("--pr --review routes to the read-only review strategy without lifecycle ev
       "skills/review/SKILL.md",
     ]);
     assert.equal(STRATEGY_OWNERSHIP_GATE.review, false);
-    assert.equal(parsed.bundle.gateReviewEvidence, undefined);
+    // `gateReviewEvidence` is a routing INPUT (`--input`) that no route ever
+    // echoes onto the emitted bundle, so asserting its absence here could
+    // never fail. Assert the gate that actually varies: the read-only review
+    // gate must win over every ownership-derived write-capable gate.
+    assert.equal(parsed.canonicalStateSummary.selectedGate, "review");
   }, { prefix: "resolve-dev-loop-review-pr-" });
 });
 
