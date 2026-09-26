@@ -888,7 +888,7 @@
       "id": "VALIDATE-COVERAGE-THRESHOLD"
     },
     {
-      "id": "VALIDATE-VERIFY-BEFORE-GATE"
+      "id": "VALIDATE-TARGETED-FIRST"
     },
     {
       "id": "WORKFLOW-DOCS-NO-REDEFINE-HELPER",

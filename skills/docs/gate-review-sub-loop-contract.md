@@ -266,12 +266,12 @@ Execute in order:
 The barrier orders a potential cache write before reads; it does not prove provider reuse. These workflows use Pi/Claude Code agent harnesses, not a raw-API path: the conductor cannot set `prompt_cache_key` or explicit breakpoints, and the shipped agent-dispatch surfaces expose no provider usage/cache-read telemetry. Do not add a verification pass or invent a cache pin. Where telemetry is unavailable, claim only ordering and request-fingerprint invariants. The default lead-reviewer form needs no extra reviewer; a dedicated primer adds one spawn.
 
 <!-- rule: GATE-EXEC-VALIDATION-ARTIFACT -->
-`GATE-EXEC-VALIDATION-ARTIFACT`: The preamble MUST run the round's validation set exactly
+`GATE-EXEC-VALIDATION-ARTIFACT`: The preamble MUST resolve the round's validation set exactly
 once, before any reviewer is dispatched, via `run-gate-validation.mjs`, and MUST persist
 the result as `<gate>-<headSha>.validation.json` beside the gate-context artifact. When
 that artifact exists, the briefing prefix MUST point every reviewer at it
 (`write-gate-context.mjs --validation-results <path>`), and a reviewer MUST consume it
-rather than executing any suite it records. A reviewer that finds the artifact absent,
+rather than executing any suite it records. A missing full result remains typed incomplete; it does not authorize a reviewer or worker to run the full suite directly. A reviewer that finds the artifact absent,
 unreadable, or stamped with a different head SHA MUST report a gate-evidence finding; it
 MUST NOT silently run the suite itself and MUST NOT treat the gap as clean.
 

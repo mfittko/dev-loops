@@ -28,7 +28,7 @@ delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verif
 pass/fail plus any failing-test names, or, when checking a pushed commit, prefer CI's structured
 conclusion (`scripts/github/probe-ci-status.mjs` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
 same opt-in `PreToolUse` Bash gate hook and the same `DEVLOOPS_COORDINATOR_READONLY=1` flag; a
-worker subagent's verify/build run is unaffected. The draft-gate `gh pr ready`
+worker subagent's targeted verify/build run is unaffected; a local full-repository run is owned only by `dev-loops gate resolve-validation` per [Validation Policy](validation-policy.md). The draft-gate `gh pr ready`
 guard still applies (harness-agnostic). A separate, stricter main-agent read-only boundary can
 also be re-imposed via the same hook — opt-in with `DEVLOOPS_MAIN_AGENT_READONLY=1` (default
 fail-open) — for repos that want it.
@@ -95,7 +95,7 @@ because "the user said yes," not because it is running from a worktree.
 - Write to `/tmp` or other non-repo paths (e.g., issue body drafts)
 - Delegate to the `dev-loop` agent (async, with worktree cwd)
 - Report findings, ask questions, get confirmation
-- `bun test`, `bun run verify` (read-only validation under the repository-pinned Bun 1.4.1 toolchain)
+- Targeted read-only validation under the repository-pinned Bun 1.4.1 toolchain; local full-repository validation goes only through `dev-loops gate resolve-validation` inside `dev-loop`
 
 ## Main agent must NEVER
 
@@ -158,7 +158,8 @@ asset-generation time (`harness: "claude"`).
 | Claude Code: the `dev-loop` coordinator writes `packages/core/src/foo.mjs` directly | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — must delegate to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) |
 | Claude Code: the `dev-loop` coordinator writes `tmp/gate-findings/...` (gate evidence) | Allowed — ephemeral/gitignored, not a tracked-file mutation |
 | Claude Code: the `dev-loop` coordinator runs `bun run verify` inline | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — delegate the run to a fresh worker subagent |
-| Claude Code: a worker subagent (`developer`/`fixer`/`quality`/`review`) runs `bun run verify` | Allowed — verification runs are the worker's job |
+| Claude Code: a worker subagent (`developer`/`fixer`/`quality`/`review`) runs a targeted suite | Allowed — targeted verification runs are the worker's job |
+| Claude Code: a worker subagent runs `bun run verify` directly | **BREACH** — request full validation through `dev-loops gate resolve-validation` |
 
 ## Dev-loop startup
 

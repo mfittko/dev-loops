@@ -4,8 +4,8 @@ Canonical owner for validation requirements across all workflow families.
 
 ## Default validation
 
-<!-- rule: VALIDATE-VERIFY-BEFORE-GATE -->
-`VALIDATE-VERIFY-BEFORE-GATE`: `bun run verify` is the default repo-level local validation path and MUST pass before PR creation, gate entry, and merge. This repository pins Bun 1.4.1 exactly for dependency installation, scripts, and unit tests; the orchestrator attempts every configured suite, keeps output attributable, and exits non-zero if any suite fails. Node `>=24` packaged-consumer checks and npm registry/pack/publish/provenance checks remain required where their boundary is under test.
+<!-- rule: VALIDATE-TARGETED-FIRST -->
+`VALIDATE-TARGETED-FIRST`: Workers run the narrowest deterministic check for the changed surface and record the command and stable outcome. Unknown or mixed surfaces require a conservative domain suite or full-validation ownership; an empty check is never a pass. Only `dev-loops gate resolve-validation` may launch a local full-repository run, bound to the exact head SHA, requested profile, and pinned Bun 1.4.1 toolchain. Missing full evidence is incomplete, never permission to run `bun run verify` directly. The full `bun run verify` suite and CI aggregate keep their existing coverage; CI on the current head or sanctioned full evidence supplies full-repository evidence at the applicable gate. Node `>=24` packaged-consumer checks and npm registry/pack/publish/provenance checks remain required where their boundary is under test.
 
 ## Gate-specific requirements
 

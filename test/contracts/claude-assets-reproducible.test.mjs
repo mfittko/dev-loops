@@ -80,6 +80,17 @@ test("Pi-runtime-only prose is stripped from generated assets but retained in so
   }
 });
 
+test("judge retains verdict writes without process execution tools", () => {
+  const source = fs.readFileSync(path.join(repoRoot, "agents/judge.agent.md"), "utf8");
+  const generated = collectGeneratedAssets({ repoRoot }).find((a) => a.target === ".claude/agents/judge.md")?.content;
+  assert.match(source, /^tools: read, search, write$/m);
+  assert.ok(generated);
+  assert.match(generated, /^tools: Read, Grep, Glob, Write$/m);
+  assert.doesNotMatch(generated, /^tools:.*Bash/m);
+  assert.match(generated, /spec-authority-verdict\.json/);
+  assert.match(generated, /judge-verdict\.json/);
+});
+
 test("watch procedure preserves the shared projection and wait_watch route link", () => {
   const assets = collectGeneratedAssets({ repoRoot });
   const source = fs.readFileSync(path.join(repoRoot, "skills/docs/wait-watch-procedure.md"), "utf8");

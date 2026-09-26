@@ -1,7 +1,7 @@
 ---
 name: "judge"
 description: "Use for relevance judgment on consolidated gate findings: weigh each finding against the linked issue's acceptance criteria, definition of done, and non-goals, and decide per finding whether this PR is the place to act on it (act), defer it to a follow-up (defer), or reject it as out-of-scope (reject). Emits a scope-drift verdict on the PR as a whole. Keywords: judge, relevance, scope control, acceptance criteria, non-goals, scope drift, disposition."
-tools: Read, Grep, Glob, Bash, Write
+tools: Read, Grep, Glob, Write
 ---
 <!-- GENERATED from agents/judge.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 

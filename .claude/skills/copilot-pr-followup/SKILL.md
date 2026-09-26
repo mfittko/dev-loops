@@ -591,7 +591,7 @@ The post-merge hook also fast-forwards the main checkout's local `main` to `orig
 
 ## Validation policy
 
-Follow [Validation Policy](../docs/validation-policy.md). Default: `bun run verify` before PR creation, gate entry, and merge. For repo-local examples: `bun run test:dev-loop` for skill scripts, contract tests for templates, `git diff --check` for docs. When CI runs exist, use `gh run watch` or `detect-copilot-loop-state.mjs` instead of `sleep`-based polling. Distinguish: locally validated, full PR-equivalent checks, awaiting CI.
+Follow [Validation Policy](../docs/validation-policy.md). Default to the narrowest deterministic targeted check; local full-repository runs go only through `dev-loops-run cli/index.mjs gate resolve-validation`. For repo-local examples: `bun run test:dev-loop` for skill scripts, contract tests for templates, `git diff --check` for docs. When CI runs exist, use `gh run watch` or `detect-copilot-loop-state.mjs` instead of `sleep`-based polling. Distinguish: locally validated, full current-head CI or sanctioned full evidence, awaiting CI, and incomplete evidence.
 
 ## Confirmation checkpoints
 

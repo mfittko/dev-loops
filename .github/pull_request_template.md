@@ -39,6 +39,6 @@ Closes #N
 ## Validation
 
 <!-- rule-ref: OPS-PR-VALIDATION-STABLE-EVIDENCE -->
-<!-- For tracker-backed PRs, list each command or named check with its stable pass/fail outcome. Keep volatile counts, durations, timestamps, and incidental totals in the head-stamped validation/gate artifacts unless an explicit acceptance criterion requires the exact quantity. -->
+<!-- For tracker-backed PRs, list targeted local checks and their stable pass/fail outcomes, plus full current-head CI or sanctioned full-validation evidence when available. Mark missing evidence incomplete. Keep volatile counts, durations, timestamps, and incidental totals in the head-stamped validation/gate artifacts unless an explicit acceptance criterion requires the exact quantity. -->
 
 <!-- Use real markdown checkboxes (`- [ ]` / `- [x]`). Do not wrap checkbox markers in backticks. -->

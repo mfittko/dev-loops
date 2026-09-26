@@ -48,9 +48,14 @@ test("automation pins Bun 1.4.1 and preserves intentional npm publication", asyn
   assert.match(docker, /bun install --frozen-lockfile/);
 });
 
-test("durable guidance records the toolchain and accepted benchmark", async () => {
-  const surfaces = ["README.md", "AGENTS.md", "extension/README.md", "scripts/README.md", ".github/copilot-instructions.md", "skills/docs/validation-policy.md", "skills/copilot-pr-followup/SKILL.md", ".claude/skills/copilot-pr-followup/SKILL.md", "packages/core/src/loop/handoff-envelope.mjs"];
-  for (const file of surfaces) assert.match(await read(file), /bun run verify/i, `${file} names canonical verification`);
+test("durable guidance records targeted validation, full-suite ownership, and accepted benchmark", async () => {
+  for (const file of ["README.md", "extension/README.md", "skills/docs/validation-policy.md"]) {
+    assert.match(await read(file), /bun run verify/i, `${file} names the retained full suite`);
+  }
+  for (const file of ["AGENTS.md", "scripts/README.md", ".github/copilot-instructions.md", "skills/docs/validation-policy.md", "skills/copilot-pr-followup/SKILL.md", "packages/core/src/loop/handoff-envelope.mjs"]) {
+    assert.match(await read(file), /dev-loops gate resolve-validation/i, `${file} names full-validation authority`);
+  }
+  assert.match(await read(".claude/skills/copilot-pr-followup/SKILL.md"), /dev-loops-run cli\/index\.mjs gate resolve-validation/i);
   assert.match(await read("docs/decisions/0062-bun-development-toolchain.md"), /Bun 1\.4\.1[\s\S]*Node `>=24`[\s\S]*npm/i);
   const verdict = await read("docs/benchmarks/bun-1.4.1/verdict.md");
   assert.match(verdict, /Verdict: \*\*pass\*\*[\s\S]*frozen historical npm baseline[\s\S]*One fresh candidate run/);
