@@ -52,6 +52,11 @@ const STRATEGY_DEFAULT_STOP_RULES = Object.freeze({
     "ack-destructive-migrations",
     "merge",
   ],
+  [INTERNAL_DEV_LOOP_STRATEGY.REVIEW]: [
+    "read-only",
+    "one-review-round",
+    "no-lifecycle-gate-evidence",
+  ],
 });
 
 const RECONCILIATION_ACCEPTANCE_TEMPLATE = deepFreeze({
@@ -183,6 +188,17 @@ register(INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW, "default", {
   ],
   evidence: ["commands-run", "validation-output"],
   maxFinalizationTurns: 4,
+  needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_MS,
+  activeNoticeAfterMs: DEFAULT_ACTIVE_NOTICE_MS,
+});
+
+register(INTERNAL_DEV_LOOP_STRATEGY.REVIEW, "default", {
+  criteria: [
+    { id: "read-only", must: "Review the current PR without claiming it, pushing, fixing, committing, moving a board item, or changing lifecycle state.", severity: "required" },
+    { id: "informational-only", must: "Run one informational review-gate round that never satisfies draft_gate or pre_approval_gate evidence.", severity: "required" },
+  ],
+  evidence: ["review-findings", "manual-notes"],
+  maxFinalizationTurns: 1,
   needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_MS,
   activeNoticeAfterMs: DEFAULT_ACTIVE_NOTICE_MS,
 });

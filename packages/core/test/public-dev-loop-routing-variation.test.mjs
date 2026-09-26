@@ -614,6 +614,46 @@ test("retrospective checkpoint gating does not block inspect_state answers", () 
   assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
 });
 
+test("retrospective checkpoint gating does not block the read-only review route", () => {
+  const result = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
+    currentState: {
+      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
+      ownership: DEV_LOOP_ACTOR.COPILOT,
+      nextActor: DEV_LOOP_ACTOR.COPILOT,
+      status: DEV_LOOP_STATUS.ACTIVE,
+      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+    },
+    retrospectiveCheckpointState: RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+  });
+
+  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.REVIEW);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.REVIEW);
+});
+
+test("authoritative startup/resume bundle preserves the read-only review route despite a missing retrospective checkpoint", () => {
+  const bundle = resolveAuthoritativeStartupResumeBundle({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
+    currentState: {
+      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
+      ownership: DEV_LOOP_ACTOR.COPILOT,
+      nextActor: DEV_LOOP_ACTOR.COPILOT,
+      status: DEV_LOOP_STATUS.ACTIVE,
+      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+    },
+    artifactState: DEV_LOOP_ARTIFACT_STATE.OPEN,
+    issueLinkageResolution: DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.NOT_APPLICABLE,
+    loopState: "pr_review_ready",
+    retrospectiveCheckpointState: RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+  });
+
+  assert.equal(bundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.RESOLVED);
+  assert.equal(bundle.selectedGate, DEV_LOOP_GATE.REVIEW);
+  assert.equal(bundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.REVIEW);
+});
+
 test("authoritative startup/resume bundle applies retrospective gating when checkpoint is missing", () => {
   const bundle = resolveAuthoritativeStartupResumeBundle({
     currentState: {
