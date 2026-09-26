@@ -130,6 +130,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     spike: undefined,
     lightweight: false,
     uiReview: false,
+    review: false,
     reconcile: true,
   });
   assert.equal(parseResolveDevLoopStartupCliArgs(["--pr", "7", "--no-reconcile"]).reconcile, false);
@@ -138,6 +139,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
   assert.equal(shouldRunStartupReconcile(parseResolveDevLoopStartupCliArgs(["--pr", "7"])), true);
   assert.equal(shouldRunStartupReconcile(parseResolveDevLoopStartupCliArgs(["--pr", "7", "--no-reconcile"])), false);
   assert.equal(shouldRunStartupReconcile(parseResolveDevLoopStartupCliArgs(["--issue", "7", "--no-reconcile"])), false);
+  assert.equal(shouldRunStartupReconcile(parseResolveDevLoopStartupCliArgs(["--pr", "7", "--review"])), false);
   assert.deepEqual(parseResolveDevLoopStartupCliArgs(["--help"]), {
     help: true,
     inputPath: undefined,
@@ -147,6 +149,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     spike: undefined,
     lightweight: false,
     uiReview: false,
+    review: false,
     reconcile: true,
   });
 });
@@ -194,6 +197,41 @@ test("parseResolveDevLoopStartupCliArgs rejects --ui-review combined with --issu
       `expected rejection for ${JSON.stringify(args)}`,
     );
   }
+});
+
+test("parseResolveDevLoopStartupCliArgs parses --pr --review", () => {
+  const opts = parseResolveDevLoopStartupCliArgs(["--pr", "507", "--review"]);
+  assert.equal(opts.pr, 507);
+  assert.equal(opts.review, true);
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --review without --pr", () => {
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--review"]),
+    /--review is only valid with --pr/i,
+  );
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --review combined with --issue/--input/--plan-file/--spike", () => {
+  for (const args of [
+    ["--issue", "511", "--review"],
+    ["--input", "state.json", "--review"],
+    ["--plan-file", "p.md", "--review"],
+    ["--spike", "s.md", "--review"],
+  ]) {
+    assert.throws(
+      () => parseResolveDevLoopStartupCliArgs(args),
+      /--review is only valid with --pr/i,
+      `expected rejection for ${JSON.stringify(args)}`,
+    );
+  }
+});
+
+test("parseResolveDevLoopStartupCliArgs rejects --review combined with --ui-review", () => {
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--pr", "740", "--review", "--ui-review"]),
+    /mutually exclusive/i,
+  );
 });
 
 test("parseResolveDevLoopStartupCliArgs rejects --issue combined with --pr", () => {
@@ -1264,6 +1302,21 @@ test("buildAutoResolvedInput for a PR fails closed (not-claimed) when the PR rea
   }
 });
 
+test("buildAutoResolvedInput for --review fails closed when the PR read fails", async () => {
+  const tmp = stampRepoWithOrigin();
+  try {
+    const ghStub = await writeGhStubHelper(tmp, [
+      { assertArgs: ["pr", "view", "999999"], exitCode: 1, stderr: "gh: not found\n" },
+    ], { matchMode: "claims" });
+    assert.throws(
+      () => buildAutoResolvedInput({ pr: 999999, review: true, cwd: tmp, env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) } }),
+      /PR #999999 could not be read; fail closed — do not start a review against an unresolvable PR\./,
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("buildAutoResolvedInput fails closed when linked-PR detection fails instead of fabricating resolved_no_open_pr (#1626)", async () => {
   const tmp = stampRepoWithOrigin();
   try {
@@ -1535,6 +1588,7 @@ test("--issue assigned_to_other fails closed naming the foreign assignee (no rea
     assert.equal(result.stdout, "");
     assert.match(result.stderr, /Issue #511 is assigned to foreign-dev, not the current viewer/);
     assert.match(result.stderr, /Have the owner unassign it, or pick a different item/);
+    assert.doesNotMatch(result.stderr, /--review/);
   }, { prefix: "resolve-dev-loop-ownership-issue-other-" });
 });
 
@@ -1577,6 +1631,7 @@ test("--issue unassigned fails closed naming the exact claim command (no readine
       result.stderr,
       /Issue #511 is not claimed by any contributor.*Claim it first: node scripts\/github\/edit-issue\.mjs --repo mfittko\/dev-loops --issue 511 --add-assignee @me/s,
     );
+    assert.doesNotMatch(result.stderr, /--review/);
   }, { prefix: "resolve-dev-loop-ownership-issue-unassigned-" });
 });
 
@@ -1674,6 +1729,7 @@ test("--pr assigned_to_other fails closed naming the foreign assignee", async ()
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.match(result.stderr, /PR #740 is assigned to foreign-dev, not the current viewer/);
+    assert.match(result.stderr, /read-only review that needs no ownership.*dev-loops loop startup --pr 740 --review/s);
   }, { prefix: "resolve-dev-loop-ownership-pr-other-" });
 });
 
@@ -1696,6 +1752,7 @@ test("--pr unassigned fails closed naming the exact claim command", async () => 
       result.stderr,
       /PR #740 is not claimed by any contributor.*Claim it first: node scripts\/github\/edit-pr\.mjs --repo mfittko\/dev-loops --pr 740 --add-assignee @me/s,
     );
+    assert.match(result.stderr, /read-only review that needs no ownership.*dev-loops loop startup --pr 740 --review/s);
   }, { prefix: "resolve-dev-loop-ownership-pr-unassigned-" });
 });
 
@@ -1748,6 +1805,76 @@ test("--pr --ui-review routes to the ui_review strategy end-to-end (issue #1362)
       "skills/ui-review/SKILL.md",
     ]);
   }, { prefix: "resolve-dev-loop-ui-review-pr-" });
+});
+
+test("--pr --review routes to the read-only review strategy without lifecycle evidence or write-capable route packs", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740", "--review"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.selectedStrategy, "review");
+    assert.equal(parsed.canonicalStateSummary.loopState, "pr_review_start");
+    assert.equal(parsed.canonicalStateSummary.requiresAsyncDispatch, false);
+    assert.deepEqual(parsed.requiredReads, [
+      "skills/docs/public-dev-loop-contract.md",
+      "skills/review/SKILL.md",
+    ]);
+    assert.equal(STRATEGY_OWNERSHIP_GATE.review, false);
+    // `gateReviewEvidence` is a routing INPUT (`--input`) that no route ever
+    // echoes onto the emitted bundle, so asserting its absence here could
+    // never fail. Assert the gate that actually varies instead: the read-only
+    // review gate must be selected ahead of the ownership-derived write-capable
+    // gates (`external_pr_followup` / `reviewer_fixer`, and the copilot path
+    // asserted here), which `public-dev-loop-routing-startup.test.mjs` pins for
+    // the foreign- and reviewer-owned shapes this resolver hardcodes to copilot.
+    assert.equal(parsed.canonicalStateSummary.selectedGate, "review");
+  }, { prefix: "resolve-dev-loop-review-pr-" });
+});
+
+test("--pr --review succeeds on foreign PR ownership without resolving the viewer login", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [{ login: "foreign-dev" }], closingIssuesReferences: [], body: "" }),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740", "--review"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).selectedStrategy, "review");
+  }, { prefix: "resolve-dev-loop-review-pr-foreign-" });
+});
+
+test("--pr --review succeeds on an unassigned PR without resolving the viewer login", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, assignees: [], closingIssuesReferences: [], body: "" }),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740", "--review"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).selectedStrategy, "review");
+  }, { prefix: "resolve-dev-loop-review-pr-unassigned-" });
 });
 
 test("--pr --ui-review succeeds on foreign PR ownership (ui_review is exempt from the ownership gate, issue #1444)", async () => {
@@ -1822,6 +1949,36 @@ test("--pr --ui-review skips the linked-issue foreign-ownership check too (issue
     assert.equal(parsed.ok, true);
     assert.equal(parsed.selectedStrategy, "ui_review");
   }, { prefix: "resolve-dev-loop-ui-review-pr-linked-issue-foreign-" });
+});
+
+test("--pr --review skips the linked-issue foreign-ownership check too (issue #2459)", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    // Linked issue #511 is foreign-owned, but NO stub entry for its assignee
+    // read and NO "api user" entry: a review PR must never reach the
+    // linked-issue ownership loop at all. If the exemption regressed, the
+    // unstubbed claims-mode call would fail closed and this test would catch it.
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({
+          state: "OPEN",
+          mergedAt: null,
+          assignees: [],
+          closingIssuesReferences: [{ number: 511 }],
+          body: "",
+        }),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740", "--review"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.selectedStrategy, "review");
+  }, { prefix: "resolve-dev-loop-review-pr-linked-issue-foreign-" });
 });
 
 test("--pr assigned to copilot-swe-agent takes the unchanged copilot path, not the ownership error", async () => {
@@ -1973,6 +2130,10 @@ test("--pr continuation fails closed when the PR's linked issue is assigned to a
     assert.equal(result.stdout, "");
     assert.match(result.stderr, /PR #740's linked issue #511 is assigned to foreign-dev, not the current viewer/);
     assert.match(result.stderr, /the issue owner owns the whole loop/);
+    assert.match(
+      result.stderr,
+      /read-only review that needs no ownership.*dev-loops loop startup --pr 740 --review/s,
+    );
   }, { prefix: "resolve-dev-loop-ownership-pr-linked-issue-other-" });
 });
 
@@ -2011,7 +2172,8 @@ test("--pr continuation proceeds when the linked issue is merely unassigned (onl
 // strategy stays gated, and an unknown/unlisted strategy fails closed.
 // ---------------------------------------------------------------------------
 
-test("STRATEGY_OWNERSHIP_GATE exempts only ui_review and wait_watch; every other listed strategy is gated", () => {
+test("STRATEGY_OWNERSHIP_GATE exempts review, ui_review, and wait_watch; every write-capable listed strategy is gated", () => {
+  assert.equal(STRATEGY_OWNERSHIP_GATE.review, false);
   assert.equal(STRATEGY_OWNERSHIP_GATE.ui_review, false);
   assert.equal(STRATEGY_OWNERSHIP_GATE.wait_watch, false);
   for (const gatedStrategy of [
@@ -2031,7 +2193,8 @@ test("ownershipGateAppliesToStrategy fails closed (gated) for an unknown/unliste
   assert.equal(ownershipGateAppliesToStrategy(undefined), true);
 });
 
-test("ownershipGateAppliesToStrategy is exempt for ui_review and wait_watch, gated for the rest", () => {
+test("ownershipGateAppliesToStrategy is exempt for review, ui_review, and wait_watch, gated for the rest", () => {
+  assert.equal(ownershipGateAppliesToStrategy("review"), false);
   assert.equal(ownershipGateAppliesToStrategy("ui_review"), false);
   assert.equal(ownershipGateAppliesToStrategy("wait_watch"), false);
   assert.equal(ownershipGateAppliesToStrategy("local_implementation"), true);

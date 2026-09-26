@@ -13,8 +13,9 @@ user-invocable: false
 lifecycle transition, waits on CI, auto-resolves, or satisfies lifecycle evidence.
 
 **Ownership-exempt (issue #1850).** It makes no branch push, fix commit, merge,
-board move, or assignee claim. Enter directly from the public review-intent
-shortcut; never run startup or its single-contributor ownership gate. Read the
+board move, or assignee claim. Enter either from the interactive review-intent
+shortcut or deterministically via `loop startup --pr <n> --review`; neither path
+consults the single-contributor ownership gate. Read the
 [ownership boundary](../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup)
 when distinguishing this route from write-capable follow-up, which stays gated.
 

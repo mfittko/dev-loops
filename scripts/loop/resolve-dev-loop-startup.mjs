@@ -79,11 +79,16 @@ Required (exactly one):
   --plan-file <path>  Path to a phase-doc-format plan to start locally
   --spike <path>  Path to a spike artifact to start a spike loop locally
 Optional modifier:
+  --review       With --pr only: route the PR to the read-only review strategy
+                 instead of the default continue_on_pr path. Requires no
+                 ownership. Rejected without --pr, or combined with --issue/
+                 --input/--plan-file/--spike, and mutually exclusive with
+                 --ui-review.
   --ui-review    With --pr only: route the PR to the ui_review strategy
                  (running-app review from an isolated worktree) instead of
                  the default continue_on_pr/copilot_pr_followup path.
                  Rejected without --pr, or combined with --issue/--input/
-                 --plan-file/--spike.
+                 --plan-file/--spike, and mutually exclusive with --review.
   --lightweight  With --issue: use the PR body as the spec-of-record
                  (canonicalSpecSource: pr_body) — no phase/plan doc minted or
                  committed. Same gate sequence; only the backing artifact
@@ -119,10 +124,13 @@ Exit codes:
 const STARTUP_RECONCILE_BUDGET_MS = 20000;
 
 // The post-emit board self-heal is a WRITE path with its own `gh` fan-out. It
-// runs only for a target-resolving invocation, and never for a read-only caller
-// that passed --no-reconcile (the inspect viewer's handoff-envelope preview).
+// runs only for a target-resolving invocation, and never for the read-only
+// review route or a caller that passed --no-reconcile (the inspect viewer's
+// handoff-envelope preview).
 export function shouldRunStartupReconcile(options) {
-  return options.reconcile !== false && (options.issue !== undefined || options.pr !== undefined);
+  return options.review !== true
+    && options.reconcile !== false
+    && (options.issue !== undefined || options.pr !== undefined);
 }
 // Static pointer for whichever session runs `loop startup`. It names
 // where the sanctioned tooling surface is documented and never copies the list, so
@@ -177,6 +185,10 @@ const STRATEGY_REQUIRED_READS = {
     SHARED_PUBLIC_CONTRACT,
     "skills/ui-review/SKILL.md",
   ],
+  review: [
+    SHARED_PUBLIC_CONTRACT,
+    "skills/review/SKILL.md",
+  ],
   none: [SHARED_PUBLIC_CONTRACT],
 };
 const STRATEGY_ASYNC_DISPATCH = {
@@ -188,12 +200,13 @@ const STRATEGY_ASYNC_DISPATCH = {
   wait_watch: true,
   final_approval: false,
   ui_review: false,
+  review: false,
   none: false,
 };
 // Single-contributor ownership gate scope (ADR 0042, refining ADR 0033's
 // universal gate): only code-changing or merge-authoritative sub-loops
-// require ownership. Pure read/observe strategies (a running-app review, or
-// waiting/watching an in-flight external run) never claim or write anything,
+// require ownership. Pure read/observe strategies (plain review, running-app
+// review, or waiting/watching an in-flight external run) never claim or write anything,
 // so a reviewer must be able to run them against work they do not own.
 // Unknown/unlisted strategies resolve to gated via the `?? true` fallback
 // below — fail closed, matching every other unknown-key posture in this file.
@@ -205,6 +218,7 @@ export const STRATEGY_OWNERSHIP_GATE = {
   reviewer_fixer: true,
   final_approval: true,
   ui_review: false,
+  review: false,
   wait_watch: false,
 };
 export function ownershipGateAppliesToStrategy(strategyKey) {
@@ -221,6 +235,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
     spike: undefined,
     lightweight: false,
     uiReview: false,
+    review: false,
     reconcile: true,
   };
   const { tokens } = parseArgs({
@@ -234,6 +249,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       spike: { type: "string" },
       lightweight: { type: "boolean" },
       "ui-review": { type: "boolean" },
+      review: { type: "boolean" },
       "no-reconcile": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -280,6 +296,10 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       options.uiReview = true;
       continue;
     }
+    if (token.name === "review") {
+      options.review = true;
+      continue;
+    }
     // Read-only callers (the inspect viewer's envelope preview) must not trigger
     // the board self-heal: it is a WRITE path, and its in-flight `gh` fan-out
     // keeps the process alive long after the bundle is on stdout.
@@ -300,6 +320,14 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
   // specifically rather than falling through to the generic message.
   if (options.uiReview && options.pr === undefined) {
     throw parseError("--ui-review is only valid with --pr <n> (rejected with --issue, --input, --plan-file, --spike, or with no --pr).");
+  }
+  // --review is the plain read-only counterpart to --ui-review and is likewise
+  // valid only for an explicitly selected PR target.
+  if (options.review && options.pr === undefined) {
+    throw parseError("--review is only valid with --pr <n> (rejected with --issue, --input, --plan-file, --spike, or with no --pr).");
+  }
+  if (options.review && options.uiReview) {
+    throw parseError("--review and --ui-review are mutually exclusive selectors; provide only one.");
   }
   // --lightweight is normally a MODIFIER (not a 6th mode): it makes the PR body
   // the spec-of-record for the --issue local path. Used ALONE (modeCount === 0)
@@ -585,15 +613,15 @@ function resolveOwnershipState(assignees, cwd, env) {
 // requires assigned_to_me and fails closed on anything else. assigned_to_other
 // names the foreign assignee(s); unassigned names the exact claim command so
 // the caller can self-heal (claim, then re-run) instead of guessing.
-function enforceOwnershipGate(ownership, { describeArtifact, claimCommand }) {
+function enforceOwnershipGate(ownership, { describeArtifact, claimCommand, reviewRouteHint = "" }) {
   if (ownership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
     throw new Error(
-      `${describeArtifact} is assigned to ${ownership.foreignLogins.join(", ")}, not the current viewer; fail closed — do not start. Have the owner unassign it, or pick a different item.`,
+      `${describeArtifact} is assigned to ${ownership.foreignLogins.join(", ")}, not the current viewer; fail closed — do not start. Have the owner unassign it, or pick a different item.${reviewRouteHint}`,
     );
   }
   if (ownership.state === OWNERSHIP_STATE.UNASSIGNED) {
     throw new Error(
-      `${describeArtifact} is not claimed by any contributor; fail closed — do not start. Claim it first: ${claimCommand}`,
+      `${describeArtifact} is not claimed by any contributor; fail closed — do not start. Claim it first: ${claimCommand}${reviewRouteHint}`,
     );
   }
 }
@@ -656,7 +684,7 @@ function normalizeConfigInputSource(value) {
   if (value === "tracker") return "tracker";
   return "tracker";
 }
-export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, env = process.env }) {
+export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, review = false, env = process.env }) {
   // The viewer-login memo exists to dedupe gh calls WITHIN one resolution
   // (PR + linked-issue checks); reset it per invocation so a long-lived
   // process (or test) never reuses a stale login across resolutions.
@@ -802,6 +830,8 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     if (!ownershipGateBypassed(env)) {
       const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
       if (ownershipGateAppliesToStrategy(peekedStrategy)) {
+        // Plain review is PR-only, so issue ownership errors intentionally do
+        // not suggest the review selector.
         enforceOwnershipGate(resolveOwnershipState(assignees, repoRoot, env), {
           describeArtifact: `Issue #${issue}`,
           claimCommand: `node scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
@@ -823,21 +853,28 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     prAssignees = prJson.assignees || [];
     linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
   } catch {
+    // A plain review is ownership-exempt, so unlike the gated strategies the
+    // ownership gate cannot backstop an unreadable PR: fail closed rather than
+    // fabricate artifactState for a PR we could not read
+    // (FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED). --ui-review deliberately keeps
+    // its existing posture; harmonizing the two is a separate change.
+    if (review) {
+      throw new Error(`PR #${pr} could not be read; fail closed — do not start a review against an unresolvable PR.`);
+    }
     artifactState = "open";
   }
   const resolvedTargetPreference = targetPreference ?? resolveTargetPreference(repoRoot);
-  // `--ui-review` routes the PR to the ui_review strategy instead of the
-  // default continue_on_pr/copilot_pr_followup path; every other field
-  // (ownership/nextActor/artifactState/etc.) stays identical — only intent +
-  // loopState change, and only when the flag is set, so the plain --pr path
-  // is byte-unchanged.
+  // `--review` and `--ui-review` route the PR to their read-only strategies
+  // instead of the default continue_on_pr/copilot_pr_followup path; every other
+  // field stays identical. Without either selector, the plain --pr path is
+  // byte-unchanged.
   const result = {
-    intent: uiReview ? "review_pr_ui" : "continue_on_pr",
+    intent: review ? "review_pr" : uiReview ? "review_pr_ui" : "continue_on_pr",
     mode: "bounded_handoff",
     targetPreference: resolvedTargetPreference,
     artifactState,
     issueLinkageResolution: "not_applicable",
-    loopState: uiReview ? "pr_ui_review_start" : "pr_followup_start",
+    loopState: review ? "pr_review_start" : uiReview ? "pr_ui_review_start" : "pr_followup_start",
     currentState: {
       target: { kind: "pr", issue: null, pr, linkedPr: null, branch: null, phase: null },
       ownership: "copilot",
@@ -848,19 +885,21 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   };
   // Scoped single-contributor ownership gate (ADR 0042): peek the strategy
   // the pure routing evaluator would select for this canonical state
-  // (ui_review for --ui-review, one of the copilot/external/reviewer-fixer
-  // follow-up strategies otherwise), then enforce ownership — including the
-  // linked-issue foreign check — only when that strategy is gated. A
-  // ui_review peek is exempt, so a reviewer can run `/dev-loops:loop-review-ui`
-  // against a PR (and its linked issue) they do not own. Bypassed (read-only
+  // (review/ui_review for their explicit selectors, one of the
+  // copilot/external/reviewer-fixer follow-up strategies otherwise), then
+  // enforce ownership — including the linked-issue foreign check — only when
+  // that strategy is gated. Review peeks are exempt, so a reviewer can inspect
+  // a PR (and its linked issue) they do not own. Bypassed (read-only
   // inspection): skip enforcement entirely, mirroring the --issue path above.
   if (!ownershipGateBypassed(env)) {
     const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
     if (ownershipGateAppliesToStrategy(peekedStrategy)) {
       const prOwnership = resolveOwnershipState(prAssignees, repoRoot, env);
+      const reviewRouteHint = ` For a read-only review that needs no ownership, use: dev-loops loop startup --pr ${pr} --review`;
       enforceOwnershipGate(prOwnership, {
         describeArtifact: `PR #${pr}`,
         claimCommand: `node scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
+        reviewRouteHint,
       });
       // A PR whose linked issue is foreign-owned is foreign too — the issue
       // owner owns the whole loop. This only checks for a FOREIGN linked
@@ -882,7 +921,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         const linkedIssueOwnership = resolveOwnershipState(linkedIssueAssignees, repoRoot, env);
         if (linkedIssueOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
           throw new Error(
-            `PR #${pr}'s linked issue #${linkedIssueNumber} is assigned to ${linkedIssueOwnership.foreignLogins.join(", ")}, not the current viewer; the issue owner owns the whole loop — fail closed, do not continue. Have the owner unassign it, or pick a different item.`,
+            `PR #${pr}'s linked issue #${linkedIssueNumber} is assigned to ${linkedIssueOwnership.foreignLogins.join(", ")}, not the current viewer; the issue owner owns the whole loop — fail closed, do not continue. Have the owner unassign it, or pick a different item.${reviewRouteHint}`,
           );
         }
       }
@@ -1388,6 +1427,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       cwd: sessionCwd,
       targetPreference,
       uiReview: options.uiReview,
+      review: options.review,
       env: adapter.getEnv(),
     });
   }

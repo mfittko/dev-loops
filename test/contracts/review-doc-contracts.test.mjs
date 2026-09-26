@@ -321,11 +321,14 @@ test("standalone review route stays structurally decoupled from the single-contr
   assert.ok(extractRelativeMarkdownLinks(reviewSkill).some(({ rawTarget }) =>
     rawTarget === "../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup"));
 
-  // The authoritative ownership-gate contract documents review's exemption
-  // (distinct mechanism from the ui_review/wait_watch STRATEGY_OWNERSHIP_GATE
-  // entries) alongside the write-capable routes that stay gated.
-  assert.match(publicContract, /standalone `review` route is ownership-exempt too/i);
+  // The authoritative contract makes review a first-class, ownership-exempt,
+  // read-only strategy while preserving the gate on every write-capable route.
+  assert.match(publicContract, /`review` is exempt via an explicit `false` entry in `STRATEGY_OWNERSHIP_GATE`/i);
   assert.match(publicContract, /Every write-capable route[\s\S]{0,200}stays gated exactly as before/i);
+  assert.match(publicContract, /sanctioned, separately invocable read-only entrypoint/i);
+  assert.match(publicContract, /only intended public write-capable workflow entrypoint/i);
+  assert.match(publicContract, /Sanctioned read-only review entrypoint\s*\|\s*`review`/i);
+  assert.match(publicContract, /loop startup --pr <n> --review/i);
 
   // No review-pipeline script imports or otherwise references the ownership
   // gate — the exemption holds structurally, not just by doc convention: a
