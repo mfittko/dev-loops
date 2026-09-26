@@ -175,8 +175,14 @@ models:
     pre-pr-strong:
       claude: opus
       pi: openai-codex/gpt-5.6-sol
+  # The two implementation roles carry the most code weight in the chain. The
+  # built-in `low` alias they default to has no Pi model, so on that harness it
+  # is a silent no-op that leaves them inheriting the conductor's model; pin
+  # them to the same strong tier as the pre-push reviewer instead.
   roleTiers:
     pre-push-reviewer: pre-pr-strong
+    developer: pre-pr-strong
+    fixer: pre-pr-strong
 
 tracker:
   board:
