@@ -29,7 +29,10 @@
  *      lockstep so a plugin-only install's auto-install resolves the release
  *
  * Bump-only: it never commits, tags, pushes, or publishes. Commit + tag + push
- * and the stable-release approval gate remain operator/runbook-owned.
+ * and the stable-release approval gate remain operator/runbook-owned. After a
+ * successful bump the CLI entrypoint best-effort pushes the regenerated `.claude`
+ * assets to their Multica counterparts (`maybeSyncMulticaAssets`); a missing or
+ * unauthenticated `multica` CLI warns and continues, never failing the release.
  *
  * Idempotent: re-running with the same target is a no-op. The target may carry
  * any prerelease token (`1.0.2-slim.0`, `1.0.0-rc.7`, …); surfaces are compared
@@ -390,6 +393,45 @@ export function bumpVersion({ repoRoot, version, stage = true, silent = false, r
   return { ok: true, version, surfaces, staged: stagedPaths };
 }
 
+/**
+ * Best-effort push of the freshly generated `.claude` assets to their Multica
+ * agent/skill counterparts (MFIT-367). Runs AFTER a successful bump (so it sees
+ * the regenerated `.claude` tree) and NEVER fails the release: a missing or
+ * unauthenticated `multica` CLI prints one warning line and returns. Kept out of
+ * `bumpVersion` itself so the injectable-runner orchestration stays a pure
+ * surfaces→guards→staging sequence.
+ *
+ * `probe`/`sync` are injectable for tests. `probe("multica", ["auth","status"])`
+ * returns `{ error?, status }` (spawnSync shape): `error.code === "ENOENT"` means
+ * the CLI is not on PATH; a non-zero `status` means present but unauthenticated.
+ * @returns {{ ran: boolean, ok?: boolean, reason?: string }}
+ */
+export function maybeSyncMulticaAssets({
+  repoRoot,
+  silent = false,
+  probe = (command, args) => spawnSync(command, args, { encoding: "utf8" }),
+  runSync = (args) => spawnSync("node", args, { stdio: silent ? ["ignore", "pipe", "pipe"] : ["ignore", 2, 2], encoding: "utf8" }),
+  stderr = process.stderr,
+} = {}) {
+  const auth = probe("multica", ["auth", "status"]);
+  if (auth.error) {
+    stderr.write("[bump-version] multica CLI not on PATH — skipping Multica asset sync (not a release failure).\n");
+    return { ran: false, reason: "no-cli" };
+  }
+  if ((auth.status ?? 1) !== 0) {
+    stderr.write("[bump-version] multica CLI not authenticated — skipping Multica asset sync (not a release failure).\n");
+    return { ran: false, reason: "unauthenticated" };
+  }
+  const script = path.join(repoRoot, "scripts/release/sync-multica.mjs");
+  const args = [script, "--repo-root", repoRoot, ...(silent ? ["--silent"] : [])];
+  const res = runSync(args);
+  if ((res.status ?? 1) !== 0) {
+    stderr.write("[bump-version] Multica asset sync failed — continuing (not a release failure). Re-run `node scripts/release/sync-multica.mjs`.\n");
+    return { ran: true, ok: false };
+  }
+  return { ran: true, ok: true };
+}
+
 function parseArgs(argv) {
   const args = [...argv];
   let repoRoot = null;
@@ -426,6 +468,8 @@ function main(argv) {
   );
   try {
     const result = bumpVersion({ repoRoot, version, silent });
+    // Best-effort: push the regenerated .claude assets to Multica. Never fails a release.
+    maybeSyncMulticaAssets({ repoRoot, silent });
     process.exit(emitResult(result, { jq, silent }));
   } catch (error) {
     process.stderr.write(`[bump-version] ${error.message}\n`);
