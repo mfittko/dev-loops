@@ -1588,6 +1588,7 @@ test("--issue assigned_to_other fails closed naming the foreign assignee (no rea
     assert.equal(result.stdout, "");
     assert.match(result.stderr, /Issue #511 is assigned to foreign-dev, not the current viewer/);
     assert.match(result.stderr, /Have the owner unassign it, or pick a different item/);
+    assert.doesNotMatch(result.stderr, /--review/);
   }, { prefix: "resolve-dev-loop-ownership-issue-other-" });
 });
 
@@ -1630,6 +1631,7 @@ test("--issue unassigned fails closed naming the exact claim command (no readine
       result.stderr,
       /Issue #511 is not claimed by any contributor.*Claim it first: node scripts\/github\/edit-issue\.mjs --repo mfittko\/dev-loops --issue 511 --add-assignee @me/s,
     );
+    assert.doesNotMatch(result.stderr, /--review/);
   }, { prefix: "resolve-dev-loop-ownership-issue-unassigned-" });
 });
 
@@ -2121,6 +2123,10 @@ test("--pr continuation fails closed when the PR's linked issue is assigned to a
     assert.equal(result.stdout, "");
     assert.match(result.stderr, /PR #740's linked issue #511 is assigned to foreign-dev, not the current viewer/);
     assert.match(result.stderr, /the issue owner owns the whole loop/);
+    assert.match(
+      result.stderr,
+      /read-only review that needs no ownership.*dev-loops loop startup --pr 740 --review/s,
+    );
   }, { prefix: "resolve-dev-loop-ownership-pr-linked-issue-other-" });
 });
 

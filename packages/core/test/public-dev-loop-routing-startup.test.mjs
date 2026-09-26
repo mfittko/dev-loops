@@ -260,6 +260,68 @@ test("review_pr with a conflicting canonical PR state fails closed", () => {
   assert.match(result.reason, /target conflicts/);
 });
 
+test("review_pr never preempts the authoritative lifecycle gates (the plain-review intercept stays after them)", () => {
+  const pr = 88;
+  const baseState = {
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr },
+    ownership: DEV_LOOP_ACTOR.COPILOT,
+    nextActor: DEV_LOOP_ACTOR.USER,
+    status: DEV_LOOP_STATUS.ACTIVE,
+    authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+  };
+  const cases = [
+    {
+      name: "status DONE routes to the done/terminal stop",
+      state: { ...baseState, status: DEV_LOOP_STATUS.DONE },
+      gate: DEV_LOOP_GATE.STOP_DONE_TERMINAL,
+    },
+    {
+      name: "status BLOCKED routes to the blocked stop",
+      state: { ...baseState, status: DEV_LOOP_STATUS.BLOCKED },
+      gate: DEV_LOOP_GATE.STOP_BLOCKED_OR_NOT_AUTHORIZED,
+    },
+    {
+      name: "authorization NOT_AUTHORIZED routes to the blocked/not-authorized stop",
+      state: { ...baseState, authorization: DEV_LOOP_AUTHORIZATION.NOT_AUTHORIZED },
+      gate: DEV_LOOP_GATE.STOP_BLOCKED_OR_NOT_AUTHORIZED,
+    },
+    {
+      name: "status WAITING routes to the wait/watch gate",
+      state: { ...baseState, status: DEV_LOOP_STATUS.WAITING },
+      gate: DEV_LOOP_GATE.WAIT_WATCH,
+    },
+    {
+      name: "status APPROVAL_READY routes to the final-approval gate",
+      state: { ...baseState, status: DEV_LOOP_STATUS.APPROVAL_READY },
+      gate: DEV_LOOP_GATE.FINAL_APPROVAL,
+      // Final-approval routing additionally requires clean current-head
+      // pre_approval_gate evidence; supplying it isolates the precedence
+      // claim under test (the lifecycle gate wins over the review intercept).
+      gateReviewEvidence: buildCleanPreApprovalGateEvidence(),
+    },
+    {
+      name: "status MERGE_READY + NEEDS_CONFIRMATION routes to the merge-authorization wait",
+      state: {
+        ...baseState,
+        status: DEV_LOOP_STATUS.MERGE_READY,
+        authorization: DEV_LOOP_AUTHORIZATION.NEEDS_CONFIRMATION,
+      },
+      gate: DEV_LOOP_GATE.WAITING_FOR_MERGE_AUTHORIZATION,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const result = evaluatePublicDevLoopRouting({
+      intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
+      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr },
+      currentState: testCase.state,
+      gateReviewEvidence: testCase.gateReviewEvidence ?? null,
+    });
+    assert.equal(result.selectedGate, testCase.gate, testCase.name);
+    assert.notEqual(result.selectedGate, DEV_LOOP_GATE.REVIEW, testCase.name);
+  }
+});
+
 test("authoritative startup/resume bundle fails closed for review_pr with each non-PR canonical target", () => {
   const common = {
     intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,

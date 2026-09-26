@@ -1496,7 +1496,7 @@ test("invariant: review is read-only and cannot produce lifecycle gate evidence"
     acceptanceKey(INTERNAL_DEV_LOOP_STRATEGY.REVIEW, "default"),
   );
   assert.deepEqual(template.evidence, ["review-findings", "manual-notes"]);
-  assert.doesNotMatch(JSON.stringify(template), /draft_gate.*satisf/i);
+  assert.doesNotMatch(JSON.stringify(template.evidence), /draft_gate|pre_approval_gate/);
   assert.match(JSON.stringify(template), /never satisfies draft_gate or pre_approval_gate evidence/i);
 });
 

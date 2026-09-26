@@ -31,6 +31,7 @@ Day-one user-intent forms:
 - auto dev loop (durable auto ownership over the detected routed loop)
 - auto dev loop on issue `<n>`
 - review PR `<n>` in a UI loop
+- review PR `<n>`
 - what state is the dev loop in?
 
 ## Issue-based shorthand auto trigger contract

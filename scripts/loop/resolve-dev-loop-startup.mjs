@@ -82,12 +82,13 @@ Optional modifier:
   --review       With --pr only: route the PR to the read-only review strategy
                  instead of the default continue_on_pr path. Requires no
                  ownership. Rejected without --pr, or combined with --issue/
-                 --input/--plan-file/--spike.
+                 --input/--plan-file/--spike, and mutually exclusive with
+                 --ui-review.
   --ui-review    With --pr only: route the PR to the ui_review strategy
                  (running-app review from an isolated worktree) instead of
                  the default continue_on_pr/copilot_pr_followup path.
                  Rejected without --pr, or combined with --issue/--input/
-                 --plan-file/--spike.
+                 --plan-file/--spike, and mutually exclusive with --review.
   --lightweight  With --issue: use the PR body as the spec-of-record
                  (canonicalSpecSource: pr_body) — no phase/plan doc minted or
                  committed. Same gate sequence; only the backing artifact
@@ -894,10 +895,11 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
     if (ownershipGateAppliesToStrategy(peekedStrategy)) {
       const prOwnership = resolveOwnershipState(prAssignees, repoRoot, env);
+      const reviewRouteHint = ` For a read-only review that needs no ownership, use: dev-loops loop startup --pr ${pr} --review`;
       enforceOwnershipGate(prOwnership, {
         describeArtifact: `PR #${pr}`,
         claimCommand: `node scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
-        reviewRouteHint: ` For a read-only review that needs no ownership, use: dev-loops loop startup --pr ${pr} --review`,
+        reviewRouteHint,
       });
       // A PR whose linked issue is foreign-owned is foreign too — the issue
       // owner owns the whole loop. This only checks for a FOREIGN linked
@@ -919,7 +921,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         const linkedIssueOwnership = resolveOwnershipState(linkedIssueAssignees, repoRoot, env);
         if (linkedIssueOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
           throw new Error(
-            `PR #${pr}'s linked issue #${linkedIssueNumber} is assigned to ${linkedIssueOwnership.foreignLogins.join(", ")}, not the current viewer; the issue owner owns the whole loop — fail closed, do not continue. Have the owner unassign it, or pick a different item.`,
+            `PR #${pr}'s linked issue #${linkedIssueNumber} is assigned to ${linkedIssueOwnership.foreignLogins.join(", ")}, not the current viewer; the issue owner owns the whole loop — fail closed, do not continue. Have the owner unassign it, or pick a different item.${reviewRouteHint}`,
           );
         }
       }
