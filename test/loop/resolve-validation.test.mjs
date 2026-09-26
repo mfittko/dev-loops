@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,14 +13,19 @@ const LEGACY = fileURLToPath(new URL("../../scripts/loop/run-gate-validation.mjs
 const CLI = fileURLToPath(new URL("../../cli/index.mjs", import.meta.url));
 const bunVersion = execFileSync("bun", ["--version"], { encoding: "utf8" }).trim();
 
-async function fixture() {
+async function fixture(extraScripts = {}) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "resolve-validation-"));
   await writeFile(path.join(repoRoot, "package.json"), JSON.stringify({
     name: "fixture", packageManager: `bun@${bunVersion}`,
-    scripts: { verify: "node -e \"console.log('full-ran')\"", test: "node -e \"console.log('test-ran')\"", passing: "node -e \"console.log('targeted-ran')\"", "test:scripts": "node -e \"console.log('scripts-ran')\"", "test:all": "node -e \"console.log('all-ran')\"", "test:docs": "node -e \"console.log('docs-ran')\"", "test:workflows": "node -e \"console.log('workflows-ran')\"" },
+    scripts: { verify: "bun scripts/verify.mjs", test: "bun run verify", passing: "bun scripts/passing.mjs", "test:scripts": "bun scripts/suite.mjs", "test:all": "bun scripts/all.mjs", "test:docs": "bun scripts/docs.mjs", "test:workflows": "bun scripts/workflows.mjs", ...extraScripts },
   }));
+  await mkdir(path.join(repoRoot, "scripts"));
+  await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
+  for (const name of ["verify", "passing", "suite", "all", "docs", "workflows"]) {
+    await writeFile(path.join(repoRoot, "scripts", `${name}.mjs`), `console.log('${name}-ran')`);
+  }
   execFileSync("git", ["init", "-q"], { cwd: repoRoot });
-  execFileSync("git", ["add", "package.json"], { cwd: repoRoot });
+  execFileSync("git", ["add", "package.json", ".gitignore", "scripts"], { cwd: repoRoot });
   execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], { cwd: repoRoot });
   const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
   return { repoRoot, headSha };
@@ -44,7 +49,7 @@ test("full validation resolves through gate CLI and preserves the legacy artifac
 });
 
 test("legacy runner cannot launch full aliases or the component-suite composition", async () => {
-  const { repoRoot, headSha } = await fixture();
+  const { repoRoot, headSha } = await fixture({ "test:quick": "bun run verify" });
   try {
     for (const suite of ["verify", "test"]) {
       const out = await runNode(LEGACY, ["--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha, "--suite", suite], { cwd: repoRoot });
@@ -54,6 +59,20 @@ test("legacy runner cannot launch full aliases or the component-suite compositio
     const composed = await runNode(LEGACY, ["--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha, "--suite", "test:all", "--suite", "test:docs", "--suite", "test:workflows"], { cwd: repoRoot });
     assert.equal(composed.code, 1);
     assert.match(composed.stderr, /resolve-validation/);
+    const alias = await runNode(LEGACY, ["--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha, "--suite", "test:quick"], { cwd: repoRoot });
+    assert.equal(alias.code, 1);
+    assert.match(alias.stderr, /resolve-validation/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("targeted resolver rejects a full alias before it runs", async () => {
+  const { repoRoot, headSha } = await fixture({ "test:quick": "bun run verify" });
+  try {
+    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha, "targeted"), "--suite", "test:quick"], { cwd: repoRoot });
+    assert.equal(out.code, 1);
+    const result = JSON.parse(out.stdout);
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /full-repository/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
@@ -101,5 +120,21 @@ test("dirty worktree cannot claim validation at the committed head", async () =>
     const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
     assert.equal(result.status, "incomplete");
     assert.match(result.reason, /clean worktree/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("suite changes to tracked files leave typed incomplete evidence and no complete artifact", async () => {
+  const { repoRoot } = await fixture({ verify: "bun scripts/mutate.mjs" });
+  try {
+    await writeFile(path.join(repoRoot, "scripts", "mutate.mjs"), "import { appendFileSync } from 'node:fs'; appendFileSync('package.json', '\\n');\n");
+    execFileSync("git", ["add", "scripts/mutate.mjs"], { cwd: repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "mutator"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha)], { cwd: repoRoot });
+    assert.equal(out.code, 1);
+    const result = JSON.parse(out.stdout);
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /changed the worktree/);
+    assert.equal(result.artifact, undefined);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });

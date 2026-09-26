@@ -26,8 +26,8 @@ import { assertWorktreeAtHead, buildValidationResultsPath } from "../github/writ
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parseBunLock } from "../release/assert-core-dependency-version.mjs";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
+import { verificationCommandSegments } from "@dev-loops/core/loop/bash-command-classify";
 
-const DEFAULT_SUITES = ["test:scripts"];
 const OUTPUT_TAIL_CHARS = 4000;
 const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
@@ -44,7 +44,7 @@ Optional:
   --suite <name>              npm script name to run (repeatable). MUST be a key
                                of this repo's package.json "scripts" map — an
                                unknown name fails closed (exit 1) BEFORE anything
-                               runs. Default: test:scripts. Full-repository
+                               runs. Required. Full-repository
                                suites require dev-loops gate resolve-validation.
   --tmp-root <path>            Root tmp directory (default: tmp/)
 
@@ -141,10 +141,8 @@ export function parseRunGateValidationCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  if (options.suites.length === 0) {
-    options.suites = [...DEFAULT_SUITES];
-  }
   const missing = ["repo", "pr", "gate", "headSha"].filter((k) => options[k] === undefined);
+  if (options.suites.length === 0) missing.push("suite");
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
   }
@@ -179,6 +177,30 @@ export function validateSuiteNames(suites, scripts) {
       `Suite name(s) not usable as a log-file path segment (allowed: alphanumerics then [A-Za-z0-9._:-]): ${unsafe.join(", ")}. Refusing to execute anything.`,
     );
   }
+}
+
+export function classifyPackageSuites(suites, scripts) {
+  validateSuiteNames(suites, scripts);
+  const commands = [];
+  const visit = (name, stack = []) => {
+    if (stack.includes(name)) throw new Error(`Recursive package script: ${[...stack, name].join(" -> ")}`);
+    const body = scripts[name];
+    if (typeof body !== "string" || !body.trim() || /\$\(|`|[<>|]|(?<!&)&(?!&)/.test(body)) throw new Error(`Cannot classify package script ${name}`);
+    commands.push(`bun run ${name}`);
+    for (const segment of verificationCommandSegments(body)) {
+      const nested = segment.match(/^(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?([A-Za-z0-9][A-Za-z0-9._:-]*)$/);
+      if (nested) {
+        if (!Object.hasOwn(scripts, nested[1])) throw new Error(`Unknown package script ${nested[1]} referenced by ${name}`);
+        visit(nested[1], [...stack, name]);
+      } else if (classifyValidationCommand(segment) !== "non-validation" || /^(?:bun|node)\s+(?:scripts\/[\w./-]+\.mjs|\.\/node_modules\/@playwright\/test\/cli\.js)(?:\s|$)/.test(segment)) {
+        commands.push(segment);
+      } else {
+        throw new Error(`Cannot classify package script ${name}: ${segment}`);
+      }
+    }
+  };
+  for (const name of suites) visit(name);
+  return classifyValidationCommand(commands.join(" && "));
 }
 
 /**
@@ -505,8 +527,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // cwd would otherwise validate a different tree under this head's stamp.
     assertWorktreeAtHead(options.headSha, { repoRoot });
     const scripts = await readPackageScripts(repoRoot);
-    validateSuiteNames(options.suites, scripts);
-    if (classifyValidationCommand(options.suites.map((name) => `bun run ${name}`).join(" && ")) === "full-repository") {
+    if (classifyPackageSuites(options.suites, scripts) === "full-repository") {
       throw new Error("Full-repository validation must run through dev-loops gate resolve-validation");
     }
 

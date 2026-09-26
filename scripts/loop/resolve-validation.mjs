@@ -3,11 +3,10 @@ import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
-import { buildValidationArtifact, parseRunGateValidationCliArgs, readPackageScripts, validateSuiteNames } from "./run-gate-validation.mjs";
+import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts } from "./run-gate-validation.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: dev-loops gate resolve-validation --profile <targeted|full-repository> --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA> [--suite <script>]...\nTargeted profile requires at least one explicit --suite.\n${JQ_OUTPUT_USAGE}`;
@@ -34,22 +33,28 @@ export function parseResolveValidationArgs(argv) {
 export async function resolveValidation(options, { repoRoot = resolveRepoRoot(process.cwd()), env = process.env } = {}) {
   const incomplete = (reason) => ({ ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason });
   try {
-    const actualHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim().toLowerCase();
-    if (actualHead !== options.headSha) return incomplete(`worktree HEAD ${actualHead} differs from requested head`);
+    const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+    const currentTreeProblem = () => {
+      const actualHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim().toLowerCase();
+      if (actualHead !== options.headSha) return `worktree HEAD ${actualHead} differs from requested head`;
+      const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim();
+      return dirty ? "validation requires a clean worktree at the requested head" : null;
+    };
+    const beforeProblem = currentTreeProblem();
+    if (beforeProblem) return incomplete(beforeProblem);
     const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
     const pinned = packageJson.packageManager;
     if (!/^bun@\d+\.\d+\.\d+$/.test(pinned ?? "")) return incomplete("packageManager does not pin an exact Bun version");
     const installed = execFileSync("bun", ["--version"], { cwd: repoRoot, encoding: "utf8", env }).trim();
     if (`bun@${installed}` !== pinned) return incomplete(`installed bun@${installed} differs from ${pinned}`);
-    const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: repoRoot, encoding: "utf8", env: { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
-    if (dirty) return incomplete("validation requires a clean worktree at the requested head");
     const scripts = await readPackageScripts(repoRoot);
-    validateSuiteNames(options.suites, scripts);
-    const classification = classifyValidationCommand(options.suites.map((name) => `bun run ${name}`).join(" && "));
+    const classification = classifyPackageSuites(options.suites, scripts);
     if (options.profile === "targeted" && classification === "full-repository") return incomplete("targeted profile cannot run full-repository validation");
     if (options.profile === "targeted" && classification !== "targeted") return incomplete("targeted profile requires a validation suite");
     if (options.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
     const artifact = { ...await buildValidationArtifact(options, { repoRoot }), profile: options.profile, toolchain: pinned };
+    const afterProblem = currentTreeProblem();
+    if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem}`);
     const artifactPath = buildValidationResultsPath(options);
     await writeFile(path.resolve(repoRoot, artifactPath), `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
     return { ok: true, status: "complete", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath, artifact };

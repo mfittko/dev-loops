@@ -13,6 +13,7 @@ import {
   stripAnsi,
   validateSuiteNames,
   buildValidationArtifact,
+  classifyPackageSuites,
 } from "../../scripts/loop/run-gate-validation.mjs";
 import { initGitFixture, runNode } from "../_helpers.mjs";
 
@@ -34,14 +35,18 @@ async function makeFixtureRepo() {
       version: "0.0.0",
       private: true,
       scripts: {
-        verify: "node -e \"console.log('verify-ran')\"",
-        "test:scripts": "node -e \"console.log('scripts-ran')\"",
-        passing: "node -e \"console.log('passing-ran')\"",
-        failing: "node -e \"console.error('boom'); process.exit(2)\"",
+        verify: "bun scripts/verify.mjs",
+        "test:scripts": "bun scripts/suite.mjs",
+        passing: "bun scripts/passing.mjs",
+        failing: "bun scripts/failing.mjs",
       },
     }, null, 2),
     "utf8",
   );
+  await mkdir(path.join(repoRoot, "scripts"));
+  for (const [name, source] of Object.entries({ verify: "console.log('verify-ran')", suite: "console.log('scripts-ran')", passing: "console.log('passing-ran')", failing: "console.error('boom'); process.exit(2)" })) {
+    await writeFile(path.join(repoRoot, "scripts", `${name}.mjs`), source);
+  }
   initGitFixture(repoRoot, { commit: null });
   git(repoRoot, ["add", "-A"]);
   git(repoRoot, ["commit", "-q", "-m", "fixture"]);
@@ -53,12 +58,10 @@ async function makeFixtureRepo() {
 // parseRunGateValidationCliArgs
 // ---------------------------------------------------------------------------
 
-test("parseRunGateValidationCliArgs defaults to a targeted suite", () => {
-  const options = parseRunGateValidationCliArgs([
+test("parseRunGateValidationCliArgs requires an explicit suite", () => {
+  assert.throws(() => parseRunGateValidationCliArgs([
     "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234",
-  ]);
-  assert.deepEqual(options.suites, ["test:scripts"]);
-  assert.equal(options.tmpRoot, "tmp");
+  ]), /Missing required arguments: suite/);
 });
 
 test("parseRunGateValidationCliArgs collects repeated --suite flags in order", () => {
@@ -115,6 +118,14 @@ test("validateSuiteNames rejects suite names that are not safe path segments", (
   }));
 });
 
+test("package script reach follows aliases and refuses recursion or unknown shell", () => {
+  const scripts = { verify: "bun scripts/verify.mjs", "test:quick": "bun run verify", "test:all": "bun scripts/run-bun-test.mjs --all", "test:docs": "bun scripts/docs/validate-links.mjs", "test:workflows": "bun scripts/github/lint-workflows.mjs", composed: "bun run test:all && bun run test:docs && bun run test:workflows", a: "bun run b", b: "bun run a", unknown: "python custom.py" };
+  assert.equal(classifyPackageSuites(["test:quick"], scripts), "full-repository");
+  assert.equal(classifyPackageSuites(["composed"], scripts), "full-repository");
+  assert.throws(() => classifyPackageSuites(["a"], scripts), /Recursive package script/);
+  assert.throws(() => classifyPackageSuites(["unknown"], scripts), /Cannot classify package script/);
+});
+
 // ---------------------------------------------------------------------------
 // stripAnsi
 // ---------------------------------------------------------------------------
@@ -142,11 +153,12 @@ test("readPackageScripts returns the scripts map", async () => {
 // CLI integration
 // ---------------------------------------------------------------------------
 
-test("default suite runs targeted validation and writes the compatible artifact", async () => {
+test("explicit targeted suite writes the compatible artifact", async () => {
   const { repoRoot, headSha } = await makeFixtureRepo();
   try {
     const { code, stdout, stderr } = await runNode(SCRIPT, [
       "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha,
+      "--suite", "test:scripts",
     ], { cwd: repoRoot });
     assert.equal(code, 0, stderr);
 
@@ -268,10 +280,11 @@ test("a suite name containing ':' writes its log under a '-'-mapped filename (Wi
       path.join(repoRoot, "package.json"),
       JSON.stringify({
         name: "fixture", version: "0.0.0", private: true,
-        scripts: { "verify": "node -e \"console.log('v')\"", "assets:check": "node -e \"console.log('colon-ran')\"" },
+        scripts: { "verify": "bun scripts/verify.mjs", "assets:check": "bun scripts/colon.mjs" },
       }, null, 2),
       "utf8",
     );
+    await writeFile(path.join(repoRoot, "scripts", "colon.mjs"), "console.log('colon-ran')");
     const { code, stdout, stderr } = await runNode(SCRIPT, [
       "--repo", "owner/repo", "--pr", "10", "--gate", "draft_gate", "--head-sha", headSha,
       "--suite", "assets:check",
