@@ -2,7 +2,7 @@ import { verificationCommandSegments } from "./bash-command-classify.mjs";
 
 const COMPONENT_SUITES = new Set(["test:core", "test:scripts", "test:assets", "test:extension", "test:dev-loop", "test:pack", "test:docs", "test:workflows"]);
 const FULL_SUITES = ["test:all", "test:docs", "test:workflows"];
-const EXACT_TEST_FILE = /(?:^|\s)[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?(?:\s|$)/;
+const EXACT_TEST_FILE = /^(?:run\s+)?[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?(?:\s|$)/;
 const UI_SUITES = new Map([
   ["docs/presentations/introducing-dev-loops.html", "intro-deck"],
   ["docs/presentations/dev-loops-deep-dive.html", "deep-dive"],
