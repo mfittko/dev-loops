@@ -263,6 +263,13 @@ function applyRetrospectiveCheckpointGate(result, checkpointState, checkpointSta
     return result;
   }
 
+  // The read-only review route is informational and non-lifecycle: it never
+  // starts or resumes a qualifying lifecycle run, so the retrospective
+  // checkpoint (scoped to those starts) must not gate it.
+  if (result.selectedGate === DEV_LOOP_GATE.REVIEW) {
+    return result;
+  }
+
   return evaluateRetrospectiveGate({
     checkpointState,
     proposedRouting: result,
