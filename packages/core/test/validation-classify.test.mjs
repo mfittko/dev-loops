@@ -13,6 +13,8 @@ test("validation commands have one shared classification", () => {
     ["env -u FOO CI=1 timeout 600 bun run verify", "full-repository"],
     ["command /usr/local/bin/bun scripts/verify.mjs", "full-repository"],
     ["bun ./scripts/verify.mjs", "full-repository"],
+    ["bun scripts/../scripts/verify.mjs", "full-repository"],
+    ["node scripts/x/../../scripts/verify.mjs", "full-repository"],
     ["./scripts/verify.mjs", "full-repository"],
     ["bun test", "full-repository"],
     ["bun scripts/run-bun-test.mjs --all", "targeted"],

@@ -132,6 +132,17 @@ test("targeted profile rejects a full suite and allows an exact targeted script"
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("targeted gate refuses a dot-segment alias to full verification", async () => {
+  const { repoRoot, headSha } = await fixture({ "test:quick": "bun scripts/../scripts/verify.mjs" });
+  try {
+    const options = parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:quick"]);
+    const result = await resolveValidation(options, { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /targeted profile cannot run full-repository/);
+    assert.equal(result.artifact, undefined);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("targeted profile without an explicit suite is incomplete and runs nothing", async () => {
   const { repoRoot, headSha } = await fixture();
   try {

@@ -26,7 +26,7 @@ function git(repoRoot, args) {
 // The CLI attests the worktree is checked out at the declared --head-sha before
 // running any suite, so the fixture must be a real git repo and every CLI
 // invocation must declare that repo's actual HEAD.
-async function makeFixtureRepo() {
+async function makeFixtureRepo(extraScripts = {}) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-"));
   await writeFile(
     path.join(repoRoot, "package.json"),
@@ -39,6 +39,7 @@ async function makeFixtureRepo() {
         "test:scripts": "bun scripts/suite.mjs",
         passing: "bun scripts/passing.mjs",
         failing: "bun scripts/failing.mjs",
+        ...extraScripts,
       },
     }, null, 2),
     "utf8",
@@ -122,8 +123,19 @@ test("package script reach follows aliases and refuses recursion or unknown shel
   const scripts = { verify: "bun scripts/verify.mjs", "test:quick": "bun run verify", "test:all": "bun scripts/run-bun-test.mjs --all", "test:docs": "bun scripts/docs/validate-links.mjs", "test:workflows": "bun scripts/github/lint-workflows.mjs", composed: "bun run test:all && bun run test:docs && bun run test:workflows", a: "bun run b", b: "bun run a", unknown: "python custom.py" };
   assert.equal(classifyPackageSuites(["test:quick"], scripts), "full-repository");
   assert.equal(classifyPackageSuites(["composed"], scripts), "full-repository");
+  assert.equal(classifyPackageSuites(["test:quick"], { ...scripts, "test:quick": "bun scripts/../scripts/verify.mjs" }), "full-repository");
   assert.throws(() => classifyPackageSuites(["a"], scripts), /Recursive package script/);
   assert.throws(() => classifyPackageSuites(["unknown"], scripts), /Cannot classify package script/);
+});
+
+test("legacy gate refuses a dot-segment alias to full verification", async () => {
+  const { repoRoot, headSha } = await makeFixtureRepo({ "test:quick": "bun scripts/../scripts/verify.mjs" });
+  try {
+    const out = await runNode(SCRIPT, ["--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha, "--suite", "test:quick"], { cwd: repoRoot });
+    assert.equal(out.code, 1);
+    assert.match(out.stderr, /Full-repository validation must run through/);
+    assert.doesNotMatch(out.stdout, /verify-ran/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
 // ---------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import { verificationCommandSegments } from "./bash-command-classify.mjs";
 
 const COMPONENT_SUITES = new Set(["test:core", "test:scripts", "test:assets", "test:extension", "test:dev-loop", "test:pack", "test:docs", "test:workflows"]);
@@ -20,6 +21,8 @@ export function classifyValidationCommand(command) {
   const suites = new Set();
   let targeted = false;
   for (const segment of verificationCommandSegments(command)) {
+    const scriptPath = segment.match(/^(?:(?:bun|node)\s+)?((?:\.\/)?scripts\/[\w./-]+\.mjs)(?:\s|$)/)?.[1];
+    if (scriptPath && posix.normalize(scriptPath) === "scripts/verify.mjs") return "full-repository";
     const bunTest = segment.match(/^bun\s+test(?:\s+(.*))?$/i);
     if (bunTest) {
       if (!EXACT_TEST_FILE.test(bunTest[1] ?? "")) return "full-repository";
@@ -34,7 +37,6 @@ export function classifyValidationCommand(command) {
       targeted = true;
       continue;
     }
-    if (/^(?:(?:bun|node)\s+)?(?:\.\/)?scripts\/verify\.mjs(?:\s|$)/.test(segment)) return "full-repository";
     const runner = segment.match(/^(?:bun|node)\s+scripts\/run-bun-test\.mjs(?:\s+(.*))?$/);
     if (runner) {
       if (/(?:^|\s)--all(?:\s|$)/.test(runner[1] ?? "") || !EXACT_TEST_FILE.test(runner[1] ?? "")) suites.add("test:all");
