@@ -56,6 +56,13 @@ export function isClaudeHarness(env = process.env) {
   return env?.[CLAUDE_HARNESS_MARKER] === "1";
 }
 
+/** Resolve the active CLI harness without choosing a model for it. */
+export function resolveRuntimeHarness(env = process.env) {
+  if (isClaudeHarness(env)) return "claude";
+  if (typeof env?.CODEX_THREAD_ID === "string" && env.CODEX_THREAD_ID.trim()) return "codex";
+  return "pi";
+}
+
 /**
  * Resolve the active run id from the environment.
  *

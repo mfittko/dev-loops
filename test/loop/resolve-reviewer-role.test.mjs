@@ -297,7 +297,7 @@ test("--harness selects the harness-specific tier model (no per-angle literal mo
   }
 });
 
-test("--harness defaults to claude under a Claude-harness env, pi otherwise", async () => {
+test("--harness defaults to the active Codex, Claude, or Pi harness", async () => {
   const dir = await makeFixtureRepo({
     devloops: "version: 1\ngates:\n  draft:\n    angles:\n      - correctness\n",
   });
@@ -307,9 +307,15 @@ test("--harness defaults to claude under a Claude-harness env, pi otherwise", as
       env: { CLAUDECODE: "1" },
     });
     assert.equal(parseJson(claudeDefault.stdout).harness, "claude");
+    const codexDefault = runCli(["--gate", "draft_gate", "--angle", "correctness"], {
+      cwd: dir,
+      env: { CLAUDECODE: "", CODEX_THREAD_ID: "test-codex-thread" },
+    });
+    assert.equal(parseJson(codexDefault.stdout).harness, "codex");
+    assert.equal(parseJson(codexDefault.stdout).model, null);
     const piDefault = runCli(["--gate", "draft_gate", "--angle", "correctness"], {
       cwd: dir,
-      env: { CLAUDECODE: "" },
+      env: { CLAUDECODE: "", CODEX_THREAD_ID: "" },
     });
     assert.equal(parseJson(piDefault.stdout).harness, "pi");
   } finally {

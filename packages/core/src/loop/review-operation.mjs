@@ -69,7 +69,7 @@ export function resolveOperationAnglePool(config, operation) {
  * @property {boolean} ok - Fail-closed reviewer safety boundary: `configErrors.length === 0 && pool.includes(angle)`.
  * @property {"draft_gate"|"pre_approval_gate"|"review"|"spike"} operation
  * @property {string} angle
- * @property {"claude"|"pi"} harness
+ * @property {"claude"|"pi"|"codex"} harness
  * @property {string} persona
  * @property {string|null} prompt
  * @property {string|null} model - Authoritative merged model tier (`resolveRoleModel(..., { kind: "angle" })`).
@@ -86,7 +86,7 @@ export function resolveOperationAnglePool(config, operation) {
  * none of them may reimplement membership/union/additive/disabled/spike
  * classification locally.
  * @param {{ config: import("../config/config.mjs").DevLoopConfig, errors?: Array<unknown> }} loadResult - the `{ config, errors }` shape `loadDevLoopConfig` returns.
- * @param {{ operation: "draft_gate"|"pre_approval_gate"|"review"|"spike", angle: string, harness: "claude"|"pi" }} params
+ * @param {{ operation: "draft_gate"|"pre_approval_gate"|"review"|"spike", angle: string, harness: "claude"|"pi"|"codex" }} params
  * @returns {OperationReviewerRoleResult}
  */
 export function resolveOperationReviewerRole(loadResult, { operation, angle, harness }) {

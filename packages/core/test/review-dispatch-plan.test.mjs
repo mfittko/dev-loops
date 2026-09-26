@@ -46,6 +46,14 @@ describe("normalizeHarnessCapabilities — explicit capability model (Section D)
     assert.equal(caps.usageTelemetry, "unavailable");
   });
 
+  test("codex default posture is conservative/opaque and telemetry unavailable", () => {
+    const caps = normalizeHarnessCapabilities({ harness: "codex" });
+    assert.equal(caps.breakpointControl, "opaque");
+    assert.equal(caps.barrierSignal, "completion_only");
+    assert.equal(caps.cacheTtlControl, "opaque");
+    assert.equal(caps.usageTelemetry, "unavailable");
+  });
+
   test("unknown harness name fails closed", () => {
     assert.throws(() => normalizeHarnessCapabilities({ harness: "no-such" }));
   });

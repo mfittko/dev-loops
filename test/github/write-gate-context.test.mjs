@@ -3529,7 +3529,7 @@ for (const failure of ["plan", "volatile", "live-sentinel", "write"]) {
       const config = { gates: { draft: { angles: [{ name: "docs", scope: "docs-only" }], dynamic: { subtractive: false } } } };
       const input = {
         repo: "owner/repo", pr: 76, gate: "draft_gate", headSha: "abc1234567890",
-        config, prBody: "original body",
+        config, harness: "claude", prBody: "original body",
         diff: { nameStatusOutput: "M\tdocs/example.md\n", diffOutput: "diff --git a/docs/example.md b/docs/example.md\n+original\n" },
       };
       const first = await buildGateContext(input, { repoRoot });
@@ -6106,6 +6106,7 @@ test("main(): the --angles path resolves the request plan's models from an on-di
     await main([
       "--repo", "owner/repo", "--pr", "58", "--gate", "draft_gate",
       "--head-sha", headSha,
+      "--harness", "claude",
       "--angles", '["correctness","docs"]',
     ], { repoRoot, run: stubGhRun });
 
@@ -6139,6 +6140,7 @@ test("buildGateContext threads input.config into the persisted request plan's re
     const result = await buildGateContext(
       {
         config,
+        harness: "claude",
         gate: "draft_gate",
         diff: DOCS_ONLY_DIFF,
         repo: "owner/repo",
@@ -6480,6 +6482,59 @@ test("writeGateContext request-plan resolves a bare no-override angle to its dis
 
     assert.equal(result.requestPlan.requestGroups.length, 1);
     assert.equal(result.requestPlan.requestGroups[0].model, "opus");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("Codex gate plans inherit while Claude and Pi retain their configured models", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-codex-"));
+  try {
+    for (const [harness, expectedModel] of [["codex", "inherit"], ["claude", "opus"], ["pi", "pi-review"]]) {
+      const options = parseWriteGateContextCliArgs([
+        "--repo", "owner/repo", "--pr", "86", "--gate", "draft_gate",
+        "--head-sha", "abc1234567890", "--angles", '["correctness"]',
+        "--harness", harness,
+      ]);
+      options.config = { models: { tiers: { high: { claude: "opus", pi: "pi-review" } } } };
+      const result = await writeGateContext(options, { repoRoot });
+      assert.equal(result.requestPlan.harness, harness);
+      assert.equal(result.requestPlan.requestGroups[0].model, expectedModel, harness);
+      assert.equal(result.requestPlan.capabilities.usageTelemetry, harness === "claude" ? "available" : "unavailable", harness);
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI selects Codex from the active session for both gate plans", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\n");
+    for (const gate of ["draft_gate", "pre_approval_gate"]) {
+      await main([
+        "--repo", "owner/repo", "--pr", "86", "--gate", gate,
+        "--head-sha", headSha, "--angles", '["correctness"]',
+      ], { repoRoot, run: stubGhRun, env: { CODEX_THREAD_ID: "test-codex-thread" }, loadCoordination: async () => null });
+      const planPath = buildGateRequestPlanPath({ repo: "owner/repo", pr: 86, gate, headSha });
+      const plan = JSON.parse(await readFile(path.resolve(repoRoot, planPath), "utf8"));
+      assert.equal(plan.harness, "codex");
+      assert.deepEqual(plan.requestGroups.map((group) => group.model), ["inherit"]);
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildGateContext forwards an explicit Codex harness", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-api-codex-"));
+  try {
+    const result = await buildGateContext({
+      repo: "owner/repo", pr: 86, gate: "draft_gate", headSha: "abc1234567890",
+      harness: "codex", config: { gates: { draft: { angles: [{ name: "correctness" }] } } },
+    }, { repoRoot });
+    assert.equal(result.requestPlan.harness, "codex");
+    assert.deepEqual(result.requestPlan.requestGroups.map((group) => group.model), ["inherit"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

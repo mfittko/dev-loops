@@ -32,14 +32,14 @@ import { parseArgs } from "node:util";
 
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { REVIEW_OPERATIONS, resolveOperationReviewerRole } from "@dev-loops/core/loop/review-operation";
-import { isClaudeHarness } from "@dev-loops/core/loop/run-context";
+import { resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: resolve-reviewer-role.mjs --gate <${REVIEW_OPERATIONS.join("|")}> --angle <name> [--harness <pi|claude>]
+const USAGE = `Usage: resolve-reviewer-role.mjs --gate <${REVIEW_OPERATIONS.join("|")}> --angle <name> [--harness <pi|claude|codex>]
 
 Resolve a gate angle's reviewer role for a review operation from the fully
 merged config (shipped extension default + the repo's .pi/dev-loop/defaults +
@@ -57,8 +57,8 @@ Required:
   --angle <name>           Gate angle / lens name (e.g. correctness, security)
 
 Optional:
-  --harness <pi|claude>    Harness whose concrete model tier to resolve
-                            (default: "claude" under Claude Code, else "pi")
+  --harness <pi|claude|codex> Harness whose concrete model tier to resolve
+                            (default: active CLI harness)
   --help, -h                Show this help
 
 Output (stdout, JSON):
@@ -88,7 +88,7 @@ Exit codes:
   2  Argument/runtime error, or invalid --jq filter`;
 
 const parseError = buildParseError(USAGE);
-const HARNESSES = new Set(["pi", "claude"]);
+const HARNESSES = new Set(["pi", "claude", "codex"]);
 
 export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}) {
   const options = { help: false, gate: null, angle: null, harness: null };
@@ -127,9 +127,9 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
   // of the same input, instead of silently falling through to the env
   // default below.
   if (options.harness !== null && !HARNESSES.has(options.harness)) {
-    throw parseError(`--harness must be one of pi|claude (got ${JSON.stringify(options.harness)})`);
+    throw parseError(`--harness must be one of pi|claude|codex (got ${JSON.stringify(options.harness)})`);
   }
-  if (!options.harness) options.harness = isClaudeHarness(env) ? "claude" : "pi";
+  if (!options.harness) options.harness = resolveRuntimeHarness(env);
   return options;
 }
 
