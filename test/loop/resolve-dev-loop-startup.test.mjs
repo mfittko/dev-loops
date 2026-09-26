@@ -1832,8 +1832,11 @@ test("--pr --review routes to the read-only review strategy without lifecycle ev
     assert.equal(STRATEGY_OWNERSHIP_GATE.review, false);
     // `gateReviewEvidence` is a routing INPUT (`--input`) that no route ever
     // echoes onto the emitted bundle, so asserting its absence here could
-    // never fail. Assert the gate that actually varies: the read-only review
-    // gate must win over every ownership-derived write-capable gate.
+    // never fail. Assert the gate that actually varies instead: the read-only
+    // review gate must be selected ahead of the ownership-derived write-capable
+    // gates (`external_pr_followup` / `reviewer_fixer`, and the copilot path
+    // asserted here), which `public-dev-loop-routing-startup.test.mjs` pins for
+    // the foreign- and reviewer-owned shapes this resolver hardcodes to copilot.
     assert.equal(parsed.canonicalStateSummary.selectedGate, "review");
   }, { prefix: "resolve-dev-loop-review-pr-" });
 });

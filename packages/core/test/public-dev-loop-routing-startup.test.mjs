@@ -322,6 +322,69 @@ test("review_pr never preempts the authoritative lifecycle gates (the plain-revi
   }
 });
 
+test("review_pr wins over the ownership-derived write-capable gates (the plain-review intercept stays before them)", () => {
+  const pr = 88;
+  // `targetPreference: prefer_github_first` is required to reach the
+  // ownership-derived gates at all: the router's own default `prefer_local`
+  // (the same value this repo's `.devloops` `strategy: local-first` resolves in
+  // production) fails closed to `fail_closed_reconcile` for an active PR path
+  // before ownership is read.
+  const routingOptions = { targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST };
+  const baseState = {
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr },
+    ownership: DEV_LOOP_ACTOR.COPILOT,
+    nextActor: DEV_LOOP_ACTOR.USER,
+    status: DEV_LOOP_STATUS.ACTIVE,
+    authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+  };
+  const cases = [
+    {
+      name: "copilot ownership",
+      state: baseState,
+      wouldRouteTo: DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP,
+    },
+    {
+      name: "external-human ownership",
+      state: { ...baseState, ownership: DEV_LOOP_ACTOR.EXTERNAL_HUMAN, nextActor: DEV_LOOP_ACTOR.EXTERNAL_HUMAN },
+      wouldRouteTo: DEV_LOOP_GATE.EXTERNAL_PR_FOLLOWUP,
+    },
+    {
+      name: "reviewer ownership",
+      state: { ...baseState, ownership: DEV_LOOP_ACTOR.REVIEWER, nextActor: DEV_LOOP_ACTOR.REVIEWER },
+      wouldRouteTo: DEV_LOOP_GATE.REVIEWER_FIXER,
+    },
+    {
+      name: "copilot ownership with a reviewer next actor",
+      state: { ...baseState, nextActor: DEV_LOOP_ACTOR.REVIEWER },
+      wouldRouteTo: DEV_LOOP_GATE.REVIEWER_FIXER,
+    },
+  ];
+
+  for (const testCase of cases) {
+    // Prove the state really would select a write-capable gate first, so the
+    // precedence claim below is a contrast and not a tautology: an intercept
+    // that slipped BELOW these checks would still be caught here.
+    const withoutReview = evaluatePublicDevLoopRouting({
+      intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT,
+      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr },
+      currentState: testCase.state,
+      gateReviewEvidence: null,
+      ...routingOptions,
+    });
+    assert.equal(withoutReview.selectedGate, testCase.wouldRouteTo, testCase.name);
+
+    const result = evaluatePublicDevLoopRouting({
+      intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
+      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr },
+      currentState: testCase.state,
+      gateReviewEvidence: null,
+      ...routingOptions,
+    });
+    assert.equal(result.selectedGate, DEV_LOOP_GATE.REVIEW, testCase.name);
+    assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.REVIEW, testCase.name);
+  }
+});
+
 test("authoritative startup/resume bundle fails closed for review_pr with each non-PR canonical target", () => {
   const common = {
     intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
