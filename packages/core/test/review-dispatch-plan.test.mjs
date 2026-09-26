@@ -46,6 +46,14 @@ describe("normalizeHarnessCapabilities — explicit capability model (Section D)
     assert.equal(caps.usageTelemetry, "unavailable");
   });
 
+  test("codex default posture is conservative/opaque and telemetry unavailable", () => {
+    const caps = normalizeHarnessCapabilities({ harness: "codex" });
+    assert.equal(caps.breakpointControl, "opaque");
+    assert.equal(caps.barrierSignal, "completion_only");
+    assert.equal(caps.cacheTtlControl, "opaque");
+    assert.equal(caps.usageTelemetry, "unavailable");
+  });
+
   test("unknown harness name fails closed", () => {
     assert.throws(() => normalizeHarnessCapabilities({ harness: "no-such" }));
   });
@@ -419,6 +427,7 @@ describe("buildReviewDispatchPlan — AC-2: deterministic request-plan artifact"
   });
 
   test("usages fail closed on bad input", () => {
+    assert.throws(() => buildReviewDispatchPlan({ gate: "g", headSha: "abc1234567890", harness: "unknown" }), /harness/);
     assert.throws(() => buildReviewDispatchPlan({ gate: "", headSha: "abc" }));
     assert.throws(() => buildReviewDispatchPlan({ gate: "g", headSha: "not-a-sha" }));
     assert.throws(() => buildReviewDispatchPlan({ gate: "g", headSha: "abc", sharedPrefixHash: "nope" }));

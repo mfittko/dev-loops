@@ -127,3 +127,9 @@ test("the CLI source carries no independent membership/union/additive classifier
     assert.equal(cli.includes(banned), false, `resolve-reviewer-role.mjs must not import/reference ${banned} directly`);
   }
 });
+
+test("gate dispatch instructions use the context harness for Pi and Codex model selection", () => {
+  const skill = read("skills/copilot-pr-followup/SKILL.md");
+  assert.match(skill, /harness: context\.harness, kind: "angle"/);
+  assert.doesNotMatch(skill, /role: angle, harness: "pi", kind: "angle"/);
+});

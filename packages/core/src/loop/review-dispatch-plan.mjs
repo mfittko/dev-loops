@@ -48,6 +48,12 @@ export const HARNESS_DEFAULT_CAPABILITIES = Object.freeze({
     cacheTtlControl: "opaque",
     usageTelemetry: "unavailable",
   }),
+  codex: Object.freeze({
+    breakpointControl: "opaque",
+    barrierSignal: "completion_only",
+    cacheTtlControl: "opaque",
+    usageTelemetry: "unavailable",
+  }),
 });
 
 const CAPABILITY_DIMENSIONS = [
@@ -397,6 +403,7 @@ export function composeCacheAwareRequest({ stablePrefix, briefingBlock, volatile
  * @param {object} input
  * @param {string} input.gate - draft_gate | pre_approval_gate | ...
  * @param {string} input.headSha - full reviewed head SHA.
+ * @param {string} [input.harness] - selected reviewer harness.
  * @param {string} [input.sharedPrefixPath] - path to the materialized briefing-prefix file.
  * @param {string} [input.sharedPrefixHash] - `sha256:<hex>` of those bytes.
  * @param {Array<object>} [input.requestGroups] - each { model, requestPrefixFingerprint, cacheBoundary, ttlIntent, angles[] }.
@@ -404,12 +411,15 @@ export function composeCacheAwareRequest({ stablePrefix, briefingBlock, volatile
  * @param {object} [input.extra] - opaque consumer fields folded into the canonical hash but ignored by validation.
  * @returns {object} validated dispatch-plan object.
  */
-export function buildReviewDispatchPlan({ gate, headSha, sharedPrefixPath, sharedPrefixHash, requestGroups = [], capabilities, extra } = {}) {
+export function buildReviewDispatchPlan({ gate, headSha, harness, sharedPrefixPath, sharedPrefixHash, requestGroups = [], capabilities, extra } = {}) {
   if (typeof gate !== "string" || gate.length === 0) {
     throw new Error("buildReviewDispatchPlan requires a non-empty gate");
   }
   if (typeof headSha !== "string" || !/^[0-9a-f]{7,64}$/i.test(headSha.trim())) {
     throw new Error("buildReviewDispatchPlan requires a hex headSha");
+  }
+  if (harness != null && !Object.hasOwn(HARNESS_DEFAULT_CAPABILITIES, harness)) {
+    throw new Error(`Unknown harness ${JSON.stringify(harness)}`);
   }
   if (sharedPrefixHash != null && !isSha256Hex(String(sharedPrefixHash).replace(/^sha256:/, ""))) {
     throw new Error(`sharedPrefixHash must be sha256:<64 hex> or absent, got ${JSON.stringify(sharedPrefixHash)}`);
@@ -436,6 +446,7 @@ export function buildReviewDispatchPlan({ gate, headSha, sharedPrefixPath, share
   const plan = {
     gate,
     headSha: headSha.trim().toLowerCase(),
+    ...(harness != null ? { harness } : {}),
     ...(sharedPrefixPath != null ? { sharedPrefixPath } : {}),
     ...(normalizedSharedPrefixHash != null ? { sharedPrefixHash: normalizedSharedPrefixHash } : {}),
     requestGroups: groups,
