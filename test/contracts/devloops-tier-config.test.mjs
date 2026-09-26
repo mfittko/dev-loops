@@ -51,7 +51,7 @@ test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and
   );
   assert.equal(
     resolveRoleModel(config, { role: "pre-push-reviewer", harness: "pi" }),
-    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-6-sol",
     "Pi harness pre-push-reviewer must resolve to the configured Codex child model",
   );
   // The rename leaves no alias: the old role key is gone from the repo config.
