@@ -268,7 +268,7 @@ The barrier orders a potential cache write before reads; it does not prove provi
 <!-- rule: GATE-EXEC-VALIDATION-ARTIFACT -->
 `GATE-EXEC-VALIDATION-ARTIFACT`: The preamble MUST resolve the round's validation set exactly
 once, before any reviewer is dispatched, via `dev-loops gate resolve-validation`
-with an explicit targeted package-domain suite selected by `resolveTargetedValidation(changedPaths)`
+with each explicit targeted `gateSuites` entry from `resolveTargetedValidation(changedPaths)`
 from `@dev-loops/core/loop/validation-classify` (or its full-repository
 profile when targeting is unsafe), and MUST persist
 the result as `<gate>-<headSha>.validation.json` beside the gate-context artifact. When

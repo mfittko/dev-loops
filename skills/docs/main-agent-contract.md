@@ -157,7 +157,7 @@ asset-generation time (`harness: "claude"`).
 | `subagent fixer` | Allowed only when called from within `dev-loop`; describe the task as part of the message |
 | Claude Code: the `dev-loop` coordinator writes `packages/core/src/foo.mjs` directly | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — must delegate to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) |
 | Claude Code: the `dev-loop` coordinator writes `tmp/gate-findings/...` (gate evidence) | Allowed — ephemeral/gitignored, not a tracked-file mutation |
-| Claude Code: the `dev-loop` coordinator runs `bun run verify` inline | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — delegate the run to a fresh worker subagent |
+| Claude Code: the `dev-loop` coordinator runs `bun run verify` inline | **BREACH** — request full validation through `dev-loops gate resolve-validation` |
 | Claude Code: a worker subagent (`developer`/`fixer`/`quality`/`review`) runs a targeted suite | Allowed — targeted verification runs are the worker's job |
 | Claude Code: a worker subagent runs `bun run verify` directly | **BREACH** — request full validation through `dev-loops gate resolve-validation` |
 
