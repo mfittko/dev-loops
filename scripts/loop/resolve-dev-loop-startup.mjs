@@ -854,8 +854,9 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   } catch {
     // A plain review is ownership-exempt, so unlike the gated strategies the
     // ownership gate cannot backstop an unreadable PR: fail closed rather than
-    // fabricate artifactState for a PR we could not read. --ui-review keeps its
-    // existing posture (issue #2459 non-goals exclude changing that route).
+    // fabricate artifactState for a PR we could not read
+    // (FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED). --ui-review deliberately keeps
+    // its existing posture; harmonizing the two is a separate change.
     if (review) {
       throw new Error(`PR #${pr} could not be read; fail closed — do not start a review against an unresolvable PR.`);
     }
