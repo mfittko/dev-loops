@@ -82,6 +82,52 @@ test("authoritative startup/resume bundle resolves routed state with authoritati
   );
 });
 
+test("the plain-review intent routes only a matching PR target to the read-only review strategy", () => {
+  const prState = {
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 1234 },
+    ownership: DEV_LOOP_ACTOR.COPILOT,
+    nextActor: DEV_LOOP_ACTOR.USER,
+    status: DEV_LOOP_STATUS.ACTIVE,
+    authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+  };
+
+  const routed = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 1234 },
+    currentState: prState,
+  });
+  assert.equal(routed.selectedGate, DEV_LOOP_GATE.REVIEW);
+  assert.equal(routed.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
+  assert.equal(routed.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.REVIEW);
+
+  const bundle = resolveAuthoritativeStartupResumeBundle({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
+    currentState: prState,
+    artifactState: DEV_LOOP_ARTIFACT_STATE.OPEN,
+    loopState: "pr_review_start",
+  });
+  assert.equal(bundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.RESOLVED);
+  assert.equal(bundle.selectedGate, DEV_LOOP_GATE.REVIEW);
+  assert.equal(bundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.REVIEW);
+
+  const missingPrTarget = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
+    target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 86 },
+    currentState: prState,
+  });
+  assert.equal(missingPrTarget.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
+  assert.match(missingPrTarget.reason, /requires a PR target/);
+
+  const unchangedPlainContinue = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_ON_PR,
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 1234 },
+    currentState: prState,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
+  });
+  assert.equal(unchangedPlainContinue.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(unchangedPlainContinue.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+});
+
 test("the ui-review intent routes a PR target to the ui_review strategy", () => {
   const prState = {
     target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 1234 },

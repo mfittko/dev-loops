@@ -1460,6 +1460,7 @@ test("validate: accepts valid envelope from all strategies", () => {
     { s: INTERNAL_DEV_LOOP_STRATEGY.REVIEWER_FIXER, f: prBundle },
     { s: INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH, f: prBundle },
     { s: INTERNAL_DEV_LOOP_STRATEGY.FINAL_APPROVAL, f: prBundle },
+    { s: INTERNAL_DEV_LOOP_STRATEGY.REVIEW, f: prBundle },
     { s: INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION, f: localBranchBundle },
   ];
   for (const { s, f } of strategies) {
@@ -1485,6 +1486,18 @@ test("invariant: every strategy with default stop rules has an acceptance templa
       `Strategy "${s}" missing acceptance template`,
     );
   }
+});
+
+test("invariant: review is read-only and cannot produce lifecycle gate evidence", () => {
+  const stopRules = STRATEGY_DEFAULT_STOP_RULES[INTERNAL_DEV_LOOP_STRATEGY.REVIEW];
+  assert.deepEqual(stopRules, ["read-only", "one-review-round", "no-lifecycle-gate-evidence"]);
+
+  const template = ACCEPTANCE_TEMPLATES.get(
+    acceptanceKey(INTERNAL_DEV_LOOP_STRATEGY.REVIEW, "default"),
+  );
+  assert.deepEqual(template.evidence, ["review-findings", "manual-notes"]);
+  assert.doesNotMatch(JSON.stringify(template), /draft_gate.*satisf/i);
+  assert.match(JSON.stringify(template), /never satisfies draft_gate or pre_approval_gate evidence/i);
 });
 
 test("invariant: ui_review locks its review-boundary stopRules and acceptance criteria ids", () => {

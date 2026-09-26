@@ -469,7 +469,7 @@ function toRoutableCanonicalState(canonicalState) {
   };
 }
 
-function selectGateForState(canonicalState, { uiReviewRequested = false } = {}) {
+function selectGateForState(canonicalState, { uiReviewRequested = false, reviewRequested = false } = {}) {
   if (canonicalState.status === DEV_LOOP_STATUS.BLOCKED || canonicalState.authorization === DEV_LOOP_AUTHORIZATION.NOT_AUTHORIZED) {
     return DEV_LOOP_GATE.STOP_BLOCKED_OR_NOT_AUTHORIZED;
   }
@@ -505,6 +505,15 @@ function selectGateForState(canonicalState, { uiReviewRequested = false } = {}) 
 
   if (canonicalState.target.kind === DEV_LOOP_TARGET_KIND.ISSUE) {
     return DEV_LOOP_GATE.ISSUE_INTAKE;
+  }
+
+  // An explicit plain-review request intercepts a PR target ahead of the
+  // ownership-derived PR gates: the read-only review is requested regardless
+  // of who owns the PR. It stays after the authoritative lifecycle stop/terminal/
+  // approval/waiting gates so it can never bypass them. Absent the signal this
+  // branch is inert, so existing routes stay byte-identical.
+  if (reviewRequested && canonicalState.target.kind === DEV_LOOP_TARGET_KIND.PR) {
+    return DEV_LOOP_GATE.REVIEW;
   }
 
   // An explicit UI-review request intercepts a PR target ahead of the
@@ -599,10 +608,11 @@ function routeForState(
     gateReviewEvidence = null,
     targetPreference = null,
     uiReviewRequested = false,
+    reviewRequested = false,
   } = {},
 ) {
   const routableCanonicalState = toRoutableCanonicalState(canonicalState);
-  const selectedGate = selectGateForState(routableCanonicalState, { uiReviewRequested });
+  const selectedGate = selectGateForState(routableCanonicalState, { uiReviewRequested, reviewRequested });
   if (
     selectedGate === DEV_LOOP_GATE.FINAL_APPROVAL
     && routableCanonicalState.target.kind === DEV_LOOP_TARGET_KIND.PR
@@ -790,6 +800,18 @@ function routeForState(
       canonicalState: routableCanonicalState,
       nextAction: "Run the UI-review route for the current PR: prove the change in the running app from an isolated worktree. Do not write product code; keep any outward review pending/draft; acknowledge destructive migrations before running them.",
       reason: "An explicit UI-review request on a PR target routes to the ui_review strategy — the running-app review sibling of the reviewer/fixer route.",
+    });
+  }
+
+  if (selectedGate === DEV_LOOP_GATE.REVIEW) {
+    return buildResult({
+      selectedGate,
+      routeKind: DEV_LOOP_ROUTE_KIND.ROUTE,
+      selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.REVIEW,
+      executionMode,
+      canonicalState: routableCanonicalState,
+      nextAction: "Run the read-only review route for the current PR: one informational review-gate round; never fix, never flip ready-for-review, never move a board item, and never satisfy lifecycle gate evidence.",
+      reason: "An explicit plain-review request on a PR target routes to the read-only review strategy.",
     });
   }
 
@@ -1202,6 +1224,7 @@ export function resolveAuthoritativeStartupResumeBundle(input = {}) {
     gateReviewEvidence,
     targetPreference,
     uiReviewRequested: intent === DEV_LOOP_PUBLIC_INTENT.REVIEW_PR_UI,
+    reviewRequested: intent === DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
   });
   if (routed.routeKind === DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE) {
     return buildStartupResumeBundleReconcile({
@@ -1533,6 +1556,8 @@ export function evaluatePublicDevLoopRouting(input = {}) {
     issueAssignmentState: acceptsIssueAssignmentFacts ? issueAssignmentState : null,
     gateReviewEvidence,
     targetPreference,
+    uiReviewRequested: intent === DEV_LOOP_PUBLIC_INTENT.REVIEW_PR_UI,
+    reviewRequested: intent === DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
   };
 
   const finalizeRoutingResult = (result) => {
@@ -1730,6 +1755,23 @@ export function evaluatePublicDevLoopRouting(input = {}) {
 
     return finalizeRoutingResult(applyWatchValidation(
       routeForState(explicitState, { ...routingOptions, executionMode: effectiveMode }),
+      watchRequested,
+    ));
+  }
+
+  if (intent === DEV_LOOP_PUBLIC_INTENT.REVIEW_PR) {
+    if (!explicitTarget || explicitTarget.kind !== DEV_LOOP_TARGET_KIND.PR) {
+      return buildInputReconcile("`review_pr` requires a PR target.", null, effectiveMode);
+    }
+    if (!explicitState || explicitState.target.kind !== DEV_LOOP_TARGET_KIND.PR) {
+      return buildInputReconcile("`review_pr` requires a valid canonical PR state.", explicitState, effectiveMode);
+    }
+    if (explicitState.target.pr !== explicitTarget.pr) {
+      return buildInputReconcile("`review_pr` target conflicts with the canonical current PR state.", explicitState, effectiveMode);
+    }
+
+    return finalizeRoutingResult(applyWatchValidation(
+      routeForState(explicitState, { ...routingOptions, executionMode: effectiveMode, reviewRequested: true }),
       watchRequested,
     ));
   }
