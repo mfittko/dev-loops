@@ -10,7 +10,7 @@ import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { buildValidationArtifact, parseRunGateValidationCliArgs, readPackageScripts, validateSuiteNames } from "./run-gate-validation.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: dev-loops gate resolve-validation --profile <targeted|full-repository> --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA> [--suite <script>]...\n${JQ_OUTPUT_USAGE}`;
+const USAGE = `Usage: dev-loops gate resolve-validation --profile <targeted|full-repository> --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA> [--suite <script>]...\nTargeted profile requires at least one explicit --suite.\n${JQ_OUTPUT_USAGE}`;
 
 export function parseResolveValidationArgs(argv) {
   const args = [...argv];
@@ -20,7 +20,9 @@ export function parseResolveValidationArgs(argv) {
   const profile = args[indices[0] + 1];
   if (!["targeted", "full-repository"].includes(profile)) throw new Error("--profile must be targeted or full-repository");
   args.splice(indices[0], 2);
-  if (profile === "full-repository" && !args.includes("--suite")) args.push("--suite", "verify");
+  const hasSuite = args.some((arg) => arg === "--suite" || arg.startsWith("--suite="));
+  if (profile === "targeted" && !hasSuite) throw new Error("targeted profile requires an explicit --suite");
+  if (profile === "full-repository" && !hasSuite) args.push("--suite", "verify");
   const options = parseRunGateValidationCliArgs(args);
   if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(options.headSha)) throw new Error("--head-sha must be a full 40- or 64-character SHA");
   if (profile === "full-repository" && options.suites.join(",") !== "verify") {

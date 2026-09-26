@@ -82,6 +82,18 @@ test("targeted profile rejects a full suite and allows an exact targeted script"
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("targeted profile without an explicit suite is incomplete and runs nothing", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha, "targeted")], { cwd: repoRoot });
+    assert.equal(out.code, 1);
+    const result = JSON.parse(out.stdout);
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /explicit --suite/);
+    assert.equal(result.artifact, undefined);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("dirty worktree cannot claim validation at the committed head", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
