@@ -17,6 +17,7 @@ import {
   countFreshDispatchUnits,
   fanoutReviewerPairingError,
   freshAngleNames,
+  ledgerAngleNames,
   scheduleFanoutWaves,
   backoffMaxConcurrent,
   planDispatchRetry,
@@ -543,6 +544,34 @@ describe("freshAngleNames", () => {
   });
 });
 
+describe("ledgerAngleNames", () => {
+  test("returns distinct angle names in ledger order, fresh and carried", () => {
+    assert.deepEqual(
+      ledgerAngleNames([{ angle: "a" }, { angle: "c", carriedFromHead: "abc1234" }, { angle: "a" }, { angle: " " }, null, { angle: "b" }]),
+      ["a", "c", "b"],
+    );
+    assert.deepEqual(ledgerAngleNames(null), []);
+  });
+
+  test("with catalogOrder, follows catalog order and puts unknown angles last in lexicographic order", () => {
+    const perAngle = [{ angle: "z" }, { angle: "b" }, { angle: "y" }, { angle: "a" }];
+    assert.deepEqual(ledgerAngleNames(perAngle, ["a", "b"]), ["a", "b", "y", "z"]);
+    assert.deepEqual(ledgerAngleNames([...perAngle].reverse(), ["a", "b"]), ["a", "b", "y", "z"]);
+    assert.deepEqual(ledgerAngleNames(perAngle, []), ["a", "b", "y", "z"]);
+  });
+});
+
+describe("fanoutReviewerPairingError fails closed on empty membership", () => {
+  const shared = [{ angle: "a", reviewer: "x", group: "g" }, { angle: "b", reviewer: "x", group: "g" }];
+  test("an empty resolvedGroups array rejects a shared reviewer", () => {
+    assert.match(fanoutReviewerPairingError(shared, []), /does not place all of them in one group \(no recorded dispatch membership\)/);
+  });
+  test("an empty dispatchUnits array is a shape error", () => {
+    assert.match(fanoutReviewerPairingError(shared, [{ name: "g", angles: ["a", "b"] }], []), /dispatchUnits is empty/);
+    assert.match(fanoutReviewerPairingError(shared, null, []), /dispatchUnits is empty/);
+  });
+});
+
 describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh angle)", () => {
   test("accepts one distinct reviewer identity per fresh angle", () => {
     assert.equal(fanoutReviewerPairingError([]), null);
@@ -709,7 +738,7 @@ describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh an
     // emitter's singleton-split does not reopen the #2100/#2101 fail-open.
     test("(issue 2180 / ADR 0048) accepts a shared identity for a REAL resolveFanoutGroups auto-chunk bundle (positive)", async () => {
       const { resolveFanoutGroups } = await import("../src/config/config.mjs");
-      // No configured groups; default maxAnglesPerGroup (3) auto-chunks
+      // No configured groups; default maxAnglesPerGroup (5) auto-chunks
       // ["a", "b"] into ONE leftover bundle "group:a+b".
       const config = { version: 1 };
       const groups = resolveFanoutGroups(config, "preApproval", ["a", "b"]);
@@ -789,12 +818,22 @@ describe("fanoutReviewerPairingError × the shipped preApproval grouping (light-
 
   test("a light-track ledger recording one reviewer per resolved dispatch UNIT passes under the shipped grouped default", async () => {
     const { groups } = await shippedPreApprovalGroups();
-    // One distinct reviewer per resolved group; every angle in a group shares
-    // that group's reviewer + declared group name.
-    const perAngle = groups.flatMap((g, i) =>
-      g.angles.map((angle) => ({ angle, reviewer: `rev-${i}`, group: g.name })),
+    // One distinct reviewer per dispatch unit: each resolved group cap-split
+    // into chunks of at most 5 angles (the 6-angle design-solid group emits
+    // two units), every angle in a unit sharing that unit's reviewer + group.
+    const dispatchUnits = groups.flatMap((g) => {
+      const chunks = [];
+      for (let i = 0; i < g.angles.length; i += 5) chunks.push({ name: g.name, angles: g.angles.slice(i, i + 5) });
+      return chunks;
+    });
+    const perAngle = dispatchUnits.flatMap((u, i) =>
+      u.angles.map((angle) => ({ angle, reviewer: `rev-${i}`, group: u.name })),
     );
     assert.equal(fanoutReviewerPairingError(perAngle, groups), null);
+    // One reviewer across the whole 6-angle group spans two base units.
+    const solid = groups.find((g) => g.angles.length > 5);
+    const spanning = solid.angles.map((angle) => ({ angle, reviewer: "rev-solid", group: solid.name }));
+    assert.match(fanoutReviewerPairingError(spanning, groups), /does not place all of them in one group/);
     // The design-quality set collapses: fewer fresh dispatch units than fresh angles.
     assert.ok(countFreshDispatchUnits(perAngle) < freshAngleNames(perAngle).length);
   });
@@ -808,6 +847,30 @@ describe("fanoutReviewerPairingError × the shipped preApproval grouping (light-
       [
         { angle: simplicity.angles[0], reviewer: "x", group: "design-quality" },
         { angle: solid.angles[0], reviewer: "x", group: "design-quality" },
+      ],
+      groups,
+    );
+    assert.match(error, /does not place all of them in one group/);
+  });
+
+  test("holistic shares one reviewer identity with its leftover auto-chunk unit, and keeps its own per-angle entry", async () => {
+    const { groups } = await shippedPreApprovalGroups();
+    const holisticUnit = groups.find((g) => g.angles.includes("holistic"));
+    assert.match(holisticUnit.name, /^group:/);
+    assert.ok(holisticUnit.angles.length > 1 && holisticUnit.angles.length <= 5);
+    const perAngle = holisticUnit.angles.map((angle) => ({ angle, reviewer: "leftover-rev", group: holisticUnit.name }));
+    assert.equal(fanoutReviewerPairingError(perAngle, groups), null);
+    assert.equal(perAngle.filter((e) => e.angle === "holistic").length, 1);
+  });
+
+  test("regression: holistic sharing a reviewer with an angle in a DIFFERENT unit still fails closed", async () => {
+    const { groups } = await shippedPreApprovalGroups();
+    const holisticUnit = groups.find((g) => g.angles.includes("holistic"));
+    const solid = groups.find((g) => g.name === "design-solid");
+    const error = fanoutReviewerPairingError(
+      [
+        { angle: "holistic", reviewer: "x", group: holisticUnit.name },
+        { angle: solid.angles[0], reviewer: "x", group: holisticUnit.name },
       ],
       groups,
     );
@@ -959,12 +1022,12 @@ describe("scheduleFanoutWaves (#1601 — bounded-concurrency wave plan via sched
     assert.deepEqual(waves[2].map((u) => u.name), ["e", "f"]);
   });
 
-  test("default cap is 4", () => {
-    const groups = units(["a", "b", "c", "d", "e"]);
+  test("default cap is 5", () => {
+    const groups = units(["a", "b", "c", "d", "e", "f"]);
     const waves = scheduleFanoutWaves(groups);
     assert.equal(waves.length, 2);
-    assert.deepEqual(waves[0].map((u) => u.name), ["a", "b", "c", "d"]);
-    assert.deepEqual(waves[1].map((u) => u.name), ["e"]);
+    assert.deepEqual(waves[0].map((u) => u.name), ["a", "b", "c", "d", "e"]);
+    assert.deepEqual(waves[1].map((u) => u.name), ["f"]);
   });
 
   test("cap 1 serializes heavy reviewers one at a time (#1726)", () => {
@@ -981,8 +1044,8 @@ describe("scheduleFanoutWaves (#1601 — bounded-concurrency wave plan via sched
     assert.deepEqual(waves, [[{ name: "a", angles: ["a"] }]]);
   });
 
-  test("invalid maxConcurrent falls back to 4", () => {
-    const groups = units(["a", "b", "c", "d", "e"]);
+  test("invalid maxConcurrent falls back to 5", () => {
+    const groups = units(["a", "b", "c", "d", "e", "f"]);
     assert.equal(scheduleFanoutWaves(groups, 0).length, 2);
     assert.equal(scheduleFanoutWaves(groups, -1).length, 2);
     assert.equal(scheduleFanoutWaves(groups, 1.5).length, 2);

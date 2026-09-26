@@ -14,7 +14,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { HEAD_SHA_RE } from "./record-dispatch-prompt-layout.mjs";
-import { sanitizeScopeSegment } from "./emit-fanout-dispatch.mjs";
+import { sanitizeScopeSegment } from "./_dispatch-units.mjs";
 import { HARNESS_VALUES, enforceReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 const USAGE = `Usage: emit-reviewer-blocked.mjs --head-sha <sha> --angles <csv> --model-turns <n> --tool-calls <n> --findings-dir <dir> [--run <id>] [--completed-angles <csv>] [--harness <pi|claude|codex>] [--help]

@@ -299,6 +299,11 @@
       "enforcement": "doc"
     },
     {
+      "id": "GATE-EXEC-FANOUT-CAPACITY",
+      "enforcement": "runtime",
+      "enforcementNote": "resolveFanoutDispatch in scripts/github/write-gate-context.mjs packs whole base units first-fit decreasing into at most the effective maxConcurrent units of at most 5 angles and throws before any artifact write when no packing fits; test/github/fanout-single-wave.test.mjs pins the single-wave round shapes and the refusal"
+    },
+    {
       "id": "GATE-EXEC-FANOUT-DISPATCH-EMIT",
       "enforcement": "runtime"
     },
@@ -315,6 +320,11 @@
     },
     {
       "id": "GATE-EXEC-FINDING-THREADS"
+    },
+    {
+      "id": "GATE-EXEC-FIRST-WAVE-RELEASE",
+      "enforcement": "agent",
+      "enforcementNote": "the gate coordinator releases the first emitted wave with no primer or lead-reviewer step; emit-fanout-dispatch.mjs emits no primer unit and its dispatch-sequence tests pin one-wave release under the Claude and Pi bounds"
     },
     {
       "id": "GATE-EXEC-FIXER-DISPOSITION-BOUNDARY",
@@ -349,10 +359,6 @@
       "enforcement": "runtime"
     },
     {
-      "id": "GATE-EXEC-PRIME",
-      "enforcement": "runtime"
-    },
-    {
       "id": "GATE-EXEC-PROPORTIONALITY",
       "enforcement": "doc",
       "enforcementNote": "the composite floors it describes are individually enforced: resolveGateDispatchMode's risk_path_touch/size_outcome_* reasons (packages/core/src/config/config.mjs), detect-checkpoint-evidence.mjs's scopeUnderThreshold re-derivation, and check-adr-tripwire.mjs's devloops-proportionality trigger"
@@ -361,11 +367,6 @@
       "id": "GATE-EXEC-CACHE-TELEMETRY",
       "enforcement": "runtime",
       "enforcementNote": "fan-in validates the recorded before/after cache-telemetry evidence via packages/core/src/loop/cache-telemetry-evidence.mjs validateCacheTelemetryEvidence"
-    },
-    {
-      "id": "GATE-EXEC-PRIMER-EVIDENCE",
-      "enforcement": "runtime",
-      "enforcementNote": "fan-in validates the recorded primer dispatch evidence via packages/core/src/loop/primer-evidence.mjs validatePrimerEvidence"
     },
     {
       "id": "GATE-EXEC-EXECUTION-RECORD",

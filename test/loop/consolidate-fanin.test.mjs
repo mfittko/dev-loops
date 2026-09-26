@@ -17,8 +17,7 @@ import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
-import { buildPrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
-import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, PRIMER_FORM_LEAD_REVIEWER, renderBriefingPointerLine, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, renderBriefingPointerLine, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 import { runNode } from "../_helpers.mjs";
 
@@ -711,150 +710,21 @@ test("a finding's oversized file reference is truncated with a plain ellipsis su
 });
 
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// GATE-EXEC-PRIMER-EVIDENCE wiring (#1475): the fan-in enforces the recorded
-// primer-dispatch evidence against the dispatch plan via enforcePrimerEvidence,
-// failing closed on missing/mismatched evidence — and proceeds unchanged when
-// neither flag is given (progressive/optional recording).
+// Primer retirement: gate fan-out has no primer phase, so fan-in has no primer
+// input. The retired primer flags are unknown arguments, so no caller can make
+// primer evidence a consolidation precondition again.
 // ---------------------------------------------------------------------------
 
-const PRIMER_FP = "sha256:" + "a".repeat(64);
-const PRIMER_HEAD = "0123456789abcdef0123456789abcdef01234567";
+const SHARED_FP = "sha256:" + "a".repeat(64);
 
-function makePrimerPlanAndEvidence() {
-  const plan = buildReviewDispatchPlan({
-    gate: "pre_approval_gate",
-    headSha: PRIMER_HEAD,
-    sharedPrefixPath: "/tmp/shared.md",
-    sharedPrefixHash: PRIMER_FP,
-    requestGroups: [
-      {
-        model: "model-a",
-        requestPrefixFingerprint: PRIMER_FP,
-        cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
-        ttlIntent: "1h",
-        angles: ["scope", "dry"],
-      },
-    ],
-    capabilities: { harness: "claude" },
-  });
-  const evidence = buildPrimerEvidence({
-    plan,
-    primerRuns: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 10 }],
-    reviewerReleases: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, releasedAt: 11 }],
-  });
-  return { plan, evidence };
-}
-
-async function withPrimerFiles(files, fn) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "primer-evidence-"));
-  try {
-    for (const [name, content] of Object.entries(files)) {
-      await writeFile(path.join(dir, name), typeof content === "string" ? content : JSON.stringify(content), "utf8");
-    }
-    return await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
-test("consolidateGateFanin enforces valid primer evidence and consolidates (GATE-EXEC-PRIMER-EVIDENCE)", async () => {
-  const { plan, evidence } = makePrimerPlanAndEvidence();
-  await withFindingsDir(
-    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
-    async (dir) => {
-      await withPrimerFiles(
-        { "primer-evidence.json": evidence, "primer-plan.json": plan },
-        async (pdir) => {
-          const result = await consolidateGateFanin({
-            findingsDir: dir,
-            primerEvidence: path.join(pdir, "primer-evidence.json"),
-            primerPlan: path.join(pdir, "primer-plan.json"),
-          });
-          assert.equal(result.ok, true);
-          assert.equal(result.overallVerdict, "clean");
-          assert.equal(result.angles.length, 1);
-        },
-      );
-    },
-  );
-});
-
-test("consolidateGateFanin fails closed when primer evidence violates the ordering barrier", async () => {
-  const { plan } = makePrimerPlanAndEvidence();
-  // Violation: the reviewer release at t=5 lands BEFORE its primer at t=10.
-  const violation = buildPrimerEvidence({
-    plan,
-    primerRuns: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 10 }],
-    reviewerReleases: [{ model: "model-a", requestPrefixFingerprint: PRIMER_FP, releasedAt: 5 }],
-  });
-  await withFindingsDir(
-    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
-    async (dir) => {
-      await withPrimerFiles(
-        { "primer-evidence.json": violation, "primer-plan.json": plan },
-        async (pdir) => {
-          await assert.rejects(
-            consolidateGateFanin({
-              findingsDir: dir,
-              primerEvidence: path.join(pdir, "primer-evidence.json"),
-              primerPlan: path.join(pdir, "primer-plan.json"),
-            }),
-            (err) => err.message.includes("GATE-EXEC-PRIMER-EVIDENCE") && err.message.includes("primer_order"),
-          );
-        },
-      );
-    },
-  );
-});
-
-test("consolidateGateFanin fails closed when primer evidence references a plan it did not come from", async () => {
-  const { evidence } = makePrimerPlanAndEvidence();
-  // A DIFFERENT plan (different request group model) than the evidence was
-  // built from: the plan-hash / shared-prefix bindings no longer match.
-  const otherPlan = buildReviewDispatchPlan({
-    gate: "pre_approval_gate",
-    headSha: PRIMER_HEAD,
-    sharedPrefixPath: "/tmp/shared.md",
-    requestGroups: [
-      {
-        model: "model-c",
-        requestPrefixFingerprint: "sha256:" + "c".repeat(64),
-        cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
-        ttlIntent: "1h",
-        angles: ["scope"],
-      },
-    ],
-    capabilities: { harness: "claude" },
-  });
-  await withFindingsDir(
-    { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
-    async (dir) => {
-      await withPrimerFiles(
-        { "primer-evidence.json": evidence, "primer-plan.json": otherPlan },
-        async (pdir) => {
-          await assert.rejects(
-            consolidateGateFanin({
-              findingsDir: dir,
-              primerEvidence: path.join(pdir, "primer-evidence.json"),
-              primerPlan: path.join(pdir, "primer-plan.json"),
-            }),
-            (err) => err.message.includes("GATE-EXEC-PRIMER-EVIDENCE") && err.message.includes("shared_prefix_hash"),
-          );
-        },
-      );
-    },
-  );
-});
-
-test("parseConsolidateFaninCliArgs rejects --primer-evidence without --primer-plan (and vice versa)", () => {
+test("parseConsolidateFaninCliArgs rejects the retired --primer-evidence / --primer-plan flags as unknown", () => {
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--primer-evidence", "/tmp/e.json"]),
-    /--primer-evidence and --primer-plan must be given together/,
+    /Unknown argument: --primer-evidence/,
   );
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--primer-plan", "/tmp/p.json"]),
-    /--primer-evidence and --primer-plan must be given together/,
+    /Unknown argument: --primer-plan/,
   );
 });
 
@@ -871,11 +741,11 @@ function makeTelemetryPlan() {
   return buildReviewDispatchPlan({
     gate: "pre_approval_gate",
     headSha: TELEMETRY_HEAD,
-    sharedPrefixHash: PRIMER_FP,
+    sharedPrefixHash: SHARED_FP,
     requestGroups: [
       {
         model: "model-a",
-        requestPrefixFingerprint: PRIMER_FP,
+        requestPrefixFingerprint: SHARED_FP,
         cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
         ttlIntent: "1h",
         angles: ["scope"],
@@ -969,7 +839,7 @@ test("consolidateGateFanin fails closed on cache telemetry over-claiming opaque 
     requestGroups: [
       {
         model: "model-a",
-        requestPrefixFingerprint: PRIMER_FP,
+        requestPrefixFingerprint: SHARED_FP,
         cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
         ttlIntent: "1h",
         angles: ["scope"],
@@ -1342,13 +1212,13 @@ test("consolidateGateFanin normalizes a programmatic gate: 'REVIEW' and processe
           plan: buildReviewDispatchPlan({
             gate: "review",
             headSha: TELEMETRY_HEAD,
-            sharedPrefixHash: PRIMER_FP,
+            sharedPrefixHash: SHARED_FP,
             requestGroups: [
-              { model: "model-a", requestPrefixFingerprint: PRIMER_FP, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "1h", angles: ["scope"] },
+              { model: "model-a", requestPrefixFingerprint: SHARED_FP, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "1h", angles: ["scope"] },
             ],
             capabilities: { harness: "claude" },
           }),
-          primerCacheCreations: [{ model: "model-a", primerForm: PRIMER_FORM_LEAD_REVIEWER, tokens: 12000 }],
+          primerCacheCreations: [{ model: "model-a", primerForm: "lead_reviewer", tokens: 12000 }],
           reviewerCacheReads: [{ model: "model-a", angle: "scope", tokens: 200 }],
         });
         const telemetryPath = path.join(tdir, "cache-telemetry.json");
@@ -4177,27 +4047,56 @@ test("#1841 AC1/AC2: fails closed when a dispatched reviewer prompt is ANGLE-FIR
 });
 
 // ---------------------------------------------------------------------------
-// #1841 AC3: primer-evidence enforcement default decision. Investigation could
-// not prove (within the shipped harness, offline in this repo) that the Phase
-// 1.5 primer measurably produces provider cache reuse without a live
-// multi-reviewer dispatch to observe — so enforcement stays OPT-IN (unchanged):
-// the fan-in proceeds unchanged, primer evidence unenforced, when neither
-// --primer-evidence nor --primer-plan is given, even on a --head-sha round
-// that also passes the (now-enforced) dispatch-layout/prefix-hash checks.
-// This test pins that decision so a future default-on flip requires
-// deliberately breaking it, not silently drifting.
+// Primer retirement keeps every identity guard: a round with no primer
+// evidence at all consolidates only through the prefix-hash, sentinel and
+// records-floor checks, and each of those still fails closed on its own.
 // ---------------------------------------------------------------------------
 
-test("#1841 AC3: primer-evidence enforcement stays OPT-IN by default — a round with neither flag consolidates unenforced", async () => {
+test("primer removal: a round with no primer evidence consolidates through the prefix-hash and sentinel guards", async () => {
   await withFindingsDir(
     { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
     async (dir) => {
-      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-primer-default-"));
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-no-primer-"));
       try {
         const hash = await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
         await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, hash);
         const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
         assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("primer removal does not remove the prefix-hash guard: a sentinel matching no briefing record still fails closed", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-no-primer-"));
+      try {
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "b".repeat(64));
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX"),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("primer removal does not remove the sentinel guard: a sentinel without a prefix hash still fails closed", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-no-primer-"));
+      try {
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, "invariant briefing bytes");
+        await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, null);
+        await assert.rejects(() => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }));
       } finally {
         await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
       }

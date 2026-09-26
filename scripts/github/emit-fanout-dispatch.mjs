@@ -12,8 +12,9 @@ import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath,
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
-import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment, unitScopeSegment } from "./_dispatch-units.mjs";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
@@ -36,12 +37,14 @@ grouped-dispatch-default: resolveFanoutGroups draws no dispatch-relevant
 distinction between a configured group and an auto-chunk bundle, so this step
 no longer does either. A multi-angle unit's (or split sub-unit's) reviewer
 records a non-null provenance \`group\` — the resolved unit's own name; each
-sub-unit's angles stay members of the SAME resolved unit, so the merge guard's
-resolveFanoutGroups re-derivation (detect-checkpoint-evidence.mjs's
-fanoutReviewerPairingError, the fail-closed authority for this) still pairs
+sub-unit's angles stay members of the SAME resolved unit, so the merge guard
+(fanoutReviewerPairingError, the fail-closed authority for this) still pairs
 them honestly whether the unit is configured or auto-chunked. A singleton
 from an unsplit single-angle resolved unit records no group; a one-angle split
-tail retains its original unit's group.
+tail retains its original unit's group. A unit write-gate-context.mjs packed
+from whole base units (GATE-EXEC-FANOUT-CAPACITY) is emitted whole under its
+packed name, which is also its provenance \`group\`; write-gate-findings-log.mjs
+records that membership so the guard honors its one shared reviewer.
 
 Each emitted prompt is a bounded reviewer work order (reference seeding): the
 invariant prefix with its \`## Required reads\` manifest, the volatile tail, and
@@ -139,51 +142,6 @@ export function dispatchUnitScope(gate, unit) {
   return `${prefix}group-${unitScopeSegment(unit?.name)}`;
 }
 
-/**
- * Collapse any run of non-alphanumeric characters to a single hyphen and trim
- * leading/trailing hyphens, so an arbitrary unit name becomes a VALID_SCOPE_RE
- * segment. Pure.
- * @param {string} value
- * @returns {string}
- */
-export function sanitizeScopeSegment(value) {
-  return String(value)
-    .replace(/[^a-zA-Z0-9]+/g, "-")
-    .replace(/^-+/, "")
-    .replace(/-+$/, "");
-}
-
-/**
- * The shared scope-segment derivation for a unit name: strip a leading
- * `group:` auto-chunk marker — otherwise the marker's `:` would sanitize to
- * its own `group-` segment and double up into `group-group-<angles>` — then
- * sanitize with sanitizeScopeSegment. The strip applies whatever the unit's
- * origin: a configured group's name is not guaranteed marker-free either
- * (e.g. a split sub-unit's base name can itself be an auto-chunk name), so
- * this never special-cases config vs auto-chunk. If the stripped result
- * sanitizes to an EMPTY string (a unit literally named `group:` or
- * `group:!!`, whose only content is the marker and/or characters
- * sanitizeScopeSegment strips), fall back to sanitizing the UNSTRIPPED name —
- * this recovers a non-empty segment for a marker-only name like `group:`, but
- * an empty or entirely-non-alphanumeric name (`""`, `undefined` coerced to
- * `""`, or e.g. `"!!"`) still sanitizes to `""` either way, so the segment is
- * NOT guaranteed non-empty. An empty segment collapses `<prefix>group-` to a
- * scope VALID_SCOPE_RE rejects — the caller (dispatchUnitScope's VALID_SCOPE_RE
- * check in main) then refuses the plan fail-closed rather than dispatching
- * under a malformed scope. Shared by
- * dispatchUnitScope (deriving a unit's dispatch scope) and splitSubUnitName
- * (disambiguating a split sub-unit's name against configured group names on
- * exactly the string the scope uses). Pure.
- * @param {string} name a resolved unit's name (may carry the `group:` marker)
- * @returns {string}
- */
-export function unitScopeSegment(name) {
-  const rawName = name ?? "";
-  const stripped = rawName.startsWith("group:") ? rawName.slice("group:".length) : rawName;
-  const sanitizedStripped = sanitizeScopeSegment(stripped);
-  return sanitizedStripped.length > 0 ? sanitizedStripped : sanitizeScopeSegment(rawName);
-}
-
 // Human phrasing for each PROHIBITED_REVIEWER_OPERATIONS kind. The RENDERED
 // SET is still driven off the array (buildAngleNamingSuffix below maps over
 // it), so an unmapped kind still renders (via the fallback) rather than
@@ -274,124 +232,6 @@ Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is
 Prohibited: ${prohibited}.
 If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
   return `${header}\n\n${scopeLine}\n\n${reads}${body}\n\n${instructions}\n\n${contract}\n`;
-}
-
-/**
- * Generate a split sub-unit's scope-distinguishing name: `${baseName}-part${n}`,
- * disambiguated against `configuredGroupNames` on their unitScopeSegment form —
- * the SAME helper dispatchUnitScope applies when deriving a multi-angle unit's
- * scope (strip a leading `group:` auto-chunk marker, then sanitize), so this
- * checks exactly the string the scope uses. Comparing raw names is not enough: a
- * separately-configured "backend_part1" group sanitizes to the SAME
- * "group-backend-part1" scope as a generated "backend-part1" sub-unit even
- * though the raw strings differ, so the collision must be caught here too —
- * while the candidate's unitScopeSegment form is itself a configured group's
- * unitScopeSegment form, append a further suffix until it is not. The
- * dispatch loop's seenScopes guard below remains the final backstop for any
- * residual collision this cannot see. Deterministic, pure.
- * @param {string} baseName configured group name being split
- * @param {number} n 1-based split index
- * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
- * @returns {string}
- */
-export function splitSubUnitName(baseName, n, configuredGroupNames) {
-  const configuredSegments = new Set(Array.from(configuredGroupNames, (name) => unitScopeSegment(name)));
-  let candidate = `${baseName}-part${n}`;
-  let bump = 0;
-  while (configuredSegments.has(unitScopeSegment(candidate))) {
-    bump += 1;
-    candidate = `${baseName}-part${n}-x${bump}`;
-  }
-  return candidate;
-}
-
-/**
- * Expand resolveFanoutGroups units into the dispatch units this step actually
- * seeds reviewers for: EVERY multi-angle unit — a CONFIGURED `gates.fanout.groups`
- * group or an auto-chunked leftover `group:...` bundle, resolveFanoutGroups
- * draws no distinction between the two for dispatch purposes (ADR 0048's
- * grouped-dispatch-default; issue 2180 reconciles this emitter to it) — shares
- * ONE reviewer, capped at `REVIEWER_UNIT_MAX_ANGLES` via the same ordered
- * cap-split used for an over-cap configured group. Only a genuine single-angle
- * unit dispatches as a singleton. The merge guard (`fanoutReviewerPairingError`
- * in `@dev-loops/core/loop/gate-fanin`) is the fail-closed authority here: it
- * re-derives this round's grouping from `resolveFanoutGroups` independently
- * (`detect-checkpoint-evidence.mjs`) and already honors a shared identity
- * within ANY resolved unit — configured or auto-chunk — so the emitter no
- * longer needs to be more conservative than the guard by splitting an
- * auto-chunk bundle to singletons. Angle order is preserved, nothing
- * dropped/duplicated/merged. Every emitted unit carries a `group`: the
- * resolved unit's own name (configured or auto-chunk) for a multi-angle unit
- * (whole or split sub-unit), null for a genuine singleton — this is
- * provenance, distinct from `name` (which scopes the reviewer and, for a
- * split sub-unit, is disambiguated via splitSubUnitName). `configuredGroupNames`
- * is used only for that disambiguation (together with this round's own unit
- * names), never to classify a unit as shared vs. singleton. Pure.
- * @param {{ name: string, angles: string[] }[]} units resolveFanoutGroups output
- * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
- * @returns {{ name: string, angles: string[], group: string|null }[]}
- */
-/**
- * The single normalization for a unit's angle list: keep non-empty string
- * angles, trimmed. Used by both the angle-less refusal pre-check and
- * expandDispatchUnits so the fail-closed guard and the dispatch classification
- * can never disagree on a unit's angle set. Pure.
- * @param {{ angles?: unknown }} unit
- * @returns {string[]}
- */
-export function normalizeUnitAngles(unit) {
-  return Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()) : [];
-}
-
-export function expandDispatchUnits(units, configuredGroupNames) {
-  const unitList = Array.isArray(units) ? units : [];
-  // Disambiguate a split sub-unit's name against every configured group name
-  // AND every OTHER unit resolved this round (a configured group's name and an
-  // auto-chunk bundle's stable name both key a real emitted scope this round,
-  // so both are live collision candidates — not just the configured table).
-  const collisionNames = new Set(configuredGroupNames);
-  for (const unit of unitList) {
-    if (typeof unit?.name === "string" && unit.name.length > 0) collisionNames.add(unit.name);
-  }
-  const out = [];
-  for (const unit of unitList) {
-    const angles = normalizeUnitAngles(unit);
-    // Every multi-angle resolved unit — a CONFIGURED gates.fanout.groups group
-    // or an auto-chunked leftover `group:...` bundle — shares one reviewer;
-    // resolveFanoutGroups draws no dispatch-relevant distinction between the
-    // two (ADR 0048), so neither does this step. Only a genuine single-angle
-    // unit is a singleton.
-    if (angles.length > 1) {
-      // Cap each dispatch unit at REVIEWER_UNIT_MAX_ANGLES assigned angles (the
-      // reviewer-unit-bound primitive's contract). A unit within the cap keeps
-      // its exact name (unchanged behaviour). A unit LARGER than the cap
-      // deterministically splits into ordered ≤cap sub-units — angle order
-      // preserved, no angle dropped, duplicated, or merged. Each sub-unit gets
-      // a distinct, collision-disambiguated `<name>-part<n>` name
-      // (splitSubUnitName) so its reviewer scope (dispatchUnitScope) never
-      // collides with a sibling's — the dispatch loop's seenScopes guard below
-      // remains the final backstop for any residual collision this cannot see.
-      // Every sub-unit records the RESOLVED unit's own name (not its own split
-      // name) as `group` — matching the contract's provenance rule — and stays
-      // a member of the SAME resolved unit, so the fan-in pairing check
-      // (fanoutReviewerPairingError, re-derived via resolveFanoutGroups) stays
-      // honest for a configured group AND an auto-chunk bundle alike.
-      // maxConcurrent already counts EMITTED dispatch units, so a split simply
-      // yields more units per wave — never more angles per unit.
-      if (angles.length <= REVIEWER_UNIT_MAX_ANGLES) {
-        out.push({ name: unit.name, angles, group: unit.name });
-      } else {
-        for (let i = 0; i < angles.length; i += REVIEWER_UNIT_MAX_ANGLES) {
-          const chunk = angles.slice(i, i + REVIEWER_UNIT_MAX_ANGLES);
-          const n = i / REVIEWER_UNIT_MAX_ANGLES + 1;
-          out.push({ name: splitSubUnitName(unit.name, n, collisionNames), angles: chunk, group: unit.name });
-        }
-      }
-    } else {
-      for (const angle of angles) out.push({ name: angle, angles: [angle], group: null });
-    }
-  }
-  return out;
 }
 
 /**
@@ -718,6 +558,40 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // its angle as the name — so both the scope and the provenance group are
   // well-formed by construction.
   const dispatchUnits = expandDispatchUnits(units, configuredGroupNames);
+
+  // GATE-EXEC-FANOUT-CAPACITY (emitter half): the emitted unit count is the wave
+  // width the coordinator uses. Refuse ONLY when BOTH (a) the artifact recorded a
+  // HIGHER plan-time effective concurrency than this harness resolves and (b) the
+  // emitted units genuinely exceed this harness's bound — the cross-harness
+  // mismatch this guard exists for (a plan packed for one harness's bound, then
+  // emitted under a tighter one, would be waved as a second wave). Comparing the
+  // recorded bound alone refused plans whose emitted units already fit one wave
+  // here and asserted a packing reason that was false for them. This mirrors
+  // write-gate-context.mjs's own packing decision (`singleWave && !sequential &&
+  // !perAngleMode`): `gates.fanout.sequential` (effective 1, one unit per wave),
+  // `mode: per-angle` (the gate-review contract's explicit multi-wave opt-out,
+  // never packed), and the standalone `review` gate (never packed) all stay
+  // emittable. `gates.fanout.sequential` is already covered by plannedConcurrency
+  // resolving 1, but the live-config check keeps the mirror explicit.
+  const plannedConcurrency = artifact.fanout?.effectiveConcurrency;
+  // A PRESENT-but-non-integer OR non-positive bound is a malformed plan and
+  // refuses fail-closed, matching this file's other malformed-plan handling (a
+  // present-but-non-array fanout.pendingGroups, an angle-less unit). A `0` or
+  // negative value is an integer, so without the `< 1` clause it would pass this
+  // check and then skip the guard below (`plannedConcurrency > maxConcurrent` is
+  // false), silently emitting a genuinely over-capacity plan as multiple waves —
+  // the fail-open hole this clause closes. Every sanctioned producer clamps the
+  // bound to >= 1, so only a malformed artifact reaches it. Only a genuinely
+  // ABSENT field (a pre-change artifact) skips the guard.
+  if (plannedConcurrency !== undefined && (!Number.isInteger(plannedConcurrency) || plannedConcurrency < 1)) {
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-CAPACITY: refusing — fanout.effectiveConcurrency is present but not a positive integer (malformed plan); re-run write-gate-context.mjs` }, false);
+  }
+  const singleWave = gate !== "review";
+  const perAngleMode = config?.gates?.fanout?.mode === "per-angle";
+  if (singleWave && !resolveFanoutSequential(config) && !perAngleMode
+    && plannedConcurrency > maxConcurrent && dispatchUnits.length > maxConcurrent) {
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-CAPACITY: refusing — the fanout plan emits ${dispatchUnits.length} dispatch units under a plan-time effective maxConcurrent ${plannedConcurrency}, above this harness's effective maxConcurrent ${maxConcurrent}; re-run write-gate-context.mjs under this harness so the round packs into one wave` }, false);
+  }
 
   // Round-level work-order identity shared by every unit: the required reads
   // the context builder bound into the prefix, the merged-config hash, and the

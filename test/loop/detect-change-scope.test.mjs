@@ -7,7 +7,7 @@ import { test } from "bun:test";
 
 import { detectScope } from "../../scripts/loop/detect-change-scope.mjs";
 
-// GATE-EXEC-PROPORTIONALITY: detectScope feeds the primer's light-mode size
+// GATE-EXEC-PROPORTIONALITY: detectScope feeds the gate coordinator's light-mode size
 // cap (resolve-gate-dispatch.mjs) and MUST diff the `cwd` repo regardless of
 // an ambient GIT_DIR/GIT_WORK_TREE — a poisoned env pointing at a DIFFERENT
 // (possibly clean) repo must never silently under-report scope, which would

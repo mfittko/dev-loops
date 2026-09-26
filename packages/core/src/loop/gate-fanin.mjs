@@ -29,6 +29,7 @@
 
 import { scheduleParallelWaves } from "./queue-parallel.mjs";
 import { trimmedOrNull } from "./normalize.mjs";
+import { REVIEWER_UNIT_MAX_ANGLES } from "./reviewer-unit-bound.mjs";
 
 /**
  * Schedule fan-out dispatch units into bounded-concurrency waves: each wave
@@ -41,12 +42,12 @@ import { trimmedOrNull } from "./normalize.mjs";
  * same head+config.
  *
  * @param {{ name: string, angles: string[] }[]} dispatchGroups — `resolveFanoutGroups` output
- * @param {number} [maxConcurrent] — `gates.fanout.maxConcurrent` (default 4, min 1)
+ * @param {number} [maxConcurrent] — `gates.fanout.maxConcurrent` (default 5, min 1)
  * @returns {{ name: string, angles: string[] }[][]} waves of dispatch units (at most `maxConcurrent` per wave)
  */
-export function scheduleFanoutWaves(dispatchGroups, maxConcurrent = 4) {
+export function scheduleFanoutWaves(dispatchGroups, maxConcurrent = 5) {
   const groups = Array.isArray(dispatchGroups) ? dispatchGroups : [];
-  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 4;
+  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 5;
   if (groups.length === 0) return [];
   return scheduleParallelWaves(groups, cap);
 }
@@ -64,7 +65,7 @@ export function scheduleFanoutWaves(dispatchGroups, maxConcurrent = 4) {
  * @returns {number}
  */
 export function backoffMaxConcurrent(maxConcurrent) {
-  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 4;
+  const cap = Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 5;
   return Math.max(1, Math.floor(cap / 2));
 }
 
@@ -509,6 +510,52 @@ export function freshAngleNames(perAngle) {
 }
 
 /**
+ * Names of DISTINCT angles in a `perAngle` array, fresh AND carried. This is the
+ * angle set to pass to `resolveFanoutGroups` when a caller re-derives the
+ * round's dispatch units for {@link fanoutReviewerPairingError}: dispatch
+ * chunks the full resolved angle set (a partially carried unit is dispatched
+ * whole), so re-deriving from fresh angles alone can shift the auto-chunk
+ * boundaries and reject an honest shared reviewer.
+ *
+ * Auto-chunk boundaries follow input order, so a re-deriving caller passes
+ * `catalogOrder` (the gate's resolved angle pool, the order dispatch resolves
+ * angles in). The result then follows that order, with angles outside it last
+ * in lexicographic order, and never depends on ledger order. Without
+ * `catalogOrder` the result keeps ledger order. Pure.
+ *
+ * @param {unknown} perAngle
+ * @param {string[]|null} [catalogOrder]
+ * @returns {string[]}
+ */
+export function ledgerAngleNames(perAngle, catalogOrder = null) {
+  if (!Array.isArray(perAngle)) return [];
+  const angles = new Set();
+  for (const entry of perAngle) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const angle = typeof entry.angle === "string" ? entry.angle.trim() : "";
+    if (angle) angles.add(angle);
+  }
+  return Array.isArray(catalogOrder) ? orderAnglesByCatalog([...angles], catalogOrder) : [...angles];
+}
+
+/**
+ * Sort angle names into `catalogOrder`, with names outside it last in
+ * lexicographic order. The dispatch plan and the pairing re-derivation both
+ * order angles this way before `resolveFanoutGroups`, so auto-chunk
+ * boundaries never depend on caller or ledger order. Returns a new array. Pure.
+ *
+ * @param {string[]} angles
+ * @param {string[]} catalogOrder
+ * @returns {string[]}
+ */
+export function orderAnglesByCatalog(angles, catalogOrder) {
+  const rank = new Map();
+  (Array.isArray(catalogOrder) ? catalogOrder : []).forEach((angle, index) => { if (!rank.has(angle)) rank.set(angle, index); });
+  const rankOf = (angle) => rank.get(angle) ?? Number.MAX_SAFE_INTEGER;
+  return [...angles].sort((a, b) => rankOf(a) - rankOf(b) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
  * Count distinct FRESH dispatch units in a `perAngle` array: a fresh angle
  * declaring a `group` counts once per DISTINCT group name (its group is one
  * reviewer's dispatch), an ungrouped fresh angle counts as its own unit. Shared
@@ -555,15 +602,67 @@ export function countFreshDispatchUnits(perAngle) {
  * group. Omitting `resolvedGroups` keeps the permissive behavior (any one shared
  * non-null `group` accepted) for callers that don't load config.
  *
+ * Membership is checked against BASE units: `resolvedGroups` cap-split in
+ * order into chunks of at most `REVIEWER_UNIT_MAX_ANGLES` (the emitter's own
+ * cap-split). Base units do not depend on the harness concurrency clamp. An
+ * optional `dispatchUnits` (the findings ledger's recorded dispatch membership,
+ * copied from the context artifact's packed `fanout.groups`) replaces the base
+ * units as the membership source. A malformed or empty recording, or an angle
+ * recorded twice, is an error. A shared reviewer is honored only inside ONE recorded
+ * unit, and that unit must be a union of whole base units with at most
+ * `REVIEWER_UNIT_MAX_ANGLES` angles. A ledger without recorded membership falls
+ * back to the base units re-derived at the CURRENT 5-angle bound: a round whose
+ * units were emitted under that bound still passes, and a reviewer shared
+ * across two base units fails closed. That fallback does NOT reproduce the
+ * pre-change 3-angle chunking, so a pre-change ledger (no recorded membership)
+ * whose shared reviewer covered a 3-angle chunk of a >5-angle group now maps to
+ * two base units and is refused — such an in-flight round needs a one-time
+ * re-gate under the 5-angle bound (recorded in ADR 0095 and the changelog).
+ *
  * @param {unknown} perAngle
  * @param {{name: string, angles: string[]}[]|null} [resolvedGroups]
+ * @param {unknown} [dispatchUnits] recorded `{ name, angles }[]` membership
  * @returns {string|null}
  */
-export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
+export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, dispatchUnits = null) {
   if (!Array.isArray(perAngle)) return null;
-  const configuredGroupOf = new Map();
+  const baseUnits = [];
   for (const g of Array.isArray(resolvedGroups) ? resolvedGroups : []) {
-    for (const a of Array.isArray(g?.angles) ? g.angles : []) configuredGroupOf.set(a, g.name);
+    const angles = Array.isArray(g?.angles) ? g.angles : [];
+    for (let i = 0; i < angles.length; i += REVIEWER_UNIT_MAX_ANGLES) baseUnits.push(angles.slice(i, i + REVIEWER_UNIT_MAX_ANGLES));
+  }
+  const baseOf = new Map();
+  // Keyed on the BASE angle name: the ledger's perAngle vocabulary may spell an
+  // angle delta-suffixed ('<angle>-delta-at-<sha>') while the recorded units and
+  // the context artifact use the base spelling, and both sides must resolve to
+  // the same base unit for the union check below. For non-suffixed names this is
+  // the identity, so nothing changes for them.
+  baseUnits.forEach((angles, index) => angles.forEach((a) => {
+    const base = baseAngleName(a);
+    if (!baseOf.has(base)) baseOf.set(base, index);
+  }));
+  // Recorded membership is validated whenever it is present, and membership is
+  // enforced whenever resolvedGroups or dispatchUnits is supplied. An empty
+  // map never skips the check: an angle absent from it fails closed.
+  const useRecorded = dispatchUnits !== null && dispatchUnits !== undefined;
+  const enforceMembership = useRecorded || Array.isArray(resolvedGroups);
+  let configuredGroupOf = baseOf;
+  if (useRecorded) {
+    const shapeError = dispatchUnitsShapeError(dispatchUnits);
+    if (shapeError !== null) return `fan-out provenance records invalid dispatch unit membership: ${shapeError}`;
+    configuredGroupOf = new Map();
+    dispatchUnits.forEach((unit, index) => unit.angles.forEach((a) => {
+      const raw = a.trim();
+      configuredGroupOf.set(raw, index);
+      // A ledger perAngle name may be delta-suffixed ('<angle>-delta-at-<sha>')
+      // while recorded units are keyed on the context's base angle name — the
+      // same spelling resolveFanoutGroups grouped. Index the base form too, so a
+      // shared reviewer over a delta re-review resolves to the unit its base
+      // angle was dispatched in instead of failing closed; an angle whose base is
+      // genuinely unrecorded still resolves to null and is refused.
+      const base = baseAngleName(raw);
+      if (base !== raw && !configuredGroupOf.has(base)) configuredGroupOf.set(base, index);
+    }));
   }
   const freshAngles = new Set();
   const anglesByIdentity = new Map();
@@ -599,10 +698,15 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
     // resolvedGroups supplied: the claimed group is honest only when every angle
     // it covers is a member of the SAME configured group — a claimed group
     // spanning angles the table splits apart fails closed.
-    if (configuredGroupOf.size > 0) {
-      const configuredGroups = new Set([...angles].map((a) => configuredGroupOf.get(a) ?? null));
+    if (enforceMembership) {
+      const configuredGroups = new Set([...angles].map((a) => configuredGroupOf.get(a) ?? configuredGroupOf.get(baseAngleName(a)) ?? null));
       if (configuredGroups.size !== 1 || configuredGroups.has(null)) {
-        details.push(`${label} "${id}" declares group "${[...groups][0]}" for fresh angles: ${[...angles].join(", ")}, but the configured gates.fanout.groups table does not place all of them in one group`);
+        details.push(`${label} "${id}" declares group "${[...groups][0]}" for fresh angles: ${[...angles].join(", ")}, but the ${useRecorded ? "recorded dispatch units" : "configured gates.fanout.groups table"} does not place all of them in one group${useRecorded ? "" : " (no recorded dispatch membership)"}`);
+      } else if (useRecorded) {
+        // The recorded unit hosting this shared reviewer must itself be a
+        // legitimate packing: a union of whole base units of at most 5 angles.
+        const unitError = recordedUnitError(dispatchUnits[[...configuredGroups][0]], baseUnits, baseOf);
+        if (unitError !== null) details.push(`${label} "${id}" shares recorded dispatch unit membership that is invalid: ${unitError}`);
       }
     }
   }
@@ -611,6 +715,54 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
   }
   if (details.length === 0) return null;
   return `fan-out provenance violates the one-scoped-reviewer-per-angle contract (${distinctFreshReviewers} distinct reviewer(s) for ${freshAngleCount} fresh angle(s)): ${details.join("; ")} — use executionMode inline_single_agent + --inline-reason for a sanctioned single-reviewer run`;
+}
+
+/**
+ * Shape check for recorded dispatch membership: a non-empty array of `{ name, angles }`
+ * with a non-empty name, non-empty angle names, and no angle recorded in two
+ * units. Returns an error string or null. Pure.
+ * @param {unknown} dispatchUnits
+ * @returns {string|null}
+ */
+function dispatchUnitsShapeError(dispatchUnits) {
+  if (!Array.isArray(dispatchUnits)) return "dispatchUnits must be an array";
+  if (dispatchUnits.length === 0) return "dispatchUnits is empty, so it records no unit for any fresh angle";
+  const seen = new Set();
+  for (const unit of dispatchUnits) {
+    const name = typeof unit?.name === "string" ? unit.name.trim() : "";
+    const angles = Array.isArray(unit?.angles) ? unit.angles.map((a) => (typeof a === "string" ? a.trim() : "")) : [];
+    if (!name || angles.length === 0 || angles.some((a) => !a)) return "every dispatch unit needs a non-empty name and non-empty angle names";
+    for (const angle of angles) {
+      if (seen.has(angle)) return `angle "${angle}" is recorded in more than one dispatch unit`;
+      seen.add(angle);
+    }
+  }
+  return null;
+}
+
+/**
+ * A recorded unit that hosts a shared reviewer is legitimate only when it holds
+ * at most `REVIEWER_UNIT_MAX_ANGLES` angles and, over the angles the ledger
+ * records, is exactly a union of whole re-derived base units. A recorded angle
+ * absent from the ledger (a carried unit the provenance omits) is outside the
+ * re-derivation and is skipped. Returns an error string or null. Pure.
+ * @param {{ name: string, angles: string[] }} unit shape-checked recorded unit
+ * @param {string[][]} baseUnits
+ * @param {Map<string, number>} baseOf angle -> base unit index
+ * @returns {string|null}
+ */
+function recordedUnitError(unit, baseUnits, baseOf) {
+  const angles = unit.angles.map((a) => a.trim());
+  if (angles.length > REVIEWER_UNIT_MAX_ANGLES) return `unit "${unit.name}" holds ${angles.length} angles, above the ${REVIEWER_UNIT_MAX_ANGLES}-angle unit bound`;
+  // Base-name comparison on both sides: a recorded unit keyed on base angle
+  // names is still a union of whole base units when the base units themselves
+  // were derived from a delta-suffixed ledger spelling (and vice versa).
+  const members = new Set(angles.map((a) => baseAngleName(a)));
+  const bases = new Set(angles.filter((a) => baseOf.has(baseAngleName(a))).map((a) => baseOf.get(baseAngleName(a))));
+  for (const index of bases) {
+    if (!baseUnits[index].every((a) => members.has(baseAngleName(a)))) return `unit "${unit.name}" is not a union of whole base units: it splits base unit ${baseUnits[index].join("+")}`;
+  }
+  return null;
 }
 
 /**

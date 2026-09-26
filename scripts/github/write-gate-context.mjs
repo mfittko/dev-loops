@@ -31,7 +31,9 @@ import { parseArgs } from "node:util";
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, orderAnglesByCatalog, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
@@ -49,7 +51,7 @@ import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_c
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
-import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { buildGateArtifactPath, buildGateContextPath, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 
@@ -581,32 +583,11 @@ export function parseWriteGateContextCliArgs(argv) {
   return options;
 }
 
-/**
- * Internal deterministic-path builder shared by every gate-artifact path
- * function below (buildGateContextPath, buildGateReviewsDir, buildGateDiffPath,
- * buildGateBriefingPrefixPath, buildGateBriefingScopePath,
- * buildValidationResultsPath): validates/sanitizes the repo/pr/gate/headSha
- * segments once and joins `<tmpRoot>/<dir>/<repo-slug>/pr-<N>/<gate>-<headSha><suffix>`.
- * `dir` distinguishes the "gate-context" artifact family from the
- * "gate-reviews" per-angle findings directory; `suffix` (empty for the
- * directory case) distinguishes the file extension within a family.
- *
- * @param {string} [input.dir] — top-level artifact-family directory, default "gate-context"
- * @param {string} [input.suffix] — filename suffix (extension), default ""
- */
-function buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot = "tmp", dir = "gate-context", suffix = "" }) {
-  const repoSlug = repoSlugFor(repo);
-  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
-  return path.join(tmpRoot, dir, repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}${suffix}`);
-}
-
-// Deterministic artifact path for a gate-review context handoff. Mirrors
-// write-gate-findings-log.mjs buildLogPath. Exported for reuse by the fork
-// fan-out reviewers so producer and consumer agree on the path. Param shapes:
-// see buildGateArtifactPath above.
-export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".json" });
-}
+// Deterministic artifact path for a gate-review context handoff — re-exported
+// from the leaf path-scheme module (see its header for why the scheme must not
+// live in either consumer). Exported for reuse by the fork fan-out reviewers so
+// producer and consumer agree on the path.
+export { buildGateContextPath };
 
 // Deterministic per-angle findings-artifact directory a gate-review fan-out
 // writes to (one `<angle>.json` per angle). Mirrors the path
@@ -661,62 +642,6 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
     }
   }
   return completed;
-}
-
-/**
- * Validate the non-repo path components (gate, pr, headSha) that are
- * interpolated into a filesystem path which is later `path.resolve()`d and
- * read/written. Mirrors the repo-segment safety check in {@link repoSlugFor} so
- * both path builders reject traversal sequences and odd filenames coming from
- * untrusted inputs. Returns sanitized values for interpolation.
- *
- * @param {object} input
- * @param {number|string} input.pr — must coerce to a positive integer
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha — 7-64 char hex SHA
- * @returns {{ pr: number, gate: string, headSha: string }}
- */
-function validatePathSegments({ pr, gate, headSha }) {
-  if (!GATE_NAMES.includes(gate)) {
-    throw new Error(`--gate segment ${JSON.stringify(gate)} is unsafe (expected ${GATE_NAMES.join(" or ")})`);
-  }
-  // Require a CANONICAL positive integer: the trimmed string must be all digits
-  // (`/^\d+$/`) and > 0. This mirrors the CLI's parsePrNumber rule so the path
-  // builder cannot accept non-canonical numeric forms ("1e3" → 1000, "0x10" →
-  // 16, "1.5") that Number() would coerce to a DIFFERENT pr-<N> segment than the
-  // operator/CLI intended, breaking the deterministic producer/consumer
-  // round-trip. " 9 " trims to "9" and stays valid; numbers are stringified first.
-  const prStr = String(pr).trim();
-  const prNum = Number(prStr);
-  if (!/^\d+$/.test(prStr) || !Number.isInteger(prNum) || prNum <= 0) {
-    throw new Error(`--pr segment ${JSON.stringify(pr)} is unsafe (expected a positive integer)`);
-  }
-  // Lowercase the validated SHA so the path segment is case-canonical regardless
-  // of caller casing, matching the CLI's normalizeHeadSha. A mixed-case
-  // headRefOid (e.g. ABC123) must compute the SAME filename as its lowercase
-  // form (abc123) or readGateContext / the .diff lookup would miss it — a
-  // determinism bug.
-  const sha = String(headSha).trim().toLowerCase();
-  if (!/^[0-9a-f]{7,64}$/i.test(sha)) {
-    throw new Error(`--head-sha segment ${JSON.stringify(headSha)} is unsafe (expected a 7-64 character hex SHA)`);
-  }
-  return { pr: prNum, gate, headSha: sha };
-}
-
-// Validate the repo string and return its `owner-name` slug, applying the same
-// safety checks (no `.`/`..` segments, no whitespace/backslashes) shared by the
-// artifact and diff path builders.
-function repoSlugFor(repo) {
-  const parts = String(repo).split("/");
-  if (parts.length !== 2 || parts.some((p) => p.length === 0)) {
-    throw new Error(`--repo must be in owner/name format, got: ${JSON.stringify(repo)}`);
-  }
-  for (const p of parts) {
-    if (p === "." || p === ".." || /[\s\\]/.test(p)) {
-      throw new Error(`--repo segment ${JSON.stringify(p)} is unsafe (a "." or ".." path segment, or contains whitespace/backslashes)`);
-    }
-  }
-  return parts.join("-");
 }
 
 // Deterministic path for the FULL diff captured alongside the gate context
@@ -1949,16 +1874,26 @@ function normalizeCarriedAnglesArg(carriedAngles) {
  * no angle resolution (it consumes the already-resolved `resolvedAngles`) and
  * no I/O. `config` may be null (a `--angles` override with no loaded config);
  * in that case grouping degrades to auto-chunked singletons under the built-in
- * defaults and `maxConcurrent`/`maxAnglesPerGroup` fall back to 4/3.
+ * defaults and `maxConcurrent`/`maxAnglesPerGroup` fall back to their
+ * shipped defaults (5/5). When the round's FULL resolved angle set would
+ * cap-split into more units than the effective concurrency, whole base units
+ * are packed into one wave (see the packing block below); if the full set
+ * cannot pack, the DISPATCHABLE set (resolved units minus fully-carried
+ * groups) is packed and emitted instead, and only a dispatchable plan that
+ * itself cannot fit throws `GATE-EXEC-FANOUT-CAPACITY`.
  *
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
- * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined> }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment.
+ * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined>, singleWave?: boolean }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment. `singleWave` (default true) enables packing and the capacity refusal; the review gate passes false.
  * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
-export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env } = {}) {
-  const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env, singleWave = true } = {}) {
+  // Angle-pool order, as the pairing guard re-derives it: auto-chunk
+  // boundaries must not depend on the order the angles arrived in.
+  const catalogOrder = resolveGateAngleContract(config, configGate).pool ?? [];
+  const orderedAngles = orderAnglesByCatalog((Array.isArray(resolvedAngles) ? resolvedAngles : []).filter((a) => typeof a === "string").map((a) => a.trim()), catalogOrder);
+  let groups = resolveFanoutGroups(config, configGate, orderedAngles, { fullLabel });
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
   // Serial (one-at-a-time) dispatch of heavy reviewers when
   // `gates.fanout.sequential` is set — effective concurrency is 1 unit per wave
@@ -1969,7 +1904,6 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   const sequential = resolveFanoutSequential(config);
   const maxConcurrent = resolveFanoutMaxConcurrent(config);
   const effectiveConcurrency = resolveFanoutEffectiveConcurrency(config, env);
-  const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   // Mirrors consolidate-fanin.mjs's own --carried-angles mandatory-angle
   // refusal: a name whose review surface always re-runs (a configured
   // mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/
@@ -2017,7 +1951,75 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // `carriedAnglesList`, not the raw `carriedAngles` option: the latter may be
   // a one-shot iterable already exhausted by the spread above, which would
   // silently exclude nothing and record empty provenance.
+  // Single-wave packing: when the round's FULL resolved angle set would
+  // cap-split into more than effectiveConcurrency dispatch units, merge whole
+  // base units (packDispatchUnits) so the round stays one wave. The packing is
+  // derived from the full resolved-angle grouping, NEVER from the
+  // completed/carried-filtered pending set: packDispatchUnits is a pure function
+  // of its input, so wave 1 and every same-head resume derive the IDENTICAL
+  // packed units and the recorded membership (readContextDispatchUnits) still
+  // admits the reviewers the completed wave was dispatched under — re-deriving
+  // the grouping from a shrunk pending set re-planned a different membership and
+  // refused a legitimate resume. The pending/shortfall subset is then whatever
+  // those same packed units leave after completed-or-carried exclusion (a
+  // partially-complete packed unit is re-dispatched whole — the unit-level
+  // membership the pairing guard needs). It never runs when the count already
+  // fits, under sequential dispatch, or in per-angle mode (both explicit
+  // opt-outs). No fit refuses fail-closed before any artifact write.
+  // `singleWave: false` (the standalone review gate, whose full-PR angle set
+  // exceeds single-wave capacity) keeps the multi-wave plan unchanged.
+  const perAngleMode = config?.gates?.fanout?.mode === "per-angle";
+  if (singleWave && !sequential && !perAngleMode) {
+    const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
+    const baseUnits = expandDispatchUnits(groups, configuredGroupNames);
+    if (baseUnits.length > effectiveConcurrency) {
+      const packed = packDispatchUnits(baseUnits, effectiveConcurrency);
+      if (packed === null) {
+        // The full resolved set can never shrink below the angles Phase 1.2
+        // already proved carried, so keying the refusal on it refused every
+        // carry-forward round above capacity even when the plan actually
+        // dispatched fit one wave. Re-check the DISPATCHABLE set: the resolved
+        // units minus every group whose angles are ALL carried forward — a set
+        // fixed for the whole round (proven for this head), so wave 1 and every
+        // same-head resume derive the IDENTICAL dispatchable plan. It
+        // deliberately excludes ONLY carried angles, never the completed set
+        // (that grows after a partial wave, and re-planning on it recorded a
+        // different membership — the round-2 regression this derivation avoids),
+        // and never drops carried angles from a group that still has fresh ones
+        // (a partially-carried group is dispatched whole, so its unit
+        // membership must keep every angle).
+        const carriedKeys = new Set(carriedAnglesList.map((a) => baseAngleName(a).trim().toLowerCase()));
+        const dispatchableGroups = groups.filter((g) => !(Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase()))));
+        const dispatchableUnits = expandDispatchUnits(dispatchableGroups, configuredGroupNames);
+        if (dispatchableUnits.length > 0) {
+          const packedDispatchable = dispatchableUnits.length > effectiveConcurrency ? packDispatchUnits(dispatchableUnits, effectiveConcurrency) : null;
+          if (dispatchableUnits.length > effectiveConcurrency && packedDispatchable === null) {
+            // The dispatchable plan itself cannot fit one wave: refuse and name
+            // the set actually counted (the resolved count and the fresh subset)
+            // so a carry-forward round is never mislabeled as all-fresh.
+            const resolvedAngleCount = baseUnits.reduce((sum, unit) => sum + unit.angles.length, 0);
+            const freshAngleCount = dispatchableUnits.reduce((sum, unit) => sum + unit.angles.filter((a) => !carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase())).length, 0);
+            const capacity = effectiveConcurrency * REVIEWER_UNIT_MAX_ANGLES;
+            throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves ${resolvedAngleCount} angles (${freshAngleCount} fresh, ${resolvedAngleCount - freshAngleCount} carried forward) in ${dispatchableUnits.length} base dispatch units that do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${REVIEWER_UNIT_MAX_ANGLES} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
+          }
+          // Emit the dispatchable plan — it IS what will be dispatched, so it is
+          // what the recorded membership must name. Packed base units when
+          // packing ran; the unsplit dispatchable grouping when it already fits
+          // (mirrors the full-set path, which records `resolveFanoutGroups`
+          // output and lets the emitter cap-split it).
+          groups = packedDispatchable ?? dispatchableGroups;
+        }
+        // A fully-carried round (`dispatchableUnits` empty) keeps the full
+        // grouping: nothing is dispatched, and the emitter's all-carried
+        // zero-unit path keys on `fanout.groups` seeing every angle.
+      } else {
+        // Packing covers every resolved unit, so it replaces `groups` outright.
+        groups = packed;
+      }
+    }
+  }
   const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
+  const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   const pendingGroups = preflight.pendingGroups;
   const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);
   return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, preflight, pendingGroups, pendingWavePlan };
@@ -2461,7 +2463,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     // Reference seeding: the prefix binds every bulk artifact by sha256 and
     // byte count, so the sentinel's prefix-hash check and the
     // no-rebuild-mid-fan-out guard cover the referenced bytes transitively.
-    // The context JSON carries no hash because it embeds the prefix identity.
+    // The context JSON carries no hash, and it embeds no prefix identity
+    // (sharedPrefixHash lives only in the request plan and on sentinels). It
+    // is written LAST as the completion marker, and it contains this
+    // requiredReads manifest itself plus a per-write loggedAt, so the prefix
+    // cannot hash it. Consequence: the context JSON and its .adjacentCode are
+    // not tamper-bound.
     const hashed = (kind, readPath, bytes, required) => ({
       kind, path: readPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes), required,
     });
@@ -2991,7 +2998,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         // own --base-derived floor check (below). A caller that already has
         // sizeOutcome evidence to hand (e.g. it also ran check-size-budget.mjs
         // for this same diff) can request the SAME floor-vs-tier precedence the
-        // primer's dispatch decision uses; omitted, this resolves exactly as
+        // gate coordinator's dispatch decision uses; omitted, this resolves exactly as
         // before.
         checkFloors: input.checkFloors === true,
         sizeOutcome: input.sizeOutcome,
@@ -3022,7 +3029,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot }, { repoRoot });
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: input.carriedAngles ?? null });
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: input.carriedAngles ?? null, singleWave: !isReviewGate });
 
   const writeResult = await writeGateContext(
     {
@@ -3569,7 +3576,7 @@ export async function main(
       // AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
       const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles });
+      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review" });
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

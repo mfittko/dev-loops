@@ -5541,7 +5541,7 @@ test("CLI main: an explicit --angles override still resolves angleScopes from lo
 // ---------------------------------------------------------------------------
 
 test("#1601 resolveFanoutDispatch: auto-chunks ungrouped angles + emits a bounded-concurrency wave plan", () => {
-  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2, maxConcurrent: 2 } } };
+  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2, maxConcurrent: 3 } } };
   // env pinned non-Claude (#1971): the wave shape below asserts the CONFIGURED
   // cap, not the Claude-harness-clamped one — pin it so this test's outcome
   // does not depend on the ambient harness it happens to run under.
@@ -5552,12 +5552,60 @@ test("#1601 resolveFanoutDispatch: auto-chunks ungrouped angles + emits a bounde
     { name: "e", angles: ["e"] },
   ]);
   assert.equal(plan.maxAnglesPerGroup, 2);
-  assert.equal(plan.maxConcurrent, 2);
-  // 5 groups... 3 dispatch units, cap 2 → 2 waves [2, 1]
-  assert.equal(plan.wavePlan.length, 2);
+  assert.equal(plan.maxConcurrent, 3);
+  // 3 dispatch units fit cap 3 → no packing, one wave of 3.
+  assert.equal(plan.wavePlan.length, 1);
+  assert.deepEqual(plan.wavePlan[0].map((u) => u.name), ["group:a+b", "group:c+d", "e"]);
+});
+
+test("#2414 resolveFanoutDispatch: units above the cap pack first-fit decreasing into one wave", () => {
+  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2, maxConcurrent: 2 } } };
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, env: {} });
+  // 3 base units (2, 2, 1 angles) above cap 2: FFD fills the first unit to 5.
+  assert.deepEqual(plan.groups, [{ name: "e+group:a+b+group:c+d", angles: ["e", "a", "b", "c", "d"] }]);
+  assert.deepEqual(plan.pendingGroups, plan.groups);
+  assert.equal(plan.wavePlan.length, 1);
+  assert.equal(plan.pendingWavePlan.length, 1);
+});
+
+test("#2414 resolveFanoutDispatch: singleWave false (the review gate) keeps the unpacked multi-wave plan above capacity", () => {
+  const config = { version: 1, gates: { fanout: { groups: [], maxConcurrent: 2 } } };
+  const angles = Array.from({ length: 12 }, (_, i) => `a${i}`);
+  assert.throws(() => resolveFanoutDispatch(config, "draft", angles, { env: {} }), /GATE-EXEC-FANOUT-CAPACITY/);
+  const plan = resolveFanoutDispatch(config, "draft", angles, { env: {}, singleWave: false });
+  assert.equal(plan.groups.length, 3);
   assert.deepEqual(plan.wavePlan.map((w) => w.length), [2, 1]);
-  assert.deepEqual(plan.wavePlan[0].map((u) => u.name), ["group:a+b", "group:c+d"]);
-  assert.deepEqual(plan.wavePlan[1].map((u) => u.name), ["e"]);
+});
+
+test("#2414 CLI refuses a round above single-wave capacity: exit 1, the angle count, capacity and remedies, and no context artifact", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  const origErr = process.stderr.write;
+  const stderrChunks = [];
+  try {
+    // maxConcurrent 1 → capacity 1 x 5 = 5; six angles chunk into 5 + 1.
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  fanout:\n    maxConcurrent: 1\n    groups: []\n", "utf8");
+    process.exitCode = undefined;
+    process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+    await main([
+      "--repo", "owner/repo", "--pr", "44", "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--angles", JSON.stringify(["a1", "a2", "a3", "a4", "a5", "a6"]),
+    ], { repoRoot, run: stubGhRun });
+    process.stderr.write = origErr;
+    assert.equal(process.exitCode, 1);
+    const stderrText = stderrChunks.join("");
+    assert.match(stderrText, /GATE-EXEC-FANOUT-CAPACITY/);
+    assert.match(stderrText, /the round resolves 6 angles \(6 fresh, 0 carried forward\)/);
+    assert.match(stderrText, /capacity 5/);
+    assert.match(stderrText, /raise gates\.fanout\.maxConcurrent, disable angles, or rely on dynamic pruning/);
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 44, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(artifact, null, "no context artifact (and so no emitted plan) is written");
+  } finally {
+    process.stderr.write = origErr;
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });
 
 test("#1601 resolveFanoutDispatch: gate:full dispatches grouped (no per-angle restoration)", () => {
@@ -5569,19 +5617,19 @@ test("#1601 resolveFanoutDispatch: gate:full dispatches grouped (no per-angle re
     { name: "g", angles: ["a", "b"] },
     { name: "c", angles: ["c"] },
   ]);
-  // default maxConcurrent 4 → one wave of 2 units.
-  assert.equal(plan.maxConcurrent, 4);
+  // default maxConcurrent 5 → one wave of 2 units.
+  assert.equal(plan.maxConcurrent, 5);
   assert.equal(plan.wavePlan.length, 1);
   assert.equal(plan.wavePlan[0].length, 2);
 });
 
-test("#1601 resolveFanoutDispatch: null config degrades to built-in defaults (auto-chunk singletons, cap 4)", () => {
+test("#1601 resolveFanoutDispatch: null config degrades to built-in defaults (auto-chunk singletons, cap 5)", () => {
   // env pinned non-Claude (#1971) — see the wave-shape rationale above.
   const plan = resolveFanoutDispatch(null, "draft", ["a", "b"], { env: {} });
-  // no configured groups, default N=3 → one chunk of 2.
+  // no configured groups, default N=5 → one chunk of 2.
   assert.deepEqual(plan.groups, [{ name: "group:a+b", angles: ["a", "b"] }]);
-  assert.equal(plan.maxAnglesPerGroup, 3);
-  assert.equal(plan.maxConcurrent, 4);
+  assert.equal(plan.maxAnglesPerGroup, 5);
+  assert.equal(plan.maxConcurrent, 5);
   assert.equal(plan.wavePlan.length, 1);
 });
 
@@ -5594,7 +5642,7 @@ test("#1601 buildGateContextArtifact records the fanout dispatch plan when suppl
     fanoutDispatch: plan,
   });
   assert.equal(artifact.fanout.maxConcurrent, 1);
-  assert.equal(artifact.fanout.maxAnglesPerGroup, 3);
+  assert.equal(artifact.fanout.maxAnglesPerGroup, 5);
   assert.deepEqual(artifact.fanout.groups, [{ name: "group:a+b", angles: ["a", "b"] }]);
   // cap 1 → 1 unit per wave → one wave.
   assert.equal(artifact.fanout.wavePlan.length, 1);
@@ -5610,7 +5658,7 @@ test("#1601 buildGateContextArtifact omits fanout when no dispatch plan is suppl
 });
 
 // ---------------------------------------------------------------------------
-// #1971 (cap raised 2 -> 4 by #2366) — caller-boundary coverage for the
+// #1971 (cap raised 2 -> 4 by #2366, 4 -> 5 by #2414) — caller-boundary coverage for the
 // Claude-harness concurrency clamp: resolveFanoutDispatch is the in-process
 // seam both write-gate-context.mjs callers route through, so pinning its
 // injectable `env` option here proves the clamp actually reaches the emitted
@@ -5618,32 +5666,32 @@ test("#1601 buildGateContextArtifact omits fanout when no dispatch plan is suppl
 // own unit tests.
 // ---------------------------------------------------------------------------
 
-test("#2366 resolveFanoutDispatch: Claude-harness env clamps the emitted wave plan to CLAUDE_MAX_EFFECTIVE_CONCURRENT (4) regardless of a higher configured cap — per-angle dispatch", () => {
-  // maxAnglesPerGroup: 1 forces per-angle (one unit per angle); 6 angles / configured
-  // cap 8 → 6 dispatch units, more than the cap of 4, so the wave bound is exercised.
-  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 1, maxConcurrent: 8 } } };
+test("#2366 resolveFanoutDispatch: Claude-harness env clamps the emitted wave plan to CLAUDE_MAX_EFFECTIVE_CONCURRENT (5) regardless of a higher configured cap — per-angle dispatch", () => {
+  // mode per-angle (one unit per angle, an explicit opt-out of packing); 6 angles /
+  // configured cap 8 → 6 dispatch units, more than the cap of 5, so the wave bound is exercised.
+  const config = { version: 1, gates: { fanout: { mode: "per-angle", maxConcurrent: 8 } } };
   const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e", "f"], { fullLabel: false, env: { CLAUDECODE: "1" } });
   assert.equal(plan.maxConcurrent, 8); // configured cap is unchanged...
-  assert.equal(plan.effectiveConcurrency, 4); // ...but the emitted wave plan is clamped.
+  assert.equal(plan.effectiveConcurrency, 5); // ...but the emitted wave plan is clamped.
+  assert.equal(plan.groups.length, 6); // per-angle mode never packs
   assert.equal(plan.wavePlan.length, 2);
-  assert.deepEqual(plan.wavePlan.map((w) => w.length), [4, 2]);
-  assert.ok(plan.wavePlan.every((w) => w.length <= 4));
+  assert.deepEqual(plan.wavePlan.map((w) => w.length), [5, 1]);
+  assert.ok(plan.wavePlan.every((w) => w.length <= 5));
 });
 
-test("#2366 resolveFanoutDispatch: Claude-harness env clamps the emitted wave plan to CLAUDE_MAX_EFFECTIVE_CONCURRENT (4) regardless of a higher configured cap — shipped grouped-dispatch default (one unit carries several angles)", () => {
-  // Shipped default maxAnglesPerGroup (3): 15 angles auto-chunk into 5 dispatch
-  // units (each carrying several angles + one sentinel), more than the cap of 4.
+test("#2366 resolveFanoutDispatch: Claude-harness env clamps the emitted wave plan to CLAUDE_MAX_EFFECTIVE_CONCURRENT (5) regardless of a higher configured cap — shipped grouped-dispatch default (one unit carries several angles)", () => {
+  // Shipped default maxAnglesPerGroup (5): 25 angles auto-chunk into 5 dispatch
+  // units (each carrying several angles + one sentinel), exactly the cap of 5.
   const config = { version: 1, gates: { fanout: { maxConcurrent: 8 } } };
-  const angles = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o"];
+  const angles = Array.from({ length: 25 }, (_, i) => String.fromCharCode(97 + i));
   const plan = resolveFanoutDispatch(config, "draft", angles, { fullLabel: false, env: { CLAUDECODE: "1" } });
-  assert.equal(plan.maxAnglesPerGroup, 3);
+  assert.equal(plan.maxAnglesPerGroup, 5);
   assert.equal(plan.groups.length, 5);
   assert.ok(plan.groups.every((g) => g.angles.length > 1));
   assert.equal(plan.maxConcurrent, 8); // configured cap is unchanged...
-  assert.equal(plan.effectiveConcurrency, 4); // ...but the emitted wave plan is clamped.
-  assert.equal(plan.wavePlan.length, 2);
-  assert.deepEqual(plan.wavePlan.map((w) => w.length), [4, 1]);
-  assert.ok(plan.wavePlan.every((w) => w.length <= 4));
+  assert.equal(plan.effectiveConcurrency, 5); // ...but the emitted wave plan is clamped.
+  assert.equal(plan.wavePlan.length, 1);
+  assert.ok(plan.wavePlan.every((w) => w.length <= 5));
 });
 
 test("#2366 resolveFanoutDispatch: for configured maxConcurrent 4 under a Claude env the emitted plan carries maxConcurrent: 4", () => {
@@ -5651,9 +5699,9 @@ test("#2366 resolveFanoutDispatch: for configured maxConcurrent 4 under a Claude
   const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, env: { CLAUDECODE: "1" } });
   assert.equal(plan.maxConcurrent, 4);
   assert.equal(plan.effectiveConcurrency, 4);
-  assert.equal(plan.wavePlan.length, 2);
-  assert.deepEqual(plan.wavePlan.map((w) => w.length), [4, 1]);
-  assert.ok(plan.wavePlan.every((w) => w.length <= 4));
+  // 5 singleton units above the cap of 4 pack into one 5-angle unit: one wave.
+  assert.deepEqual(plan.groups, [{ name: "a+b+c+d+e", angles: ["a", "b", "c", "d", "e"] }]);
+  assert.equal(plan.wavePlan.length, 1);
 });
 
 test("#2366 resolveFanoutDispatch: non-Claude env keeps the configured concurrency (no clamp)", () => {
@@ -5675,8 +5723,8 @@ test("#1507 resolveFanoutDispatch emits a reviewer-budget preflight (unknown bud
 });
 
 test("#1507 resolveFanoutDispatch preflight blocks on an insufficient budget", () => {
-  // 5 angles, default N=3 → 2 dispatch units (group:a+b+c, group:d+e).
-  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, availableReviewers: 1 });
+  // 7 angles, default N=5 → 2 dispatch units (group:a+b+c+d+e, group:f+g).
+  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e", "f", "g"], { fullLabel: false, availableReviewers: 1 });
   assert.equal(plan.preflight.requiredReviewers, 2);
   assert.equal(plan.preflight.ok, false);
   assert.equal(plan.preflight.dispatch, false);
@@ -5686,23 +5734,23 @@ test("#1507 resolveFanoutDispatch preflight blocks on an insufficient budget", (
 });
 
 test("#1635 resolveFanoutDispatch threads carriedAngles into the preflight (head-bump shortfall computed over remaining groups only)", () => {
-  // 5 angles, default N=3 → 2 dispatch units (group:a+b+c, group:d+e). "d" and
-  // "e" were proven carried forward by Phase 1.2 (resolve-angle-carry-forward.mjs)
-  // for this head-bump re-gate, so group:d+e needs no reviewer.
-  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e"], {
+  // 7 angles, default N=5 → 2 dispatch units (group:a+b+c+d+e, group:f+g). "f"
+  // and "g" were proven carried forward by Phase 1.2 (resolve-angle-carry-forward.mjs)
+  // for this head-bump re-gate, so group:f+g needs no reviewer.
+  const plan = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e", "f", "g"], {
     fullLabel: false,
     availableReviewers: 1,
-    carriedAngles: ["d", "e"],
+    carriedAngles: ["f", "g"],
   });
   assert.equal(plan.preflight.requiredReviewers, 1);
   assert.equal(plan.preflight.dispatch, true);
   assert.equal(plan.preflight.shortfall, null);
   assert.equal(plan.preflight.reason, "budget_sufficient");
-  assert.deepEqual(plan.preflight.carriedAngles, ["d", "e"]);
+  assert.deepEqual(plan.preflight.carriedAngles, ["f", "g"]);
 });
 
 test("#1635 resolveFanoutDispatch: absent carriedAngles is unchanged from today's full-count behavior", () => {
-  const withoutCarried = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, availableReviewers: 1 });
+  const withoutCarried = resolveFanoutDispatch({ version: 1 }, "draft", ["a", "b", "c", "d", "e", "f", "g"], { fullLabel: false, availableReviewers: 1 });
   assert.equal(withoutCarried.preflight.requiredReviewers, 2);
   assert.equal(withoutCarried.preflight.dispatch, false);
   assert.equal(withoutCarried.preflight.shortfall, 1);
@@ -5955,8 +6003,8 @@ test("buildGateContext threads input.availableReviewers into the persisted artif
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
   try {
     // Static pool, no tiers: 6 angles + the mandatory "gate-evidence" floor =
-    // 7 angles → default maxAnglesPerGroup 3 auto-chunks into 3 groups
-    // (3+3+1), so requiredReviewers is 3 and a budget of 2 is short by 1.
+    // 7 angles → default maxAnglesPerGroup 5 auto-chunks into 2 groups
+    // (5+2), so requiredReviewers is 2 and a budget of 1 is short by 1.
     const config = draftConfig({ dynamicAngles: false });
     const result = await buildGateContext(
       {
@@ -5966,12 +6014,12 @@ test("buildGateContext threads input.availableReviewers into the persisted artif
         repo: "owner/repo",
         pr: 50,
         headSha: "cafef00d1234",
-        availableReviewers: 2,
+        availableReviewers: 1,
       },
       { repoRoot },
     );
-    assert.equal(result.artifact.fanout.preflight.requiredReviewers, 3);
-    assert.equal(result.artifact.fanout.preflight.availableReviewers, 2);
+    assert.equal(result.artifact.fanout.preflight.requiredReviewers, 2);
+    assert.equal(result.artifact.fanout.preflight.availableReviewers, 1);
     assert.equal(result.artifact.fanout.preflight.dispatch, false);
     assert.equal(result.artifact.fanout.preflight.shortfall, 1);
     assert.equal(result.artifact.fanout.preflight.reason, "budget_shortfall");
@@ -5991,7 +6039,7 @@ test("main() threads --available-reviewers to the written artifact's fanout.pref
     await main([
       "--repo", "owner/repo", "--pr", "51", "--gate", "draft_gate",
       "--head-sha", headSha,
-      "--angles", '["a", "b", "c", "d", "e"]',
+      "--angles", '["a", "b", "c", "d", "e", "f", "g"]',
       "--available-reviewers", "1",
     ], { repoRoot, run: stubGhRun });
 
@@ -5999,7 +6047,7 @@ test("main() threads --available-reviewers to the written artifact's fanout.pref
       repo: "owner/repo", pr: 51, gate: "draft_gate", headSha,
     }, { repoRoot });
 
-    // 5 angles, default maxAnglesPerGroup 3 → 2 dispatch units; budget 1 is
+    // 7 angles, default maxAnglesPerGroup 5 → 2 dispatch units; budget 1 is
     // short by 1.
     assert.equal(artifact.fanout.preflight.requiredReviewers, 2);
     assert.equal(artifact.fanout.preflight.availableReviewers, 1);
@@ -6058,23 +6106,23 @@ test("main() threads --carried-angles to the written artifact's fanout.preflight
     await main([
       "--repo", "owner/repo", "--pr", "52", "--gate", "draft_gate",
       "--head-sha", headSha,
-      "--angles", '["a", "b", "c", "d", "e"]',
+      "--angles", '["a", "b", "c", "d", "e", "f", "g"]',
       "--available-reviewers", "1",
-      "--carried-angles", '["d", "e"]',
+      "--carried-angles", '["f", "g"]',
     ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 52, gate: "draft_gate", headSha,
     }, { repoRoot });
 
-    // 5 angles, default maxAnglesPerGroup 3 → 2 dispatch units (group:a+b+c,
-    // group:d+e). Carrying "d"/"e" forward drops requiredReviewers to 1, so a
+    // 7 angles, default maxAnglesPerGroup 5 → 2 dispatch units (group:a+b+c+d+e,
+    // group:f+g). Carrying "f"/"g" forward drops requiredReviewers to 1, so a
     // budget of 1 (which shortfalls by 1 in the --available-reviewers-only
     // test above) now dispatches clean.
     assert.equal(artifact.fanout.preflight.requiredReviewers, 1);
     assert.equal(artifact.fanout.preflight.dispatch, true);
     assert.equal(artifact.fanout.preflight.shortfall, null);
-    assert.deepEqual(artifact.fanout.preflight.carriedAngles, ["d", "e"]);
+    assert.deepEqual(artifact.fanout.preflight.carriedAngles, ["f", "g"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

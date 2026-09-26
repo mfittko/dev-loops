@@ -15,7 +15,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-
 import { formatCliError } from "../_core-helpers.mjs";
 
 const USAGE = `Usage: resolve-gate-dispatch.mjs --gate <draft|preApproval> [--base <ref>] [--head <ref>] [--full-label] [--inline-severities <csv>]
-Compute the primer-owned deterministic review-proportionality plan
+Compute the gate-coordinator-owned deterministic review-proportionality plan
 (GATE-EXEC-PROPORTIONALITY, resolveReviewProportionality): mode (inline vs
 full fan-out) + resolved angle set + fan-out grouping, from lightMode config +
 PR facts. Under the size cap, ALSO fails closed to full_fanout DISPATCH (keeping the
@@ -177,9 +177,9 @@ export async function run(argv) {
     // not fail-open: the merge-gate re-verify (detect-checkpoint-evidence.mjs)
     // NEVER trusts this round's recorded plan — it independently RECOMPUTES
     // every floor from its OWN merge-base diff at merge time — so a
-    // primer/merge-gate range mismatch here can only cost an extra
+    // coordinator/merge-gate range mismatch here can only cost an extra
     // reject-and-redo round-trip, never let a genuinely risky diff merge on a
-    // stale or lenient primer decision. A future unification would read both
+    // stale or lenient coordinator decision. A future unification would read both
     // facts from ONE captured diff object (mirroring write-gate-context.mjs's
     // build-once bundle) rather than two independent git reads.
     let sizeOutcome = null;

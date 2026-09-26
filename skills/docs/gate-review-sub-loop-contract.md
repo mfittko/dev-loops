@@ -73,7 +73,7 @@ Both gates run the identical phases with their own review angles.
 in a dedicated, fresh-context **gate coordinator** agent. This is the only sanctioned round
 shape. The gate coordinator is the "gate-round capsule" of ADR 0081. It owns exactly one round
 for one gate at one head and runs every in-round step: gate validation, the Phase 1 context,
-Phase 1.2 carry-forward, the Phase 1.5 primer, the Phase 2 wave dispatch of `review` agents, the
+Phase 1.2 carry-forward, the Phase 2 wave dispatch of `review` agents, the
 Phase 3 fan-in and durable ledger write, the Phase 3.5 judge, and `judge-pass`. A light-mode
 `inline_single_agent` round also runs inside the gate coordinator. Inside a round, "conductor" in
 this contract means the gate coordinator. The dev-loop coordinator dispatches the gate
@@ -240,30 +240,16 @@ The physically separate volatile tail follows that boundary. Put only values the
 
 **Write ordering.** Both builder and CLI prepare the full diff without persisting it. The shared writer renders the evidence file and scoped briefings in memory, refuses a rebuild with live sentinels that would change the prefix or any hash-bound read outside it (prior-dispositions, known-findings, scoped variants), and validates the plan/volatile tail before overwriting any referenced file. Refusal preserves the prior set's bytes. The prefix binds the evidence file and the full diff by sha256, so a change to either changes the prefix. Before changing a prefix, evidence file, scoped briefing or full diff, the writer MUST invalidate the previous JSON marker. It then persists those stable files, volatile tail and dispatch plan, writing the JSON completion marker LAST. Successful reruns with unchanged stable bytes retain the marker in place. Optional diff/variant write failures retain their existing fallback only after invalidation: rebuild pointers/hash/plan without a failed diff, or downgrade failed variants to the full briefing. A failed required write MUST remove the marker even when prefix bytes are unchanged; landed siblings and round history remain for diagnosis. If cleanup also fails, report both errors and MUST NOT report success. `readGateContext`, dispatch emission and reviewer `--context-path` checks use the marker; after a failed write, repair the failure and rebuild the complete set before dispatching.
 
-Use `requestPrefixFingerprint`/`sharedPrefixHash` for the following primer phase's ordering evidence. A plan alone does not prove that its primer barrier ran.
+A request plan proves request-shape identity only. It never proves a provider cache write or read.
 
-### Phase 1.5 — Cache primer (MANDATORY)
+### First-wave release
 
-<!-- rule: GATE-EXEC-PRIME -->
-`GATE-EXEC-PRIME`: Every gate fan-out MUST prime its shared prefix before releasing the remaining reviewers. This is mandatory, not a config option: build context, run the primer, observe its barrier, then release reviewers over the same prefix. The primer is non-load-bearing: correctness, successful dispatch, and a bounded reviewer context MUST NOT depend on a provider cache hit; the prefix stays compact and is never inflated for cache economics.
+<!-- rule: GATE-EXEC-FIRST-WAVE-RELEASE -->
+`GATE-EXEC-FIRST-WAVE-RELEASE`: After Phase 1 builds and validates the round context and the emitter writes the bounded work orders, the gate coordinator MUST release the first reviewer wave immediately, bounded only by `resolveFanoutEffectiveConcurrency` (Phase 2). No primer spawn, lead reviewer, or other cache-warming step precedes that wave. Reviewer 1 is never required to complete, or to emit output, before the other slots of the first wave are released. Correctness, successful dispatch, fan-in, and the gate verdict MUST NOT depend on a provider cache hit or on any priming evidence; the shared prefix stays compact and is never inflated for cache economics.
 
-| Form | Dispatch and output |
-| --- | --- |
-| One-reviewer-as-primer (default) | Dispatch one real reviewer first. It keeps its normal angle scope and writes normal findings; there is no separate primer run or `<gate>-prime` sentinel. |
-| Dedicated angle-less primer (alternative) | Dispatch one scoped `review` agent with only the verbatim invariant prefix, no angle suffix. It runs `verify-fresh-review-context.mjs`, confirms context and returns without reviewing or writing findings. Use reserved scope `<gate>-prime` and the same prefix hash. |
+Cache priming is an optional, non-semantic execution optimization. A harness or execution adapter MAY prime internally only when its capability and measured economics justify it. Priming MUST NOT change review semantics or evidence, reduce reviewer independence, serialize a completion-only lead reviewer before the wave, or become a fan-in or verdict precondition. Where cache telemetry is exposed, a round MAY record creation and read events at `<gate>-<headSha>.cache-telemetry.json` (`cacheTelemetryPath` / `buildCacheTelemetryEvidence` / `writeCacheTelemetryEvidence` from `@dev-loops/core/loop/cache-telemetry-evidence`); `GATE-EXEC-CACHE-TELEMETRY` validates a recorded artifact. Opaque or unavailable telemetry records `cacheReuseVerified: false` with a reason: it is never described as verified reuse, and missing telemetry never fails the gate.
 
-Use the same `review` request envelope for primer and reviewers, never a bespoke context-reader. Request-prefix compatibility includes model, tools and ordering, system/project/agent instructions, message/content-block boundaries, thinking/tool-choice settings, context bytes, breakpoint position and TTL. Identical artifact bytes alone do not establish request-prefix identity. The dedicated primer's same-hash sentinel passes normal prefix verification; `verify-briefing-prefixes.mjs` does not special-case `<gate>-prime`, and fan-in receives no findings from it.
-
-Execute in order:
-
-1. Use Phase 1's immutable `<gate>-<headSha>.briefing-prefix.txt` verbatim.
-2. Dispatch the lead reviewer or dedicated primer with that prefix.
-3. Await the earliest observable model output: the first streamed token/chunk when exposed, otherwise completion. Never release reviewers on an unobservable start. Completion-only harnesses serialize the lead reviewer before the rest.
-4. Record ordering at `<gate>-<headSha>.primer-evidence.json` beside the context, using `primerEvidencePath` / `buildPrimerEvidence` / `writePrimerEvidence` from `@dev-loops/core/loop/primer-evidence`. Bind observed primer runs and reviewer releases to the request plan: each primer's model/request-prefix fingerprint, and a landed primer before each release. Phase 3 owns the conditions under which this evidence is mechanically checked.
-5. Where cache telemetry is exposed, record creation (before) and read (after) events plus the aggregate read:create report at `<gate>-<headSha>.cache-telemetry.json`, using `cacheTelemetryPath` / `buildCacheTelemetryEvidence` / `writeCacheTelemetryEvidence` from `@dev-loops/core/loop/cache-telemetry-evidence`. Bind the request plan and capability record. For opaque/unavailable telemetry, the builder records `cacheReuseVerified: false` with a reason; never claim verified `1 write + N reads`.
-6. Release the remaining reviewers with the same model and byte-identical request prefix, subject to Phase 2's concurrency bound.
-
-The barrier orders a potential cache write before reads; it does not prove provider reuse. These workflows use Pi/Claude Code agent harnesses, not a raw-API path: the conductor cannot set `prompt_cache_key` or explicit breakpoints, and the shipped agent-dispatch surfaces expose no provider usage/cache-read telemetry. Do not add a verification pass or invent a cache pin. Where telemetry is unavailable, claim only ordering and request-fingerprint invariants. The default lead-reviewer form needs no extra reviewer; a dedicated primer adds one spawn.
+These workflows use Pi/Claude Code agent harnesses, not a raw-API path: the conductor cannot set `prompt_cache_key` or explicit breakpoints, and the shipped agent-dispatch surfaces expose no provider usage/cache-read telemetry. Do not add a verification pass or invent a cache pin. The prefix-hash, required-read hash, sentinel, same-head rebuild/retirement, and fan-in provenance checks stay load-bearing and unchanged.
 
 <!-- rule: GATE-EXEC-VALIDATION-ARTIFACT -->
 `GATE-EXEC-VALIDATION-ARTIFACT`: The preamble MUST run the round's validation set exactly
@@ -297,19 +283,22 @@ To resume at the same head, rerun `write-gate-context.mjs` with the refreshed bu
 
 Resolve grouping through `resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel })` (`@dev-loops/core/config`), then dispatch through `GATE-EXEC-FANOUT-DISPATCH-EMIT` below. Do not treat the context's unsplit groups as the final emitted units.
 
+<!-- rule: GATE-EXEC-FANOUT-CAPACITY -->
+`GATE-EXEC-FANOUT-CAPACITY`: Every planned round MUST dispatch in exactly one wave. `write-gate-context.mjs` (`resolveFanoutDispatch`) derives the base units: the RESOLVED units after the emitter's cap-split at `REVIEWER_UNIT_MAX_ANGLES` (5) — the round's resolved-angle grouping, deliberately NOT the completed/carried-filtered pending set, so wave 1 and every same-head resume derive identical units and the recorded membership still admits the wave's reviewers. When the base units exceed the effective `maxConcurrent`, it packs whole base units first-fit decreasing by angle count, ties broken by unit name, into at most effective `maxConcurrent` units of at most 5 angles. A merged unit's name joins its member unit names in sorted order with `+`, and the emitter records that name as the provenance `group`. Packing never splits a base unit and never runs when the count already fits, so a restored `holistic` singleton stays alone in a round that fits. The packed list is recorded in the context artifact's `fanout.groups` and `pendingGroups`, which the emitter consumes. When the full resolved grouping cannot pack, the decision is keyed on the DISPATCHABLE set — the resolved units minus every group whose angles are ALL carried forward (a set fixed for the whole round) — and that dispatchable plan is emitted when it fits one wave, so a carry-forward re-gate whose fresh plan fits is never blocked. The writer MUST refuse with exit 1 before writing any artifact only when the dispatchable plan itself cannot fit, naming the resolved angle count, the fresh (non-carried) count, the capacity and the remedies: raise `gates.fanout.maxConcurrent`, disable angles, or rely on dynamic pruning. It never plans a second wave. `gates.fanout.sequential: true` and `mode: per-angle` are explicit opt-outs that neither pack nor refuse. The standalone `review` gate is outside this rule: its full-PR angle set exceeds single-wave capacity, so it keeps its multi-wave plan.
+
 | Input | Resolver behavior |
 | --- | --- |
-| `gates.fanout.mode` unset or `grouped` (default) | Match configured `gates.fanout.groups` first; chunk remaining angles by `gates.fanout.maxAnglesPerGroup` (default 3). |
+| `gates.fanout.mode` unset or `grouped` (default) | Match configured `gates.fanout.groups` first; chunk remaining angles by `gates.fanout.maxAnglesPerGroup` (default 5). |
 | `mode: per-angle` | Bypass configured groups; one singleton per angle. `maxAnglesPerGroup: 1` is equivalent only when no configured multi-angle group matches. |
 | `gate:full` | Force the full angle set upstream (`gate_full_label`), while retaining grouped dispatch; it does not imply per-angle mode. |
 
 `gates.fanout.groups` is a global reviewer-identity table shared across gates. A group participates only when the gate resolves one of its angles. Grouping changes reviewer allocation, never the resolved angle set, per-angle evidence, or provenance requirement. The emitter shares every multi-angle resolved unit, whether configured or auto-chunked, and keeps only genuinely single-angle units as singletons; its units are the dispatch authority.
 
-Keep reviewer groups separate from `requestGroups`: the latter batch models/request fingerprints for caching, not reviewer identity. Validate provenance against resolved reviewer groups (`fanoutReviewerPairingError`), never against model/cache groups.
+Keep reviewer groups separate from `requestGroups`: the latter batch models/request fingerprints for caching, not reviewer identity. Validate provenance against the recorded dispatch units (`fanoutReviewerPairingError`), never against model/cache groups.
 
 The gate coordinator dispatches one independent, fresh-context `review` agent per emitted unit via the plain Agent tool — releasing the wave's units together (under Pi: ONE call per wave, the wave rule below), never N separate blocking calls — each given its unit's bounded work order, which references the neutral evidence and carries its angle prompts. Never inherit the gate coordinator's, the dev-loop coordinator's, or a sibling reviewer's context. Follow the [review agent's scoped angle-review mode](../../agents/review.md).
 
-Wave the emitted units under the emitter's `maxConcurrent` (`resolveFanoutEffectiveConcurrency`) in ONE call per wave — under Pi a single `subagent({ workflowScriptPath })` call whose script body returns ONE `runs.all([...])` with its own unique `key` per unit (this shape needs pi-subagents ≥0.57; `tasks: [...]` was removed in 0.41.0, and the repo's `Dockerfile` `PI_SUBAGENTS_VERSION` pin is below that floor and must be raised for the shape to run in the declared container) — then join that wave before releasing the next. Never issue N separate blocking per-unit calls for one wave: that is the shape Pi's foreground guard rejects, and it silently serializes the round. The configured cross-harness default is 4; this repo configures 3. `gates.fanout.sequential: true` resolves to 1, so each reviewer completes and writes evidence before the next starts. Under the Claude harness the effective value is additionally capped at 4; Pi/unknown harnesses retain the configured value. These bounds never collapse independent review into inline review.
+Wave the emitted units under the emitter's `maxConcurrent` (`resolveFanoutEffectiveConcurrency`) in ONE call per wave — under Pi a single `subagent({ workflowScriptPath })` call whose script body returns ONE `runs.all([...])` with its own unique `key` per unit (this shape needs pi-subagents ≥0.57; `tasks: [...]` was removed in 0.41.0, and the repo's `Dockerfile` `PI_SUBAGENTS_VERSION` pin is below that floor and must be raised for the shape to run in the declared container) — then join that wave before releasing the next. Never issue N separate blocking per-unit calls for one wave: that is the shape Pi's foreground guard rejects, and it silently serializes the round. The configured cross-harness default is 5, so a full shipped round (capacity 5 x 5 = 25 angles) packs into one wave (`GATE-EXEC-FANOUT-CAPACITY`). This repo also configures 5, independent of `queue.maxParallel: 3`, so its combined peak is 3 runners x 5 = 15 concurrent reviewer units. It relies on `GATE-EXEC-DISPATCH-RETRY-BACKOFF` for transient 429s; if 429s rise, lower `queue.maxParallel` first and keep `maxConcurrent` at 5 so one round stays one wave. `gates.fanout.sequential: true` resolves to 1, so each reviewer completes and writes evidence before the next starts. Under the Claude harness the effective value is additionally capped at 5; Pi/unknown harnesses retain the configured value. These bounds never collapse independent review into inline review.
 
 If a dispatch still receives 429, follow `GATE-EXEC-DISPATCH-RETRY-BACKOFF` below: retry the same unit under the helper's policy, then halve the batch with `backoffMaxConcurrent` and recompute waves before foreground one-at-a-time fallback. Record degradation in gate evidence/provenance. Never launch all units and rely on retries to impose the bound.
 
@@ -497,11 +486,21 @@ dispatch path, and it closes three failure modes prose discipline never held:
   itself draws no dispatch-relevant distinction between a configured group and an auto-chunk
   bundle (both are "this round's resolved dispatch units"), so the emitter no longer draws one
   either. The merge guard (`fanoutReviewerPairingError` in `@dev-loops/core/loop/gate-fanin`) is
-  the fail-closed authority for this: it re-derives this round's grouping independently via its
-  own `resolveFanoutGroups` call (`detect-checkpoint-evidence.mjs`) and accepts a shared identity
-  ONLY when every angle it covers is a member of that SAME re-derived unit — configured or
-  auto-chunk — so a claimed group spanning angles the guard's own re-derivation places in
-  different units (or an angle the re-derivation never resolves at all) still fails closed. The
+  the fail-closed authority for this. It re-derives this round's base units independently via its
+  own `resolveFanoutGroups` call (`detect-checkpoint-evidence.mjs`) over the ledger's fresh and
+  carried angles (so a partially carried unit resolves to its emitted boundaries), cap-split at
+  `REVIEWER_UNIT_MAX_ANGLES`; base units never depend on the harness concurrency clamp. The
+  dispatch plan and this re-derivation both order angles by the gate's angle pool, so ledger order
+  never moves a unit boundary.
+  `write-gate-findings-log.mjs` records each dispatch unit's membership (`name`, `angles`) from the
+  keyed context artifact's `fanout.groups`, expanded through the emitter's cap-split, as
+  `provenance.dispatchUnits`; a caller-supplied `dispatchUnits` is dropped. Both the write side and
+  the read side accept a shared identity ONLY inside ONE recorded unit, and accept that unit only
+  when it is a union of whole base units with at most 5 angles. An empty recorded membership is
+  rejected, never read as "no check". A ledger without recorded
+  membership falls back to the base units: an unpacked round still passes and a reviewer shared
+  across a packed unit fails closed. A claimed group spanning angles the membership places in
+  different units (or an angle it never places at all) still fails closed. The
   emitter no longer needs to be more conservative than the guard by splitting a sanctioned
   auto-chunk bundle to singletons. Provenance / distinct-reviewer / grouped-dispatch / fail-closed invariants
   are preserved (a singleton covering one fresh angle is never pair-checked, and a configured
@@ -588,7 +587,7 @@ Missing/malformed `prefixPath` or leading bytes, missing `promptContentHash`, a 
 
 **Three identities, one honest boundary.** This binds recorded-layout identity to generated-file identity, **not delivered-task identity**. Claude Code's orchestrator must relay emitted bytes verbatim into the Agent prompt, but the check cannot observe that final hop. It catches honestly recorded delivery drift; recording emitted bytes while delivering different bytes remains unverified. Do not present an emitted-file hash as proof of delivery. The same boundary holds for evidence reads: the sentinel proves each hashed required read still matches its recorded bytes before the reviewer starts, not that the reviewer read it in full. The per-harness delivery limitations above and `GATE-EXEC-FANOUT-DISPATCH-EMIT` still apply.
 
-Zero dispatch-prompt records do not themselves fail this check: capture remains progressive/optional for non-composer callers, including legacy offline rounds, as with `GATE-EXEC-PRIMER-EVIDENCE`. This does not waive the records-floor below. Recovery requires re-emitting and actually redispatching compliant prompts before reconsolidating; regenerating files cannot certify old delivery. For unchanged prefix bytes, use the same-head retry guard below. For changed bytes, follow `GATE-EXEC-ROUND-RETIREMENT`: retire before rebuilding, then redispatch. Preserve the original review history and audit records.
+Zero dispatch-prompt records do not themselves fail this check: capture remains progressive/optional for non-composer callers, including legacy offline rounds. This does not waive the records-floor below. Recovery requires re-emitting and actually redispatching compliant prompts before reconsolidating; regenerating files cannot certify old delivery. For unchanged prefix bytes, use the same-head retry guard below. For changed bytes, follow `GATE-EXEC-ROUND-RETIREMENT`: retire before rebuilding, then redispatch. Preserve the original review history and audit records.
 
 **Records-floor (issue #1868).** The remaining vacuous-pass shape — a coordinator round that
 records ZERO dispatch/briefing evidence for a gate that DID dispatch units — is closed
@@ -610,7 +609,7 @@ reconciles and closes the records-floor residual carried on #1468.
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Bounded parallelism is the DEFAULT dispatch posture:
 fan-out dispatches up to `gates.fanout.maxConcurrent` dispatch units concurrently per wave
-(this repo: 3, aligned with `queue.maxParallel`) in one wave (under Pi: ONE call per wave — one
+(this repo: 5, with `queue.maxParallel: 3`, see Phase 2) in one wave (under Pi: ONE call per wave — one
 `subagent`/`runs.all([...])` call, described above) — the gate coordinator awaits each wave before releasing
 the next. `gates.fanout.sequential:
 true` (effective concurrency 1, above) is the documented LOAD FALLBACK for an environment
@@ -747,30 +746,9 @@ or a proven carry (a name also present in `--carried-angles`, itself only
 ever populated after its own `--carry-forward-plan` proof check). A resolved
 angle with neither FAILS CLOSED (exit 1), naming the missing angle(s).
 
-<!-- rule: GATE-EXEC-PRIMER-EVIDENCE -->
-`GATE-EXEC-PRIMER-EVIDENCE`: when the round recorded primer-dispatch ordering
-evidence (Phase 1.5 step 4, `<gate>-<headSha>.primer-evidence.json`), fan-in MUST
-validate it against the request plan via `@dev-loops/core/loop/primer-evidence`
-`validatePrimerEvidence` and fail closed — refusing to proceed to consolidation —
-when the evidence is missing, or when the ordering barrier, request-group
-coverage, model-group binding, request-prefix fingerprint, shared-prefix hash, or
-plan hash is missing or mismatched. The refusal names the failing check
-(`primer_order` / `group_coverage` / `model_group` / `request_fingerprint` /
-`shared_prefix_hash` / `plan_hash`). This materially backs the `GATE-EXEC-PRIME`
-barrier: the primer write-before-read ordering is no longer asserted only in
-prose, but is a mechanically-checkable fail-closed input to consolidation.
-
-**Enforcement stays OPT-IN.** `consolidate-fanin.mjs` checks primer evidence only
-when both `--primer-evidence` and `--primer-plan` are supplied; neither means
-unenforced. Offline ordering/fingerprint checks do not measure provider cache reuse.
-No in-repo artifact demonstrates a real primed harness round's creation/read token
-counts; revisit default-on enforcement only after that evidence exists, to avoid
-false-blocking unmeasured harness/mechanism combinations. Dispatch-layout checking
-remains unconditional: it verifies controlled prompt bytes, not provider behavior.
-
 <!-- rule: GATE-EXEC-CACHE-TELEMETRY -->
-`GATE-EXEC-CACHE-TELEMETRY`: when a round records cache-telemetry evidence
-(Phase 1.5 step 5, `<gate>-<headSha>.cache-telemetry.json`) it MUST be validated
+`GATE-EXEC-CACHE-TELEMETRY`: when a round records optional cache-telemetry evidence
+(`GATE-EXEC-FIRST-WAVE-RELEASE`, `<gate>-<headSha>.cache-telemetry.json`) it MUST be validated
 via `@dev-loops/core/loop/cache-telemetry-evidence` `validateCacheTelemetryEvidence`
 and fail closed — refusing to proceed to consolidation — when the artifact is
 missing/malformed, when verified provider reuse is claimed for a harness whose usage
@@ -1909,7 +1887,7 @@ disabled, or whose scope is underivable remains rejected exactly as before.
 ### Review-proportionality dispatch plan (non-overridable floors)
 
 <!-- rule: GATE-EXEC-PROPORTIONALITY -->
-`GATE-EXEC-PROPORTIONALITY`: The primer OWNS a deterministic, mandatory, auditable
+`GATE-EXEC-PROPORTIONALITY`: The gate coordinator OWNS a deterministic, mandatory, auditable
 dispatch plan computed from the diff for every gate round — execution mode/grouping
 plus a provisional angle set — and it scales reviewer COST to the change's size and risk
 WITHOUT lowering what is checked: trivial → single combined reviewer
@@ -1922,7 +1900,7 @@ composition of the existing decision functions — `resolveGateDispatchMode` (mo
 `resolveFanoutGroups` (dispatch-unit grouping) — exposed as ONE testable object
 (`{ mode, angles, groups, reason, floors }`) via `resolveReviewProportionality`
 (`@dev-loops/core/config`). It performs no I/O itself; `resolve-gate-dispatch.mjs`
-(the primer's dispatch-decision step) is one of its two production callers and
+(the gate coordinator's dispatch-decision step) is one of its two production callers and
 supplies the diff-derived facts. Whenever a RISK-signal floor fires — a risk-path
 touch, a non-clean/ambiguous size-budget outcome, missing changed-file evidence, or an
 unclassifiable diff — the composer forces `full_fanout` DISPATCH but keeps a matched
@@ -2039,7 +2017,7 @@ non-code, which subtractive reduction by category cannot express.
 
 The handoff envelope built for the fan-out advertises the gate's UNTRIERED run-set; tier
 reduction is applied when the per-round context artifact is built, not reflected back into
-the envelope's own advertised angle set. The primer's dispatch-decision output
+the envelope's own advertised angle set. The gate coordinator's dispatch-decision output
 (`resolve-gate-dispatch.mjs`) instead carries the composer's tiered or file-kind best-effort
 set — a lower bound. The per-round context resolver (`resolveGateAnglesDynamic`) may widen
 that lower bound with lenses justified by hunk-derived change categories; its persisted set
@@ -2099,7 +2077,9 @@ are valid exactly when every entry sharing that identity declares the SAME `grou
 **AND** — whenever the caller supplies the round's resolved dispatch groups (both call
 sites do, `write-gate-findings-log.mjs` via its own `--full-label` flag threaded into
 `resolveFanoutGroups` just like `write-gate-context.mjs`'s) — every one of those fresh
-angles is a member of that SAME configured dispatch unit per `resolveFanoutGroups`. A
+angles is a member of that SAME dispatch unit: the recorded `provenance.dispatchUnits` unit
+(itself a union of whole cap-split `resolveFanoutGroups` base units of at most 5 angles) or,
+for a ledger without recorded membership, the same base unit (`GATE-EXEC-FANOUT-CAPACITY`). A
 self-attested `group` label spanning angles the
 configured table splits apart (or never groups together at all) fails closed even though
 the label itself is internally consistent; `resolveFanoutGroups` emits one-angle-per-unit
@@ -2306,7 +2286,7 @@ request is recomposed from the compacted base.
 
 Covered by the compaction suite in `packages/core/test/review-lineage.test.mjs`
 and the end-to-end fixture `packages/core/test/review-lineage-e2e-fixture.test.mjs`
-(driving request plan → primer → fan-out/fan-in → lineage delta → compaction
+(driving request plan → fan-out/fan-in → lineage delta → compaction
 for two rounds).
 
 ### Non-goals preserved

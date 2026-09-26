@@ -2,13 +2,14 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
+import { expandDispatchUnits } from "./_dispatch-units.mjs";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, freshAngleNames, hasLocatableShape, isDefaultDeferrableSeverity, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, hasLocatableShape, ledgerAngleNames, isDefaultDeferrableSeverity, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
@@ -18,6 +19,7 @@ import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resol
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { buildGateContextPath, buildLogPath } from "./_gate-artifact-paths.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -264,9 +266,11 @@ function resolveFindings(options) {
  * Validate + normalize the fan-out provenance object (distinctReviewers +
  * perAngle). Rejects malformed or self-inconsistent provenance; this raises
  * the bar but does not make provenance unforgeable (see the Pi-harness
- * subagent-tool bridge for that).
+ * subagent-tool bridge for that). `dispatchUnits` is the round's recorded
+ * dispatch membership (readContextDispatchUnits); a caller-supplied
+ * `dispatchUnits` key in `raw` is dropped, never trusted.
  */
-export function parseProvenanceJson(raw, resolvedGroups = null) {
+export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = null) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -336,11 +340,13 @@ export function parseProvenanceJson(raw, resolvedGroups = null) {
   // (non-carried) angles may share a reviewer identity, except fresh angles
   // sharing one under the SAME declared `group` (grouped fan-out dispatch —
   // see fanoutReviewerPairingError). `resolvedGroups` additionally rejects a
-  // claimed group the configured table does not actually place together.
-  const pairingError = fanoutReviewerPairingError(normalized.perAngle, resolvedGroups);
+  // claimed group the configured table does not actually place together, and
+  // `dispatchUnits` (when recorded) is the membership the reviewers shared.
+  const pairingError = fanoutReviewerPairingError(normalized.perAngle, resolvedGroups, dispatchUnits);
   if (pairingError) {
     throw parseError(`--provenance.perAngle ${pairingError}`);
   }
+  if (dispatchUnits !== null) normalized.dispatchUnits = dispatchUnits;
   return normalized;
 }
 /**
@@ -623,19 +629,12 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
   }
   return options;
 }
-export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
-  const parts = repo.split("/");
-  if (parts.length !== 2 || parts.some(p => p.length === 0)) {
-    throw new Error(`--repo must be in owner/name format, got: ${JSON.stringify(repo)}`);
-  }
-  for (const p of parts) {
-    if (p === "." || p === ".." || /[\s\\]/.test(p)) {
-      throw new Error(`--repo segment ${JSON.stringify(p)} contains unsafe characters (dots, whitespace, or backslashes)`);
-    }
-  }
-  const repoSlug = parts.join("-");
-  return path.join(tmpRoot, "gate-findings", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
-}
+// The gate-artifact path scheme lives in the leaf module _gate-artifact-paths.mjs
+// (see its header): write-gate-context.mjs imports it too, so neither consumer
+// imports the other and this CLI entry can never deadlock on an ESM cycle while
+// its own top-level `await main()` is pending. Re-exported so the existing
+// consumers keep resolving buildLogPath from this writer.
+export { buildLogPath };
 /**
  * ADR 0089: carry the judge pass's spec-authority `finding_conflicts` reject
  * into the durable ledger. The spec-authority verdict is the fixed sibling
@@ -673,6 +672,41 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
     .map((d) => d.index);
   return rejectFindingConflicts(findings, conflicts);
 }
+/**
+ * Read this round's dispatch membership from the keyed gate-context artifact
+ * (the same `<tmpRoot>/gate-context/...` path emit-fanout-dispatch.mjs reads:
+ * `--tmp-root` when given, else the worktree `tmp/`). The context's
+ * `fanout.groups` (packed when the round needed packing) expands through the
+ * emitter's own cap-split into the `{ name, angles }` dispatch units reviewers
+ * actually shared. Returns null when no context or no fanout plan exists, so
+ * the pairing guard falls back to re-derived base units. The path is keyed by
+ * repo, PR, gate and head, as in the emitter. A present but unreadable context,
+ * or a fanout plan without a `fanout.groups` array, fails closed. A plan whose
+ * groups yield no dispatch unit (empty, or only malformed or angle-less
+ * entries) returns `[]`, which the pairing guard rejects as a shape error.
+ * @returns {Promise<{ name: string, angles: string[] }[]|null>}
+ */
+export async function readContextDispatchUnits({ repo, pr, gate, headSha, tmpRoot }, config, repoRoot) {
+  const contextPath = path.resolve(repoRoot, buildGateContextPath({ repo, pr, gate, headSha, tmpRoot: tmpRoot || path.join(repoRoot, "tmp") }));
+  let raw;
+  try {
+    raw = await readFile(contextPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw parseError(`gate-context artifact ${contextPath} could not be read for dispatch membership: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let context;
+  try {
+    context = JSON.parse(raw);
+  } catch (error) {
+    throw parseError(`gate-context artifact ${contextPath} is not valid JSON, so its dispatch membership cannot be recorded: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (context?.fanout === undefined || context?.fanout === null) return null;
+  if (!Array.isArray(context.fanout.groups)) throw parseError(`gate-context artifact ${contextPath} has a fanout plan without a fanout.groups array, so its dispatch membership cannot be recorded`);
+  const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
+  return expandDispatchUnits(context.fanout.groups, configuredGroupNames).map(({ name, angles }) => ({ name, angles }));
+}
+
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   // The ledger write resolves against repoRoot (process.cwd() on the CLI), so the guard does too.
   if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
@@ -759,14 +793,18 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // to a malformed --provenance flag — never a parallel validator.
   const resolveAndValidateProvenance = async (rawProvenanceJson) => {
     let resolvedGroups = null;
+    let config = null;
     try {
       const rawPerAngle = JSON.parse(rawProvenanceJson)?.perAngle;
-      const { config } = await loadDevLoopConfig({ repoRoot });
-      resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[options.gate] ?? options.gate, freshAngleNames(rawPerAngle), { fullLabel: options.fullLabel === true });
+      ({ config } = await loadDevLoopConfig({ repoRoot }));
+      const configGate = GATE_CONFIG_KEY[options.gate] ?? options.gate;
+      const anglePool = resolveGateAngleContract(config, configGate).pool ?? [];
+      resolvedGroups = resolveFanoutGroups(config, configGate, ledgerAngleNames(rawPerAngle, anglePool), { fullLabel: options.fullLabel === true });
     } catch {
       resolvedGroups = null;
     }
-    return parseProvenanceJson(rawProvenanceJson, resolvedGroups);
+    const dispatchUnits = await readContextDispatchUnits(options, config, repoRoot);
+    return parseProvenanceJson(rawProvenanceJson, resolvedGroups, dispatchUnits);
   };
   let provenance;
   if (options.provenance !== undefined) {

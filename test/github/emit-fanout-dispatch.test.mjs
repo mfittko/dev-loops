@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, listPriorFindingsLogHeads, main } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { expandDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
@@ -530,9 +531,9 @@ test("contradiction-lens's emitted unit leads with the invariant prefix and carr
 });
 
 // End-to-end split-path regression (#2155 wiring slice a, Copilot follow-up):
-// a CONFIGURED group of 5 angles (over REVIEWER_UNIT_MAX_ANGLES) must come out
+// a CONFIGURED group of 6 angles (over REVIEWER_UNIT_MAX_ANGLES) must come out
 // of the REAL emitter (main(), not just expandDispatchUnits in isolation) as
-// ceil(5/3)=2 split sub-units, alongside the other configured/singleton units
+// ceil(6/5)=2 split sub-units, alongside the other configured/singleton units
 // unaffected by the cap.
 //
 // Round-2 Copilot follow-up: the earlier fixture hand-authored a "group" of 5
@@ -544,7 +545,7 @@ test("contradiction-lens's emitted unit leads with the invariant prefix and carr
 // fixture only proved main() can split an already-resolved, hand-rolled plan
 // — never that a genuinely CONFIGURED over-cap group survives resolveFanoutGroups
 // (the config->groups resolution step) before the split. This test instead
-// writes a REAL .devloops declaring a fanout group of 5 real angle names,
+// writes a REAL .devloops declaring a fanout group of 6 real angle names,
 // loads it with loadDevLoopConfig, and produces the gate-context bundle via
 // writeGateContext + resolveFanoutDispatch (which calls resolveFanoutGroups)
 // — the SAME production seam write-gate-context.mjs's CLI drives — before
@@ -558,13 +559,13 @@ async function seedRealConfiguredGroupBundle(tmpDir) {
       "  fanout:",
       "    groups:",
       "      - name: design-solid",
-      "        angles: [srp, soc, ocp, lsp, isp]",
+      "        angles: [srp, soc, ocp, lsp, isp, dip]",
       "",
     ].join("\n"),
     "utf8",
   );
   const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
-  const angles = ["srp", "soc", "ocp", "lsp", "isp", "contradiction-lens"];
+  const angles = ["srp", "soc", "ocp", "lsp", "isp", "dip", "contradiction-lens"];
   const options = parseWriteGateContextCliArgs([
     "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
     "--angles", JSON.stringify(angles),
@@ -577,7 +578,7 @@ async function seedRealConfiguredGroupBundle(tmpDir) {
   await writeGateContext(options, { repoRoot: tmpDir });
 }
 
-test("main(): a configured group OVER the angle cap splits into ceil(N/3) sub-units end-to-end, from a REAL resolveFanoutGroups-routed config", async () => {
+test("main(): a configured group of 6 angles splits into -part1 (5) and -part2 (1) end-to-end, from a REAL resolveFanoutGroups-routed config", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedRealConfiguredGroupBundle(tmpDir);
     const result = runEmitCli(
@@ -587,42 +588,44 @@ test("main(): a configured group OVER the angle cap splits into ceil(N/3) sub-un
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
-    // ceil(5/3)=2 split sub-units + 1 singleton (contradiction-lens)
+    // ceil(6/5)=2 split sub-units + 1 singleton (contradiction-lens)
     assert.equal(payload.count, 3);
     for (const unit of payload.units) {
       assert.ok(unit.angles.length <= REVIEWER_UNIT_MAX_ANGLES, `unit ${unit.scope} exceeds the cap`);
     }
     // No angle dropped, duplicated, reordered, or merged across the emitted units.
     const orderedAngles = payload.units.flatMap((u) => u.angles).filter((a) => a !== "contradiction-lens");
-    assert.deepEqual(orderedAngles, ["srp", "soc", "ocp", "lsp", "isp"]);
-    // Every split MULTI-angle sub-unit records the CONFIGURED group name as
-    // provenance — not its own synthetic `-partN` scope-distinguishing name
-    // (the "provenance documentation" fix: FIX 1).
-    const splitUnits = payload.units.filter((u) => u.angles.length > 1);
-    // 5 angles / cap 3 → part1 (3 angles) + part2 (2 angles), both multi-angle.
-    assert.equal(splitUnits.length, 2);
-    for (const u of splitUnits) assert.equal(u.group, "design-solid");
+    assert.deepEqual(orderedAngles, ["srp", "soc", "ocp", "lsp", "isp", "dip"]);
+    // 6 angles / cap 5 → part1 (5 angles) + part2 (1 angle). Both split
+    // sub-units record the CONFIGURED group name as provenance, including the
+    // one-angle tail — not their own synthetic `-partN` names.
+    const splitUnits = payload.units.filter((u) => u.group === "design-solid");
+    assert.deepEqual(splitUnits.map((u) => u.angles), [["srp", "soc", "ocp", "lsp", "isp"], ["dip"]]);
+    assert.deepEqual(splitUnits.map((u) => u.scope), ["pre-approval-gate-group-design-solid-part1", "pre-approval-gate-dip"]);
   });
 });
 
 for (const configured of [true, false]) {
   test(`C17: ${configured ? "configured" : "auto-chunk"} singleton split tail retains its original group through emission and ledger writing`, async () => {
     await withTmpDir(async (repoRoot) => {
-      const angles = ["srp", "soc", "ocp", "lsp", "pr-checklist"];
+      const angles = ["srp", "soc", "ocp", "lsp", "isp", "dip", "pr-checklist"];
       await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: {
         // Disable the shipped mandatory "holistic" angle so this fixture's
-        // minimal five-angle contract stays exact (same pattern used elsewhere
+        // minimal seven-angle contract stays exact (same pattern used elsewhere
         // to isolate a test's angle set from the shipped defaults).
         preApproval: { angles: [{ name: "holistic", enabled: false }] },
         fanout: {
-          groups: configured ? [{ name: "design-solid", angles: angles.slice(0, 4) }] : [],
-          maxAnglesPerGroup: 4,
+          groups: configured ? [{ name: "design-solid", angles: angles.slice(0, 6) }] : [],
+          maxAnglesPerGroup: 6,
         },
       } }));
       const { config, errors } = await loadDevLoopConfig({ repoRoot });
       assert.deepEqual(errors, []);
       const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, {});
-      assert.deepEqual(fanout.groups.map((unit) => unit.angles), [angles.slice(0, 4), angles.slice(4)]);
+      // Dispatch orders angles by the gate pool: the mandatory pr-checklist leads
+      // the leftover auto-chunk, and a configured group resolves first.
+      const order = configured ? angles : ["pr-checklist", ...angles.slice(0, 6)];
+      assert.deepEqual(fanout.groups.map((unit) => unit.angles), [order.slice(0, 6), order.slice(6)]);
       const options = parseWriteGateContextCliArgs([
         "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
         "--angles", JSON.stringify(angles),
@@ -635,19 +638,23 @@ for (const configured of [true, false]) {
       const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
       assert.deepEqual(JSON.parse(await readFile(emitPlan, "utf8")), payload);
       assert.equal(payload.count, 3);
-      assert.deepEqual(payload.units.map((unit) => unit.angles), [angles.slice(0, 3), [angles[3]], [angles[4]]]);
+      assert.deepEqual(payload.units.map((unit) => unit.angles), [order.slice(0, 5), [order[5]], [order[6]]]);
       const group = fanout.groups[0].name;
       assert.deepEqual(payload.units.map((unit) => unit.group), [group, group, null]);
-      assert.equal(payload.units[1].scope, "pre-approval-gate-lsp");
+      assert.equal(payload.units[1].scope, `pre-approval-gate-${order[5]}`);
       const provenance = { distinctReviewers: 3, perAngle: payload.units.flatMap((unit, index) =>
         unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, ...(unit.group === null ? {} : { group: unit.group }) }))) };
       const writeOptions = { repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA, verdict: "clean",
         findings: "[]", provenance: JSON.stringify(provenance), emitPlan, tmpRoot };
       const written = await writeGateFindingsLog(writeOptions, { repoRoot });
-      assert.deepEqual(written.log.provenance, provenance);
+      // The ledger records the context's dispatch membership next to the
+      // caller-supplied provenance.
+      const { dispatchUnits, ...recorded } = written.log.provenance;
+      assert.deepEqual(recorded, provenance);
+      assert.deepEqual(dispatchUnits.map((unit) => unit.angles), payload.units.map((unit) => unit.angles));
       for (const replacement of [undefined, "wrong-group"]) {
         const changed = structuredClone(provenance);
-        changed.perAngle[3].group = replacement;
+        changed.perAngle[5].group = replacement;
         await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(changed) }, { repoRoot }), /records group/);
       }
       const mixedIdentity = structuredClone(provenance);
@@ -655,9 +662,12 @@ for (const configured of [true, false]) {
       mixedIdentity.distinctReviewers = 4;
       await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(mixedIdentity) }, { repoRoot }), /multiple reviewer identities/);
       const reusedIdentity = structuredClone(provenance);
-      reusedIdentity.perAngle[3].reviewer = "review-0";
+      reusedIdentity.perAngle[5].reviewer = "review-0";
       reusedIdentity.distinctReviewers = 2;
-      await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(reusedIdentity) }, { repoRoot }), /smaller than/);
+      // One reviewer across the full-cap split sibling and its tail spans two
+      // recorded dispatch units, so the pairing guard refuses before the
+      // emit-plan reviewer-count check.
+      await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(reusedIdentity) }, { repoRoot }), /recorded dispatch units does not place all of them in one group/);
       const nullTail = structuredClone(payload);
       nullTail.units[1].group = null;
       await writeFile(emitPlan, JSON.stringify(nullTail));
@@ -687,9 +697,9 @@ for (const configured of [true, false]) {
 // angle set (no gates.fanout.groups match at all) routed through the REAL
 // resolveFanoutGroups auto-chunk path (via resolveFanoutDispatch, the same
 // seam write-gate-context.mjs's CLI drives) must dispatch ONE shared reviewer
-// PER AUTO-CHUNK BUNDLE — never one reviewer per angle. 7 ungrouped angles at
-// the default maxAnglesPerGroup=3 auto-chunk into exactly 3 bundles
-// ([a,b,c], [d,e,f], [g]); the emitted count must be 3, not 7.
+// PER AUTO-CHUNK BUNDLE — never one reviewer per angle. 11 ungrouped angles at
+// the default maxAnglesPerGroup=5 auto-chunk into exactly 3 bundles
+// ([a..e], [f..j], [k]); the emitted count must be 3, not 11.
 async function seedRealAutoChunkOnlyBundle(tmpDir, angles) {
   const { config } = await loadDevLoopConfig({ repoRoot: tmpDir }); // no .devloops
   // loadDevLoopConfig still layers in the shipped extension-defaults.yaml,
@@ -710,7 +720,7 @@ async function seedRealAutoChunkOnlyBundle(tmpDir, angles) {
 
 test("main(): a no-config-table angle set dispatches ONE shared reviewer per auto-chunk bundle, not one per angle (AC9, issue 2180)", async () => {
   await withTmpDir(async (tmpDir) => {
-    const angles = ["a", "b", "c", "d", "e", "f", "g"];
+    const angles = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"];
     await writeAnglePrompts(tmpDir, angles);
     await seedRealAutoChunkOnlyBundle(tmpDir, angles);
     const result = runEmitCli(
@@ -720,12 +730,12 @@ test("main(): a no-config-table angle set dispatches ONE shared reviewer per aut
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
-    // 7 angles / cap 3 → 3 auto-chunk bundles ([a,b,c],[d,e,f],[g]), NOT 7
+    // 11 angles / cap 5 → 3 auto-chunk bundles ([a..e],[f..j],[k]), NOT 11
     // per-angle singletons.
     assert.equal(payload.count, 3);
     // Coverage (AC7): every input angle is dispatched exactly once.
     assert.deepEqual(payload.units.flatMap((u) => u.angles).sort(), [...angles].sort());
-    // The two 3-angle bundles are shared reviewers recording their own
+    // The two 5-angle bundles are shared reviewers recording their own
     // auto-chunk bundle name as provenance `group`; the trailing 1-angle
     // bundle is a genuine singleton with no shared group.
     const sharedUnits = payload.units.filter((u) => u.angles.length > 1);
@@ -736,13 +746,13 @@ test("main(): a no-config-table angle set dispatches ONE shared reviewer per aut
   });
 });
 
-// #1971 (cap raised 2 -> 4 by #2366) — caller-boundary coverage for the
+// #1971 (cap raised 2 -> 4 by #2366, 4 -> 5 by #2414) — caller-boundary coverage for the
 // Claude-harness concurrency clamp: this CLI is the second (of two)
 // resolveFanoutEffectiveConcurrency call sites, and reads process.env
 // directly rather than through an injectable seam, so a caller-level test
 // here has to pin the env at the OS-process boundary (spawnSync's own `env`
 // option) rather than via a function argument.
-test("emits maxConcurrent 4 (configured default, unchanged by the cap) under a Claude-harness env (#2366)", async () => {
+test("emits maxConcurrent 5 (configured default, unchanged by the cap) under a Claude-harness env (#2366)", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);
     const result = runEmitCli(
@@ -751,12 +761,12 @@ test("emits maxConcurrent 4 (configured default, unchanged by the cap) under a C
     );
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    // no .devloops in tmpDir → default gates.fanout.maxConcurrent (4); min(4, 4) = 4.
-    assert.equal(payload.maxConcurrent, 4);
+    // no .devloops in tmpDir → default gates.fanout.maxConcurrent (5); min(5, 5) = 5.
+    assert.equal(payload.maxConcurrent, 5);
   });
 });
 
-test("emits maxConcurrent clamped to 4 from a higher configured value under a Claude-harness env (#2366)", async () => {
+test("emits maxConcurrent clamped to 5 from a higher configured value under a Claude-harness env (#2366)", async () => {
   await withTmpDir(async (tmpDir) => {
     await writeFile(
       path.join(tmpDir, ".devloops"),
@@ -770,7 +780,7 @@ test("emits maxConcurrent clamped to 4 from a higher configured value under a Cl
     );
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    assert.equal(payload.maxConcurrent, 4);
+    assert.equal(payload.maxConcurrent, 5);
   });
 });
 
@@ -805,8 +815,8 @@ test("emits the configured (unclamped) maxConcurrent under a non-Claude env (#19
     );
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    // no config file in tmpDir → default gates.fanout.maxConcurrent (4), unclamped.
-    assert.equal(payload.maxConcurrent, 4);
+    // no config file in tmpDir → default gates.fanout.maxConcurrent (5), unclamped.
+    assert.equal(payload.maxConcurrent, 5);
   });
 });
 
@@ -834,15 +844,15 @@ test("--pending emits only the pendingGroups subset", async () => {
 // --carried-angles narrows fanout.pendingGroups (resolveFanoutDispatch), and
 // --pending here emits ONLY the changed-input angles' units into the
 // persisted keyed emit-plan. Angles auto-chunk (unconfigured groups) into
-// units of <= maxAnglesPerGroup (default 3): "correctness"/"coverage"/"docs"
-// chunk together and "determinism" chunks alone. Carrying the WHOLE first
-// chunk forward (a narrow bump whose delta provably never touched their
-// surface) excludes it entirely from pendingGroups; "determinism" (the
+// units of <= maxAnglesPerGroup (default 5): the first five angles chunk
+// together and "yagni" chunks alone (with no configured angle pool the plan
+// orders angles lexicographically). Carrying the WHOLE first chunk forward (a narrow bump whose delta provably never touched their
+// surface) excludes it entirely from pendingGroups; "yagni" (the
 // changed-input angle) is the only unit left to dispatch.
 test("end-to-end: write-gate-context.mjs's --carried-angles narrows pendingGroups, and --pending emits only the changed-input angle's unit", async () => {
   await withTmpDir(async (tmpDir) => {
-    const angles = ["correctness", "coverage", "docs", "determinism"];
-    const carriedAngles = ["correctness", "coverage", "docs"];
+    const angles = ["correctness", "coverage", "docs", "dry", "kiss", "yagni"];
+    const carriedAngles = ["correctness", "coverage", "docs", "dry", "kiss"];
     const options = parseWriteGateContextCliArgs([
       "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
       "--angles", JSON.stringify(angles),
@@ -868,7 +878,7 @@ test("end-to-end: write-gate-context.mjs's --carried-angles narrows pendingGroup
     const persisted = JSON.parse(await readFile(planPath, "utf8"));
     assert.equal(persisted.pending, true);
     const emittedAngles = persisted.units.flatMap((u) => u.angles).sort();
-    assert.deepEqual(emittedAngles, ["determinism"], "only the changed-input angle's unit is emitted — the carried angles never re-dispatch");
+    assert.deepEqual(emittedAngles, ["yagni"], "only the changed-input angle's unit is emitted — the carried angles never re-dispatch");
   });
 });
 
@@ -1332,32 +1342,32 @@ test("expandDispatchUnits: emitted angle coverage equals the input angle set (no
 
 test("expandDispatchUnits: a configured group AT the angle cap stays one shared unit", () => {
   const configured = new Set(["backend"]);
-  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c"] }], configured);
-  assert.equal(REVIEWER_UNIT_MAX_ANGLES, 3);
-  assert.deepEqual(out, [{ name: "backend", angles: ["a", "b", "c"], group: "backend" }]);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e"] }], configured);
+  assert.equal(REVIEWER_UNIT_MAX_ANGLES, 5);
+  assert.deepEqual(out, [{ name: "backend", angles: ["a", "b", "c", "d", "e"], group: "backend" }]);
 });
 
 test("expandDispatchUnits: a configured group OVER the cap splits into ordered ≤cap sub-units (even remainder)", () => {
   const configured = new Set(["backend"]);
-  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e"] }], configured);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e", "f", "g"] }], configured);
   assert.deepEqual(out, [
-    { name: "backend-part1", angles: ["a", "b", "c"], group: "backend" },
-    { name: "backend-part2", angles: ["d", "e"], group: "backend" },
+    { name: "backend-part1", angles: ["a", "b", "c", "d", "e"], group: "backend" },
+    { name: "backend-part2", angles: ["f", "g"], group: "backend" },
   ]);
 });
 
-test("expandDispatchUnits: an over-cap group whose remainder is one angle yields a trailing singleton sub-unit", () => {
+test("expandDispatchUnits: a configured group of 6 angles cap-splits into -part1 (5) and a trailing singleton -part2 (1)", () => {
   const configured = new Set(["backend"]);
-  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d"] }], configured);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e", "f"] }], configured);
   assert.deepEqual(out, [
-    { name: "backend-part1", angles: ["a", "b", "c"], group: "backend" },
-    { name: "backend-part2", angles: ["d"], group: "backend" },
+    { name: "backend-part1", angles: ["a", "b", "c", "d", "e"], group: "backend" },
+    { name: "backend-part2", angles: ["f"], group: "backend" },
   ]);
 });
 
 test("expandDispatchUnits: split never drops, duplicates, or reorders angles, and every unit is within the cap", () => {
   const configured = new Set(["big"]);
-  const angles = ["a", "b", "c", "d", "e", "f", "g"]; // 7 → 3 + 3 + 1
+  const angles = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"]; // 11 → 5 + 5 + 1
   const out = expandDispatchUnits([{ name: "big", angles }], configured);
   // No angle dropped/duplicated/merged: concatenation equals the input, in order.
   assert.deepEqual(out.flatMap((u) => u.angles), angles);
@@ -1387,10 +1397,10 @@ test("splitSubUnitName is a no-op when the candidate name is not itself configur
 
 test("expandDispatchUnits: split sub-unit name avoids colliding with a separately-configured group name", () => {
   const configured = new Set(["backend", "backend-part1"]);
-  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d"] }], configured);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e", "f"] }], configured);
   assert.deepEqual(out, [
-    { name: "backend-part1-x1", angles: ["a", "b", "c"], group: "backend" },
-    { name: "backend-part2", angles: ["d"], group: "backend" },
+    { name: "backend-part1-x1", angles: ["a", "b", "c", "d", "e"], group: "backend" },
+    { name: "backend-part2", angles: ["f"], group: "backend" },
   ]);
   // Distinct dispatch scopes — the seenScopes guard never has to fire.
   const scopes = out.map((u) => dispatchUnitScope("pre_approval_gate", u));
@@ -1406,17 +1416,17 @@ test("expandDispatchUnits: split sub-unit name avoids colliding with a separatel
 // unit already named "backend-part1" this round.
 test("expandDispatchUnits: split sub-unit name avoids colliding with a SIBLING unit's name (empty configured set)", () => {
   const units = [
-    { name: "backend", angles: ["a", "b", "c", "d", "e"] },
+    { name: "backend", angles: ["a", "b", "c", "d", "e", "f", "g"] },
     { name: "backend-part1", angles: ["backend-part1"] },
   ];
   const out = expandDispatchUnits(units, new Set());
   assert.deepEqual(out, [
-    { name: "backend-part1-x1", angles: ["a", "b", "c"], group: "backend" },
-    { name: "backend-part2", angles: ["d", "e"], group: "backend" },
+    { name: "backend-part1-x1", angles: ["a", "b", "c", "d", "e"], group: "backend" },
+    { name: "backend-part2", angles: ["f", "g"], group: "backend" },
     { name: "backend-part1", angles: ["backend-part1"], group: null },
   ]);
   // No angle dropped/duplicated: coverage equals the input, in order.
-  assert.deepEqual(out.flatMap((u) => u.angles), ["a", "b", "c", "d", "e", "backend-part1"]);
+  assert.deepEqual(out.flatMap((u) => u.angles), ["a", "b", "c", "d", "e", "f", "g", "backend-part1"]);
   // Distinct dispatch scopes — the split sub-unit never collides with the sibling singleton.
   const scopes = out.map((u) => dispatchUnitScope("pre_approval_gate", u));
   assert.equal(new Set(scopes).size, scopes.length);
@@ -1424,7 +1434,7 @@ test("expandDispatchUnits: split sub-unit name avoids colliding with a SIBLING u
 
 test("dispatchUnitScope: split sub-units of one group derive DISTINCT scopes (no collision)", () => {
   const configured = new Set(["backend"]);
-  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e"] }], configured);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e", "f", "g"] }], configured);
   const scopes = out.map((u) => dispatchUnitScope("pre_approval_gate", u));
   assert.equal(new Set(scopes).size, scopes.length);
   assert.deepEqual(scopes, [
@@ -1454,10 +1464,10 @@ test("splitSubUnitName disambiguates against the SANITIZED form of a configured 
 
 test("expandDispatchUnits: a split sub-unit's scope never collides with a separately-configured group's SANITIZED scope (backend / backend_part1)", () => {
   const configured = new Set(["backend", "backend_part1"]);
-  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d"] }], configured);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e", "f"] }], configured);
   assert.deepEqual(out, [
-    { name: "backend-part1-x1", angles: ["a", "b", "c"], group: "backend" },
-    { name: "backend-part2", angles: ["d"], group: "backend" },
+    { name: "backend-part1-x1", angles: ["a", "b", "c", "d", "e"], group: "backend" },
+    { name: "backend-part2", angles: ["f"], group: "backend" },
   ]);
   const splitScope = dispatchUnitScope("pre_approval_gate", out[0]);
   const configuredGroupScope = dispatchUnitScope("pre_approval_gate", { name: "backend_part1", angles: ["x", "y"] });

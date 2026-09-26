@@ -56,7 +56,6 @@ import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
-import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 
 const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>] [--emit-plan <path>]
@@ -220,20 +219,8 @@ Optional:
                                  (GATE-EXEC-BRIEFING-PREFIX layout, #1841/completes #1468) — an
                                  angle-first prompt fails this mechanically. A round with no such
                                  records is never newly blocked (progressive/optional capture).
-  --primer-evidence <path>       The recorded primer-dispatch ordering evidence artifact
-                                 (<gate>-<headSha>.primer-evidence.json, Phase 1.5 step 4) as JSON.
-                                 Must be paired with --primer-plan (either flag alone fails closed at
-                                 parse time). When both are given, the fan-in re-validates the
-                                 evidence against the dispatch plan via enforcePrimerEvidence
-                                 (GATE-EXEC-PRIMER-EVIDENCE) and FAILS CLOSED (exit 1) when the
-                                 ordering barrier, request-group coverage, model-group binding,
-                                 request-prefix fingerprint, shared-prefix hash, or plan hash is
-                                 missing or mismatched — the refusal names the failing check.
-  --primer-plan <path>           The dispatch plan (buildReviewDispatchPlan output, carrying its
-                                 requestGroups / planHash / sharedPrefixHash) the evidence was
-                                 derived from, as JSON. Required together with --primer-evidence.
-  --cache-telemetry <path>       The before/after cache-telemetry evidence artifact
-                                 (<gate>-<headSha>.cache-telemetry.json, Phase 1.5 step 5) as JSON.
+  --cache-telemetry <path>       The optional before/after cache-telemetry evidence artifact
+                                 (<gate>-<headSha>.cache-telemetry.json) as JSON.
                                  When given, the fan-in validates it via enforceCacheTelemetryEvidence
                                  (GATE-EXEC-CACHE-TELEMETRY) and FAILS CLOSED (exit 1) when the
                                  artifact is missing, when verified provider reuse is claimed for an
@@ -522,10 +509,8 @@ export function parseConsolidateFaninCliArgs(argv) {
     resolvedAngles: undefined,
     repoRoot: undefined,
     expectedDispatchUnits: undefined,
-    primerEvidence: undefined,
     cacheTelemetry: undefined,
     emitPlan: undefined,
-    primerPlan: undefined,
     tmpRoot: undefined,
     specAuthority: undefined,
   };
@@ -546,9 +531,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       "resolved-angles": { type: "string" },
       "repo-root": { type: "string" },
       "expected-dispatch-units": { type: "string" },
-      "primer-evidence": { type: "string" },
       "emit-plan": { type: "string" },
-      "primer-plan": { type: "string" },
       "tmp-root": { type: "string" },
       "spec-authority": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -683,22 +666,6 @@ export function parseConsolidateFaninCliArgs(argv) {
       options.specAuthority = p;
       continue;
     }
-    if (token.name === "primer-evidence") {
-      const p = requireTokenValue(token, parseError).trim();
-      if (p.length === 0) {
-        throw parseError("--primer-evidence requires a non-empty path");
-      }
-      options.primerEvidence = p;
-      continue;
-    }
-    if (token.name === "primer-plan") {
-      const p = requireTokenValue(token, parseError).trim();
-      if (p.length === 0) {
-        throw parseError("--primer-plan requires a non-empty path");
-      }
-      options.primerPlan = p;
-      continue;
-    }
     if (token.name === "cache-telemetry") {
       const p = requireTokenValue(token, parseError).trim();
       if (p.length === 0) {
@@ -720,14 +687,6 @@ export function parseConsolidateFaninCliArgs(argv) {
   }
   if (!options.findingsDir) {
     throw parseError("Missing required argument: --findings-dir <dir>");
-  }
-  // Primer-evidence enforcement only makes sense when both the recorded
-  // evidence artifact and the dispatch plan it was derived from are present —
-  // enforcePrimerEvidence needs the plan's request groups and hashes to check
-  // the evidence against. Either alone fails closed here, so a caller can
-  // never half-enable the gate.
-  if ((options.primerEvidence === undefined) !== (options.primerPlan === undefined)) {
-    throw parseError("--primer-evidence and --primer-plan must be given together: a primer-evidence artifact cannot be enforced against no plan, and a plan without its recorded evidence would silently skip the gate");
   }
   // --emit-plan pairing is NOT checked here: the pair requirement lives in
   // consolidateGateFanin's own guard (verifyEmitPlanKey), which runs on BOTH
@@ -1127,43 +1086,10 @@ export async function consolidateGateFanin(options) {
     // canonical emitted file on disk, a hash mismatch from an altered suffix /
     // mismatched delivered prompt, or an emitted unit that is not inline-aligned).
     // A round with no dispatch-prompt records at all is never newly blocked —
-    // progressive/optional capture, same posture as GATE-EXEC-PRIMER-EVIDENCE below.
+    // progressive/optional capture.
     const layoutVerdict = await verifyDispatchPromptLayoutForHead(tmpRoot, options.headSha);
     if (layoutVerdict.recordCount > 0 && !layoutVerdict.verified) {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt did not bind to the sanctioned emitter's emitted unit. Re-run the sanctioned emitter (emit-fanout-dispatch.mjs) for the offending unit(s), re-dispatch from the emitted promptPath bytes, then re-consolidate.`);
-    }
-  }
-
-  // GATE-EXEC-PRIMER-EVIDENCE: enforces primer-dispatch ordering evidence as a
-  // fail-closed input to consolidation. The primer-evidence artifact
-  // (`<gate>-<headSha>.primer-evidence.json`) and the dispatch plan it was
-  // derived from are passed in together (parse-time both-or-neither); when
-  // present the fan-in re-validates them via enforcePrimerEvidence and fails
-  // closed when the ordering barrier, request-group coverage, model-group
-  // binding, request-prefix fingerprint, shared-prefix hash, or plan hash is
-  // missing or mismatched. Absent both flags the fan-in proceeds unchanged:
-  // recording evidence is progressive/optional, so older rounds that never
-  // recorded it are not newly blocked.
-  if (options.primerEvidence !== undefined && options.primerPlan !== undefined) {
-    const readJson = async (filePath, label) => {
-      let text;
-      try {
-        text = await readFile(filePath, "utf8");
-      } catch (err) {
-        throw new Error(`--primer-${label} "${filePath}" could not be read: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      try {
-        return JSON.parse(text);
-      } catch {
-        throw new Error(`--primer-${label} "${filePath}" is not valid JSON`);
-      }
-    };
-    const evidence = await readJson(options.primerEvidence, "evidence");
-    const plan = await readJson(options.primerPlan, "plan");
-    try {
-      enforcePrimerEvidence({ plan, evidence });
-    } catch (err) {
-      throw new Error(err instanceof Error ? err.message : String(err));
     }
   }
 

@@ -214,13 +214,15 @@ gates:
   # dispatches grouped.
   #
   # Two orthogonal dispatch bounds (#1601):
-  #   maxAnglesPerGroup (N, default 3, min 1) — leftover ungrouped angles
+  #   maxAnglesPerGroup (N, default 5, min 1) — leftover ungrouped angles
   #     auto-chunk into dispatch units of ≤N instead of singletons.
-  #   maxConcurrent (M, default 4, min 1) — at most M dispatch units per wave.
-  # Both count dispatch units (groups), not angles.
+  #   maxConcurrent (M, default 5, min 1) — at most M dispatch units per wave.
+  # Both count dispatch units (groups), not angles. When a round's units exceed
+  # M, write-gate-context.mjs packs whole units into one wave of at most M
+  # units x 5 angles (capacity 25) and refuses a round above that capacity.
   fanout:
-    maxAnglesPerGroup: 3
-    maxConcurrent: 4
+    maxAnglesPerGroup: 5
+    maxConcurrent: 5
     # The table is global; a group is only emitted for a gate that actually
     # resolves at least one of its angles, so a group naming preApproval-only
     # angles is inert for the draft/spike gates (their angle sets never include
@@ -247,14 +249,9 @@ gates:
         angles: [srp, soc, ocp, lsp, isp, dip]
       - name: finalization
         angles: [correctness-final, ui-validation]
-      # The holistic reviewer reads the whole diff, so it gets its own
-      # reviewer rather than being auto-chunked with unrelated leftover
-      # angles — one reviewer reviews the whole change holistically.
-      # A consumer repo that overrides gates.fanout.groups replaces this
-      # table wholesale (shallow merge) and must restate this singleton to
-      # keep holistic un-batched.
-      - name: holistic
-        angles: [holistic]
+      # holistic has no group: it joins the auto-chunked leftover pool and may
+      # share a reviewer unit with other leftover angles. It keeps its own
+      # prompt, findings artifact and provenance entry.
   preApproval:
     angles:
       - name: dry
