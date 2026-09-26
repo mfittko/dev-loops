@@ -427,6 +427,7 @@ describe("buildReviewDispatchPlan — AC-2: deterministic request-plan artifact"
   });
 
   test("usages fail closed on bad input", () => {
+    assert.throws(() => buildReviewDispatchPlan({ gate: "g", headSha: "abc1234567890", harness: "unknown" }), /harness/);
     assert.throws(() => buildReviewDispatchPlan({ gate: "", headSha: "abc" }));
     assert.throws(() => buildReviewDispatchPlan({ gate: "g", headSha: "not-a-sha" }));
     assert.throws(() => buildReviewDispatchPlan({ gate: "g", headSha: "abc", sharedPrefixHash: "nope" }));

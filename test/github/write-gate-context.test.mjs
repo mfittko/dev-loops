@@ -6575,6 +6575,36 @@ test("buildGateContext forwards an explicit Codex harness", async () => {
   }
 });
 
+test("buildGateContext inherits the active Codex harness when omitted", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-api-active-codex-"));
+  const priorThread = process.env.CODEX_THREAD_ID;
+  const priorClaude = process.env.CLAUDECODE;
+  process.env.CODEX_THREAD_ID = "test-codex-thread";
+  delete process.env.CLAUDECODE;
+  try {
+    const result = await buildGateContext({
+      repo: "owner/repo", pr: 86, gate: "draft_gate", headSha: "abc1234567890",
+      config: { gates: { draft: { angles: [{ name: "correctness" }] } } },
+    }, { repoRoot });
+    assert.equal(result.artifact.harness, "codex");
+    assert.equal(result.requestPlan.harness, "codex");
+    assert.deepEqual(result.requestPlan.requestGroups.map((group) => group.model), ["inherit"]);
+  } finally {
+    if (priorThread === undefined) delete process.env.CODEX_THREAD_ID;
+    else process.env.CODEX_THREAD_ID = priorThread;
+    if (priorClaude === undefined) delete process.env.CLAUDECODE;
+    else process.env.CLAUDECODE = priorClaude;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("gate-context CLI rejects an unknown harness", () => {
+  assert.throws(() => parseWriteGateContextCliArgs([
+    "--repo", "owner/repo", "--pr", "86", "--gate", "draft_gate",
+    "--head-sha", "abc1234567890", "--harness", "unknown",
+  ]), /--harness/);
+});
+
 test("writeGateContext request-plan honors a per-angle tier override (harness-aware, not just a bare model override)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-reqplan-tier2-"));
   try {

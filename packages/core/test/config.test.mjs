@@ -6904,6 +6904,13 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     }
   });
 
+  test("Codex inherits even when Pi and Claude review models are configured", () => {
+    const config = { models: { tiers: { high: { claude: "opus", pi: "pi-review" } } } };
+    assert.equal(resolveRoleModel(config, { role: "correctness", harness: "claude", kind: "angle" }), "opus");
+    assert.equal(resolveRoleModel(config, { role: "correctness", harness: "pi", kind: "angle" }), "pi-review");
+    assert.equal(resolveRoleModel(config, { role: "correctness", harness: "codex", kind: "angle" }), null);
+  });
+
   test("the retired pre-PR-reviewer role has no built-in tier (resolves like an unknown role)", () => {
     for (const harness of ["claude", "pi"]) {
       assert.equal(
