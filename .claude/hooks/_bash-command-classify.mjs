@@ -264,6 +264,12 @@ const SHELL_EXEC_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env
 const VERIFY_EXEC_PREFIX =
   "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:env(?:\\s+(?:[A-Za-z_][A-Za-z0-9_]*=\\S*|-i|--ignore-environment|-u\\s+\\S+|--unset=\\S+|-C\\s+\\S+|--chdir=\\S+|-S\\s+\\S+|--split-string=\\S+|--|-))*\\s+|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?";
 
+/** Reuse the existing wrapper boundary for pure validation classification. */
+export function verificationCommandSegments(command) {
+  const prefix = new RegExp(`^${VERIFY_EXEC_PREFIX}`, "i");
+  return shellSegments(command).map((segment) => segment.replace(prefix, ""));
+}
+
 /**
  * Build the `gh <subcmd> <verb>` prefix matcher (subcmd = "pr" | "issue").
  * Tolerates a leading env-assignment/wrapper/path prefix so `GH_TOKEN=x gh pr create`,
