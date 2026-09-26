@@ -7,16 +7,17 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 import { parseResolveValidationArgs, resolveValidation } from "../../scripts/loop/resolve-validation.mjs";
+import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import { runNode } from "../_helpers.mjs";
 
 const LEGACY = fileURLToPath(new URL("../../scripts/loop/run-gate-validation.mjs", import.meta.url));
 const CLI = fileURLToPath(new URL("../../cli/index.mjs", import.meta.url));
 const bunVersion = execFileSync("bun", ["--version"], { encoding: "utf8" }).trim();
 
-async function fixture(extraScripts = {}) {
+async function fixture(extraScripts = {}, pinnedBunVersion = bunVersion) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "resolve-validation-"));
   await writeFile(path.join(repoRoot, "package.json"), JSON.stringify({
-    name: "fixture", packageManager: `bun@${bunVersion}`,
+    name: "fixture", packageManager: `bun@${pinnedBunVersion}`,
     scripts: { verify: "bun scripts/verify.mjs", test: "bun run verify", passing: "bun scripts/passing.mjs", "test:scripts": "bun scripts/suite.mjs", "test:all": "bun scripts/all.mjs", "test:docs": "bun scripts/docs.mjs", "test:workflows": "bun scripts/workflows.mjs", ...extraScripts },
   }));
   await mkdir(path.join(repoRoot, "scripts"));
@@ -24,6 +25,7 @@ async function fixture(extraScripts = {}) {
   for (const name of ["verify", "passing", "suite", "all", "docs", "workflows"]) {
     await writeFile(path.join(repoRoot, "scripts", `${name}.mjs`), `console.log('${name}-ran')`);
   }
+  await writeFile(path.join(repoRoot, "scripts", "fail.mjs"), "console.error('fixture failure'); process.exit(2);\n");
   execFileSync("git", ["init", "-q"], { cwd: repoRoot });
   execFileSync("git", ["add", "package.json", ".gitignore", "scripts"], { cwd: repoRoot });
   execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], { cwd: repoRoot });
@@ -45,6 +47,35 @@ test("full validation resolves through gate CLI and preserves the legacy artifac
     assert.equal(result.toolchain, `bun@${bunVersion}`);
     assert.equal(result.artifact.suites[0].command, "bun run verify");
     assert.deepEqual(JSON.parse(await readFile(path.join(repoRoot, result.artifactPath), "utf8")), result.artifact);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("failed full suite returns an unsuccessful public result and retains failure artifact", async () => {
+  const { repoRoot, headSha } = await fixture({ verify: "bun scripts/fail.mjs" });
+  try {
+    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha)], { cwd: repoRoot });
+    assert.equal(out.code, 1);
+    const result = JSON.parse(out.stdout);
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "failed");
+    assert.equal(result.artifact.allPassed, false);
+    assert.equal(result.artifact.suites[0].exitCode, 2);
+    assert.deepEqual(JSON.parse(await readFile(path.join(repoRoot, result.artifactPath), "utf8")), result.artifact);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("wrong installed Bun version returns incomplete and writes no complete artifact", async () => {
+  const { repoRoot, headSha } = await fixture({}, "0.0.0");
+  try {
+    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha)], { cwd: repoRoot });
+    assert.equal(out.code, 1);
+    const result = JSON.parse(out.stdout);
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /differs from bun@0\.0\.0/);
+    assert.equal(result.artifact, undefined);
+    const artifactPath = buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" });
+    await assert.rejects(readFile(path.join(repoRoot, artifactPath)), /ENOENT/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 

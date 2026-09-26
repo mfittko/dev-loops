@@ -57,7 +57,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem}`);
     const artifactPath = buildValidationResultsPath(options);
     await writeFile(path.resolve(repoRoot, artifactPath), `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
-    return { ok: true, status: "complete", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath, artifact };
+    return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath, artifact };
   } catch (error) {
     return incomplete(error instanceof Error ? error.message : String(error));
   }
