@@ -1302,11 +1302,14 @@ test("buildAutoResolvedInput for a PR fails closed (not-claimed) when the PR rea
   }
 });
 
-test("buildAutoResolvedInput for --review fails closed when the PR read fails", () => {
+test("buildAutoResolvedInput for --review fails closed when the PR read fails", async () => {
   const tmp = stampRepoWithOrigin();
   try {
+    const ghStub = await writeGhStubHelper(tmp, [
+      { assertArgs: ["pr", "view", "999999"], exitCode: 1, stderr: "gh: not found\n" },
+    ], { matchMode: "claims" });
     assert.throws(
-      () => buildAutoResolvedInput({ pr: 999999, review: true, cwd: tmp }),
+      () => buildAutoResolvedInput({ pr: 999999, review: true, cwd: tmp, env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) } }),
       /PR #999999 could not be read; fail closed — do not start a review against an unresolvable PR\./,
     );
   } finally {
@@ -1724,7 +1727,7 @@ test("--pr assigned_to_other fails closed naming the foreign assignee", async ()
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.match(result.stderr, /PR #740 is assigned to foreign-dev, not the current viewer/);
-    assert.match(result.stderr, /read-only review that needs no ownership.*--pr 740 --review/s);
+    assert.match(result.stderr, /read-only review that needs no ownership.*dev-loops loop startup --pr 740 --review/s);
   }, { prefix: "resolve-dev-loop-ownership-pr-other-" });
 });
 
@@ -1747,7 +1750,7 @@ test("--pr unassigned fails closed naming the exact claim command", async () => 
       result.stderr,
       /PR #740 is not claimed by any contributor.*Claim it first: node scripts\/github\/edit-pr\.mjs --repo mfittko\/dev-loops --pr 740 --add-assignee @me/s,
     );
-    assert.match(result.stderr, /read-only review that needs no ownership.*--pr 740 --review/s);
+    assert.match(result.stderr, /read-only review that needs no ownership.*dev-loops loop startup --pr 740 --review/s);
   }, { prefix: "resolve-dev-loop-ownership-pr-unassigned-" });
 });
 
@@ -1937,6 +1940,36 @@ test("--pr --ui-review skips the linked-issue foreign-ownership check too (issue
     assert.equal(parsed.ok, true);
     assert.equal(parsed.selectedStrategy, "ui_review");
   }, { prefix: "resolve-dev-loop-ui-review-pr-linked-issue-foreign-" });
+});
+
+test("--pr --review skips the linked-issue foreign-ownership check too (issue #2459)", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    // Linked issue #511 is foreign-owned, but NO stub entry for its assignee
+    // read and NO "api user" entry: a review PR must never reach the
+    // linked-issue ownership loop at all. If the exemption regressed, the
+    // unstubbed claims-mode call would fail closed and this test would catch it.
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({
+          state: "OPEN",
+          mergedAt: null,
+          assignees: [],
+          closingIssuesReferences: [{ number: 511 }],
+          body: "",
+        }),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740", "--review"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.selectedStrategy, "review");
+  }, { prefix: "resolve-dev-loop-review-pr-linked-issue-foreign-" });
 });
 
 test("--pr assigned to copilot-swe-agent takes the unchanged copilot path, not the ownership error", async () => {

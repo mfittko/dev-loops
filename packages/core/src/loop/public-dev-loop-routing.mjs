@@ -612,6 +612,19 @@ function routeForState(
   } = {},
 ) {
   const routableCanonicalState = toRoutableCanonicalState(canonicalState);
+  // `review_pr` is PR-only at every entrypoint: a plain-review request paired
+  // with a non-PR authoritative canonical target must fail closed rather than
+  // silently selecting a write-capable strategy (issue_intake /
+  // local_implementation). The check is against the authoritative target
+  // (pre-normalization) so an issue-with-linked-PR target reconciles too,
+  // mirroring `evaluatePublicDevLoopRouting`'s REVIEW_PR validation.
+  if (reviewRequested && canonicalState.target.kind !== DEV_LOOP_TARGET_KIND.PR) {
+    return buildReconcile(
+      "`review_pr` requires a valid canonical PR state; a non-PR canonical target must reconcile rather than route to a write-capable strategy.",
+      routableCanonicalState,
+      executionMode,
+    );
+  }
   const selectedGate = selectGateForState(routableCanonicalState, { uiReviewRequested, reviewRequested });
   if (
     selectedGate === DEV_LOOP_GATE.FINAL_APPROVAL

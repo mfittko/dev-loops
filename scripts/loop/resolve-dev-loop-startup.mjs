@@ -897,7 +897,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       enforceOwnershipGate(prOwnership, {
         describeArtifact: `PR #${pr}`,
         claimCommand: `node scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
-        reviewRouteHint: ` For a read-only review that needs no ownership, use: node scripts/loop/resolve-dev-loop-startup.mjs --pr ${pr} --review`,
+        reviewRouteHint: ` For a read-only review that needs no ownership, use: dev-loops loop startup --pr ${pr} --review`,
       });
       // A PR whose linked issue is foreign-owned is foreign too — the issue
       // owner owns the whole loop. This only checks for a FOREIGN linked

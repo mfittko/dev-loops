@@ -213,6 +213,115 @@ test("review_pr_ui with a conflicting canonical PR state fails closed", () => {
   assert.match(result.reason, /target conflicts/);
 });
 
+test("review_pr without a canonical state fails closed", () => {
+  const result = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
+  });
+
+  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.NONE);
+  assert.match(result.reason, /requires a valid canonical PR state/);
+});
+
+test("review_pr with a non-PR canonical state fails closed", () => {
+  const result = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
+    currentState: {
+      target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 86 },
+      ownership: DEV_LOOP_ACTOR.COPILOT,
+      nextActor: DEV_LOOP_ACTOR.USER,
+      status: DEV_LOOP_STATUS.ACTIVE,
+      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+    },
+  });
+
+  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.NONE);
+  assert.match(result.reason, /requires a valid canonical PR state/);
+});
+
+test("review_pr with a conflicting canonical PR state fails closed", () => {
+  const result = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
+    currentState: {
+      target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 99 },
+      ownership: DEV_LOOP_ACTOR.COPILOT,
+      nextActor: DEV_LOOP_ACTOR.USER,
+      status: DEV_LOOP_STATUS.ACTIVE,
+      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+    },
+  });
+
+  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.NONE);
+  assert.match(result.reason, /target conflicts/);
+});
+
+test("authoritative startup/resume bundle fails closed for review_pr with each non-PR canonical target", () => {
+  const common = {
+    intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR,
+    artifactState: DEV_LOOP_ARTIFACT_STATE.NOT_APPLICABLE,
+    loopState: "active",
+  };
+
+  const issueTarget = resolveAuthoritativeStartupResumeBundle({
+    ...common,
+    currentState: {
+      target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 93 },
+      ownership: DEV_LOOP_ACTOR.COPILOT,
+      nextActor: DEV_LOOP_ACTOR.USER,
+      status: DEV_LOOP_STATUS.ACTIVE,
+      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+    },
+    issueLinkageResolution: DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.RESOLVED_NO_OPEN_PR,
+    issueReadiness: DEV_LOOP_ISSUE_READINESS.READY,
+    issueAssignmentState: DEV_LOOP_ISSUE_ASSIGNMENT_STATE.ASSIGNED_TO_COPILOT,
+  });
+
+  const issueWithLinkedPr = resolveAuthoritativeStartupResumeBundle({
+    ...common,
+    currentState: {
+      target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 89, linkedPr: 92 },
+      ownership: DEV_LOOP_ACTOR.COPILOT,
+      nextActor: DEV_LOOP_ACTOR.USER,
+      status: DEV_LOOP_STATUS.ACTIVE,
+      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+    },
+    issueLinkageResolution: DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.RESOLVED_LINKED_PR,
+  });
+
+  const localBranch = resolveAuthoritativeStartupResumeBundle({
+    ...common,
+    currentState: {
+      target: { kind: DEV_LOOP_TARGET_KIND.LOCAL_BRANCH, branch: "feature/issue-86" },
+      ownership: DEV_LOOP_ACTOR.LOCAL,
+      nextActor: DEV_LOOP_ACTOR.LOCAL,
+      status: DEV_LOOP_STATUS.ACTIVE,
+      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+    },
+  });
+
+  const localPhase = resolveAuthoritativeStartupResumeBundle({
+    ...common,
+    currentState: {
+      target: { kind: DEV_LOOP_TARGET_KIND.LOCAL_PHASE, issue: 86, phase: "issue-86" },
+      ownership: DEV_LOOP_ACTOR.LOCAL,
+      nextActor: DEV_LOOP_ACTOR.LOCAL,
+      status: DEV_LOOP_STATUS.ACTIVE,
+      authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
+    },
+  });
+
+  for (const bundle of [issueTarget, issueWithLinkedPr, localBranch, localPhase]) {
+    assert.equal(bundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.NEEDS_RECONCILE);
+    assert.equal(bundle.selectedStrategy, null);
+    assert.match(bundle.reason, /requires a valid canonical PR state/);
+  }
+});
+
 test("absent the ui-review intent, a copilot PR target still routes to copilot follow-up", () => {
   const prState = {
     target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 1234 },
