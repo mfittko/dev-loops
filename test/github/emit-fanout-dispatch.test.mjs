@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, listPriorFindingsLogHeads, main } from "../../scripts/github/emit-fanout-dispatch.mjs";
-import { expandDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
+import { expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
@@ -299,7 +299,7 @@ test("all-carried rounds consume the real emitter's keyed zero-unit plan through
     }
     await assert.rejects(() => consolidateGateFanin({ ...faninOptions, headSha: "d".repeat(40) }), /stamped for head/);
     await assert.rejects(() => writeGateFindingsLog({ ...writeOptions,
-      provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "coverage", reviewer: "fresh-reviewer" }] }) }, { repoRoot }), /zero|non-empty|fresh angles/);
+      provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "coverage", reviewer: "fresh-reviewer" }] }) }, { repoRoot }), /zero|non-empty|fresh angles|invalid dispatch unit membership/);
     const cleanPlan = buildCarryForwardPlan({
       log: { headSha: "b".repeat(40), verdict: "clean", findings: [],
         provenance: { perAngle: provenance.perAngle.map(({ angle, reviewer, model }) => ({ angle, reviewer, model })) } },
@@ -1609,6 +1609,27 @@ test("expandDispatchUnits: a configured-name unit with one resolved angle is a s
 test("dispatchUnitScope: singleton uses the angle name; multi-angle sanitizes the unit name", () => {
   assert.equal(dispatchUnitScope("draft_gate", { name: "coverage", angles: ["coverage"] }), "draft-gate-coverage");
   assert.equal(dispatchUnitScope("pre_approval_gate", { name: "design-simplicity", angles: ["dry", "kiss"] }), "pre-approval-gate-group-design-simplicity");
+});
+
+test("packed identity stays bounded for long member names and the round emits without an oversized filename", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const angles = Array.from({ length: 5 }, (_, i) => `member-${String(i).padStart(2, "0")}-${"x".repeat(10)}`);
+    assert.ok(angles.every((angle) => Buffer.byteLength(angle) === 20));
+    const [packed] = packDispatchUnits(angles.map((name) => ({ name, angles: [name] })), 1);
+    assert.match(packed.name, /^packed:sha256:[0-9a-f]{64}$/);
+    assert.equal(Buffer.byteLength(packed.name), 78);
+    const scope = dispatchUnitScope(GATE, packed);
+    assert.ok(Buffer.byteLength(scope) < 128, `bounded scope: ${scope}`);
+
+    await writeAnglePrompts(tmpDir, angles);
+    await seedBundle(tmpDir, { fanout: { groups: [packed], pendingGroups: [packed] } });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.count, 1);
+    assert.equal(payload.units[0].scope, scope);
+    assert.ok(Buffer.byteLength(path.basename(payload.units[0].promptPath)) < 255);
+  });
 });
 
 // #2372: an auto-chunk unit's name already starts with the literal `group:`

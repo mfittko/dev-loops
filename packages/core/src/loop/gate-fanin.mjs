@@ -674,6 +674,14 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, disp
   if (useRecorded) {
     const shapeError = dispatchUnitsShapeError(dispatchUnits);
     if (shapeError !== null) return `fan-out provenance records invalid dispatch unit membership: ${shapeError}`;
+    // Validate every recorded unit before reviewer-identity analysis. Unit
+    // membership is a property of the dispatch artifact itself; distinct
+    // one-angle reviewer identities must not let a split, oversized, or
+    // foreign-member unit bypass this fail-closed check.
+    for (const unit of dispatchUnits) {
+      const unitError = recordedUnitError(unit, baseUnits, baseOf);
+      if (unitError !== null) return `fan-out provenance records invalid dispatch unit membership: ${unitError}`;
+    }
     configuredGroupOf = new Map();
     dispatchUnits.forEach((unit, index) => unit.angles.forEach((a) => {
       const raw = a.trim();
@@ -726,11 +734,6 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null, disp
       const configuredGroups = new Set([...angles].map((a) => configuredGroupOf.get(a) ?? configuredGroupOf.get(baseAngleName(a)) ?? null));
       if (configuredGroups.size !== 1 || configuredGroups.has(null)) {
         details.push(`${label} "${id}" declares group "${[...groups][0]}" for fresh angles: ${[...angles].join(", ")}, but the ${useRecorded ? "recorded dispatch units" : "configured gates.fanout.groups table"} does not place all of them in one group${useRecorded ? "" : " (no recorded dispatch membership)"}`);
-      } else if (useRecorded) {
-        // The recorded unit hosting this shared reviewer must itself be a
-        // legitimate packing: a union of whole base units of at most 5 angles.
-        const unitError = recordedUnitError(dispatchUnits[[...configuredGroups][0]], baseUnits, baseOf);
-        if (unitError !== null) details.push(`${label} "${id}" shares recorded dispatch unit membership that is invalid: ${unitError}`);
       }
     }
   }
@@ -765,11 +768,10 @@ function dispatchUnitsShapeError(dispatchUnits) {
 }
 
 /**
- * A recorded unit that hosts a shared reviewer is legitimate only when it holds
- * at most `REVIEWER_UNIT_MAX_ANGLES` angles and, over the angles the ledger
- * records, is exactly a union of whole re-derived base units. A recorded angle
- * absent from the ledger (a carried unit the provenance omits) is outside the
- * re-derivation and is skipped. Returns an error string or null. Pure.
+ * A recorded unit is legitimate only when it holds at most
+ * `REVIEWER_UNIT_MAX_ANGLES` angles and is exactly a union of whole re-derived
+ * base units. Every recorded angle must belong to a re-derived base unit.
+ * Returns an error string or null. Pure.
  * @param {{ name: string, angles: string[] }} unit shape-checked recorded unit
  * @param {string[][]} baseUnits
  * @param {Map<string, number>} baseOf angle -> base unit index
@@ -782,7 +784,9 @@ function recordedUnitError(unit, baseUnits, baseOf) {
   // names is still a union of whole base units when the base units themselves
   // were derived from a delta-suffixed ledger spelling (and vice versa).
   const members = new Set(angles.map((a) => baseAngleName(a)));
-  const bases = new Set(angles.filter((a) => baseOf.has(baseAngleName(a))).map((a) => baseOf.get(baseAngleName(a))));
+  const unknown = angles.find((a) => !baseOf.has(baseAngleName(a)));
+  if (unknown !== undefined) return `unit "${unit.name}" contains angle "${unknown}" that is not a member of any re-derived base unit`;
+  const bases = new Set(angles.map((a) => baseOf.get(baseAngleName(a))));
   for (const index of bases) {
     if (!baseUnits[index].every((a) => members.has(baseAngleName(a)))) return `unit "${unit.name}" is not a union of whole base units: it splits base unit ${baseUnits[index].join("+")}`;
   }

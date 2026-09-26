@@ -14,7 +14,7 @@ import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
-import { expandDispatchUnits, normalizeUnitAngles, sanitizeScopeSegment, unitScopeSegment } from "./_dispatch-units.mjs";
+import { expandDispatchUnits, isPackedUnitName, normalizeUnitAngles, sanitizeScopeSegment, unitScopeSegment } from "./_dispatch-units.mjs";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
@@ -121,8 +121,9 @@ const parseError = buildParseError(USAGE);
 
 /**
  * Derive the reviewer-sentinel/prompt-layout scope for a resolved dispatch unit.
- * A singleton unit dispatches under its angle name (`<gatePrefix><angle>`); a
- * multi-angle unit dispatches under `<gatePrefix>group-<segment>`, where
+ * An ordinary singleton unit dispatches under its angle name
+ * (`<gatePrefix><angle>`). A packed bin (even a one-angle bin) and every
+ * multi-angle unit dispatch under `<gatePrefix>group-<segment>`, where
  * `<segment>` is unitScopeSegment(unit.name) — the leading `group:` auto-chunk
  * marker (see resolveFanoutGroups' chunk naming) is stripped BEFORE
  * sanitizing, whatever the unit's origin: a configured group's name is not
@@ -138,7 +139,7 @@ const parseError = buildParseError(USAGE);
 export function dispatchUnitScope(gate, unit) {
   const prefix = gateScopePrefix(gate);
   const angles = Array.isArray(unit?.angles) ? unit.angles : [];
-  if (angles.length === 1) return `${prefix}${sanitizeScopeSegment(angles[0])}`;
+  if (angles.length === 1 && !isPackedUnitName(unit?.name)) return `${prefix}${sanitizeScopeSegment(angles[0])}`;
   return `${prefix}group-${unitScopeSegment(unit?.name)}`;
 }
 

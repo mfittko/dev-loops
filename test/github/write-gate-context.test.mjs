@@ -49,6 +49,7 @@ import {
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
+import { packedUnitName } from "../../scripts/github/_dispatch-units.mjs";
 
 // #1653: chmod-based refusal tests (scanError/readError) rely on filesystem
 // permissions that root bypasses — skip with a recorded reason under root so
@@ -5562,7 +5563,7 @@ test("#2414 resolveFanoutDispatch: units above the cap pack first-fit decreasing
   const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2, maxConcurrent: 2 } } };
   const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, env: {} });
   // 3 base units (2, 2, 1 angles) above cap 2: FFD fills the first unit to 5.
-  assert.deepEqual(plan.groups, [{ name: "e+group:a+b+group:c+d", angles: ["e", "a", "b", "c", "d"] }]);
+  assert.deepEqual(plan.groups, [{ name: packedUnitName(["e", "group:a+b", "group:c+d"]), angles: ["e", "a", "b", "c", "d"] }]);
   assert.deepEqual(plan.pendingGroups, plan.groups);
   assert.equal(plan.wavePlan.length, 1);
   assert.equal(plan.pendingWavePlan.length, 1);
@@ -5700,7 +5701,7 @@ test("#2366 resolveFanoutDispatch: for configured maxConcurrent 4 under a Claude
   assert.equal(plan.maxConcurrent, 4);
   assert.equal(plan.effectiveConcurrency, 4);
   // 5 singleton units above the cap of 4 pack into one 5-angle unit: one wave.
-  assert.deepEqual(plan.groups, [{ name: "a+b+c+d+e", angles: ["a", "b", "c", "d", "e"] }]);
+  assert.deepEqual(plan.groups, [{ name: packedUnitName(["a", "b", "c", "d", "e"]), angles: ["a", "b", "c", "d", "e"] }]);
   assert.equal(plan.wavePlan.length, 1);
 });
 

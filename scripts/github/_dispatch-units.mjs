@@ -2,6 +2,7 @@
 // fan-out emitter (cap-split and scope naming) and the findings-log writer
 // (recorded dispatch membership). Kept in one import-cycle-free module: the
 // emitter imports both writers, so the writers cannot import the emitter.
+import { createHash } from "node:crypto";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 /**
@@ -140,7 +141,11 @@ export function expandDispatchUnits(units, configuredGroupNames) {
         }
       }
     } else {
-      for (const angle of angles) out.push({ name: angle, angles: [angle], group: null });
+      // Packing gives every bin — including a one-member/one-angle bin — a
+      // collision-resistant identity. Preserve it through expansion so the
+      // emitter can derive the packed bin's scope from the same identity;
+      // ordinary singleton units retain the historical angle-name scope.
+      for (const angle of angles) out.push({ name: isPackedUnitName(unit.name) ? unit.name : angle, angles: [angle], group: null });
     }
   }
   return out;
@@ -151,14 +156,29 @@ const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 /**
  * Pack whole base units (expandDispatchUnits output) into at most `maxUnits`
  * units of at most `REVIEWER_UNIT_MAX_ANGLES` angles: first-fit decreasing by
- * angle count, ties broken by unit name. A base unit is never split. A merged
- * unit's name joins its member unit names in sorted order with `+`, and its
- * angles follow that member order; the emitter derives the provenance `group`
- * from that name. Returns null when no packing fits. Deterministic, pure.
+ * angle count, ties broken by unit name. A base unit is never split. EVERY
+ * bin's name (including a one-member bin) is the full SHA-256 digest of its
+ * canonical sorted member-name array, under a reserved `packed:sha256:`
+ * marker. This gives fixed-width, collision-resistant identities across
+ * arbitrary configured names without putting the unbounded member list into
+ * filenames; its angles follow member order. Returns null when no packing
+ * fits. Deterministic, pure.
  * @param {{ name: string, angles: string[] }[]} baseUnits
  * @param {number} maxUnits
  * @returns {{ name: string, angles: string[] }[]|null}
  */
+const PACKED_UNIT_PREFIX = "packed:sha256:";
+const PACKED_UNIT_NAME_RE = /^packed:sha256:[0-9a-f]{64}$/;
+
+export function isPackedUnitName(name) {
+  return typeof name === "string" && PACKED_UNIT_NAME_RE.test(name);
+}
+
+export function packedUnitName(memberNames) {
+  const canonicalMembers = JSON.stringify([...memberNames].sort());
+  return `${PACKED_UNIT_PREFIX}${createHash("sha256").update(canonicalMembers, "utf8").digest("hex")}`;
+}
+
 export function packDispatchUnits(baseUnits, maxUnits) {
   const order = baseUnits
     .map((unit) => ({ name: unit.name, angles: normalizeUnitAngles(unit) }))
@@ -178,6 +198,7 @@ export function packDispatchUnits(baseUnits, maxUnits) {
   }
   return bins.map(({ members }) => {
     const sorted = [...members].sort(byName);
-    return { name: sorted.map((member) => member.name).join("+"), angles: sorted.flatMap((member) => member.angles) };
+    const name = packedUnitName(sorted.map((member) => member.name));
+    return { name, angles: sorted.flatMap((member) => member.angles) };
   });
 }

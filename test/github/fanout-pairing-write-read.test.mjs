@@ -16,7 +16,7 @@ import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation
 import { resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
-import { expandDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
+import { expandDispatchUnits, packedUnitName } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateContextPath, parseWriteGateContextCliArgs, readGateContext, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 
 const HEAD_SHA = "d".repeat(40);
@@ -172,7 +172,7 @@ describe("fanoutReviewerPairingError at write time and read time", () => {
 // membership from the context artifact, and both checks honor a shared
 // reviewer only inside one recorded unit that is a union of whole base units.
 // maxConcurrent 2 over four base units (process 1, alpha 2, beta 2, holistic 1)
-// packs into alpha+beta+holistic (5) and process (1).
+// packs alpha, beta and holistic together (5) and process alone (1).
 const PACK_DEVLOOPS = [
   "version: 1",
   "gates:",
@@ -287,17 +287,16 @@ describe("fanoutReviewerPairingError against recorded dispatch membership (packe
     await withConfig(PACK_DEVLOOPS, async (dir, config) => {
       const plan = resolveFanoutDispatch(config, "preApproval", PACK_ANGLES, { env: {} });
       assert.deepEqual(plan.groups, [
-        { name: "alpha+beta+holistic", angles: ["dry", "kiss", "yagni", "deep", "holistic"] },
-        // Packing merges emitter base units; a singleton base unit is named by its angle.
-        { name: "pr-checklist", angles: ["pr-checklist"] },
+        { name: packedUnitName(["alpha", "beta", "holistic"]), angles: ["dry", "kiss", "yagni", "deep", "holistic"] },
+        // A one-member bin gets the same bounded identity derivation.
+        { name: packedUnitName(["pr-checklist"]), angles: ["pr-checklist"] },
       ]);
       const units = expandDispatchUnits(plan.groups, new Set(["process", "alpha", "beta"]));
       const { error, provenance } = await writePacked(dir, "pre_approval_gate", plan.groups, perUnitProvenance(units));
       assert.equal(error, null);
       assert.deepEqual(provenance.dispatchUnits, [
-        { name: "alpha+beta+holistic", angles: ["dry", "kiss", "yagni", "deep", "holistic"] },
-        // A one-angle packed unit dispatches as a singleton named by its angle.
-        { name: "pr-checklist", angles: ["pr-checklist"] },
+        { name: packedUnitName(["alpha", "beta", "holistic"]), angles: ["dry", "kiss", "yagni", "deep", "holistic"] },
+        { name: packedUnitName(["pr-checklist"]), angles: ["pr-checklist"] },
       ]);
     });
   });
@@ -418,12 +417,57 @@ describe("fanoutReviewerPairingError against recorded dispatch membership (packe
   test("REJECT: a reviewer shared across two recorded units fails both checks", async () => {
     await withConfig(PACK_DEVLOOPS, async (dir, config) => {
       const plan = resolveFanoutDispatch(config, "preApproval", PACK_ANGLES, { env: {} });
-      const perAngle = PACK_ANGLES.map((angle) => ({ angle, reviewer: angle === "pr-checklist" || angle === "holistic" ? "shared" : "r-pack", group: "alpha+beta+holistic" }));
+      const perAngle = PACK_ANGLES.map((angle) => ({ angle, reviewer: angle === "pr-checklist" || angle === "holistic" ? "shared" : "r-pack", group: packedUnitName(["alpha", "beta", "holistic"]) }));
       const { error } = await writePacked(dir, "pre_approval_gate", plan.groups, perAngle);
       assert.match(error ?? "", /recorded dispatch units does not place all of them in one group/);
       const units = expandDispatchUnits(plan.groups, new Set());
       const read = await readPacked(dir, "pre_approval_gate", { distinctReviewers: 2, perAngle, dispatchUnits: units.map(({ name, angles }) => ({ name, angles })) });
       assert.match(read ?? "", /recorded dispatch units does not place all of them in one group/);
+    });
+  });
+
+  test("REJECT: every malformed recorded unit is validated even with one distinct reviewer per angle", async () => {
+    await withConfig(PACK_DEVLOOPS, async (dir) => {
+      const perAngle = PACK_ANGLES.map((angle, index) => ({ angle, reviewer: `distinct-${index}` }));
+      const cases = [
+        {
+          label: "split base unit",
+          groups: [
+            { name: "mixed", angles: ["dry", "yagni"] },
+            { name: "rest", angles: ["kiss", "deep", "holistic"] },
+            { name: "process", angles: ["pr-checklist"] },
+          ],
+          writeError: /is not a union of whole base units/,
+          readError: /is not a union of whole base units/,
+        },
+        {
+          label: "oversized unit",
+          groups: [{ name: "all", angles: PACK_ANGLES }],
+          // The context reader cap-splits this malformed producer shape before
+          // validation, but it still refuses; a persisted ledger must reject
+          // the unsplit six-angle unit specifically.
+          writeError: /invalid dispatch unit membership/,
+          readError: /holds 6 angles, above the 5-angle unit bound/,
+        },
+        {
+          label: "unknown logical member",
+          groups: [
+            { name: "alpha", angles: ["dry", "kiss"] },
+            { name: "beta", angles: ["yagni", "deep"] },
+            { name: "holistic", angles: ["holistic"] },
+            { name: "process", angles: ["pr-checklist"] },
+            { name: "foreign", angles: ["not-in-the-round"] },
+          ],
+          writeError: /not a member of any re-derived base unit/,
+          readError: /not a member of any re-derived base unit/,
+        },
+      ];
+      for (const { label, groups, writeError, readError } of cases) {
+        const { error } = await writePacked(dir, "pre_approval_gate", groups, perAngle);
+        assert.match(error ?? "", writeError, `${label}: write side`);
+        const read = await readPacked(dir, "pre_approval_gate", { distinctReviewers: perAngle.length, perAngle, dispatchUnits: groups });
+        assert.match(read ?? "", readError, `${label}: read side`);
+      }
     });
   });
 

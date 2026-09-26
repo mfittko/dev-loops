@@ -114,6 +114,9 @@ test("parseWriteGateFindingsLogCliArgs keeps --emit-plan optional and requires p
 
 test("carry-forward uses the real emitter's pending plan for fresh-only provenance", async () => {
   await withAngleContractRepo(async (repoRoot) => {
+    // Keep each angle in its own legitimate base unit so carrying coverage
+    // removes exactly that unit from the pending plan.
+    await writeFile(path.join(repoRoot, ".devloops"), `${ANGLE_CONTRACT_DEVLOOPS}  fanout:\n    groups:\n      - name: scope\n        angles: [scope]\n      - name: coverage\n        angles: [coverage]\n      - name: pr-description\n        angles: [pr-description]\n`, "utf8");
     const headSha = "abc1234567890abcdef000000000000000000000";
     const tmpRoot = path.join(repoRoot, "tmp");
     const contextDir = path.join(tmpRoot, "gate-context", "owner-repo", "pr-42");

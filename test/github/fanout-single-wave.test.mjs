@@ -12,7 +12,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
-import { expandDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
+import { expandDispatchUnits, packDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
+import { dispatchUnitScope } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateContextPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import {
   loadDevLoopConfig,
@@ -136,6 +137,7 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
   for (const [harness, env] of HARNESS_ENVS) {
     test(`same-head resume after a partial packed wave (${harness}): stable membership, one pending wave`, () => {
       const { pool } = resolveGateAngleContract(REPO_CONFIG, "draft");
+      const resolvedGroups = resolveFanoutGroups(REPO_CONFIG, "draft", pool);
       const first = resolveFanoutDispatch(REPO_CONFIG, "draft", pool, { env: env() });
       const wave1 = expandDispatchUnits(first.pendingGroups, configuredNames(REPO_CONFIG));
       const shared = wave1.find((u) => u.angles.length > 1);
@@ -148,12 +150,12 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
         reviewer: `r${index}`,
         ...(unit.angles.length > 1 ? { group: unit.name } : {}),
       })));
-      assert.equal(fanoutReviewerPairingError(perAngle, null, first.pendingGroups), null, "wave 1 records a membership that admits its own reviewers");
+      assert.equal(fanoutReviewerPairingError(perAngle, resolvedGroups, first.pendingGroups), null, "wave 1 records a membership that admits its own reviewers");
 
       // Resume at the same head with that unit's angles already complete.
       const resumed = resolveFanoutDispatch(REPO_CONFIG, "draft", pool, { env: env(), completedAngles: [...shared.angles] });
       assert.deepEqual(resumed.groups, first.groups, "the packed membership is stable under a pending-set change");
-      assert.equal(fanoutReviewerPairingError(perAngle, null, resumed.groups), null, "the wave-1 reviewer is still admitted after the resume");
+      assert.equal(fanoutReviewerPairingError(perAngle, resolvedGroups, resumed.groups), null, "the wave-1 reviewer is still admitted after the resume");
 
       const wave2 = expandDispatchUnits(resumed.pendingGroups, configuredNames(REPO_CONFIG));
       assertSingleWave(REPO_CONFIG, wave2, env(), `resume ${harness}`);
@@ -309,6 +311,24 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
       assertSingleWave(REPO_CONFIG, units, env(), "single-angle");
     });
   }
+
+  test("packed names and scopes distinguish every bin from a configured name matching the old derived encoding", () => {
+    const oldDerivedName = "packed:5b2261222c2262225d"; // old UTF-8 JSON hex for ["a","b"]
+    const bins = packDispatchUnits([
+      { name: oldDerivedName, angles: ["raw-1", "raw-2", "raw-3", "raw-4", "raw-5"] },
+      { name: "a", angles: ["a-1", "a-2"] },
+      { name: "b", angles: ["b-1", "b-2"] },
+    ], 2);
+    assert.equal(bins.length, 2);
+    assert.deepEqual(packDispatchUnits([
+      { name: "b", angles: ["b-1", "b-2"] },
+      { name: oldDerivedName, angles: ["raw-1", "raw-2", "raw-3", "raw-4", "raw-5"] },
+      { name: "a", angles: ["a-1", "a-2"] },
+    ], 2), bins, "bin identities are deterministic and member-order independent");
+    assert.notEqual(bins[0].name, bins[1].name);
+    assert.notEqual(dispatchUnitScope("draft_gate", bins[0]), dispatchUnitScope("draft_gate", bins[1]));
+    for (const bin of bins) assert.match(bin.name, /^packed:sha256:[0-9a-f]{64}$/);
+  });
 
   test("packing is deterministic: the same input gives the same units", () => {
     const { pool } = resolveGateAngleContract(REPO_CONFIG, "draft");
