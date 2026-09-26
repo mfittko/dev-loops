@@ -39,6 +39,7 @@ import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
 import { parseNonNegativeInteger, parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
@@ -199,7 +200,7 @@ export function rationaleFromResolver(resolverResult) {
   return { resolvedAngles: [...recommended], rationale };
 }
 
-const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>]
+const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--harness <pi|claude|codex>] [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>]
 Write a deterministic gate-review context-builder handoff artifact under tmp/ paths.
 Required:
   --repo <owner/name>
@@ -207,6 +208,7 @@ Required:
   --gate <draft_gate|pre_approval_gate|review>
   --head-sha <sha>
 Optional:
+  --harness <pi|claude|codex> Active reviewer harness (default: active CLI harness).
   --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires; a fired floor refuses it and continues with tier-or-best-effort selection. An empty list (\`[]\`) is refused (exit 1, no artifact written) at every entry point — the CLI dynamic path, this flag, and the exported buildGateContext/writeGateContext API — because a gate-context bundle must carry at least one review angle; the non-empty verbatim/floor behavior is unchanged.
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
@@ -340,6 +342,7 @@ export function parseWriteGateContextCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       gate: { type: "string" },
+      harness: { type: "string" },
       "head-sha": { type: "string" },
       angles: { type: "string" },
       rationale: { type: "string" },
@@ -368,6 +371,7 @@ export function parseWriteGateContextCliArgs(argv) {
     repo: undefined,
     pr: undefined,
     gate: undefined,
+    harness: undefined,
     headSha: undefined,
     angles: undefined,
     rationale: [],
@@ -420,6 +424,12 @@ export function parseWriteGateContextCliArgs(argv) {
       const gate = normalizeGate(requireTokenValue(token, parseError));
       if (!gate) throw parseError(`--gate must be one of: ${GATE_NAMES.join(", ")}`);
       options.gate = gate;
+      continue;
+    }
+    if (token.name === "harness") {
+      const harness = requireTokenValue(token, parseError).trim();
+      if (!["pi", "claude", "codex"].includes(harness)) throw parseError(`--harness must be one of pi|claude|codex (got ${JSON.stringify(harness)})`);
+      options.harness = harness;
       continue;
     }
     if (token.name === "head-sha") {
@@ -2032,6 +2042,7 @@ export function buildGateContextArtifact(options) {
     pr: options.pr,
     gate: options.gate,
     headSha: options.headSha,
+    ...(options.harness ? { harness: options.harness } : {}),
     resolvedAngles: [...options.angles],
     rationale: Array.isArray(options.rationale) ? options.rationale : [],
     scope: {
@@ -2636,7 +2647,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // SAME dispatch-time resolution a fan-out actually dispatches on (config
   // override → per-angle tier → built-in tier → null=inherit), unlike
   // resolveReviewerRole's `.model`, which ignores `tier` and can merge/split
-  // groups wrongly. Harness defaults to "claude" (override via
+  // groups wrongly. Harness defaults to the active runtime (override via
   // options.harness). Without a config every angle resolves to inherit
   // (never guessed), so such a plan is evidence only of "no config consulted."
   //
@@ -2651,7 +2662,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // throw on a bad angle/model/capability shape) — BEFORE any destructive
   // write below, so a config-reachable bad model spelling fails closed here
   // rather than after the stale-sibling unlink.
-  const harness = options.harness ?? "claude";
+  const harness = options.harness ?? resolveRuntimeHarness();
+  options.harness = harness;
   const pendingAngleNames = options.fanoutDispatch?.pendingGroups
     ? new Set(options.fanoutDispatch.pendingGroups.flatMap((g) => g.angles).map((a) => String(a).trim()))
     : null;
@@ -2689,6 +2701,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   const requestPlan = buildReviewDispatchPlan({
     gate: options.gate,
     headSha: options.headSha,
+    harness,
     sharedPrefixPath: briefingPrefixPath,
     sharedPrefixHash: `sha256:${prefixHash}`,
     requestGroups,
@@ -3057,6 +3070,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       issueBody: input.issueBody ?? null,
       tmpRoot,
       config: input.config,
+      harness: input.harness ?? resolveRuntimeHarness(),
     },
     { repoRoot },
   );
@@ -3327,12 +3341,13 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
  * injectable coordination-facts reader the ordering tripwire consults (default:
  * `loadPrGateCoordinationContext`).
  * @param {string[]} [argv]
- * @param {{ repoRoot?: string, run?: Function, loadCoordination?: Function }} [runtime]
+ * @param {{ repoRoot?: string, run?: Function, loadCoordination?: Function, env?: Record<string, string|undefined> }} [runtime]
  */
 export async function main(
   argv = process.argv.slice(2),
   {
     repoRoot = process.cwd(),
+    env = process.env,
     run = runChild,
     // Injectable so the tripwire test can supply the raw coordination facts
     // directly instead of stubbing the whole gh coordination surface. The
@@ -3349,6 +3364,7 @@ export async function main(
   let options;
   try {
     options = parseWriteGateContextCliArgs(argv);
+    options.harness ??= resolveRuntimeHarness(env);
   } catch (error) {
     process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
     process.exitCode = 1;

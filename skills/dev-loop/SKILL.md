@@ -22,7 +22,7 @@ Required installed runtime contract docs are shared bundled copies under `../doc
 
 ## Startup procedure
 
-**Review intent short-circuit (issue #1850):** A plain review request against a PR ("review PR #N", "review this PR") is NOT a continue/fix/merge request. Recognize review intent BEFORE resolving authoritative state below, and dispatch straight to the standalone [Review Skill](../review/SKILL.md) (`/dev-loops:loop-review <pr>`, or `/loop-review <pr>` in the dev-loops repo itself) — never run `loop startup`/`resolve-dev-loop-startup.mjs` for this route. The review route is read-only (no branch push, no fix commit, no merge, no board move, no assignee claim) and ownership-exempt by construction: it is not one of the routing evaluator's strategies, so `STRATEGY_OWNERSHIP_GATE` never applies to it and it runs on a PR owned by anyone, or by no one — see [Single-contributor ownership gate](../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup). Any other request (continue the loop, fix findings, merge, watch) proceeds through the ordinary startup procedure below, which still enforces the ownership gate exactly as before.
+**Review intent short-circuit (issue #1850):** A plain review request against a PR ("review PR #N", "review this PR") is NOT a continue/fix/merge request. In interactive intent handling, recognize it before ordinary startup and dispatch to the [Review Skill](../review/SKILL.md) (`/dev-loops:loop-review <pr>`, or `/loop-review <pr>` in this repo). A harness that drives startup directly selects the same route deterministically with `loop startup --pr <n> --review`; the selector is read-only and ownership-exempt, so routing no longer depends on an agent interpreting intent prose. The route performs no assignee claim, branch push, fix commit, merge, board move, or lifecycle gate evidence. Any continue/fix/merge/watch request proceeds through ordinary startup and remains ownership-gated as before.
 
 **"Run the gates" is NOT review intent (issue #1913):** `review` is a `GATE_NAME` but it gates nothing (informational, blocks no transition — see the tier comment in `scripts/github/_gate-names.mjs`: `LIFECYCLE_GATES` vs `REVIEW_GATE`). So a request phrased around *gating* — "run this PR through the gates", "gate this PR", "gate PR #N" — with NO explicit "review" word MUST NOT match the review short-circuit above. The discriminator is the same one question the vocabulary encodes: **does it block a lifecycle transition?** "Run the gates" means the lifecycle gates (`draft_gate`, `pre_approval_gate`), which run inside the ordinary loop via the startup flow below — NOT the standalone `review` command. Route these requests through `loop startup`/`resolve-dev-loop-startup.mjs` like any other continue request; do not dispatch `/loop-review`.
 
@@ -105,6 +105,7 @@ Load only the route-specific internal skill required by `selectedStrategy`:
 | `reviewer_fixer` | same as `copilot_pr_followup` |
 | `wait_watch` | [Wait / Watch Procedure](../docs/wait-watch-procedure.md) |
 | `final_approval` | same as `copilot_pr_followup` + [Final Approval Skill](../final-approval/SKILL.md) |
+| `review` | [Review Skill](../review/SKILL.md) |
 
 Do not preload route packs before the resolver selects the strategy.
 

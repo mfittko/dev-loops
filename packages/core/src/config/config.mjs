@@ -1125,7 +1125,10 @@ export function resolveReviewerRole(config, angle) {
  * (only `docs` today) MUST pass `kind: "angle"` to avoid the silent downgrade.
  *
  * @param {DevLoopConfig} config
- * @param {{ role: string, harness: "claude"|"pi", kind?: "role"|"angle" }} params
+ * Codex currently has no model mapping; it returns `null` so dispatch
+ * inherits the active Codex session model.
+ *
+ * @param {{ role: string, harness: "claude"|"pi"|"codex", kind?: "role"|"angle" }} params
  * @returns {string|null}
  */
 export function resolveRoleModel(config, { role, harness, kind } = {}) {

@@ -6916,6 +6916,13 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     }
   });
 
+  test("Codex inherits even when Pi and Claude review models are configured", () => {
+    const config = { models: { tiers: { high: { claude: "opus", pi: "pi-review" } } } };
+    assert.equal(resolveRoleModel(config, { role: "correctness", harness: "claude", kind: "angle" }), "opus");
+    assert.equal(resolveRoleModel(config, { role: "correctness", harness: "pi", kind: "angle" }), "pi-review");
+    assert.equal(resolveRoleModel(config, { role: "correctness", harness: "codex", kind: "angle" }), null);
+  });
+
   test("the retired pre-PR-reviewer role has no built-in tier (resolves like an unknown role)", () => {
     for (const harness of ["claude", "pi"]) {
       assert.equal(
@@ -6992,6 +6999,67 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     const config = { models: { roleTiers: { developer: "inherit" } } };
     assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), null);
     assert.equal(resolveRoleModel(config, { role: "developer", harness: "pi" }), null);
+  });
+});
+
+// ============================================================================
+// This repo's .devloops — developer/fixer run on the strong tier
+// ============================================================================
+
+describe("this repo's .devloops — developer and fixer run on the strong tier (#2457)", () => {
+  // Read THIS repo's real .devloops, not a synthetic fixture: the pin must fail
+  // when either roleTiers entry is dropped from the repo config.
+  const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+
+  test("developer and fixer are pinned to pre-pr-strong and resolve strongly on both harnesses", async () => {
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
+
+    const strongTier = config.models.tiers["pre-pr-strong"];
+    assert.ok(
+      strongTier?.claude && strongTier?.pi,
+      "the pre-pr-strong tier must define a concrete model for both harnesses",
+    );
+    // resolveRoleModel reads the merged role→tier map
+    // `{ ...BUILTIN_ROLE_TIERS, ...config.models.roleTiers }`. Pinning the
+    // config layer here means dropping either entry fails loudly instead of
+    // silently falling back to the builtin `low` alias (inherit on Pi).
+    for (const role of ["developer", "fixer"]) {
+      assert.equal(
+        config.models.roleTiers[role],
+        "pre-pr-strong",
+        `.devloops must pin ${role} to pre-pr-strong`,
+      );
+      for (const harness of ["claude", "pi"]) {
+        assert.equal(
+          resolveRoleModel(config, { role, harness }),
+          strongTier[harness],
+          `${role} must resolve the strong tier on ${harness}`,
+        );
+      }
+    }
+  });
+
+  test("docs and quality keep their builtin resolution (change scoped to the two implementation roles)", async () => {
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
+
+    // Expected resolution: the built-in role policy mapped through THIS repo's
+    // own tier mappings. Comparing against zero-config would instead false-fail
+    // on a documented repo-level retune of the shared `low` tier, even though
+    // neither role was re-tiered.
+    const builtinRolePolicyWithRepoTiers = { models: { tiers: config.models.tiers } };
+    for (const role of ["docs", "quality"]) {
+      assert.equal(config.models.roleTiers?.[role], undefined, `.devloops must not re-tier ${role}`);
+      assert.equal(config.models.roles?.[role], undefined, `.devloops must not pin a concrete ${role} model`);
+      for (const harness of ["claude", "pi"]) {
+        assert.equal(
+          resolveRoleModel(config, { role, harness }),
+          resolveRoleModel(builtinRolePolicyWithRepoTiers, { role, harness }),
+          `${role} must keep its built-in tier resolution on ${harness}`,
+        );
+      }
+    }
   });
 });
 
