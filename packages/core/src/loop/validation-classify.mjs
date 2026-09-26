@@ -35,8 +35,9 @@ export function classifyValidationCommand(command) {
       continue;
     }
     if (/^(?:(?:bun|node)\s+)?(?:\.\/)?scripts\/verify\.mjs(?:\s|$)/.test(segment)) return "full-repository";
-    if (/^(?:bun|node)\s+scripts\/run-bun-test\.mjs(?:\s|$)/.test(segment)) {
-      if (/(?:^|\s)--all(?:\s|$)/.test(segment)) suites.add("test:all");
+    const runner = segment.match(/^(?:bun|node)\s+scripts\/run-bun-test\.mjs(?:\s+(.*))?$/);
+    if (runner) {
+      if (/(?:^|\s)--all(?:\s|$)/.test(runner[1] ?? "") || !EXACT_TEST_FILE.test(runner[1] ?? "")) suites.add("test:all");
       targeted = true;
       continue;
     }
