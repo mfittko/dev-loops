@@ -325,6 +325,9 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
   if (options.review && options.pr === undefined) {
     throw parseError("--review is only valid with --pr <n> (rejected with --issue, --input, --plan-file, --spike, or with no --pr).");
   }
+  if (options.review && options.uiReview) {
+    throw parseError("--review and --ui-review are mutually exclusive selectors; provide only one.");
+  }
   // --lightweight is normally a MODIFIER (not a 6th mode): it makes the PR body
   // the spec-of-record for the --issue local path. Used ALONE (modeCount === 0)
   // it is instead the issue-less PR-first trigger — no tracker
@@ -849,6 +852,13 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     prAssignees = prJson.assignees || [];
     linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
   } catch {
+    // A plain review is ownership-exempt, so unlike the gated strategies the
+    // ownership gate cannot backstop an unreadable PR: fail closed rather than
+    // fabricate artifactState for a PR we could not read. --ui-review keeps its
+    // existing posture (issue #2459 non-goals exclude changing that route).
+    if (review) {
+      throw new Error(`PR #${pr} could not be read; fail closed — do not start a review against an unresolvable PR.`);
+    }
     artifactState = "open";
   }
   const resolvedTargetPreference = targetPreference ?? resolveTargetPreference(repoRoot);

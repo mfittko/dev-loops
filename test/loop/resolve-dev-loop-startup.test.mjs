@@ -227,6 +227,13 @@ test("parseResolveDevLoopStartupCliArgs rejects --review combined with --issue/-
   }
 });
 
+test("parseResolveDevLoopStartupCliArgs rejects --review combined with --ui-review", () => {
+  assert.throws(
+    () => parseResolveDevLoopStartupCliArgs(["--pr", "740", "--review", "--ui-review"]),
+    /mutually exclusive/i,
+  );
+});
+
 test("parseResolveDevLoopStartupCliArgs rejects --issue combined with --pr", () => {
   assert.throws(
     () => parseResolveDevLoopStartupCliArgs(["--issue", "511", "--pr", "507"]),
@@ -1289,6 +1296,18 @@ test("buildAutoResolvedInput for a PR fails closed (not-claimed) when the PR rea
     assert.throws(
       () => buildAutoResolvedInput({ pr: 999999, cwd: tmp }),
       /PR #999999 is not claimed by any contributor.*edit-pr\.mjs.*--pr 999999 --add-assignee @me/s,
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("buildAutoResolvedInput for --review fails closed when the PR read fails", () => {
+  const tmp = stampRepoWithOrigin();
+  try {
+    assert.throws(
+      () => buildAutoResolvedInput({ pr: 999999, review: true, cwd: tmp }),
+      /PR #999999 could not be read; fail closed — do not start a review against an unresolvable PR\./,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
