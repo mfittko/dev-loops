@@ -45,23 +45,27 @@ test("validation commands have one shared classification", () => {
 
 test("changed surfaces select existing checks and unknown or mixed changes fail closed", () => {
   const cases = [
-    [["packages/core/src/loop/validation-classify.mjs"], ["bun run test:core"]],
-    [["packages/core/test/foo.test.mjs"], ["bun scripts/run-bun-test.mjs packages/core/test/foo.test.mjs"]],
-    [["scripts/loop/run-gate-validation.mjs"], ["bun run test:scripts"]],
-    [["scripts/claude/generate-claude-assets.mjs"], ["bun run assets:check", "bun run test:doc-guard"]],
-    [["test/loop/run-gate-validation.test.mjs"], ["bun scripts/run-bun-test.mjs test/loop/run-gate-validation.test.mjs"]],
-    [["skills/docs/validation-contract.md"], ["bun run test:docs", "bun run test:doc-guard"]],
-    [[".github/workflows/ci.yml"], ["bun run test:workflows"]],
-    [["extension/index.ts"], ["bun run test:extension"]],
-    [[".claude/agents/judge.md"], ["bun run assets:check", "bun run test:assets"]],
-    [["scripts/loop/inspect-run-viewer/client.mjs"], ["bun run test:playwright:viewer"]],
-    [["docs/presentations/dev-loops-deep-dive.html"], ["bun run test:playwright:deep-dive"]],
-    [["docs/articles/introducing-dev-loops.html"], ["bun run test:playwright:intro-article"]],
-    [["test/playwright/deep-dive-deck.spec.mjs"], ["bun run test:playwright:deep-dive"]],
-    [["test/playwright/how-decided-article.spec.mjs"], ["bun run test:playwright:how-decided-article"]],
+    [["packages/core/src/loop/validation-classify.mjs"], ["bun run test:core"], ["test:core"]],
+    [["packages/core/test/foo.test.mjs"], ["bun scripts/run-bun-test.mjs packages/core/test/foo.test.mjs"], ["test:core"]],
+    [["scripts/loop/run-gate-validation.mjs"], ["bun run test:scripts"], ["test:scripts"]],
+    [["scripts/claude/generate-claude-assets.mjs"], ["bun run assets:check", "bun run test:doc-guard"], ["assets:check", "test:doc-guard"]],
+    [["test/loop/run-gate-validation.test.mjs"], ["bun scripts/run-bun-test.mjs test/loop/run-gate-validation.test.mjs"], ["test:scripts"]],
+    [["skills/docs/validation-contract.md"], ["bun run test:doc-guard", "bun run test:docs"], ["test:doc-guard", "test:docs"]],
+    [[".github/workflows/ci.yml"], ["bun run test:workflows"], ["test:workflows"]],
+    [["extension/index.ts"], ["bun run test:extension"], ["test:extension"]],
+    [[".claude/agents/judge.md"], ["bun run assets:check", "bun run test:assets"], ["assets:check", "test:assets"]],
+    [["scripts/loop/inspect-run-viewer/client.mjs"], ["bun run test:playwright:viewer"], ["test:playwright:viewer"]],
+    [["docs/presentations/dev-loops-deep-dive.html"], ["bun run test:playwright:deep-dive"], ["test:playwright:deep-dive"]],
+    [["docs/articles/introducing-dev-loops.html"], ["bun run test:playwright:intro-article"], ["test:playwright:intro-article"]],
+    [["test/playwright/deep-dive-deck.spec.mjs"], ["bun run test:playwright:deep-dive"], ["test:playwright:deep-dive"]],
+    [["test/playwright/how-decided-article.spec.mjs"], ["bun run test:playwright:how-decided-article"], ["test:playwright:how-decided-article"]],
   ];
-  for (const [paths, commands] of cases) assert.deepEqual(resolveTargetedValidation(paths), { profile: "targeted", commands }, paths.join(","));
-  for (const paths of [[], ["mystery.bin"], ["docs/articles/new-page.html"], ["test/playwright/ui-review-drive.spec.mjs"], ["packages/core/src/x.mjs", "extension/index.ts"]]) {
-    assert.deepEqual(resolveTargetedValidation(paths), { profile: "full-repository", commands: [] });
+  for (const [paths, commands, gateSuites] of cases) assert.deepEqual(resolveTargetedValidation(paths), { profile: "targeted", commands, gateSuites }, paths.join(","));
+  for (const paths of [[], ["mystery.bin"], ["docs/articles/new-page.html"], ["test/playwright/ui-review-drive.spec.mjs"], ["packages/core/src/x.mjs", "extension/index.ts"], ["packages/core/test/a;touch pwn.test.mjs"], ["test/loop/a;touch pwn.test.mjs"]]) {
+    assert.deepEqual(resolveTargetedValidation(paths), { profile: "full-repository", commands: [], gateSuites: [] });
   }
+  const paths = ["packages/core/src/loop/validation-classify.mjs", "packages/core/test/foo.test.mjs"];
+  const expected = { profile: "targeted", commands: ["bun run test:core", "bun scripts/run-bun-test.mjs packages/core/test/foo.test.mjs"], gateSuites: ["test:core"] };
+  assert.deepEqual(resolveTargetedValidation(paths), expected);
+  assert.deepEqual(resolveTargetedValidation(paths.toReversed()), expected);
 });

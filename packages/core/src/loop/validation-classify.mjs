@@ -53,12 +53,13 @@ export function classifyValidationCommand(command) {
 
 /** Pick an existing domain check for a single changed surface; mixed/unknown needs full ownership. */
 export function resolveTargetedValidation(paths) {
-  if (!Array.isArray(paths) || paths.length === 0) return { profile: "full-repository", commands: [] };
+  const full = { profile: "full-repository", commands: [], gateSuites: [] };
+  if (!Array.isArray(paths) || paths.length === 0) return full;
   const checks = paths.map((path) => {
     if (typeof path !== "string" || !path || path.startsWith("/") || path.includes("..") || path.includes("\\")) return null;
-    if (/^packages\/core\/test\/[^/]+\.test\.mjs$/.test(path)) return ["core", `bun scripts/run-bun-test.mjs ${path}`];
+    if (/^packages\/core\/test\/[^/]+\.test\.mjs$/.test(path)) return /^packages\/core\/test\/[A-Za-z0-9._-]+\.test\.mjs$/.test(path) ? ["core", `bun scripts/run-bun-test.mjs ${path}`] : null;
     if (path.startsWith("packages/core/")) return ["core", "bun run test:core"];
-    if (/^test\/(?:loop|github|docs|projects|pages|security)\/[^/]+\.test\.mjs$/.test(path)) return ["scripts", `bun scripts/run-bun-test.mjs ${path}`];
+    if (/^test\/(?:loop|github|docs|projects|pages|security)\/[^/]+\.test\.mjs$/.test(path)) return /^test\/(?:loop|github|docs|projects|pages|security)\/[A-Za-z0-9._-]+\.test\.mjs$/.test(path) ? ["scripts", `bun scripts/run-bun-test.mjs ${path}`] : null;
     if (path === "scripts/claude/generate-claude-assets.mjs") return ["generated", "bun run assets:check", "bun run test:doc-guard"];
     if (UI_SUITES.has(path)) return ["ui", `bun run test:playwright:${UI_SUITES.get(path)}`];
     if (/^docs\/(?:presentations|articles)\/[^/]+\.html$/.test(path)) return null;
@@ -78,6 +79,8 @@ export function resolveTargetedValidation(paths) {
     return null;
   });
   const surfaces = new Set(checks.map((check) => check?.[0]));
-  if (surfaces.size !== 1 || surfaces.has(undefined)) return { profile: "full-repository", commands: [] };
-  return { profile: "targeted", commands: [...new Set(checks.flatMap((check) => check.slice(1)))] };
+  if (surfaces.size !== 1 || surfaces.has(undefined)) return full;
+  const commands = [...new Set(checks.flatMap((check) => check.slice(1)))].sort();
+  const gateSuites = [...new Set(checks.flatMap((check) => check.slice(1).map((command) => command.startsWith("bun run ") ? command.slice(8) : check[0] === "core" ? "test:core" : "test:scripts")))].sort();
+  return { profile: "targeted", commands, gateSuites };
 }
