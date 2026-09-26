@@ -21,7 +21,7 @@ import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityV
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { buildGateContextPath, buildLogPath } from "./_gate-artifact-paths.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
-const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
+const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>] [--context-tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
   --repo <owner/name>
@@ -80,6 +80,11 @@ Optional:
                                  A path inside a linked (non-main) worktree is refused
                                  (exit 1, no file written): the ledger would be lost on
                                  prune and unreadable by the merge.
+  --context-tmp-root <path>      Root tmp directory containing this round's gate-context
+                                 bundle. Default: this worktree's tmp/. When
+                                 write-gate-context.mjs and emit-fanout-dispatch.mjs used
+                                 an explicit --tmp-root, pass that same path here. This
+                                 does not change the ledger --tmp-root semantics above.
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                   (issue 2008 / ADR 0061 AC1). When supplied, stamps the log
                                   with the pinned revision identity via the ONE shared stamp
@@ -501,6 +506,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       "full-label": { type: "boolean" },
       "judge-verdict": { type: "string" },
       "tmp-root": { type: "string" },
+      "context-tmp-root": { type: "string" },
       "spec-authority": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -521,6 +527,8 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     // Left undefined so writeGateFindingsLog's fallback anchors the ledger at
     // the MAIN worktree tmp. An explicit --tmp-root still overrides.
     tmpRoot: undefined,
+    // Independent of the ledger root: omitted reads the worktree-local context.
+    contextTmpRoot: undefined,
     specAuthority: undefined,
   };
   for (const token of tokens) {
@@ -603,6 +611,11 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (token.name === "context-tmp-root") {
+      options.contextTmpRoot = requireTokenValue(token, parseError).trim();
+      if (options.contextTmpRoot.length === 0) throw parseError("--context-tmp-root requires a non-empty path");
+      continue;
+    }
     if (token.name === "spec-authority") {
       options.specAuthority = requireTokenValue(token, parseError).trim();
       continue;
@@ -677,7 +690,8 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
  * gate-context artifact (the same `tmp/gate-context/...` path
  * write-gate-context.mjs writes by default). The findings writer's
  * `--tmp-root` controls only the durable ledger and must not relocate this
- * context read. The context's
+ * context read; `--context-tmp-root` explicitly selects a context bundle that
+ * the producer and dispatcher relocated. The context's
  * `fanout.groups` (packed when the round needed packing) expands through the
  * emitter's own cap-split into the `{ name, angles }` dispatch units reviewers
  * actually shared. Returns null when no context or no fanout plan exists, so
@@ -688,8 +702,14 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
  * entries) returns `[]`, which the pairing guard rejects as a shape error.
  * @returns {Promise<{ name: string, angles: string[] }[]|null>}
  */
-export async function readContextDispatchUnits({ repo, pr, gate, headSha }, config, repoRoot) {
-  const contextPath = path.resolve(repoRoot, buildGateContextPath({ repo, pr, gate, headSha }));
+export async function readContextDispatchUnits({ repo, pr, gate, headSha, contextTmpRoot }, config, repoRoot) {
+  const contextPath = path.resolve(repoRoot, buildGateContextPath({
+    repo,
+    pr,
+    gate,
+    headSha,
+    tmpRoot: contextTmpRoot || "tmp",
+  }));
   let raw;
   try {
     raw = await readFile(contextPath, "utf8");

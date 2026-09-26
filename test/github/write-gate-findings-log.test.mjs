@@ -85,6 +85,7 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     // default left undefined so writeGateFindingsLog anchors the ledger
     // at the MAIN worktree tmp; an explicit --tmp-root still overrides.
     tmpRoot: undefined,
+    contextTmpRoot: undefined,
     specAuthority: undefined,
   });
 });
@@ -220,7 +221,7 @@ test("verifyEmitPlanProvenance rejects multiple reviewer identities for one emit
   }
 });
 
-test("parseWriteGateFindingsLogCliArgs accepts custom tmp-root", () => {
+test("parseWriteGateFindingsLogCliArgs accepts distinct custom ledger and context tmp roots", () => {
   const result = parseWriteGateFindingsLogCliArgs([
     "--repo", "owner/repo",
     "--pr", "1",
@@ -228,9 +229,11 @@ test("parseWriteGateFindingsLogCliArgs accepts custom tmp-root", () => {
     "--head-sha", "deadbeef12345678900000000000000000000000",
     "--verdict", "clean",
     "--findings", "[]",
-    "--tmp-root", "custom-tmp",
+    "--tmp-root", "custom-ledger-tmp",
+    "--context-tmp-root", "custom-context-tmp",
   ]);
-  assert.equal(result.tmpRoot, "custom-tmp");
+  assert.equal(result.tmpRoot, "custom-ledger-tmp");
+  assert.equal(result.contextTmpRoot, "custom-context-tmp");
 });
 
 test("parseWriteGateFindingsLogCliArgs rejects invalid gate", () => {

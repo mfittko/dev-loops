@@ -350,6 +350,42 @@ describe("fanoutReviewerPairingError against recorded dispatch membership (packe
     });
   });
 
+  test("real producer->writer seam: an explicitly relocated packed context is read independently of the custom ledger root", async () => {
+    await withConfig(PACK_DEVLOOPS, async (dir, config) => {
+      const contextTmpRoot = path.join(dir, "custom-context-tmp");
+      const options = parseWriteGateContextCliArgs([
+        "--repo", "owner/repo", "--pr", "5", "--gate", "pre_approval_gate", "--head-sha", HEAD_SHA,
+        "--angles", JSON.stringify(PACK_ANGLES), "--tmp-root", contextTmpRoot,
+      ]);
+      options.config = config;
+      options.fanoutDispatch = resolveFanoutDispatch(config, "preApproval", PACK_ANGLES, { env: {} });
+      await writeGateContext(options, { repoRoot: dir });
+
+      const artifact = await readGateContext({
+        repo: "owner/repo", pr: 5, gate: "pre_approval_gate", headSha: HEAD_SHA, tmpRoot: contextTmpRoot,
+      }, { repoRoot: dir });
+      assert.ok(artifact, "the producer wrote a context artifact at the explicit context root");
+      assert.deepEqual(artifact.fanout.groups, options.fanoutDispatch.groups);
+
+      const units = expandDispatchUnits(artifact.fanout.groups, new Set(["process", "alpha", "beta"]));
+      const perAngle = units.flatMap((unit, index) => unit.angles.map((angle) => ({
+        angle,
+        reviewer: `r${index}`,
+        ...(unit.angles.length > 1 ? { group: unit.name } : {}),
+      })));
+
+      const ledgerTmpRoot = path.join(dir, "custom-ledger-tmp");
+      const result = await writeGateFindingsLog({
+        repo: "owner/repo", pr: 5, gate: "pre_approval_gate", headSha: HEAD_SHA, verdict: "clean", findings: "[]",
+        provenance: JSON.stringify({ distinctReviewers: countIds(perAngle), perAngle }),
+        contextTmpRoot,
+        tmpRoot: ledgerTmpRoot,
+      }, { repoRoot: dir });
+      assert.ok(result.path.startsWith(ledgerTmpRoot), "the custom root still controls only the ledger path");
+      assert.deepEqual(result.log.provenance.dispatchUnits, artifact.fanout.groups, "the recorded membership is the explicitly relocated packed plan");
+    });
+  });
+
   // Act index 9: a delta-suffixed re-review spelling ('<angle>-delta-at-<sha>') is
   // the same angle for membership purposes — the recorded units are keyed on the
   // context's base angle names, so the lookup resolves the base form too. Without
