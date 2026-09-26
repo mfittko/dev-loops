@@ -42,9 +42,11 @@ sub-unit's angles stay members of the SAME resolved unit, so the merge guard
 them honestly whether the unit is configured or auto-chunked. A singleton
 from an unsplit single-angle resolved unit records no group; a one-angle split
 tail retains its original unit's group. A unit write-gate-context.mjs packed
-from whole base units (GATE-EXEC-FANOUT-CAPACITY) is emitted whole under its
-packed name, which is also its provenance \`group\`; write-gate-findings-log.mjs
-records that membership so the guard honors its one shared reviewer.
+from whole base units (GATE-EXEC-FANOUT-CAPACITY) is emitted under its packed
+name, which determines its dispatch scope. A one-angle packed bin dispatches
+as a singleton with \`group: null\`; only multi-angle packed bins record the
+packed name as provenance \`group\`. write-gate-findings-log.mjs records that
+membership so the guard honors the dispatched reviewer allocation.
 
 Each emitted prompt is a bounded reviewer work order (reference seeding): the
 invariant prefix with its \`## Required reads\` manifest, the volatile tail, and
@@ -57,8 +59,9 @@ Run write-gate-context.mjs FIRST (it writes the briefing prefix, evidence file,
 volatile tail, and the fanout dispatch plan this reads). Then dispatch ONE
 fresh-context \`review\` subagent per emitted unit whose task is that unit's
 work order (its promptPath bytes, relayed unchanged), and
-record each unit's \`group\` on Phase 3's provenance (null for an unsplit singleton;
-the original resolved unit's name for a shared unit or any split sub-unit).
+record each unit's \`group\` on Phase 3's provenance (null for a singleton,
+including a one-angle packed bin; the original resolved unit's name for a
+shared unit or any split sub-unit).
 
 Required:
   --repo <owner/name>        Same vocabulary as write-gate-context.mjs.

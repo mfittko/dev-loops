@@ -219,7 +219,9 @@ gates:
   #   maxConcurrent (M, default 5, min 1) — at most M dispatch units per wave.
   # Both count dispatch units (groups), not angles. When a round's units exceed
   # M, write-gate-context.mjs packs whole units into one wave of at most M
-  # units x 5 angles (capacity 25) and refuses a round above that capacity.
+  # units x 5 angles (capacity 25) and refuses a round whose dispatchable
+  # base units cannot pack into that capacity (even at or below 25 angles,
+  # because a base unit is never split).
   fanout:
     maxAnglesPerGroup: 5
     maxConcurrent: 5
