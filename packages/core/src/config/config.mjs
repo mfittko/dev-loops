@@ -1452,12 +1452,13 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors) {
     data = { ...data, strategy: "tracker-first" };
   }
 
-  // gates.primeSharedPrefix is not a knob (priming is always on). The schema is
-  // strictObject, so strip this stale key before validation (with a deprecation
+  // gates.primeSharedPrefix is not a knob: cache priming is an optional,
+  // non-semantic execution optimization. The schema is strictObject, so strip
+  // this stale key before validation (with a deprecation
   // warning) rather than let it drop the whole gates layer.
   if (data?.gates && Object.prototype.hasOwnProperty.call(data.gates, "primeSharedPrefix")) {
     warnings.push(
-      `gates.primeSharedPrefix is removed (#1462): cache priming is now mandatory, not configurable. ` +
+      `gates.primeSharedPrefix is removed (#1462): cache priming is an optional, non-semantic execution optimization, no longer configurable via this key. ` +
       `Remove it from ${path.basename(filePath)}; the key is ignored.`
     );
     const { primeSharedPrefix: _removed, ...gatesRest } = data.gates;

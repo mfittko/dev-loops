@@ -534,8 +534,8 @@ export function freshAngleNames(perAngle) {
 }
 
 /**
- * Names of DISTINCT angles in a `perAngle` array, fresh AND carried. This is the
- * angle set to pass to `resolveFanoutGroups` when a caller re-derives the
+ * BASE names of DISTINCT angles in a `perAngle` array, fresh AND carried. This
+ * is the angle set to pass to `resolveFanoutGroups` when a caller re-derives the
  * round's dispatch units for {@link fanoutReviewerPairingError}: dispatch
  * chunks the full resolved angle set (a partially carried unit is dispatched
  * whole), so re-deriving from fresh angles alone can shift the auto-chunk
@@ -557,7 +557,7 @@ export function ledgerAngleNames(perAngle, catalogOrder = null) {
   for (const entry of perAngle) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     const angle = typeof entry.angle === "string" ? entry.angle.trim() : "";
-    if (angle) angles.add(angle);
+    if (angle) angles.add(baseAngleName(angle));
   }
   return Array.isArray(catalogOrder) ? orderAnglesByCatalog([...angles], catalogOrder) : [...angles];
 }

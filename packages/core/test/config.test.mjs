@@ -1836,7 +1836,8 @@ describe("tracker config (#1408)", () => {
       assert.deepEqual(result.errors, [], "stale key must not drop the gates layer");
       assert.equal(result.config.gates.maxFanoutReviewers, 4, "rest of the gates layer still loads");
       assert.equal("primeSharedPrefix" in result.config.gates, false, "removed key does not survive into resolved config");
-      assert.ok(result.warnings.some((w) => /gates\.primeSharedPrefix is removed/.test(w)));
+      const warning = result.warnings.find((w) => /gates\.primeSharedPrefix is removed/.test(w));
+      assert.match(warning ?? "", /cache priming is an optional, non-semantic execution optimization, no longer configurable via this key/);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

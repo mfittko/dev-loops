@@ -559,6 +559,21 @@ describe("ledgerAngleNames", () => {
     assert.deepEqual(ledgerAngleNames([...perAngle].reverse(), ["a", "b"]), ["a", "b", "y", "z"]);
     assert.deepEqual(ledgerAngleNames(perAngle, []), ["a", "b", "y", "z"]);
   });
+
+  test("canonicalizes a delta-suffixed row before catalog ordering and configured-group matching", async () => {
+    const catalog = ["left-1", "group-a", "group-b", "left-2", "left-3", "left-4", "left-5", "left-6", "left-7"];
+    const perAngle = [...catalog].reverse().map((angle) => ({ angle: angle === "group-b" ? "group-b-delta-at-current-head" : angle }));
+    const names = ledgerAngleNames(perAngle, catalog);
+    assert.deepEqual(names, catalog, "the delta spelling occupies its base angle's catalog rank");
+
+    const { resolveFanoutGroups } = await import("../src/config/config.mjs");
+    const config = { version: 1, gates: { fanout: { groups: [{ name: "configured", angles: ["group-a", "group-b"] }] } } };
+    assert.deepEqual(resolveFanoutGroups(config, "draft", names), [
+      { name: "configured", angles: ["group-a", "group-b"] },
+      { name: "group:left-1+left-2+left-3+left-4+left-5", angles: ["left-1", "left-2", "left-3", "left-4", "left-5"] },
+      { name: "group:left-6+left-7", angles: ["left-6", "left-7"] },
+    ]);
+  });
 });
 
 describe("fanoutReviewerPairingError fails closed on empty membership", () => {
