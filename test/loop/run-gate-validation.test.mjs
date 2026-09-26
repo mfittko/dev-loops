@@ -35,6 +35,7 @@ async function makeFixtureRepo() {
       private: true,
       scripts: {
         verify: "node -e \"console.log('verify-ran')\"",
+        "test:scripts": "node -e \"console.log('scripts-ran')\"",
         passing: "node -e \"console.log('passing-ran')\"",
         failing: "node -e \"console.error('boom'); process.exit(2)\"",
       },
@@ -52,11 +53,11 @@ async function makeFixtureRepo() {
 // parseRunGateValidationCliArgs
 // ---------------------------------------------------------------------------
 
-test("parseRunGateValidationCliArgs defaults --suite to [verify]", () => {
+test("parseRunGateValidationCliArgs defaults to a targeted suite", () => {
   const options = parseRunGateValidationCliArgs([
     "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234",
   ]);
-  assert.deepEqual(options.suites, ["verify"]);
+  assert.deepEqual(options.suites, ["test:scripts"]);
   assert.equal(options.tmpRoot, "tmp");
 });
 
@@ -131,7 +132,7 @@ test("readPackageScripts returns the scripts map", async () => {
   const { repoRoot } = await makeFixtureRepo();
   try {
     const scripts = await readPackageScripts(repoRoot);
-    assert.deepEqual(Object.keys(scripts).sort(), ["failing", "passing", "verify"]);
+    assert.deepEqual(Object.keys(scripts).sort(), ["failing", "passing", "test:scripts", "verify"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -141,7 +142,7 @@ test("readPackageScripts returns the scripts map", async () => {
 // CLI integration
 // ---------------------------------------------------------------------------
 
-test("default suite (no --suite given) runs only 'verify' and writes the artifact at buildValidationResultsPath", async () => {
+test("default suite runs targeted validation and writes the compatible artifact", async () => {
   const { repoRoot, headSha } = await makeFixtureRepo();
   try {
     const { code, stdout, stderr } = await runNode(SCRIPT, [
@@ -151,8 +152,8 @@ test("default suite (no --suite given) runs only 'verify' and writes the artifac
 
     const artifact = JSON.parse(stdout.trim());
     assert.equal(artifact.suites.length, 1);
-    assert.equal(artifact.suites[0].name, "verify");
-    assert.equal(artifact.suites[0].command, "bun run verify");
+    assert.equal(artifact.suites[0].name, "test:scripts");
+    assert.equal(artifact.suites[0].command, "bun run test:scripts");
 
     const expectedPath = buildValidationResultsPath({
       repo: "owner/repo", pr: 1, gate: "draft_gate", headSha,

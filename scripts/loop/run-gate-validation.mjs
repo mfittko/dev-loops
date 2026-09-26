@@ -25,8 +25,9 @@ import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeHeadSha as n
 import { assertWorktreeAtHead, buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parseBunLock } from "../release/assert-core-dependency-version.mjs";
+import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 
-const DEFAULT_SUITES = ["verify"];
+const DEFAULT_SUITES = ["test:scripts"];
 const OUTPUT_TAIL_CHARS = 4000;
 const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
@@ -43,13 +44,14 @@ Optional:
   --suite <name>              npm script name to run (repeatable). MUST be a key
                                of this repo's package.json "scripts" map — an
                                unknown name fails closed (exit 1) BEFORE anything
-                               runs. Default: verify
+                               runs. Default: test:scripts. Full-repository
+                               suites require dev-loops gate resolve-validation.
   --tmp-root <path>            Root tmp directory (default: tmp/)
 
 Output (stdout, JSON — the artifact itself):
   { "ok": true, "repo": "...", "pr": 1, "gate": "draft_gate", "headSha": "...",
     "generatedAt": "...", "allPassed": true,
-    "suites": [ { "name": "verify", "command": "bun run verify", "exitCode": 0,
+    "suites": [ { "name": "test:scripts", "command": "bun run test:scripts", "exitCode": 0,
                   "outputTail": "...", "outputPath": "tmp/gate-context/.../...log" } ] }
 Exit codes:
   0   Success (even when a suite fails — allPassed:false is the signal)
@@ -504,6 +506,9 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     assertWorktreeAtHead(options.headSha, { repoRoot });
     const scripts = await readPackageScripts(repoRoot);
     validateSuiteNames(options.suites, scripts);
+    if (classifyValidationCommand(options.suites.map((name) => `bun run ${name}`).join(" && ")) === "full-repository") {
+      throw new Error("Full-repository validation must run through dev-loops gate resolve-validation");
+    }
 
     const artifact = await buildValidationArtifact(
       { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, suites: options.suites, tmpRoot: options.tmpRoot },
