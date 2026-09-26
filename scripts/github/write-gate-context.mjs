@@ -2039,6 +2039,7 @@ export function buildGateContextArtifact(options) {
     pr: options.pr,
     gate: options.gate,
     headSha: options.headSha,
+    ...(options.harness ? { harness: options.harness } : {}),
     resolvedAngles: [...options.angles],
     rationale: Array.isArray(options.rationale) ? options.rationale : [],
     scope: {
@@ -2638,7 +2639,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // SAME dispatch-time resolution a fan-out actually dispatches on (config
   // override → per-angle tier → built-in tier → null=inherit), unlike
   // resolveReviewerRole's `.model`, which ignores `tier` and can merge/split
-  // groups wrongly. Harness defaults to "claude" (override via
+  // groups wrongly. Harness defaults to the active runtime (override via
   // options.harness). Without a config every angle resolves to inherit
   // (never guessed), so such a plan is evidence only of "no config consulted."
   //
@@ -2653,7 +2654,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // throw on a bad angle/model/capability shape) — BEFORE any destructive
   // write below, so a config-reachable bad model spelling fails closed here
   // rather than after the stale-sibling unlink.
-  const harness = options.harness ?? "claude";
+  const harness = options.harness ?? resolveRuntimeHarness();
+  options.harness = harness;
   const pendingAngleNames = options.fanoutDispatch?.pendingGroups
     ? new Set(options.fanoutDispatch.pendingGroups.flatMap((g) => g.angles).map((a) => String(a).trim()))
     : null;

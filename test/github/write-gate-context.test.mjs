@@ -3662,6 +3662,7 @@ test("writeGateContext failure-ordering: a config-reachable buildAngleRequestGro
     const baseArgs = [
       "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
+      "--harness", "claude",
       "--angles", '["docs"]',
     ];
     // Establish a real, valid artifact set at this head first, so the
@@ -6449,6 +6450,7 @@ test("writeGateContext request-plan partitions angles by concrete resolved model
     const options = parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "82", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
+      "--harness", "claude",
       "--angles", '["correctness","security","docs"]',
     ]);
     options.config = angleModelConfig();
@@ -6469,6 +6471,7 @@ test("writeGateContext request-plan resolves a bare no-override angle to its dis
     const options = parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "86", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
+      "--harness", "claude",
       "--angles", '["docs"]',
     ]);
     // No model/tier override at all: resolveRoleModel(kind:"angle") falls
@@ -6498,9 +6501,38 @@ test("Codex gate plans inherit while Claude and Pi retain their configured model
       ]);
       options.config = { models: { tiers: { high: { claude: "opus", pi: "pi-review" } } } };
       const result = await writeGateContext(options, { repoRoot });
+      assert.equal(result.artifact.harness, harness);
       assert.equal(result.requestPlan.harness, harness);
       assert.equal(result.requestPlan.requestGroups[0].model, expectedModel, harness);
       assert.equal(result.requestPlan.capabilities.usageTelemetry, harness === "claude" ? "available" : "unavailable", harness);
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("direct writer inherits the active Codex harness when no override is supplied", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-direct-codex-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "86", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890", "--angles", '["correctness"]',
+    ]);
+    options.config = { models: { tiers: { high: { claude: "opus", pi: "pi-review" } } } };
+    const priorThread = process.env.CODEX_THREAD_ID;
+    const priorClaude = process.env.CLAUDECODE;
+    process.env.CODEX_THREAD_ID = "test-codex-thread";
+    delete process.env.CLAUDECODE;
+    try {
+      const result = await writeGateContext(options, { repoRoot });
+      assert.equal(result.artifact.harness, "codex");
+      assert.equal(result.requestPlan.harness, "codex");
+      assert.equal(result.requestPlan.requestGroups[0].model, "inherit");
+    } finally {
+      if (priorThread === undefined) delete process.env.CODEX_THREAD_ID;
+      else process.env.CODEX_THREAD_ID = priorThread;
+      if (priorClaude === undefined) delete process.env.CLAUDECODE;
+      else process.env.CLAUDECODE = priorClaude;
     }
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -6518,6 +6550,8 @@ test("CLI selects Codex from the active session for both gate plans", async () =
       ], { repoRoot, run: stubGhRun, env: { CODEX_THREAD_ID: "test-codex-thread" }, loadCoordination: async () => null });
       const planPath = buildGateRequestPlanPath({ repo: "owner/repo", pr: 86, gate, headSha });
       const plan = JSON.parse(await readFile(path.resolve(repoRoot, planPath), "utf8"));
+      const context = await readGateContext({ repo: "owner/repo", pr: 86, gate, headSha }, { repoRoot });
+      assert.equal(context.harness, "codex");
       assert.equal(plan.harness, "codex");
       assert.deepEqual(plan.requestGroups.map((group) => group.model), ["inherit"]);
     }
@@ -6533,6 +6567,7 @@ test("buildGateContext forwards an explicit Codex harness", async () => {
       repo: "owner/repo", pr: 86, gate: "draft_gate", headSha: "abc1234567890",
       harness: "codex", config: { gates: { draft: { angles: [{ name: "correctness" }] } } },
     }, { repoRoot });
+    assert.equal(result.artifact.harness, "codex");
     assert.equal(result.requestPlan.harness, "codex");
     assert.deepEqual(result.requestPlan.requestGroups.map((group) => group.model), ["inherit"]);
   } finally {
@@ -6546,6 +6581,7 @@ test("writeGateContext request-plan honors a per-angle tier override (harness-aw
     const options = parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "87", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
+      "--harness", "claude",
       "--angles", '["docs"]',
     ]);
     // Built-in low and high are both opus on claude; a distinct low id makes
@@ -6762,6 +6798,7 @@ test("AC4 contract: two angle requests composed from the same plan are byte-equa
     const options = parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
+      "--harness", "claude",
       "--angles", '["correctness","security"]',
     ]);
     options.config = angleModelConfig(); // both angles resolve to "opus" — one request group
@@ -6803,6 +6840,7 @@ test("AC4 scoped-variant coverage: a docs-only-scope angle sharing a model group
     const options = parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "92", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
+      "--harness", "claude",
       "--angles", '["correctness","docs"]',
     ]);
     // Both angles resolve to the SAME model — one request group — while
