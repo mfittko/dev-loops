@@ -241,7 +241,7 @@ const GATE_KEY = { draft_gate: "draft", pre_approval_gate: "preApproval" };
 // Write the keyed gate-context artifact the findings-log writer reads its
 // dispatch membership from, then write the ledger through the real writer.
 async function writePacked(dir, gate, groups, perAngle) {
-  const contextPath = path.join(dir, buildGateContextPath({ repo: "owner/repo", pr: 5, gate, headSha: HEAD_SHA, tmpRoot: OUT }));
+  const contextPath = path.join(dir, buildGateContextPath({ repo: "owner/repo", pr: 5, gate, headSha: HEAD_SHA }));
   await mkdir(path.dirname(contextPath), { recursive: true });
   await writeFile(contextPath, JSON.stringify({ fanout: { groups, pendingGroups: groups } }), "utf8");
   try {
@@ -315,10 +315,10 @@ describe("fanoutReviewerPairingError against recorded dispatch membership (packe
   // Act index 4: the packed membership must survive the REAL producer->writer
   // seam. Every other packed test here hand-writes the context artifact; this
   // one produces it with writeGateContext (the sanctioned producer) and writes
-  // the ledger from that artifact, so the tmp-root the writer resolves the
-  // context under (readContextDispatchUnits: tmpRoot || <repoRoot>/tmp, while
-  // the ledger is anchored separately) is exercised for the packed case too.
-  test("real producer->writer seam: a packed context written by writeGateContext is recorded by the ledger writer", async () => {
+  // the ledger from that artifact. The custom ledger root intentionally differs
+  // from the worktree-local context root, pinning that the writer never uses its
+  // --tmp-root ledger override to locate dispatch membership.
+  test("real producer->writer seam: a worktree-local packed context is read independently of the custom ledger root", async () => {
     await withConfig(PACK_DEVLOOPS, async (dir, config) => {
       const options = parseWriteGateContextCliArgs([
         "--repo", "owner/repo", "--pr", "5", "--gate", "pre_approval_gate", "--head-sha", HEAD_SHA,
@@ -339,11 +339,14 @@ describe("fanoutReviewerPairingError against recorded dispatch membership (packe
         ...(unit.angles.length > 1 ? { group: unit.name } : {}),
       })));
 
+      const ledgerTmpRoot = path.join(dir, "custom-ledger-tmp");
       const result = await writeGateFindingsLog({
         repo: "owner/repo", pr: 5, gate: "pre_approval_gate", headSha: HEAD_SHA, verdict: "clean", findings: "[]",
         provenance: JSON.stringify({ distinctReviewers: countIds(perAngle), perAngle }),
+        tmpRoot: ledgerTmpRoot,
       }, { repoRoot: dir });
-      assert.deepEqual(result.log.provenance.dispatchUnits, artifact.fanout.groups, "the recorded membership is the produced packed plan");
+      assert.ok(result.path.startsWith(ledgerTmpRoot), "the custom root still controls the ledger path");
+      assert.deepEqual(result.log.provenance.dispatchUnits, artifact.fanout.groups, "the recorded membership is the worktree-local produced packed plan");
     });
   });
 

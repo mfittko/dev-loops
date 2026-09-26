@@ -673,9 +673,11 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
   return rejectFindingConflicts(findings, conflicts);
 }
 /**
- * Read this round's dispatch membership from the keyed gate-context artifact
- * (the same `<tmpRoot>/gate-context/...` path emit-fanout-dispatch.mjs reads:
- * `--tmp-root` when given, else the worktree `tmp/`). The context's
+ * Read this round's dispatch membership from the keyed, worktree-local
+ * gate-context artifact (the same `tmp/gate-context/...` path
+ * write-gate-context.mjs writes by default). The findings writer's
+ * `--tmp-root` controls only the durable ledger and must not relocate this
+ * context read. The context's
  * `fanout.groups` (packed when the round needed packing) expands through the
  * emitter's own cap-split into the `{ name, angles }` dispatch units reviewers
  * actually shared. Returns null when no context or no fanout plan exists, so
@@ -686,8 +688,8 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
  * entries) returns `[]`, which the pairing guard rejects as a shape error.
  * @returns {Promise<{ name: string, angles: string[] }[]|null>}
  */
-export async function readContextDispatchUnits({ repo, pr, gate, headSha, tmpRoot }, config, repoRoot) {
-  const contextPath = path.resolve(repoRoot, buildGateContextPath({ repo, pr, gate, headSha, tmpRoot: tmpRoot || path.join(repoRoot, "tmp") }));
+export async function readContextDispatchUnits({ repo, pr, gate, headSha }, config, repoRoot) {
+  const contextPath = path.resolve(repoRoot, buildGateContextPath({ repo, pr, gate, headSha }));
   let raw;
   try {
     raw = await readFile(contextPath, "utf8");
