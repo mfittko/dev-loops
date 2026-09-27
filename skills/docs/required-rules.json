@@ -267,6 +267,10 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-EXEC-BASE-REFRESH",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-BLOCKING-ONLY-FIX"
     },
     {

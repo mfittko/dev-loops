@@ -102,7 +102,38 @@ If a harness cannot fan out at the gate coordinator's depth, the round fails clo
 `FANOUT_UNAVAILABLE_MESSAGE` ([below](#fail-closed-fan-out-unavailable--route-to-conductor))
 and never degrades to inline review.
 
+Dispatch guidance. A worker, reviewer, judge or fixer dispatch names the linked issue and states
+"The issue body is the spec; read it." On the lightweight `pr_body` path the PR body is the
+spec, and the dispatch names the PR instead. The dispatch never restates issue-specific spec.
+It cites rules by rule ID, never by copied text, and it cites each rule only to the roles that
+need it:
+
+- agents that dispatch children, such as the gate coordinator: `GATE-EXEC-HARNESS-JOIN`;
+- editing workers (developer, fixer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and
+  `OPS-NO-INLINE-INTERPRETER`;
+- script runners (any role that runs repo scripts, reviewers included):
+  `WORKTREE-SCRIPT-LAUNCHER-CWD`.
+
+A worker, reviewer, judge or fixer dispatches no children and receives no join rule.
+
 The standalone `review` gate is outside this rule's scope.
+
+### Base refresh before a gate round
+
+<!-- rule: GATE-EXEC-BASE-REFRESH -->
+`GATE-EXEC-BASE-REFRESH`: Before the dev-loop coordinator dispatches a `draft_gate` or
+`pre_approval_gate` round, it fetches the base branch. When `origin/<base>` is not an ancestor
+of the PR head, it MUST integrate the current base into the PR branch, so the round runs the
+current gate tooling. It integrates through the sanctioned `scripts/loop/resolve-pr-conflicts.mjs`,
+the same tool that ADR 0066 uses at PR pickup (`FACADE-PICKUP-INTEGRATE-BASE-FIRST`). That tool
+runs `git merge --no-edit origin/<base>`, so the merge commit carries git's default merge
+subject. It auto-resolves only additive CHANGELOG conflicts and otherwise fails closed. On a
+fail-closed result the coordinator stops and reports, and it dispatches no round. The
+coordinator MUST push the merge before it dispatches the round, so the round reviews the pushed
+head. On a ready PR, the `pre_approval_gate` re-runs on the new head per
+`GATE-EXEC-REGATE-MANDATORY`. An integrate-only base move keeps carry-forward eligibility
+through the base-relative delta that `GATE-EXEC-ANGLE-CARRY-FORWARD` already defines
+(`deltaComplete`). ADR 0096 records this rule.
 
 ### Phase 1 — Preamble: context-builder
 
@@ -262,7 +293,11 @@ that artifact exists, the briefing prefix MUST point every reviewer at it
 (`write-gate-context.mjs --validation-results <path>`), and a reviewer MUST consume it
 rather than executing any suite it records. A missing full result remains typed incomplete; it does not authorize a reviewer or worker to run the full suite directly. A reviewer that finds the artifact absent,
 unreadable, or stamped with a different head SHA MUST report a gate-evidence finding; it
-MUST NOT silently run the suite itself and MUST NOT treat the gap as clean.
+MUST NOT silently run the suite itself and MUST NOT treat the gap as clean. The verdict writer
+enforces this rule: `upsert-checkpoint-verdict.mjs` refuses a `fanout_fanin` verdict post when
+the head's `<gate>-<headSha>.validation.json` is absent, unreadable, or stamped with a different
+head SHA. The refusal names the artifact and `run-gate-validation.mjs`. It applies under the
+same `gates.requireFanoutEvidence` condition as the durable-ledger refusal.
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 
@@ -343,7 +378,7 @@ operator decision per PR permits inline.
 
 **Grouped dispatch (default).** Use the resolver and emitter above. Each emitted unit is one concurrent reviewer, while artifacts remain per-angle. Record the emitted group name on every fresh provenance entry that shares that reviewer; [Fan-out provenance](#fan-out-provenance-closing-the-self-produced-artifact-loophole) owns pairing and `countFreshDispatchUnits` owns the distinct-reviewer floor.
 <!-- rule: GATE-EXEC-NO-CWD-DEPENDENCE -->
-`GATE-EXEC-NO-CWD-DEPENDENCE`: A reviewer MUST NOT depend on the shell's working directory — each command may start in the primary checkout, not the worktree under review, so a bare `git branch`/`git log`/`git diff` can read the wrong tree and produce confident false findings. Run the mandatory sentinel invocation as ONE compound command that enters the worktree first (`cd <worktree> && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...`) with its cwd-relative `--context-path` exactly as briefed — the locality guard depends on that form, and the compound form is the sanctioned remedy for the resetting cwd. After it passes, address the tree explicitly with the explicit-root idiom owned by `WORKTREE-DEFAULT-USE` in [worktree-guidance](./worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) (`git -C <repoRoot>`, absolute-path reads), where `<repoRoot>` is the briefing prefix's `worktree:` line, echoed back as `repoRoot` in `verify-fresh-review-context.mjs`'s fresh output (the directory the sentinel ran in, worktree-local when the locality guard passed).
+`GATE-EXEC-NO-CWD-DEPENDENCE`: A reviewer MUST NOT depend on the shell's working directory — each command may start in the primary checkout, not the worktree under review, so a bare `git branch`/`git log`/`git diff` can read the wrong tree and produce confident false findings. Run the mandatory sentinel invocation as ONE compound command that enters the worktree first (`cd <worktree> && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...`) with its cwd-relative `--context-path` exactly as briefed — the locality guard depends on that form, and the compound form is the sanctioned remedy for the resetting cwd. This rule is the reviewer-specific form of `WORKTREE-SCRIPT-LAUNCHER-CWD` in [worktree-guidance](./worktree-guidance.md), which owns the general script launcher rule. After it passes, address the tree explicitly with the explicit-root idiom owned by `WORKTREE-DEFAULT-USE` in [worktree-guidance](./worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) (`git -C <repoRoot>`, absolute-path reads), where `<repoRoot>` is the briefing prefix's `worktree:` line, echoed back as `repoRoot` in `verify-fresh-review-context.mjs`'s fresh output (the directory the sentinel ran in, worktree-local when the locality guard passed).
 
 <!-- rule: GATE-EXEC-SOURCE-READ-WORKTREE -->
 `GATE-EXEC-SOURCE-READ-WORKTREE`: A reviewer citing a skill/doc/source file in a finding MUST read it from the WORKTREE SOURCE under review, not from an installed skill layout (`.pi/skills/`, `~/.pi/agent/`). Installed copies lag a PR that modifies those source files, so reading them produces false high-severity findings against text the PR already fixed (#1603). Resolve skill/doc paths (e.g. `skills/<name>/SKILL.md`, `skills/docs/...`, `docs/...`) as RELATIVE paths from the worktree cwd named on the briefing prefix's `worktree:` line. Before reporting a finding that quotes a skill/doc line, verify the cited text matches `git show HEAD:<path>` (the worktree source at the reviewed head); a finding whose cited text does not appear in `git show HEAD:<path>` is a false positive against a stale installed copy and MUST NOT be reported. This governs SOURCE FILES reviewed as content, not HELPER SCRIPT paths invoked as tooling — those still resolve from the installed skill layout per `ASSET-PATH-SOURCE-NO-REPO-LOCAL`. The briefing prefix carries this invariant as a fixed `## Reviewer source-read invariant` section (below) so every reviewer of a round is seeded with it byte-identically.
@@ -964,9 +999,13 @@ Consolidation:
   disposition (accepted-for-fix, deferred, needs-answer, disputed, or operator_acknowledged) —
   needs-answer applies only to a LOCATABLE question; a non-locatable one gets deferred
 - produce a merged findings artifact
-- determine the overall gate verdict:
-  - `clean`: no findings with a severity in the gate's `blockCleanOnFindingSeverities` list remain
-  - `findings_present`: one or more findings with a blocking severity remain
+- determine the overall gate verdict. The ledger keeps the consolidator's severity
+  `overallVerdict`. The posted review verdict composes it with the judge act list (ADR 0089,
+  `GATE-COMMENT-VERDICT-VALUES`):
+  - `clean`: no findings with a severity in the gate's `blockCleanOnFindingSeverities` list
+    remain, and the judge act list is empty
+  - `findings_present`: one or more findings with a blocking severity remain, or the judge act
+    list is not empty
   - `blocked`: the gate could not complete or a hard blocker prevented a verdict
 
 Ledger content and write-before-comment sequencing are owned by
@@ -1259,7 +1298,10 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   and never from an open medium thread; an unresolved in-window locatable
   medium THREAD still forces another fix round, but through the unresolved-feedback
   routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing what the ledger verdict `clean`
-  means. GATE-CLOSE is a third, stricter layer (see `GATE-EXEC-THREAD-DISPOSITION` below): a
+  means. The posted review verdict composes the ledger verdict with the judge act list: it is
+  `clean` only when the ledger verdict is `clean` and the judge act list is empty (ADR 0089). A
+  judge `act` therefore blocks `clean` at any round, inside or outside the medium fix window.
+  GATE-CLOSE is a third, stricter layer (see `GATE-EXEC-THREAD-DISPOSITION` below): a
   clean verdict is NOT sufficient to close the
   gate — every gate-authored review thread (any severity) must be resolved (fix-closed by the
   fixer, answered for a locatable question, defer-closed by the disposition pass, or reject-closed
@@ -1276,9 +1318,9 @@ After applying fixes and advancing the head SHA:
 
 - <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean. The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule. A `draft_gate` never re-runs on a non-draft PR whose draft gate is already satisfied: `write-gate-context.mjs` refuses it before any reviewer work, and a new ready head instead takes a Copilot re-request when it answers Copilot findings, and a current-head `pre_approval_gate`.
 - rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA)
-- continue the fix-then-retry cycle until the synthesis verdict is `clean`
+- continue the fix-then-retry cycle until the posted review verdict is `clean`
 - on retry, re-invoke every reviewer whose review surface the new head's delta touched (including any angle whose prior finding attribution is ambiguous), and re-invoke every mandatory / always-run angle; the context-builder and consolidation always run fresh. A previously-clean **or** unambiguously-attributed `findings_present` angle whose surface the delta provably did NOT touch is by default **carried forward** per [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed) below — a carried `findings_present` angle brings its open findings forward and the round still blocks on them — on that rule's proof and never on guesswork
-- a clean pass means all gate-specific review angles pass and no findings with a severity in `blockCleanOnFindingSeverities` remain
+- a clean pass means all gate-specific review angles pass, no findings with a severity in `blockCleanOnFindingSeverities` remain, and the judge act list is empty (ADR 0089): the posted review verdict composes the ledger's severity `overallVerdict` with the act list
 
 #### Angle carry-forward (fail-closed) {#angle-carry-forward-fail-closed}
 
@@ -1375,7 +1417,7 @@ Each gate chain exits when one of these conditions is met:
 
 | Condition | Result |
 |---|---|
-| Consolidated verdict is `clean` (no findings at any blocking severity) | Gate passes; proceed to next boundary |
+| Posted review verdict is `clean` (no findings at any blocking severity, and the judge act list is empty per ADR 0089) | Gate passes; proceed to next boundary |
 | `pre_approval_gate` checkpoint `blocked` composed from a deterministic AC/DoD blocker over a completed review ledger (the comment records a **Review verdict** and **Gate blockers**) | Tick verified items or finish the open work, then rerun the gate (the writer's next action is "rerun gate") |
 | `blocked` verdict from the review/fan-in itself (gate could not complete) | Stop; escalate to operator |
 | Maximum retry cycles exhausted without reaching `clean` | Stop; escalate to operator |
