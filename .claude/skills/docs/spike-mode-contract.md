@@ -2,9 +2,7 @@
 
 Canonical owner for spike mode: the time-boxed, exploratory dev-loop run started from a local question with no GitHub issue. Its deliverable is a findings document. When the exploration reaches a recommendation, the operator concludes it with one of two exits: **discard** (drop it with zero tracker artifacts) or **graduate** (emit a #947-style local-first plan file that enters the existing plan→PR promotion path).
 
-This doc is the canonical operator sequence for spike mode and carries a worked example showing both exits. The spike artifact lives outside the tracker; it is exempt from the production-gate ceremony at entry and runs under a relaxed gate profile (`gates.spike`). The [Artifact Authority Contract](artifact-authority-contract.md) owns the local-planning model a graduated spike feeds into.
-
-The spike track shipped across three phases: P1 (#964) the `--spike` intake state machine, P2 (#965) the relaxed gate profile and the discard/graduate exits, P3 (#966) this doc.
+The spike artifact lives outside the tracker. It is exempt from the production-gate ceremony at entry and runs under a relaxed gate profile (`gates.spike`). The [Artifact Authority Contract](artifact-authority-contract.md) owns the local-planning model a graduated spike feeds into.
 
 ## Shipped surfaces
 
@@ -109,13 +107,13 @@ gates:
     requireCi: false
 ```
 
-| Knob | Spike value | Production draft/pre-approval | Why for a spike |
-|---|---|---|---|
-| `angles` | `scope`, `docs` | the full production angle set | A findings doc needs a scope check and a docs check, so the angle set is small and docs-first |
-| `required` | `false` | `true` | The spike's record is the findings doc, so the gate is advisory and the loop proceeds without a passing verdict |
-| `requireCi` | `false` | `true` (CI required by default; both gates honor an opt-out via `requireCi: false`) | A spike produces no production code to run CI against |
+| Knob | Spike value | Production draft/pre-approval |
+|---|---|---|
+| `angles` | `scope`, `docs` | the full production angle set |
+| `required` | `false`: the gate is advisory and the loop proceeds without a passing verdict | `true` |
+| `requireCi` | `false` | `true` (CI required by default; both gates honor an opt-out via `requireCi: false`) |
 
-`gates.spike` resolves through the same config-merge layering and the same `resolveGateConfig(config, "spike")` path as `draft` and `preApproval` (`packages/core/src/config/config.mjs`) — no new strategy→knob resolver. It is `optional()` in the schema (`packages/core/src/config/config.mjs`, `schemas/dev-loop-config.schema.json`) and absent for non-spike work, so production gates are unaffected. A repo `.devloops` can override any of these knobs.
+`gates.spike` resolves through the same config-merge layering and the same `resolveGateConfig(config, "spike")` path as `draft` and `preApproval` (`packages/core/src/config/config.mjs`). It is `optional()` in the schema (`packages/core/src/config/config.mjs`, `schemas/dev-loop-config.schema.json`) and absent for non-spike work, so production gates are unaffected. A repo `.devloops` can override any of these knobs.
 
 ## Worked example
 
@@ -177,7 +175,7 @@ $ node scripts/refine/exit-spike.mjs --spike-file spike-cache.md --disposition d
 { "ok": true, "action": "discard", "spikeFile": "/abs/spike-cache.md" }
 ```
 
-No plan file is written, no GitHub artifact is created, and no tracker entry is made. The `spike-cache.md` findings doc on disk is the entire record of the exploration.
+No plan file, GitHub artifact or tracker entry is created (`SPIKE-DISCARD-ZERO-MUTATION`).
 
 ### Exit B — graduate (emits a plan file)
 
@@ -223,7 +221,7 @@ The trace replay shows p95 dropping from 240ms to 90ms with the cache, with a
 - Work beyond the recommendation above.
 ```
 
-This plan file passes `validatePlanFile`, so it enters the local-planning flow as a new plan needing refinement: refine it, hold the local human-review checkpoint, then `promote-plan.mjs` opens the draft PR (see the [Local-Planning Worked Example](local-planning.md#local-planning-worked-example)). Re-running the graduate exit reproduces the same plan body, because `buildGraduatedPlanBody` is pure.
+This plan file passes `validatePlanFile` and follows the promotion path above; see the [Local-Planning Worked Example](local-planning.md#local-planning-worked-example).
 
 ## Relationship to other docs
 
@@ -235,6 +233,4 @@ This plan file passes `validatePlanFile`, so it enters the local-planning flow a
 
 ## Non-goals
 
-- Changing spike intake, exit, or gate behavior (this is a docs-only surface).
 - Defining a tracker-backed spike — a spike is local by construction.
-- A discard that records a tracker artifact — discard is zero-mutation by contract.

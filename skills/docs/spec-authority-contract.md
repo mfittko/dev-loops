@@ -4,7 +4,7 @@ Canonical owner for immutable spec authority across the review / judge / fixer /
 
 The deterministic enforcement lives in `packages/core/src/loop/spec-authority.mjs`; the judge-pass bridge (`scripts/loop/judge-pass.mjs`) enforces it at the seam between fan-in and the fixer. This document is the normative source; other docs and harness prompts MAY summarize the outcomes and identities for operational guidance, but MUST NOT redefine, weaken, or override the rules defined here.
 
-Adoption: the enforcement is engaged for a run by invoking the judge-pass bridge with `--spec-file` (plus `--content-digest` and the judge's `--spec-authority-verdict`). The live dev-loop conductor passes those on every gate round by default (ADR 0061, `docs/decisions/0061-engage-spec-authority-in-live-conductor.md`): `skills/dev-loop/SKILL.md` Phase 3.5 and `gate-review-sub-loop-contract.md` always run the `scripts/loop/spec-context.mjs` CLI seam to derive the spec/digest identities and always invoke judge-pass with them. This contract defines the mechanism and its tooling seam; ADR 0061 is the adoption decision that turned it on by default.
+Adoption: a run engages the enforcement by invoking the judge-pass bridge with `--spec-file` (plus `--content-digest` and the judge's `--spec-authority-verdict`). The live dev-loop conductor passes those on every gate round by default (ADR 0061, `docs/decisions/0061-engage-spec-authority-in-live-conductor.md`): `skills/dev-loop/SKILL.md` Phase 3.5 and `gate-review-sub-loop-contract.md` always run the `scripts/loop/spec-context.mjs` CLI seam to derive the spec/digest identities and always invoke judge-pass with them.
 
 ## Two independent revision identities
 
@@ -18,16 +18,16 @@ Every review, judge, fixer, gate, carry-forward, and re-entry record pins two in
 
 ### `specDigest` is derived from the authoritative matrix, not a redundant checklist projection (#2016)
 
-`extractSpecFromBody` — the canonical `computeSpecDigest` input for a tracker-backed body — sources acceptance-criteria and definition-of-done text from the AUTHORITATIVE AC→DoD mapping matrix (`detectAcDodMatrix`; the same #1951 refinement artifact "matrix on the issue" mapping table) whenever the body carries one that parses as valid. The issue-side Acceptance criteria / Definition of done list-form CHECKLISTS are a redundant re-aliasable presentation projection of that matrix (`derivePrChecklistsFromIssueMatrix` derives the PR-side checklist from the same rows) and are NOT part of the hashed identity when a valid matrix exists.
+`extractSpecFromBody`, the canonical `computeSpecDigest` input for a tracker-backed body, sources acceptance-criteria and definition-of-done text from the AUTHORITATIVE AC→DoD mapping matrix (`detectAcDodMatrix`, the #1951 "matrix on the issue" table) whenever the body carries one that parses as valid. The issue-side Acceptance criteria / Definition of done list-form CHECKLISTS are a presentation projection of that matrix (`derivePrChecklistsFromIssueMatrix` derives the PR-side checklist from the same rows). They are NOT part of the hashed identity when a valid matrix exists.
 
-Provably semantics-preserving edit classes that leave `specDigest` unchanged, because they never touch the matrix that is actually hashed:
+These edit classes leave `specDigest` unchanged, because they never touch the hashed matrix:
 
 - adding, removing, or reformatting a list-form checklist alias (Acceptance criteria / Definition of done checkboxes) that projects an unchanged matrix;
 - canonical heading normalization and checklist marker/whitespace normalization of any such alias, or of the matrix heading/cell whitespace itself.
 
-Any change to the authoritative matrix content — a criterion's text, its completion-evidence cell, or the row set (a row added or removed) — changes `matrix.rows` and therefore produces a new `specDigest`, re-invalidating through the existing `resolveCriterionInvalidation` path exactly as any other spec change does. A changed Non-goal (read independently from the `## Non-goals` section, unaffected by this matrix/checklist boundary) likewise changes the digest. No genuine acceptance-criterion, completion-evidence, or Non-goal change is ever exempted from review by this equivalence.
+Any change to the matrix content (a criterion's text, its completion-evidence cell, or the row set) changes `matrix.rows` and produces a new `specDigest`, which re-invalidates through `resolveCriterionInvalidation`. A changed Non-goal (read from the `## Non-goals` section) also changes the digest. This equivalence never exempts a genuine acceptance-criterion, completion-evidence, or Non-goal change from review.
 
-Fail-closed default: whenever the body carries no matrix at all, or the matrix is present but empty/malformed/identifier-only (`detectAcDodMatrix` reports `found: false` or `valid: false` — i.e. it cannot be positively proven a valid semantic mapping), `extractSpecFromBody` falls back to the pre-#2016 behavior of hashing the extracted checklist text directly. An edit not positively proven equivalent is never silently narrowed into a weaker or empty digested surface.
+Fail-closed default: when the body carries no matrix, or `detectAcDodMatrix` reports `found: false` or `valid: false` (empty, malformed or identifier-only), `extractSpecFromBody` hashes the extracted checklist text directly. An edit not positively proven equivalent is never narrowed into a weaker or empty digested surface.
 
 ## Whole-spec disposition and the four named outcomes
 
@@ -43,7 +43,7 @@ The judge selects exactly one named, machine-readable outcome per finding:
 | `remediation_conflicts` | finding valid, but the proposed remediation conflicts with the spec | keep the finding, reject that remedy autonomously, route to a spec-compliant alternative |
 | `spec_cannot_decide` | the spec is materially ambiguous, internally contradictory, or progress requires changing/reinterpreting AC/DoD/non-goals | escalate to an explicit human-spec-decision state |
 
-The outcomes are ENFORCED on the fixer act list, not merely recorded: the judge-pass bridge drops every `finding_conflicts` finding from the act list (it cannot authorize a fix even if its relevance disposition was `act`), keeps `remediation_conflicts` findings actionable (the finding is valid; only its proposed remedy is rejected, and the fixer routes to a compliant alternative), and fails the pass closed on any `spec_cannot_decide`. Enforcement lives in shared tooling (`judge-pass.mjs`), engaged for a run by supplying `--spec-file`; a harness prompt never has to re-derive it.
+The judge-pass bridge (`judge-pass.mjs`, engaged by `--spec-file`) ENFORCES the outcomes on the fixer act list. It drops every `finding_conflicts` finding from the act list, even when its relevance disposition was `act`. It keeps `remediation_conflicts` findings actionable, and the fixer routes to a compliant alternative. It fails the pass closed on any `spec_cannot_decide`.
 
 <!-- rule: SPEC-AUTHORITY-CONFLICT-EVIDENCE -->
 `SPEC-AUTHORITY-CONFLICT-EVIDENCE`: a `finding_conflicts` or `remediation_conflicts` outcome MUST name a non-empty `conflictingCriteria` set drawn from the spec — autonomous rejection is legitimate only when it names what the finding/remedy conflicts with. A non-conflict outcome MUST NOT carry a conflict list. A `valid_compliant` outcome MUST name an `authorizedRemediation`.
@@ -68,9 +68,9 @@ A fixer push records the new `headSha`/`contentDigest` and which previously revi
 - carries an unaffected criterion forward ONLY when deterministic positive proof shows both its governing spec text is unchanged AND the implementation/content surface it covers is unchanged;
 - fails closed to fresh review on unknown, incomplete, or unproven impact.
 
-The judge-pass bridge is the runtime caller: `--prior-approvals` feeds the previous clean round's durable approval record into `resolveCriterionInvalidation`, and `--approvals-out` persists the new record (revision identities + approved criteria + invalidation result). A deterministic file→criterion producer, `resolveAffectedCriteria` (`--changed-paths` + `--coverage-map`), maps a fixer push's changed paths to the criteria whose declared coverage they intersect; it fails closed to the full prior-approved set (all-stale) on a changed path that matches no criterion's coverage, or when no coverage map is supplied at all. An unaffected criterion carries forward only when `--carry-forward-proof` positively proves both its spec text and covered surface unchanged — unknown impact fails closed to fresh review.
+The judge-pass bridge is the runtime caller. `--prior-approvals` feeds the previous clean round's durable approval record into `resolveCriterionInvalidation`, and `--approvals-out` persists the new record (revision identities + approved criteria + invalidation result). `resolveAffectedCriteria` (`--changed-paths` + `--coverage-map`) maps a fixer push's changed paths to the criteria whose declared coverage they intersect. It fails closed to the full prior-approved set (all-stale) on a changed path that matches no criterion's coverage, or when no coverage map is supplied. The carry-forward proof above is supplied through `--carry-forward-proof`.
 
-This composes with the fixer push/thread-disposition ordering owned by `skills/copilot-pr-followup/SKILL.md` Step 7 (`COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE`, `COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY`) and the fresh-review-context machinery in `gate-review-sub-loop-contract.md`: after an authorized fixer push, thread reply/resolution and live verification finish before the required fresh review begins. This contract adds authority and invalidation; it does not weaken that ordering, current-head gate evidence, CI, review coverage, approval, or merge-authorization requirements.
+After an authorized fixer push, thread reply/resolution and live verification finish before the required fresh review begins. Owners: `COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE` and `COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY` in `skills/copilot-pr-followup/SKILL.md` Step 7, and the fresh-review-context rules in `gate-review-sub-loop-contract.md`. This contract does not weaken that ordering, current-head gate evidence, CI, review coverage, approval, or merge-authorization requirements.
 
 ## Severity and batching never bypass authority
 
@@ -78,7 +78,7 @@ Low and nit findings receive the same whole-spec finding/remediation comparison 
 
 ## Cross-harness parity
 
-The authority comparison, disposition outcomes, revision identities, invalidation, and re-entry enforcement live in shared deterministic core (`packages/core/src/loop/spec-authority.mjs`), so Pi, Claude Code, and Codex enforce identical behavior by calling the same core. Harness prompts may explain the rule but are never its sole enforcement. See `cross-harness-regression-contract.md`.
+The authority comparison, disposition outcomes, revision identities, invalidation, and re-entry enforcement live in `packages/core/src/loop/spec-authority.mjs`, so Pi, Claude Code, and Codex call the same core. Harness prompts are never the sole enforcement. See `cross-harness-regression-contract.md`.
 
 ## Durable re-entry
 
