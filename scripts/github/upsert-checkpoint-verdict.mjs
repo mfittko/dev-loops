@@ -2119,7 +2119,9 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordination
   // The spec-of-record unticked items come from the issue bodies this tick just
   // fetched and edited, never from the reload's re-fetch: a failed re-fetch would
   // drop them and let an unverified issue AC item pass the clean guard.
-  const uncheckedAcItems = [...new Set(tickedIssueBodies.flatMap((body) => detectIssueRefinementArtifact({ body }).uncheckedAcItems))];
+  // Union with the reload's list so the result is never smaller than either source.
+  const local = tickedIssueBodies.flatMap((body) => detectIssueRefinementArtifact({ body }).uncheckedAcItems);
+  const uncheckedAcItems = [...new Set([...(reloaded.uncheckedAcItems ?? []), ...local])];
   return { ...reloaded, uncheckedAcItems };
 }
 

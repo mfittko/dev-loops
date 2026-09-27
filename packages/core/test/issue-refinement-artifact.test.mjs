@@ -315,6 +315,8 @@ test("isGateOutcomeItem stays narrow: no row of a real tool-behavior matrix is a
     "the pre_approval_gate is clean at the final head",
     "merge only on a full gate pass",
     "the merge happens only on a full gate pass",
+    "Merge happens only after a clean pre_approval_gate",
+    "draft_gate and pre_approval_gate both pass",
   ]) {
     assert.equal(isGateOutcomeItem(outcome), true, outcome);
   }
@@ -329,6 +331,10 @@ test("isGateOutcomeItem needs an explicit gate subject and lifecycle merge phras
     "A test asserts a branch that was merged is skipped",
     "merge queue merges only green PRs",
     "a draft PR is merged into main by merge-pr when checks pass",
+    "The pre_approval_gate passes only when every AC box is ticked",
+    "upsert-checkpoint-verdict refuses clean unless pre_approval_gate is clean on the head",
+    "A draft_gate fan-out on a ready PR whose draft_gate passed is refused",
+    "auto-merge merges only on an APPROVED review",
   ]) {
     assert.equal(isGateOutcomeItem(item), false, item);
   }
