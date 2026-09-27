@@ -128,6 +128,13 @@ export function isRefusalPathCitation(line, tokenIndex) {
 // shape scan would flag FAIL-CLOSED / BEST-EFFORT / PROJ-123 as phantom rule
 // citations. A NEW unknown token in runtime source that is not a real registry
 // ID and not on this list is treated as a phantom citation (gating).
+// Cited rule IDs whose definition lands in a later, drain-ordered change. A
+// listed ID may be cited before it is defined (no unresolved_rule_reference or
+// phantom_rule_citation); once it is defined the entry is stale and gates
+// (resolved_forward_reference_entry) until removed. Every other undefined
+// cited ID still fails.
+export const FORWARD_RULE_REFERENCES = Object.freeze(new Set(["GATE-EXEC-HARNESS-JOIN"]));
+
 const NON_RULE_TOKENS = new Set([
   "ACCEPT-CRITERIA-VERIFY-AND",
   "AGENT-LEVEL",
@@ -484,17 +491,42 @@ export function extractTermUses(content, file) {
   return uses;
 }
 
+// Shared rule-body normalization: drop code spans, modal verbs and punctuation,
+// so a reworded-modality or re-punctuated copy still compares equal.
+function normalizeRuleBody(text) {
+  return text.toLowerCase().replace(/`[^`]+`/g, "").replace(/\b(must|shall|should|may|not)\b/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+}
+const MIN_NORMALIZED_BODY_LENGTH = 24;
+
 export function detectNearDuplicates(definitions) {
   const seen = new Map();
   const findings = [];
   for (const def of definitions) {
-    const normalized = def.body.toLowerCase().replace(/`[^`]+`/g, "").replace(/\b(must|shall|should|may|not)\b/g, "").replace(/[^a-z0-9]+/g, " ").trim();
-    if (!normalized || normalized.length < 24) continue;
+    const normalized = normalizeRuleBody(def.body);
+    if (!normalized || normalized.length < MIN_NORMALIZED_BODY_LENGTH) continue;
     const prior = seen.get(normalized);
     if (prior && prior.id !== def.id) findings.push({ kind: "near_duplicate", a: prior, b: def });
     else seen.set(normalized, def);
   }
   return findings;
+}
+
+/**
+ * Rule bodies defined in `sources` ([{ file, content }], read through
+ * extractRuleDefinitions) that appear copied into `text`, compared under the
+ * detectNearDuplicates normalization. A text that cites a rule by ID only
+ * yields no match. Returns the embedded definitions ({ id, file, line, body }).
+ */
+export function findEmbeddedRuleBodies(text, sources) {
+  const haystack = ` ${normalizeRuleBody(String(text ?? ""))} `;
+  const embedded = [];
+  for (const { file, content } of sources) {
+    for (const def of extractRuleDefinitions(content, file)) {
+      const needle = normalizeRuleBody(def.body);
+      if (needle.length >= MIN_NORMALIZED_BODY_LENGTH && haystack.includes(` ${needle} `)) embedded.push(def);
+    }
+  }
+  return embedded;
 }
 
 export function detectModalityConflicts(definitions) {
@@ -647,7 +679,10 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
   }
 
   for (const ref of references) {
-    if (!byId.has(ref.id)) errors.push({ kind: "unresolved_rule_reference", id: ref.id, location: `${ref.file}:${ref.line}` });
+    if (!byId.has(ref.id) && !FORWARD_RULE_REFERENCES.has(ref.id)) errors.push({ kind: "unresolved_rule_reference", id: ref.id, location: `${ref.file}:${ref.line}` });
+  }
+  for (const id of FORWARD_RULE_REFERENCES) {
+    if (byId.has(id)) errors.push({ kind: "resolved_forward_reference_entry", id, location: "FORWARD_RULE_REFERENCES in scripts/docs/validate-rule-ownership.mjs" });
   }
 
   const termsByKey = new Map();
@@ -692,7 +727,7 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
       // enforcement error/refusal string marks the rule as enforced, not mere
       // presence in source. Phantom detection below still scans all presence.
       if (requiredSet.has(token.id) && token.refusalPath) citedRuntimeIds.add(token.id);
-    } else if (!NON_RULE_TOKENS.has(token.id)) {
+    } else if (!NON_RULE_TOKENS.has(token.id) && !FORWARD_RULE_REFERENCES.has(token.id)) {
       const prev = unknownById.get(token.id);
       unknownById.set(token.id, prev ? { count: prev.count + 1, file: prev.file } : { count: 1, file: token.file });
     }
