@@ -760,7 +760,7 @@ export function extractSpecFromBody(body) {
 
 /** The spec shape a gate round requires, named in every missing-spec refusal. */
 export const EXPECTED_SPEC_SHAPE =
-  "an Acceptance criteria section and a Definition of done section at any heading level (## or ###), each with `- [ ]` checkbox items (or an AC/DoD matrix)";
+  "an Acceptance criteria section and a Definition of done section at any heading level (## or ###), each with list items (or an AC/DoD matrix); a PR-body spec must use `- [ ]` checkbox items (validatePrBodySpec)";
 
 /**
  * {@link extractSpecFromBody}, failing closed when the body yields no AC or no
