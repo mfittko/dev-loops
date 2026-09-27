@@ -472,6 +472,11 @@ test("fan-in join: consolidateGateFanin consumes per-angle findings artifacts fo
     assert.equal((await verifyDispatchPromptLayoutForHead(tmpRoot, HEAD_SHA)).verified, true);
     assert.equal((await verifyBriefingPrefixesForHead(tmpRoot, HEAD_SHA)).verified, true);
 
+    // Reviewers pull first; a result only counts when written after its pull.
+    for (const unit of payload.units) {
+      const pulled = runPullCli(unit, { cwd: tmpDir });
+      assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+    }
     // One per-angle findings artifact per emitted angle at the canonical
     // per-angle path (packages/core/src/loop/gate-fanin.mjs header docs) —
     // including determinism/state-concurrency, the auto-chunk bundle's own
@@ -486,11 +491,6 @@ test("fan-in join: consolidateGateFanin consumes per-angle findings artifacts fo
         JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }),
         "utf8",
       );
-    }
-
-    for (const unit of payload.units) {
-      const pulled = runPullCli(unit, { cwd: tmpDir });
-      assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
     }
     const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
     const fanin = await consolidateGateFanin({

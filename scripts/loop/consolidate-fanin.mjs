@@ -511,9 +511,11 @@ async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot) {
     if (!check.ok) {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: incomplete delivery evidence for unit ${unit.scope}: ${check.reason} (expected a pull receipt for execution ${unit.executionIdentity}, digest ${unit.workOrderDigest}) under ${receiptTmpRoot}; re-dispatch the unit with its compact reference (fail-closed)`);
     }
-    const missing = (unit.angles ?? []).filter((angle) => !resultAngles.has(angle));
+    // A result older than this execution's pull (or an unparseable pulledAt) is a stale prior-round file.
+    const missing = [];
+    for (const angle of unit.angles ?? []) if (!resultAngles.has(angle) || !((await stat(resultAngles.get(angle)[0])).mtimeMs >= Date.parse(check.receipt.pulledAt))) missing.push(angle);
     if (missing.length > 0) {
-      throw new Error(`interrupted reviewer: unit ${unit.scope} (execution ${unit.executionIdentity}) pulled its work order but wrote no result for angle(s) ${missing.join(", ")}; the unit is not complete, retry it per the existing execution rules (fail-closed)`);
+      throw new Error(`interrupted reviewer: unit ${unit.scope} (execution ${unit.executionIdentity}) pulled its work order but wrote no post-pull result for angle(s) ${missing.join(", ")}; the unit is not complete, retry it per the existing execution rules (fail-closed)`);
     }
   }
 }
@@ -1065,7 +1067,7 @@ export async function consolidateGateFanin(options) {
   if (emitPlan !== undefined) {
     // Receipts live under the MAIN checkout's tmp root (pull-work-order.mjs).
     const receiptTmpRoot = options.receiptTmpRoot ?? resolveGateArtifactTmpRoot(path.dirname(path.resolve(options.tmpRoot ?? path.join(process.cwd(), "tmp"))));
-    await verifyUnitDeliveryReceipts(emitPlan, new Set(angleSourceFiles.keys()), receiptTmpRoot);
+    await verifyUnitDeliveryReceipts(emitPlan, angleSourceFiles, receiptTmpRoot);
   }
 
   // GATE-EXEC-BRIEFING-PREFIX: the fan-in runs verify-briefing-prefixes.mjs

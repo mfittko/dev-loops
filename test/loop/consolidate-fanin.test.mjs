@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -965,9 +965,10 @@ function matchingEmitPlan() {
 
 // The pull receipt the reviewer's pull-work-order.mjs run leaves for a plan
 // unit (#2416); `receipt` overrides the identity written at that unit's path.
+// pulledAt is a minute back so the fixture's result files count as post-pull.
 async function writeEmitPlanReceipt(receiptTmpRoot, unit = matchingEmitPlan().units[0], receipt = unit) {
   const { workOrderRef, workOrderDigest, executionIdentity } = receipt;
-  await writeJson(pullReceiptPath(receiptTmpRoot, unit.workOrderRef), { role: "review", workOrderRef, workOrderDigest, executionIdentity });
+  await writeJson(pullReceiptPath(receiptTmpRoot, unit.workOrderRef), { role: "review", workOrderRef, workOrderDigest, executionIdentity, pulledAt: new Date(Date.now() - 60_000).toISOString() });
 }
 
 test("parseConsolidateFaninCliArgs: no --emit-plan flag leaves emitPlan undefined", () => {
@@ -1051,8 +1052,10 @@ test("consolidateGateFanin fails closed on a missing, wrong-execution, wrong-uni
   }
 });
 
-test("consolidateGateFanin classifies a matching receipt without a result artifact as an interrupted reviewer, never complete", async () => {
-  await withFindingsDir({ "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } }, (dir) => withTempDir(async (planDir) => {
+// docs.json is a stale prior-round result (mtime before the pull), so it must not count.
+test("consolidateGateFanin classifies a matching receipt without a post-pull result artifact as an interrupted reviewer, never complete", async () => {
+  await withFindingsDir({ "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD }, "docs.json": { angle: "docs", verdict: "clean", findings: [], headSha: EMIT_HEAD } }, (dir) => withTempDir(async (planDir) => {
+    await utimes(path.join(dir, "docs.json"), new Date(0), new Date(0));
     const plan = matchingEmitPlan();
     const docsUnit = { ...plan.units[0], scope: "review-docs", angles: ["docs"], workOrderRef: `review:o/r#7:review:${EMIT_HEAD}:review-docs`, executionIdentity: "r1-ab-u1" };
     plan.units.push(docsUnit);
@@ -1061,7 +1064,7 @@ test("consolidateGateFanin classifies a matching receipt without a result artifa
     await writeEmitPlanReceipt(planDir, docsUnit);
     await assert.rejects(
       () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, receiptTmpRoot: planDir }),
-      /interrupted reviewer: unit review-docs .*no result for angle\(s\) docs/,
+      /interrupted reviewer: unit review-docs .*no post-pull result for angle\(s\) docs/,
     );
   }));
 });
