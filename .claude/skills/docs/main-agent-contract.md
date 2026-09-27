@@ -24,8 +24,8 @@ is unaffected. This is a mechanically-guarded, targeted denylist, not an airtigh
 "Guarded surface and deliberate ceilings" below for what it does and does not cover. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
-`pnpm`, inline — delegate the run to a fresh worker subagent, which reports back a compact
-pass/fail plus any failing-test names, or, when checking a pushed commit, prefer CI's structured
+`pnpm`, inline — delegate targeted checks to a fresh worker subagent, which reports back a compact
+pass/fail plus any failing-test names; request a local full-repository run only through `dev-loops gate resolve-validation` on a clean commit, or, when checking a pushed commit, prefer CI's structured
 conclusion (`scripts/github/probe-ci-status.mjs` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
 same opt-in `PreToolUse` Bash gate hook and the same `DEVLOOPS_COORDINATOR_READONLY=1` flag; a
 worker subagent's targeted verify/build run is unaffected; a local full-repository run is owned only by `dev-loops gate resolve-validation` per [Validation Policy](validation-policy.md). The draft-gate `gh pr ready`

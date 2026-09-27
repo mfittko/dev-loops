@@ -24,8 +24,8 @@ is unaffected. This is a mechanically-guarded, targeted denylist, not an airtigh
 "Guarded surface and deliberate ceilings" below for what it does and does not cover. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
-`pnpm`, inline — delegate the run to a fresh worker subagent, which reports back a compact
-pass/fail plus any failing-test names, or, when checking a pushed commit, prefer CI's structured
+`pnpm`, inline — delegate targeted checks to a fresh worker subagent, which reports back a compact
+pass/fail plus any failing-test names; request a local full-repository run only through `dev-loops gate resolve-validation` on a clean commit, or, when checking a pushed commit, prefer CI's structured
 conclusion (`scripts/github/probe-ci-status.mjs` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
 same opt-in `PreToolUse` Bash gate hook and the same `DEVLOOPS_COORDINATOR_READONLY=1` flag; a
 worker subagent's targeted verify/build run is unaffected; a local full-repository run is owned only by `dev-loops gate resolve-validation` per [Validation Policy](validation-policy.md). The draft-gate `gh pr ready`
@@ -210,7 +210,7 @@ clause reinforces that for the `dev-loop` dispatch pattern specifically.
   `COORDINATOR-VERIFY-DELEGATION`: the dev-loop coordinator MUST NOT run a known
   code-verification/build entrypoint (`bun run verify`/`bun test`/`vitest`/`npm test`/
   `npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/`pnpm`) inline; it
-  MUST delegate the run to a fresh worker subagent (`developer`/`fixer`/`quality`/`review`) instead. Enforced by the
+  MUST delegate targeted runs to a fresh worker subagent (`developer`/`fixer`/`quality`/`review`) and request any local full-repository run through `dev-loops gate resolve-validation` instead. Enforced by the
   `PreToolUse` Bash gate hook (`.claude/hooks/pre-tool-use-bash-gate.mjs`), which denies the
   command when the caller's `agent_type` is the coordinator's own (`dev-loop`). Gated by the SAME
   `DEVLOOPS_COORDINATOR_READONLY=1` flag as the write-guard boundary above (default fail-open); a
