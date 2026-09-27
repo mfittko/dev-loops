@@ -3,8 +3,7 @@
 Use this procedure for the internal `wait_watch` route after loading the validated
 handoff envelope and public routing contract. Resolve command paths using the
 package root selected by `dev-loop`. The links identify policy owners; do not preload the full
-follow-up, gate or retrospective procedures just to wait. Startup still checks
-retrospective reconciliation.
+follow-up, gate or retrospective procedures just to wait.
 
 ## Enter the wait
 
@@ -29,9 +28,7 @@ fresh-envelope sequence below. If the snapshot reports `mergeStateStatus=BEHIND`
 or `DIRTY`, `mergeable=CONFLICTING`, or a new review request is needed, that state
 is a transition, not a wait: resolve the fresh envelope and load its destination
 `requiredReads` — which pull in the follow-up and operations preflight — before
-acting. Do not direct-load those procedures ahead of the envelope; they are
-conditional reads the destination route requires, not savings on a preflight that
-actually needs them. A `DIRTY`/`CONFLICTING` base never enters a CI or review wait
+acting. Do not direct-load those procedures ahead of the envelope. A `DIRTY`/`CONFLICTING` base never enters a CI or review wait
 (`FACADE-NEVER-CI-WAIT-WHILE-DIRTY`): the handoff integrates the base or fails
 closed first. Preserve ownership, worktree, and authorization checks;
 if an authorized route cannot be established, stop for reconciliation. The
