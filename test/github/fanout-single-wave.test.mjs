@@ -463,7 +463,9 @@ describe("no primer or lead-reviewer serialization precedes the first wave", () 
         // item task (Pi) is the compact envelope only, under the fixed cap.
         for (const u of payload.units) {
           assert.ok(Buffer.byteLength(u.dispatchPrompt) <= DISPATCH_POINTER_MAX_BYTES);
-          assert.deepEqual(JSON.parse(u.dispatchPrompt), { workOrderRef: u.workOrderRef, workOrderDigest: u.workOrderDigest, executionIdentity: u.executionIdentity });
+          // Self-describing: the pull command with concrete values, so a skewed reviewer definition still pulls.
+          assert.ok(u.dispatchPrompt.includes(`\`dev-loops-run scripts/github/pull-work-order.mjs --ref ${u.workOrderRef} --digest ${u.workOrderDigest} --execution ${u.executionIdentity}\``), u.dispatchPrompt);
+          assert.match(u.dispatchPrompt, /follow its printed work order exactly/);
           assert.ok(u.promptBytes > 4 * Buffer.byteLength(u.dispatchPrompt), `${u.scope}: ${u.promptBytes} work-order bytes vs ${Buffer.byteLength(u.dispatchPrompt)} dispatch bytes`);
         }
         for (const u of payload.units) assert.ok(u.angles.length <= REVIEWER_UNIT_MAX_ANGLES);

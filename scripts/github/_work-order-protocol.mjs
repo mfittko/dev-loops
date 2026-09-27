@@ -43,16 +43,14 @@ export function workOrderDigest(workOrder) {
 
 export const materializationHash = sha256Hex;
 
-/**
- * The compact dispatch envelope: the ONLY text a coordinator relays to a
- * worker. It carries identity, never task prose; the worker's own procedure
- * says to pull it with pull-work-order.mjs.
- */
+// The compact dispatch envelope, the ONLY text relayed to a worker: a self-describing pull instruction
+// (a lagging agent definition still pulls), never task prose. Values go unquoted, so each is one shell-inert word.
 export function buildDispatchPointer({ workOrderRef, workOrderDigest: digest, executionIdentity }) {
-  const text = JSON.stringify({ workOrderRef, workOrderDigest: digest, executionIdentity });
-  if (Buffer.byteLength(text) > DISPATCH_POINTER_MAX_BYTES) {
-    throw new Error(`dispatch envelope for ${workOrderRef} is ${Buffer.byteLength(text)} bytes, over DISPATCH_POINTER_MAX_BYTES ${DISPATCH_POINTER_MAX_BYTES}`);
-  }
+  const unsafe = [workOrderRef, digest, executionIdentity].find((value) => !/^[A-Za-z0-9][\w.:/#-]*$/.test(String(value)));
+  if (unsafe !== undefined) throw new Error(`dispatch envelope value ${JSON.stringify(unsafe)} is not shell-safe`);
+  const text = `Run \`dev-loops-run scripts/github/pull-work-order.mjs --ref ${workOrderRef} --digest ${digest} --execution ${executionIdentity}\` and follow its printed work order exactly. On exit 1, stop and report its refusal JSON verbatim.`;
+  const bytes = Buffer.byteLength(text);
+  if (bytes > DISPATCH_POINTER_MAX_BYTES) throw new Error(`dispatch envelope for ${workOrderRef} is ${bytes} bytes, over DISPATCH_POINTER_MAX_BYTES ${DISPATCH_POINTER_MAX_BYTES}`);
   return text;
 }
 

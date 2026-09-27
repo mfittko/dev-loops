@@ -58,9 +58,9 @@ Read [Gate-review sub-loop contract](../docs/gate-review-sub-loop-contract.md) b
    (`agents/review.agent.md`, generated to `.claude/agents/review.md`),
    spawned via the plain Agent tool, NOT a general-purpose agent — per
    resolved dispatch unit (`resolveFanoutGroups`), each given only its
-   compact `dispatchPrompt` `{workOrderRef, workOrderDigest,
-   executionIdentity}`. The reviewer first runs `pull-work-order.mjs --ref
-   <workOrderRef> --digest <workOrderDigest> --execution <executionIdentity>`
+   compact `dispatchPrompt`: the one-line instruction to run
+   `pull-work-order.mjs --ref <workOrderRef> --digest <workOrderDigest>
+   --execution <executionIdentity>` with concrete values. The reviewer runs it
    and follows the pulled work order, which references the identical neutral
    evidence and carries its angle prompts — unchanged from draft/
    pre-approval fan-out; no new reviewer angles, no bespoke review agent.

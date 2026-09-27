@@ -12,7 +12,7 @@ ADR 0086 bounded each reviewer work order, but the coordinator still copied ever
 
 ## Decision
 
-Every worker role receives only a compact dispatch envelope `{workOrderRef, workOrderDigest, executionIdentity}`, capped once at `DISPATCH_POINTER_MAX_BYTES` (499 bytes). The envelope carries no task prose. A deterministic emitter writes the work order; no model authors it, and a model-authored brief is never a sanctioned fallback.
+Every worker role receives only a compact dispatch envelope: a one-line instruction to run the pull CLI with the concrete `workOrderRef`, `workOrderDigest` and `executionIdentity` and follow the printed work order, capped once at `DISPATCH_POINTER_MAX_BYTES` (499 bytes). The envelope is self-describing, so a worker whose agent definition lags still pulls, and carries no task prose. A deterministic emitter writes the work order; no model authors it, and a model-authored brief is never a sanctioned fallback.
 
 The worker runs `pull-work-order.mjs` first. The CLI selects a role adapter by the ref's role prefix, verifies the reference against the canonical emitted unit, prints the exact emitted bytes and writes a pull receipt under the main checkout's `tmp/work-order-receipts/`. Its only write is that receipt, so a read-only role pulls through the sanctioned command without an unrestricted shell. It refuses by name: `dispatch_reference_mismatch` (retryable; re-dispatch the same unit, never retire the round), `dispatch_identity_mismatch`, `stale_dispatch` (a retired or superseded round is never retargeted to the newest one), `unknown_role`, `invalid_work_order`, `semantic_identity_mismatch` and `local_materialization_integrity_failure`.
 

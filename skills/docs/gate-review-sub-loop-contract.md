@@ -429,7 +429,7 @@ writes the unit's angle-suffix and drives the composer core above (`composeAndRe
 the shared atomic compose-and-record core). It emits one
 `{ scope, angles, group, promptPath, promptBytes, sectionBytes, workOrderRef, workOrderDigest, materializationHash, executionIdentity, dispatchPrompt, workOrder }`
 per DISPATCH unit plus a `maxConcurrent` field. The coordinator relays only `dispatchPrompt`
-(the compact envelope); the reviewer pulls the work order through `pull-work-order.mjs`
+(the compact pull instruction); the reviewer pulls the work order through `pull-work-order.mjs`
 (see "Per-harness delivery"). The execution rules carry the widening rule: the reviewer MAY
 read further code, spec, contracts or prior findings when a concrete dependency or ambiguity
 requires it, and records each widened read in the `contextWidened` result field. Each unit's prompt is a bounded work order and
@@ -539,7 +539,7 @@ duplicate findings fail closed because no fresh reviewer ran.
 Missing, altered or fresh provenance fails closed. Same-head completed-only resumes do not qualify.
 Omit `--expected-dispatch-units` at zero, as required by the existing consumer contract.
 
-**Per-harness delivery.** Relay only the emitted unit's compact `dispatchPrompt`: the JSON envelope `{workOrderRef, workOrderDigest, executionIdentity}`, under `DISPATCH_POINTER_MAX_BYTES` (< 500 bytes; the emitter refuses over it). Never relay the `promptPath` bytes and never append task prose. The reviewer first runs `pull-work-order.mjs --ref <workOrderRef> --digest <workOrderDigest> --execution <executionIdentity>`, which verifies the reference against the canonical emitted unit, prints the exact emitted work order (inline invariant prefix first) and writes a pull receipt under the main checkout's `tmp/work-order-receipts/`. The same rule holds on every harness:
+**Per-harness delivery.** Relay only the emitted unit's compact `dispatchPrompt`: a self-describing one-line instruction to run `dev-loops-run scripts/github/pull-work-order.mjs --ref <workOrderRef> --digest <workOrderDigest> --execution <executionIdentity>` with the unit's concrete values and follow the printed work order exactly, under `DISPATCH_POINTER_MAX_BYTES` (< 500 bytes; the emitter refuses over it, and refuses any value that is not a shell-inert word). A reviewer whose agent definition lags the pull transport still pulls. Never relay the `promptPath` bytes and never append task prose. The pull CLI verifies the reference against the canonical emitted unit, prints the exact emitted work order (inline invariant prefix first) and writes a pull receipt under the main checkout's `tmp/work-order-receipts/`. The same rule holds on every harness:
 
 | Dispatch | Delivery and limits |
 | --- | --- |

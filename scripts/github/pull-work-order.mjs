@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * Sanctioned read-only work-order pull (ADR 0106). A
- * worker receives only a compact envelope {workOrderRef, workOrderDigest,
- * executionIdentity} and runs this CLI to fetch and verify its own immutable
- * work order. The only write is the pull receipt.
+ * worker receives only a compact envelope that tells it to run this CLI with
+ * its workOrderRef, workOrderDigest and executionIdentity, to fetch and verify
+ * its own immutable work order. The only write is the pull receipt.
  */
 import { readdir } from "node:fs/promises";
 import path from "node:path";

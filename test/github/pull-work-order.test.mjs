@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import { WorkOrderRefusal, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { WorkOrderRefusal, buildDispatchPointer, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
@@ -51,6 +51,16 @@ test("pull returns exactly the emitted work order, carrying the widening rule, a
       { executionIdentity: unit.executionIdentity, role: "review", workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest,
         materializationHash: unit.materializationHash, subject: { repo: "o/r", pr: 7, gate: GATE, headSha: HEAD, roundId: unit.executionIdentity.replace(/-u\d+$/, ""), scope: unit.scope }, pulledAt: undefined },
     );
+  });
+});
+
+test("the dispatchPrompt carries a shell-runnable pull command; shell metacharacters refuse", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const args = unit.dispatchPrompt.match(/`dev-loops-run scripts\/github\/pull-work-order\.mjs ([^`]+)`/)[1];
+    const result = spawnSync("sh", ["-c", `node ${path.join(SCRIPTS, "pull-work-order.mjs")} ${args}`], { cwd: root, encoding: "utf8" });
+    assert.equal(result.stdout, await readFile(unit.promptPath, "utf8"), result.stderr);
+    for (const bad of [`${unit.workOrderRef};id`, "$(id)", "#x", "a b"]) assert.throws(() => buildDispatchPointer({ ...unit, workOrderRef: bad }), /not shell-safe/);
   });
 });
 
