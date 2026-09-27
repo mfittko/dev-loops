@@ -40,6 +40,50 @@ test("draft PR only allows mark-ready after current-head clean draft gate eviden
   assert.equal(result.draftGate.currentHeadClean, true);
 });
 
+test("#2456: draft-start keeps mark-ready and the Copilot request blocked until a clean current-head draft_gate verdict", () => {
+  const draftAt = (draftGate, draftGateMarker, overrides = {}) => evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success",
+    draftGate,
+    draftGateMarker,
+    ...overrides,
+  });
+  const cleanAt = (headSha) => [
+    gate({ visible: true, headSha, verdict: "clean" }),
+    gate({ visible: true, headSha, verdict: "clean", contractComplete: true }),
+  ];
+
+  // No verdict, and a clean verdict at an older head: both enter draft_gate.
+  for (const blocked of [draftAt(gate(), gate()), draftAt(...cleanAt("old1234"))]) {
+    assert.equal(blocked.gateBoundary, PR_CHECKPOINT.DRAFT_REVIEW);
+    assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+    assert(blocked.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+    assert(blocked.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+    assert(!blocked.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  }
+
+  // Clean verdict at the same current head: mark-ready is permitted.
+  const clean = draftAt(...cleanAt("abc1234"));
+  assert.equal(clean.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  assert(clean.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert(!clean.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+
+  // Once ready at that same head, the Copilot request is permitted.
+  const ready = draftAt(...cleanAt("abc1234"), {
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    preApprovalGate: gate(),
+    preApprovalGateMarker: gate(),
+  });
+  assert.equal(ready.nextAction, PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW);
+  assert(ready.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  assert(!ready.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+});
+
 // ---------------------------------------------------------------------------
 // ADR 0088: unresolvedGateThreadCount folds into draftGate.currentHeadClean —
 // reconciling this detector's MARK_READY_FOR_REVIEW decision with
