@@ -481,6 +481,33 @@ test("real git: a symlinked renumber destination is refused", async () => {
   }
 });
 
+test("real git: a dangling symlink renumber destination does not crash the guard", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-adr-dangling-symlink-git-"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+  try {
+    git("init", "-q", "-b", "main");
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.invalid");
+    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+    for (const [rel, text] of Object.entries(DUPLICATE_BASE)) await writeFile(path.join(root, rel), text);
+    git("add", "docs/decisions");
+    git("commit", "-qm", "base with duplicate number");
+    git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD").trim());
+    await rm(path.join(root, "docs/decisions/0047-something.md"));
+    // The target is never created, so the candidate symlink is dangling: it must
+    // read as a non-match instead of throwing ENOENT out of the guard.
+    await symlink("../missing.md", path.join(root, NEW_PATH));
+    git("add", "-A");
+    git("commit", "-qm", "replace record with dangling symlink");
+    assert.match(git("ls-files", "--stage", "--", NEW_PATH), /^120000 /);
+    const result = await validateDecisionRecords({ root });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "adr_post_acceptance_rewrite"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an already-Superseded record is also protected from non-status edits", async () => {
   const { root, git } = await fixture({
     "docs/decisions/0047-something.md": ACCEPTED_4047_EDITED,

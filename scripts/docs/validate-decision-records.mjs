@@ -225,7 +225,16 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
               // ambiguity, but never accept it as the selected destination.
               // Other non-regular entries (e.g. directories) have no record body.
               if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-              const text = await readFile(path.join(root, dest), "utf8");
+              let text;
+              try {
+                text = await readFile(path.join(root, dest), "utf8");
+              } catch (err) {
+                // A dangling symlink (or otherwise unreadable candidate) cannot be
+                // the selected destination: treat it as a non-match rather than
+                // crashing the guard with an uncaught ENOENT (fail closed below).
+                if (err.code === "ENOENT") continue;
+                throw err;
+              }
               if (normalizeRecordNumber(splitStatus(text).rest) === normalizeRecordNumber(baseRest)) {
                 matches.push({ dest, number: match[1], text, regular: entry.isFile() });
               }
