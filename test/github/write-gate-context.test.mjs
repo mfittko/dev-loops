@@ -2097,6 +2097,13 @@ test("prematureGateOrderingRefusal: pins BOTH orderings as structured refusals (
   assert.match(premature, /run_draft_gate/);
 });
 
+test("prematureGateOrderingRefusal: an unknown draft state never refuses draft_gate", () => {
+  assert.equal(
+    prematureGateOrderingRefusal({ gate: "draft_gate", isDraft: undefined, draftGateSatisfied: true, repo: "owner/repo", pr: 97 }),
+    null,
+  );
+});
+
 test("CLI tripwire: a premature pre_approval_gate exits non-zero naming run_draft_gate, writing NO gate-context artifact and NO diff", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   const priorExitCode = process.exitCode;
@@ -2175,7 +2182,7 @@ test("CLI tripwire: a draft_gate on a ready PR with a satisfied draft gate exits
     ], {
       repoRoot,
       run: stubGhRun,
-      loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true } }),
+      loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { visible: true, verdict: "clean", headSha: "0ld1234" } } }),
     });
 
     assert.equal(process.exitCode, 1, "draft_gate on a ready PR fails closed with a non-zero exit");
@@ -2209,7 +2216,7 @@ test("CLI tripwire: draft_gate on a still-draft PR consults coordination once an
       run: stubGhRun,
       loadCoordination: async () => {
         coordinationCalls++;
-        return { prData: { isDraft: true }, gateEvidence: { draftGateSatisfied: false } };
+        return { prData: { isDraft: true }, gateEvidence: { draftGateSatisfied: false, draftGate: { visible: false, verdict: null, headSha: null } } };
       },
     });
     assert.equal(coordinationCalls, 1, "draft_gate consults the ordering facts once");
@@ -2229,11 +2236,41 @@ test("CLI tripwire: draft_gate on a ready PR WITHOUT a satisfied draft gate buil
     ], {
       repoRoot,
       run: stubGhRun,
-      loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: false } }),
+      loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: false, draftGate: { visible: false, verdict: null, headSha: null } } }),
     });
     const artifact = await readGateContext({ repo: "owner/repo", pr: 99, gate: "draft_gate", headSha }, { repoRoot });
     assert.ok(artifact, "the reconcile path still builds its draft_gate context");
   } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI tripwire: draft_gate on a ready PR with a clean draft verdict is refused even when the folded draftGateSatisfied is false (unresolved gate thread)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  process.exitCode = undefined;
+  const origErr = process.stderr.write;
+  const stderrChunks = [];
+  process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "100", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], {
+      repoRoot,
+      run: stubGhRun,
+      loadCoordination: async () => ({
+        prData: { isDraft: false },
+        gateEvidence: { draftGateSatisfied: false, draftGate: { visible: true, verdict: "clean", headSha: "0ld1234" } },
+      }),
+    });
+    assert.equal(process.exitCode, 1, "the unfolded clean draft verdict drives the refusal");
+    assert.match(stderrChunks.join(""), /rerequest_copilot_review/);
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 100, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(artifact, null, "no gate-context artifact is written");
+  } finally {
+    process.stderr.write = origErr;
+    process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
