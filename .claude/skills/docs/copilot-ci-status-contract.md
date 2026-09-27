@@ -18,7 +18,7 @@ The first two return the shared machine-readable shape documented below.
 
 Exclude all THREE `.github/workflows/gate-evidence.yml` surfaces before deriving loop CI: the `gate-evidence` commit `StatusContext` (`.context`), the `gate-evidence-runner` detector check run, and the `gate-evidence-reporter` reporter check run. `LOOP_DERIVED_CI_CHECK_NAME` names the first; `LOOP_DERIVED_CI_CHECK_NAMES` contains all three. Workflow tests require every job id to belong to the full set.
 
-These are derived from loop progress, not independent build/test signals. Letting them block `pre_approval_gate` would prevent the verdict needed to make them green. Missing current-head evidence fails closed to definitive `failure`; that evidence, unresolved threads, stale runners and genuine gate violations remain independently tracked in the loop snapshot. Exclusion applies regardless of conclusion, including historical pending entries and definitive failures; the workflow never posts pending. It also excludes cancelled superseded runner checks without treating cancellation of real CI as green.
+These are derived from loop progress, not independent build/test signals. Missing current-head evidence fails closed to definitive `failure`; that evidence, unresolved threads, stale runners and genuine gate violations remain independently tracked in the loop snapshot. Exclusion applies regardless of conclusion, including historical pending entries and definitive failures; the workflow never posts pending. It also excludes cancelled superseded runner checks without treating cancellation of real CI as green.
 
 `partitionEntriesByCheckName` accepts one name or a set. Both rollup fallback and current-head refresh apply the same exclusion. The detector (`scripts/loop/detect-copilot-loop-state.mjs`) and CI prober (`scripts/github/probe-ci-status.mjs`, `fetchHeadCiState`) exclude the full set from check-runs and the single status name from commit statuses. `watchCiStatus`, `dev-loops loop watch-ci`, and its thin `scripts/github/wait-pr-checks.mjs` wrapper therefore do not wait on loop-derived entries.
 
@@ -40,7 +40,7 @@ The CLI rejects the removed `--local-validation-head-sha` flag and supplies no l
 
 - `checkRunsStatus` — normalized head-scoped check-runs status (`success` | `failure` | `pending` | `none`)
 - `commitStatus` — normalized head-scoped commit-status status (`success` | `failure` | `pending` | `none`)
-- optional `checkRunsUnsupportedCompleted` — `true` when the current-head check-runs probe observed an unsupported/non-success completed conclusion (for example `CANCELLED`) that must keep the merged result non-green even if commit status separately reports success
+- optional `checkRunsUnsupportedCompleted` — `true` when the current-head check-runs probe observed an unsupported/non-success completed conclusion (for example `CANCELLED`); see the merged current-head exception below
 
 ## Output
 
@@ -62,6 +62,4 @@ The rollup precedence is fixed and policy-agnostic for ordinary normalized statu
 
 Completed `SKIPPED` and `NEUTRAL` check-run conclusions count as non-blocking success-like signals. A completed `CANCELLED` check does not count as a successful readiness signal by itself; cancelled-only snapshots normalize to `none` so CI-dependent gates do not advance on cancelled work. Legacy successful `StatusContext` rollup entries also normalize to `success` instead of being mistaken for pending work.
 
-Merged current-head exception:
-- when `checkRunsUnsupportedCompleted=true`, a `checkRunsStatus: "none"` result caused by unsupported/non-success completed check-runs must remain non-green even if `commitStatus` is `success`
-- in that specific case, the merged `overallStatus` stays `none` rather than letting `success` mask the unsupported completed check-run signal
+Merged current-head exception: when `checkRunsUnsupportedCompleted=true` and `checkRunsStatus` is `"none"`, the merged `overallStatus` stays `none` even if `commitStatus` is `success`.

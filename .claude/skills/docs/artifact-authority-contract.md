@@ -1,10 +1,6 @@
 # Artifact authority contract
 
-Canonical owner for the artifact-selection model: whether a work item originates from a GitHub issue (tracker-first), a persisted markdown plan file (local-planning), or the sanctioned lightweight PR-body-as-spec path.
-
-This canonical owner lives in the shipped `skills/docs/` surface because installed skill/runtime consumers reliably own the skills subtree. In installed layouts, read the same contract via [Artifact Authority Contract](../docs/artifact-authority-contract.md) from the installed skill directory.
-
-Other repo docs may summarize or link this contract, but they should not redefine it.
+Canonical owner for the artifact-selection model: whether a work item originates from a GitHub issue (tracker-first), a persisted markdown plan file (local-planning), or the sanctioned lightweight PR-body-as-spec path. Installed layouts read the same contract via [Artifact Authority Contract](../docs/artifact-authority-contract.md) from the installed skill directory. Other repo docs may summarize or link this contract, but they should not redefine it.
 
 ## Three-origin model
 
@@ -23,8 +19,8 @@ Artifacts:
 - **Planning artifact:** GitHub issue (title, body, labels, assignees, acceptance criteria)
 - **Execution artifact:** GitHub PR (linked to issue; created during implementation)
 - <!-- rule: ARTIFACT-TRACKER-FIRST-NO-DUP --> **No local duplicate:** A tracker-first session MUST NOT create `docs/phases/phase-<n>.md` for the same session when a GitHub issue is the canonical spec
-- <!-- rule: ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR --> A refined tracker-backed issue body MUST carry the authoritative semantic AC→DoD mapping **matrix** — a two-column table mapping each acceptance-criterion outcome to its required completion evidence — plus an explicit, non-empty `## Non-goals` section (#1951, "matrix on the issue, checklist on the PR"). Interactive issue-side Acceptance criteria / Definition of done CHECKLISTS are NOT required merely to satisfy detection: the mapping table is the authoritative issue artifact, and the PR carries the derived self-contained list-form AC/DoD checkboxes (never a matrix/table on the PR, never checkboxes inside table cells — per the issue's Non-goals). The deterministic predicate `detectIssueRefinementArtifact` (`@dev-loops/core/loop/issue-refinement-artifact`, via `detectAcDodMatrix`) validates the mapping table's PRESENCE and SHAPE fail-closed with distinct findings — `missing_ac_dod_matrix` (AC/DoD content present but no mapping table, including a checklist-only issue), `malformed_ac_dod_matrix` (a table that is empty, or identifier-only/tautological such as `AC1 → D1`), and `missing_explicit_non_goals` (#1866, the same Non-goals requirement the loop-grill synthesis writes and the lightweight PR-body path validates). The boundary is completeness-and-shape, not truthfulness: the mapping's semantic correctness is authored at refinement (loop-grill) and verified by reviewers (the `pr-checklist` angle), never by the predicate. This is the same completeness-not-truthfulness boundary as the pre-approval unchecked-box block. The matrix requirement extends the epic-only AC/DoD matrix contract (epic-tree-refinement-procedure.md) to all tracker-backed issues at refinement. A linked `tmp/refinement/*.md` doc satisfies the artifact check only when it actually resolves (enqueue gate and draft-gate linked-issue path verify the path on disk) and is itself a complete artifact (the doc carries the matrix); the issue-less / PR-body spec path is unchanged.
-  - **Migration (#1951):** existing checklist-bearing issues stay readable — the parser still extracts their AC/DoD checklist content — but a body carrying only checklists and no mapping matrix now fails closed with `missing_ac_dod_matrix` and is re-grilled (loop-grill synthesizes the matrix) rather than being silently grandfathered. No compatibility alias for the obsolete AC-checklist/DoD-checklist floor is retained. PR-side validation (`validateTrackerBackedPrBodySpec`) and the pre-approval unchecked-box block (`extractPrBodyUncheckedChecklistItems`) continue to read the PR's list-form checklists and are unaffected — acceptance verification no longer depends on ticking duplicate issue-side boxes.
+- <!-- rule: ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR --> A refined tracker-backed issue body MUST carry the authoritative semantic AC→DoD mapping **matrix** — a two-column table mapping each acceptance-criterion outcome to its required completion evidence — plus an explicit, non-empty `## Non-goals` section (#1951, "matrix on the issue, checklist on the PR"). Issue-side Acceptance criteria / Definition of done CHECKLISTS are NOT required for detection. The PR carries the derived self-contained list-form AC/DoD checkboxes (never a matrix/table on the PR, never checkboxes inside table cells). The deterministic predicate `detectIssueRefinementArtifact` (`@dev-loops/core/loop/issue-refinement-artifact`, via `detectAcDodMatrix`) validates the mapping table's PRESENCE and SHAPE fail-closed with distinct findings — `missing_ac_dod_matrix` (AC/DoD content present but no mapping table, including a checklist-only issue), `malformed_ac_dod_matrix` (a table that is empty, or identifier-only/tautological such as `AC1 → D1`), and `missing_explicit_non_goals` (#1866). The predicate checks completeness and shape only; loop-grill authors semantic correctness at refinement and reviewers verify it (the `pr-checklist` angle). The requirement extends the epic-only AC/DoD matrix contract (epic-tree-refinement-procedure.md) to all tracker-backed issues. A linked `tmp/refinement/*.md` doc satisfies the artifact check only when it actually resolves on disk (enqueue gate and draft-gate linked-issue path) and itself carries the matrix; the issue-less / PR-body spec path is unchanged.
+  - **Migration (#1951):** the parser still extracts AC/DoD checklist content from existing issues, but a body carrying only checklists and no mapping matrix fails closed with `missing_ac_dod_matrix` and is re-grilled (loop-grill synthesizes the matrix). No compatibility alias for the obsolete checklist floor is retained. PR-side validation (`validateTrackerBackedPrBodySpec`) and the pre-approval unchecked-box block (`extractPrBodyUncheckedChecklistItems`) keep reading the PR's list-form checklists.
 
 Key contract:
 - GitHub issue state is authoritative — not local notes or chat context
@@ -49,7 +45,7 @@ Key contract:
 
 ### Lightweight (PR-body-as-spec)
 
-**The PR description itself is the authoritative artifact store — no committed plan artifact.** This is a lightweight modifier on the local `--issue` path (`resolve-dev-loop-startup.mjs --issue <n> --lightweight`, `canonicalSpecSource: pr_body`), not a settings-level mode. No phase/plan doc is minted or committed; the PR body carries the spec-of-record invariants directly. The gate sequence is identical to the phase-doc path (draft → pre-approval fanout → detect-evidence → human merge); only the backing artifact differs (PR body vs phase doc).
+**The PR description itself is the authoritative artifact store — no committed plan artifact.** This is a lightweight modifier on the local `--issue` path (`resolve-dev-loop-startup.mjs --issue <n> --lightweight`, `canonicalSpecSource: pr_body`), not a settings-level mode. The gate sequence is identical to the phase-doc path (draft → pre-approval fanout → detect-evidence → human merge); only the backing artifact differs.
 
 Artifacts:
 - **Planning + execution artifact:** the GitHub PR — its description is the spec, its diff is the execution
@@ -57,8 +53,8 @@ Artifacts:
 
 Key contract:
 - <!-- rule: ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS --> The PR body MUST carry the same invariants a durable spec would: **Objective/why, in-scope + explicit non-goals, testable acceptance criteria, definition of done, open questions/risks** — unconditionally, whether or not the work is tracker-backed. The `Closes #N` linkage (GitHub's other closing keywords count too) is conditional on artifact backing (operator ruling, issue #1210): REQUIRED when the work originates from a GitHub issue (`--issue --lightweight`), ABSENT BY DESIGN when the PR is the sole artifact with no backing issue (`--lightweight` alone, issue-less PR-first) — an issue-less PR body MUST NOT carry a closing reference to an issue that doesn't back it. `scripts/loop/validate-pr-body-spec.mjs` (reusing the generic markdown logic of `@dev-loops/core/loop/issue-refinement-artifact`, `validatePrBodySpec`) validates these and fails closed with a distinct reason per violated invariant — `missing_closing_issue_reference` without the linkage in tracker-backed mode, `closes_wrong_issue` when an `--expected-issue` is given and doesn't match, `unexpected_closing_issue_reference` when a closing reference is present under explicit issue-less mode (`--no-issue`) — so the lightweight path's issue-tracking state never silently diverges from PR state (issue #1181).
-- This flips the promotion invariant below (P4, "the PR body carries the committed plan-doc **path**"): under lightweight there is no committed plan doc — the PR body **is** the spec, not a pointer to one.
-- The explicit `--lightweight` flag is the primary, deterministic trigger. The secondary heuristic (chore/fix commit type + no `--plan-file` + small change) is a documented manual signal for when to reach for the flag; it is not an automatic selector.
+- Unlike promotion (P4), where the PR body carries the committed plan-doc **path**, the lightweight PR body **is** the spec.
+- The explicit `--lightweight` flag is the only deterministic trigger. A chore/fix commit type with no `--plan-file` and a small change is a manual signal to reach for the flag, not an automatic selector.
 - <!-- rule: ARTIFACT-LIGHTWEIGHT-PLAN-FILE-EXCLUSIVE --> `--lightweight` MUST be rejected when combined with `--plan-file` (they are opposites: `--plan-file` commits a durable plan doc as the spec, `--lightweight` makes the PR body the spec). It composes with `--issue` (tracker-backed) or stands alone (issue-less PR-first, #1210 — gated on `localImplementation.lightMode` being enabled and the change scope staying within its threshold, unless `localImplementation.issueless` (#1349) sanctions issue-less PR-first at any change scope for consumers whose spec of record lives in an external tracker; review depth stays scope-driven — gate dispatch still resolves inline vs full fan-out from the light-mode threshold, and over-threshold PRs keep the full-PR Copilot round cap); it MUST be rejected when combined with any other mode flag (`--pr`, `--input`, `--spike`).
 - Pre-approval acceptance-criteria verification reads the AC/DoD/invariants directly from the PR body rather than a linked issue body; see [Acceptance Criteria Verification](acceptance-criteria-verification.md).
 
@@ -87,28 +83,18 @@ strategy: local-first     # local-planning (markdown plan file)
 inputSource: tracker      # spec source for local-first: tracker (issue body) or phase-docs
 ```
 
-The `strategy` key carries two jobs:
-1. It declares the repo's default artifact-authority posture (local-planning under `local-first`, tracker-first under `tracker-first`).
-2. It sets the routing preference (`targetPreference`) in dev-loop startup — `prefer_local` under `local-first`, `prefer_github_first` under `tracker-first`.
-
-The authoritative artifact for a given run is selected by the explicit startup input. `scripts/loop/resolve-dev-loop-startup.mjs` takes `--issue` / `--pr` / `--input` / `--plan-file` (mutually exclusive), and `strategy` supplies the default routing preference; it does not force the artifact per invocation.
-
-The `inputSource` key disambiguates local-first startup:
-- `tracker` (default): the local agent implements from the GitHub issue body; the issue is the canonical spec
-- `phase-docs`: the local agent implements from persisted phase docs; no tracker issue required
+The `strategy` key declares the repo's default artifact-authority posture and sets the startup routing preference (`targetPreference`): `prefer_local` under `local-first`, `prefer_github_first` under `tracker-first`. The explicit startup input selects the authoritative artifact for a run: `scripts/loop/resolve-dev-loop-startup.mjs` takes `--issue` / `--pr` / `--input` / `--plan-file` (mutually exclusive); `strategy` does not force the artifact per invocation. `inputSource` is defined in the table above.
 
 ### Shipped default posture
 
 The effective default for a consumer comes from the config-merge layering in `packages/core/src/config/config.mjs`. Precedence, low to high:
 
-1. `BUILT_IN_DEFAULTS` (frozen in `config.mjs`) — `strategy: local-first`. This is the code-level fallback when no other layer sets the key.
-2. Extension-packaged defaults (`packages/core/src/config/extension-defaults.yaml`, loaded as the `extensionDefaults` layer) — `strategy: local-first`. This is the opinion the package ships and the layer that wins over the built-in fallback.
-3. Repo-local `.pi/dev-loop/defaults.*` — applied when present.
+1. `BUILT_IN_DEFAULTS` (frozen in `config.mjs`) — `strategy: local-first`, the code-level fallback.
+2. Extension-packaged defaults (`packages/core/src/config/extension-defaults.yaml`, loaded as the `extensionDefaults` layer) — `strategy: local-first`.
+3. Repo-local legacy `.pi/dev-loop/defaults.*` — applied when present (the package no longer ships one).
 4. Repo `.devloops` at repo root — the per-repo override, highest precedence.
 
-With nothing but the shipped package in place, the extension layer resolves `strategy` to `local-first`, so the shipped default posture is local-planning (epic #947, decision #7). A repo opts back into tracker-first by setting `strategy: tracker-first` in its own `.devloops` (`github-first` is a deprecated accepted alias, normalized with a load-time warning).
-
-One legacy repo-local layer also exists under `.pi/dev-loop/` (the package no longer ships a `.pi/dev-loop/defaults.yaml`): `.pi/dev-loop/defaults.*` is always applied when present, between the extension defaults and `.devloops`. The old `.pi/dev-loop/settings.*` / `overrides.*` fallback layers were removed at the v1.0.0 cut (ADR 0017) and no longer load — such files are simply ignored.
+The shipped default posture is therefore local-planning (epic #947, decision #7). A repo opts into tracker-first by setting `strategy: tracker-first` in its own `.devloops` (`github-first` is a deprecated accepted alias, normalized with a load-time warning). The old `.pi/dev-loop/settings.*` / `overrides.*` layers were removed at the v1.0.0 cut (ADR 0017) and are ignored.
 
 ### Explicit non-knobs
 
@@ -157,17 +143,11 @@ The shipped extension layer pairs local-first with a low-noise posture, in `pack
 | `queue.maxAutoFiledIssues` | `1` | Local-first is PR-first, so auto-filing issues is near-zero; a low cap keeps tracker noise minimal |
 | `gates.postFindingsComments` | `false` | Gate findings already live on the PR as the round's verdict review; a second consolidated comment would only duplicate them |
 
-These values come from the existing config-merge layering, so no new resolver is involved: `BUILT_IN_DEFAULTS` keeps the tracker-first posture (`humanMergeOnly: false`, `maxAutoFiledIssues: 10`), and the extension layer sets the local-first values above. A repo `.devloops` can override any of them.
+`BUILT_IN_DEFAULTS` keeps the tracker-first values (`humanMergeOnly: false`, `maxAutoFiledIssues: 10`); the extension layer sets the local-first values above. A repo `.devloops` can override any of them.
 
 ## dev-loops own mode
 
-dev-loops runs **local-planning**, set in its repo-root `.devloops`.
-
-- **Mode:** Local-planning
-- **Settings:** repo-root `.devloops` sets `strategy: local-first` and `inputSource: tracker`
-- **Artifact authority:** the canonical spec for a work item is its plan artifact; the repo dogfoods the same local-first posture the package ships as default
-- **Per-run input:** with `inputSource: tracker`, a local-first session can still implement from a GitHub issue body when one is supplied (the issue is the spec source for that run); `phase-docs` switches the source to a committed plan file
-- **Why local-planning:** the repo runs the local-first plan-file flow (plan-file → refine → review → promote) on its own work so the shipped default posture is exercised end to end.
+dev-loops runs **local-planning**: its repo-root `.devloops` sets `strategy: local-first` and `inputSource: tracker`. With `inputSource: tracker`, a local-first session implements from a supplied GitHub issue body (the issue is the spec source for that run); `phase-docs` switches the source to a committed plan file.
 
 ## Relationship to other docs
 
@@ -182,12 +162,10 @@ dev-loops runs **local-planning**, set in its repo-root `.devloops`.
 | AGENTS.md | Repo constitution; cites the work-origin rule and points to this contract |
 | [Dev Loop Skill](../dev-loop/SKILL.md) | Public entrypoint skill; cites the work-origin rule and points to this contract |
 
-### Distinction: artifact authority vs tracker-first PR workflow
-
-`tracker-first-loop-state.md` defines a state machine for PR lifecycle management when a tracker item (e.g., Shortcut story) drives a GitHub PR. It is a **PR-level workflow contract**. The term "tracker-first" there refers to tracker-driven PR state transitions, a separate concern from the artifact authority model this doc defines.
+"Tracker-first" in `tracker-first-loop-state.md` means tracker-driven PR state transitions (a PR-level workflow contract), a separate concern from this artifact-authority model.
 
 ## Non-goals
 
-- Defining the `Tracker` provider interface/registry or multi-tracker support — that is the [Tracker Seam Contract](tracker-seam-contract.md) (issue #1408); this doc owns only the artifact-authority MODEL (which artifact is canonical), not which provider backs "GitHub issue"
-- Specifying how PRs map to issues in detail (that is the [Public Dev Loop Contract](public-dev-loop-contract.md))
+- The `Tracker` provider interface/registry or multi-tracker support ([Tracker Seam Contract](tracker-seam-contract.md), issue #1408)
+- Detailed PR-to-issue mapping ([Public Dev Loop Contract](public-dev-loop-contract.md))
 - Changing the dev-loop startup resolver behavior

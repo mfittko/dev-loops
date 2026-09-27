@@ -6,21 +6,17 @@ How dev-loop work is structured depends on the harness.
 COORDINATOR.** The agent invoked for dev-loop work runs git and PR lifecycle operations, runs the
 `dev-loops` CLI (including state-changing `gate` / `pr` / `loop` subcommands), and posts gate
 verdicts under the operating session's identity. There is no separate read-only "main agent" and
-no mandatory async-subagent dispatch — i.e. no Pi-style main-agent→dev-loop async hop: the dev-loop
-agent is invoked directly and owns the work end to end, at that outer level. This is distinct from
-the coordinator→worker delegation described next: the same dev-loop agent, now acting as
-COORDINATOR one level down, is itself read-only for TRACKED repo files (source, tests, docs) and
-MUST delegate every tracked-file implementation edit and targeted verification run to a fresh WORKER
-subagent (`developer`/`fixer`/`quality`/`docs`). The coordinator MAY still write EPHEMERAL artifacts
-directly — `tmp/`, the scratchpad, and sanctioned ledger paths (the PR body markdown, comment
-bodies, dispatch prompts, gate evidence/ledgers under `tmp/gate-findings/`) — because those are
-gitignored/non-repo paths, not tracked-file mutations. This coordinator→worker boundary is the
-Claude analogue of the absolute main-agent read-only boundary Pi enforces, enforced mechanically
-(not by convention) by the same `PreToolUse` Write/Edit guard hook: opt-in via
-`DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once enforced, and
-non-bypassable BY THE DISPATCHED COORDINATOR (`agent_type: "dev-loop"`) FOR ITS GUARDED SURFACE — a
-tracked-file Write/Edit whose `agent_type` is `dev-loop` is denied; a worker subagent's `agent_type`
-is unaffected. This is a mechanically-guarded, targeted denylist, not an airtight sandbox; see
+no Pi-style main-agent→dev-loop async hop. As COORDINATOR, the dev-loop agent is read-only for
+TRACKED repo files (source, tests, docs) and MUST delegate every tracked-file implementation edit
+and targeted verification run to a fresh WORKER subagent (`developer`/`fixer`/`quality`/`docs`).
+The coordinator MAY still write EPHEMERAL gitignored/non-repo artifacts directly: `tmp/`, the
+scratchpad, and sanctioned ledger paths (the PR body markdown, comment bodies, dispatch prompts,
+gate evidence/ledgers under `tmp/gate-findings/`). The `PreToolUse` Write/Edit guard hook enforces
+this boundary: opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once
+enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop`; a worker
+subagent's `agent_type` is unaffected. It is a targeted denylist, not an airtight sandbox:
+Bash-driven tracked mutations (`git commit`, `sed -i`, `> file`) stay convention-enforced, and
+the top-level/inline agent (`agent_type: null`) falls under the main-agent boundary below. On Pi, see
 "Guarded surface and deliberate ceilings" below for what it does and does not cover. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/

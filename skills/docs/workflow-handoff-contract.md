@@ -24,27 +24,15 @@ template.
 ## Sanctioned commands (MANDATORY DEFAULT — issue #1081)
 
 `sanctionedCommands` is a **mandatory default** element of every handoff
-envelope. It is the operation → wrapper command map (which wrapper performs
-which GitHub/loop operation), plus the forbidden and orchestrator-owned lists.
+envelope. It is the operation → wrapper command map, plus the forbidden and
+orchestrator-owned lists (shape in the [Envelope schema](#envelope-schema)).
 The `loop build-envelope` CLI injects it into every emitted envelope, so a
-spawned dev-loop subagent receives it verbatim without the briefer adding it —
-no re-deriving which wrapper does `gh pr ready` etc.
+spawned dev-loop subagent receives it verbatim without the briefer adding it.
 
 The **single source of truth** is `scripts/loop/sanctioned-commands.mjs` (a
-frozen data module). `@dev-loops/core` stays consumer-agnostic: it defines the
-envelope SHAPE and carries whatever `sanctionedCommands` object the consumer
-supplies; the repo-specific `scripts/...` paths live only in the consumer
-module. Do not duplicate the map into prose — reference the module.
-
-```typescript
-sanctionedCommands?: {
-  reads: Record<string, string>;         // operation → wrapper path (some also accept `loop info`)
-  edits: Record<string, string>;
-  lifecycle: Record<string, string>;
-  forbidden: string[];                   // raw `gh pr view/checks/edit`, `node -e`, `python -c`, transcript tailing, sleep-poll loops
-  orchestratorOwned: string[];           // pr merge via merge-pr.mjs (raw `gh pr merge` forbidden), board status transitions — never done by a subagent
-};
-```
+frozen data module). `@dev-loops/core` defines only the envelope SHAPE and
+carries whatever `sanctionedCommands` object the consumer supplies. Do not
+duplicate the map into prose — reference the module.
 
 A contract test (`test/contracts/sanctioned-commands-exist.test.mjs`) asserts
 every mapped wrapper exists on disk and fails closed if one is renamed/removed.
@@ -69,14 +57,14 @@ and `control.*` are derived from a static strategy+gate mapping table:
 
 Unknown strategy and gate combinations throw an explicit error listing known combos. A resolver result with `routeKind: "needs_reconcile"`, `selectedGate: "fail_closed_reconcile"`, and `selectedStrategy: null` is intentionally accepted as a terminal, actionable envelope; null remains invalid for routed work.
 
-For that terminal reconciliation tuple, the resolver remains the authority for the actual `nextAction`; the builder copies it unchanged. The validator checks the tuple, no-worktree boundary, canonical reconcile stop rules, a required `reconcile` acceptance criterion, and a recognized fail-closed directive prefix (including the router's canonical `Stop and reconcile ...` action). A wrapped startup result must carry `bundleKind: needs_reconcile` at both levels, the outer display key `selectedStrategy: none`, and nested `selectedStrategy: null`; an unwrapped canonical bundle remains supported. No worktree is required, and the stop rules are exactly `["reconcile"]` with an optional trailing `"merge"` when human-only merge policy applies. Configured `autonomy.stopAt` and ordinary strategy defaults do not override this terminal behavior.
+For that terminal reconciliation tuple, the resolver remains the authority for the actual `nextAction`; the builder copies it unchanged. The validator checks the tuple, no-worktree boundary, canonical reconcile stop rules, a required `reconcile` acceptance criterion, and a recognized fail-closed directive prefix (including the router's canonical `Stop and reconcile ...` action). A wrapped startup result must carry `bundleKind: needs_reconcile` at both levels, the outer display key `selectedStrategy: none`, and nested `selectedStrategy: null`; an unwrapped canonical bundle remains supported. No worktree is required. The stop rules follow the terminal exception in [Stop rules](#stop-rules).
 
 ## Stop rules
 
-Stop rules are derived from `settings.autonomy.stopAt` when present.
-When absent, strategy defaults apply:
+The terminal reconciliation tuple always uses `["reconcile"]`, plus `"merge"` only when required by `humanMergeOnly`. It ignores configured `autonomy.stopAt` and ordinary strategy defaults, because no strategy may execute until reconciliation succeeds.
 
-The terminal reconciliation tuple is the exception: it always uses `["reconcile"]`, plus `"merge"` only when required by `humanMergeOnly`, and ignores configured `autonomy.stopAt` because no strategy may execute until reconciliation succeeds.
+Otherwise stop rules are derived from `settings.autonomy.stopAt` when present.
+When absent, strategy defaults apply:
 
 | Strategy | Default stop rules |
 |---|---|
@@ -147,11 +135,11 @@ interface HandoffEnvelope {
 
   // Mandatory default (issue #1081). Source: scripts/loop/sanctioned-commands.mjs
   sanctionedCommands?: {
-    reads: Record<string, string>;
+    reads: Record<string, string>;         // operation → wrapper path (some also accept `loop info`)
     edits: Record<string, string>;
     lifecycle: Record<string, string>;
-    forbidden: string[];
-    orchestratorOwned: string[];
+    forbidden: string[];                   // raw `gh pr view/checks/edit`, `node -e`, `python -c`, transcript tailing, sleep-poll loops
+    orchestratorOwned: string[];           // pr merge via merge-pr.mjs (raw `gh pr merge` forbidden), board status transitions — never done by a subagent
   };
 
   // #1462: the ONLY per-round-varying block, ALWAYS LAST. Treat gateState as
@@ -185,8 +173,7 @@ same target+gate**. All per-round-varying values (`derivedAt`, the head SHA, CI
 status, thread/round counts) live in the trailing `gateState` block, and nothing
 else may.
 
-Spawn fresh review subagents each round for independent reads. They can reuse
-this stable prefix; actual cache hits depend on the provider and delivered prompt.
+Fresh review subagents spawned each round can reuse this stable prefix.
 **Contract rule:** never add a field that
 varies per round anywhere except inside `gateState`. The envelope test
 (`#1462: the envelope minus gateState is byte-stable ...`) checks byte stability.
@@ -197,12 +184,9 @@ The `acceptance` block maps 1:1 into the existing `subagent()` acceptance
 contract shape. When the envelope is present, no separate prose task
 parameter is required.
 
-#1462 relocated the per-round-varying fields (`derivedAt`, `currentHeadSha`,
-`ciStatus`, `unresolvedThreadCount`, `copilotRoundCount`) from the envelope top
-level into the trailing `gateState` block; `handoffVersion` is intentionally left
-at `1` because envelopes are ephemeral (rebuilt each pass, never persisted) and all
-live consumers were updated in the same change — there is no stored envelope to
-migrate. Read moved fields from `envelope.gateState.*`.
+Read the per-round fields (`derivedAt`, `currentHeadSha`, `ciStatus`,
+`unresolvedThreadCount`, `copilotRoundCount`) from `envelope.gateState.*`.
+`handoffVersion` stays `1`, because envelopes are ephemeral and never persisted.
 
 ## Non-goals
 

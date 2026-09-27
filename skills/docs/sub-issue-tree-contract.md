@@ -43,11 +43,9 @@ When refining an umbrella issue into executable slices:
 4. **Attach children as real sub-issues** using `manage-sub-issues.mjs add`.
 5. **Set execution order** using `manage-sub-issues.mjs reorder` — first in the list is
    highest priority.
-6. **Verify the resulting tree** using `manage-sub-issues.mjs verify` so attachment and order are
-   confirmed deterministically before the parent body stops carrying sequence details.
-7. **Keep the parent issue body lean** — sequencing and progress now live in the sub-issue tree.
-   The parent body should carry scope/context/acceptance criteria but not duplicate the ordered
-   child list.
+6. **Verify the resulting tree** using `manage-sub-issues.mjs verify` before the parent body
+   stops carrying sequence details.
+7. **Keep the parent issue body lean** per [Lean parent issue bodies](#lean-parent-issue-bodies).
 
 ## Lean parent issue bodies
 
@@ -107,8 +105,7 @@ node <resolved-skill-scripts>/github/manage-sub-issues.mjs reorder \
   --repo <owner/name> --issue <parent-number> --order <n1,n2,...>
 ```
 
-All issue numbers in `--order` must already be sub-issues of the parent. The helper sends
-sequential priority-update calls so the tree reflects the specified order.
+All issue numbers in `--order` must already be sub-issues of the parent.
 The first number in the list becomes the highest-priority (first) sub-issue.
 
 ### Verify the tree state
@@ -120,20 +117,15 @@ node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
 
 Returns `"verified": true` when the actual sub-issues match the expected set.
 Add `--ordered` to also verify that the execution order matches exactly.
-`verify` exits 0 for mismatch-only results and reports the discrepancy in JSON.
-Completion requires both exit 0 and `verified: true`; `ok: true` alone only means the command ran.
-Argument/usage errors and `gh`/runtime failures still exit non-zero.
-
-Verification output includes `"missing"` and `"unexpected"` arrays so discrepancies are
-machine-readable.
+`verify` exits 0 for mismatch-only results and reports the discrepancy in the `"missing"` and
+`"unexpected"` arrays. Completion requires both exit 0 and `verified: true`; `ok: true` alone
+only means the command ran. Argument/usage errors and `gh`/runtime failures still exit non-zero.
 
 ## Compatibility with `dev-loop`
 
-This pattern is used inside the routed `issue-intake` and local-implementation skills and is always accessed through the
-`dev-loop` public entrypoint. The helper is a thin, deterministic tool; it does not replace
-issue writing, refinement, or the normal PR-based execution loop.
-
-The `dev-loop` skill invokes `manage-sub-issues.mjs` when epic decomposition work includes a
-real sub-issue tree step.
+The routed `issue-intake` and local-implementation skills use this pattern, always through the
+`dev-loop` public entrypoint. The `dev-loop` skill invokes `manage-sub-issues.mjs` when epic
+decomposition work includes a real sub-issue tree step. The helper does not replace issue
+writing, refinement, or the normal PR-based execution loop.
 
 - <!-- rule: SUBISSUE-NO-ADHOC-BYPASS --> `SUBISSUE-NO-ADHOC-BYPASS`: Agents MUST NOT implement sub-issue management ad hoc or bypass `manage-sub-issues.mjs`.

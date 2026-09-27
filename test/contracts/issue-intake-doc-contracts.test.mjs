@@ -11,8 +11,54 @@ import {
 import { assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
 import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
 import { parseReadyForReviewCliArgs } from "../../scripts/github/ready-for-review.mjs";
+import { parseEditPrCliArgs } from "../../scripts/github/edit-pr.mjs";
+
+// The intake PR edit example must run the sanctioned edit-pr.mjs wrapper with the
+// resolved repo and PR identity, and must not fall back to a raw `gh pr edit`.
+function assertIntakePrEditUsesWrapper(intake) {
+  const line = intake.match(/^node <resolved-skill-scripts>\/github\/edit-pr\.mjs (.+)$/m);
+  assert.ok(line, "intake must edit the PR through the edit-pr.mjs wrapper");
+  const args = line[1].replaceAll("<resolved-repo>", "owner/repo").replaceAll("<pr-number>", "42").split(/\s+/);
+  const parsed = parseEditPrCliArgs(args);
+  assert.equal(parsed.repo, "owner/repo", "edit-pr example must carry the resolved repo");
+  assert.equal(String(parsed.pr), "42", "edit-pr example must carry the PR number");
+  assert.doesNotMatch(intake, /(?:^|[\s`(;&|])gh pr edit\b/m, "intake must not prescribe a raw gh pr edit");
+}
 
 const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
+
+// The gate table must route approval to the human checkpoint and stop for merge
+// authorization. Row cells are parsed; surrounding prose may change.
+function assertApprovalStopGates(content) {
+  const rows = new Map(content.split("\n")
+    .map((line) => line.match(/^\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*([^|]*)\|\s*([^|]*)\|/))
+    .filter(Boolean)
+    .map(([, gate, routeKind, strategy, meaning]) => [gate, { routeKind, strategy: strategy.trim(), meaning }]));
+  const approval = rows.get("final_approval");
+  assert.ok(approval?.routeKind === "route" && /human approval checkpoint/i.test(approval.meaning),
+    "gate table must route final_approval to the human approval checkpoint");
+  assert.equal(rows.get("waiting_for_merge_authorization")?.routeKind, "stop",
+    "gate table must stop at waiting_for_merge_authorization");
+}
+
+// The safety section must name the mutation pass input (the approved proposal) and
+// its output (the post-mutation verification artifact with the verified state).
+function assertMutationPassContract(doc) {
+  const section = doc.split("## New-idea safety layer")[1]?.split("\n## ")[0] ?? "";
+  for (const [needle, message] of [
+    [/mutation pass[^.]*approved proposal/i, "mutation pass must consume the approved proposal"],
+    [/post-mutation verification artifact[^.]*(?:changed|verified)/i, "mutation pass must emit a verification artifact of the verified change"],
+  ]) assert.match(section, needle, message);
+}
+
+// The plan-doc normalization branch must stop on a closed matching issue. A list
+// item is located by role (closed issue, stop, user decision); its wording may change.
+function assertPlanDocClosedStop(doc) {
+  const section = doc.split("### From a plan-doc path")[1]?.split("\n### ")[0] ?? "";
+  const stopItem = section.split("\n").find((line) => /^\s*-\s/.test(line)
+    && /\bclosed\b/i.test(line) && /\bstop\b/i.test(line) && /\buser\b/i.test(line));
+  assert.ok(stopItem, "plan-doc path must stop on a closed matching issue");
+}
 
 async function readIssueIntakeSurface() {
   const [skill, intakeDoc, operationsDoc] = await Promise.all([
@@ -130,8 +176,7 @@ test("issue-based shorthand auto dev-loop trigger is documented as one public in
   assertRuleOwned("FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION", PUBLIC_CONTRACT_PATH);
   assert.match(publicContract, /non-terminal follow-up\/wait states[\s\S]*waiting_for_copilot_review[\s\S]*continuation boundaries/i);
   assert.match(publicContract, /async child exits before the requested stop boundary[\s\S]*re-dispatch via the main session driver/i);
-  assert.match(publicContract, /R --> A\[Human approval checkpoint\]/i);
-  assert.match(publicContract, /R --> M\[Wait for merge authorization\]/i);
+  assertApprovalStopGates(publicContract);
 
   assert.match(devLoopSkill, /Shorthand issue-based auto trigger contract/i);
   assert.match(devLoopSkill, /public `dev-loop` intent `auto_continue_current`/i);
@@ -201,8 +246,8 @@ test("issue-intake flow carries the resolved repo slug through later GitHub issu
   assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --body-file <updated-body-file>/);
   assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee @me/);
   assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent/);
-  assert.match(skillContent, /gh pr edit <pr-number> --repo <resolved-repo> --title/);
   const intake = await readRepo("skills/docs/issue-intake-procedure.md");
+  assertIntakePrEditUsesWrapper(intake);
   const ready = intake.match(/^node <resolved-skill-scripts>\/github\/ready-for-review\.mjs (.+)$/m);
   assert.ok(ready, "intake must use the guarded ready wrapper");
   const args = ready[1].replaceAll("<resolved-repo>", "owner/repo").replaceAll("<pr-number>", "42").split(/\s+/);
@@ -237,7 +282,7 @@ test("issue-intake docs define closed-match handling and keep the handoff helper
   const skillContent = await readIssueIntakeSurface();
 
   assert.match(skillContent, /if the matching issue is closed, stop for a user decision before proceeding/i);
-  assert.match(skillContent, /if that matching issue turns out to be closed, stop for a user decision/i);
+  assertPlanDocClosedStop(await readRepo("skills/docs/issue-intake-procedure.md"));
   assert.match(skillContent, /copilot-pr-handoff\.mjs --repo <resolved-repo> --pr <number>/);
 });
 
@@ -346,8 +391,7 @@ test("issue-intake safety layer contract is documented", async () => {
   for (const token of ["pause_for_clarification", "stopped_overlap_needs_decision", "stopped_low_confidence", "stopped_explicit_reject", "MUST stop", "MUST NOT mutate GitHub"]) {
     assert.ok(stopStatesRuleBlock.includes(token), `INTAKE-STOP-STATES rule block must cover ${token}`);
   }
-  assert.match(skillContent, /start a separate async mutation pass \(dispatched via the procedure\) that consumes the approved proposal and emits a post-mutation verification artifact/i);
-  assert.match(skillContent, /record what the mutation pass actually changed and verify the resulting issue\/artifact state/i);
+  assertMutationPassContract(await readRepo("skills/docs/issue-intake-procedure.md"));
   assert.match(skillContent, /tmp\/new-idea-intake\/<run-id>\/proposal\.md/i);
   assert.match(skillContent, /tmp\/new-idea-intake\/<run-id>\/proposal\.json/i);
   assert.match(skillContent, /human-readable Markdown proposal/i);
@@ -356,4 +400,50 @@ test("issue-intake safety layer contract is documented", async () => {
   assert.match(skillContent, /emit a concise post-mutation verification artifact/i);
   assert.match(planContent, /Proposal-first new-idea safety layer/i);
   assert.match(planContent, /stopped_overlap_needs_decision`, `stopped_low_confidence`, `stopped_explicit_reject`/i);
+});
+
+test("approval stop-gate check accepts reworded prose and rejects a lost stop or checkpoint route", async () => {
+  const publicContract = await readRepo(PUBLIC_CONTRACT_PATH);
+  assertApprovalStopGates(publicContract.replace("approval-ready canonical state routes to the human approval checkpoint;",
+    "an approval-ready state is sent to the human approval checkpoint;"));
+  assert.throws(
+    () => assertApprovalStopGates(publicContract.replace("| `waiting_for_merge_authorization` | `stop` |", "| `waiting_for_merge_authorization` | `route` |")),
+    /must stop at waiting_for_merge_authorization/,
+  );
+  assert.throws(
+    () => assertApprovalStopGates(publicContract.replace("routes to the human approval checkpoint", "routes to merge")),
+    /must route final_approval to the human approval checkpoint/,
+  );
+});
+
+test("mutation-pass and plan-doc closed-stop checks reject a dropped input, output or stop", async () => {
+  const doc = await readRepo("skills/docs/issue-intake-procedure.md");
+  assertMutationPassContract(doc.replace("the separate async mutation pass", "a distinct async mutation pass"));
+  assertPlanDocClosedStop(doc.replace("if the matching issue is closed, stop for a user decision before proceeding",
+    "when that issue is already closed, stop and ask the user to decide"));
+  assert.throws(() => assertPlanDocClosedStop(doc.replace("if the matching issue is closed, stop for a user decision before proceeding",
+    "if the matching issue is closed, reopen it and continue")),
+    /plan-doc path must stop on a closed matching issue/);
+  assert.throws(() => assertMutationPassContract(doc.replace("consumes the approved proposal", "reads chat context")),
+    /must consume the approved proposal/);
+  assert.throws(() => assertMutationPassContract(doc.replaceAll("post-mutation verification artifact", "note")),
+    /must emit a verification artifact/);
+  assert.throws(() => assertPlanDocClosedStop(doc.replace("if the matching issue is closed, stop for a user decision before proceeding", "continue")),
+    /plan-doc path must stop on a closed matching issue/);
+});
+
+test("intake PR edit check rejects a raw gh pr edit or a wrapper call without repo identity", async () => {
+  const intake = await readRepo("skills/docs/issue-intake-procedure.md");
+  const wrapper = "node <resolved-skill-scripts>/github/edit-pr.mjs --repo <resolved-repo> --pr <pr-number>";
+  assertIntakePrEditUsesWrapper(intake.replace(`${wrapper} --title "..."`, `${wrapper} --title Refined`));
+  assert.throws(() => assertIntakePrEditUsesWrapper(intake.replace(wrapper, "gh pr edit <pr-number> --repo <resolved-repo>")),
+    /must edit the PR through the edit-pr\.mjs wrapper/);
+  assert.throws(() => assertIntakePrEditUsesWrapper(`${intake}\ngh pr edit <pr-number> --repo <resolved-repo> --title x\n`),
+    /must not prescribe a raw gh pr edit/);
+  assert.throws(() => assertIntakePrEditUsesWrapper(`${intake}\n  gh pr edit <pr-number> --repo <resolved-repo> --title x\n`),
+    /must not prescribe a raw gh pr edit/);
+  assert.throws(() => assertIntakePrEditUsesWrapper(`${intake}\nThen run \`gh pr edit <pr-number> --title x\` to rename it.\n`),
+    /must not prescribe a raw gh pr edit/);
+  assert.throws(() => assertIntakePrEditUsesWrapper(intake.replace(`${wrapper} --title`, "node <resolved-skill-scripts>/github/edit-pr.mjs --pr <pr-number> --title")),
+    /requires both --repo <owner\/name> and --pr <number>/);
 });

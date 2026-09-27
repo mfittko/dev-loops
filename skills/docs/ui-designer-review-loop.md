@@ -6,25 +6,13 @@ A sibling loop, the [Slides Content & Storytelling Review Loop](./slides-story-r
 
 ## Public entrypoint and dependency boundary
 
-- `dev-loop` remains the single public entrypoint.
-- This review loop is an internal capability behind `dev-loop`; it does not introduce a second public workflow name.
-- The loop depends on the reusable harness from [UI Smoke Harness](./ui-smoke-harness.md) and the artifact contract from [UI Artifact Contract](./ui-artifact-contract.md).
-- The loop is a **consumer** of those earlier slices. It does not redefine browser capture, artifact naming, or when UI e2e is required (that is path-triggered and fail-closed — see [UI e2e scoping step](./ui-e2e-scoping-step.md)).
-- This loop is a required, fail-closed **recorded-evidence** pass on the
-  rendered-HTML paths that already gate smoke (`docs/articles/*.html`,
-  `docs/presentations/*.html`): the review runs and records its existing
-  artifact bundle + review outcome (`ui_review_satisfied` among others), and the
-  gate blocks unless that evidence is present and the recorded outcome is the
-  satisfied state (ADR 0041, UI half — issue #1443). It is distinct from the
-  required, auto-scoped UI e2e gate. Light/spike relaxed-gate carve-outs still
-  exempt the recorded-evidence requirement.
+- `dev-loop` remains the single public entrypoint. This review loop is an internal capability behind it and adds no second public workflow name.
+- The loop consumes the harness from [UI Smoke Harness](./ui-smoke-harness.md) and the bundle from [UI Artifact Contract](./ui-artifact-contract.md). It does not redefine browser capture, artifact naming, or when UI e2e is required. [UI e2e scoping step](./ui-e2e-scoping-step.md) owns that path-triggered, fail-closed rule.
+- This loop is a required, fail-closed **recorded-evidence** pass on the rendered-HTML paths that already gate smoke (`docs/articles/*.html`, `docs/presentations/*.html`). The review records its artifact bundle and review outcome. The gate blocks unless that evidence is present and the recorded outcome is `ui_review_satisfied` (ADR 0041, UI half, issue #1443). This gate is distinct from the required, auto-scoped UI e2e gate. Light/spike relaxed-gate carve-outs still exempt the recorded-evidence requirement.
 
 ## Purpose
 
-The designer-persona review loop turns deterministic UI artifacts into a repeatable next-iteration handoff.
-
-For UI slices that request `uiReviewMode: vision`, this contract also defines
-the vision-model review mode behind the same `dev-loop` boundary.
+The designer-persona review loop turns deterministic UI artifacts into a repeatable next-iteration handoff. For UI slices that request `uiReviewMode: vision`, this contract also defines the vision-model review mode behind the same `dev-loop` boundary.
 
 ## Required input bundle
 
@@ -50,120 +38,39 @@ If any required part of this bundle is missing, incomplete, or ambiguous, the lo
 
 ## Accessibility findings come from axe, not pixels
 
-Computable accessibility facts — color contrast, missing accessible names/roles,
-and similar — are **asserted from `axe.json`**, not judged from the screenshot by
-the reviewer. Each named state carries an `axe.json` (raw `@axe-core/playwright`
-results, or JSON `null` when axe could not run). A reviewer grounds every
-accessibility finding in an axe violation and maps its `impact` to a finding
-severity with a fixed mapping:
-
-- `critical` → `high`
-- `serious` → `high`
-- `moderate` → `medium`
-- `minor` → `low`
-- unranked / unknown impact → `medium`
-
-This mapping is codified and tested in `scripts/loop/ui-designer-review-contract.mjs`
-(`mapAxeImpactToFindingSeverity`); the vision template no longer instructs the
-reviewer to eyeball contrast.
+The reviewer asserts computable accessibility facts from each named state's `axe.json` and does not judge them from the screenshot. Every accessibility finding is grounded in an axe violation. Its severity comes from the fixed `impact` mapping in [UI Artifact Contract](./ui-artifact-contract.md#axejson-contract). `mapAxeImpactToFindingSeverity` in `scripts/loop/ui-designer-review-contract.mjs` codifies and tests that mapping.
 
 ## Console and network errors are review findings
 
-Each named state also carries a `console.json` (raw console errors and failed
-network requests attributed to that state, or JSON `null` when none were
-captured). A captured console error or failed network request — a swallowed 500,
-an uncaught page error — is a **mechanical fail-closed signal**, never silently
-dropped: it flips the drive's `ok` to false and is anchored to its source line by
-the diagnose stage, independent of the review mode or the LLM. These errors are
-sliced from the live drive's walk-level capture per state for attribution WITHOUT
-being removed from that walk-level gate, so `console.json` and the mechanical
-failure set are two views of the same error; the final report dedups so it is
-never posted twice.
+Each named state's `console.json` holds the console errors and failed network requests attributed to it. A captured error is a **mechanical fail-closed signal** and is never silently dropped. It flips the drive's `ok` to false, and the diagnose stage anchors it to its source line, independent of the review mode or the LLM. The per-state slice leaves the walk-level gate intact. The `ui-review-report` stage posts only the diagnosed findings and does not read `console.json`. The [UI Artifact Contract](./ui-artifact-contract.md#consolejson-contract) owns both views of these events.
 
 ## Four lenses over one bundle, converged deterministically
 
-A review pass judges ONE enriched named-state bundle through four parallel
-**lenses**, each grounded in a different artifact:
+A review pass judges ONE enriched named-state bundle through four parallel **lenses**, each grounded in a different artifact:
 
 - `a11y` — computable accessibility facts, grounded in `axe.json`
 - `layout-geometry` — layout, spacing, clipping, overlap, grounded in `snapshot.json`/geometry
 - `visual` — visual hierarchy, callouts, state-transition clarity, grounded in the screenshot
 - `interaction` — console errors, failed network requests, interaction-state signals, grounded in `console.json`
 
-Lens **execution** stays in the review route (designer/vision): each lens is a
-named producer that takes the enriched bundle and returns a findings array. The
-vision template emits one FLAT `findings[]`, each finding tagged with its `lens`;
-the route hands that array (with the acceptance-criteria list + `checkedCriteria`)
-to `convergeUiReviewRouteFindings(findings, { acceptanceCriteria, checkedCriteria })`,
-which groups it by lens (seeding an empty bucket for each of the four canonical
-lenses, so an all-clean lens is still present), passes the acceptance-criteria list
-+ `checkedCriteria` through, and calls the **pure converge seam**,
-`convergeUiReviewLenses(lensResults, { acceptanceCriteria, checkedCriteria }) -> { findings, outcome, coverage }`, in
-`scripts/loop/ui-review-lenses.mjs`. The seam is deterministic and
-harness-agnostic — no browser, no model.
+Lens **execution** stays in the review route (designer or vision). The vision template emits one FLAT `findings[]`, and each finding carries its `lens` and `acceptanceCriterionRef`. The route passes that array, the acceptance-criteria list and `checkedCriteria` to `convergeUiReviewRouteFindings(findings, { acceptanceCriteria, checkedCriteria })`. It groups the findings by lens, seeds an empty bucket for each of the four canonical lenses so an all-clean lens is still present, and calls the **pure converge seam** `convergeUiReviewLenses(lensResults, { acceptanceCriteria, checkedCriteria }) -> { findings, outcome, coverage }` in `scripts/loop/ui-review-lenses.mjs`. `UI_REVIEW_LENSES` in the same file names the four lenses and their artifacts. The seam is deterministic and harness-agnostic: no browser, no model.
 
-- **Dedupe key.** Two findings from any lenses are the same defect when they
-  share a normalized `(stateName, region/selector, category/rule)` triple; they
-  collapse to one representative and every contributing lens is recorded on
-  `lenses`.
-- **Precedence.** When two lenses report the same defect the worse severity wins
-  (ladder: `must-fix` > `high` > `medium` > `low`); on a severity tie the earlier
-  canonical lens (`a11y` > `layout-geometry` > `visual` > `interaction`) supplies
-  the representative's descriptive fields, so the merge is independent of input
-  order. A `blocking` signal from any contributing lens survives the merge.
-- **Stable ordering.** Findings are ordered by `stateName`, then severity
-  (worst first), then region, then category.
-- **Outcome mapping** (the existing enum, unchanged): any `blocking` finding ⇒
-  `blocked_needs_human_decision`; else any must-fix finding (severity `must-fix`
-  or `high`) ⇒ `continue_ui_fix_loop`; else any acceptance criterion left
-  uncovered (see the coverage gate below) ⇒ `continue_ui_fix_loop`; else ⇒
-  `ui_review_satisfied`.
-- **Fail-closed.** `validateUiReviewLensResults` rejects a set that is missing a
-  lens, carries an unknown/duplicate lens, holds a malformed finding, is missing
-  the acceptance-criteria list, or holds a finding whose `acceptanceCriterionRef`
-  does not map to a criterion; the converge seam refuses to merge such a set
-  rather than converging a partial or unauditable review.
+- **Dedupe key.** Two findings from any lenses are the same defect when they share a normalized `(stateName, region/selector, category/rule)` triple. They collapse to one representative, and every contributing lens is recorded on `lenses`.
+- **Precedence.** When two lenses report the same defect, the worse severity wins (ladder: `must-fix` > `high` > `medium` > `low`). On a severity tie, the earlier canonical lens (`a11y` > `layout-geometry` > `visual` > `interaction`) supplies the representative's descriptive fields, so the merge is independent of input order. A `blocking` signal from any contributing lens survives the merge.
+- **Stable ordering.** Findings are ordered by `stateName`, then severity (worst first), then region, then category.
+- **Outcome mapping** (the existing enum, unchanged): any `blocking` finding ⇒ `blocked_needs_human_decision`; else any must-fix finding (severity `must-fix` or `high`) ⇒ `continue_ui_fix_loop`; else any acceptance criterion left uncovered (see the coverage gate below) ⇒ `continue_ui_fix_loop`; else ⇒ `ui_review_satisfied`.
+- **Fail-closed.** `validateUiReviewLensResults` rejects a set that is missing a lens, carries an unknown/duplicate lens, holds a malformed finding, is missing the acceptance-criteria list, or holds a finding whose `acceptanceCriterionRef` does not map to a criterion. The converge seam refuses to merge such a set.
 
 ## Per-criterion coverage gates `ui_review_satisfied`
 
-`ui_review_satisfied` is not a gestalt "looks good enough" call: it is gated on
-**per-criterion coverage**, enforced in the same pure fail-closed seam, so
-satisfaction is auditable from the emitted result.
+`ui_review_satisfied` is gated on **per-criterion coverage** in the same pure fail-closed seam, so satisfaction is auditable from the emitted result.
 
-- **Every finding maps to a criterion.** Each converged finding carries an
-  `acceptanceCriterionRef` — an `AC<n>` token referencing one criterion in the
-  provided `acceptanceCriteria` list by 1-based position (`AC1` is the first). A
-  finding with a missing or unmappable ref is a fail-closed malformed finding
-  (`validateUiReviewLensResults` rejects it; converge throws), never silently
-  satisfied.
-- **The coverage bar.** A criterion is **covered** when it is referenced by >=1
-  converged finding OR by >=1 affirmative **checked** mark over a named state
-  (`checkedCriteria[] = { acceptanceCriterionRef, stateName }`, the reviewer's
-  affirmative "I checked this criterion and found no problem" pass). The full bar
-  (`coverage.satisfiedBarMet`) is met only when EVERY criterion is covered.
-- **Merged defects attribute to their primary criterion.** Coverage runs on the
-  DEDUPED findings, and the dedupe key `(stateName, region, category)` excludes
-  `acceptanceCriterionRef` — so when two cross-lens findings share the triple but
-  map to DIFFERENT criteria, they collapse to one representative and only the
-  winner's (primary) criterion is credited. A co-flagged loser criterion on a
-  merged finding can therefore still read as an uncovered coverage gap and keep
-  the loop iterating (`continue_ui_fix_loop`). This is intentional fail-closed
-  behavior: it can only flip `satisfied → continue`, never the reverse, so a real
-  gap is never hidden. (Reworking the dedupe key is a non-goal.)
-- **The gate.** `ui_review_satisfied` is returned only when the coverage bar is
-  met AND there are no must-fix/blocking findings. A criterion covered by neither
-  a finding nor a check is an unaudited coverage GAP — not a human-decision
-  blocker — so it downgrades the outcome to `continue_ui_fix_loop` (the loop keeps
-  going until every criterion is audited), never straight to satisfied.
-- **Auditable output.** `convergeUiReviewLenses` / `convergeUiReviewRouteFindings`
-  emit a `coverage` audit alongside `{findings, outcome}`:
-  `coverage.perCriterion[]` (`{ ref, criterion, findingCount, checked, covered }`),
-  `coverage.covered[]` / `coverage.uncovered[]` (the `AC<n>` refs), and
-  `coverage.satisfiedBarMet`. Which AC each finding maps to, and which criteria are
-  covered vs uncovered, are readable straight from the structured result.
-- **Fail-closed checks.** A malformed `checkedCriteria` mark (missing `stateName`,
-  or an `acceptanceCriterionRef` that does not map) fails closed — the converge
-  seam throws rather than letting a bad mark silently satisfy a criterion.
+- **Every finding maps to a criterion.** Each converged finding carries an `acceptanceCriterionRef`: an `AC<n>` token for one criterion in the `acceptanceCriteria` list by 1-based position (`AC1` is the first). A finding with a missing or unmappable ref is a fail-closed malformed finding (`validateUiReviewLensResults` rejects it; converge throws).
+- **The coverage bar.** A criterion is **covered** when >=1 converged finding references it OR >=1 affirmative **checked** mark over a named state references it (`checkedCriteria[] = { acceptanceCriterionRef, stateName }`, the reviewer's "I checked this criterion and found no problem" pass). The full bar (`coverage.satisfiedBarMet`) is met only when EVERY criterion is covered.
+- **Merged defects attribute to their primary criterion.** Coverage runs on the DEDUPED findings, and the dedupe key excludes `acceptanceCriterionRef`. When two cross-lens findings share the triple but map to DIFFERENT criteria, only the winner's criterion is credited. The loser criterion can then read as uncovered and keep the loop at `continue_ui_fix_loop`. This can only flip `satisfied → continue`, never the reverse.
+- **The gate.** `ui_review_satisfied` is returned only when the coverage bar is met AND there are no must-fix/blocking findings. A criterion covered by neither a finding nor a check is an unaudited coverage GAP, not a human-decision blocker. It downgrades the outcome to `continue_ui_fix_loop`, never straight to satisfied.
+- **Auditable output.** `convergeUiReviewLenses` / `convergeUiReviewRouteFindings` emit a `coverage` audit alongside `{findings, outcome}`: `coverage.perCriterion[]` (`{ ref, criterion, findingCount, checked, covered }`), `coverage.covered[]` / `coverage.uncovered[]` (the `AC<n>` refs), and `coverage.satisfiedBarMet`.
+- **Fail-closed checks.** A malformed `checkedCriteria` mark (missing `stateName`, or an `acceptanceCriterionRef` that does not map) fails closed: the converge seam throws.
 
 ## Review modes behind `dev-loop`
 
@@ -209,12 +116,7 @@ Use this when:
 - the named states in scope satisfy the review brief and acceptance criteria closely enough to stop iterating on the UI/design side
 - any remaining issues are minor enough that they do not justify another dedicated UI-fix pass
 
-This outcome is gated on **per-criterion coverage** (see "Per-criterion coverage
-gates `ui_review_satisfied`" above): the seam returns it only when every
-acceptance criterion is covered by a finding or an affirmative check and no
-must-fix/blocking findings remain. It is auditable, not a gestalt call.
-
-This does **not** replace normal engineering validation; it only means the designer-persona review loop is satisfied.
+The seam returns this outcome only under the per-criterion coverage gate above. It does **not** replace normal engineering validation; it only means the designer-persona review loop is satisfied.
 
 ### `blocked_needs_human_decision`
 
@@ -233,15 +135,10 @@ The loop fails closed when:
 - the artifact bundle is missing
 - the artifact bundle has no named states
 - a named state lacks `screenshotPath`, `statePath`, `snapshotPath`, `axePath`, or `consolePath`
-- vision mode is requested but a named state screenshot path does not end with `screenshot.png`
-- vision mode is requested but a named-state `statePath` does not end with `state.json`
-- vision mode is requested but a named-state `snapshotPath` does not end with `snapshot.json`
-- vision mode is requested but a named-state `axePath` does not end with `axe.json`
-- vision mode is requested but a named-state `consolePath` does not end with `console.json`
-- the work is not actually a UI slice \(the loop returns a skip outcome rather than failing closed\)
+- vision mode is requested but a named-state path does not end with its artifact file name: `screenshotPath` with `screenshot.png`, `statePath` with `state.json`, `snapshotPath` with `snapshot.json`, `axePath` with `axe.json`, or `consolePath` with `console.json`
 - an unsupported `uiReviewMode` value (anything other than `designer` or `vision`) fails closed with `blocked_unsupported_review_mode`
 
-When the work is non-UI, the loop does not trigger for non-UI work; it returns a skip outcome instead of pretending to review unrelated artifacts.
+Non-UI work does not trigger the loop. It returns a skip outcome instead of failing closed or reviewing unrelated artifacts.
 
 ## Handoff sequence under `dev-loop`
 
@@ -255,19 +152,10 @@ When the work is non-UI, the loop does not trigger for non-UI work; it returns a
 6. Regenerate the artifact bundle after the fix iteration.
 7. Re-run the selected review mode until the outcome is `ui_review_satisfied` or `blocked_needs_human_decision`.
 
-## Current minimal validation seam
+## Entry validation seam
 
-The pure validation helper at `scripts/loop/ui-designer-review-contract.mjs` codifies the fail-closed entry conditions for this loop:
+The pure helper `scripts/loop/ui-designer-review-contract.mjs` codifies the fail-closed entry conditions for this loop:
 - non-UI or not-requested work is skipped
 - missing required inputs are blocked
 - incomplete artifact bundles are blocked
 - only a complete artifact bundle is eligible for routed review (`ready_for_designer_review` or `ready_for_vision_review`)
-
-This keeps the boundary testable before any later higher-level reviewer orchestration is layered on top.
-
-The pure lens-converge seam at `scripts/loop/ui-review-lenses.mjs` codifies the
-deterministic tail:
-- `UI_REVIEW_LENSES` names the four lenses and the artifact each is grounded in
-- `validateUiReviewLensResults` rejects a missing/unknown/duplicate lens, a malformed finding, a missing acceptance-criteria list, or a finding whose `acceptanceCriterionRef` does not map, fail-closed
-- `convergeUiReviewLenses(lensResults, { acceptanceCriteria, checkedCriteria })` merges the four findings arrays into one deduped set, computes the per-criterion `coverage` audit, and maps it to the unchanged outcome enum — `ui_review_satisfied` only when every criterion is covered and no must-fix/blocking finding remains
-- `convergeUiReviewRouteFindings` is the route's entrypoint: it groups the vision template's flat `findings[]` (each tagged with its `lens` and its `acceptanceCriterionRef`) into the four-lens result set and passes the acceptance-criteria list + `checkedCriteria` passes through to `convergeUiReviewLenses`, so the template output and the seam meet at one documented, fail-closed boundary

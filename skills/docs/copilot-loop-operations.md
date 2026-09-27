@@ -2,10 +2,7 @@
 
 Canonical owner for operating the deterministic Copilot PR follow-up state machine — the operational reference for the routed `copilot_pr_followup`, `wait_watch`, `reviewer_fixer`, and `final_approval` paths behind `dev-loop`. The machine's states and transitions are defined by [Copilot Loop State Graph](./copilot-loop-state-graph.md).
 
-Use it together with:
-- [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md)
-- [Public Dev Loop Contract](./public-dev-loop-contract.md)
-- [Retrospective Checkpoint Contract](./retrospective-checkpoint-contract.md) when the current step depends on async start/resume/status or retrospective enforcement
+Use it with the [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md), the [Public Dev Loop Contract](./public-dev-loop-contract.md), and, when the current step depends on async start/resume/status or retrospective enforcement, the [Retrospective Checkpoint Contract](./retrospective-checkpoint-contract.md).
 
 ## Deterministic orchestration authority
 
@@ -47,29 +44,14 @@ These routing guarantees are owned by [Copilot Loop State Graph](./copilot-loop-
 6. Follow the `nextAction` from the machine output. For stop states (`review_request_unavailable`,
    `blocked_needs_user_decision`), report to the user and do not proceed.
 
-7. After a converged Copilot review, a later head does not need another Copilot round by default.
-   The latest submitted Copilot review decides. With zero unresolved threads and no outstanding
-   request, a converged latest review on an earlier head stands for the current head, whatever the
-   delta. `request-copilot-review.mjs` then returns `suppressed_post_convergence`, and the gate
-   coordination detector allows `pre_approval_gate`, which reviews the current head. A later Copilot review, such as the ruleset review when a PR becomes ready, replaces the
-   earlier one and decides again. To require a Copilot review for every significant post-convergence
-   change, set `refinement.requireCopilotConvergenceAtLatestHead: true` in `.devloops`. That strict
-   mode carries convergence only across a docs-only or integrate-only delta
-   (`suppressed_post_convergence_docs_only`) and reopens the cycle at the round cap on a significant
-   change. `COPILOT-STATE-CARRIED-CONVERGENCE` in [Copilot Loop State Graph](./copilot-loop-state-graph.md)
-   owns the rule, and ADR 0090 records it.
+7. Before you request another Copilot round on a later head, apply `COPILOT-STATE-CARRIED-CONVERGENCE`
+   in [Copilot Loop State Graph](./copilot-loop-state-graph.md). It owns the carried-convergence
+   preconditions, the `suppressed_post_convergence` outcome and the
+   `refinement.requireCopilotConvergenceAtLatestHead` strict mode (ADR 0090).
 
 ## Judgment calls that remain in the agent layer
 
 See [Copilot Loop State Graph](./copilot-loop-state-graph.md)'s "Agent judgment boundary" for the bounded list of decisions the state machine leaves to the agent.
-
-## Workflow overview
-
-```text
-ready issue -> confirm scope -> Copilot branch/PR -> async review/watch -> Pi follow-up fixes -> validation -> confirm verdict/action -> merge when authorized
-```
-
-Route each decision through [Deterministic orchestration authority](#deterministic-orchestration-authority).
 
 ## Pre-follow-up working rules
 
@@ -88,13 +70,7 @@ Useful checks:
 - `node scripts/github/view-issue.mjs --repo <owner/name> --issue <number>`
 - `gh pr list --state open`
 
-If the user asks for status/progress/readiness/merge-state/next-step (including “what is next”):
-- resolve authoritative active artifact identity first (issue/PR, plus branch/head SHA when useful)
-- for issue targets, resolve authoritative issue↔PR linkage via the startup resolver (`dev-loops loop startup --issue <number>`, run inside the `dev-loop` async subagent) rather than running `detect-linked-issue-pr.mjs` manually; the fail-closed-until-resolved requirement is owned by `FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED` in [Public Dev Loop Contract](./public-dev-loop-contract.md)
-- resolve artifact state (`open`/`closed`/`merged`/`not_applicable`)
-- resolve current loop state and next action from deterministic helper/state output
-- include explicit resolved artifact identity in the answer
-- if identity/state cannot be resolved confidently, stop with reconcile/unknown instead of guessing from chat context
+For a status/progress/readiness/merge-state/next-step question (including “what is next”), follow `FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED` and the status reporting contract in [Public Dev Loop Contract](./public-dev-loop-contract.md), and include the resolved artifact identity in the answer. For issue targets, resolve issue↔PR linkage via the startup resolver (`dev-loops loop startup --issue <number>`, run inside the `dev-loop` async subagent) rather than running `detect-linked-issue-pr.mjs` manually.
 
 ### Step 2: Confirm issue scope before execution
 
@@ -145,28 +121,28 @@ implementation-focused, test-aware instructions.
 
 This section governs tracker-backed (Copilot-handoff) PRs; issue-less/plan-file-backed PRs are governed by merge precondition 7 in merge-preconditions.md instead.
 
-Follow the PR description contract (see [Agent Instructions](../../AGENTS.md) if present; otherwise use the structure below): detailed structured descriptions, not thin placeholders. At minimum include change summary, scope/context, explicit acceptance criteria, explicit definition of done, and explicit non-goals, and `Closes #N` (or `Fixes #N`) for the linked issue so GitHub auto-closes it on merge.
+Author a detailed structured description ([Agent Instructions](../../AGENTS.md) when present, otherwise the [PR Body Skeleton](../dev-loop/templates/pr-body.md)). At minimum include change summary, scope/context, explicit acceptance criteria, explicit definition of done, explicit non-goals, and `Closes #N` (or `Fixes #N`) for the linked issue.
 
 Checkbox rule: acceptance criteria, definition-of-done items, and any task list must be rendered as real GitHub markdown checkboxes inside list items (`- [ ]` / `- [x]`, also `* [ ]` / `* [x]`). Do not wrap checkbox markers (e.g. `[x]`) in backticks. Do not place checkbox markers inside table cells — task lists are not interactive there even with a leading `- `.
 
 `validateTrackerBackedPrBodySpec` (`@dev-loops/core/loop/issue-refinement-artifact`,
 reusing `validatePrBodySpec`) runs at BOTH ends of the lifecycle: `create-pr.mjs` fails
 closed at PR-creation time on a non-conformant tracker-backed body, and `ready-for-review.mjs`
-re-checks it at draft exit. One validator, run at both ends, never drifting — author the body
-conformant up front instead of discovering it non-conformant when marking ready. For a PR
-closing an issue, its OWN body must contain an Objective/why section, an In scope section,
+re-checks it at draft exit. For a PR closing an issue, its OWN body must contain an Objective/why section, an In scope section,
 Acceptance criteria and Definition of done checklists, explicit Non-goals, and
 `Closes #N`/`Fixes #N`; otherwise it fails closed. A linked issue's criteria or reviewer
-judgment cannot substitute. The canonical conformant skeleton lives at
-[PR Body Skeleton](../dev-loop/templates/pr-body.md).
+judgment cannot substitute. The
+[PR Body Skeleton](../dev-loop/templates/pr-body.md) is conformant.
 
 <!-- rule: OPS-PR-VALIDATION-STABLE-EVIDENCE -->
 `OPS-PR-VALIDATION-STABLE-EVIDENCE`: For tracker-backed PRs, the PR description's Validation section MUST record each validation command or named check together with its stable pass/fail outcome. It MUST NOT include volatile aggregate test, assertion, or asset counts; skip counts; durations; timestamps; or incidental totals unless an explicit acceptance criterion makes that exact quantity behaviorally significant. Detailed totals MUST live in the head-stamped validation and gate artifacts, where they remain bound to the exact revision that produced them.
 
 <!-- rule: OPS-DRAFT-FIRST-PR -->
 `OPS-DRAFT-FIRST-PR`: New PRs MUST open as **draft** through `create-pr.mjs`, which
-rejects `--ready`. Agents MUST NOT create ready PRs. The only draft-exit path is
-`ready-for-review.mjs` (`gh pr ready`), gated on clean draft-gate evidence.
+rejects `--ready`. Agents MUST NOT create ready PRs. The two sanctioned draft exits are
+`ready-for-review.mjs` (`gh pr ready`) for a normal ready flip, and `restore-ready.mjs`
+only to restore a PR that `convert-to-draft.mjs` made a transient draft while CI is
+blocking. Both run through `readyForReview()` and require clean current-head `draft_gate` evidence.
 [TRACKER-PROJECTION-REQUIRED-METADATA](./tracker-first-loop-state.md#31-required-pr-metadata)
 owns the corresponding tracker metadata requirement.
 
@@ -196,9 +172,7 @@ semantics. `validatePrBodySpec` still owns the draft-exit `Closes`/`Fixes` vocab
 
 ## Timeout and watch policy
 
-This workflow is intentionally long-lived, but one Copilot review watch boundary must still be capped.
-
-Preferred defaults for this repo:
+One Copilot review watch boundary must be capped. Defaults:
 - poll interval for review/activity watchers: **1 minute** (derived from `packages/core/src/loop/policy-constants.mjs` DEFAULT_POLL_INTERVAL_MS)
 - max watch timeout per Copilot review boundary: **30 minutes** (derived from `packages/core/src/loop/policy-constants.mjs` COPILOT_REVIEW_WAIT_TIMEOUT_MS)
 - if that 30-minute watch budget expires, refresh authoritative state once; if the refreshed state still resolves `waiting_for_copilot_review`, stop with `watch timeout — PR #<number> needs manual attention`
@@ -206,13 +180,11 @@ Preferred defaults for this repo:
 - parent/subagent no-activity threshold for watcher-style runs: at least **15 minutes**
 - active-long-running notice threshold for watcher-style runs: about **30 minutes**
 
-These are the defaults built into `probe-copilot-review.mjs`, `run-watch-cycle.mjs`, and the `watchArgs` emitted by `copilot-pr-handoff.mjs`. Do not pass removed CLI policy flags (`--poll-interval-ms`, `--probe-only`): the scripts reject them as usage errors, but do not rely on that as a guaranteed hard stop in the `dev-loops gate …` path — the CLI retry-wrapper (`buildCorrectedArgs`) may strip an unrecognized/removed flag and silently retry with defaults, so passing one can quietly fall back to default behavior rather than failing. `probe-copilot-review.mjs` does accept `--timeout-ms` (watch budget in ms; `0` = single immediate idle check, no watch); timeouts and intervals are otherwise derived from `packages/core/src/loop/policy-constants.mjs`.
+`probe-copilot-review.mjs`, `run-watch-cycle.mjs`, and the `watchArgs` emitted by `copilot-pr-handoff.mjs` build in these defaults. Do not pass removed CLI policy flags (`--poll-interval-ms`, `--probe-only`). The scripts reject them, but in the `dev-loops gate …` path the CLI retry-wrapper (`buildCorrectedArgs`) may strip such a flag and silently retry with defaults. `probe-copilot-review.mjs` does accept `--timeout-ms` (watch budget in ms; `0` = single immediate idle check, no watch); timeouts and intervals are otherwise derived from `packages/core/src/loop/policy-constants.mjs`.
 
 ### Outer-loop checkpoint: canonical re-attachment artifact
 
-The outer-loop checkpoint (`tmp/copilot-loop/<owner>/<repo>/pr-<n>/outer-loop-state.json`)
-is the canonical re-attachment artifact for async subagent runs. It is written by
-`outer-loop.mjs` at every conductor cycle and records:
+`outer-loop.mjs` writes the outer-loop checkpoint (`tmp/copilot-loop/<owner>/<repo>/pr-<n>/outer-loop-state.json`) at every conductor cycle. It is the canonical re-attachment artifact for async subagent runs and records:
 
 | Field | Meaning |
 |---|---|
@@ -244,9 +216,7 @@ or local notes to determine "where we left off."
 
 ## Hard rule: no agent-authored shell polling
 
-Helper-owned sleep inside `run-watch-cycle.mjs`, `probe-copilot-review.mjs`, or `watch-initial-copilot-pr.mjs` is allowed. Agent-authored shell polling (`sleep`, `for`, `while`, `timeout` wrappers around tool invocations) is a contract breach. This rule applies to ALL repos using the dev-loop workflow, not just the source repo.
-
-A watcher sleeping between polls is expected behavior, not a blocker.
+Helper-owned sleep inside `run-watch-cycle.mjs`, `probe-copilot-review.mjs`, or `watch-initial-copilot-pr.mjs` is allowed and is not a blocker. Agent-authored shell polling (`sleep`, `for`, `while`, `timeout` wrappers around tool invocations) is a contract breach. This rule applies to ALL repos using the dev-loop workflow.
 
 ## Hard rule: no inline interpreters
 

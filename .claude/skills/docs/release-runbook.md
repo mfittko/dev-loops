@@ -35,17 +35,14 @@ Everything after the tag is hands-off.
    never commits, tags, pushes, or publishes.
 
    Each merged PR records its note as a `changes/<slug>.md` fragment (see
-   `changes/README.md`), so by release time the pending notes are the fragment
-   files plus anything already under `## Unreleased`. The bump assembles the
-   fragments into `## Unreleased`, then stamps that heading to `## <version>`
-   and fails closed if there is still no Unreleased content to stamp, so an
-   undocumented release cannot proceed. `release.yml`'s lockstep guard
+   `changes/README.md`). The bump fails closed if there is no Unreleased
+   content to stamp. `release.yml`'s lockstep guard
    (`scripts/release/assert-core-dependency-version.mjs`) also fails the release
    workflow before the GitHub Release is created if the lockfile is out of
-   lockstep. Committing and pushing this release
-   commit lands directly on `main`, which the default-branch guard hooks (see
-   [Default-branch guard](worktree-guidance.md#default-branch-guard)) now refuse
-   by default — a sanctioned release commits and pushes with
+   lockstep. The release commit lands directly on `main`, which the
+   default-branch guard hooks (see
+   [Default-branch guard](worktree-guidance.md#default-branch-guard)) refuse
+   by default. A sanctioned release commits and pushes with
    `DEVLOOPS_ALLOW_MAIN=1`:
 
    ```bash
@@ -56,10 +53,8 @@ Everything after the tag is hands-off.
    **Staging the release commit.** Stage the exact release files explicitly
    (the version bump, `CHANGELOG.md`, `bun.lock`, and any regenerated
    assets) — never
-   `git add -A` or `git add .`. The release commit runs with
-   `DEVLOOPS_ALLOW_MAIN=1`, which intentionally turns the default-branch guard
-   off, so a broad add sweeps accumulated main-checkout scratch straight into
-   the release commit. Before committing, run `git status --porcelain` and verify every
+   `git add -A` or `git add .`, because `DEVLOOPS_ALLOW_MAIN=1` turns the
+   default-branch guard off. Before committing, run `git status --porcelain` and verify every
    staged path is an intended release file; abort the commit if anything
    unexpected is staged.
 2. Tag the release commit and push the tag:
@@ -80,11 +75,9 @@ the workflow does it (and is idempotent if you already created one).
 ## Operator release approval gate (stable releases)
 
 Cutting a **stable** tag (`vX.Y.Z`, no prerelease suffix) and publishing it to
-npm is a **gated release decision, not an agent judgment call**. The first
-v1.0.0 cut was tagged and published by a dev-loop subagent acting on a generic
-"continue" plus a blanket merge authorization, and had to be rolled back — the
-approval was read as transferable. It is not. Blanket merge authorizations and
-generic "continue" instructions never satisfy this gate.
+npm is a **gated release decision, not an agent judgment call**. The approval
+is not transferable. Blanket merge authorizations and generic "continue"
+instructions never satisfy this gate.
 
 **Sanctioned division:**
 
@@ -96,10 +89,8 @@ generic "continue" instructions never satisfy this gate.
   stating `approve release v<version>` — or the operator running the publish
   commands themselves.
 
-npm is intentionally retained at this boundary: the publish workflow uses npm
-for package packing, registry queries, dist-tag selection, and
-`npm publish --provenance`. Bun remains the installer/script/test tool and does
-not replace the provenance-capable registry client.
+The publish workflow uses npm for package packing, registry queries, dist-tag
+selection, and `npm publish --provenance`.
 
 **Deterministic enforcement (fail closed).** Both release workflows run
 `scripts/release/verify-release-approval.mjs` before anything is published:
@@ -125,14 +116,12 @@ by the operator **after** cutting the release commit:
 
 - **Must post-date the release commit.** The approval comment's timestamp must
   be strictly **after** the release commit being tagged (the commit's committer
-  date). An older approval — one carried over from a prior or reverted cut — is
-  **stale** and is rejected: it never authorizes a later release. If a first cut
-  was rolled back, the operator must post a **new** approval after the new
-  release commit. (`resolveApprovalState` compares each comment's `created_at`
-  against the release-commit date.)
+  date). An older approval, for example one from a prior or reverted cut, is
+  **stale** and is rejected. After a rollback, the operator must post a **new**
+  approval after the new release commit. (`resolveApprovalState` compares each
+  comment's `created_at` against the release-commit date.)
 - **Timestamp must be verifiable.** A matching approval whose `created_at`
-  cannot be parsed is refused as **unverifiable** — the gate cannot confirm it
-  post-dates the release commit, so it fails closed rather than assume freshness.
+  cannot be parsed is refused as **unverifiable**.
 - **Must be a real assertion, not quoted text.** The phrase must appear as
   ordinary prose. The gate strips code spans, fenced code blocks, indented code
   blocks, and block quotes before matching (`stripNonAssertionMarkdown`), so an
@@ -141,11 +130,9 @@ by the operator **after** cutting the release commit:
 - **Must not be instructional/handoff/reference text.** A phrase governed by an
   instructional/handoff verb — "post `approve release v…`", "a note stating
   `approve release v…`", "this **requires** an `approve release v…` comment" — is
-  a **reference** to the approval act, not the act itself, and is refused
-  (`instructsApproval`). This refusal keys on the phrasing, not on who wrote it:
-  an instructional occurrence never counts even in the operator's own comment, and
-  an agent-authored summary or handoff note that merely references the phrase never
-  satisfies the gate (such a comment also fails the operator-authored check below).
+  a **reference** to the approval act and is refused (`instructsApproval`). The
+  refusal keys on the phrasing, so an instructional occurrence never counts,
+  even in the operator's own comment.
 - **Must not be negated.** A negation in the same clause ("do not approve
   release v…", "cannot approve release v…") or a same-sentence retraction
   ("approve release v…; do not proceed") is refused.
@@ -181,11 +168,10 @@ manually. Local pre-flight (optional but recommended before pushing the tag):
   closed** if the version has no CHANGELOG section — an undocumented version never
   gets an empty release.
 - **`.github/workflows/npm-publish.yml`** is dispatched by the step above via
-  `workflow_dispatch` (`gh workflow run npm-publish.yml --ref <tag>`): a
-  `GITHUB_TOKEN`-created Release does **not** emit the `release` event, so the
-  automated tag flow relies on that explicit dispatch rather than `on: release`
-  (the `release: published` trigger remains only for a Release published by hand
-  in the UI). It publishes the packages to npm under the dist-tag resolved by
+  `workflow_dispatch` (`gh workflow run npm-publish.yml --ref <tag>`), because a
+  `GITHUB_TOKEN`-created Release does **not** emit the `release` event. The
+  `release: published` trigger covers only a Release published by hand in the
+  UI. It publishes the packages to npm under the dist-tag resolved by
   `scripts/release/resolve-npm-dist-tag.mjs`: a stable version → `latest`; a
   prerelease → its channel (`1.0.0-rc.1` → `rc`, `…-next.N` → `next`, …) and
   **never** `latest`, so a release candidate is opt-in (`npm install dev-loops@rc`)

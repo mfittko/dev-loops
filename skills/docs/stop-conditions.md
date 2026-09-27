@@ -32,7 +32,7 @@ Canonical owner for agent stop / wait / block conditions across all workflow fam
 
 | Rule ID | Condition | Strategy | Behavior |
 |---|---|---|---|
-| <!-- rule: STOP-WAIT-001 --> `STOP-WAIT-001` | `waiting` lifecycle state | `wait_watch` | The loop MUST treat this as a healthy wait and re-dispatch from the main session. |
+| <!-- rule: STOP-WAIT-001 --> `STOP-WAIT-001` | `waiting` lifecycle state | `wait_watch` | The loop MUST treat this as a healthy wait and continue it per the harness rule in [Wait-watch procedure](wait-watch-procedure.md): Pi re-dispatches from the main session, and Claude Code continues inline. |
 | <!-- rule: STOP-INITIAL-COPILOT-001 --> `STOP-INITIAL-COPILOT-001` | `waiting_for_initial_copilot_implementation` | `issue_intake` | The loop MUST use the bootstrap wait with a one-hour watch budget. |
 | <!-- rule: STOP-COPILOT-REVIEW-001 --> `STOP-COPILOT-REVIEW-001` | `waiting_for_copilot_review` | `copilot_pr_followup` | The loop MUST treat this as a continuation boundary, not completion. |
 | <!-- rule: STOP-QUIET-WATCHER-001 --> `STOP-QUIET-WATCHER-001` | Quiet watcher observations | `wait_watch` | The loop MUST treat quiet observations as observational only and MUST NOT surface them as stops by themselves. |

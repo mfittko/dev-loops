@@ -48,10 +48,9 @@ It provides projection and sync logic only.
 
 ## 3. PR Projection Contract
 
-The following rules define how a tracker work item projects into GitHub PR
-metadata. All rules are deterministic and idempotent: applying them to the
-same inputs always produces the same output, and re-applying them to an
-already-correct PR leaves it unchanged.
+These rules define how a tracker work item projects into GitHub PR metadata.
+All rules are deterministic: the same inputs always produce the same output.
+Idempotence is `TRACKER-PROJECTION-IDEMPOTENT` (§3.3).
 
 ### 3.1 Required PR Metadata
 
@@ -119,21 +118,13 @@ implementations map canonical action names to tracker-native field updates.
 | `draft_pr_open` — draft PR created or open | `set_in_progress` | Tracker moves to in-progress (or nearest equivalent) |
 | `pr_reviewable` — PR marked ready for review | `set_reviewable` | Tracker moves to reviewable / in-review (or nearest equivalent) |
 | `pr_merged` — PR merged | `set_done` | Tracker moves to done/completed terminal state |
-| `pr_closed_unmerged` — PR closed without merge | `none` | No automatic terminal transition; human decision required |
+| `pr_closed_unmerged` — PR closed without merge | `none` | No automatic terminal transition; report to user; human decision required |
 | `no_tracker_item` | `none` | No tracker item to update |
 | <!-- rule: TRACKER-BLOCKED-FAIL-CLOSED --> `blocked_needs_user_decision` | `none` | An unexpected or contradictory snapshot MUST stop and report; the helper MUST NOT apply an automatic tracker update |
 
-### 4.2 Event Triggers
+Each PR lifecycle event (draft PR creation, ready-for-review conversion, merge, close without merge) maps to the row of the state it enters and applies that row's action.
 
-| PR lifecycle event | Maps to canonical state | Sync trigger |
-|---|---|---|
-| No PR created yet | `ready_no_pr` | No trigger |
-| Draft PR creation succeeds | `draft_pr_open` | Apply `set_in_progress` to tracker |
-| PR converted from draft to ready-for-review | `pr_reviewable` | Apply `set_reviewable` to tracker |
-| PR merged | `pr_merged` | Apply `set_done` to tracker |
-| PR closed without merge | `pr_closed_unmerged` | No automatic sync; report to user |
-
-### 4.3 Adapter Mapping Guidance
+### 4.2 Adapter Mapping Guidance
 
 Each tracker adapter maps the four canonical action names to its native API:
 
@@ -146,29 +137,13 @@ Each tracker adapter maps the four canonical action names to its native API:
 
 ## 5. State Machine
 
-The full lifecycle path for this MVP slice is:
-
-```text
-selected/ready (tracker-owned precondition; not encoded directly in this snapshot)
-  -> tracker item exists, no PR   [ready_no_pr]
-  -> draft PR created             [draft_pr_open]   -> tracker: set_in_progress
-  -> PR marked ready for review   [pr_reviewable]   -> tracker: set_reviewable
-  -> PR merged                    [pr_merged]       -> tracker: set_done
-```
-
-Alternate paths:
-
-```text
-PR closed without merge   [pr_closed_unmerged]          -> tracker: no automatic action
-No tracker item, no PR    [no_tracker_item]             -> blocked; report and stop
-Contradictory snapshot    [blocked_needs_user_decision] -> stop and report
-```
+Tracker-owned selection/readiness is a precondition that this snapshot does not encode. The tracker actions per state are in §4.1.
 
 ### 5.1 State Definitions
 
 | State | Meaning |
 |---|---|
-| `no_tracker_item` | No tracker work item was found; lifecycle cannot proceed |
+| `no_tracker_item` | No tracker work item was found; lifecycle cannot proceed; report and stop |
 | `ready_no_pr` | Tracker item exists and no PR has been created yet. This helper does not infer tracker-native readiness beyond that no-PR fact. |
 | `draft_pr_open` | Draft PR exists; tracker should reflect in-progress |
 | `pr_reviewable` | PR is open and not draft; tracker should reflect reviewable / in-review |
@@ -216,22 +191,11 @@ blocked_needs_user_decision
 | `prMerged` | `boolean` | Whether the PR has been merged |
 | `prClosed` | `boolean` | Whether the PR is closed on GitHub. Merged PRs are also closed, so `pr_closed_unmerged` is derived from `prClosed && !prMerged`. |
 
-Unlike the Copilot/reviewer loop snapshots, this tracker contract uses `prClosed` for the raw GitHub closed state. Merged PRs therefore set both `prMerged=true` and `prClosed=true`, while `pr_closed_unmerged` remains the derived terminal state for `prClosed && !prMerged`.
-
-This snapshot intentionally omits tracker-native workflow fields such as selected/ready, blocked, or done. Higher-level callers must combine tracker-owned readiness/state separately when deciding whether opening a PR is appropriate.
+Unlike the Copilot/reviewer loop snapshots, `prClosed` is the raw GitHub closed state. The snapshot omits tracker-native workflow fields such as selected/ready, blocked, or done. Higher-level callers must combine tracker-owned readiness/state separately when deciding whether opening a PR is appropriate.
 
 ## 6. Scope Boundaries
 
-This contract is intentionally narrower than the parent epics:
-
-| Boundary | In scope (this slice) | Out of scope (deferred) |
-|---|---|---|
-| Tracker adapters | Adapter-agnostic contract only | Jira adapter, Shortcut adapter, any specific adapter |
-| Artifact model | One tracker item + one PR | Multi-PR, roll-up, cross-artifact sync |
-| Epic / PRD | Metadata reference links only | Automated roll-up or field sync |
-| ADR / RFC | Metadata reference links only | Decision synchronization |
-| Reverse sync | Four canonical states above | Tracker comment mirroring, full bidirectional field sync |
-| Parent epics | Consistent with #17 and #19 | Does not re-own the umbrella artifact model |
+§1 and §3.2 fix the artifact and reference scope. This contract also excludes any specific tracker adapter (Jira, Shortcut and others), tracker comment mirroring, full bidirectional field sync, and ownership of the umbrella artifact model (#17, #19).
 
 ## 7. Related
 

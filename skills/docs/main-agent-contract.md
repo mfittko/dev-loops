@@ -6,21 +6,17 @@ How dev-loop work is structured depends on the harness.
 COORDINATOR.** The agent invoked for dev-loop work runs git and PR lifecycle operations, runs the
 `dev-loops` CLI (including state-changing `gate` / `pr` / `loop` subcommands), and posts gate
 verdicts under the operating session's identity. There is no separate read-only "main agent" and
-no mandatory async-subagent dispatch — i.e. no Pi-style main-agent→dev-loop async hop: the dev-loop
-agent is invoked directly and owns the work end to end, at that outer level. This is distinct from
-the coordinator→worker delegation described next: the same dev-loop agent, now acting as
-COORDINATOR one level down, is itself read-only for TRACKED repo files (source, tests, docs) and
-MUST delegate every tracked-file implementation edit and targeted verification run to a fresh WORKER
-subagent (`developer`/`fixer`/`quality`/`docs`). The coordinator MAY still write EPHEMERAL artifacts
-directly — `tmp/`, the scratchpad, and sanctioned ledger paths (the PR body markdown, comment
-bodies, dispatch prompts, gate evidence/ledgers under `tmp/gate-findings/`) — because those are
-gitignored/non-repo paths, not tracked-file mutations. This coordinator→worker boundary is the
-Claude analogue of the absolute main-agent read-only boundary Pi enforces, enforced mechanically
-(not by convention) by the same `PreToolUse` Write/Edit guard hook: opt-in via
-`DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once enforced, and
-non-bypassable BY THE DISPATCHED COORDINATOR (`agent_type: "dev-loop"`) FOR ITS GUARDED SURFACE — a
-tracked-file Write/Edit whose `agent_type` is `dev-loop` is denied; a worker subagent's `agent_type`
-is unaffected. This is a mechanically-guarded, targeted denylist, not an airtight sandbox; see
+no Pi-style main-agent→dev-loop async hop. As COORDINATOR, the dev-loop agent is read-only for
+TRACKED repo files (source, tests, docs) and MUST delegate every tracked-file implementation edit
+and targeted verification run to a fresh WORKER subagent (`developer`/`fixer`/`quality`/`docs`).
+The coordinator MAY still write EPHEMERAL gitignored/non-repo artifacts directly: `tmp/`, the
+scratchpad, and sanctioned ledger paths (the PR body markdown, comment bodies, dispatch prompts,
+gate evidence/ledgers under `tmp/gate-findings/`). The `PreToolUse` Write/Edit guard hook enforces
+this boundary: opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once
+enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop`; a worker
+subagent's `agent_type` is unaffected. It is a targeted denylist, not an airtight sandbox:
+Bash-driven tracked mutations (`git commit`, `sed -i`, `> file`) stay convention-enforced, and
+the top-level/inline agent (`agent_type: null`) falls under the main-agent boundary below. On Pi, see
 "Guarded surface and deliberate ceilings" below for what it does and does not cover. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
@@ -114,12 +110,10 @@ because "the user said yes," not because it is running from a worktree.
   that pushes and opens a PR (the scope `PRE-PR-BEFORE-FIRST-PUSH` in the
   [Pre-push review contract](pre-pr-review-contract.md) defines, on any route) the
   first push is deferred to the pre-PR review step so the branch reaches origin once, already
-  cleaned — a sub-delegate commits but does not push. There is no "edit here, commit there" split: an editing sub-delegate is
-  never told not to commit, and a `dev-loop` session that wants a single consolidated commit
-  performs the edits itself rather than delegating the edit and keeping the commit. The removed
-  `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT` env-var exemption deadlocked an editing subagent under a
-  task-scoped no-commit instruction on the Claude harness (#1936); the
-  `subagent-stop-uncommitted-guard` hook stays fully enforced for every editing role.
+  cleaned — a sub-delegate commits but does not push. An editing sub-delegate is never told not
+  to commit; a `dev-loop` session that wants a single consolidated commit performs the edits
+  itself. The `subagent-stop-uncommitted-guard` hook stays fully enforced for every editing role
+  (#1936).
   See [Delegation contract](../local-implementation/SKILL.md#delegation-contract).
 
 ## Model tier at dispatch (Pi)
@@ -128,21 +122,18 @@ When dispatching a subagent, resolve its model with
 `resolveRoleModel(config, { role, harness: "pi" })` from `@dev-loops/core/config`
 (`role` = the subagent/angle name, e.g. `developer`, `refiner`, `review`, or a
 gate angle) and pass that model to the async dispatch **only when it is non-null**.
-Pass `kind: "angle"` when resolving a **gate fan-out review angle** (a review
-activity — e.g. `correctness`, `docs`, `acceptance-criteria`) so it always gets the
-review (high) tier even when the angle name collides with a routine role; leave
-`kind` unset (or `kind: "role"`) for a routine **subagent role** dispatch. This
-matters for `docs`: the `docs` angle must resolve high via `review`, not the `docs`
-writer role's low tier.
+Pass `kind: "angle"` when resolving a **gate fan-out review angle** (e.g. `correctness`,
+`docs`, `acceptance-criteria`) so it always gets the review (high) tier, even when the angle
+name collides with a routine role such as `docs`; leave `kind` unset (or `kind: "role"`) for
+a routine **subagent role** dispatch.
 The built-in policy runs routine subagents (`developer`/`docs`/`fixer`/`quality`)
-on the low tier, planning (`refiner`) and critical review (the `review` role, and gate
-fan-out review angles via the review tier forced by `kind: "angle"`) on the high tier, and lets the conductor
-(`dev-loop`) inherit. Built-in Pi tiers are `null`, so with zero config every role
-resolves to `null` and dispatch passes no model override — a genuine no-op on Pi.
+on the low tier, planning (`refiner`) and critical review (the `review` role and gate
+fan-out review angles) on the high tier, and lets the conductor (`dev-loop`) inherit.
+Built-in Pi tiers are `null`, so with zero config dispatch passes no model override.
 Operators opt in by setting concrete Pi ids under `models.tiers.<alias>.pi` (and may
-retune `models.roleTiers` / `models.roles`) in `.devloops`. The same resolver drives
-the Claude harness, where the tier is baked into each agent's `model:` frontmatter at
-asset-generation time (`harness: "claude"`).
+retune `models.roleTiers` / `models.roles`) in `.devloops`. On the Claude harness the same
+resolver bakes the tier into each agent's `model:` frontmatter at asset-generation time
+(`harness: "claude"`).
 
 ## Boundary examples
 
@@ -179,9 +170,7 @@ before continuing, or a skill must finish within a single turn. In that case the
 wait for the subagent's result before returning control.
 
 Calling `subagent_wait` merely to wait out an async dispatch freezes the interactive session for
-the full run duration (often 30+ minutes per dev-loop drive) and defeats async dispatch. The Pi
-platform default already says return control; do not call `subagent_wait` merely to wait. This
-clause reinforces that for the `dev-loop` dispatch pattern specifically.
+the full run.
 
 ## Enforcement posture
 
@@ -193,18 +182,9 @@ clause reinforces that for the `dev-loop` dispatch pattern specifically.
   gitignored is **denied** when it originates from the main agent, and allowed only inside the
   `dev-loop` subagent context (detected via the neutral `DEVLOOPS_RUN_ID` run-id contract, or
   the dev-loop `agent_type` — a generic subagent is not authorized).
-  Strict enforcement is opt-in via `DEVLOOPS_MAIN_AGENT_READONLY=1` (default fail-open) so
-  adopting the harness does not retroactively break a repo's own interactive dev; full run-id
-  propagation into the Claude subagent context completes with the headless/agent wiring.
-- **Coordinator→worker delegation boundary (#2082).** The same Write/Edit guard hook also
-  enforces a second, inner boundary under Claude Code: a tracked-file Write/Edit whose
-  `agent_type` is the coordinator's own (`dev-loop`) is denied — the coordinator must delegate
-  the edit to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) instead. Opt-in via
-  `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open); fail-closed once enforced and
-  non-bypassable BY THE DISPATCHED COORDINATOR through the Write/Edit tools it names. Ephemeral
-  artifacts (`tmp/`, the scratchpad, sanctioned ledger paths) are gitignored/non-repo paths, so
-  they fall through unaffected. See "Guarded surface and deliberate ceilings" below for what this
-  does not cover.
+  Strict enforcement is opt-in via `DEVLOOPS_MAIN_AGENT_READONLY=1` (default fail-open).
+- **Coordinator→worker delegation boundary (#2082).** The same hook enforces the coordinator
+  write boundary defined at the top of this document.
 - **Coordinator verify-command delegation boundary (#2082).**
   <!-- rule: COORDINATOR-VERIFY-BOUNDARY -->
   `COORDINATOR-VERIFY-BOUNDARY`: the dev-loop coordinator MUST NOT run a known
@@ -219,26 +199,16 @@ clause reinforces that for the `dev-loop` dispatch pattern specifically.
   `-C <dir>`, `-S <str>`, `--`, a bare `-`, and their long forms) before the real executable
   (`env -u DEVLOOPS_COORDINATOR_READONLY bun run verify` is still denied), on top of the bare
   leading-assignment and `nice`/`timeout` wrapper forms already covered.
-- **Guarded surface and deliberate ceilings.** Both boundaries above are mechanically enforced and
-  non-bypassable BY THE AGENT for their GUARDED SURFACE — a dispatched coordinator's
-  (`agent_type: "dev-loop"`) `Write`/`Edit` tracked-file mutations, and its use of a recognized
-  code-verification/build command ENTRYPOINT. That guarantee has three deliberate ceilings, not
-  gaps to be read as contradicting "mechanically enforced":
-  1. **Bash-driven tracked mutations remain convention-enforced, not mechanically guarded.** The
-     hook covers the Edit and Write tools only; Bash-driven repo mutations the contract also
-     forbids (`git commit`/`git push`/branch creation, in-place edits like `sed -i`, shell
-     redirection `> file` / `tee`) run through the Bash tool and are not denied by either boundary.
-     Tightening Bash-mutation coverage is possible follow-up.
-  2. **The top-level/inline agent (`agent_type: null`) is out of scope for both boundaries above.**
-     It is governed by the separate main-agent boundary (`DEVLOOPS_MAIN_AGENT_READONLY`) described
-     earlier in this section, not by `DEVLOOPS_COORDINATOR_READONLY`. Full inline-coordinator
-     enforcement depends on the coordinator-dispatch-default work (follow-up); conflating the two
-     boundaries by denying a null `agent_type` here would break the legitimate top-level/interactive
-     case.
-  3. **The verify-command denylist is a targeted classifier, not an exhaustive shell-command
-     parser.** It matches the known daily invocation shapes (package-manager/`vitest` heads, with
-     `env`/`nice`/`timeout` wrapper tolerance as described above); a command expressed via an
-     unrecognized wrapper form is a known, documented ceiling rather than a guaranteed sandbox.
+- **Guarded surface and deliberate ceilings.** Both coordinator boundaries are non-bypassable BY
+  THE AGENT only for their GUARDED SURFACE: a dispatched coordinator's (`agent_type: "dev-loop"`)
+  `Write`/`Edit` tracked-file mutations and its use of a recognized code-verification/build
+  command ENTRYPOINT. Three deliberate ceilings apply:
+  1. Bash-driven tracked mutations the contract also forbids (`git commit`/`git push`/branch
+     creation, `sed -i`, `> file` / `tee`) are convention-enforced, not denied by either boundary.
+  2. The top-level/inline agent (`agent_type: null`) is governed by the separate main-agent
+     boundary (`DEVLOOPS_MAIN_AGENT_READONLY`), not by `DEVLOOPS_COORDINATOR_READONLY`.
+  3. The verify-command denylist is a targeted classifier of the known invocation shapes; an
+     unrecognized wrapper form is not caught.
 - A companion `PreToolUse` Bash hook reproduces the `gh pr ready` draft-gate guard.
 - A `dev-loop` async subagent should still reject delegation attempts that bypass the contract.
 

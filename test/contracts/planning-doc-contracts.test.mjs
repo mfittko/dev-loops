@@ -121,6 +121,94 @@ test("planning guidance keeps sub-issue trees as the durable decomposition owner
   assert.match(docsIndex, /sub-issue-tree-contract\.md/i);
 });
 
+// Structural: find the durable and non-durable lists by heading line and
+// bullet membership, tolerant of heading markup, blank lines and wording.
+// Exact only for the API literal `canonicalSpecSource: pr_body`.
+function listItemsUnder(lines, headingRe) {
+  const start = lines.findIndex((line) => headingRe.test(line));
+  if (start === -1) return null;
+  const items = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^\s*[-*]\s+/.test(line)) items.push(line.trim());
+    else if (items.length && /^\s+\S/.test(line)) items[items.length - 1] += ` ${line.trim()}`;
+    else if (line.trim() !== "") break;
+  }
+  return items;
+}
+
+function assertLightweightIsNonDurable(content) {
+  const lines = content.split(/\r?\n/);
+  // A heading is a markdown heading or a lead-in line that ends with a colon.
+  const durable = listItemsUnder(lines, /^\s*(?:#+\s*durable\b.*|durable\b.*:)\s*$/i);
+  const nonDurable = listItemsUnder(lines, /^\s*(?:#+\s*non-durable\b.*|non-durable\b.*:)\s*$/i);
+  assert.ok(durable && nonDurable, "missing durable / non-durable spec-of-record lists");
+  assert.ok(!durable.some((item) => /lightweight/i.test(item)), "lightweight must not be listed as durable");
+  assert.ok(nonDurable.length > 0, "missing non-durable spec-of-record list");
+  const entry = nonDurable.find((item) => /lightweight/i.test(item));
+  assert.ok(entry, "non-durable list must name lightweight sessions");
+  assert.match(entry, /canonicalSpecSource: pr_body/, "lightweight entry must name its pr_body spec source");
+  // Invariant: the entry negates a phase or plan doc within one clause, in any wording.
+  assert.match(
+    entry,
+    /\bno\b[^.;]*\b(?:phase|plan)\b[^.;]*\bdoc(?:ument)?s?\b|\b(?:phase|plan)\b[^.;]*\bdoc(?:ument)?s?\b[^.;]*\b(?:is|are)\s+(?:not|never)\b/i,
+    "lightweight entry must state it has no plan doc",
+  );
+}
+
+test("lightweight non-durable check accepts a valid fixture and fails each broken fixture for its own reason", () => {
+  const valid = [
+    "Durable/committed spec artifacts:",
+    "",
+    "- phase-doc-backed local sessions",
+    "",
+    "Non-durable spec-of-record (no committed plan artifact):",
+    "",
+    "- lightweight PR-body-as-spec sessions (`canonicalSpecSource: pr_body`); no phase/plan doc",
+    "",
+  ].join("\n");
+  assert.doesNotThrow(() => assertLightweightIsNonDurable(valid));
+  assert.doesNotThrow(() => assertLightweightIsNonDurable(`${valid}\n- trailing section\n`));
+
+  // Reformatted headings: single newline, extra whitespace, markdown heading form.
+  const reformatted = valid
+    .replace("Durable/committed spec artifacts:\n\n", "### Durable / committed spec artifacts\n")
+    .replace("Non-durable spec-of-record (no committed plan artifact):\n\n", "Non-durable  spec-of-record   (no committed plan artifact):  \n");
+  assert.doesNotThrow(() => assertLightweightIsNonDurable(reformatted));
+
+  // Reworded prose with a wrapped continuation line.
+  const reworded = valid.replace(
+    "- lightweight PR-body-as-spec sessions (`canonicalSpecSource: pr_body`); no phase/plan doc",
+    "- sessions run with the lightweight flag use `canonicalSpecSource: pr_body`;\n  no plan or phase document is created or committed",
+  );
+  assert.doesNotThrow(() => assertLightweightIsNonDurable(reworded));
+  const rewordedPassive = valid.replace("; no phase/plan doc", ". A phase or plan doc is never committed");
+  assert.doesNotThrow(() => assertLightweightIsNonDurable(rewordedPassive));
+
+  const moved = valid.replace("- phase-doc-backed local sessions", "- lightweight PR-body-as-spec sessions");
+  assert.throws(() => assertLightweightIsNonDurable(moved), /lightweight must not be listed as durable/);
+
+  const noLists = valid.replace("Non-durable spec-of-record (no committed plan artifact):", "Other sessions:");
+  assert.throws(() => assertLightweightIsNonDurable(noLists), /missing durable \/ non-durable spec-of-record lists/);
+
+  const noListBody = valid.replace(
+    "- lightweight PR-body-as-spec sessions (`canonicalSpecSource: pr_body`); no phase/plan doc",
+    "See the artifact authority contract.",
+  );
+  assert.throws(() => assertLightweightIsNonDurable(noListBody), /missing non-durable spec-of-record list/);
+
+  const noLightweight = valid.replace("lightweight PR-body-as-spec sessions", "other sessions");
+  assert.throws(() => assertLightweightIsNonDurable(noLightweight), /non-durable list must name lightweight sessions/);
+
+  const noSpecSource = valid.replace(" (`canonicalSpecSource: pr_body`)", "");
+  assert.throws(() => assertLightweightIsNonDurable(noSpecSource), /lightweight entry must name its pr_body spec source/);
+
+  const noPlanDoc = valid.replace("; no phase/plan doc", "");
+  assert.throws(() => assertLightweightIsNonDurable(noPlanDoc), /lightweight entry must state it has no plan doc/);
+
+  const planDocCommitted = valid.replace("; no phase/plan doc", "; a phase/plan doc is committed");
+  assert.throws(() => assertLightweightIsNonDurable(planDocCommitted), /lightweight entry must state it has no plan doc/);
+});
+
 test("local workflow docs define tracker-backed local canonicality and no-dup rules", async () => {
   const [workflowDoc, localImplSkill, scriptsReadme] = await Promise.all([
     readRepo("docs/IMPLEMENTATION_WORKFLOW.md"),
@@ -141,11 +229,11 @@ test("local workflow docs define tracker-backed local canonicality and no-dup ru
     /phase-doc-backed local sessions/i,
     /tracker-backed local sessions/i,
     /Non-durable spec-of-record \(no committed plan artifact\)/i,
-    /lightweight PR-body-as-spec sessions.*NOT a durable committed artifact/is,
     /ARTIFACT-TRACKER-FIRST-NO-DUP/,
     /do not read \[Phase Plan\]\(\.\.\/\.\.\/docs\/phases\/phase-x\.md\) for that same tracker-backed session/i,
     /keep `tmp\/` as temporary local execution state only/i,
   ], "skills/local-implementation/SKILL.md");
+  assertLightweightIsNonDurable(localImplSkill);
 
   assertMatchesAll(scriptsReadme, [
     /resolve-tracker-local-spec\.mjs/i,

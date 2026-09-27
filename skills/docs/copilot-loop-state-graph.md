@@ -4,11 +4,7 @@ Canonical owner for the async Copilot review/fix loop state machine.
 
 ## Overview
 
-The state machine captures observable PR/GitHub/worktree facts (the **snapshot**) and maps them to exactly one **current state**, a list of **allowed next transitions**, and a **recommended next action**.
-
-This document is the Copilot-family inner-loop state machine. The broader family-local PR lifecycle that consumes this machine is defined in [PR Lifecycle Contract](./pr-lifecycle-contract.md).
-
-The implementation lives in:
+The machine maps observable PR/GitHub/worktree facts (the **snapshot**) to exactly one **current state**, its **allowed next transitions**, and a **recommended next action**. [PR Lifecycle Contract](./pr-lifecycle-contract.md) defines the lifecycle that consumes it. Implementation:
 
 - **Pure logic**: `packages/core/src/loop/copilot-loop-state.mjs` — state constants, transition table, `normalizeSnapshot`, `interpretLoopState`
 - **CLI**: `scripts/loop/detect-copilot-loop-state.mjs` — auto-detect or `--input` snapshot interpretation
@@ -30,10 +26,7 @@ The implementation lives in:
 | `done` | The loop's work at this boundary is complete: the PR was merged or closed, or a terminal hand-off occurred (e.g. re-request handed back to the watcher, internal-tooling PR proceeding to `pre_approval_gate`) |
 | <!-- term: state:internal_tooling_direct_gate --> `internal_tooling_direct_gate` | Internal-tooling-only PR; Copilot external review is skipped and the loop proceeds directly to `pre_approval_gate`. Externally assigned by the routing layer, never derived from a snapshot by `interpretLoopState` — no snapshot field drives it |
 
-Three additional terminal states (`low_signal_converged`, `round_cap_reached`,
-`round_cap_clean_fallback`) are owned by the round-cap/low-signal refinement heuristics in
-`copilot-loop-state.mjs`'s `NEXT_ACTIONS`/`isCopilotRoundCapReached` and are out of scope for
-this document's interpretation rules; see that module for their entry conditions.
+The round-cap/low-signal heuristics in `copilot-loop-state.mjs` (`NEXT_ACTIONS`/`isCopilotRoundCapReached`) own three more terminal states and their entry conditions: `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback`.
 
 ## Required transitions
 
@@ -73,8 +66,6 @@ Terminal states with no outgoing transitions: `no_pr`, `review_request_unavailab
   - internal-tooling PR skips Copilot review and proceeds directly to `pre_approval_gate`
 
 ## Snapshot Schema
-
-The snapshot is the set of observable facts that the interpreter uses to determine the current state.
 
 | Field | Type | Description |
 |---|---|---|
@@ -154,13 +145,13 @@ When rule 11 yields `ready_to_rerequest_review`, the interpreter also emits two 
 ### Active current-head request state keeps the wait open
 
 <!-- rule: COPILOT-STATE-ACTIVE-REQUEST-WAIT -->
-`COPILOT-STATE-ACTIVE-REQUEST-WAIT`: Rule 8 MUST route to `waiting_for_copilot_review` whenever the effective request status is `requested` or `already-requested`. A submitted (non-PENDING) Copilot review on the current head is necessary evidence for clean convergence, but it is not sufficient while the request remains active. This reconciliation is shared (issue #1588): `resolveCopilotReviewRequestStatus` in `scripts/loop/_copilot-review-request-status.mjs` is the single derivation path for `copilotReviewRequestStatus` across `detect-copilot-loop-state.mjs`, `detect-pr-gate-coordination-state.mjs`, and `request-copilot-review.mjs`. It resolves an ambiguous `requested_reviewers` entry (Copilot listed AND a submitted current-head review exists with no PENDING review) by comparing the latest `review_requested` timeline event timestamp against the latest submitted review timestamp: if the request is newer than the review, the request is genuinely active and the status stays `requested`; if the request predates the review, it is stale and settles to `none`. When the timeline is unavailable, the derivation fails closed to `requested`. A settled (`none`) status lets the loop proceed from `ready_to_rerequest_review` to `pre_approval_gate` instead of dead-ending into `stop`. The loop falls through to rule 9+ only after the current-head request status settles to `none` or another non-active terminal status.
+`COPILOT-STATE-ACTIVE-REQUEST-WAIT`: Rule 8 MUST route to `waiting_for_copilot_review` whenever the effective request status is `requested` or `already-requested`. A submitted (non-PENDING) Copilot review on the current head is necessary evidence for clean convergence, but it is not sufficient while the request remains active. `resolveCopilotReviewRequestStatus` in `scripts/loop/_copilot-review-request-status.mjs` is the single derivation path for `copilotReviewRequestStatus` across `detect-copilot-loop-state.mjs`, `detect-pr-gate-coordination-state.mjs`, and `request-copilot-review.mjs` (issue #1588). When Copilot is listed in `requested_reviewers` AND a submitted current-head review exists with no PENDING review, it compares the latest `review_requested` timeline event with the latest submitted review: a newer request stays `requested`; an older request settles to `none`. When the timeline is unavailable, the derivation fails closed to `requested`. The loop falls through to rule 9+ only after the current-head request status settles to `none` or another non-active terminal status.
 
 ### Automatic same-head re-request suppression after clean convergence
 
-When the current head already has a submitted Copilot review, the unresolved thread count is 0, and CI is not in a blocked wait/failure state, automatic follow-up re-request is suppressed for that head (clean convergence on current head, automatic re-request suppressed). Automatic re-request becomes eligible again only after a meaningful remediation event changes the review basis (for this loop: a newer head without a submitted Copilot review on that head). Explicit operator/manual re-request remains allowed, but the direct request helper now suppresses same-head clean re-requests by default unless `--force-rerequest-review` is provided.
+When the current head already has a submitted Copilot review, the unresolved thread count is 0, and CI is not in a blocked wait/failure state, automatic re-request is suppressed for that head. It becomes eligible again only on a newer head without a submitted Copilot review. The direct request helper also suppresses same-head clean re-requests unless `--force-rerequest-review` is provided.
 
-Clean convergence is a behavioral indicator (`sameHeadCleanConverged`) emitted while the state remains `ready_to_rerequest_review` — it is not a transition to `done` or `pre_approval_gate`. The handoff to `pre_approval_gate` is owned by the broader PR-lifecycle/gate-coordination layer, which consumes the `sameHeadCleanConverged` indicator (and the shared `resolveCopilotReviewRequestStatus` reconciliation that settles a stale `requested` status to `none` when the request predates the latest same-head submitted review) to grant `RUN_PRE_APPROVAL_GATE` instead of dead-ending into `stop` (#1588).
+Clean convergence is the behavioral indicator `sameHeadCleanConverged`, emitted while the state remains `ready_to_rerequest_review`; it is not a transition. The gate-coordination layer consumes it, with the settled request status above, to grant `RUN_PRE_APPROVAL_GATE` (#1588).
 
 ### Carried convergence after a post-convergence head bump
 
@@ -177,13 +168,11 @@ Clean convergence is a behavioral indicator (`sameHeadCleanConverged`) emitted w
 <!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex current head> operator -->
 ```
 
-`review` is the Copilot review's GraphQL node id as `gh pr view --json reviews` reports it, compared case-sensitively. `head` MUST equal the current head. `fix` names the fixing commit, which MUST be strictly after the dispositioned review's commit (the compare from the review commit to the fix commit reports `ahead`) and MUST be the head or one of its ancestors. A `fix` record therefore never clears a finding on a review of the current head; only the `operator` form can. The `operator` form is reserved for a human operator decision; agents, the fixer included, write only the `fix` form. `merge-pr.mjs` reads the record through the same resolver, so a current-head finding cleared by an `operator` record also clears `copilot_convergence` at merge, and the merge result names the record as `copilotBodyDisposition`. A marker inside a fenced code block, an inline code span, or a `>` quote line is never a record. The comment author MUST be a human with `OWNER`, `MEMBER`, or `COLLABORATOR` association; bot logins, Copilot included, are never trusted. A trusted record that names the current-head review which raised the finding clears `copilotBodyFeedbackUnresolved` in `detect-copilot-loop-state.mjs`, `detect-pr-gate-coordination-state.mjs`, and `request-copilot-review.mjs` (one shared resolver in `scripts/github/_copilot-body-disposition.mjs`) and clears the gate-entry body block, for that head only, so `round_cap_clean_fallback` becomes reachable at the round cap. The same resolver covers an earlier-head finding: when the latest Copilot review sits on an earlier head and is body-only changes-recommended or unrecognized with no thread of its own, it sets `copilotPriorHeadBodyFeedbackUnresolved`, and at the round cap that blocks `round_cap_clean_fallback` until a trusted `fix` record (fix commit after that review's commit and in the head) or `operator` record names that review for the current head. Two or more tied latest reviews with a body finding have no single owner, so no record clears them. The gate coordination output records the record used as `copilotBodyDisposition`. While either flag blocks, it emits `copilotBodyDispositionRequired` (`reviewId`, `reviewCommitSha`, `reason`) to name the review a record must name; `reviewId` is `null` for a tie that no record clears, and the field is `null` when neither flag blocks. No record, a record for another head, a different review id, an untrusted author, an unreachable fix commit, or an unreadable comment stream MUST leave the finding blocking. No tool writes this record automatically; the operator posts the `operator` form and the fixer posts the `fix` form.
+`review` is the Copilot review's GraphQL node id as `view-pr.mjs --json reviews` reports it, compared case-sensitively. `head` MUST equal the current head. `fix` names the fixing commit, which MUST be strictly after the dispositioned review's commit (the compare from the review commit to the fix commit reports `ahead`) and MUST be the head or one of its ancestors. A `fix` record therefore never clears a finding on a review of the current head; only the `operator` form can. The `operator` form is reserved for a human operator decision; agents, the fixer included, write only the `fix` form. `merge-pr.mjs` reads the record through the same resolver, so a current-head finding cleared by an `operator` record also clears `copilot_convergence` at merge, and the merge result names the record as `copilotBodyDisposition`. A marker inside a fenced code block, an inline code span, or a `>` quote line is never a record. The comment author MUST be a human with `OWNER`, `MEMBER`, or `COLLABORATOR` association; bot logins, Copilot included, are never trusted. A trusted record that names the current-head review which raised the finding clears `copilotBodyFeedbackUnresolved` in `detect-copilot-loop-state.mjs`, `detect-pr-gate-coordination-state.mjs`, and `request-copilot-review.mjs` (one shared resolver in `scripts/github/_copilot-body-disposition.mjs`) and clears the gate-entry body block, for that head only, so `round_cap_clean_fallback` becomes reachable at the round cap. The same resolver covers an earlier-head finding: when the latest Copilot review sits on an earlier head and is body-only changes-recommended or unrecognized with no thread of its own, it sets `copilotPriorHeadBodyFeedbackUnresolved`, and at the round cap that blocks `round_cap_clean_fallback` until a trusted `fix` record (fix commit after that review's commit and in the head) or `operator` record names that review for the current head. Two or more tied latest reviews with a body finding have no single owner, so no record clears them. The gate coordination output records the record used as `copilotBodyDisposition`. While either flag blocks, it emits `copilotBodyDispositionRequired` (`reviewId`, `reviewCommitSha`, `reason`) to name the review a record must name; `reviewId` is `null` for a tie that no record clears, and the field is `null` when neither flag blocks. No record, a record for another head, a different review id, an untrusted author, an unreachable fix commit, or an unreadable comment stream MUST leave the finding blocking. No tool writes this record automatically; the operator posts the `operator` form and the fixer posts the `fix` form.
 
 ### `unavailable` stops the loop only when no in-progress evidence exists
 
-Rule 4 routes to `review_request_unavailable` when the explicit request path returned `unavailable`. However, this only reaches the state machine when there is **no observable in-progress evidence**. The request helper (`request-copilot-review.mjs`) short-circuits to `already-requested` when Copilot review is already observably in progress before the mutation attempt, and it also performs post-failure verification after known unavailable/unrequestable failures (including the 422 collaborator error): if Copilot is found in `requested_reviewers` or has a PENDING review pinned to the current head commit, it returns `already-requested` instead of `unavailable`. The auto-detect path also treats a PENDING Copilot review on the current head as equivalent evidence to being in `requested_reviewers`, setting `copilotReviewRequestStatus = "requested"`.
-
-The net effect: `unavailable` in the snapshot means the request path failed **and** Copilot is observably not in progress. The loop never drops to the approval gate when Copilot review is still in progress.
+`unavailable` in the snapshot means the request path failed **and** Copilot is observably not in progress. `request-copilot-review.mjs` returns `already-requested` when Copilot is in `requested_reviewers` or has a PENDING current-head review, both before the request and after a known unavailable/unrequestable failure (including the 422 collaborator error). Auto-detect maps a PENDING current-head Copilot review to `requested`. The loop never drops to the approval gate while Copilot review is in progress.
 
 ### `failed` and plain `unavailable` stop the loop immediately
 
@@ -192,7 +181,7 @@ The net effect: `unavailable` in the snapshot means the request path failed **an
 
 ### Incomplete review-thread detection blocks auto-detect
 
-Auto-detect must fail closed when review-thread state cannot be captured or parsed. The detector must not synthesize `unresolvedThreadCount: 0` from a GitHub or parser failure, because that could hide unresolved feedback and produce an unsafe wait or re-request recommendation.
+Auto-detect must fail closed when review-thread state cannot be captured or parsed. The detector must not synthesize `unresolvedThreadCount: 0` from a GitHub or parser failure.
 
 ### Reply/resolve must precede re-request
 
@@ -201,17 +190,13 @@ Auto-detect must fail closed when review-thread state cannot be captured or pars
 
 ### Green validation precondition before follow-up re-request
 
-Re-requesting Copilot after a follow-up fix is gated on the updated head being green or credibly green. In practice:
+`COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE` in the [follow-up skill](../copilot-pr-followup/SKILL.md) and the [Copilot CI Status Contract](./copilot-ci-status-contract.md) gate a follow-up re-request on the updated head being green or credibly green. In snapshot terms:
 
-- run the smallest honest local validation for the accepted fix scope
-- continue remediation if that local validation is still known red
-- after a fix push advances the PR head SHA, treat previous-head CI evidence as stale for CI-dependent follow-up
-- refresh the relevant GitHub CI/check state for the current head before advancing
-- treat `ciStatus: "pending"` and `ciStatus: "none"` for the current head as wait states, not as green
-- passing local validation alone does not satisfy a follow-up step that still requires GitHub CI/check readiness for the current head
-- only current-head results may satisfy that CI-dependent step; older-head results must not unblock the new head
-- continue remediation if CI/checks for the current head are known red for a fixable issue
-- if waiting for current-head checks times out before they settle, remain waiting/blocked rather than crossing the CI-dependent boundary anyway
+- run the smallest honest local validation for the accepted fix scope; known-red local validation or current-head CI for a fixable issue continues remediation
+- after a fix push, previous-head CI evidence is stale; refresh current-head CI/check state before advancing, and only current-head results may satisfy a CI-dependent step
+- `ciStatus: "pending"` and `ciStatus: "none"` for the current head are wait states, not green
+- passing local validation alone does not satisfy a step that requires current-head GitHub CI/check readiness
+- a wait that times out before current-head checks settle stays waiting/blocked
 
 ### `waiting_for_copilot_review` is a persistence boundary for explicit async loop entry
 
@@ -220,13 +205,11 @@ Re-requesting Copilot after a follow-up fix is gated on the updated head being g
 
 ## Normal request/watch routing contract
 
-The normal request/re-request/watch routing seam is helper-owned in `scripts/loop/copilot-pr-handoff.mjs` (not markdown-owned). Use its machine-readable output as the contract:
+`scripts/loop/copilot-pr-handoff.mjs` owns the normal request/re-request/watch routing seam. Use its machine-readable output as the contract:
 
 - top-level `action`, `nextAction`, `reviewRequestStatus`, `watchArgs`, `loopDisposition`, `terminal`
 - `requestWatchContract.routingState` (`ready_state_needs_copilot_request`, `copilot_request_confirmed_waiting`, `draft_reset_requires_ready_state_reentry`, `non_ready_state`)
 - `requestWatchContract.stopState` for explicit stop/blocked routing (`unavailable`, `blocked`, `draft_requires_ready_state_reentry`, `no_automatic_next_step`)
-
-Skills and operational docs should reference this helper contract for deterministic branching and reserve markdown for policy/operator judgment.
 
 ## Related Scripts
 

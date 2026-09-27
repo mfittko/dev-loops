@@ -26,12 +26,12 @@ Judge each named state through four **lenses**, each grounded in one artifact, a
 - `visual` — grounded in `screenshotPath` (the pixels)
 - `interaction` — grounded in `consolePath` (`console.json`) and interaction state
 
-The route MUST forward the non-empty `acceptanceCriteria` list and your `checkedCriteria` passes to `convergeUiReviewRouteFindings(findings, { acceptanceCriteria, checkedCriteria })` in `scripts/loop/ui-review-lenses.mjs`. That seam groups findings by lens and calls `convergeUiReviewLenses`, which dedupes normalized `(stateName, region, category)` triples using the worse severity. Emit the raw findings and passes specified below; the seam derives the outcome.
+The route MUST forward the non-empty `acceptanceCriteria` list and your `checkedCriteria` passes to `convergeUiReviewRouteFindings(findings, { acceptanceCriteria, checkedCriteria })` in `scripts/loop/ui-review-lenses.mjs`. That seam calls `convergeUiReviewLenses`, which dedupes normalized `(stateName, region, category)` triples using the worse severity.
 
 1. Fail closed when required inputs are missing, ambiguous, or unreadable.
-2. Ground every finding in **its lens's** artifact — `a11y` in `axePath` (`axe.json`), `layout-geometry` in `snapshotPath` (`snapshot.json`), `visual` in `screenshotPath` (the pixels), `interaction` in `consolePath` (`console.json`) — and cite that artifact in the finding's `evidence`. Use `statePath` (`state.json`) as the shared per-state reference; add a `screenshotPath` reference when the pixels corroborate a non-`visual` finding.
+2. Ground every finding in **its lens's** artifact (listed above) and cite that artifact in the finding's `evidence`. Use `statePath` (`state.json`) as the shared per-state reference; add a `screenshotPath` reference when the pixels corroborate a non-`visual` finding.
 3. Evaluate layout, hierarchy, spacing, clipping, overlap, callouts/highlighting, and state-transition clarity against the acceptance criteria and review brief. Do **not** eyeball computable accessibility facts (color contrast, missing accessible names/roles, and similar). Those are asserted from `axe.json` evidence, not judged from pixels: cite the axe rule `id`/`impact` and map its impact to finding severity (`critical`/`serious` → `high`, `moderate` → `medium`, `minor` → `low`; unranked/unknown → `medium`).
-4. Read `console.json` as evidence for that state (its captured console errors and failed network requests: a swallowed 500, an uncaught page error). These captured errors are ALREADY surfaced as fail-closed, source-anchored must-fix findings by the drive's mechanical failure gate — do **not** re-file them as separate findings (the report dedups against the mechanical set). Use `console.json` to corroborate or explain a visual finding, never to independently pass a state; a state whose `console.json` is JSON `null` captured none.
+4. Read `console.json` as evidence for that state (its captured console errors and failed network requests: a swallowed 500, an uncaught page error). These captured errors are ALREADY surfaced as fail-closed, source-anchored must-fix findings by the drive's mechanical failure gate — do **not** re-file them as separate findings. Use `console.json` to corroborate or explain a visual finding, never to independently pass a state; a state whose `console.json` is JSON `null` captured none.
 5. Return only deterministic findings; do not invent evidence that is not visible in artifacts.
 
 ## Required output format
@@ -88,14 +88,11 @@ Return strict JSON with this shape (example uses concrete values):
 The seam gates `ui_review_satisfied` on **per-criterion coverage**: an acceptance
 criterion counts as covered only when it is referenced by >=1 finding OR marked as
 an affirmative **pass** in `checkedCriteria` over a named state. Satisfaction
-requires EVERY criterion covered (and no must-fix/blocking findings).
+requires EVERY criterion covered (and no must-fix/blocking findings). A criterion
+with neither a finding nor a pass keeps the fix loop going (`continue_ui_fix_loop`).
 
-`checkedCriteria` records the criteria you affirmatively checked and found NO
-problem for — each mark is `{ "acceptanceCriterionRef": "AC<n>", "stateName": "…" }`
-naming the criterion and the named state you verified it over. A malformed mark
-(missing `stateName`, unmappable `acceptanceCriterionRef`) fails closed.
-
-An all-clean review is therefore **not** auto-satisfied: emit
-`{ "findings": [], "checkedCriteria": [ … one pass per criterion … ] }` so every
-criterion is covered by a pass. A criterion with neither a finding nor a pass is an
-unaudited gap and keeps the fix loop going (`continue_ui_fix_loop`).
+Each `checkedCriteria` mark is `{ "acceptanceCriterionRef": "AC<n>", "stateName": "…" }`
+and names a criterion you checked and found NO problem for over that named state.
+A malformed mark (missing `stateName`, unmappable `acceptanceCriterionRef`) fails
+closed. An all-clean review emits
+`{ "findings": [], "checkedCriteria": [ … one pass per criterion … ] }`.
