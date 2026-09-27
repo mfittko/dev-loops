@@ -2534,6 +2534,88 @@ test("detect-pr-gate-coordination-state: issue-less draft PR whose body fails sp
   }
 });
 
+test("#2456: draft PR with no closing issue and no plan artifact reports the spec precondition naming the missing artifacts, not the pr_draft stop", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body: "Draft work in progress.",
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      buildMockRuntime(env),
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    const specReason = result.refinementArtifact?.reason;
+    assert.match(specReason, /closes no resolvable same-repo issue/);
+    assert.match(specReason, /no promoted plan doc/);
+    assert.match(result.reason, /closes no resolvable same-repo issue/);
+    // The handoff's Copilot-only draft stop is state "pr_draft" /
+    // stopState "draft_requires_ready_state_reentry"; the spec reason is distinct.
+    for (const handoffDraftStop of ["pr_draft", "draft_requires_ready_state_reentry"]) {
+      assert.notEqual(result.reason, handoffDraftStop);
+      assert(!result.reason.includes(handoffDraftStop));
+    }
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("#2456: issue-less draft PR with only a cross-repo Closes reference names no resolvable same-repo issue", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-test-"));
+  try {
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body: "Draft work in progress.\n\nCloses other/repo#5",
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      buildMockRuntime(env),
+    );
+    assert.equal(result.ok, true);
+    const specReason = result.refinementArtifact?.reason;
+    assert.match(specReason, /closes no resolvable same-repo issue/);
+    assert.doesNotMatch(specReason, /closes no issue\b/);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("loadRefinementArtifact: non-draft issue-less PR stays unknown (refinement is a draft-gate boundary)", async () => {
   const result = await loadRefinementArtifact({
     repo: "owner/repo",
