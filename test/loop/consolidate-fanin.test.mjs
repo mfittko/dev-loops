@@ -404,52 +404,56 @@ test("consolidateGateFanin writes --ledger-out as the { overallVerdict, findings
   );
 });
 
+const VERIFIED_HEAD = "b7".repeat(20);
+const STALE_HEAD = "a".repeat(40);
+
+async function consolidateLedger(dir, options) {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-verified-"));
+  try {
+    const ledgerPath = path.join(dir, "out", "ledger.json");
+    await consolidateGateFanin({ findingsDir: dir, ledgerOut: ledgerPath, tmpRoot, ...options });
+    return JSON.parse(await readFile(ledgerPath, "utf8"));
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+}
+
 test("consolidateGateFanin writes the deduplicated, trimmed verifiedItems union into --ledger-out", async () => {
   await withFindingsDir(
     {
-      "acceptance-criteria.json": { angle: "acceptance-criteria", verdict: "clean", findings: [], verifiedItems: [" item one ", "item two"] },
-      "pr-checklist.json": { angle: "pr-checklist", verdict: "clean", findings: [], verifiedItems: ["item two", "item three"] },
-      "scope.json": { angle: "scope", verdict: "clean", findings: [] },
+      "acceptance-criteria.json": { angle: "acceptance-criteria", verdict: "clean", findings: [], headSha: VERIFIED_HEAD, verifiedItems: [" item one ", "item two"] },
+      "pr-checklist.json": { angle: "pr-checklist", verdict: "clean", findings: [], headSha: VERIFIED_HEAD, verifiedItems: ["item two", "item three"] },
+      "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: VERIFIED_HEAD },
     },
     async (dir) => {
-      const ledgerPath = path.join(dir, "out", "ledger.json");
-      await consolidateGateFanin({ findingsDir: dir, ledgerOut: ledgerPath });
-      const written = JSON.parse(await readFile(ledgerPath, "utf8"));
+      const written = await consolidateLedger(dir, { headSha: VERIFIED_HEAD });
       assert.deepEqual(written.verifiedItems, ["item one", "item two", "item three"]);
+      // Without --head-sha no artifact is bound to the round head, so none counts.
+      assert.equal("verifiedItems" in await consolidateLedger(dir, {}), false);
     },
   );
 });
 
-test("consolidateGateFanin: carried-forward and synthetic pr-checklist entries contribute no verifiedItems", async () => {
-  await withMinimalConfigRepoRoot(async (repoRoot) => {
-    await withFindingsDir(
-      { "acceptance-criteria.json": { angle: "acceptance-criteria", verdict: "clean", findings: [], verifiedItems: ["fresh item"] } },
-      async (dir) => {
-        const ledgerPath = path.join(dir, "out", "ledger.json");
-        const plan = JSON.parse(carryForwardPlanJson(["dry"])).carried.map((e) => ({ ...e, verifiedItems: ["carried item"] }));
-        await consolidateGateFanin({
-          findingsDir: dir,
-          gate: "draft_gate",
-          repoRoot,
-          ledgerOut: ledgerPath,
-          prChecklist: "clean",
-          carriedAngles: ["dry"],
-          carryForwardPlan: plan,
-        });
-        const written = JSON.parse(await readFile(ledgerPath, "utf8"));
-        assert.deepEqual(written.verifiedItems, ["fresh item"]);
-      },
-    );
-    await withFindingsDir(
-      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
-      async (dir) => {
-        const ledgerPath = path.join(dir, "out", "ledger.json");
-        await consolidateGateFanin({ findingsDir: dir, ledgerOut: ledgerPath, prChecklist: "clean" });
-        const written = JSON.parse(await readFile(ledgerPath, "utf8"));
-        assert.equal("verifiedItems" in written, false);
-      },
-    );
-  });
+test("consolidateGateFanin: a stale-head artifact never contributes verifiedItems", async () => {
+  await withFindingsDir(
+    { "acceptance-criteria.json": { angle: "acceptance-criteria", verdict: "clean", findings: [], headSha: STALE_HEAD, verifiedItems: ["stale item"] } },
+    async (dir) => {
+      // Without --head-sha nothing binds the artifact to the round head.
+      assert.equal("verifiedItems" in await consolidateLedger(dir, {}), false);
+      // With --head-sha the stamp guard refuses the stale artifact outright.
+      await assert.rejects(() => consolidateLedger(dir, { headSha: VERIFIED_HEAD }), /is stamped for head/);
+    },
+  );
+});
+
+test("consolidateGateFanin: the synthetic pr-checklist entry contributes no verifiedItems", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: VERIFIED_HEAD } },
+    async (dir) => {
+      const written = await consolidateLedger(dir, { headSha: VERIFIED_HEAD, prChecklist: "clean" });
+      assert.equal("verifiedItems" in written, false);
+    },
+  );
 });
 
 test("consolidateGateFanin fails closed on verifiedItems from a non-AC angle", async () => {

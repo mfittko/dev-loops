@@ -9175,9 +9175,15 @@ function makeAcRunChild({
   issueComments = [],
   ciSuccess = true,
   prBody = DEFAULT_TEST_PR_BODY,
+  // true fails every body edit; "pr" or "issue" fails only that kind. Mutable
+  // through the returned `control` so a second run can succeed.
   failBodyEdit = false,
+  // Fail every `gh issue view` after this many successful ones (null: never).
+  failIssueViewAfter = null,
 } = {}) {
   const calls = [];
+  const control = { failBodyEdit };
+  let issueViews = 0;
   // Body edits (`gh pr|issue edit --body-file`) update the served bodies, so a
   // re-read after an edit sees the edited text. `editedBodies` records each one.
   const editedBodies = [];
@@ -9193,7 +9199,7 @@ function makeAcRunChild({
     if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
     const a = args.join(" ");
     if ((args[0] === "pr" || args[0] === "issue") && args[1] === "edit" && args.includes("--body-file")) {
-      if (failBodyEdit) return { code: 1, stdout: "", stderr: "HTTP 502: body edit failed\n" };
+      if (control.failBodyEdit === true || control.failBodyEdit === args[0]) return { code: 1, stdout: "", stderr: "HTTP 502: body edit failed\n" };
       const body = await readFile(args[args.indexOf("--body-file") + 1], "utf8");
       editedBodies.push({ kind: args[0], number: args[2], body });
       if (args[0] === "pr") currentPrBody = body;
@@ -9203,6 +9209,7 @@ function makeAcRunChild({
     // gh issue view <n> --json body — the linked-issue spec-of-record fetch.
     if (args[0] === "issue" && args[1] === "view") {
       const issue = args[2];
+      if (failIssueViewAfter !== null && issueViews++ >= failIssueViewAfter) return { code: 1, stdout: "", stderr: "HTTP 502: issue view failed\n" };
       const body = issueBodies[issue];
       if (body === undefined) return { code: 1, stdout: "", stderr: "not found\n" };
       return { code: 0, stdout: JSON.stringify({ body }) + "\n", stderr: "" };
@@ -9232,7 +9239,7 @@ function makeAcRunChild({
     if (args[0] === "pr" && args[1] === "view") return { code: 0, stdout: prJson(), stderr: "" };
     return { code: 0, stdout: "{}\n", stderr: "" };
   };
-  return { runChild, calls, editedBodies };
+  return { runChild, calls, editedBodies, control };
 }
 
 // Stage a repoRoot whose .devloops mirrors the real config with
@@ -10050,13 +10057,14 @@ const COMPOSITION_UNCHECKED_AC_PR_BODY = [
   "- none", "",
 ].join("\n");
 
-function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKED_AC_ISSUE_BODY, failBodyEdit = false } = {}) {
+function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKED_AC_ISSUE_BODY, failBodyEdit = false, failIssueViewAfter = null } = {}) {
   return makeAcRunChild({
     isDraft: false,
     closingIssues: [{ number: 900 }],
     issueBodyByNumber: { 900: issueBody },
     prBody,
     failBodyEdit,
+    failIssueViewAfter,
     reviews: [1, 2, 3, 4, 5].map((i) => ({
       author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
       submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
@@ -10074,14 +10082,14 @@ function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKE
   });
 }
 
-async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, issueBody, failBodyEdit }, fn) {
+async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, issueBody, failBodyEdit, failIssueViewAfter }, fn) {
   const repoRoot = await stageConfigRepoRoot(requireFanoutEvidence);
   try {
     const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate, verifiedItems });
     const ledgerBefore = await readFile(ledgerPath, "utf8");
-    const { runChild, calls, editedBodies } = gate === "draft_gate"
+    const { runChild, calls, editedBodies, control } = gate === "draft_gate"
       ? makeAcRunChild({ isDraft: true, prBody })
-      : makeCompositionRunChild(prBody, extraComments, { issueBody, failBodyEdit });
+      : makeCompositionRunChild(prBody, extraComments, { issueBody, failBodyEdit, failIssueViewAfter });
     const post = (overrides = {}) => upsertCheckpointVerdict({
       repo: "owner/repo", pr: 17, gate, headSha: GATE_FULL_HEAD,
       findingsSummary: "review round summary",
@@ -10095,7 +10103,7 @@ async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approv
       assert.ok(postCall, "a review was posted");
       return JSON.parse(postCall.stdinText).body;
     };
-    await fn({ post, postedBody, calls, editedBodies, ledgerPath });
+    await fn({ post, postedBody, calls, editedBodies, ledgerPath, control });
     // The fan-in ledger is never mutated by the composition.
     assert.equal(await readFile(ledgerPath, "utf8"), ledgerBefore);
   } finally {
@@ -10439,6 +10447,69 @@ test("tick: the linked issue's unticked AC items are ticked too, and the later c
     assert.match(editedBodies[1].body, /^- \[x\] criterion number 1$/m);
     assert.match(editedBodies[1].body, /^- \[x\] criterion number 2$/m);
     assert.match(postedBody(), /\*\*Verdict:\*\* clean/);
+  });
+});
+
+const TICK_ISSUE_BODY_WITH_UNVERIFIED = [
+  "## Acceptance criteria", "",
+  "- [ ] criterion number 1", "- [ ] unverified issue criterion", "",
+].join("\n");
+const reviewPosted = (calls) => calls.some((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
+
+test("tick: a failed post-tick issue re-fetch cannot drop the unverified issue AC item, so no clean is posted", async () => {
+  // Views 1 and 2 (coordination load, tick fetch) succeed; the reload re-fetch fails.
+  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED, failIssueViewAfter: 2 };
+  await withCompositionRound(round, async ({ post, calls }) => {
+    await assert.rejects(
+      () => post({ verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS }),
+      /1 unticked spec-of-record Acceptance criteria\), the checkpoint verdict is "blocked"/,
+    );
+    assert.equal(reviewPosted(calls), false);
+  });
+  await withCompositionRound(round, async ({ post, postedBody }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
+    assert.deepEqual(result.gateBlockers, [{ kind: "unticked spec-of-record Acceptance criteria", item: "unverified issue criterion" }]);
+  });
+});
+
+test("clean guards point at reviewer verifiedItems and a gate rerun, with the tick CLI only as a manual correction", async () => {
+  const guidance = (message) => {
+    assert.match(message, /verifiedItems of the acceptance-criteria and pr-checklist review angles/);
+    assert.match(message, /rerun the gate/);
+    assert.match(message, /tick-verified-checkboxes\.mjs is a manual correction tool only/);
+    assert.doesNotMatch(message, /Tick the satisfied ACs in the tracker issue|Tick the verified boxes via/);
+    return true;
+  };
+  const noLedger = { findingsLedger: undefined, verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS };
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY }, async ({ post }) => {
+    await assert.rejects(() => post(noLedger), (err) => guidance(err.message));
+  });
+  await withCompositionRound({ overallVerdict: "clean", prBody: FULLY_TICKED_PR_BODY, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED }, async ({ post }) => {
+    await assert.rejects(() => post(noLedger), (err) => /spec-of-record/.test(err.message) && guidance(err.message));
+  });
+});
+
+test("tick: a PR body that is not a string fails closed before any edit or verdict", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: null, verifiedItems: TICK_ITEMS }, async ({ post, calls }) => {
+    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS }), /PR body is not a string/);
+    assert.equal(calls.some((c) => c.args[1] === "edit" && c.args.includes("--body-file")), false);
+    assert.equal(reviewPosted(calls), false);
+  });
+});
+
+test("tick: a failed issue edit after a successful PR edit posts no verdict; the rerun ticks only the issue", async () => {
+  const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", ""].join("\n");
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody, failBodyEdit: "issue" }, async ({ post, calls, editedBodies, control }) => {
+    // The CLI main() maps this rejection to exit code 1.
+    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS }), /gh issue edit failed/);
+    assert.equal(reviewPosted(calls), false);
+    assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17"]);
+    control.failBodyEdit = false;
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17", "issue 900"]);
+    assert.match(editedBodies[1].body, /^- \[x\] criterion number 1$/m);
   });
 });
 

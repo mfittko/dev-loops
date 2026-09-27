@@ -577,12 +577,13 @@ export function detectAcDodMatrix(body = "") {
 // a merge outcome ("merge only on a full gate pass") can only become true after
 // the gate that checks the PR-body boxes has already run, so as a checkbox it
 // would block that gate forever.
-// ponytail: keyword heuristic; it catches "<gate> [and <gate>] pass/is clean"
-// and "merge only"/"is merged" phrasings and misses paraphrases such as
-// "approval succeeds". Upgrade path: an explicit gate-outcome marker in the
-// issue matrix instead of text matching.
-const GATE_OUTCOME_RE = /\b(?:draft_gate|pre_approval_gate|gates?)`?(?:\s+(?:and|or)\s+`?(?:draft_gate|pre_approval_gate)`?)*\s+(?:pass(?:es|ed)?|succeeds?|(?:is|are|stays?|closes?)\s+clean)\b/i;
-const MERGE_OUTCOME_RE = /\bmerges?\s+only\b|\b(?:is|was|gets?)\s+merged\b/i;
+// ponytail: keyword heuristic; it catches "draft_gate/pre_approval_gate [and
+// <gate>] pass/is clean" and "merge [happens] only on" phrasings. It misses
+// paraphrases such as "approval succeeds", "the gates pass" (no named gate) or
+// "the PR is merged after a full gate pass". Upgrade path: an explicit
+// gate-outcome marker in the issue matrix instead of text matching.
+const GATE_OUTCOME_RE = /\b(?:draft_gate|pre_approval_gate)`?(?:\s+(?:and|or)\s+`?(?:draft_gate|pre_approval_gate)`?)*\s+(?:pass(?:es|ed)?|succeeds?|(?:is|are|stays?|closes?)\s+clean)\b/i;
+const MERGE_OUTCOME_RE = /\bmerges?\s+(?:happens\s+)?only\s+on\b/i;
 
 /**
  * True when a matrix item's satisfaction depends on a gate or merge being

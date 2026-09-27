@@ -310,12 +310,27 @@ test("isGateOutcomeItem stays narrow: no row of a real tool-behavior matrix is a
   }
   assert.deepEqual(derivePrChecklistsFromIssueMatrix({ matrix }).gateOutcomes, []);
   for (const outcome of [
+    "draft_gate and pre_approval_gate pass on the final head; merge only on a full gate pass",
     "`draft_gate` and `pre_approval_gate` pass on the final head",
     "the pre_approval_gate is clean at the final head",
-    "the PR is merged after a full gate pass",
     "merge only on a full gate pass",
+    "the merge happens only on a full gate pass",
   ]) {
     assert.equal(isGateOutcomeItem(outcome), true, outcome);
+  }
+});
+
+test("isGateOutcomeItem needs an explicit gate subject and lifecycle merge phrasing", () => {
+  for (const item of [
+    "The gate passes a --head-sha flag to the consolidator",
+    "the gate stays clean when no finding remains",
+    "CI gates pass",
+    "The gate succeeds when the ledger is clean",
+    "A test asserts a branch that was merged is skipped",
+    "merge queue merges only green PRs",
+    "a draft PR is merged into main by merge-pr when checks pass",
+  ]) {
+    assert.equal(isGateOutcomeItem(item), false, item);
   }
 });
 

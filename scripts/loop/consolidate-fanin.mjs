@@ -1454,13 +1454,14 @@ export async function consolidateGateFanin(options) {
       parseError,
     );
     // verifiedItems: the deduplicated, trimmed union of the AC/DoD labels this
-    // round's fresh reviewers verified at this head (validateAngleResult already
-    // limited the field to the acceptance-criteria/pr-checklist angles). A
-    // carried-forward entry verified nothing at this head and the synthetic
-    // --pr-checklist entry carries no field, so neither contributes. Omitted
-    // when empty, so a round without it writes the same ledger as before.
-    const verifiedItems = [...new Set(rawArtifacts
-      .filter((a) => typeof a.carriedFromHead !== "string" && Array.isArray(a.verifiedItems))
+    // round's reviewers verified (validateAngleResult already limited the field
+    // to the acceptance-criteria/pr-checklist angles). Only an artifact stamped
+    // with this round's --head-sha counts; without --head-sha nothing is bound
+    // to the round head, so nothing counts. Carried and synthetic entries carry
+    // no stamp. Omitted when empty, so a round without it writes the same
+    // ledger as before.
+    const verifiedItems = options.headSha === undefined ? [] : [...new Set(rawArtifacts
+      .filter((a) => normalizeHeadShaValue(a.headSha) === options.headSha && Array.isArray(a.verifiedItems))
       .flatMap((a) => a.verifiedItems.map((item) => item.trim())))];
     const ledgerWrapper = { overallVerdict: consolidated.verdict, findings };
     if (verifiedItems.length > 0) ledgerWrapper.verifiedItems = verifiedItems;

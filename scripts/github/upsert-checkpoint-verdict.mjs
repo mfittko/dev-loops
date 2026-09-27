@@ -13,6 +13,7 @@ import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
 import { loadPrGateCoordinationContext, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
+import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { applyTick } from "./tick-verified-checkboxes.mjs";
 import { editPr } from "./edit-pr.mjs";
 import { editIssue } from "./edit-issue.mjs";
@@ -2087,28 +2088,39 @@ export function collectPreApprovalGateBlockers(gate, refinementArtifact) {
 // --findings-ledger only): tick the ledger's reviewer-verified labels in the PR
 // body and, when the spec-of-record still has unticked AC items, in each linked
 // issue body. Exact-label match, never unchecks, one edit per changed body. A
-// failed fetch or edit throws, so no verdict is posted. Returns the refinement
-// artifact reloaded from the ticked bodies; labels no reviewer verified stay
-// unchecked in it and still block.
+// failed fetch or edit, or a PR body that is not a string, throws, so no verdict
+// is posted. Returns the refinement artifact reloaded from the ticked bodies;
+// labels no reviewer verified stay unchecked in it and still block.
 async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordinationContext }, { env, ghCommand, runChild }) {
-  const prData = coordinationContext.prData ?? {};
-  const prTick = await applyTick(typeof prData.body === "string" ? prData.body : "", verifiedItems, false, (bodyFile) =>
+  const prData = coordinationContext.prData;
+  if (typeof prData?.body !== "string") {
+    throw new Error(`Cannot tick reviewer-verified items on PR ${pr}: the PR body is not a string.`);
+  }
+  const prTick = await applyTick(prData.body, verifiedItems, false, (bodyFile) =>
     editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
   );
   const artifact = coordinationContext.refinementArtifact;
+  const tickedIssueBodies = [];
   if (Array.isArray(artifact?.uncheckedAcItems) && artifact.uncheckedAcItems.length > 0) {
     for (const issue of artifact.linkedIssues ?? []) {
       const issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
-      await applyTick(issueBody, verifiedItems, false, (bodyFile) =>
+      const issueTick = await applyTick(issueBody, verifiedItems, false, (bodyFile) =>
         editIssue({ repo, issue, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
       );
+      tickedIssueBodies.push(issueTick.body);
     }
   }
   const state = String(prData.state || "").toUpperCase();
-  return loadRefinementArtifact(
+  const reloaded = await loadRefinementArtifact(
     { repo, prData: { ...prData, body: prTick.body }, prDraft: Boolean(prData.isDraft), prClosed: state === "CLOSED", prMerged: state === "MERGED" },
     { env, ghCommand, runChild },
   );
+  if (tickedIssueBodies.length === 0) return reloaded;
+  // The spec-of-record unticked items come from the issue bodies this tick just
+  // fetched and edited, never from the reload's re-fetch: a failed re-fetch would
+  // drop them and let an unverified issue AC item pass the clean guard.
+  const uncheckedAcItems = [...new Set(tickedIssueBodies.flatMap((body) => detectIssueRefinementArtifact({ body }).uncheckedAcItems))];
+  return { ...reloaded, uncheckedAcItems };
 }
 
 // GATE-COMMENT-VERDICT-VALUES layer composition: the fan-in ledger's
@@ -2587,7 +2599,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const acArtifact = coordinationContext.refinementArtifact;
     const items = acArtifact.uncheckedAcItems;
     throw new Error(
-      `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the spec-of-record (linked issue(s) ${(acArtifact.linkedIssues ?? []).map((n) => `#${n}`).join(", ") || "?"}) still has ${items.length} unticked Acceptance criteria item(s): ${items.slice(0, 3).map((t) => `\`${t}\``).join(", ")}${items.length > 3 ? ", …" : ""}. Tick the satisfied ACs in the tracker issue before declaring the pre-approval gate clean — ACCEPT-CRITERIA-VERIFY-AND-REFLECT (skills/docs/acceptance-criteria-verification.md): a clean pre_approval_gate must not rely on a spec-of-record with unticked acceptance criteria.`,
+      `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the spec-of-record (linked issue(s) ${(acArtifact.linkedIssues ?? []).map((n) => `#${n}`).join(", ") || "?"}) still has ${items.length} unticked Acceptance criteria item(s): ${items.slice(0, 3).map((t) => `\`${t}\``).join(", ")}${items.length > 3 ? ", …" : ""}. The gate ticks an item only when it appears in the verifiedItems of the acceptance-criteria and pr-checklist review angles: have those reviewers verify the satisfied items, or finish the remaining work, then rerun the gate; scripts/github/tick-verified-checkboxes.mjs is a manual correction tool only — ACCEPT-CRITERIA-VERIFY-AND-REFLECT (skills/docs/acceptance-criteria-verification.md): a clean pre_approval_gate must not rely on a spec-of-record with unticked acceptance criteria.`,
     );
   }
   // Deterministic pre-approval block: ANY unchecked `- [ ]` in the PR
@@ -2611,7 +2623,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         parts.push(`${uncheckedDod.length} unchecked Definition-of-done box(es): ${uncheckedDod.slice(0, 3).map((t) => `\`${t}\``).join(", ")}${uncheckedDod.length > 3 ? ", …" : ""}`);
       }
       throw new Error(
-        `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the PR body's own AC/DoD checklist still has ${parts.join("; ")}. Every acceptance criterion must be complete before approval — the deterministic pre-approval block (#1877) fails closed on any unchecked box. Tick the verified boxes via scripts/github/tick-verified-checkboxes.mjs (only actually-verified items; never blanket-check) or finish the remaining work — a box the gate could not verify stays unchecked and therefore blocks. This check enforces completeness, not truthfulness: verifying each [x] is real remains the reviewer's responsibility (skills/docs/acceptance-criteria-verification.md).`,
+        `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the PR body's own AC/DoD checklist still has ${parts.join("; ")}. Every acceptance criterion must be complete before approval — the deterministic pre-approval block (#1877) fails closed on any unchecked box. The gate ticks a box only when it appears in the verifiedItems of the acceptance-criteria and pr-checklist review angles: have those reviewers verify the satisfied items, or finish the remaining work, then rerun the gate; scripts/github/tick-verified-checkboxes.mjs is a manual correction tool only (never blanket-check). A box no reviewer verified stays unchecked and therefore blocks. This check enforces completeness, not truthfulness: verifying each [x] is real remains the reviewer's responsibility (skills/docs/acceptance-criteria-verification.md).`,
       );
     }
   }
