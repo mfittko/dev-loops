@@ -104,6 +104,8 @@ test("GATE-EXEC-VALIDATION-RESOLUTION names the verdict writer as its enforcemen
   assert.match(flat, /It is incomplete evidence, never a pass\./);
   assert.match(flat, /absent, unreadable, incomplete, or stamped with a different head SHA MUST report a gate-evidence finding/);
   assert.match(flat, /A typed incomplete artifact satisfies this check\./);
+  assert.match(flat, /The verdict writer checks only the artifact's presence and head stamp\./);
+  assert.match(flat, /The reviewer gate-evidence finding path, not the verdict writer, prevents a `clean` verdict over an incomplete artifact\./);
 });
 
 test("GATE-EXEC-NO-CWD-DEPENDENCE cites WORKTREE-SCRIPT-LAUNCHER-CWD by ID", async () => {
@@ -276,8 +278,8 @@ test("README Claude Code plugin section names the permission rule for both verdi
   assert.ok(section.includes("`Bash(node scripts/github/upsert-checkpoint-verdict.mjs:*)`"));
   assert.ok(section.includes("`Bash(node scripts/github/ready-for-review.mjs:*)`"));
   assert.ok(section.includes("`Bash(dev-loops-run:*)`"));
-  assert.match(section, /Only an exact command prefix matches\./);
-  assert.match(section, /An ask rule on the bare form does not gate the launcher form/);
+  assert.match(section, /Observed during the v1\.0\.5 drain: only an exact command prefix matched/);
+  assert.match(section, /an ask rule on the bare form did not gate the launcher form/);
   assert.ok(section.includes("`Bash(dev-loops-run scripts/github/merge-pr.mjs:*)`"));
 });
 
@@ -303,6 +305,7 @@ for (const surface of DEV_LOOP_AGENT_SURFACES) {
     assert.match(runners, /`WORKTREE-SCRIPT-LAUNCHER-CWD`/);
     assert.doesNotMatch(runners, /HARNESS-JOIN/);
     assert.match(section, /A worker, reviewer, judge or fixer dispatches no children and receives no join rule\./);
+    assert.match(bullet("Awaiting any wait the run depends on"), /Join rule: `GATE-EXEC-HARNESS-JOIN`\./);
   });
 
   test(`${surface} Subagent delegation embeds no rule body defined in another doc`, async () => {
@@ -325,6 +328,7 @@ function followUpFilingViolations(passage) {
   const flat = collapse(passage);
   if (/standalone issue only if[^|]*independent[^|]*outlives it/.test(flat)
     || /independent bugs that outlive the PR/.test(flat)) violations.push("standalone-issue permission present");
+  if (/Cross-cutting contract\/policy changes remain their own issues/.test(flat)) violations.push("unscoped cross-cutting permission present");
   return violations;
 }
 
@@ -349,4 +353,6 @@ test("negative fixture: restoring the old standalone-issue permission fails the 
   assert.deepEqual(followUpFilingViolations(restoredWithCitation), ["standalone-issue permission present"]);
   const restoredClause = "**Conservatism clause:** prefer noting PR-scoped follow-ups on the originating artifact. Cross-cutting contract/policy changes and\ngenuinely independent bugs that outlive the PR remain their own issues. See `MAIN-AGENT-FILING-BLOCKER-ONLY`.";
   assert.deepEqual(followUpFilingViolations(restoredClause), ["standalone-issue permission present"]);
+  const unscopedClause = "**Conservatism clause:** prefer noting PR-scoped follow-ups on the originating artifact. Cross-cutting contract/policy changes remain\ntheir own issues. A follow-up found during a PR or loop becomes a standalone issue only under\n`MAIN-AGENT-FILING-BLOCKER-ONLY`.";
+  assert.deepEqual(followUpFilingViolations(unscopedClause), ["unscoped cross-cutting permission present"]);
 });

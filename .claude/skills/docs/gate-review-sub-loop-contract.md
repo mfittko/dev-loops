@@ -299,7 +299,9 @@ or stamped with a different head SHA MUST report a gate-evidence finding; it
 MUST NOT silently run the suite itself and MUST NOT treat the gap as clean. The verdict writer
 enforces this rule: `upsert-checkpoint-verdict.mjs` refuses a `fanout_fanin` verdict post when
 the head's `<gate>-<headSha>.validation.json` is absent, unreadable, or stamped with a different
-head SHA. A typed incomplete artifact satisfies this check. The refusal names the artifact and `run-gate-validation.mjs`. It applies under the
+head SHA. A typed incomplete artifact satisfies this check. The verdict writer checks only the
+artifact's presence and head stamp. The reviewer gate-evidence finding path, not the verdict
+writer, prevents a `clean` verdict over an incomplete artifact. The refusal names the artifact and `run-gate-validation.mjs`. It applies under the
 same `gates.requireFanoutEvidence` condition as the durable-ledger refusal.
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
