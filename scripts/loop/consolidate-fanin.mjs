@@ -512,11 +512,8 @@ async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot) {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: incomplete delivery evidence for unit ${unit.scope}: ${check.reason} (expected a pull receipt for execution ${unit.executionIdentity}, digest ${unit.workOrderDigest}) under ${receiptTmpRoot}; re-dispatch the unit with its compact reference (fail-closed)`);
     }
     // A result older than this execution's pull (or an unparseable pulledAt) is a stale prior-round file.
-    const missing = [];
-    for (const angle of unit.angles ?? []) if (!resultAngles.has(angle) || !((await stat(resultAngles.get(angle)[0])).mtimeMs >= Date.parse(check.receipt.pulledAt))) missing.push(angle);
-    if (missing.length > 0) {
-      throw new Error(`interrupted reviewer: unit ${unit.scope} (execution ${unit.executionIdentity}) pulled its work order but wrote no post-pull result for angle(s) ${missing.join(", ")}; the unit is not complete, retry it per the existing execution rules (fail-closed)`);
-    }
+    const missing = (await Promise.all((unit.angles ?? []).map(async (angle) => (resultAngles.has(angle) && (await stat(resultAngles.get(angle)[0])).mtimeMs >= Date.parse(check.receipt.pulledAt) ? null : angle)))).filter(Boolean);
+    if (missing.length > 0) throw new Error(`interrupted reviewer: unit ${unit.scope} (execution ${unit.executionIdentity}) pulled its work order but wrote no post-pull result for angle(s) ${missing.join(", ")}; the unit is not complete, retry it per the existing execution rules (fail-closed)`);
   }
 }
 
