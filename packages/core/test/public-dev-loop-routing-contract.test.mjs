@@ -99,6 +99,11 @@ test("public dev-loop routing exposes an explicit gate contract for the current 
         selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW,
       },
       {
+        gate: DEV_LOOP_GATE.REVIEW,
+        routeKind: DEV_LOOP_ROUTE_KIND.ROUTE,
+        selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.REVIEW,
+      },
+      {
         gate: DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE,
         routeKind: DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE,
         selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.NONE,

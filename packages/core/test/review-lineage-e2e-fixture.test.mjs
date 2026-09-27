@@ -7,16 +7,12 @@ import { describe, test } from "bun:test";
 import {
   buildReviewDispatchPlan,
   CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
-  PRIMER_FORM_LEAD_REVIEWER,
 } from "../src/loop/review-dispatch-plan.mjs";
-import {
-  buildPrimerEvidence,
-  validatePrimerEvidence,
-} from "../src/loop/primer-evidence.mjs";
 import {
   consolidateFanin,
   planFanoutBatches,
 } from "../src/loop/gate-fanin.mjs";
+import { resolveRoleModel } from "../src/config/config.mjs";
 import {
   buildFixRoundDelta,
   buildReviewLineageBase,
@@ -30,17 +26,40 @@ const FIXTURE = JSON.parse(
   readFileSync(join(__dirname, "fixtures", "lineage-e2e", "pipeline.json"), "utf8"),
 );
 
+// Issue #2414 retired the mandatory primer barrier, so this case keeps only the
+// Codex model-inheritance assertions #2467 added and drops its primer-evidence
+// half, whose API no longer exists.
+test("Codex model resolution works through both gate fan-ins without a primer phase", () => {
+  const config = { models: { tiers: { high: { claude: "opus", pi: "pi-review" } } } };
+  for (const gate of ["draft_gate", "pre_approval_gate"]) {
+    const model = resolveRoleModel(config, { role: "correctness", harness: "codex", kind: "angle" });
+    assert.equal(model, null);
+    const plan = buildReviewDispatchPlan({
+      gate,
+      headSha: "abc1234567890",
+      harness: "codex",
+      sharedPrefixHash: "sha256:" + "a".repeat(64),
+      requestGroups: [{ model: "inherit", requestPrefixFingerprint: "sha256:" + "b".repeat(64), angles: ["correctness"] }],
+      capabilities: { harness: "codex" },
+    });
+    assert.equal(plan.harness, "codex");
+    assert.equal(plan.requestGroups[0].model, "inherit");
+    assert.equal(consolidateFanin({ angleResults: [{ angle: "correctness", verdict: "clean", findings: [] }] }).verdict, "clean");
+  }
+});
+
 /**
  * End-to-end lineage fixture (issue #1468 slice 6): drives the real cache-aware
  * review pipeline across two rounds and closes with a compaction, in the order
  * the #1478 AC demands:
  *
- *   context build -> request plan -> primer -> fan-out -> fan-in -> lineage delta
+ *   context build -> request plan -> fan-out -> fan-in -> lineage delta
  *
- * Every step uses its production module — no inline re-implementations.
+ * Every step uses its production module — no inline re-implementations. The
+ * first wave follows the request plan directly; there is no primer step.
  */
 describe("review-lineage e2e fixture (2 rounds + compaction)", () => {
-  test("round 1: build plan -> prime -> fan-out/fan-in (findings) -> delta -> compose", () => {
+  test("round 1: build plan -> fan-out/fan-in (findings) -> delta -> compose", () => {
     const round1 = FIXTURE.rounds[0];
     const lineageBase = buildReviewLineageBase({
       lineageId: "fixture-1",
@@ -69,34 +88,16 @@ describe("review-lineage e2e fixture (2 rounds + compaction)", () => {
     assert.match(plan.planHash, /^sha256:[0-9a-f]{64}$/);
     assert.equal(plan.requestGroups[0].angles.length, 2);
 
-    // 2. Primer (lead reviewer primes the group; ordering evidence validated).
-    const evidence = buildPrimerEvidence({
-      plan,
-      primerRuns: [
-        {
-          model: FIXTURE.model,
-          requestPrefixFingerprint: FIXTURE.requestPrefixFingerprint,
-          primerForm: PRIMER_FORM_LEAD_REVIEWER,
-          landedAt: 10,
-        },
-      ],
-      reviewerReleases: [
-        { model: FIXTURE.model, requestPrefixFingerprint: FIXTURE.requestPrefixFingerprint, releasedAt: 11 },
-      ],
-    });
-    const validation = validatePrimerEvidence({ plan, evidence });
-    assert.equal(validation.ok, true, JSON.stringify(validation.failures));
-
-    // 3. Fan-out schedule (fan-out).
+    // 2. Fan-out schedule (fan-out), released straight from the plan.
     const { batches } = planFanoutBatches(FIXTURE.angles, 4);
     assert.equal(batches.length, 1);
 
-    // 4. Fan-in (round 1 has a high-severity finding -> findings_present).
+    // 3. Fan-in (round 1 has a high-severity finding -> findings_present).
     const fanin = consolidateFanin({ angleResults: round1.angleResults, blockCleanOnFindingSeverities: ["high"] });
     assert.equal(fanin.verdict, "findings_present");
     assert.equal(fanin.counts.blocking, 1);
 
-    // 5. Lineage delta + compose round-1 request.
+    // 4. Lineage delta + compose round-1 request.
     const delta1 = buildFixRoundDelta({
       lineageId: "fixture-1",
       round: 1,
@@ -139,16 +140,7 @@ describe("review-lineage e2e fixture (2 rounds + compaction)", () => {
       ],
       capabilities: { harness: "claude" },
     });
-    const evidence2 = buildPrimerEvidence({
-      plan: plan2,
-      primerRuns: [
-        { model: FIXTURE.model, requestPrefixFingerprint: FIXTURE.requestPrefixFingerprint, primerForm: PRIMER_FORM_LEAD_REVIEWER, landedAt: 20 },
-      ],
-      reviewerReleases: [
-        { model: FIXTURE.model, requestPrefixFingerprint: FIXTURE.requestPrefixFingerprint, releasedAt: 21 },
-      ],
-    });
-    assert.equal(validatePrimerEvidence({ plan: plan2, evidence: evidence2 }).ok, true);
+    assert.match(plan2.planHash, /^sha256:[0-9a-f]{64}$/);
 
     // Round 2 is clean (fan-in clean).
     const fanin2 = consolidateFanin({ angleResults: round2.angleResults, blockCleanOnFindingSeverities: ["high"] });

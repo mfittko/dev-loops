@@ -45,7 +45,8 @@ What this PR changes and why. One or two sentences of the problem it solves.
 
 ## Validation
 
-- `bun run verify`: pass.
+- Targeted local checks: `<command>` — pass.
+- Full current-head CI or sanctioned full-validation evidence: `<check/artifact>` — pass or incomplete.
 - Record each validation command or named check with its stable pass/fail outcome only. Do NOT paste volatile aggregate test/assertion/asset counts, durations, or timestamps (OPS-PR-VALIDATION-STABLE-EVIDENCE); those live in the head-stamped gate artifacts.
 
 Closes #N

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * run-gate-validation.mjs — GATE-EXEC-VALIDATION-ARTIFACT producer.
+ * run-gate-validation.mjs — GATE-EXEC-VALIDATION-RESOLUTION producer.
  *
  * The gate preamble runs this round's validation suites ONCE and records the
  * results here, so every per-angle reviewer of the same gate pass reads this
@@ -25,31 +25,33 @@ import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeHeadSha as n
 import { assertWorktreeAtHead, buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parseBunLock } from "../release/assert-core-dependency-version.mjs";
+import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
+import { verificationCommandSegments } from "@dev-loops/core/loop/bash-command-classify";
 
-const DEFAULT_SUITES = ["verify"];
 const OUTPUT_TAIL_CHARS = 4000;
 const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
-const USAGE = `Usage: run-gate-validation.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--suite <name>]... [--tmp-root <dir>]
+const USAGE = `Usage: run-gate-validation.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --suite <name> [--suite <name>]... [--tmp-root <dir>]
 Run this round's validation suites ONCE and record the results in the shared
-validation-results artifact (GATE-EXEC-VALIDATION-ARTIFACT) so every per-angle
+validation-results artifact (GATE-EXEC-VALIDATION-RESOLUTION) so every per-angle
 gate reviewer reads this record instead of re-running the same suites.
 Required:
   --repo <owner/name>
   --pr <number>
   --gate <draft_gate|pre_approval_gate|review>
   --head-sha <sha>
-Optional:
   --suite <name>              npm script name to run (repeatable). MUST be a key
                                of this repo's package.json "scripts" map — an
                                unknown name fails closed (exit 1) BEFORE anything
-                               runs. Default: verify
+                               runs. Full-repository
+                               suites require dev-loops gate resolve-validation.
+Optional:
   --tmp-root <path>            Root tmp directory (default: tmp/)
 
 Output (stdout, JSON — the artifact itself):
   { "ok": true, "repo": "...", "pr": 1, "gate": "draft_gate", "headSha": "...",
     "generatedAt": "...", "allPassed": true,
-    "suites": [ { "name": "verify", "command": "bun run verify", "exitCode": 0,
+    "suites": [ { "name": "test:scripts", "command": "bun run test:scripts", "exitCode": 0,
                   "outputTail": "...", "outputPath": "tmp/gate-context/.../...log" } ] }
 Exit codes:
   0   Success (even when a suite fails — allPassed:false is the signal)
@@ -139,10 +141,8 @@ export function parseRunGateValidationCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  if (options.suites.length === 0) {
-    options.suites = [...DEFAULT_SUITES];
-  }
   const missing = ["repo", "pr", "gate", "headSha"].filter((k) => options[k] === undefined);
+  if (options.suites.length === 0) missing.push("suite");
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
   }
@@ -177,6 +177,31 @@ export function validateSuiteNames(suites, scripts) {
       `Suite name(s) not usable as a log-file path segment (allowed: alphanumerics then [A-Za-z0-9._:-]): ${unsafe.join(", ")}. Refusing to execute anything.`,
     );
   }
+}
+
+export function classifyPackageSuites(suites, scripts) {
+  validateSuiteNames(suites, scripts);
+  const commands = [];
+  const visit = (name, stack = []) => {
+    if (stack.includes(name)) throw new Error(`Recursive package script: ${[...stack, name].join(" -> ")}`);
+    const body = scripts[name];
+    if (typeof body !== "string" || !body.trim() || /\$\(|`|[<>|]|(?<!&)&(?!&)/.test(body)) throw new Error(`Cannot classify package script ${name}`);
+    commands.push(`bun run ${name}`);
+    for (const segment of verificationCommandSegments(body)) {
+      const nested = segment.match(/^(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?([A-Za-z0-9][A-Za-z0-9._:-]*)(?:\s+(.+))?$/);
+      if (nested) {
+        if (nested[2]) throw new Error(`Cannot classify package script ${name}: ${segment}`);
+        if (!Object.hasOwn(scripts, nested[1])) throw new Error(`Unknown package script ${nested[1]} referenced by ${name}`);
+        visit(nested[1], [...stack, name]);
+      } else if (classifyValidationCommand(segment) !== "non-validation" || /^(?:bun|node)\s+(?:scripts\/(?:run-bun-test|docs\/validate-(?:links|rule-ownership|decision-records|changelog-completeness)|github\/lint-workflows|claude\/generate-claude-assets|generate-config-schema)\.mjs|\.\/node_modules\/@playwright\/test\/cli\.js)(?:\s|$)/.test(segment)) {
+        commands.push(segment);
+      } else {
+        throw new Error(`Cannot classify package script ${name}: ${segment}`);
+      }
+    }
+  };
+  for (const name of suites) visit(name);
+  return classifyValidationCommand(commands.join(" && "));
 }
 
 /**
@@ -503,7 +528,9 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // cwd would otherwise validate a different tree under this head's stamp.
     assertWorktreeAtHead(options.headSha, { repoRoot });
     const scripts = await readPackageScripts(repoRoot);
-    validateSuiteNames(options.suites, scripts);
+    if (classifyPackageSuites(options.suites, scripts) === "full-repository") {
+      throw new Error("Full-repository validation must run through dev-loops gate resolve-validation");
+    }
 
     const artifact = await buildValidationArtifact(
       { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, suites: options.suites, tmpRoot: options.tmpRoot },

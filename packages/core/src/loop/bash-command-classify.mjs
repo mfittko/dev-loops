@@ -263,6 +263,12 @@ const SHELL_EXEC_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env
 const VERIFY_EXEC_PREFIX =
   "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:env(?:\\s+(?:[A-Za-z_][A-Za-z0-9_]*=\\S*|-i|--ignore-environment|-u\\s+\\S+|--unset=\\S+|-C\\s+\\S+|--chdir=\\S+|-S\\s+\\S+|--split-string=\\S+|--|-))*\\s+|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?";
 
+/** Reuse the existing wrapper boundary for pure validation classification. */
+export function verificationCommandSegments(command) {
+  const prefix = new RegExp(`^${VERIFY_EXEC_PREFIX}`, "i");
+  return shellSegments(command).map((segment) => segment.replace(prefix, ""));
+}
+
 /**
  * Build the `gh <subcmd> <verb>` prefix matcher (subcmd = "pr" | "issue").
  * Tolerates a leading env-assignment/wrapper/path prefix so `GH_TOKEN=x gh pr create`,
@@ -1097,7 +1103,7 @@ const PACKAGE_MANAGER_VERIFY_RUN_RE = new RegExp(
 const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x\\s+)?vitest(?:\\s|$)`, "i");
 
 /**
- * COORDINATOR-VERIFY-DELEGATION: whether `command` contains a known code-verification/
+ * COORDINATOR-VERIFY-BOUNDARY: whether `command` contains a known code-verification/
  * build entrypoint in ANY shell segment — `bun test`/`bun run verify`/`bun run build`, `vitest`,
  * `npm test`/`npm run test`/`npm run build`, and the `yarn`/`pnpm` `test`/`build` equivalents
  * (with or without the `run` keyword). PreToolUse gate use only: the dev-loop COORDINATOR must

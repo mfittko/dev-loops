@@ -1,7 +1,7 @@
 ---
 name: "judge"
 description: "Use for relevance judgment on consolidated gate findings: weigh each finding against the linked issue's acceptance criteria, definition of done, and non-goals, and decide per finding whether this PR is the place to act on it (act), defer it to a follow-up (defer), or reject it as out-of-scope (reject). Emits a scope-drift verdict on the PR as a whole. Keywords: judge, relevance, scope control, acceptance criteria, non-goals, scope drift, disposition."
-tools: read, search, execute, bash, write
+tools: read, search, write
 argument-hint: "Consolidated findings ledger path, issue AC/DoD/non-goals, PR declared scope, prior-round judge ledgers, and the gate/head context."
 systemPromptMode: append
 inheritProjectContext: true

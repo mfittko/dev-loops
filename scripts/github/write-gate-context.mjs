@@ -31,12 +31,15 @@ import { parseArgs } from "node:util";
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
 import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
 import { parseNonNegativeInteger, parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
@@ -49,7 +52,7 @@ import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_c
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
-import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { buildGateArtifactPath, buildGateContextPath, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 
@@ -197,7 +200,7 @@ export function rationaleFromResolver(resolverResult) {
   return { resolvedAngles: [...recommended], rationale };
 }
 
-const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>]
+const USAGE = `Usage: write-gate-context.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--harness <pi|claude|codex>] [--angles <json>] [--rationale <json>] [--branch <name>] [--touched-files <json>] [--base <ref>] [--acceptance-criteria <pointer>] [--pr-body <text>] [--issue-body <text>] [--prefix-file <path>] [--validation-posture <text>] [--tmp-root <path>]
 Write a deterministic gate-review context-builder handoff artifact under tmp/ paths.
 Required:
   --repo <owner/name>
@@ -205,6 +208,7 @@ Required:
   --gate <draft_gate|pre_approval_gate|review>
   --head-sha <sha>
 Optional:
+  --harness <pi|claude|codex> Active reviewer harness (default: active CLI harness).
   --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires; a fired floor refuses it and continues with tier-or-best-effort selection. An empty list (\`[]\`) is refused (exit 1, no artifact written) at every entry point — the CLI dynamic path, this flag, and the exported buildGateContext/writeGateContext API — because a gate-context bundle must carry at least one review angle; the non-empty verbatim/floor behavior is unchanged.
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
@@ -215,7 +219,7 @@ Optional:
   --pr-body <text>               PR description text, inlined into the rendered briefing evidence file. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
   --issue-body <text>            Linked-issue body text, inlined into the briefing evidence file under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the evidence file should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the evidence file entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
-  --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
+  --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-RESOLUTION) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
@@ -338,6 +342,7 @@ export function parseWriteGateContextCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       gate: { type: "string" },
+      harness: { type: "string" },
       "head-sha": { type: "string" },
       angles: { type: "string" },
       rationale: { type: "string" },
@@ -366,6 +371,7 @@ export function parseWriteGateContextCliArgs(argv) {
     repo: undefined,
     pr: undefined,
     gate: undefined,
+    harness: undefined,
     headSha: undefined,
     angles: undefined,
     rationale: [],
@@ -418,6 +424,12 @@ export function parseWriteGateContextCliArgs(argv) {
       const gate = normalizeGate(requireTokenValue(token, parseError));
       if (!gate) throw parseError(`--gate must be one of: ${GATE_NAMES.join(", ")}`);
       options.gate = gate;
+      continue;
+    }
+    if (token.name === "harness") {
+      const harness = requireTokenValue(token, parseError).trim();
+      if (!["pi", "claude", "codex"].includes(harness)) throw parseError(`--harness must be one of pi|claude|codex (got ${JSON.stringify(harness)})`);
+      options.harness = harness;
       continue;
     }
     if (token.name === "head-sha") {
@@ -581,32 +593,11 @@ export function parseWriteGateContextCliArgs(argv) {
   return options;
 }
 
-/**
- * Internal deterministic-path builder shared by every gate-artifact path
- * function below (buildGateContextPath, buildGateReviewsDir, buildGateDiffPath,
- * buildGateBriefingPrefixPath, buildGateBriefingScopePath,
- * buildValidationResultsPath): validates/sanitizes the repo/pr/gate/headSha
- * segments once and joins `<tmpRoot>/<dir>/<repo-slug>/pr-<N>/<gate>-<headSha><suffix>`.
- * `dir` distinguishes the "gate-context" artifact family from the
- * "gate-reviews" per-angle findings directory; `suffix` (empty for the
- * directory case) distinguishes the file extension within a family.
- *
- * @param {string} [input.dir] — top-level artifact-family directory, default "gate-context"
- * @param {string} [input.suffix] — filename suffix (extension), default ""
- */
-function buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot = "tmp", dir = "gate-context", suffix = "" }) {
-  const repoSlug = repoSlugFor(repo);
-  const { pr: safePr, gate: safeGate, headSha: safeSha } = validatePathSegments({ pr, gate, headSha });
-  return path.join(tmpRoot, dir, repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}${suffix}`);
-}
-
-// Deterministic artifact path for a gate-review context handoff. Mirrors
-// write-gate-findings-log.mjs buildLogPath. Exported for reuse by the fork
-// fan-out reviewers so producer and consumer agree on the path. Param shapes:
-// see buildGateArtifactPath above.
-export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".json" });
-}
+// Deterministic artifact path for a gate-review context handoff — re-exported
+// from the leaf path-scheme module (see its header for why the scheme must not
+// live in either consumer). Exported for reuse by the fork fan-out reviewers so
+// producer and consumer agree on the path.
+export { buildGateContextPath };
 
 // Deterministic per-angle findings-artifact directory a gate-review fan-out
 // writes to (one `<angle>.json` per angle). Mirrors the path
@@ -661,62 +652,6 @@ export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpR
     }
   }
   return completed;
-}
-
-/**
- * Validate the non-repo path components (gate, pr, headSha) that are
- * interpolated into a filesystem path which is later `path.resolve()`d and
- * read/written. Mirrors the repo-segment safety check in {@link repoSlugFor} so
- * both path builders reject traversal sequences and odd filenames coming from
- * untrusted inputs. Returns sanitized values for interpolation.
- *
- * @param {object} input
- * @param {number|string} input.pr — must coerce to a positive integer
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha — 7-64 char hex SHA
- * @returns {{ pr: number, gate: string, headSha: string }}
- */
-function validatePathSegments({ pr, gate, headSha }) {
-  if (!GATE_NAMES.includes(gate)) {
-    throw new Error(`--gate segment ${JSON.stringify(gate)} is unsafe (expected ${GATE_NAMES.join(" or ")})`);
-  }
-  // Require a CANONICAL positive integer: the trimmed string must be all digits
-  // (`/^\d+$/`) and > 0. This mirrors the CLI's parsePrNumber rule so the path
-  // builder cannot accept non-canonical numeric forms ("1e3" → 1000, "0x10" →
-  // 16, "1.5") that Number() would coerce to a DIFFERENT pr-<N> segment than the
-  // operator/CLI intended, breaking the deterministic producer/consumer
-  // round-trip. " 9 " trims to "9" and stays valid; numbers are stringified first.
-  const prStr = String(pr).trim();
-  const prNum = Number(prStr);
-  if (!/^\d+$/.test(prStr) || !Number.isInteger(prNum) || prNum <= 0) {
-    throw new Error(`--pr segment ${JSON.stringify(pr)} is unsafe (expected a positive integer)`);
-  }
-  // Lowercase the validated SHA so the path segment is case-canonical regardless
-  // of caller casing, matching the CLI's normalizeHeadSha. A mixed-case
-  // headRefOid (e.g. ABC123) must compute the SAME filename as its lowercase
-  // form (abc123) or readGateContext / the .diff lookup would miss it — a
-  // determinism bug.
-  const sha = String(headSha).trim().toLowerCase();
-  if (!/^[0-9a-f]{7,64}$/i.test(sha)) {
-    throw new Error(`--head-sha segment ${JSON.stringify(headSha)} is unsafe (expected a 7-64 character hex SHA)`);
-  }
-  return { pr: prNum, gate, headSha: sha };
-}
-
-// Validate the repo string and return its `owner-name` slug, applying the same
-// safety checks (no `.`/`..` segments, no whitespace/backslashes) shared by the
-// artifact and diff path builders.
-function repoSlugFor(repo) {
-  const parts = String(repo).split("/");
-  if (parts.length !== 2 || parts.some((p) => p.length === 0)) {
-    throw new Error(`--repo must be in owner/name format, got: ${JSON.stringify(repo)}`);
-  }
-  for (const p of parts) {
-    if (p === "." || p === ".." || /[\s\\]/.test(p)) {
-      throw new Error(`--repo segment ${JSON.stringify(p)} is unsafe (a "." or ".." path segment, or contains whitespace/backslashes)`);
-    }
-  }
-  return parts.join("-");
 }
 
 // Deterministic path for the FULL diff captured alongside the gate context
@@ -783,7 +718,7 @@ export function buildCarryForwardPlanPath({ repo, pr, gate, headSha, tmpRoot = "
 }
 
 // Deterministic path for the shared validation-results artifact
-// (GATE-EXEC-VALIDATION-ARTIFACT, `run-gate-validation.mjs`): the record of
+// (GATE-EXEC-VALIDATION-RESOLUTION, `run-gate-validation.mjs`): the record of
 // this round's validation suites, run once and read (not re-run) by every
 // per-angle reviewer via the briefing-prefix section. Exported so
 // `run-gate-validation.mjs` (the producer) and this module's CLI/context
@@ -1407,7 +1342,7 @@ export function renderBriefingPrefix({
  * @param {string[]} [input.changedFiles]
  * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output
  * @param {string|null} [input.validationResultsPath] — absolute path to the
- *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-ARTIFACT).
+ *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-RESOLUTION).
  *   When non-empty, ONE additional `## Validation results at this head` section is
  *   appended LAST. Omitted entirely when absent.
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES
@@ -1949,16 +1884,27 @@ function normalizeCarriedAnglesArg(carriedAngles) {
  * no angle resolution (it consumes the already-resolved `resolvedAngles`) and
  * no I/O. `config` may be null (a `--angles` override with no loaded config);
  * in that case grouping degrades to auto-chunked singletons under the built-in
- * defaults and `maxConcurrent`/`maxAnglesPerGroup` fall back to 4/3.
+ * defaults and `maxConcurrent`/`maxAnglesPerGroup` fall back to their
+ * shipped defaults (5/5). When the round's resolved angle set would
+ * cap-split into more units than the effective concurrency, whole base units
+ * of the DISPATCHABLE set (resolved units minus fully-carried groups) are
+ * packed into one wave (see the packing block below), so a carried-forward
+ * unit is never re-dispatched; a fully-carried round (an empty dispatchable
+ * set) keeps the full grouping for the emitter's zero-unit path, and only a
+ * dispatchable plan that itself cannot fit throws `GATE-EXEC-FANOUT-CAPACITY`.
  *
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
- * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined> }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment.
+ * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined>, singleWave?: boolean }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment. `singleWave` (default true) enables packing and the capacity refusal; the review gate passes false.
  * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
-export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env } = {}) {
-  const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env, singleWave = true } = {}) {
+  // Angle-pool order, as the pairing guard re-derives it: auto-chunk
+  // boundaries must not depend on the order the angles arrived in.
+  const catalogOrder = resolveGateAngleContract(config, configGate).pool ?? [];
+  const orderedAngles = orderAnglesByCatalog((Array.isArray(resolvedAngles) ? resolvedAngles : []).filter((a) => typeof a === "string").map((a) => a.trim()), catalogOrder);
+  let groups = resolveFanoutGroups(config, configGate, orderedAngles, { fullLabel });
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
   // Serial (one-at-a-time) dispatch of heavy reviewers when
   // `gates.fanout.sequential` is set — effective concurrency is 1 unit per wave
@@ -1969,7 +1915,6 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   const sequential = resolveFanoutSequential(config);
   const maxConcurrent = resolveFanoutMaxConcurrent(config);
   const effectiveConcurrency = resolveFanoutEffectiveConcurrency(config, env);
-  const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   // Mirrors consolidate-fanin.mjs's own --carried-angles mandatory-angle
   // refusal: a name whose review surface always re-runs (a configured
   // mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/
@@ -2017,7 +1962,75 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // `carriedAnglesList`, not the raw `carriedAngles` option: the latter may be
   // a one-shot iterable already exhausted by the spread above, which would
   // silently exclude nothing and record empty provenance.
+  // Single-wave packing: when the round's FULL resolved angle set would
+  // cap-split into more than effectiveConcurrency dispatch units, merge whole
+  // base units (packDispatchUnits) so the round stays one wave. The packing is
+  // derived from the full resolved-angle grouping, NEVER from the
+  // completed/carried-filtered pending set: packDispatchUnits is a pure function
+  // of its input, so wave 1 and every same-head resume derive the IDENTICAL
+  // packed units and the recorded membership (readContextDispatchUnits) still
+  // admits the reviewers the completed wave was dispatched under — re-deriving
+  // the grouping from a shrunk pending set re-planned a different membership and
+  // refused a legitimate resume. The pending/shortfall subset is then whatever
+  // those same packed units leave after completed-or-carried exclusion (a
+  // partially-complete packed unit is re-dispatched whole — the unit-level
+  // membership the pairing guard needs). It never runs when the count already
+  // fits, under sequential dispatch, or in per-angle mode (both explicit
+  // opt-outs). No fit refuses fail-closed before any artifact write.
+  // `singleWave: false` (the standalone review gate, whose full-PR angle set
+  // exceeds single-wave capacity) keeps the multi-wave plan unchanged.
+  const perAngleMode = config?.gates?.fanout?.mode === "per-angle";
+  if (singleWave && !sequential && !perAngleMode) {
+    const configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
+    const baseUnits = expandDispatchUnits(groups, configuredGroupNames);
+    if (baseUnits.length > effectiveConcurrency) {
+      // The DISPATCHABLE set: the resolved units minus every group whose angles
+      // are ALL carried forward — a set fixed for the whole round (proven for
+      // this head), so wave 1 and every same-head resume derive the IDENTICAL
+      // dispatchable plan. It deliberately excludes ONLY carried angles, never
+      // the completed set (that grows after a partial wave, and re-planning on
+      // it recorded a different membership — the round-2 regression this
+      // derivation avoids), and never drops carried angles from a group that
+      // still has fresh ones (a partially-carried group is dispatched whole, so
+      // its unit membership must keep every angle).
+      const carriedKeys = new Set(carriedAnglesList.map((a) => baseAngleName(a).trim().toLowerCase()));
+      const dispatchableGroups = groups.filter((g) => !(Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase()))));
+      const dispatchableUnits = expandDispatchUnits(dispatchableGroups, configuredGroupNames);
+      if (dispatchableUnits.length > 0) {
+        // Pack the DISPATCHABLE set, NEVER the full resolved set. The full set
+        // still holds every fully-carried base unit, so packing it and
+        // assigning `groups = packed` re-dispatched a fully-carried unit that a
+        // full-set pack had merged with a fresh one — re-reviewing carried
+        // angles on every packed re-gate and contradicting the carry-forward
+        // rule ("subtract, never substitute: dispatch every current-head
+        // resolved angle minus the plan's `carried` angles"). Carried angles
+        // are round-stable (proven for this head), so packing them out keeps
+        // this a round-stable packing input: a same-head resume re-derives the
+        // IDENTICAL units (the growing COMPLETED set is still excluded).
+        const packedDispatchable = dispatchableUnits.length > effectiveConcurrency ? packDispatchUnits(dispatchableUnits, effectiveConcurrency) : null;
+        if (dispatchableUnits.length > effectiveConcurrency && packedDispatchable === null) {
+          // The dispatchable plan itself cannot fit one wave: refuse and name
+          // the set actually counted (the resolved count and the fresh subset)
+          // so a carry-forward round is never mislabeled as all-fresh.
+          const resolvedAngleCount = baseUnits.reduce((sum, unit) => sum + unit.angles.length, 0);
+          const freshAngleCount = dispatchableUnits.reduce((sum, unit) => sum + unit.angles.filter((a) => !carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase())).length, 0);
+          const capacity = effectiveConcurrency * REVIEWER_UNIT_MAX_ANGLES;
+          throw new Error(`GATE-EXEC-FANOUT-CAPACITY: refusing — the round resolves ${resolvedAngleCount} angles (${freshAngleCount} fresh, ${resolvedAngleCount - freshAngleCount} carried forward) in ${dispatchableUnits.length} base dispatch units that do not fit one wave of effective maxConcurrent ${effectiveConcurrency} units x ${REVIEWER_UNIT_MAX_ANGLES} angles (capacity ${capacity}); raise gates.fanout.maxConcurrent, disable angles, or rely on dynamic pruning to shrink the round`);
+        }
+        // Emit the dispatchable plan — it IS what will be dispatched, so it is
+        // what the recorded membership must name. Packed base units when
+        // packing ran; the unsplit dispatchable grouping when it already fits
+        // (mirrors the full-set path, which records `resolveFanoutGroups`
+        // output and lets the emitter cap-split it).
+        groups = packedDispatchable ?? dispatchableGroups;
+      }
+      // A fully-carried round (`dispatchableUnits` empty) keeps the full
+      // grouping: nothing is dispatched, and the emitter's all-carried
+      // zero-unit path keys on `fanout.groups` seeing every angle.
+    }
+  }
   const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
+  const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   const pendingGroups = preflight.pendingGroups;
   const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);
   return { groups, wavePlan, sequential, maxAnglesPerGroup, maxConcurrent, effectiveConcurrency, preflight, pendingGroups, pendingWavePlan };
@@ -2029,6 +2042,7 @@ export function buildGateContextArtifact(options) {
     pr: options.pr,
     gate: options.gate,
     headSha: options.headSha,
+    ...(options.harness ? { harness: options.harness } : {}),
     resolvedAngles: [...options.angles],
     rationale: Array.isArray(options.rationale) ? options.rationale : [],
     scope: {
@@ -2040,7 +2054,7 @@ export function buildGateContextArtifact(options) {
       acceptanceCriteria: options.acceptanceCriteria ?? null,
       validationPosture: options.validationPosture ?? null,
       // Absolute path to the run-gate-validation.mjs artifact for this head SHA
-      // (GATE-EXEC-VALIDATION-ARTIFACT), threaded into the rendered briefing
+      // (GATE-EXEC-VALIDATION-RESOLUTION), threaded into the rendered briefing
       // prefix's trailing "## Validation results at this head" section. Always
       // present (defaulting null) so every caller's scope object has the same
       // key set, unlike the conditionally-added acceptanceCriteriaSource/diffSource
@@ -2330,14 +2344,14 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     tmpRoot: options.tmpRoot || "tmp",
   });
 
-  // `--validation-results` (GATE-EXEC-VALIDATION-ARTIFACT): fail closed before
+  // `--validation-results` (GATE-EXEC-VALIDATION-RESOLUTION): fail closed before
   // any write when the supplied path is missing/unreadable — a reviewer must
   // never be pointed at a validation record that does not actually exist.
   // Resolved to an ABSOLUTE path (independent of prefix mode: this feeds
   // scope.validationResultsPath and, in self-rendered mode below, the trailing
   // briefing-prefix section) so the artifact and prefix always agree with
   // whatever CWD produced them, regardless of a later reader's own CWD.
-  // GATE-EXEC-VALIDATION-ARTIFACT (pointer half): when --validation-results is
+  // GATE-EXEC-VALIDATION-RESOLUTION (pointer half): when --validation-results is
   // omitted, derive the canonical path the producer (run-gate-validation.mjs via
   // buildValidationResultsPath) would have written and use it IF the artifact
   // exists. The export exists precisely so producer and consumer agree on the
@@ -2364,7 +2378,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       // closed exactly like the explicit --validation-results path, never
       // silently strip the validation evidence a reviewer depends on.
       if (err?.code !== "ENOENT") {
-        throw new Error(`GATE-EXEC-VALIDATION-ARTIFACT: derived validation-results ${JSON.stringify(derivedValidationResultsPath)} is unreadable: ${err?.message ?? err}`);
+        throw new Error(`GATE-EXEC-VALIDATION-RESOLUTION: derived validation-results ${JSON.stringify(derivedValidationResultsPath)} is unreadable: ${err?.message ?? err}`);
       }
     }
   }
@@ -2375,7 +2389,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     try {
       validationBytes = await readFile(resolvedValidationResultsPath);
     } catch (err) {
-      throw new Error(`GATE-EXEC-VALIDATION-ARTIFACT: --validation-results ${JSON.stringify(options.validationResultsPath)} is unreadable: ${err?.message ?? err}`);
+      throw new Error(`GATE-EXEC-VALIDATION-RESOLUTION: --validation-results ${JSON.stringify(options.validationResultsPath)} is unreadable: ${err?.message ?? err}`);
     }
     options.validationResultsPath = resolvedValidationResultsPath;
   }
@@ -2461,7 +2475,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     // Reference seeding: the prefix binds every bulk artifact by sha256 and
     // byte count, so the sentinel's prefix-hash check and the
     // no-rebuild-mid-fan-out guard cover the referenced bytes transitively.
-    // The context JSON carries no hash because it embeds the prefix identity.
+    // The context JSON carries no hash, and it embeds no prefix identity
+    // (sharedPrefixHash lives only in the request plan and on sentinels). It
+    // is written LAST as the completion marker, and it contains this
+    // requiredReads manifest itself plus a per-write loggedAt, so the prefix
+    // cannot hash it. Consequence: the context JSON and its .adjacentCode are
+    // not tamper-bound.
     const hashed = (kind, readPath, bytes, required) => ({
       kind, path: readPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes), required,
     });
@@ -2628,7 +2647,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // SAME dispatch-time resolution a fan-out actually dispatches on (config
   // override → per-angle tier → built-in tier → null=inherit), unlike
   // resolveReviewerRole's `.model`, which ignores `tier` and can merge/split
-  // groups wrongly. Harness defaults to "claude" (override via
+  // groups wrongly. Harness defaults to the active runtime (override via
   // options.harness). Without a config every angle resolves to inherit
   // (never guessed), so such a plan is evidence only of "no config consulted."
   //
@@ -2643,7 +2662,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // throw on a bad angle/model/capability shape) — BEFORE any destructive
   // write below, so a config-reachable bad model spelling fails closed here
   // rather than after the stale-sibling unlink.
-  const harness = options.harness ?? "claude";
+  const harness = options.harness ?? resolveRuntimeHarness();
+  options.harness = harness;
   const pendingAngleNames = options.fanoutDispatch?.pendingGroups
     ? new Set(options.fanoutDispatch.pendingGroups.flatMap((g) => g.angles).map((a) => String(a).trim()))
     : null;
@@ -2681,6 +2701,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   const requestPlan = buildReviewDispatchPlan({
     gate: options.gate,
     headSha: options.headSha,
+    harness,
     sharedPrefixPath: briefingPrefixPath,
     sharedPrefixHash: `sha256:${prefixHash}`,
     requestGroups,
@@ -2964,8 +2985,10 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // understands "draft"/"preApproval"); its angle scope/fanout lookups below
   // fall back to draft's config shape — a reasonable default since neither
   // gate config exists for it — while its ANGLE SET is the dedicated union
-  // resolver below, never resolveGateAnglesDynamic.
-  const configKey = isReviewGate ? "draft" : mapGateToConfigKey(input.gate);
+  // resolver below, never resolveGateAnglesDynamic. resolveGateAngleCatalogKey
+  // owns that review -> draft fallback so the ledger's write/read-side
+  // re-derivation orders angles exactly as this dispatch does.
+  const configKey = resolveGateAngleCatalogKey(input.gate);
   // input.hasFullLabel is an ATTESTATION about the live PR's gate:full label,
   // not a preference: only an explicit `false` (caller checked the labels and
   // the label is absent) enables diff-class tier reduction. An omitted or
@@ -2991,7 +3014,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         // own --base-derived floor check (below). A caller that already has
         // sizeOutcome evidence to hand (e.g. it also ran check-size-budget.mjs
         // for this same diff) can request the SAME floor-vs-tier precedence the
-        // primer's dispatch decision uses; omitted, this resolves exactly as
+        // gate coordinator's dispatch decision uses; omitted, this resolves exactly as
         // before.
         checkFloors: input.checkFloors === true,
         sizeOutcome: input.sizeOutcome,
@@ -3022,7 +3045,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot }, { repoRoot });
-  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: input.carriedAngles ?? null });
+  const fanoutDispatch = resolveFanoutDispatch(input.config, configKey, resolvedAngles, { fullLabel: input.hasFullLabel !== false, availableReviewers: input.availableReviewers ?? null, completedAngles, carriedAngles: input.carriedAngles ?? null, singleWave: !isReviewGate });
 
   const writeResult = await writeGateContext(
     {
@@ -3047,6 +3070,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       issueBody: input.issueBody ?? null,
       tmpRoot,
       config: input.config,
+      harness: input.harness ?? resolveRuntimeHarness(),
     },
     { repoRoot },
   );
@@ -3317,12 +3341,13 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
  * injectable coordination-facts reader the ordering tripwire consults (default:
  * `loadPrGateCoordinationContext`).
  * @param {string[]} [argv]
- * @param {{ repoRoot?: string, run?: Function, loadCoordination?: Function }} [runtime]
+ * @param {{ repoRoot?: string, run?: Function, loadCoordination?: Function, env?: Record<string, string|undefined> }} [runtime]
  */
 export async function main(
   argv = process.argv.slice(2),
   {
     repoRoot = process.cwd(),
+    env = process.env,
     run = runChild,
     // Injectable so the tripwire test can supply the raw coordination facts
     // directly instead of stubbing the whole gh coordination surface. The
@@ -3339,6 +3364,7 @@ export async function main(
   let options;
   try {
     options = parseWriteGateContextCliArgs(argv);
+    options.harness ??= resolveRuntimeHarness(env);
   } catch (error) {
     process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
     process.exitCode = 1;
@@ -3557,7 +3583,7 @@ export async function main(
       const scopeConfig = config;
       // review has no config key of its own; scope/fanout lookups fall back
       // to draft's config shape (see buildGateContext's own configKey note).
-      const scopeConfigKey = options.gate === "review" ? "draft" : mapGateToConfigKey(options.gate);
+      const scopeConfigKey = resolveGateAngleCatalogKey(options.gate);
       options.angleScopes = Object.fromEntries(
         options.angles.map((name) => [name, resolveGateAngleScope(scopeConfig, scopeConfigKey, name)]),
       );
@@ -3569,7 +3595,7 @@ export async function main(
       // AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
       const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
-      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles });
+      options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles, singleWave: options.gate !== "review" });
     }
     const result = await writeGateContext(options, { repoRoot });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });

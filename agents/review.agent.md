@@ -67,8 +67,7 @@ When NOT given an angle scope, behave exactly as the full-PR review agent descri
 The `tools:` frontmatter declares only harness-universal builtins (`read`, `bash`,
 `edit`, `write`). It does NOT declare `search` or `execute` (harness-neutral tool
 names that Pi does not expose as builtins): declaring unavailable tools causes
-Pi to mark the review step `failed`, which aborts `runs.all` and the
-GATE-EXEC-PRIME primer-then-parallel pattern.
+Pi to mark the review step `failed`, which aborts the wave's `runs.all`.
 
 - **Search**: use `bash` (`rg`, `grep`, `find`) to locate cross-cutting issues
   on both harnesses. On Claude Code the structured `Grep`/`Glob` tools are

@@ -26,7 +26,7 @@ With independent checks green, exclusion yields ordinary `"success"`, never `"cr
 
 ### Zero-suite local-validation exception
 
-`"crediblyGreen"` is reserved for the bounded zero-suite local-validation exception, never produced by gate-evidence exclusion. Its prerequisites remain: zero current-head suites/statuses, previous-head green, and local `bun run verify` passed for that same head. These facts do not authorize self-certifying CI or overriding `none`; refresh the detector and proceed under this exception only on authoritative current-head `crediblyGreen` evidence.
+`"crediblyGreen"` is reserved for the bounded zero-suite local-validation exception, never produced by gate-evidence exclusion. Its prerequisites remain: zero current-head suites/statuses, previous-head green, and a sanctioned local full-validation result for that same head from `dev-loops gate resolve-validation`. These facts do not authorize self-certifying CI or overriding `none`; refresh the detector and proceed under this exception only on authoritative current-head `crediblyGreen` evidence.
 
 The CLI rejects the removed `--local-validation-head-sha` flag and supplies no local-validation evidence input, so an ordinary refresh cannot activate this exception. If the result remains `none`, follow the existing wait/reconciliation policy. The internal promotion helper additionally requires matching local-validation/head identity, successful fallback rollup, a current-head submitted Copilot review and zero unresolved/actionable threads; those checks do not make the missing CLI input available.
 

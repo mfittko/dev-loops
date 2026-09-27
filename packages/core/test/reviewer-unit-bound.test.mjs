@@ -51,11 +51,11 @@ describe("reviewer-unit-bound — explicit-enumeration conformance", () => {
   });
 
   test("REVIEWER_UNIT_BUDGET equals the fixed budget", () => {
-    assert.deepEqual(REVIEWER_UNIT_BUDGET, { maxModelTurns: 45, maxToolCalls: 50, maxAngles: 3 });
+    assert.deepEqual(REVIEWER_UNIT_BUDGET, { maxModelTurns: 45, maxToolCalls: 50, maxAngles: 5 });
   });
 
-  test("REVIEWER_UNIT_MAX_ANGLES is 3", () => {
-    assert.equal(REVIEWER_UNIT_MAX_ANGLES, 3);
+  test("REVIEWER_UNIT_MAX_ANGLES is 5", () => {
+    assert.equal(REVIEWER_UNIT_MAX_ANGLES, 5);
   });
 
   test("HARNESS_VALUES matches the three recognized dev-loop harnesses", () => {
@@ -122,8 +122,12 @@ describe("validateReviewerUnit — malformed unit fails closed", () => {
     assert.throws(() => validateReviewerUnit(baseUnit({ angles: ["coverage", "Coverage"] })), TypeError);
   });
 
-  test("throws TypeError on > 3 angles", () => {
-    assert.throws(() => validateReviewerUnit(baseUnit({ angles: ["a", "b", "c", "d"] })), TypeError);
+  test("throws TypeError on > 5 angles", () => {
+    assert.throws(() => validateReviewerUnit(baseUnit({ angles: ["a", "b", "c", "d", "e", "f"] })), TypeError);
+  });
+
+  test("accepts exactly 5 angles", () => {
+    assert.deepEqual([...validateReviewerUnit(baseUnit({ angles: ["a", "b", "c", "d", "e"] })).angles], ["a", "b", "c", "d", "e"]);
   });
 });
 
@@ -269,6 +273,25 @@ for (const harness of ["pi", "claude", "codex"]) {
       assert.equal(result.ok, false);
       assert.equal(result.reason, "reviewer_budget_exhausted");
       assert.deepEqual(result.unreviewedAngles, ["security"]);
+    });
+
+    test("a 5-angle unit that runs over budget emits reviewer_budget_exhausted naming the unreviewed angles, never clean", () => {
+      const angles = ["holistic", "coverage", "security", "performance", "maintainability"];
+      const unit = baseUnit({ angles, gateContext: { headSha: "sha-5", harness } });
+      const result = enforceReviewerUnitBound({
+        unit,
+        consumed: { modelTurns: 46, toolCalls: 51 },
+        completedAngles: ["holistic", "coverage"],
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.verdict, "blocked");
+      assert.equal(result.reason, "reviewer_budget_exhausted");
+      assert.deepEqual(result.unreviewedAngles, ["security", "performance", "maintainability"]);
+      assert.equal(result.headSha, "sha-5");
+      // Even with every angle reported complete, an over-budget run is never clean.
+      const allDone = enforceReviewerUnitBound({ unit, consumed: { modelTurns: 46, toolCalls: 0 }, completedAngles: angles });
+      assert.equal(allDone.ok, false);
+      assert.equal(allDone.reason, "reviewer_budget_exhausted");
     });
 
     test("incomplete coverage within budget blocks naming exactly the missing angle", () => {

@@ -52,6 +52,11 @@ const STRATEGY_DEFAULT_STOP_RULES = Object.freeze({
     "ack-destructive-migrations",
     "merge",
   ],
+  [INTERNAL_DEV_LOOP_STRATEGY.REVIEW]: [
+    "read-only",
+    "one-review-round",
+    "no-lifecycle-gate-evidence",
+  ],
 });
 
 const RECONCILIATION_ACCEPTANCE_TEMPLATE = deepFreeze({
@@ -133,7 +138,7 @@ register(INTERNAL_DEV_LOOP_STRATEGY.FINAL_APPROVAL, "default", {
 register(INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION, "default", {
   criteria: [
     { id: "phase-ac", must: "All phase acceptance criteria from the active phase doc are satisfied.", severity: "required" },
-    { id: "verify-green", must: "`bun run verify` passes with no failures.", severity: "required" },
+    { id: "validation-green", must: "Targeted validation passes; any required local full validation uses `dev-loops gate resolve-validation`.", severity: "required" },
   ],
   evidence: ["commands-run", "validation-output", "changed-files"],
   maxFinalizationTurns: 6,
@@ -148,7 +153,7 @@ register(INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION, "default", {
 register(INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION, "spike", {
   criteria: [
     { id: "spike-recorded", must: "The spike exploration and its recommendation are recorded (spike file + summary).", severity: "required" },
-    { id: "verify-green", must: "`bun run verify` passes with no failures.", severity: "required" },
+    { id: "validation-green", must: "Targeted validation passes; any required local full validation uses `dev-loops gate resolve-validation`.", severity: "required" },
   ],
   evidence: ["commands-run", "validation-output", "changed-files"],
   maxFinalizationTurns: 6,
@@ -183,6 +188,17 @@ register(INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW, "default", {
   ],
   evidence: ["commands-run", "validation-output"],
   maxFinalizationTurns: 4,
+  needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_MS,
+  activeNoticeAfterMs: DEFAULT_ACTIVE_NOTICE_MS,
+});
+
+register(INTERNAL_DEV_LOOP_STRATEGY.REVIEW, "default", {
+  criteria: [
+    { id: "read-only", must: "Review the current PR without claiming it, pushing, fixing, committing, moving a board item, or changing lifecycle state.", severity: "required" },
+    { id: "informational-only", must: "Run one informational review-gate round that never satisfies draft_gate or pre_approval_gate evidence.", severity: "required" },
+  ],
+  evidence: ["review-findings", "manual-notes"],
+  maxFinalizationTurns: 1,
   needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_MS,
   activeNoticeAfterMs: DEFAULT_ACTIVE_NOTICE_MS,
 });

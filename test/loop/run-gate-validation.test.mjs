@@ -13,6 +13,7 @@ import {
   stripAnsi,
   validateSuiteNames,
   buildValidationArtifact,
+  classifyPackageSuites,
 } from "../../scripts/loop/run-gate-validation.mjs";
 import { initGitFixture, runNode } from "../_helpers.mjs";
 
@@ -25,7 +26,7 @@ function git(repoRoot, args) {
 // The CLI attests the worktree is checked out at the declared --head-sha before
 // running any suite, so the fixture must be a real git repo and every CLI
 // invocation must declare that repo's actual HEAD.
-async function makeFixtureRepo() {
+async function makeFixtureRepo(extraScripts = {}) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-"));
   await writeFile(
     path.join(repoRoot, "package.json"),
@@ -34,13 +35,20 @@ async function makeFixtureRepo() {
       version: "0.0.0",
       private: true,
       scripts: {
-        verify: "node -e \"console.log('verify-ran')\"",
-        passing: "node -e \"console.log('passing-ran')\"",
-        failing: "node -e \"console.error('boom'); process.exit(2)\"",
+        verify: "bun scripts/verify.mjs",
+        "test:scripts": "bun scripts/docs/validate-links.mjs",
+        passing: "bun scripts/docs/validate-rule-ownership.mjs",
+        failing: "bun scripts/docs/validate-decision-records.mjs",
+        ...extraScripts,
       },
     }, null, 2),
     "utf8",
   );
+  await mkdir(path.join(repoRoot, "scripts"));
+  await mkdir(path.join(repoRoot, "scripts", "docs"));
+  for (const [name, source] of Object.entries({ verify: "console.log('verify-ran')", "docs/validate-links": "console.log('scripts-ran')", "docs/validate-rule-ownership": "console.log('passing-ran')", "docs/validate-decision-records": "console.error('boom'); process.exit(2)" })) {
+    await writeFile(path.join(repoRoot, "scripts", `${name}.mjs`), source);
+  }
   initGitFixture(repoRoot, { commit: null });
   git(repoRoot, ["add", "-A"]);
   git(repoRoot, ["commit", "-q", "-m", "fixture"]);
@@ -52,12 +60,10 @@ async function makeFixtureRepo() {
 // parseRunGateValidationCliArgs
 // ---------------------------------------------------------------------------
 
-test("parseRunGateValidationCliArgs defaults --suite to [verify]", () => {
-  const options = parseRunGateValidationCliArgs([
+test("parseRunGateValidationCliArgs requires an explicit suite", () => {
+  assert.throws(() => parseRunGateValidationCliArgs([
     "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234",
-  ]);
-  assert.deepEqual(options.suites, ["verify"]);
-  assert.equal(options.tmpRoot, "tmp");
+  ]), /Missing required arguments: suite/);
 });
 
 test("parseRunGateValidationCliArgs collects repeated --suite flags in order", () => {
@@ -114,6 +120,36 @@ test("validateSuiteNames rejects suite names that are not safe path segments", (
   }));
 });
 
+test("package script reach follows aliases and refuses recursion or unknown shell", () => {
+  const scripts = { verify: "bun scripts/verify.mjs", "test:quick": "bun run verify", "test:all": "bun scripts/run-bun-test.mjs --all", "test:docs": "bun scripts/docs/validate-links.mjs", "test:workflows": "bun scripts/github/lint-workflows.mjs", composed: "bun run test:all && bun run test:docs && bun run test:workflows", a: "bun run b", b: "bun run a", unknown: "python custom.py" };
+  assert.equal(classifyPackageSuites(["test:quick"], scripts), "full-repository");
+  assert.equal(classifyPackageSuites(["composed"], scripts), "full-repository");
+  assert.equal(classifyPackageSuites(["test:quick"], { ...scripts, "test:quick": "bun scripts/../scripts/verify.mjs" }), "full-repository");
+  assert.throws(() => classifyPackageSuites(["a"], scripts), /Recursive package script/);
+  assert.throws(() => classifyPackageSuites(["unknown"], scripts), /Cannot classify package script/);
+  assert.throws(() => classifyPackageSuites(["test:quick"], { "test:quick": "bun scripts/run-full.mjs" }), /Cannot classify package script/);
+});
+
+test("legacy gate refuses an unknown script entrypoint before execution", async () => {
+  const { repoRoot, headSha } = await makeFixtureRepo({ "test:quick": "bun scripts/run-full.mjs" });
+  try {
+    const out = await runNode(SCRIPT, ["--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha, "--suite", "test:quick"], { cwd: repoRoot });
+    assert.equal(out.code, 1);
+    assert.match(out.stderr, /Cannot classify package script/);
+    assert.doesNotMatch(out.stdout, /should-not-run/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("legacy gate refuses a dot-segment alias to full verification", async () => {
+  const { repoRoot, headSha } = await makeFixtureRepo({ "test:quick": "bun scripts/../scripts/verify.mjs" });
+  try {
+    const out = await runNode(SCRIPT, ["--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha, "--suite", "test:quick"], { cwd: repoRoot });
+    assert.equal(out.code, 1);
+    assert.match(out.stderr, /Full-repository validation must run through/);
+    assert.doesNotMatch(out.stdout, /verify-ran/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 // ---------------------------------------------------------------------------
 // stripAnsi
 // ---------------------------------------------------------------------------
@@ -131,7 +167,7 @@ test("readPackageScripts returns the scripts map", async () => {
   const { repoRoot } = await makeFixtureRepo();
   try {
     const scripts = await readPackageScripts(repoRoot);
-    assert.deepEqual(Object.keys(scripts).sort(), ["failing", "passing", "verify"]);
+    assert.deepEqual(Object.keys(scripts).sort(), ["failing", "passing", "test:scripts", "verify"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -141,18 +177,19 @@ test("readPackageScripts returns the scripts map", async () => {
 // CLI integration
 // ---------------------------------------------------------------------------
 
-test("default suite (no --suite given) runs only 'verify' and writes the artifact at buildValidationResultsPath", async () => {
+test("explicit targeted suite writes the compatible artifact", async () => {
   const { repoRoot, headSha } = await makeFixtureRepo();
   try {
     const { code, stdout, stderr } = await runNode(SCRIPT, [
       "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha,
+      "--suite", "test:scripts",
     ], { cwd: repoRoot });
     assert.equal(code, 0, stderr);
 
     const artifact = JSON.parse(stdout.trim());
     assert.equal(artifact.suites.length, 1);
-    assert.equal(artifact.suites[0].name, "verify");
-    assert.equal(artifact.suites[0].command, "bun run verify");
+    assert.equal(artifact.suites[0].name, "test:scripts");
+    assert.equal(artifact.suites[0].command, "bun run test:scripts");
 
     const expectedPath = buildValidationResultsPath({
       repo: "owner/repo", pr: 1, gate: "draft_gate", headSha,
@@ -267,10 +304,12 @@ test("a suite name containing ':' writes its log under a '-'-mapped filename (Wi
       path.join(repoRoot, "package.json"),
       JSON.stringify({
         name: "fixture", version: "0.0.0", private: true,
-        scripts: { "verify": "node -e \"console.log('v')\"", "assets:check": "node -e \"console.log('colon-ran')\"" },
+        scripts: { "verify": "bun scripts/verify.mjs", "assets:check": "bun scripts/claude/generate-claude-assets.mjs --check" },
       }, null, 2),
       "utf8",
     );
+    await mkdir(path.join(repoRoot, "scripts", "claude"));
+    await writeFile(path.join(repoRoot, "scripts", "claude", "generate-claude-assets.mjs"), "console.log('colon-ran')");
     const { code, stdout, stderr } = await runNode(SCRIPT, [
       "--repo", "owner/repo", "--pr", "10", "--gate", "draft_gate", "--head-sha", headSha,
       "--suite", "assets:check",

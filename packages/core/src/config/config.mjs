@@ -288,30 +288,50 @@ const FanoutGroup = z.strictObject({
 // (default) batches related angles onto one reviewer per group; per-angle emits
 // one reviewer per angle (bypasses configured groups). gate:full forces the full
 // angle set upstream (resolveGateTier) and dispatches GROUPED here (ADR 0048).
-//   maxAnglesPerGroup (N, default 3, min 1) — leftover ungrouped angles
+//   maxAnglesPerGroup (N, default 5, min 1) — leftover ungrouped angles
 //     auto-chunk into units of ≤N after configured groups match.
-//   maxConcurrent (M, default 4, min 1) — at most M dispatch units per wave
+//   maxConcurrent (M, default 5, min 1) — at most M dispatch units per wave
 //     (scheduleFanoutWaves).
 // An angle in no configured group joins the auto-chunked leftover pool.
 const FanoutConfig = z.strictObject({
   mode: z.enum(["grouped", "per-angle"]).default("grouped").describe("Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle bypasses the configured-groups table and emits one singleton unit per angle (the original full-scrutiny shape). per-angle is equivalent to maxAnglesPerGroup: 1 in dispatch unit size ONLY when no configured multi-angle group matches a resolved angle; otherwise per-angle bypasses configured groups while maxAnglesPerGroup: 1 honors them (matched first, never split)."),
   groups: z.array(FanoutGroup).optional().describe("Static named angle groups consulted in grouped mode. An angle absent from every group joins the auto-chunked leftover pool (chunked into units of ≤maxAnglesPerGroup)."),
-  maxAnglesPerGroup: z.number().int().min(1).default(3).describe("Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 3, min 1). Configured groups are matched first and never split by this knob; mode: per-angle bypasses the table entirely (one singleton per angle)."),
-  maxConcurrent: z.number().int().min(1).default(4).describe("Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves). Ignored when sequential is true (which forces one unit per wave)."),
+  maxAnglesPerGroup: z.number().int().min(1).default(5).describe("Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 5, min 1). Configured groups are matched first and never split by this knob; mode: per-angle bypasses the table entirely (one singleton per angle)."),
+  maxConcurrent: z.number().int().min(1).default(5).describe("Max dispatch units (groups) the conductor dispatches concurrently per wave (default 5, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves). Ignored when sequential is true (which forces one unit per wave)."),
   sequential: z.boolean().default(false).describe("Dispatch heavy reviewers one at a time (serial) instead of wave-by-wave parallel (issue #1726). When true, effective fan-out concurrency is one dispatch unit per wave regardless of maxConcurrent, so each heavy reviewer completes and writes its evidence artifact before the next starts. Distinct reviewers, real fan-in/ledger, and provenance are unchanged — this only bounds dispatch concurrency. Default false keeps shipped behaviour unchanged for other harnesses/repos (cross-harness non-regression #1086); a repo sets it in .devloops to bound concurrency for all its PRs."),
 });
 
 /**
- * Two `gates.fanout.groups` entries sharing one `name` would resolve to two
- * dispatch units with the same reviewer-sentinel scope (resolveFanoutGroups
- * keys the scope by group name) — reject at config-validation time rather
- * than let it degrade silently at dispatch time. Applied via `.superRefine`
- * where `FanoutConfig` is used (zod v4 rejects `.partial()` on a schema that
- * already carries a refinement), not on `FanoutConfig` itself.
+ * The reserved synthetic packed-bin name shape. Every bin `packDispatchUnits`
+ * generates (including a one-member bin) is named `packed:sha256:<64 lowercase
+ * hex>`, and `isPackedUnitName` infers a unit's packed origin from exactly this
+ * shape — so a configured `gates.fanout.groups[].name` matching it would make
+ * `expandDispatchUnits`/`dispatchUnitScope` give an ordinary one-angle group
+ * packed-bin scope semantics, and a crafted name could collide with a generated
+ * packed identity. This literal is re-declared here (not imported from
+ * `scripts/github/_dispatch-units.mjs`, which core must not depend on — see
+ * test/core-runtime-boundary.test.mjs) with the owner named for the mirror; a
+ * test asserts both declarations agree on the same sample names so they cannot
+ * drift. Mirrors the local re-declaration precedent in
+ * packages/core/src/loop/reviewer-unit-bound.mjs.
+ */
+export const RESERVED_PACKED_FANOUT_GROUP_NAME_RE = /^packed:sha256:[0-9a-f]{64}$/;
+
+/**
+ * Reject two `gates.fanout.groups` entries sharing one `name` — they would
+ * resolve to two dispatch units with the same reviewer-sentinel scope
+ * (resolveFanoutGroups keys the scope by group name) — and reject a group whose
+ * `name` matches the reserved synthetic packed-bin shape
+ * (RESERVED_PACKED_FANOUT_GROUP_NAME_RE), which would silently inherit
+ * packed-bin scope semantics and could collide with a generated packed
+ * identity. Both are rejected at config-validation time rather than letting
+ * them degrade silently at dispatch time. Applied via `.superRefine` where
+ * `FanoutConfig` is used (zod v4 rejects `.partial()` on a schema that already
+ * carries a refinement), not on `FanoutConfig` itself.
  * @param {{ groups?: Array<{ name: string }> }} val
  * @param {import("zod").RefinementCtx} ctx
  */
-function rejectDuplicateFanoutGroupNames(val, ctx) {
+function rejectInvalidFanoutGroupNames(val, ctx) {
   if (!Array.isArray(val.groups)) return;
   const seen = new Set();
   for (const [index, group] of val.groups.entries()) {
@@ -320,6 +340,13 @@ function rejectDuplicateFanoutGroupNames(val, ctx) {
         code: z.ZodIssueCode.custom,
         path: ["groups", index, "name"],
         message: `duplicate gates.fanout.groups name "${group.name}"`,
+      });
+    }
+    if (typeof group.name === "string" && RESERVED_PACKED_FANOUT_GROUP_NAME_RE.test(group.name)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["groups", index, "name"],
+        message: `gates.fanout.groups name "${group.name}" is in the reserved packed-bin namespace packed:sha256:<64 lowercase hex>; that shape is not usable as a configured group name`,
       });
     }
     seen.add(group.name);
@@ -380,8 +407,6 @@ const GatesConfig = z.strictObject({
   // Accepted but inert: setting it has no dispatch effect. The active
   // concurrency cap is gates.fanout.maxConcurrent (ADR 0048).
   maxFanoutReviewers: z.number().int().min(1).max(64).default(8).describe("SUPERSEDED by gates.fanout.maxConcurrent (#1601, ADR 0048): no longer governs fan-out dispatch — the conductor dispatches wave-by-wave at most gates.fanout.maxConcurrent (M) dispatch units per wave via scheduleFanoutWaves (the wave plan emitted by write-gate-context.mjs). Kept for back-compat; setting it has no dispatch effect."),
-  // GATE-EXEC-PRIME is MANDATORY: every gate fan-out primes the byte-identical
-  // briefing prefix before reviewers read it.
   // postFindingsComments: opt-in duplicate findings surface; the disposition
   // ledger is written regardless.
   postFindingsComments: z.boolean().default(false),
@@ -395,7 +420,7 @@ const GatesConfig = z.strictObject({
   rejectForeignAngles: z.boolean().default(true),
   // Grouped vs per-angle fan-out dispatch policy + static grouping table.
   // GLOBAL, not per-gate — see resolveFanoutGroups.
-  fanout: FanoutConfig.superRefine(rejectDuplicateFanoutGroupNames).optional(),
+  fanout: FanoutConfig.superRefine(rejectInvalidFanoutGroupNames).optional(),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -797,7 +822,7 @@ const FileGatesConfig = z.strictObject({
   postFindingsComments: z.boolean().describe("Also post consolidated gate findings as a second marker-tagged PR comment, duplicating the verdict review's own findings (default false).").optional(),
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
-  fanout: FanoutConfig.partial().superRefine(rejectDuplicateFanoutGroupNames).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
+  fanout: FanoutConfig.partial().superRefine(rejectInvalidFanoutGroupNames).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
 });
 
 // ============================================================================
@@ -1127,7 +1152,10 @@ export function resolveReviewerRole(config, angle) {
  * (only `docs` today) MUST pass `kind: "angle"` to avoid the silent downgrade.
  *
  * @param {DevLoopConfig} config
- * @param {{ role: string, harness: "claude"|"pi", kind?: "role"|"angle" }} params
+ * Codex currently has no model mapping; it returns `null` so dispatch
+ * inherits the active Codex session model.
+ *
+ * @param {{ role: string, harness: "claude"|"pi"|"codex", kind?: "role"|"angle" }} params
  * @returns {string|null}
  */
 export function resolveRoleModel(config, { role, harness, kind } = {}) {
@@ -1454,12 +1482,13 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors) {
     data = { ...data, strategy: "tracker-first" };
   }
 
-  // gates.primeSharedPrefix is not a knob (priming is always on). The schema is
-  // strictObject, so strip this stale key before validation (with a deprecation
+  // gates.primeSharedPrefix is not a knob: cache priming is an optional,
+  // non-semantic execution optimization. The schema is strictObject, so strip
+  // this stale key before validation (with a deprecation
   // warning) rather than let it drop the whole gates layer.
   if (data?.gates && Object.prototype.hasOwnProperty.call(data.gates, "primeSharedPrefix")) {
     warnings.push(
-      `gates.primeSharedPrefix is removed (#1462): cache priming is now mandatory, not configurable. ` +
+      `gates.primeSharedPrefix is removed (#1462): cache priming is an optional, non-semantic execution optimization, no longer configurable via this key. ` +
       `Remove it from ${path.basename(filePath)}; the key is ignored.`
     );
     const { primeSharedPrefix: _removed, ...gatesRest } = data.gates;
@@ -2208,14 +2237,14 @@ export function resolveGateDispatchMode(config, gate, { scope, changedFiles, siz
  * Default auto-chunk size for ungrouped angles. Mirrors the
  * zod default on `gates.fanout.maxAnglesPerGroup`.
  */
-export const DEFAULT_MAX_ANGLES_PER_GROUP = 3;
+export const DEFAULT_MAX_ANGLES_PER_GROUP = 5;
 
 /**
  * Default concurrent-dispatch-unit cap per wave. Mirrors the
  * zod default on `gates.fanout.maxConcurrent`; consumed by
  * `scheduleFanoutWaves` (@dev-loops/core/loop/gate-fanin).
  */
-export const DEFAULT_FANOUT_MAX_CONCURRENT = 4;
+export const DEFAULT_FANOUT_MAX_CONCURRENT = 5;
 export const DEFAULT_FANOUT_SEQUENTIAL = false;
 
 /**
@@ -2234,14 +2263,16 @@ export function resolveFanoutSequential(config) {
 /**
  * Claude-harness-scoped cap on effective fan-out concurrency (per ADR
  * docs/decisions/0069-claude-harness-fanout-concurrency-clamp.md, amended by
- * docs/decisions/0083-raise-claude-fanout-concurrency-cap-to-4.md). The
+ * docs/decisions/0083-raise-claude-fanout-concurrency-cap-to-4.md and
+ * docs/decisions/0095-single-wave-gate-fanout.md). The
  * `GATE-EXEC-DISPATCH-RETRY-BACKOFF` retry/backoff policy turns a single 429
  * into latency instead of a failed drive, so this cap only bounds the
  * steady-state per-wave burst (driver + dispatch units) for a single-driver
  * Claude session; other harnesses (pi, unknown) are unaffected — see
- * `resolveFanoutEffectiveConcurrency`.
+ * `resolveFanoutEffectiveConcurrency`. At 5 it matches the shipped
+ * maxConcurrent default, so a full shipped round packs into one wave.
  */
-export const CLAUDE_MAX_EFFECTIVE_CONCURRENT = 4;
+export const CLAUDE_MAX_EFFECTIVE_CONCURRENT = 5;
 
 /**
  * Resolve the effective fan-out concurrency (dispatch units per wave): 1 when
@@ -2262,7 +2293,7 @@ export function resolveFanoutEffectiveConcurrency(config, env = process.env) {
 }
 
 /**
- * Resolve `gates.fanout.maxAnglesPerGroup` (default 3, min 1). Defensive,
+ * Resolve `gates.fanout.maxAnglesPerGroup` (default 5, min 1). Defensive,
  * independent of zod: a non-integer or sub-1 value falls back to the default so
  * a malformed raw merged config (which loadDevLoopConfig still returns) never
  * crashes Phase 2.
@@ -2276,7 +2307,7 @@ export function resolveMaxAnglesPerGroup(config) {
 }
 
 /**
- * Resolve `gates.fanout.maxConcurrent` (default 4, min 1). The
+ * Resolve `gates.fanout.maxConcurrent` (default 5, min 1). The
  * max dispatch units (groups) the conductor dispatches concurrently per wave.
  * Defensive, independent of zod (same rationale as resolveMaxAnglesPerGroup).
  * @param {DevLoopConfig} config
@@ -2559,7 +2590,7 @@ function selectFloorPlusJustifiedAngles(config, gate, changedFiles) {
 }
 
 /**
- * The primer-owned deterministic review-proportionality plan
+ * The gate-coordinator-owned deterministic review-proportionality plan
  * (GATE-EXEC-PROPORTIONALITY, gate-review-sub-loop-contract.md): a single,
  * pure composition of the existing decision functions so "the plan" (angle
  * set + execution mode + grouping) is one testable, persistable object.
@@ -2569,7 +2600,7 @@ function selectFloorPlusJustifiedAngles(config, gate, changedFiles) {
  * {@link resolveDynamicAngles} (no-tier best-effort selection), and {@link
  * resolveFanoutGroups} (dispatch-unit grouping). No git I/O, no logic
  * of its own beyond the floor-vs-tier precedence below: this is the ONE place
- * the primer (emit) and the merge gate (re-verify) compose mode + angles +
+ * the gate coordinator (emit) and the merge gate (re-verify) compose mode + angles +
  * grouping, so they can never drift onto two different floor implementations.
  *
  * Floor-vs-tier precedence: every fired floor affects DISPATCH only. A

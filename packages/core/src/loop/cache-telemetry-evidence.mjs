@@ -2,20 +2,19 @@
  * cache-telemetry-evidence.mjs — cache telemetry adapter + before/after evidence
  * artifact (issue #1468 slice 4).
  *
- * Slices 1-3 produced the deterministic request plan, request-prefix fingerprints,
- * stable/volatile separation, per-model primer-group partitioning, and the
- * primer-dispatch ordering evidence + fail-closed fan-in validation. That
- * proves the ordering and request-fingerprint invariants a cache-aware dispatch
- * relies on, but it does not by itself MEASURE the provider cache reuse: whether
- * the N reviewers actually read the cache entry the primer wrote.
+ * The request plan and request-prefix fingerprints prove request-SHAPE
+ * identity, but they do not MEASURE provider cache reuse: whether reviewers
+ * actually read a cache entry an earlier request wrote.
  *
- * This slice adds the harness-capability-aware telemetry surface (Section D of
- * #1468). Where a harness exposes cache creation/read usage telemetry, we
- * persist per-primer creation tokens and per-reviewer read tokens and emit an
- * aggregate read:create report. Where the harness is opaque or telemetry is
- * unavailable, we record `cacheReuseVerified: false` with the reason and NEVER
- * describe the result as a verified `1 write + N reads` outcome — only the
- * ordering + fingerprint invariants from the earlier slices may be claimed.
+ * This module is an OPTIONAL measurement surface. Gate fan-out has no primer
+ * phase; an execution adapter MAY prime as a non-semantic optimization, and
+ * the `primerCacheCreations` field records any observed cache-creation events
+ * (adapter priming or the first reviewer's write). Where a harness exposes
+ * cache creation/read usage telemetry, we persist creation tokens and
+ * per-reviewer read tokens and emit an aggregate read:create report. Where the
+ * harness is opaque or telemetry is unavailable, we record
+ * `cacheReuseVerified: false` with the reason and NEVER describe the result as
+ * verified reuse. Missing telemetry never alters a gate verdict.
  *
  * This module is pure and offline (no GitHub, no harness, no clock). It owns:
  *
@@ -78,7 +77,7 @@ function sumTokens(entries) {
 /**
  * Build the before/after cache-telemetry evidence artifact for a gate run.
  *
- * "Before" = the cache-creation events (the primer write side); "after" = the
+ * "Before" = the cache-creation events (the write side); "after" = the
  * cache-read events (the reviewer read side). Where a harness does not expose
  * per-event token counts, callers may record the event with `tokens: null`; the
  * event still counts toward the create/read tally but not the token aggregates.

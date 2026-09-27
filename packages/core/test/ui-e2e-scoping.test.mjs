@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "bun:test";
+import { resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
 
 import {
   evaluateUiE2eScoping,
   classifyRenderedArtifactPath,
   REGISTERED_ARTIFACT_PATHS,
+  REGISTERED_ARTIFACT_SUITES,
 } from "../src/loop/ui-e2e-scoping.mjs";
 // Import the registries directly so the sync test fails if a deck/article is
 // added to the harness without updating REGISTERED_ARTIFACT_PATHS.
@@ -88,11 +91,18 @@ test("fail-closed: registered artifact but suite not passed blocks", () => {
   assert.equal(failed.satisfied, false);
 });
 
-test("REGISTERED_ARTIFACT_PATHS stays in sync with DECK_REGISTRY and ARTICLE_REGISTRY", () => {
-  const deckPaths = Object.values(DECK_REGISTRY).map((e) => `docs/presentations/${e.deck}`);
-  const articlePaths = Object.values(ARTICLE_REGISTRY).map((e) => `docs/articles/${e.file}`);
+test("registered UI paths and suite commands stay in sync with the Playwright registries", () => {
+  const deckEntries = Object.values(DECK_REGISTRY).map((e) => [`docs/presentations/${e.deck}`, e.sliceId === "deep-dive-deck" ? "deep-dive" : e.sliceId]);
+  const articleEntries = Object.values(ARTICLE_REGISTRY).map((e) => [`docs/articles/${e.file}`, e.sliceId]);
   assert.deepEqual(
-    [...REGISTERED_ARTIFACT_PATHS].sort(),
-    [...deckPaths, ...articlePaths].sort(),
+    Object.entries(REGISTERED_ARTIFACT_SUITES).sort(),
+    [...deckEntries, ...articleEntries].sort(),
   );
+  assert.deepEqual(REGISTERED_ARTIFACT_PATHS, Object.keys(REGISTERED_ARTIFACT_SUITES));
+  const { scripts } = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
+  for (const [artifact, suite] of Object.entries(REGISTERED_ARTIFACT_SUITES)) {
+    const command = `test:playwright:${suite}`;
+    assert.ok(scripts[command], `${artifact} must select an existing UI suite`);
+    assert.deepEqual(resolveTargetedValidation([artifact]).gateSuites, [command]);
+  }
 });
