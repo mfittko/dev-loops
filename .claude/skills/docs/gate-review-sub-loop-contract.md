@@ -432,7 +432,7 @@ per DISPATCH unit plus a `maxConcurrent` field. The coordinator relays only `dis
 (the compact pull instruction); the reviewer pulls the work order through `pull-work-order.mjs`
 (see "Per-harness delivery"). The execution rules carry the widening rule: the reviewer MAY
 read further code, spec, contracts or prior findings when a concrete dependency or ambiguity
-requires it, and records each widened read in the `contextWidened` result field. Each unit's prompt is a bounded work order and
+requires it, and records in the `contextWidened` result field only the widened reads that moved its judgment. Each unit's prompt is a bounded work order and
 uses reference seeding: the `workOrder` carries the target, the round identity (gate, head,
 prefix sha256), the merged-config sha256 (informational only; nothing verifies it), the assigned angles with each angle's resolved persona
 and prompt (`angleInstructions`), the `requiredReads` manifest (the context artifact's shared

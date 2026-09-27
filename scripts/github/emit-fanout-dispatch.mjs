@@ -173,7 +173,7 @@ const PROHIBITED_OPERATION_INSTRUCTIONS = {
 export const REVIEWER_WORK_ORDER_MAX_BYTES = 30 * 1024;
 
 /** The reviewer widening rule, stated in every work order's execution rules. */
-export const REVIEWER_WIDENING_RULE = "requiredReads are the default context, not a ceiling. You MAY read further code, spec, contracts or prior findings when a concrete dependency or ambiguity requires it, and record each widened read in the `contextWidened` result field";
+export const REVIEWER_WIDENING_RULE = "requiredReads are the default context, not a ceiling. You MAY read further code, spec, contracts or prior findings when a concrete dependency or ambiguity requires it, and record in the `contextWidened` result field only the widened reads that moved your judgment";
 
 /**
  * The deterministic angle-suffix for a dispatch unit: it NAMES the unit's
