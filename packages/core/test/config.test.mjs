@@ -1836,7 +1836,8 @@ describe("tracker config (#1408)", () => {
       assert.deepEqual(result.errors, [], "stale key must not drop the gates layer");
       assert.equal(result.config.gates.maxFanoutReviewers, 4, "rest of the gates layer still loads");
       assert.equal("primeSharedPrefix" in result.config.gates, false, "removed key does not survive into resolved config");
-      assert.ok(result.warnings.some((w) => /gates\.primeSharedPrefix is removed/.test(w)));
+      const warning = result.warnings.find((w) => /gates\.primeSharedPrefix is removed/.test(w));
+      assert.match(warning ?? "", /cache priming is an optional, non-semantic execution optimization, no longer configurable via this key/);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -3723,18 +3724,23 @@ describe("holistic reviewer angle (#2307)", () => {
       assert.ok(mandatoryAngles.includes("holistic"), `${gate}: "holistic" must be mandatory`);
     });
 
-    test(`AC1 — ${gate}: resolveFanoutGroups dispatches holistic as its own dedicated unit`, async () => {
+    test(`${gate}: resolveFanoutGroups places holistic in a leftover auto-chunk unit (no shipped singleton group)`, async () => {
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
       assert.deepEqual(errors, []);
+      assert.equal(
+        (config.gates.fanout.groups ?? []).some((g) => g.angles.includes("holistic")),
+        false,
+        "no configured group names holistic",
+      );
       const { pool } = resolveGateAngleContract(config, gate);
       const units = resolveFanoutGroups(config, gate, pool);
-      const holisticUnit = units.find((u) => u.angles.includes("holistic"));
-      assert.deepEqual(
-        holisticUnit,
-        { name: "holistic", angles: ["holistic"] },
-        `${gate}: holistic must dispatch as its own singleton unit, never co-batched with another angle`,
-      );
+      const holisticUnits = units.filter((u) => u.angles.includes("holistic"));
+      assert.equal(holisticUnits.length, 1, `${gate}: holistic resolves into exactly one unit`);
+      const [holisticUnit] = holisticUnits;
+      assert.match(holisticUnit.name, /^group:/, `${gate}: holistic joins an auto-chunked leftover unit`);
+      assert.ok(holisticUnit.angles.length > 1, `${gate}: holistic shares its unit with other leftover angles`);
+      assert.ok(holisticUnit.angles.length <= 5, `${gate}: the shared unit stays within the 5-angle bound`);
     });
   }
 
@@ -4583,7 +4589,7 @@ describe("isSizeOutcomeT1Clean (GATE-EXEC-PROPORTIONALITY): the ONE shared size-
   });
 });
 
-describe("resolveReviewProportionality (#1984 — primer-owned deterministic plan)", () => {
+describe("resolveReviewProportionality (#1984 — gate-coordinator-owned deterministic plan)", () => {
   const preApprovalTierConfig = () => ({
     version: 1,
     localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } },
@@ -4937,17 +4943,17 @@ test("resolveFanoutGroups: gate:full no longer restores per-angle — dispatches
 
 test("resolveFanoutGroups: gate:full dispatches grouped with auto-chunked leftovers (#1601)", () => {
   // gate:full + no configured groups: the full angle set is auto-chunked into
-  // units of ≤ maxAnglesPerGroup (default 3) — NOT per-angle singletons.
-  const result = resolveFanoutGroups({ version: 1 }, "draft", ["a", "b", "c", "d"], { fullLabel: true });
+  // units of ≤ maxAnglesPerGroup (default 5) — NOT per-angle singletons.
+  const result = resolveFanoutGroups({ version: 1 }, "draft", ["a", "b", "c", "d", "e", "f"], { fullLabel: true });
   assert.deepEqual(result, [
-    { name: "group:a+b+c", angles: ["a", "b", "c"] },
-    { name: "d", angles: ["d"] },
+    { name: "group:a+b+c+d+e", angles: ["a", "b", "c", "d", "e"] },
+    { name: "f", angles: ["f"] },
   ]);
 });
 
-test("resolveFanoutGroups: absent gates.fanout config auto-chunks ungrouped angles into ≤maxAnglesPerGroup units (default 3, #1601)", () => {
+test("resolveFanoutGroups: absent gates.fanout config auto-chunks ungrouped angles into ≤maxAnglesPerGroup units (default 5, #1601)", () => {
   const result = resolveFanoutGroups({ version: 1 }, "draft", ["scope", "docs"]);
-  // No configured groups → both angles are leftovers, chunked into one unit of 2 (≤3).
+  // No configured groups → both angles are leftovers, chunked into one unit of 2 (≤5).
   assert.deepEqual(result, [
     { name: "group:scope+docs", angles: ["scope", "docs"] },
   ]);
@@ -4955,7 +4961,7 @@ test("resolveFanoutGroups: absent gates.fanout config auto-chunks ungrouped angl
 
 test("resolveFanoutGroups: duplicate resolvedAngles entries dedupe before auto-chunking (#1601)", () => {
   const result = resolveFanoutGroups({ version: 1 }, "draft", ["docs", "docs", "scope"]);
-  // dedupe → ["docs", "scope"], then auto-chunked into one unit (≤3).
+  // dedupe → ["docs", "scope"], then auto-chunked into one unit (≤5).
   assert.deepEqual(result, [
     { name: "group:docs+scope", angles: ["docs", "scope"] },
   ]);
@@ -5054,7 +5060,7 @@ test("resolveFanoutGroups is defensive against a malformed gates.fanout.groups e
     [{ name: "g", angles: ["docs"] }, { name: "scope", angles: ["scope"] }],
   );
   // A scalar `angles` (YAML string instead of a list) is treated as empty, dropping the group;
-  // both angles fall through to the leftover auto-chunk pool (≤3 → one unit).
+  // both angles fall through to the leftover auto-chunk pool (≤5 → one unit).
   assert.deepEqual(
     resolveFanoutGroups({ gates: { fanout: { groups: [{ name: "g", angles: "docs" }] } } }, "draft", angles),
     [{ name: "group:docs+scope", angles: ["docs", "scope"] }],
@@ -5085,9 +5091,9 @@ test("resolveFanoutGroups: the shipped default groups the preApproval design-qua
   try {
     const { loadDevLoopConfig } = await import("../src/config/config.mjs");
     const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
-    // Validate under the SHIPPED default (mode: grouped, maxAnglesPerGroup: 3), not a hand-built config.
+    // Validate under the SHIPPED default (mode: grouped, maxAnglesPerGroup: 5), not a hand-built config.
     assert.equal(config.gates.fanout.mode, "grouped");
-    assert.equal(config.gates.fanout.maxAnglesPerGroup, 3);
+    assert.equal(config.gates.fanout.maxAnglesPerGroup, 5);
 
     const preApprovalAngles = config.gates.preApproval.angles.map((a) => (typeof a === "string" ? a : a.name));
     const units = resolveFanoutGroups(config, "preApproval", preApprovalAngles);
@@ -5117,11 +5123,11 @@ test("resolveFanoutGroups: the shipped default groups the preApproval design-qua
     );
     // contradiction-lens is intentionally NOT in a configured group (it is also
     // a draft-gate angle, so grouping it globally would leak into the draft
-    // gate); it resolves as its own auto-chunk singleton unit here.
-    assert.deepEqual(
-      units.find((u) => u.angles.includes("contradiction-lens"))?.angles,
-      ["contradiction-lens"],
-    );
+    // gate); it resolves into an auto-chunked leftover unit here, which it may
+    // share with holistic and other leftover angles.
+    const contradictionUnit = units.find((u) => u.angles.includes("contradiction-lens"));
+    assert.match(contradictionUnit?.name ?? "", /^group:/);
+    assert.ok(contradictionUnit.angles.length <= 5);
     // Whole round: fewer dispatch units than resolved angles.
     assert.ok(units.length < preApprovalAngles.length);
   } finally {
@@ -5130,15 +5136,19 @@ test("resolveFanoutGroups: the shipped default groups the preApproval design-qua
 });
 
 test("resolveMaxAnglesPerGroup / resolveFanoutMaxConcurrent: defaults + config override + defensive fallback (#1601)", () => {
-  assert.equal(resolveMaxAnglesPerGroup({ version: 1 }), 3);
-  assert.equal(resolveFanoutMaxConcurrent({ version: 1 }), 4);
-  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 5 } } }), 5);
+  assert.equal(resolveMaxAnglesPerGroup({ version: 1 }), 5);
+  assert.equal(DEFAULT_MAX_ANGLES_PER_GROUP, 5);
+  assert.equal(resolveFanoutMaxConcurrent({ version: 1 }), 5);
+  assert.equal(DEFAULT_FANOUT_MAX_CONCURRENT, 5);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 3 } } }), 3);
   assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: 2 } } }), 2);
   // Defensive: non-integer / sub-1 fall back to defaults.
-  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 0 } } }), 3);
-  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 1.5 } } }), 3);
-  assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: 0 } } }), 4);
-  assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: "4" } } }), 4);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 0 } } }), 5);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: -2 } } }), 5);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: 1.5 } } }), 5);
+  assert.equal(resolveMaxAnglesPerGroup({ gates: { fanout: { maxAnglesPerGroup: "5" } } }), 5);
+  assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: 0 } } }), 5);
+  assert.equal(resolveFanoutMaxConcurrent({ gates: { fanout: { maxConcurrent: "4" } } }), 5);
 });
 
 test("resolveFanoutSequential / resolveFanoutEffectiveConcurrency: serial bound (#1726) with a cross-harness-safe default", () => {
@@ -5148,7 +5158,7 @@ test("resolveFanoutSequential / resolveFanoutEffectiveConcurrency: serial bound 
   // Pin env to {} so these assertions stay deterministic regardless of the ambient harness
   // (resolveFanoutEffectiveConcurrency defaults env to process.env; the Claude-harness clamp is
   // exercised explicitly, with { CLAUDECODE: "1" }, in the #1971 block below).
-  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, {}), 4);
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, {}), 5);
   // Effective concurrency follows maxConcurrent when not sequential.
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 2 } } }, {}), 2);
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: false, maxConcurrent: 3 } } }, {}), 3);
@@ -5160,8 +5170,8 @@ test("resolveFanoutSequential / resolveFanoutEffectiveConcurrency: serial bound 
   assert.equal(resolveFanoutSequential({ gates: { fanout: { sequential: "yes" } } }), false);
 });
 
-test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp (#1971, raised to 4 by #2366)", () => {
-  assert.equal(CLAUDE_MAX_EFFECTIVE_CONCURRENT, 4);
+test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp (#1971, raised to 4 by #2366, to 5 by #2414)", () => {
+  assert.equal(CLAUDE_MAX_EFFECTIVE_CONCURRENT, 5);
   // The Pi-runtime-injected run-id alias (no CLAUDECODE): the one RUN_ID_MARKERS entry that
   // is not the neutral var. Selected by name, not index, and built from RUN_ID_MARKERS (not a
   // literal token here) so this file stays outside the harness-adapter allowlist
@@ -5169,53 +5179,55 @@ test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp
   const piMarker = RUN_ID_MARKERS.find((m) => m !== NEUTRAL_RUN_ID_VAR);
   assert.ok(piMarker);
   const piEnv = { [piMarker]: "pi-run-1" };
-  // 1. Claude harness, default config → clamped to 4 (== the shipped default; min(4, 4)).
-  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, { CLAUDECODE: "1" }), 4);
-  // 2. Claude harness, .devloops-style maxConcurrent: 3 → stays 3 (min(3, 4)).
+  // 1. Claude harness, default config → clamped to 5 (== the shipped default; min(5, 5)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, { CLAUDECODE: "1" }), 5);
+  // 2. Claude harness, this repo's .devloops maxConcurrent: 5 → stays 5 (min(5, 5)); the clamp is a no-op.
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 5 } } }, { CLAUDECODE: "1" }), 5);
+  // 2b. Claude harness, maxConcurrent: 3 → stays 3 (min(3, 5)).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 3 } } }, { CLAUDECODE: "1" }), 3);
-  // 3. Claude harness, maxConcurrent: 1 → stays 1 (min(1, 4)).
+  // 3. Claude harness, maxConcurrent: 1 → stays 1 (min(1, 5)).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 1 } } }, { CLAUDECODE: "1" }), 1);
-  // 4. Claude harness, maxConcurrent: 2 → stays 2 (min(2, 4)).
+  // 4. Claude harness, maxConcurrent: 2 → stays 2 (min(2, 5)).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 2 } } }, { CLAUDECODE: "1" }), 2);
-  // 5. Claude harness, maxConcurrent: 8 → clamped to 4 (min(8, 4)).
-  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, { CLAUDECODE: "1" }), 4);
+  // 5. Claude harness, maxConcurrent: 8 → clamped to 5 (min(8, 5)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, { CLAUDECODE: "1" }), 5);
   // 5b. Sweep the clamp boundary: configured value resolves unchanged under the Pi env and
-  // under {}, and to Math.min(m, 4) under Claude — for m at, below, and above the cap.
-  for (const m of [2, 3, 4, 8]) {
+  // under {}, and to Math.min(m, 5) under Claude — for m at, below, and above the cap.
+  for (const m of [2, 3, 4, 5, 8]) {
     const config = { gates: { fanout: { maxConcurrent: m } } };
     assert.equal(resolveFanoutEffectiveConcurrency(config, piEnv), m);
     assert.equal(resolveFanoutEffectiveConcurrency(config, {}), m);
-    assert.equal(resolveFanoutEffectiveConcurrency(config, { CLAUDECODE: "1" }), Math.min(m, 4));
+    assert.equal(resolveFanoutEffectiveConcurrency(config, { CLAUDECODE: "1" }), Math.min(m, 5));
   }
-  // 5c. maxConcurrent: 0 (the resolver's defensive fallback to the shipped default 4) still
-  // resolves to 4 under Claude (min(4, 4)).
-  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 0 } } }, { CLAUDECODE: "1" }), 4);
+  // 5c. maxConcurrent: 0 (the resolver's defensive fallback to the shipped default 5) still
+  // resolves to 5 under Claude (min(5, 5)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 0 } } }, { CLAUDECODE: "1" }), 5);
   // 6. Claude harness, sequential: true → stays 1 (sequential already forces one unit per wave).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true } } }, { CLAUDECODE: "1" }), 1);
   // 7. Pi harness → returns the configured value unchanged.
-  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, piEnv), 4);
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, piEnv), 5);
   assert.equal(
     resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, piEnv),
     8,
   );
   // 8. Unknown/no-marker env → returns the configured value unchanged (cross-harness non-regression).
-  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, {}), 4);
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, {}), 5);
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 3 } } }, { CLAUDECODE: "0" }), 3);
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, {}), 8);
   // 9. No env passed on a non-Claude process → unchanged base value.
   const originalClaudecode = process.env.CLAUDECODE;
   delete process.env.CLAUDECODE;
   try {
-    assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }), 4);
+    assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }), 5);
   } finally {
     if (originalClaudecode === undefined) delete process.env.CLAUDECODE;
     else process.env.CLAUDECODE = originalClaudecode;
   }
 });
 
-test("backoffMaxConcurrent: halves the Claude-clamped concurrency of 4 to 2 (#2366)", () => {
+test("backoffMaxConcurrent: halves the Claude-clamped concurrency of 5 to 2 (#2366, #2414)", () => {
   const effective = resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, { CLAUDECODE: "1" });
-  assert.equal(effective, 4);
+  assert.equal(effective, 5);
   assert.equal(backoffMaxConcurrent(effective), 2);
 });
 
@@ -5240,6 +5252,62 @@ test("gates.fanout.groups schema validation: duplicate group names are rejected"
     const { errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
     assert.ok(errors.length > 0);
     assert.match(errors.map((e) => e.message).join("\n"), /duplicate gates\.fanout\.groups name/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Copilot review (PR #2450): `isPackedUnitName` infers a synthetic packed bin
+// from the name shape alone, so a configured group named in that reserved
+// namespace would silently get packed-bin scope semantics and could collide
+// with a generated packed identity. Config validation reserves the namespace.
+test("gates.fanout.groups schema validation: a name in the reserved packed-bin namespace is rejected", async () => {
+  const packedName = `packed:sha256:${"0123456789abcdef".repeat(4)}`;
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-packed-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  fanout:",
+        "    groups:",
+        `      - name: ${JSON.stringify(packedName)}`,
+        "        angles: [holistic]",
+        "",
+      ].join("\n"),
+    );
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.ok(errors.length > 0);
+    assert.match(
+      errors.map((e) => e.message).join("\n"),
+      /reserved packed-bin namespace packed:sha256:<64 lowercase hex>/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("gates.fanout.groups schema validation: an ordinary group name still parses", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-ok-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  fanout:",
+        "    groups:",
+        "      - name: docs-surface",
+        "        angles: [holistic]",
+        "",
+      ].join("\n"),
+    );
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.equal(errors.length, 0, JSON.stringify(errors));
+    assert.equal(config.gates.fanout.groups[0].name, "docs-surface");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

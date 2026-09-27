@@ -50,7 +50,30 @@ test("contract forbids clipped/ellipsis evidence and requires a full referenced 
 });
 
 test("contract: correctness MUST NOT depend on a provider cache hit", () => {
-  assert.match(ruleBlock(read(CONTRACT), "GATE-EXEC-PRIME"), /MUST NOT depend on a provider cache hit/);
+  assert.match(ruleBlock(read(CONTRACT), "GATE-EXEC-FIRST-WAVE-RELEASE"), /MUST NOT depend on a provider cache hit/);
+});
+
+test("contract: the first wave is released immediately, with no primer or lead-reviewer barrier", () => {
+  assertRuleOwned("GATE-EXEC-FIRST-WAVE-RELEASE", CONTRACT);
+  const block = collapse(ruleBlock(read(CONTRACT), "GATE-EXEC-FIRST-WAVE-RELEASE"));
+  assert.match(block, /MUST release the first reviewer wave immediately/);
+  assert.match(block, /No primer spawn, lead reviewer, or other cache-warming step precedes that wave/);
+  assert.match(block, /optional, non-semantic execution optimization/);
+  assert.match(block, /never described as verified reuse, and missing telemetry never fails the gate/);
+});
+
+test("the retired primer rules are gone from the contract and the registry; the identity guards stay registered", () => {
+  const contract = read(CONTRACT);
+  const registry = JSON.parse(read("skills/docs/required-rules.json")).requiredRules.map((r) => (typeof r === "string" ? r : r.id));
+  for (const retired of ["GATE-EXEC-PRIME", "GATE-EXEC-PRIMER-EVIDENCE"]) {
+    assert.equal(contract.includes(`<!-- rule: ${retired} -->`), false, `${retired} marker retired`);
+    assert.equal(registry.includes(retired), false, `${retired} retired from required-rules.json`);
+  }
+  assert.doesNotMatch(contract, /primer-evidence/);
+  for (const guard of ["GATE-EXEC-BRIEFING-PREFIX", "GATE-EXEC-ROUND-RETIREMENT", "GATE-EXEC-RESOLVED-ANGLE-EVIDENCE", "GATE-EXEC-FANOUT-DISPATCH-EMIT", "GATE-EXEC-CACHE-TELEMETRY"]) {
+    assert.ok(registry.includes(guard), `${guard} stays registered`);
+    assert.ok(contract.includes(`<!-- rule: ${guard} -->`), `${guard} stays owned by the contract`);
+  }
 });
 
 test("per-harness delivery: Pi and Claude relay only the work order; the child reads the evidence", () => {

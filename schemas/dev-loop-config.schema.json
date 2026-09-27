@@ -1032,14 +1032,14 @@
               }
             },
             "maxAnglesPerGroup": {
-              "default": 3,
-              "description": "Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 3, min 1). Configured groups are matched first and never split by this knob; mode: per-angle bypasses the table entirely (one singleton per angle).",
+              "default": 5,
+              "description": "Max angles per auto-chunked dispatch unit for leftover ungrouped angles (default 5, min 1). Configured groups are matched first and never split by this knob; mode: per-angle bypasses the table entirely (one singleton per angle).",
               "type": "integer",
               "minimum": 1
             },
             "maxConcurrent": {
-              "default": 4,
-              "description": "Max dispatch units (groups) the conductor dispatches concurrently per wave (default 4, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves). Ignored when sequential is true (which forces one unit per wave).",
+              "default": 5,
+              "description": "Max dispatch units (groups) the conductor dispatches concurrently per wave (default 5, min 1). The wave plan is emitted by write-gate-context.mjs via scheduleFanoutWaves (scheduleParallelWaves). Ignored when sequential is true (which forces one unit per wave).",
               "type": "integer",
               "minimum": 1
             },

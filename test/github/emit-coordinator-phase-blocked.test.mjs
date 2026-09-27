@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { main } from "../../scripts/github/emit-coordinator-phase-blocked.mjs";
 import { ROLE_BUDGETS } from "@dev-loops/core/loop/role-budget-bound";
-import { sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { sanitizeScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
 import { consolidateFanin } from "@dev-loops/core/loop/gate-fanin";
 
 const BLOCKER_FILENAME = "coordinator-phase--blocked.json";

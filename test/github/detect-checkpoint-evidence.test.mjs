@@ -4438,7 +4438,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked 
 // ~line 924) — both are exercised by buildFanoutEnforcement +
 // buildPreMergeGateCheck here.
 test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES a ledger built from the REAL emitter's expandDispatchUnits output for an auto-chunk bundle (issue 2180 / ADR 0048)", async () => {
-  const { expandDispatchUnits } = await import("../../scripts/github/emit-fanout-dispatch.mjs");
+  const { expandDispatchUnits } = await import("../../scripts/github/_dispatch-units.mjs");
   const { resolveFanoutGroups } = await import("@dev-loops/core/config");
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-emitter-autochunk-"));
   try {

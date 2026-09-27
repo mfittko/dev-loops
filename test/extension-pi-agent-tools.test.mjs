@@ -308,7 +308,7 @@ test("#1604 role-agent sources keep neutral search/execute (no Claude regression
   //
   // The `review` agent is exempted per #1659: it drops search/execute from source
   // so Pi does not mark review steps `failed` for unavailable declared tools (which
-  // aborts runs.all / GATE-EXEC-PRIME). The review agent can search via `bash`
+  // aborts the wave's runs.all). The review agent can search via `bash`
   // (rg/grep) on both harnesses, and code-execution verification is delegated to CI.
   // See the dedicated `#1659 review agent source is Pi-safe` test below.
   const roleAgents = ["fixer", "developer", "docs", "quality", "refiner"];
@@ -326,8 +326,8 @@ test("#1604 role-agent sources keep neutral search/execute (no Claude regression
 // review fan-out steps `failed` for unavailable declared tools. The review agent
 // uses `bash` (rg/grep) for search on both harnesses; code-execution verification
 // is delegated to CI. This is the root-cause fix for shallow gate review on Pi:
-// the GATE-EXEC-PRIME primer-then-parallel pattern dispatches `review` agents,
-// and a `failed` status on the primer aborts the entire `runs.all`.
+// each wave dispatches `review` agents in one `runs.all`, and a `failed`
+// status on any step aborts the entire `runs.all`.
 test("#1659 review agent source is Pi-safe (no search/execute) and keeps bash/read", async () => {
   const raw = await readFile(fileURLToPath(new URL("../agents/review.agent.md", import.meta.url)), "utf8");
   const tools = (raw.match(/^tools:\s*(.*)$/m)?.[1] ?? "").split(/[\s,]+/).filter(Boolean);
