@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -357,6 +357,30 @@ test("number and slug change is refused", async () => {
   await assertRefusedMove("slug changed", { "docs/decisions/0048-renamed.md": REN_NUMBER, "docs/decisions/0047-other.md": DUP_OTHER });
 });
 
+test("concurrent unrelated addition takes the next base number, so the smallest HEAD-free renumber passes", async () => {
+  const moved = "docs/decisions/0049-something.md";
+  const unrelated = "docs/decisions/0048-new.md";
+  const { root, git } = await fixture({
+    [moved]: REN_NUMBER.replace("# 0048.", "# 0049."),
+    [unrelated]: "# 0048. New\n",
+    "docs/decisions/0047-other.md": DUP_OTHER,
+  }, makeGit(DUPLICATE_BASE, [moved, unrelated]));
+  try {
+    const result = await validateDecisionRecords({ root, git });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("two normalized-body-matching renumber additions are ambiguous and refused", async () => {
+  await assertRefusedMove("ambiguous bodies", {
+    [NEW_PATH]: REN_NUMBER,
+    "docs/decisions/0049-something.md": REN_NUMBER.replace("# 0048.", "# 0049."),
+    "docs/decisions/0047-other.md": DUP_OTHER,
+  });
+});
+
 test("skipping the next free base number is refused", async () => {
   await assertRefusedMove("not next free", {
     "docs/decisions/0049-something.md": REN_NUMBER.replace("# 0048.", "# 0049."),
@@ -393,6 +417,32 @@ test("real git: large Status change below rename similarity still permits duplic
     const result = await validateDecisionRecords({ root });
     assert.equal(result.ok, true, JSON.stringify(result.errors));
     assert.equal(result.rule3.state, "ran");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("real git: a symlinked renumber destination is refused", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-adr-symlink-git-"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+  try {
+    git("init", "-q", "-b", "main");
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.invalid");
+    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+    for (const [rel, text] of Object.entries(DUPLICATE_BASE)) await writeFile(path.join(root, rel), text);
+    git("add", "docs/decisions");
+    git("commit", "-qm", "base with duplicate number");
+    git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD").trim());
+    await rm(path.join(root, "docs/decisions/0047-something.md"));
+    await writeFile(path.join(root, "docs/replacement.md"), REN_NUMBER);
+    await symlink("../replacement.md", path.join(root, NEW_PATH));
+    git("add", "-A");
+    git("commit", "-qm", "replace record with symlink");
+    assert.match(git("ls-files", "--stage", "--", NEW_PATH), /^120000 /);
+    const result = await validateDecisionRecords({ root });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "adr_post_acceptance_rewrite"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

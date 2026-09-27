@@ -19,15 +19,15 @@ Rule 3 recognizes only a duplicate-on-base number repair, not an arbitrary renam
 The validator keeps its delete/add read (`diffNameOnly`, `--no-renames`) as the guard's core. It identifies replacements deterministically among changed, newly added paths, not through Git's heuristic rename detection. A base-present Accepted-or-Superseded record absent at HEAD is admitted only when exactly one candidate satisfies all of these:
 
 - another direct record in the base catalog carries the source's four-digit number;
-- the candidate is a direct record-shaped file under `docs/decisions` with the identical slug;
-- its four-digit number differs from the source's and is unused by every other HEAD record (the repair uses the next free number);
+- the candidate is a direct, regular (not symlinked), record-shaped file under `docs/decisions` with the identical slug;
+- its four-digit number is the smallest number greater than the source's that is unused by every other HEAD record (excluding the destination itself);
 - its H1 number matches its filename (`recordTitleNumber`); and
 - its body outside `## Status`, with the H1's four-digit number normalized (`normalizeRecordNumber`), equals the base body's.
 
-Otherwise the ordinary deletion refusal applies. A non-duplicate move, slug change, unchanged number, edited body, stale H1, nested destination, ambiguous match, or plain delete is refused.
+Body-matching additions are counted before filtering by number; two matching candidates are ambiguous even if only one uses that smallest free number. Otherwise the ordinary deletion refusal applies. A non-duplicate move, slug change, unchanged number, edited body, stale H1, nested or symlinked destination, ambiguous match, or plain delete is refused.
 
 The comparison stays inside the existing rule-3 scope boundary: only content outside `## Status` is compared, the H1 number is the only line treated as identity rather than content, and judging the correctness of a record's Status content remains a declared non-goal.
 
 ## Consequences
 
-A duplicate number already on the default branch is repairable at a free destination number while preserving the slug and decision text. Non-duplicate and slug-changing moves remain protected; Git similarity scores cannot reject a lawful repair with a large Status edit. Tests pin both admissible repairs and refusal cases with fake-git fixtures, anchor `--no-renames`, and exercise a low-similarity renumber in real Git.
+A duplicate number already on the default branch is repairable at the smallest greater HEAD-free destination number while preserving the slug and decision text. Non-duplicate and slug-changing moves remain protected; Git similarity scores cannot reject a lawful repair with a large Status edit. Tests pin both admissible repairs and refusal cases with fake-git fixtures, anchor `--no-renames`, and exercise a low-similarity renumber in real Git.

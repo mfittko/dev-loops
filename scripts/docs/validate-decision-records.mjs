@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -146,8 +146,9 @@ export { createGitClient };
  *
  * Renumber tolerance (0097): only a number duplicated in the base catalog may be
  * repaired. The changed, newly added direct record must retain the source slug,
- * change its number to an unused HEAD number, match its H1, and have identical body
- * outside Status after normalizing the H1 number. Exactly one destination must
+ * change its number to the smallest greater number unused by other HEAD records,
+ * match its H1, be a regular file, and have identical body outside Status after
+ * normalizing the H1 number. Exactly one destination must
  * match. This uses delete/add paths (`diffNameOnly`, `--no-renames`), never Git's
  * heuristic rename detection; every other deletion remains refused.
  */
@@ -190,7 +191,6 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
         baseNumbers.set(match[1], (baseNumbers.get(match[1]) ?? 0) + 1);
       }
     }
-    const nextFreeNumber = String(Math.max(0, ...baseNumbers.keys().map(Number)) + 1).padStart(4, "0");
     // Only paths changed this round and absent from the base can replace a deletion.
     // The no-renames diff exposes both halves regardless of Git similarity scores.
     const added = [];
@@ -217,18 +217,34 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
         if (err.code === "ENOENT") {
           const source = FILENAME_RE.exec(baseName);
           const matches = [];
+          let nonRegularCandidate = false;
           if (source && (baseNumbers.get(source[1]) ?? 0) > 1) {
             for (const { rel: dest, match } of added) {
-              if (match[1] === source[1] || match[1] !== nextFreeNumber || match[2] !== source[2]
-                || names.some((name) => name !== path.posix.basename(dest) && name.startsWith(`${match[1]}-`))) continue;
+              if (match[1] === source[1] || match[2] !== source[2]) continue;
+              // Never follow a symlink (or read a directory) as a replacement record.
+              if (!(await lstat(path.join(root, dest))).isFile()) {
+                nonRegularCandidate = true;
+                continue;
+              }
               const text = await readFile(path.join(root, dest), "utf8");
-              if (recordTitleNumber(text) === match[1]
-                && normalizeRecordNumber(splitStatus(text).rest) === normalizeRecordNumber(baseRest)) {
-                matches.push(dest);
+              if (normalizeRecordNumber(splitStatus(text).rest) === normalizeRecordNumber(baseRest)) {
+                matches.push({ dest, number: match[1], text });
               }
             }
           }
-          if (matches.length === 1) continue;
+          // Count all body matches before filtering by number: a cloned record
+          // cannot become unambiguous just because one clone has a later number.
+          if (matches.length === 1 && !nonRegularCandidate) {
+            const { dest, number, text } = matches[0];
+            const others = new Set(names.filter((name) => name !== path.posix.basename(dest))
+              .map((name) => FILENAME_RE.exec(name)?.[1]).filter(Boolean).map(Number));
+            const from = Number(source[1]);
+            const to = Number(number);
+            if (recordTitleNumber(text) === number && to > from && !others.has(to)
+              && Array.from({ length: to - from - 1 }, (_, i) => from + i + 1).every((n) => others.has(n))) {
+              continue;
+            }
+          }
           // Deleting an Accepted/Superseded record is itself a post-acceptance
           // rewrite; refuse it instead of passing silently.
           errors.push({
