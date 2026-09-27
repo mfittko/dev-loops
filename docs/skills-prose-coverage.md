@@ -544,6 +544,19 @@ Bundle A holds no phase 3b file. In phase 3b, Bundle B changed only through `ent
 
 Cumulative cross-file review. All 42 `skills/docs/` files changed in phases 3a and 3b, plus the phase 2 files, were checked against each other and against their implementation owners for these classes: rule restatements that disagree with the owner, stale commands or flags, raw `gh` reads that `SANCTIONED_COMMANDS` bars, config defaults stated in prose, and inbound anchors. Checked pairs include the UI doc family against the stage scripts and `ui-vision-review.md`; the scoping step, validation contract and smoke harness against `ui-e2e-scoping.mjs`; `spike-mode-contract.md` against `gates.spike` and `local-planning.md` anchors; `docs-grill-step.md` and `reviewer-loop-state-graph.md` against `gates.preApproval.angles`; `agent-stall-detection.md` against `workflow.stallDetection`; `validation-policy.md` against `copilot-ci-status-contract.md`; `wait-watch-procedure.md` against `copilot-loop-operations.md` timeouts, `stop-conditions.md` and `anti-patterns.md`; and `acceptance-criteria-verification.md` against `SANCTIONED_COMMANDS`. The rows above record every conflict found. No other contradiction was found.
 
+### Per-phase semantic review record
+
+Each phase had one semantic review. Each reviewer was a fresh-context, independent, review-only general-purpose agent on model `opus`.
+
+| Phase | Reviewed range | Reviewer | Findings (by severity) | Fix commit | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `6202c2ed..7d3e583d` | Pre-PR reviewer, `pre-pr-review-contract.md` full mode | 0 high, 0 medium, 0 low, 2 nit. Nit 1: historical rows said "see current-run". Nit 2: previous-run H2 headings could be H3. | `ef5634e2` fixed nit 1. Nit 2 was accepted as is, because it is heading-only and the intro already scopes it. | No blocking findings. No loosened obligation. |
+| 2 | `ef5634e2..702829c7` | Semantic reviewer | 0 high, 1 medium, 3 low, 6 nit. Medium: a vacuous negative case in the planning-doc lightweight test. Low: a dangling re-baseline reference in copilot-pr-followup; the loop-grill credential-capture prune sentence was dropped; the ui-review sort order and dedup statements were dropped. | `7b778c4e`. The dedup sentence was not restored, because no code backs it. Phase 3b resolved it later. | No weakened MUST or MUST NOT. No removed marker or anchor. The reviewer judged phase 2 largely cosmetic, at about 1% of total prose. That judgment was recorded, and deeper condensation was carried forward. |
+| 3a | `7b778c4e..4b0d0db9` | Semantic reviewer | 0 high, 1 medium, 4 low, 5 nit. Medium: the tracker-backed "do not read or update a duplicate phase doc" rule lost its home. Low: title-marker case-insensitivity and the underscore exemption; the `RAW-GH-PR-READY-BYPASS` predicate; apostrophe mangling from perl edits ("loop.s", "envelope.s"); preconditions of the carried-convergence restatement. | `7b4502da` | No weakened MUST or MUST NOT after the fixes. Reserved passages are byte-identical. |
+| 3b | `4b0d0db9..0fd258e6` | Semantic reviewer | 0 high, 1 medium, 1 low, 1 nit. Medium: the `STOP-WAIT-001` contradiction was marked reserved without an owner. Low: the stale dedup comment in `scripts/loop/ui-review-drive.mjs` was untracked. Nit: a missing trace line for `workflow-handoff-contract.md:176`. | `43ff228b`. `STOP-WAIT-001` now follows its owner, `wait-watch-procedure.md`. The `ui-review-drive.mjs` comment is recorded as a follow-up emitted to the orchestrator. | No weakened obligation. The measurements reproduce. |
+
+The PR gate rounds (draft_gate rounds 1 and 2) are recorded on the PR as gate verdict comments. Their durable ledgers are under `tmp/gate-findings/`.
+
 ## Previous run — 2026-09-19 (issue 2236)
 
 ### Contradiction-resolution pass — current authority

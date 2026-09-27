@@ -359,7 +359,7 @@ test("draft-boundary check requires the restore-ready exit", async () => {
     /missing draft-boundary API: restore-ready\.mjs/);
 });
 
-test("draft-boundary check limits restore-ready to a convert-to-draft transient draft", async () => {
+test("draft-boundary check requires the convert-to-draft.mjs token", async () => {
   const owner = await readRepo("skills/docs/copilot-loop-operations.md");
   assert.throws(() => assertDraftBoundary(owner.replaceAll("`convert-to-draft.mjs`", "convert-to-draft")),
     /missing draft-boundary API: convert-to-draft\.mjs/);
