@@ -24,8 +24,7 @@
  */
 
 import { sha256Hex } from "./review-dispatch-plan.mjs";
-import { extractSection } from "./markdown-sections.mjs";
-import { extractChecklistItems, detectAcDodMatrix } from "./issue-refinement-artifact.mjs";
+import { extractChecklistItems, detectAcDodMatrix, readSpecSectionBodies } from "./issue-refinement-artifact.mjs";
 
 /**
  * Canonical spec category keys, in the fixed order the digest serializes them.
@@ -730,16 +729,16 @@ export function resolveAffectedCriteria({ changedPaths, criterionCoverage } = {}
  * fail-closed fallback for older issue bodies with no matrix at all.
  * A checklist-only edit that projects an unchanged matrix therefore never
  * touches `specDigest`; any edit that changes the matrix itself still does.
- * Non-goals always come from the `## Non-goals` section — the matrix does not
- * carry them.
+ * Non-goals always come from the Non-goals section — the matrix does not
+ * carry them. Sections are read at any heading level (`readSpecSectionBodies`),
+ * so a `###` body yields the same spec as its `##` form.
  *
  * @param {string} body — the tracker issue markdown body
  * @returns {{ acceptanceCriteria: string[], definitionOfDone: string[], nonGoals: string[] }}
  */
 export function extractSpecFromBody(body) {
-  const nonGoalsSection =
-    extractSection(body, "Non-goals") ?? extractSection(body, "Non goals");
-  const nonGoals = nonGoalsSection ? extractChecklistItems(nonGoalsSection) : [];
+  const sectionBodies = readSpecSectionBodies(body);
+  const nonGoals = sectionBodies.nonGoals ? extractChecklistItems(sectionBodies.nonGoals) : [];
 
   const matrix = detectAcDodMatrix(body);
   if (matrix.found && matrix.valid && matrix.rows.length > 0) {
@@ -752,12 +751,32 @@ export function extractSpecFromBody(body) {
 
   // Fallback: no positively-parseable matrix — hash the checklist projection
   // (prior behavior) rather than an empty/weaker AC/DoD surface.
-  const acSection = extractSection(body, "Acceptance criteria");
-  const dodSection =
-    extractSection(body, "Definition of done") ?? extractSection(body, "DoD");
   return {
-    acceptanceCriteria: acSection ? extractChecklistItems(acSection) : [],
-    definitionOfDone: dodSection ? extractChecklistItems(dodSection) : [],
+    acceptanceCriteria: sectionBodies.acceptanceCriteria ? extractChecklistItems(sectionBodies.acceptanceCriteria) : [],
+    definitionOfDone: sectionBodies.definitionOfDone ? extractChecklistItems(sectionBodies.definitionOfDone) : [],
     nonGoals,
   };
+}
+
+/** The spec shape a gate round requires, named in every missing-spec refusal. */
+export const EXPECTED_SPEC_SHAPE =
+  "an Acceptance criteria section and a Definition of done section at any heading level (## or ###), each with `- [ ]` checkbox items (or an AC/DoD matrix)";
+
+/**
+ * {@link extractSpecFromBody}, failing closed when the body yields no AC or no
+ * DoD. The error names {@link EXPECTED_SPEC_SHAPE}, so a gate round that cannot
+ * derive its spec stops with an actionable message instead of no verdict.
+ * @param {string} body
+ * @returns {{ acceptanceCriteria: string[], definitionOfDone: string[], nonGoals: string[] }}
+ */
+export function requireSpecFromBody(body) {
+  const spec = extractSpecFromBody(body);
+  const missing = [
+    ...(spec.acceptanceCriteria.length === 0 ? ["acceptance criteria"] : []),
+    ...(spec.definitionOfDone.length === 0 ? ["definition of done"] : []),
+  ];
+  if (missing.length > 0) {
+    throw new Error(`spec body has no ${missing.join(" and no ")}; expected ${EXPECTED_SPEC_SHAPE}`);
+  }
+  return spec;
 }

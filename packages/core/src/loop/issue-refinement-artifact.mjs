@@ -1226,6 +1226,31 @@ export function validateTrackerBackedPrBodySpec({ body = "", closingIssues = [] 
   return validatePrBodySpec({ body, expectedIssue, requireOpenQuestions: false });
 }
 
+const SPEC_NON_GOALS_SECTION_PATTERNS = Object.freeze([/^non[- ]?goals\b.*$/i]);
+
+/**
+ * Read the AC, DoD and Non-goals section bodies of a spec body at ANY heading
+ * level (`##`, `###`, ...), through the same `parseMarkdownSections` +
+ * `findSectionByPatterns` reader `validatePrBodySpec` uses. Each body is
+ * flattened past deeper sub-headings (`flattenSectionDeep`), so a `##`
+ * section keeps its nested `###` items. A missing section is null. Pure.
+ *
+ * @param {string} body
+ * @returns {{ acceptanceCriteria: string|null, definitionOfDone: string|null, nonGoals: string|null }}
+ */
+export function readSpecSectionBodies(body) {
+  const sections = parseMarkdownSections(typeof body === "string" ? body : "");
+  const read = (patterns) => {
+    const section = findSectionByPatterns(sections, patterns);
+    return section ? flattenSectionDeep(sections, sections.indexOf(section)) : null;
+  };
+  return {
+    acceptanceCriteria: read(ACCEPTANCE_SECTION_PATTERNS),
+    definitionOfDone: read(DOD_SECTION_PATTERNS),
+    nonGoals: read(SPEC_NON_GOALS_SECTION_PATTERNS),
+  };
+}
+
 /**
  * Extract the UNCHECKED AC/DoD checkbox items from a PR body's own
  * Acceptance criteria / Definition of done checklists — the derived,

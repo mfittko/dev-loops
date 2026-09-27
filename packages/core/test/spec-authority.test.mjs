@@ -18,8 +18,10 @@ import {
   resolveAffectedCriteria,
   stampSpecAuthorityIdentity,
   extractSpecFromBody,
+  requireSpecFromBody,
+  EXPECTED_SPEC_SHAPE,
 } from "@dev-loops/core/loop/spec-authority";
-import { detectAcDodMatrix } from "../src/loop/issue-refinement-artifact.mjs";
+import { detectAcDodMatrix, validatePrBodySpec } from "../src/loop/issue-refinement-artifact.mjs";
 
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
@@ -409,6 +411,66 @@ describe("spec extraction from a tracker body", () => {
     ]);
     // A non-empty authoritative spec so spec-context no longer fails closed.
     assert.ok(computeSpecDigest(spec).length > 0);
+  });
+
+  function checklistBody(level) {
+    return [
+      "# Title",
+      `${level} Acceptance criteria`,
+      "- [ ] Remove repetitive A/B contrast scaffolding",
+      "- [ ] Ship a working demo",
+      `${level} Definition of done`,
+      "- [ ] npm run verify passes",
+      `${level} Non-goals`,
+      "- Do not flatten the decks' voice or product identity",
+    ].join("\n");
+  }
+
+  test("a ### AC/DoD/Non-goals body yields the same spec and specDigest as the ## form", () => {
+    const h2 = extractSpecFromBody(checklistBody("##"));
+    const h3 = extractSpecFromBody(checklistBody("###"));
+    assert.deepEqual(h3, h2);
+    assert.equal(computeSpecDigest(h3), computeSpecDigest(h2));
+    assert.equal(computeSpecDigest(h3), computeSpecDigest(SPEC));
+  });
+
+  test("a ## section keeps checklist items nested under a deeper sub-heading", () => {
+    const body = [
+      "## Acceptance criteria",
+      "- [ ] Remove repetitive A/B contrast scaffolding",
+      "### Demo",
+      "- [ ] Ship a working demo",
+      "## Definition of done",
+      "- [ ] npm run verify passes",
+      "## Non-goals",
+      "- Do not flatten the decks' voice or product identity",
+    ].join("\n");
+    assert.equal(computeSpecDigest(extractSpecFromBody(body)), computeSpecDigest(SPEC));
+  });
+
+  test("requireSpecFromBody names the expected shape when AC or DoD is missing", () => {
+    assert.throws(
+      () => requireSpecFromBody("## Summary\nNo spec sections here."),
+      (error) => /no acceptance criteria and no definition of done/.test(error.message)
+        && error.message.includes(EXPECTED_SPEC_SHAPE),
+    );
+    const noDod = "### Acceptance criteria\n- [ ] Ship a working demo\n";
+    assert.throws(() => requireSpecFromBody(noDod), /no definition of done; expected .*any heading level.*`- \[ \]` checkbox items/);
+    assert.deepEqual(requireSpecFromBody(checklistBody("###")), extractSpecFromBody(checklistBody("##")));
+  });
+
+  test("a plain-bullet ### AC/DoD PR-body spec stays rejected", () => {
+    const body = [
+      "### Objective", "Ship it.",
+      "### In scope", "The demo.",
+      "### Acceptance criteria", "- Ship a working demo",
+      "### Definition of done", "- npm run verify passes",
+      "### Non-goals", "- None",
+      "Closes #1",
+    ].join("\n");
+    const codes = validatePrBodySpec({ body, requireOpenQuestions: false }).errors.map((e) => e.code);
+    assert.ok(codes.includes("acceptance_criteria_not_checkboxes"));
+    assert.ok(codes.includes("definition_of_done_not_checkboxes"));
   });
 });
 
