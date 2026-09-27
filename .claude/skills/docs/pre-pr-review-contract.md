@@ -8,18 +8,6 @@ before its push. Other docs MAY link this contract; they MUST NOT redefine it.
 Full mode is unchanged by delta mode. The sections up to Delta mode describe full
 mode.
 
-## Why this phase exists
-
-Almost all dev-loop churn comes from findings that surface INSIDE the gate.
-Every in-gate fix costs a head bump, a re-gate, and often a forced Copilot round
-plus thread reconciliation. The cheapest place to fix a defect is BEFORE the
-first push: no head bump, no PR thread, no Copilot round, nothing to reconcile.
-
-The pre-PR phase shifts one review left, to that cheapest fix point. One premium
-review call that catches a defect early avoids a downstream full draft-gate
-fan-out (7+ reviewers) plus a Copilot round for each missed finding. That is a
-lopsided economic win.
-
 ## Phase position
 
 <!-- rule: PRE-PR-BEFORE-FIRST-PUSH -->
@@ -49,16 +37,13 @@ exactly ONE fresh-context, general-purpose reviewer per round (a round-two
 re-review runs one reviewer too; see `PRE-PR-BOUNDED-TWO-ROUNDS`). The brief is a
 developer-authored prompt stating what changed, what to scrutinize, known risks
 and tradeoffs, and where the implementation cut corners. The reviewer MUST NOT be
-a fixed angle: it reviews holistically per the brief. Fresh context is required,
-because the implementer rationalizes their own code and a same-context
-self-review is near-worthless. This is distinct from the single developer
-self-check (`LOCAL-DEV-SELF-CHECK-NO-FANOUT`), which the implementer runs against
-the plan; the pre-push reviewer MUST be a separate fresh-context agent. The
-reviewer returns findings only and MUST NOT edit the tree; the implementer
-applies the fixes.
+a fixed angle: it reviews holistically per the brief. This is distinct from the
+single developer self-check (`LOCAL-DEV-SELF-CHECK-NO-FANOUT`), which the
+implementer runs against the plan; the pre-push reviewer MUST be a separate
+fresh-context agent. The reviewer returns findings only and MUST NOT edit the
+tree; the implementer applies the fixes.
 
-The reviewer MUST run with the adversarial-enumeration checklist below so the
-strong model reviews systematically, not ad hoc.
+The reviewer MUST run with the adversarial-enumeration checklist below.
 
 ### Harness-specific dispatch
 
@@ -100,9 +85,7 @@ mapped through `models.roleTiers.pre-push-reviewer` (or a direct `models.roles`
 override). Each harness value MUST be a model token that harness's dispatch
 accepts. On the Claude Code harness the Agent-tool `model` enum accepts only
 `sonnet|opus|haiku|fable`, so an operator opting into Fable sets `fable` (the
-underlying model identity is `claude-fable-5-1`). The phase works unchanged on
-both the Pi and Claude Code harnesses; each harness resolves to its own
-configured model or to `null` (default).
+underlying model identity is `claude-fable-5-1`).
 
 ## Findings are ephemeral
 
@@ -110,7 +93,6 @@ configured model or to `null` (default).
 `PRE-PR-EPHEMERAL-NO-ARTIFACTS`: the pass MUST be ephemeral. Findings are applied
 directly to the working tree and then live and die in the pass. It MUST NOT
 create a pull request, a comment, a review thread, or a Copilot round.
-Ephemerality is the whole point: the phase must not recreate in-gate churn.
 
 ## Bounds
 
@@ -120,8 +102,7 @@ MUST NOT run more than one general-purpose reviewer per round; after at most two
 rounds the branch is pushed once. It MUST NOT fan out to multiple reviewers. The
 round-two re-review verifies the applied fixes with a fresh-context reviewer: the
 same reviewer continued when the harness supports agent continuation, otherwise
-one new fresh-context dispatch. Either way the reviewer stays fresh relative to
-the implementer, which is the property `PRE-PR-ONE-FRESH-REVIEWER` requires.
+one new fresh-context dispatch.
 
 ## The fan-out gate stays the authority
 
@@ -134,25 +115,20 @@ authority for merge readiness.
 <!-- rule: PRE-PR-NOT-GATE-EVIDENCE -->
 `PRE-PR-NOT-GATE-EVIDENCE`: the pre-PR pass is NOT a lifecycle-gate fan-out. It
 MUST NOT produce gate evidence: no `resolveGateAngles` run, no fan-in disposition
-ledger, no gate verdict comment. It is consistent with
-`LOCAL-DEV-SELF-CHECK-NO-FANOUT`, which forbids a pre-pull-request gate fan-out.
-The pre-PR pass is one general-purpose reviewer, not the angle set the fan-out
-gate uses.
+ledger, no gate verdict comment.
 
 ## Delta mode
 
 Delta mode is one fresh holistic review of a gate act-list fix before that fix
 is pushed. It checks the cumulative fix delta against the act items the fix
-claims to resolve, so a fix-induced regression is caught before it costs another
-gate round, CI run and review cycle. It resolves the same `pre-push-reviewer`
+claims to resolve. It resolves the same `pre-push-reviewer`
 role and tier as full mode (`PRE-PR-MODEL-CONFIG-RESOLVED`) and uses the same
 harness dispatch. The only delta source is the gate judge's act list. The
 deterministic checks live in `@dev-loops/core/loop/pre-push-delta-review`; the
 dev-loop coordinator runs them through `dev-loops loop pre-push-delta`.
 
 The dev-loop coordinator owns delta mode, because it dispatches the Phase 4
-fixer and owns the push; the gate coordinator has returned by then. The
-sequence is:
+fixer and owns the push. The sequence is:
 
 1. The dev-loop coordinator dispatches the fixer with the act list. The fixer
    commits the fix and hands back the commit SHA unpushed.

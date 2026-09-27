@@ -4,38 +4,32 @@ Canonical owner for selecting the next loop family and its handoff envelope in a
 
 ## Overview
 
-This contract starts **after**:
-- the active run has been identified (scope/target resolved)
-- ownership/idempotency classification is optional (the `conductor-ownership.mjs` module and its issue #32 have been retired; designs archived in git history); when supplied, `ownershipState` activates routing branches such as `stay_with_current_live_owner`
-- the copilot/reviewer inner-loop state-machine outputs have been detected (from `copilot-loop-state.mjs` and `reviewer-loop-state.mjs`) and are interpreted under the broader family-local PR lifecycle semantics frozen in [PR Lifecycle Contract](./pr-lifecycle-contract.md)
+This contract starts **after** the active run has been identified (scope/target resolved) and
+the copilot/reviewer inner-loop states have been detected (`copilot-loop-state.mjs`,
+`reviewer-loop-state.mjs`). It interprets them under the lifecycle semantics of
+[PR Lifecycle Contract](./pr-lifecycle-contract.md) without redefining them.
+Ownership/idempotency classification is optional (see
+[Ownership availability note](#ownership-availability-note)).
 
 <!-- rule: ROUTING-EVALUATOR-AUTHORITY -->
 The evaluator **MUST** derive the routing outcome directly from normalized state inputs; it
 **MUST NOT** accept a pre-computed outer-loop action. It is the routing authority, not a
 remapper.
 
-## Relationship to other contracts
-
-| Contract / Issue | Relationship |
-|---|---|
-| [#28 — conductor umbrella](https://github.com/mfittko/dev-loops/issues/28) | Parent umbrella |
-| [#32 — ownership/idempotency](https://github.com/mfittko/dev-loops/issues/32) | **Historical**: designed the ownership model; the `conductor-ownership.mjs` module was retired during deslop cleanup (issue #319). `ownershipState` remains as an optional external input. |
-| [#26 — family-local PR lifecycle contract](https://github.com/mfittko/dev-loops/issues/26) / [PR Lifecycle Contract](./pr-lifecycle-contract.md) | **Upstream**: provides family-local PR lifecycle semantics; the concrete `copilotState` and `reviewerState` inputs still come from the existing copilot/reviewer state machines, and this contract consumes them without redefining their semantics |
-| [#34 — request/watch helper contract](https://github.com/mfittko/dev-loops/issues/34) | **Adjacent**: defines Copilot request/watch semantics inside the copilot loop family; this contract decides _which family_ gets control |
-| [#48 — visible PR projection](https://github.com/mfittko/dev-loops/issues/48) | **Downstream**: routing decisions may drive PR projection artifacts |
-| [#57/#58/#59 — inspection/viewer/steering](https://github.com/mfittko/dev-loops/issues/57) | **Adjacent**: read-only inspection surfaces; this contract defines routing policy, not operator UX |
-
 ## Boundary
 
-It does **not** define:
-- which run is active (ownership/idempotency rules; the conductor implementation was retired, see issue #319)
-- PR lifecycle state semantics, gate order, or draft/ready transitions (from [PR Lifecycle Contract](./pr-lifecycle-contract.md))
-- Copilot request/re-request/watch helper semantics (from #34)
-- PR-visible projection artifacts (from #48)
-- inspection, viewer, or steering surfaces (from #57/#58/#59)
+This contract decides _which loop family_ gets control. It does **not** define:
+- which run is active, ownership-key design, duplicate-owner handling, or start/attach/resume idempotency (#32; conductor implementation retired, issue #319)
+- PR lifecycle state semantics, gate order, draft/ready transitions, remediation ownership classes, or approval-gate semantics ([PR Lifecycle Contract](./pr-lifecycle-contract.md))
+- Copilot request/re-request/watch helper semantics (#34)
+- PR-visible projection or closeout artifacts (#48)
+- inspection, viewer, or steering surfaces (#57/#58/#59)
 - family-local state machines (copilot-loop-state.mjs, reviewer-loop-state.mjs)
 - backend discovery, remote polling, or transport coordination
+- a generic multi-family conductor beyond the current Copilot PR outer-loop family
 - board synchronization and queue-column state transitions for tracked items — the conductor's continuous board-sync obligation is owned by [QUEUE-BOARD-SYNC-CONTINUOUS](projects-queue-contract.md#conductor-board-synchronization-responsibility) in the projects queue contract <!-- rule-ref: QUEUE-BOARD-SYNC-CONTINUOUS -->
+
+Parent umbrella: [#28](https://github.com/mfittko/dev-loops/issues/28).
 
 ## Implementation
 
@@ -50,7 +44,8 @@ It does **not** define:
 
 ## Routing inputs
 
-The evaluator (`evaluateConductorRouting`) consumes a single normalized input object.
+The evaluator (`evaluateConductorRouting`) consumes a single normalized input object. Unknown
+extra fields are ignored.
 
 ### Required inputs
 
@@ -62,9 +57,8 @@ The evaluator (`evaluateConductorRouting`) consumes a single normalized input ob
 
 ### Target normalization and malformed-target behavior
 
-For valid targets, the evaluator normalizes:
-- `target.repo` -> `target.repo.trim().toLowerCase()`
-- `target.pr` -> unchanged positive integer
+For valid targets, the evaluator normalizes `target.repo` to `target.repo.trim().toLowerCase()`
+and keeps `target.pr` as the positive integer.
 
 When `target` is missing or malformed, routing fails closed to `needs_reconcile`.
 In that fail-closed result, `handoffEnvelope.targetIdentity` is stable:
@@ -77,17 +71,17 @@ In that fail-closed result, `handoffEnvelope.targetIdentity` is stable:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `ownershipState` | `string` | `undefined` | Settled ownership/idempotency classification (conductor-ownership module retired; see git history and issue #319). `"live_owner"` → `stay_with_current_live_owner` for active states. `"duplicate_local_owners"` → `needs_reconcile`. Other values or omission → routing continues purely from states. **See ownership availability note below.** |
+| `ownershipState` | `string` | `undefined` | Settled ownership/idempotency classification. `"live_owner"` → `stay_with_current_live_owner` for active states. `"duplicate_local_owners"` → `needs_reconcile`. Other values or omission → routing continues purely from states. |
 | `sourceMode` | `string` | `"local"` | Source/confidence mode: `"authoritative"` \| `"local"` \| `"snapshot"` |
 | `requiresLocalIsolation` | `boolean` | `false` | Whether the checkout is dirty or detached; callers must continue local-execution handoffs from an isolated checkout/worktree when this is true |
 
 ### Ownership availability note
 
-`ownershipState` is an optional caller-supplied input. **The current `outer-loop.mjs` integration seam does not
-supply it** — the orchestrator does not yet resolve conductor ownership (the conductor-ownership module has been retired; see git history and issue #319 for its design).
-The ownership-aware routing branches (`stay_with_current_live_owner`, duplicate-owner reconcile) are fully
-implemented and unit-tested; they become active when a caller that has already resolved ownership supplies
-`ownershipState`.
+The current `outer-loop.mjs` integration seam does **not** supply `ownershipState`; the
+conductor-ownership module was retired (issue #319; designs in git history). The
+ownership-aware branches (`stay_with_current_live_owner`, duplicate-owner reconcile) are
+implemented and unit-tested, and activate when a caller supplies `ownershipState`.
+
 ### Direct routing vs reconcile
 
 Direct routing (no reconcile) needs all required fields present and valid, with
@@ -127,8 +121,8 @@ combination reconciles first per `ROUTING-FAIL-CLOSED-RECONCILE`
 ## Required transitions
 
 The outer-loop graph (`OUTER_STATE` / `OUTER_TRANSITIONS` in `conductor-routing.mjs`) is
-stateless per cycle: each evaluation is independent, so every non-terminal outcome can be
-followed, on the next cycle, by any of the 7 outcomes.
+stateless per cycle, so every non-terminal outcome can be followed by any of the 7 outcomes
+on the next cycle.
 
 - `continue_current_wait` -> any outer state
 - `handoff_to_copilot_loop` -> any outer state
@@ -203,7 +197,7 @@ When `requiresLocalIsolation=true`, those local-execution states **MUST NOT** be
 
 **Copilot/reviewer wait states** (owned by orchestrator): `waiting_for_copilot_review`, `waiting_for_ci` (copilot); `waiting_for_author_followup`, `waiting_for_re_request` (reviewer)
 
-`waiting_for_copilot_review` is an explicit post-request settle gate for the current head: this routing contract keeps `continue_current_wait` semantics until that fresh Copilot pass has settled, even if reviewer-side state is otherwise active.
+`waiting_for_copilot_review` is a post-request settle gate for the current head: routing stays `continue_current_wait` until that Copilot pass settles, even when reviewer-side state is active (priority 9).
 
 ---
 
@@ -218,110 +212,21 @@ The evaluator **MUST** fail closed to `needs_reconcile` rather than guessing a h
 4. **Unrecognized combined state**: the `copilotState`/`reviewerState` combination does not match any routing rule.
 
 A fail-closed result (`needs_reconcile` or `stop_needs_human`) **MUST NOT** carry a live
-handoff: `handoffEnvelope.loopFamily` and `handoffEnvelope.entrypoint` are `null` — the
-routing-layer analog of "fail-closed states never dispatch a Backlog pull" (epic #1104).
-
-### Non-goal: this rule does not apply to noise fields
-
-Callers may pass extra fields on the input object; unknown fields are ignored. Only the declared
-required and optional fields listed above affect routing decisions.
+handoff: `handoffEnvelope.loopFamily` and `handoffEnvelope.entrypoint` are `null` (epic #1104).
 
 ---
 
 ## Scenario matrix
 
-### 1. Outer wait remains outer wait
+| # | `copilotState` | `reviewerState` | Other input | `routingOutcome` | `outerAction` | `loopFamily` | `entrypoint` |
+|---|---|---|---|---|---|---|---|
+| 1 | `"waiting_for_copilot_review"` | `"waiting_for_review_request"` | none | `"continue_current_wait"` | `"continue_wait"` | `"outer_loop"` | `"outer_loop_wait"` |
+| 2 | `"pr_ready_no_feedback"` | `"review_requested"` | none | `"handoff_to_reviewer_loop"` | `"reenter_reviewer_loop"` | `"reviewer_loop"` | `"reviewer_loop_handler"` |
+| 3 | `"unresolved_feedback_present"` | `"waiting_for_author_followup"` | none | `"handoff_to_copilot_loop"` | `"reenter_copilot_loop"` | `"copilot_loop"` | `"copilot_pr_handoff"` |
+| 4 | `"blocked_needs_user_decision"` | `"waiting_for_review_request"` | none | `"stop_needs_human"` (`stopReason` `"copilot_blocked"`) | `"stop"` | `null` | `null` |
+| 5 | `"done"` | any | none | `"done_terminal"` | `"done"` | `null` | `null` |
+| 6 | `"unresolved_feedback_present"` | `"waiting_for_author_followup"` | `ownershipState` `"live_owner"` (unit tests only) | `"stay_with_current_live_owner"` | `"continue_wait"` | `"outer_loop"` | `"outer_loop_wait"` |
 
-| Field | Value |
-|---|---|
-| `copilotState` | `"waiting_for_copilot_review"` |
-| `reviewerState` | `"waiting_for_review_request"` |
-| Expected `routingOutcome` | `"continue_current_wait"` |
-| `outerAction` (derived) | `"continue_wait"` |
-| `loopFamily` | `"outer_loop"` |
-| `entrypoint` | `"outer_loop_wait"` |
-
-### 2. Reviewer-active routes to reviewer-loop handoff
-
-| Field | Value |
-|---|---|
-| `copilotState` | `"pr_ready_no_feedback"` |
-| `reviewerState` | `"review_requested"` |
-| Expected `routingOutcome` | `"handoff_to_reviewer_loop"` |
-| `outerAction` (derived) | `"reenter_reviewer_loop"` |
-| `loopFamily` | `"reviewer_loop"` |
-| `entrypoint` | `"reviewer_loop_handler"` |
-
-### 3. Copilot-active routes to Copilot-loop handoff
-
-| Field | Value |
-|---|---|
-| `copilotState` | `"unresolved_feedback_present"` |
-| `reviewerState` | `"waiting_for_author_followup"` |
-| Expected `routingOutcome` | `"handoff_to_copilot_loop"` |
-| `outerAction` (derived) | `"reenter_copilot_loop"` |
-| `loopFamily` | `"copilot_loop"` |
-| `entrypoint` | `"copilot_pr_handoff"` |
-
-### 4. Blocked routes to stop_needs_human
-
-| Field | Value |
-|---|---|
-| `copilotState` | `"blocked_needs_user_decision"` |
-| `reviewerState` | `"waiting_for_review_request"` |
-| Expected `routingOutcome` | `"stop_needs_human"` |
-| `outerAction` (derived) | `"stop"` |
-| `stopReason` | `"copilot_blocked"` |
-| `loopFamily` | `null` |
-| `entrypoint` | `null` |
-
-### 5. Terminal state routes to done_terminal
-
-| Field | Value |
-|---|---|
-| `copilotState` | `"done"` |
-| `reviewerState` | any |
-| Expected `routingOutcome` | `"done_terminal"` |
-| `outerAction` (derived) | `"done"` |
-| `loopFamily` | `null` |
-| `entrypoint` | `null` |
-
-### 6. Live owner suppresses handoff (ownership-aware path)
-
-**Note**: this path is exercised by unit tests only. The `outer-loop.mjs` integration seam does not supply
-`ownershipState` yet; the conductor-ownership module has been retired (issue #319).
-
-| Field | Value |
-|---|---|
-| `copilotState` | `"unresolved_feedback_present"` |
-| `reviewerState` | `"waiting_for_author_followup"` |
-| `ownershipState` | `"live_owner"` |
-| Expected `routingOutcome` | `"stay_with_current_live_owner"` |
-| `outerAction` (derived) | `"continue_wait"` |
-| `loopFamily` | `"outer_loop"` |
-| `entrypoint` | `"outer_loop_wait"` |
-
-### 7. Non-target / noise inputs fail closed
-
-| Condition | Expected `routingOutcome` |
-|---|---|
-| `target` is `null` | `"needs_reconcile"` |
-| `target.pr` is not a positive integer | `"needs_reconcile"` |
-| `copilotState` is empty string | `"needs_reconcile"` |
-| Unrecognized combined state | `"needs_reconcile"` |
-
----
-
-## Non-goals
-
-This contract intentionally does **not** cover:
-
-- ownership-key design, duplicate-owner handling, or start/attach/resume idempotency rules (→ #32, conductor implementation retired, see issue #319)
-- wiring `ownershipState` into `outer-loop.mjs` or any other caller (deferred; conductor implementation retired)
-- PR lifecycle states, draft/ready gate order, remediation ownership classes, or approval-gate semantics (→ [PR Lifecycle Contract](./pr-lifecycle-contract.md))
-- Copilot request / re-request / watch helper semantics (→ #34)
-- inspection, viewer, or steering surface design (→ #57/#58/#59)
-- PR-visible projection / closeout artifacts (→ #48)
-- replacing or redefining the existing family-local state machines
-- backend discovery, remote polling, or transport coordination
-- broad generic multi-family conductor rollout beyond the current Copilot PR outer-loop family
+Non-target and noise inputs fail closed to `"needs_reconcile"`: `target` is `null`,
+`target.pr` is not a positive integer, `copilotState` is an empty string, or the combined
+state is unrecognized.

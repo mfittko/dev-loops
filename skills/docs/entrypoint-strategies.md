@@ -83,7 +83,7 @@ Required reading:
 
 **Decision: won't-do.** There is no `tracker_first` route in `resolve-dev-loop-startup.mjs`, and none is planned. Tracker-backed work is an **input-source** of `local_implementation`; see [Tracker-backed local implementation input-source contract](public-dev-loop-contract.md#tracker-backed-local-implementation-input-source-contract) and the [Local Implementation SKILL](../local-implementation/SKILL.md#tracker-backed-local-implementation).
 
-**Standalone tooling (not routed by `dev-loop`):** [Tracker-First Loop State](tracker-first-loop-state.md) documents a PR-level and loop-level state machine with its own detectors (`detect-tracker-first-loop-state.mjs`, `detect-tracker-pr-state.mjs`). These are implemented and tested, but `resolve-dev-loop-startup.mjs` never dispatches to them and the `dev-loops` CLI wrapper does not expose them under `loop loop-state` (that command maps to the Copilot loop detector instead). Treat them as standalone, directly-invoked tools, not as part of the routed strategy list above.
+**Standalone tooling (not routed by `dev-loop`):** the detectors of [Tracker-First Loop State](tracker-first-loop-state.md) (`detect-tracker-first-loop-state.mjs`, `detect-tracker-pr-state.mjs`) are directly-invoked tools. `resolve-dev-loop-startup.mjs` never dispatches to them, and `loop loop-state` maps to the Copilot loop detector.
 
 ## Wait / watch
 

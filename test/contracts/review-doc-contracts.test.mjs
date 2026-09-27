@@ -298,6 +298,36 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(playwrightWebkitAction, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('bun\.lock'\)\s*\}\}/i);
 });
 
+// The ownership-gate section must list every write-capable strategy as gated and
+// `review` as exempt through STRATEGY_OWNERSHIP_GATE. Sentences are located by
+// role (gated list, exempt list); their wording may change.
+const OWNERSHIP_GATED_STRATEGIES = ["local_implementation", "issue_intake", "copilot_pr_followup", "external_pr_followup", "reviewer_fixer", "final_approval"];
+function assertReviewOwnershipExempt(content) {
+  const section = content.split("## Single-contributor ownership gate")[1]?.split("\n## ")[0] ?? "";
+  const sentences = section.split(/(?<=\.)\s+/);
+  const tokens = (s) => new Set([...(s ?? "").matchAll(/`([^`]+)`/g)].map((m) => m[1]));
+  const namesGate = (s) => s.includes("STRATEGY_OWNERSHIP_GATE");
+  const gated = tokens(sentences.find((s) => namesGate(s) && !/exempt/i.test(s)));
+  for (const id of OWNERSHIP_GATED_STRATEGIES) assert.ok(gated.has(id), `ownership gate must cover ${id}`);
+  assert.ok(!gated.has("review"), "ownership gate must not cover review");
+  const exempt = tokens(sentences.find((s) => namesGate(s) && /exempt/i.test(s)));
+  assert.ok(exempt.has("review"), "review must be exempt through STRATEGY_OWNERSHIP_GATE");
+}
+
+test("ownership-gate exemption check rejects a gated review or a dropped write strategy", async () => {
+  const publicContract = await readRepo("skills/docs/public-dev-loop-contract.md");
+  assertReviewOwnershipExempt(publicContract.replace("unknown/future strategy defaults to gated", "unknown or future strategy is gated by default"));
+  assertReviewOwnershipExempt(publicContract
+    .replace("it applies ONLY to", "it covers only")
+    .replace("Every write-capable route stays gated.", "All write-capable routes remain gated."));
+  assert.throws(() => assertReviewOwnershipExempt(publicContract.replace("`reviewer_fixer`, `final_approval`);", "`final_approval`);")),
+    /ownership gate must cover reviewer_fixer/);
+  assert.throws(() => assertReviewOwnershipExempt(publicContract.replace("Pure read/observe strategies (`review`, ", "Pure read/observe strategies (")),
+    /review must be exempt/);
+  assert.throws(() => assertReviewOwnershipExempt(publicContract.replace("`reviewer_fixer`, `final_approval`);", "`reviewer_fixer`, `final_approval`, `review`);")),
+    /ownership gate must not cover review/);
+});
+
 test("standalone review route stays structurally decoupled from the single-contributor ownership gate (issue #1850)", async () => {
   // Prose/structure companion to the behavioral pin above ("behavioral pin:
   // review proceeds on a foreign-owned PR...", issue #1893): that test drives
@@ -323,10 +353,9 @@ test("standalone review route stays structurally decoupled from the single-contr
 
   // The authoritative contract makes review a first-class, ownership-exempt,
   // read-only strategy while preserving the gate on every write-capable route.
-  assert.match(publicContract, /`review` is exempt via an explicit `false` entry in `STRATEGY_OWNERSHIP_GATE`/i);
-  assert.match(publicContract, /Every write-capable route[\s\S]{0,200}stays gated exactly as before/i);
+  assertReviewOwnershipExempt(publicContract);
   assert.match(publicContract, /sanctioned, separately invocable read-only entrypoint/i);
-  assert.match(publicContract, /only intended public write-capable workflow entrypoint/i);
+  assert.match(publicContract, /Public write-capable workflow entrypoint\s*\|\s*`dev-loop`/i);
   assert.match(publicContract, /Sanctioned read-only review entrypoint\s*\|\s*`review`/i);
   assert.match(publicContract, /loop startup --pr <n> --review/i);
 

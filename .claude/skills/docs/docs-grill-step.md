@@ -13,7 +13,7 @@ The dev-loop autonomously checks a change's claims against the repository contra
 
 The grill rides two surfaces that already run inside the loop, so it applies on every run without a manual pass:
 
-1. **During refinement.** The [refiner agent](../../agents/refiner.md) cross-checks the active phase against the contracts and docs it touches as part of producing the refined plan, surfacing drift as a refinement finding while the claim is still being verified. The local-first refine step (#951) is the in-loop consumer: its CLI (`scripts/refine/refine-plan-file.mjs`) classifies each finding with `classifyDocsGrillFinding`, then the pure core contract (`packages/core/src/loop/plan-file-refine-contract.mjs`) validates the dispositions and records them into the plan file under a `Docs-grill findings` section before stopping at the local human-review checkpoint. The contract takes pre-classified dispositions rather than importing the classifier, so published `@dev-loops/core` stays free of any `scripts/` import.
+1. **During refinement.** The [refiner agent](../../agents/refiner.md) cross-checks the active phase against the contracts and docs it touches as part of producing the refined plan, surfacing drift as a refinement finding while the claim is still being verified. The local-first refine step (#951) is the in-loop consumer: its CLI (`scripts/refine/refine-plan-file.mjs`) classifies each finding with `classifyDocsGrillFinding`, then the pure core contract (`packages/core/src/loop/plan-file-refine-contract.mjs`) validates the dispositions and records them into the plan file under a `Docs-grill findings` section before stopping at the local human-review checkpoint.
 2. **At the pre-approval gate.** The `docs` review angle in `gates.preApproval.angles` (see `packages/core/src/config/extension-defaults.yaml`) resolves to the [docs persona](../../agents/docs.md) in review mode, which audits documentation correctness for the change as one fan-out angle of the [gate review sub-loop](./gate-review-sub-loop-contract.md).
 
 ## The keep/fix rule
@@ -35,5 +35,3 @@ The pure classifier at `scripts/loop/docs-grill-contract.mjs` codifies the keep/
 - `DOCS_GRILL_FINDING_KINDS` — the bounded `drift` / `stale_reference` / `cosmetic` finding kinds
 - `DOCS_GRILL_DISPOSITIONS` — the bounded `record_finding` / `fix_in_place` / `route_followup` / `ignore_cosmetic` set
 - `classifyDocsGrillFinding(finding)` — maps a finding to its disposition and fails closed (`invalid_finding`) on an unknown kind
-
-This keeps the disposition rule testable; the firing surfaces (refiner cross-check, gate `docs` angle) carry the grill itself.

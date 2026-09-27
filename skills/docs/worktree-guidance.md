@@ -4,11 +4,9 @@ Canonical owner for local worktree usage guidance in `dev-loops`.
 
 ## Purpose and scope
 
-Use it to keep local mutation work isolated, predictable, and easy to clean up.
-This guidance covers where worktrees live, how to create-or-reuse and provision
-them in one step (`ensure-worktree.mjs`), how to handle dependencies inside them,
-and how loop-owned worktrees are cleaned up after merge (`cleanup-worktree.mjs`).
-The raw `git worktree` commands remain documented as the underlying mechanism.
+Keep local mutation work isolated and easy to clean up: where worktrees live,
+create-or-reuse plus provisioning (`ensure-worktree.mjs`), dependencies, and
+post-merge cleanup (`cleanup-worktree.mjs`).
 
 ## Canonical location and naming
 
@@ -20,32 +18,28 @@ recomputable from the issue/PR number alone. `resolveWorktreePath({ repoRoot, ki
 number })` in `packages/core/src/loop/handoff-envelope.mjs` is the sole resolver for
 create, provision, and cleanup.
 
-- The `dev-loops/` namespace marks loop-owned worktrees so cleanup can only ever
-  remove its own — a hand-made `tmp/worktrees/my-experiment` is never touched.
-- Deprecate ad hoc locations such as `tmp/copilot-loop/`, repo-root `worktrees/`,
-  and `/private/tmp/...` for normal repository worktree usage.
+- The `dev-loops/` namespace marks loop-owned worktrees, so cleanup never
+  touches a hand-made `tmp/worktrees/my-experiment`.
+- Do not use ad hoc locations such as `tmp/copilot-loop/`, repo-root
+  `worktrees/`, and `/private/tmp/...` for normal repository worktree usage.
 
 ## Lifecycle automation
 
-The worktree lifecycle is owned end to end: **create + provision** in one
-command → **post-merge cleanup**. The two entrypoints below are the DEFAULT
-path; the raw `git worktree add` / `git worktree remove` commands are the
-underlying mechanism, not the operator interface.
+The two entrypoints below are the DEFAULT path for **create + provision** and
+**post-merge cleanup**; raw `git worktree add` / `git worktree remove` are the
+underlying mechanism.
 
 ### Create (or reuse) + provision: `ensure-worktree.mjs`
 
 <!-- rule: WORKTREE-CREATE-PROVISION -->
 `WORKTREE-CREATE-PROVISION`: Creating or reusing a loop-owned worktree MUST use
-this lifecycle entrypoint. It resolves the canonical namespaced path, best-effort
-runs `git fetch --prune` for every candidate remote (see branch resolution below —
-the one `--base` names, then `origin` when it differs; run on the create path
-AND on an already-existing-worktree reuse ON A LOCAL BRANCH, so a divergence
-report answers from freshly-fetched refs rather than whatever was last
-fetched — a DETACHED reuse, see below, fetches nothing and skips straight to
-provisioning, by design: there is no local branch there to fetch for),
-creates the worktree if absent (or reuses it if one already exists at that
-exact path — idempotent; a different branch at the path is reported as a
-conflict rather than clobbered), then provisions it (below) in the same step:
+this lifecycle entrypoint. It resolves the canonical namespaced path and
+best-effort runs `git fetch --prune` for every candidate remote (the one
+`--base` names, then `origin` when it differs) on the create path and on a
+reuse ON A LOCAL BRANCH; a DETACHED reuse fetches nothing. It creates the
+worktree if absent or reuses the one at that exact path (idempotent; a
+different branch at the path is reported as a conflict, never clobbered), then
+provisions it (below) in the same step:
 
 ```sh
 node scripts/loop/ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) \
@@ -54,47 +48,38 @@ node scripts/loop/ensure-worktree.mjs --repo-root <p> (--issue <n> | --pr <n>) \
 
 Branch resolution on the create path is three-way, reported via `branchOrigin`:
 an existing local branch is re-attached (`reused-local`); otherwise the first
-candidate remote — in priority order, the one `--base` names, then `origin`
-when it differs, so an existing `origin/<branch>` is never invisible just
-because `--base` pointed at a different remote (a fork workflow's `--base
-upstream/main`) — that already has a same-name branch is checked out as a new
-local branch tracking that remote's tip (`tracked-remote` — upstream is the
-remote branch, never base); otherwise the branch is created off the resolved
-base (`created-from-base`). Reusing an already-existing worktree that is
-DETACHED (no local branch — e.g. `ui-review`'s pinned-PR-head worktrees)
-reports `branchOrigin: "reused-detached"` instead of fabricating a branch
-association. When a local branch and a candidate remote's same-name branch
-have genuinely forked, the result carries a `diverged: { remoteRef, local,
-remote }` report (on both the create and reuse paths) instead of silently
-picking a side; a `--single-branch` clone only carries remote-tracking refs
-for the branches it was cloned with, so a genuinely existing but
-never-fetched remote branch can still fall through to `created-from-base`
-there.
+candidate remote (same priority order as the fetch) that has a same-name branch
+is checked out as a new local branch tracking that remote's tip
+(`tracked-remote`; upstream is the remote branch, never base); otherwise the
+branch is created off the resolved base (`created-from-base`). A DETACHED reuse
+(e.g. `ui-review`'s pinned-PR-head worktrees) reports
+`branchOrigin: "reused-detached"`. When a local branch and a candidate remote's
+same-name branch have forked, the result carries a `diverged: { remoteRef,
+local, remote }` report on both paths instead of picking a side. A
+`--single-branch` clone lacks remote-tracking refs for other branches, so an
+unfetched remote branch can still fall through to `created-from-base`.
 
 It prints `{ ok, path, created|reused, base?, branchOrigin, diverged?,
-fetchDegraded?, provision: { actions, summary }, guard }` (`base` only on
-create; `provision` is the full `provisionWorktree()` result, not just its
-summary; `fetchDegraded: true` means at least one candidate remote's
-best-effort fetch failed, so branch resolution ran against whatever was
-already fetched). Provisioning is fail-soft (a warning never aborts the
-worktree); a `git worktree add` failure is a hard error. It does **not** install
-dependencies (see below).
+fetchDegraded?, provision: { actions, summary }, guard }`. `base` appears only on
+create; `provision` is the full `provisionWorktree()` result; `fetchDegraded: true`
+means at least one candidate remote's fetch failed, so branch resolution used the
+refs already present. Provisioning is fail-soft; a `git worktree add` failure is
+a hard error. It does **not** install dependencies (see below).
 
 `guard` is the default-branch guard's install result for the primary checkout
-(`{ ok, installed, refreshed, skipped, defaultBranches?, droppedExplicitBranches?, reason? }`), always
-present on both the create and reuse paths — installing it is best-effort and
-never fails the worktree. `guard.ok: false` means the install refused
-entirely (nothing was written) — see [Default-branch guard](#default-branch-guard)
-below for the refusal and no-op paths, which are not all `ok: false`.
+(`{ ok, installed, refreshed, skipped, defaultBranches?, droppedExplicitBranches?, reason? }`),
+present on both paths. Installing it is best-effort and never fails the worktree.
+`guard.ok: false` means the install refused entirely (nothing written); see
+[Default-branch guard](#default-branch-guard) for the refusal and no-op paths.
 
 ### Auto-provisioning (`.devloops` `worktree` section)
 
 `ensure-worktree.mjs` invokes this automatically; `provision-worktree.mjs` is
 available standalone for re-provisioning an existing worktree.
 
-A fresh worktree contains only tracked files, so gitignored runtime files the
-app/tests need (a config file, a large read-only dataset) are absent. Configure
-which ones to bring in from the main checkout:
+A fresh worktree contains only tracked files. Configure which gitignored runtime
+files (a config file, a large read-only dataset) to bring in from the main
+checkout:
 
 ```yaml
 # .devloops
@@ -122,10 +107,8 @@ worktree:
 - **Fail-soft:** a missing source or an empty glob logs one warning and continues
   — provisioning never aborts init. Idempotent on worktree reuse.
 - **Opt-in:** empty/absent by default; no baked-in file list.
-- **Not for `node_modules`.** A copied/symlinked `node_modules` goes stale the
-  moment a branch changes a dependency and can break native builds — use
-  `bun install --frozen-lockfile` inside the worktree. Provisioning does **not**
-  install dependencies.
+- **Not for `node_modules`:** use `bun install --frozen-lockfile` inside the
+  worktree (`WORKTREE-DEPS-ISOLATED`).
 
 Run manually with:
 
@@ -142,19 +125,16 @@ checkout's shared common hook directory, refusing a commit (plain or via
 `git merge`, which git runs `pre-merge-commit` for, not `pre-commit`) on a
 guarded branch, or a push to one (including via an explicit refspec such as
 `HEAD:main` from a feature branch). The hooks guard the repo's OWN default
-branch (git's advertised
-`origin/HEAD`) — resolved fresh on every install from `origin` specifically, never from a --base guess
-— and, additionally, an EXPLICIT `--base` (an operator's flag, or the
-`.devloops` `workflow.baseBranch` the resolver injects as one) when it
-differs: a worktree stacked on a non-default base never strips protection
-from the real default. Linked worktrees run the same hooks — git resolves
-them from the common directory — but a worktree's own branch is normally
-neither guarded name, so its work passes through untouched. Override for a
+branch (git's advertised `origin/HEAD`, resolved fresh on every install from
+`origin`, never from a --base guess) and, additionally, an EXPLICIT `--base`
+(an operator's flag, or the `.devloops` `workflow.baseBranch` the resolver
+injects as one) when it differs. Linked worktrees run the same hooks, but a
+worktree's own branch is normally neither guarded name. Override for a
 sanctioned release or reconcile with `DEVLOOPS_ALLOW_MAIN=1 <command>`.
 
-This is **not an unconditional guarantee** — several paths leave one or both
-hooks unable to fire, each reported in the `guard` result rather than failing
-the worktree. Refused entirely (`guard.ok: false`, nothing written):
+This is **not an unconditional guarantee**. The `guard` result reports each
+path that leaves a hook unable to fire. Refused entirely (`guard.ok: false`,
+nothing written):
 
 - `core.hooksPath` is already configured to point elsewhere: installing into
   `$GIT_DIR/hooks` would never run.
@@ -176,14 +156,11 @@ Installed but with reduced coverage (`guard.ok: true`):
   (offline, no remote, or a base that has never been pushed): the hooks
   install inert (`guard.defaultBranches: []`) rather than guess a branch to
   protect.
-- `git rebase` replays commits without running `pre-commit`/`pre-merge-commit`
-  at all (git's own rebase behavior, not something an installed hook can
-  change) — a rebase that moves a guarded branch is not caught by this guard.
+- `git rebase` runs neither `pre-commit` nor `pre-merge-commit`, so a rebase
+  that moves a guarded branch is not caught.
 
-Because of these, `ensure-worktree.mjs`'s hook is a defense-in-depth
-best-effort measure, not a substitute for `WORKTREE-CREATE-PROVISION` and
-`WORKTREE-DEFAULT-USE`'s own mandate to address git operations explicitly
-(below).
+The guard is defense-in-depth, not a substitute for `WORKTREE-DEFAULT-USE`'s
+mandate to address git operations explicitly (below).
 
 ### Commit-message contract guard
 
@@ -224,33 +201,24 @@ elsewhere refuses the install) — see `installCommitMsgGuard` in
 `WORKTREE-WRONG-CHECKOUT-GUARD`: under the Claude harness, the PreToolUse
 `Edit`/`Write` hook (`.claude/hooks/pre-tool-use-write-guard.mjs`, deciding via
 `decideWorktreeCheckoutGuard`) refuses a file mutation that would land on the
-MAIN checkout while a worktree cycle is active. The "active worktree" is the one CONTAINING the call context's `cwd`
-(anchoring on cwd, not on the mere existence of a worktree, keeps the guard
-immune to the many stale `tmp/worktrees/` worktrees a long-lived checkout
-accumulates). A write is refused when cwd sits inside a listed worktree and the
-target resolves to a non-gitignored file in the main checkout (the check is
-`git check-ignore`, so a not-yet-tracked new source file is caught too, not only
-already-tracked ones); the refusal names the worktree-local path to use instead.
-Unlike the branch/commit-msg guards above,
-this one is ALWAYS ON (not best-effort), because it needs no hook install — it
-runs in-process on every `Edit`/`Write`.
+MAIN checkout while a worktree cycle is active. The "active worktree" is the
+one CONTAINING the call context's `cwd`. A write is refused when cwd sits inside
+a listed worktree and the target resolves to a non-gitignored file in the main
+checkout (`git check-ignore`, so a new untracked source file is caught too); the
+refusal names the worktree-local path to use instead. This guard is ALWAYS ON:
+it runs in-process on every `Edit`/`Write` and needs no hook install. It is the
+tool-call-time counterpart to the commit-time
+`pre-commit-branch-guard.mjs --block-main-checkout` check.
 
-- A legitimate in-worktree edit passes untouched (the target is under the
-  active worktree).
+- A legitimate in-worktree edit passes untouched.
 - A gitignored/scratch path (a main-checkout `tmp/` file, `/tmp`, another
-  worktree's file, anything outside the repo) passes — it is not the
-  wrong-checkout mistake this guard exists to catch.
-- An unresolvable/ambiguous active-worktree context fails SAFE: when the main
-  target's tracked status cannot be determined (e.g. `git check-ignore`
-  errored), the hook treats it as tracked and refuses rather than silently
-  allowing a wrong-checkout write.
+  worktree's file, anything outside the repo) passes.
+- When the main target's tracked status cannot be determined (e.g.
+  `git check-ignore` errored), the hook fails SAFE: it treats the target as
+  tracked and refuses.
 - Override a deliberate main-checkout edit during an active cycle with
-  `DEVLOOPS_ALLOW_MAIN=1 <command>` — the same override the default-branch
-  guard uses, so "I mean to operate on the primary checkout" stays one flag.
-
-This is the tool-call-time counterpart to the commit-time
-`pre-commit-branch-guard.mjs --block-main-checkout` check: it catches the wrong
-checkout at the `Edit`/`Write` before it ever reaches a commit.
+  `DEVLOOPS_ALLOW_MAIN=1 <command>`, the same override the default-branch
+  guard uses.
 
 ### Post-merge cleanup
 
@@ -311,17 +279,16 @@ node scripts/loop/ensure-worktree.mjs --repo-root <p> --issue <n>
 **Underlying mechanism** (use directly only when the entrypoint is
 unavailable): `git fetch --prune origin` (and any other remote `--base`
 names), check `git worktree list`, then pick ONE of the three branch
-resolutions the entrypoint automates (see `branchOrigin` above) — an existing
-local branch: `git worktree add tmp/worktrees/dev-loops/<kind>-<number>
-<branch>`; an existing same-name remote branch on any candidate remote:
-`git worktree add -b <branch> --track tmp/worktrees/dev-loops/<kind>-<number>
-<remote>/<branch>`; neither: `git worktree add -b <branch>
-tmp/worktrees/dev-loops/<kind>-<number> origin/<auto-detected-default>` (e.g.
-`origin/main`, or `origin/master` on a repo whose actual default is
-`master`). Unconditionally forking off base (the last case) when a same-name
-branch already exists on a remote silently drops that branch's commits and
-points upstream at base instead — the exact hazard `branchOrigin:
-tracked-remote` exists to avoid.
+resolutions the entrypoint automates (see `branchOrigin` above):
+
+- existing local branch: `git worktree add tmp/worktrees/dev-loops/<kind>-<number> <branch>`
+- existing same-name remote branch on any candidate remote:
+  `git worktree add -b <branch> --track tmp/worktrees/dev-loops/<kind>-<number> <remote>/<branch>`
+- neither: `git worktree add -b <branch> tmp/worktrees/dev-loops/<kind>-<number> origin/<auto-detected-default>`
+  (e.g. `origin/main`, or `origin/master` on a repo whose actual default is `master`)
+
+Never fork off base when a same-name remote branch exists; that drops the
+branch's commits.
 
 ## Dependency and install expectations
 
@@ -347,25 +314,17 @@ branch when practical.
 
 ## Cleanup and prune flow
 
-**Default:** a merge through `merge-pr.mjs` removes the merged branch's
-worktree. After a merge that reports a cleanup skip, or when the work is
-abandoned, run `cleanup-worktree.mjs` (`WORKTREE-CLEANUP`, see
-[Post-merge cleanup](#post-merge-cleanup) above):
-
-```sh
-node scripts/loop/cleanup-worktree.mjs --repo-root <p> (--issue <n> | --pr <n> | --branch <name> [--head-sha <sha>])
-```
-
-Clean up promptly after merge so stale worktrees do not accumulate under
-`tmp/worktrees/`.
+A merge through `merge-pr.mjs` removes the merged branch's worktree. After a
+merge that reports a cleanup skip, or when the work is abandoned, run
+`cleanup-worktree.mjs` promptly ([Post-merge cleanup](#post-merge-cleanup),
+`WORKTREE-CLEANUP`).
 
 ## Never `git stash` in a shared-`.git` layout
 
 <!-- rule: WORKTREE-NO-STASH -->
 `WORKTREE-NO-STASH`: Agents MUST NOT run `git stash` (or `git stash pop`/`apply`) in this repo.
 `refs/stash` is a single ref shared by every worktree over this repo's one `.git` directory, so a
-stash pushed from one worktree can pop into a different worktree — parallel agents have already
-picked up each other's stashed files this way. Inspect working-tree changes with `git diff` (or
+stash pushed from one worktree can pop into a different worktree. Inspect working-tree changes with `git diff` (or
 `git diff --staged`) instead; save them to a patch file (`git diff > patch.diff`, later `git apply
 patch.diff`) if they need to survive a checkout, or use a separate scratch worktree/checkout
 rather than stashing. The Claude Code PreToolUse Bash gate blocks `git stash` outright on this

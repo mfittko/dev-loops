@@ -1,25 +1,14 @@
 # Public dev-loop contract
 
-Canonical owner for the public `dev-loop` entrypoint: routed semantics, accepted shorthand, and the rule that internal strategy names stay behind the façade.
-
-This canonical owner lives in the shipped `skills/docs/` surface because installed skill/runtime consumers reliably own the skills subtree. In installed layouts, read the same contract via [Public Dev Loop Contract](../docs/public-dev-loop-contract.md) from the installed skill directory.
+Canonical owner for the public `dev-loop` entrypoint: routed semantics, accepted shorthand, and the rule that internal strategy names stay behind the façade. Installed layouts read the same contract via [Public Dev Loop Contract](../docs/public-dev-loop-contract.md) from the installed skill directory.
 
 Other repo docs MAY summarize or link this contract; they MUST NOT redefine it.
 
 ## Public surface
 
-The single public entrypoint for write-capable workflow activity is:
+The single public entrypoint for write-capable workflow activity is `dev-loop`. The `review` route is a sanctioned, separately invocable read-only entrypoint. Its deterministic selector through the public resolver is `loop startup --pr <n> --review`; it does not advance workflow lifecycle state.
 
-- `dev-loop`
-
-Accordingly, `dev-loop` is the only intended public write-capable workflow entrypoint.
-
-The `review` route is a sanctioned, separately invocable read-only entrypoint. Its deterministic selector through the public resolver is `loop startup --pr <n> --review`; it does not advance workflow lifecycle state.
-
-`dev-loop` MUST be callable from the user-facing workflow surfaces, including:
-
-- `subagent dev-loop`
-- `/skill:dev-loop`
+`dev-loop` MUST be callable from the user-facing workflow surfaces, including `subagent dev-loop` and `/skill:dev-loop`.
 
 Day-one user-intent forms:
 
@@ -36,15 +25,7 @@ Day-one user-intent forms:
 
 ## Issue-based shorthand auto trigger contract
 
-This shorthand form is explicitly accepted and resolves to the same bounded public `dev-loop` intent:
-
-- `auto dev loop on issue 112`
-
-Canonical mapping:
-
-| Shorthand phrase | Canonical public intent |
-|---|---|
-| `auto dev loop on issue 112` | `dev-loop --intent auto_continue_current` with authoritative current state targeting issue 112 |
+The shorthand `auto dev loop on issue 112` resolves to the same bounded public `dev-loop` intent: `dev-loop --intent auto_continue_current` with authoritative current state targeting issue 112.
 
 Stop-boundary contract for this shorthand:
 
@@ -62,11 +43,7 @@ Do not remove surfaced internal loop names until all of the following are true:
 3. former name-shaped variation pressure has a bounded `dev-loop` parameter/settings home
 4. surfaced help/discovery/readiness paths already point users to `dev-loop` and supported routed/parameterized forms
 
-Once that bar is met:
-
-- `dev-loop` remains the only intended visible write-capable workflow entrypoint in surfaced UX; the sanctioned `review` entrypoint remains explicitly read-only
-- internal seam names are removed from surfaced workflow-choice phrasing
-- any remaining seam use stays explicitly internal/runtime-only
+Once that bar is met, remove internal seam names from surfaced workflow-choice phrasing, and keep any remaining seam use explicitly internal/runtime-only.
 
 ## Workflow-surface taxonomy and guardrails
 
@@ -97,11 +74,7 @@ The public router consumes one canonical current state with these top-level dime
 | `status` | `active` \| `waiting` \| `blocked` \| `approval_ready` \| `merge_ready` \| `done` |
 | `authorization` | `authorized` \| `needs_confirmation` \| `not_authorized` |
 
-The authoritative first-slice evaluator, status-report helper (`resolveAuthoritativeDevLoopStatus()`), and startup/resume bundle helper (`resolveAuthoritativeStartupResumeBundle()`) all live in `packages/core/src/loop/public-dev-loop-routing.mjs`.
-
-Its tests are:
-
-- `packages/core/test/public-dev-loop-routing.test.mjs`
+The authoritative first-slice evaluator, status-report helper (`resolveAuthoritativeDevLoopStatus()`), and startup/resume bundle helper (`resolveAuthoritativeStartupResumeBundle()`) all live in `packages/core/src/loop/public-dev-loop-routing.mjs`. Tests: `packages/core/test/public-dev-loop-routing-*.test.mjs`.
 
 ## Authoritative-state-first status reporting contract
 
@@ -262,15 +235,13 @@ The public router currently maps to these deterministic internal strategies:
 | `ui_review` | explicit UI-review "prove it in the running app" pass on the current PR | `dev-loop` (the deterministic selector is `loop startup --pr <n> --ui-review`; see [UI Review](../ui-review/SKILL.md)) |
 | `review` | plain read-only review gate on the current PR | `dev-loop` via `loop startup --pr <n> --review`, and the sanctioned separately invocable read-only [Review](../review/SKILL.md) entrypoint |
 
-`waiting_for_merge_authorization` is part of the gate contract below as a stop gate rather than an internal strategy.
-
-Internal strategy naming is implementation detail; normal orchestration always starts from `dev-loop`.
+`waiting_for_merge_authorization` is part of the gate contract below as a stop gate rather than an internal strategy. Normal orchestration always starts from `dev-loop`.
 
 ## Tracker-backed local implementation input-source contract
 
 Tracker-backed local implementation is an input-source addition to the existing `local_implementation` strategy. It does **not** create a new routing mode, strategy family, or public workflow entrypoint.
 
-For tracker-backed local sessions, the tracker issue is canonical; the no-duplicate-phase-doc rule is owned by `ARTIFACT-TRACKER-FIRST-NO-DUP` in [Artifact Authority Contract](artifact-authority-contract.md).
+For tracker-backed local sessions, the tracker issue is canonical. `ARTIFACT-TRACKER-FIRST-NO-DUP` in [Artifact Authority Contract](artifact-authority-contract.md) bars creating a duplicate phase doc.
 
 Deterministic GitHub-backed spec resolution:
 
@@ -280,16 +251,9 @@ Deterministic GitHub-backed spec resolution:
 4. treat the returned issue `title`, `body`, `url`, and `state` as the usable local spec bundle
 5. if the tracker reference cannot be resolved into one valid issue payload, fail closed instead of guessing or falling back to a duplicate phase doc
 
-State-sync expectations for this slice:
+Local branch state and `tmp/` artifacts remain local execution state. Durable scope / acceptance / status changes discovered during local execution SHOULD sync back to the tracker issue. There is no full bidirectional tracker sync and no tracker-provider adapter beyond the bounded GitHub-backed helper path above.
 
-- local branch state and `tmp/` artifacts remain local execution state
-- durable scope / acceptance / status changes discovered during local execution SHOULD sync back to the tracker issue
-- this slice does **not** introduce full bidirectional tracker sync or tracker-provider adapters beyond the bounded GitHub-backed helper path above
-
-Non-duplication rule:
-
-- do not create, read, or update `docs/phases/phase-<n>.md` for the same tracker-backed session
-- if a duplicate local phase doc already exists, reconcile explicitly before continuing rather than keeping two durable spec surfaces alive
+Do not create, read, or update `docs/phases/phase-<n>.md` for the same tracker-backed session. If such a duplicate phase doc already exists, reconcile explicitly before continuing.
 
 ## Copilot-first issue-assignment seam (unassigned issues)
 
@@ -304,29 +268,27 @@ Fail closed if those readiness/assignment facts are missing or invalid.
 
 ## Single-contributor ownership gate (resolve-dev-loop-startup)
 
-This is a separate, script-layer gate — `issueAssignmentState` above is an authoritative issue-state fact, not a bounded variation parameter (see [Bounded variation parameter contract](#bounded-variation-parameter-contract)), and this gate is a distinct seam from the Copilot-first assignment seam. It is enforced by `resolve-dev-loop-startup.mjs` after it selects the strategy for the `--issue`/`--pr` start, and applies ONLY to code-changing or merge-authoritative strategies (`local_implementation`, `issue_intake`, `copilot_pr_followup`, `external_pr_followup`, `reviewer_fixer`, `final_approval`; an unknown/future strategy defaults to gated) via `STRATEGY_OWNERSHIP_GATE` — see `docs/decisions/0042-ownership-gate-scoped-to-code-changing-strategies.md`. Pure read/observe strategies (`review`, `ui_review`, `wait_watch`) are exempt: `review` is exempt via an explicit `false` entry in `STRATEGY_OWNERSHIP_GATE`, just like `ui_review` and `wait_watch`. A reviewer can run `loop startup --pr <n> --review`, run the UI-review selector, or wait/watch against work they do not own. For a gated strategy, the artifact (issue or PR) must resolve to a SOLE human owner — the viewer (`gh api user`'s login) and no other human assignee — failing closed on anything else.
+This script-layer gate is a distinct seam from the Copilot-first assignment seam above. `resolve-dev-loop-startup.mjs` enforces the gate after it selects the strategy for the `--issue`/`--pr` start. Through `STRATEGY_OWNERSHIP_GATE` it applies ONLY to code-changing or merge-authoritative strategies (`local_implementation`, `issue_intake`, `copilot_pr_followup`, `external_pr_followup`, `reviewer_fixer`, `final_approval`); an unknown/future strategy defaults to gated (`docs/decisions/0042-ownership-gate-scoped-to-code-changing-strategies.md`). Pure read/observe strategies (`review`, `ui_review`, `wait_watch`) are exempt through explicit `false` entries in `STRATEGY_OWNERSHIP_GATE`, so a reviewer can run `loop startup --pr <n> --review`, the UI-review selector, or wait/watch against work they do not own. For a gated strategy, the artifact (issue or PR) must resolve to a SOLE human owner: the viewer (`gh api user`'s login) and no other human assignee. Anything else fails closed.
 
-The `review` route stays read-only: no assignee claim, no branch push, no fix commit, no board move, and no lifecycle gate evidence. It never satisfies `draft_gate` or `pre_approval_gate`. Every write-capable route (`local_implementation`, `issue_intake`, `copilot_pr_followup`, `external_pr_followup`, `reviewer_fixer`, `final_approval`) stays gated exactly as before.
+The `review` route stays read-only: no assignee claim, no branch push, no fix commit, no board move, and no lifecycle gate evidence. It never satisfies `draft_gate` or `pre_approval_gate`. Every write-capable route stays gated.
 
-- assigned to another human, or co-assigned to the viewer AND another human (contested — not sole) → foreign-ownership error naming the OTHER assignee(s), never the viewer; no readiness bundle
-- unassigned → not-claimed error naming the exact claim command (`edit-issue.mjs`/`edit-pr.mjs --add-assignee @me`); no readiness bundle
-- assigned to the viewer alone → proceed
-- assigned to `copilot-swe-agent` → unaffected; the Copilot-first seam above still governs; the viewer login is never resolved for this case
-- the PR path also fails closed when the PR's linked issue is assigned to another human — the issue owner owns the whole loop
+- assigned to another human, or co-assigned to the viewer AND another human (contested, not sole): foreign-ownership error naming the OTHER assignee(s), never the viewer; no readiness bundle
+- unassigned: not-claimed error naming the exact claim command (`edit-issue.mjs`/`edit-pr.mjs --add-assignee @me`); no readiness bundle
+- assigned to the viewer alone: proceed
+- assigned to `copilot-swe-agent`: unaffected; the Copilot-first seam above still governs; the viewer login is never resolved for this case
+- the PR path also fails closed when the PR's linked issue is assigned to another human; the issue owner owns the whole loop
 - the viewer login itself failing to resolve fails closed too (cannot verify or claim ownership)
 
-Claiming is NOT compare-and-swap, so it is not atomic: `gh issue/pr edit --add-assignee @me` can land two racing contributors as co-assignees on the same item. Safety holds through three layers, not through the claim call alone:
+Claiming is NOT compare-and-swap: `gh issue/pr edit --add-assignee @me` can land two racing contributors as co-assignees. Three layers keep ownership safe:
 
-1. `resolve-active-board-item.mjs` (Next Up pickup) claims an unassigned candidate, then immediately RE-READS its assignees. Sole → proceed. A re-read showing another human present is only a GENUINE contest — eligible for the tiebreak below — when the viewer's own claim is verified present in that same re-read (case-insensitive membership check). A re-read showing only another human, with the viewer's `@me` not yet visible (read-after-write lag, a silently-degraded claim, a permissions quirk), is NOT a contest the viewer is part of: it best-effort self-unclaims (in case the claim is merely lingering server-side) and skips without touching the other assignee (`claim_not_visible_post_read`) — the winner only ever removes the loser when the viewer is a verified co-assignee. A genuine contest (the viewer plus another human, both verified present) resolves via a deterministic tiebreak: case-insensitive lexicographically-smallest login wins, so every racer computes the same winner independently. The **loser** self-unassigns (`--remove-assignee @me`) and skips to the next candidate. The **winner** removes the OTHER contender's login (`--remove-assignee <their login>`) before proceeding — removing on the winning side, not just backing off on the losing side, is what closes the interleaving where the loser claimed and re-read BEFORE the winner's claim landed: the loser would otherwise have seen itself as sole owner and proceeded too, but once the winner's removal lands, that raced-past loser's next ownership read sees only the winner and fails closed as foreign.
-2. The issue-intake procedure claims a directly-targeted issue before invoking startup, same claim semantics.
-3. Every contributor's own `resolve-dev-loop-startup.mjs` invocation re-derives sole ownership from scratch and fails closed on any contested (non-sole) state — the universal backstop if a racer's pickup-side re-read/tiebreak/removal is itself interrupted (network failure, crash) before it completes; those failure paths also best-effort self-unassign so an aborted pick doesn't strand a phantom claim.
+1. `resolve-active-board-item.mjs` (Next Up pickup) claims an unassigned candidate, then immediately RE-READS its assignees. Sole: proceed. A re-read that shows another human is a GENUINE contest only when the viewer's own claim is verified present in that same re-read (case-insensitive membership check). When the re-read shows only another human and the viewer's `@me` is not yet visible, the pickup best-effort self-unclaims and skips without touching the other assignee (`claim_not_visible_post_read`). A genuine contest resolves through a deterministic tiebreak: the case-insensitive lexicographically-smallest login wins. The **loser** self-unassigns (`--remove-assignee @me`) and skips to the next candidate. The **winner** removes the OTHER contender's login (`--remove-assignee <their login>`) before proceeding, so a loser that raced past its own re-read fails closed as foreign on its next ownership read.
+2. The issue-intake procedure claims a directly-targeted issue before invoking startup, with the same claim semantics.
+3. Every contributor's own `resolve-dev-loop-startup.mjs` invocation re-derives sole ownership from scratch and fails closed on any contested (non-sole) state. This is the backstop when a pickup-side re-read, tiebreak or removal is interrupted; those failure paths also best-effort self-unassign so an aborted pick does not strand a phantom claim.
 
-What these three layers give: every ownership read that observes contention (contested or foreign) fails closed, so a contributor is caught and stopped the moment contention becomes visible to it. That makes two contributors both proceeding on the same artifact improbable and short-lived — NOT physically impossible: GitHub assignment has no compare-and-swap, so a "proceed" cannot be un-done once taken. Two residual windows remain, both accepted rather than denied:
+Every ownership read that observes contention (contested or foreign) fails closed. Two residual windows remain and are accepted:
 
-- **Both proceed (double work).** Racer A completes its whole claim → pickup re-read (sole) → startup re-read (sole) → proceeds, all before racer B's claim call lands. B then claims, re-reads a genuine contest, wins the tiebreak and removes A — but A has already passed its startup gate and started; the winner-side removal converges the assignment, it cannot retract A's start. So both can proceed in this narrow window. It is bounded (each read narrows it) and self-corrects going forward (A's next ownership read — any watch cycle, gate, or restart — sees the contested state and fails A closed), but the initial overlap is real.
-- **Safe co-assignment.** A near-simultaneous double-claim where BOTH racers' post-claim re-reads land before the other's write propagates leaves each seeing only its own claim, so neither observes the contention and no tiebreak fires. The item is left genuinely co-assigned — safe, not stuck-and-broken, since both contributors' own startup gates then see the contested state and fail closed — but it needs a human to unassign one login (the documented no-lease/no-automatic-reclamation non-goal).
-
-Convergence to a solely-owned (or cleanly unassigned) item holds for the common races: a sequential claim race, or any race where at least one racer's post-claim re-read observes the contention (the tiebreak self-heals it). The residual windows above are the price of a non-CAS substrate, made small by re-reading at every layer rather than trusting the claim call alone.
+- **Both proceed (double work).** Racer A passes pickup and startup as sole owner before racer B's claim lands. B then wins the tiebreak and removes A, but A has already started. A's next ownership read (watch cycle, gate, or restart) sees the contested state and fails A closed.
+- **Safe co-assignment.** When both racers' post-claim re-reads land before the other's write propagates, neither observes contention and no tiebreak fires. Both startup gates then fail closed on the co-assigned item, and a human must unassign one login (the documented no-lease/no-automatic-reclamation non-goal).
 
 ## Authoritative gate contract
 
@@ -380,10 +342,7 @@ First-match-wins routing posture:
 
 ## Required transitions
 
-The gate graph (`DEV_LOOP_GATE` / `PUBLIC_DEV_LOOP_GATE_CONTRACT` in
-`public-dev-loop-routing.mjs`) is stateless per cycle: each `evaluatePublicDevLoopRouting`
-call re-derives one gate from fresh authoritative state, so every non-terminal (route/wait)
-gate can be followed, on the next cycle, by any of the gates.
+The gate graph is stateless per cycle: each `evaluatePublicDevLoopRouting` call re-derives one gate from fresh authoritative state, so every non-terminal (route/wait) gate can be followed by any gate on the next cycle.
 
 - `final_approval` -> any dev-loop gate
 - `wait_watch` -> any dev-loop gate
@@ -395,12 +354,7 @@ gate can be followed, on the next cycle, by any of the gates.
 - `ui_review` -> any dev-loop gate
 - `review` -> any dev-loop gate
 
-Terminal gates (`stop_blocked_or_not_authorized`, `stop_done_terminal`,
-`waiting_for_merge_authorization`, `fail_closed_reconcile`) have no outgoing transitions —
-reaching one ends the current evaluation cycle. Their route-kind classification
-(`stop` / `needs_reconcile`) is the authoritative terminal marker; the route/wait gates above
-are the authoritative non-terminal set. This machine is wired into the L2/L3 state-machine
-conformance harness (`validate-state-machine-conformance.mjs`).
+Terminal gates (`stop_blocked_or_not_authorized`, `stop_done_terminal`, `waiting_for_merge_authorization`, `fail_closed_reconcile`) have no outgoing transitions; reaching one ends the current evaluation cycle. Their route kind (`stop` / `needs_reconcile`) is the authoritative terminal marker. `validate-state-machine-conformance.mjs` checks this list.
 
 ## Conflict reconciliation path (`CONFLICTING` / `DIRTY`)
 
@@ -420,10 +374,10 @@ When an open linked PR reports merge conflict against `main`, treat this as an e
 ### Base integration is the deterministic FIRST action of PR pickup
 
 <!-- rule: FACADE-PICKUP-INTEGRATE-BASE-FIRST -->
-`FACADE-PICKUP-INTEGRATE-BASE-FIRST`: when the deterministic pickup path (the `loop handoff` / startup-continue route) picks up an existing PR, the FIRST action — before any gate run or CI-wait — is to read the PR's `mergeable` / `mergeStateStatus` and, when the branch is behind base or `CONFLICTING`/`DIRTY`, integrate `origin/<base>` (merge, or the sanctioned `resolve-pr-conflicts.mjs` additive-conflict resolver) and push. Only after the branch is mergeable-clean and re-based on the current base do gates / CI-wait proceed. This rule lives in the sanctioned pickup path (`scripts/loop/copilot-pr-handoff.mjs` `runBasePickupPreflight`), so every coordinator does it the same way without re-deriving it.
+`FACADE-PICKUP-INTEGRATE-BASE-FIRST`: when the deterministic pickup path (the `loop handoff` / startup-continue route) picks up an existing PR, the FIRST action — before any gate run or CI-wait — is to read the PR's `mergeable` / `mergeStateStatus` and, when the branch is behind base or `CONFLICTING`/`DIRTY`, integrate `origin/<base>` (merge, or the sanctioned `resolve-pr-conflicts.mjs` additive-conflict resolver) and push. Gates / CI-wait proceed only after the branch is mergeable-clean on the current base. The sanctioned pickup path implements this rule (`scripts/loop/copilot-pr-handoff.mjs` `runBasePickupPreflight`).
 
 <!-- rule: FACADE-NEVER-CI-WAIT-WHILE-DIRTY -->
-`FACADE-NEVER-CI-WAIT-WHILE-DIRTY`: the pickup path MUST NEVER enter a CI-wait (or Copilot-review wait) while `mergeStateStatus` is `DIRTY` / `mergeable` is `CONFLICTING`. GitHub does not dispatch `pull_request` CI on a conflicted branch, so a wait there never ends — the deadlock (observed on PR #2028). A conflicted PR is resolved first (integrate the base), or the loop fails closed with a clear actionable stop; it never waits for CI that can never dispatch. After integration the loop re-gates at the new head (`FACADE-CONFLICT-REVALIDATE-NEW-HEAD`).
+`FACADE-NEVER-CI-WAIT-WHILE-DIRTY`: the pickup path MUST NEVER enter a CI-wait (or Copilot-review wait) while `mergeStateStatus` is `DIRTY` / `mergeable` is `CONFLICTING`. GitHub does not dispatch `pull_request` CI on a conflicted branch. Resolve a conflicted PR first (integrate the base), or fail closed with a clear actionable stop. After integration the loop re-gates at the new head (`FACADE-CONFLICT-REVALIDATE-NEW-HEAD`).
 
 ## `auto dev loop` durable auto contract
 
@@ -447,39 +401,10 @@ Bootstrap-only exception to the general blocked-escalation rule for `waiting_for
 | <!-- rule: FACADE-BOOTSTRAP-FOLLOWUP-REENTRY --> `FACADE-BOOTSTRAP-FOLLOWUP-REENTRY` | refreshed seam state advances to `linked_pr_ready_for_followup` | durable-auto continuation MUST re-enter the same linked PR follow-up path |
 | <!-- rule: FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION --> `FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION` | follow-up handoff carries `conductorRouting.handoffEnvelope.requiresLocalIsolation=true` | orchestration SHOULD continue through an isolated checkout/worktree transition rather than treat that boundary as final completion (the runtime surfaces the flag; it does not enforce re-entry) |
 
-Main conductor orchestration MUST treat non-terminal follow-up/wait states (for example `waiting_for_copilot_review`) as continuation boundaries rather than clean completion. If an async child exits before the requested stop boundary and continuation is feasible, re-dispatch via the main session driver (the subagent exits on external wait; the main session re-dispatches); otherwise surface the concrete blocker.
-
-## Internal / external model
-
-```mermaid
-flowchart TD
-    U[User intent / public dev-loop entrypoint] --> C[Unified dev-loop conductor]
-    C --> S[Canonical current state]
-    S --> R[Deterministic router]
-
-    R --> L[Local implementation]
-    R --> I[Issue intake / normalization]
-    R --> CP[Copilot PR follow-up]
-    R --> HP[External-human PR follow-up]
-    R --> RF[Reviewer / fixer]
-    R --> W[Wait / watch]
-    R --> A[Human approval checkpoint]
-    R --> M[Wait for merge authorization]
-
-    L --> S
-    I --> S
-    CP --> S
-    HP --> S
-    RF --> S
-    W --> S
-    A --> S
-    M --> S
-```
+Main conductor orchestration MUST treat non-terminal follow-up/wait states (for example `waiting_for_copilot_review`) as continuation boundaries rather than clean completion. If an async child exits before the requested stop boundary and continuation is feasible, re-dispatch via the main session driver; otherwise surface the concrete blocker.
 
 ## Single-entrypoint convergence posture
 
-- `dev-loop` is the only intended public write-capable workflow entrypoint; the sanctioned, separately invocable read-only `review` entrypoint does not advance lifecycle state.
-- any remaining specialized Copilot behavior is internal-only and non-user-invocable behind the canonical internal route-pack surface (`issue-intake`, `copilot-pr-followup`, `local-implementation`, `final-approval`).
 - Documentation and examples SHOULD lead with `dev-loop` and explain routed behavior.
 - Workflow branching SHOULD converge into deterministic state-machine/tooling surfaces behind `dev-loop`.
 - User-visible variation SHOULD be expressed through the `dev-loop` API/parameters or settings, not multiple public workflow names or legacy compatibility seams.
@@ -545,24 +470,3 @@ The following parameter/state combinations fail closed to `needs_reconcile` inst
 | "review PR 88 in a UI loop" | `dev-loop --intent review_pr_ui --target pr:88` |
 
 These are parameterized uses of `dev-loop`, not new workflow-facing entrypoints.
-
-## Non-goals for this slice
-
-- broad deletion of lower-level helper logic that `dev-loop` still routes to internally
-- flattening actor/ownership differences between local, Copilot, reviewer, maintainer, and external-human paths
-- replacing existing lower-level state machines with prompt-only branching
-- wiring every runtime helper through this façade in one change
-- broad UI work outside the public workflow/API unification
-
-## Example mappings
-
-| User intent | Canonical state / route |
-|---|---|
-| start dev loop on issue `86` with no linked PR | synthesize issue target -> `issue_intake` internal strategy (routed behind `dev-loop`) |
-| start dev loop on issue `86` with linked PR `88` and Copilot ownership | issue target + `linkedPr=88` -> route as PR `88` -> `copilot_pr_followup` internal strategy (routed behind `dev-loop`) |
-| continue dev loop on PR `88` with Copilot ownership | PR target + `ownership=copilot` -> `copilot_pr_followup` internal strategy (routed behind `dev-loop`) |
-| start issue `86` locally, then continue the loop | local phase slice for issue `86` -> `local_implementation`, then resume via public `dev-loop` against the updated state |
-| continue the current dev loop while waiting | same target + `status=waiting` -> `wait_watch` |
-| what state is the dev loop in? | inspect the canonical state and report the routed internal strategy without switching public entrypoints |
-| review PR `88` | PR target + explicit plain-review request (`review_pr` intent) -> read-only `review` strategy |
-| review PR `88` in a UI loop | PR target + explicit UI-review request (`review_pr_ui` intent) -> `ui_review` internal strategy (routed behind `dev-loop`) |

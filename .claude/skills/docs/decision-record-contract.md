@@ -2,9 +2,14 @@
 
 Canonical owner for the ADR (Architecture Decision Record) practice: when an accepted decision must be persisted, where the record lives, and how it connects to the existing RFC-escalation path.
 
-RFC-worthy decisions reach the parent session / human operator through refiner escalation notes, the grill rationale comment or the review template's RFC-escalation sanity check. The rules below distinguish an ADR accompanying an in-flight change from an RFC issue whose sole deliverable is the decision record.
+RFC-worthy decisions reach the parent session / human operator through refiner escalation notes, the grill rationale comment or the review template's RFC-escalation sanity check.
 
-The practice is no longer purely advisory: a fail-closed tripwire (issue [#1867](https://github.com/mfittko/dev-loops/issues/1867), enforced by `scripts/loop/check-adr-tripwire.mjs` at both ready-gate paths — `ready-for-review.mjs` and the raw `gh pr ready` guard `pre-pr-ready-gate.mjs`) blocks any PR whose diff touches a decision-shaped surface — a `skills/docs/*-contract.md` file, the shared gate config `packages/core/src/config/extension-defaults.yaml`, or a rule-modality (MUST/SHALL vs SHOULD vs MAY family) reversal on an existing `<!-- rule: <ID> -->` (including a keyword stripped from a rule that keeps its marker, or a rule removed outright from a still-present rule-bearing doc) — unless the same diff adds or updates a `docs/decisions/NNNN-*.md` record, or the PR body carries a one-line waiver `adr-tripwire:allow <reason>` for the deliberate no-ADR case (a bare marker without a reason, or the marker mentioned mid-sentence, does not waive). A changed rule-bearing doc whose base and head content cannot both be read also blocks (fail-closed unresolvable-rule-scan). The tripwire is deliberately narrow: it covers only the mechanically detectable high-signal surfaces; the judgment-heavy remainder of ADR-worthiness stays with reviewers through the existing RFC-escalation sanity check.
+A fail-closed tripwire (issue [#1867](https://github.com/mfittko/dev-loops/issues/1867)) enforces part of this practice. `scripts/loop/check-adr-tripwire.mjs` runs at both ready-gate paths: `ready-for-review.mjs` and the raw `gh pr ready` guard `pre-pr-ready-gate.mjs`. It blocks any PR whose diff touches a decision-shaped surface:
+- a `skills/docs/*-contract.md` file;
+- the shared gate config `packages/core/src/config/extension-defaults.yaml`;
+- a rule-modality (MUST/SHALL vs SHOULD vs MAY family) reversal on an existing `<!-- rule: <ID> -->`, including a keyword stripped from a rule that keeps its marker, or a rule removed outright from a still-present rule-bearing doc.
+
+The block clears when the same diff adds or updates a `docs/decisions/NNNN-*.md` record, or when the PR body carries a one-line waiver `adr-tripwire:allow <reason>` for the deliberate no-ADR case. A bare marker without a reason, or the marker mentioned mid-sentence, does not waive. A changed rule-bearing doc whose base and head content cannot both be read also blocks (fail-closed unresolvable-rule-scan). Reviewers judge the remaining ADR-worthiness through the RFC-escalation sanity check.
 
 `docs/decisions/` always means the directory at the root of the repo where the decision is made — in an installed-plugin context that is the consumer repo, which creates the directory (and a `0000-template.md` following the section structure defined here) on first use.
 
@@ -35,5 +40,4 @@ A decision that only affects one PR's internals is not ADR-worthy.
 ## Cross-references
 
 - [Contract style guide](./contract-style-guide.md) — rule ID and RFC-2119 conventions
-- [Tracker-first loop state](./tracker-first-loop-state.md) — ADR / RFC linkage rows (links only, no decision sync)
 - `docs/decisions/0000-template.md` — the record template
