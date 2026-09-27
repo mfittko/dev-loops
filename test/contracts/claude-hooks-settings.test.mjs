@@ -179,10 +179,11 @@ test("bash-gate hook lets the judge run only its work-order pull; shell, test an
 test("write-guard hook lets the judge write only its verdict files under a checkout's tmp/gate-judge/ (ADR 0106)", () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "judge-write-guard-")));
   try {
-    const git = (...args) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root, encoding: "utf8" });
-    git("init", "-q");
-    git("commit", "-q", "--allow-empty", "-m", "init");
-    git("worktree", "add", "-q", "wt");
+    // gitFixture is the file's hermetic helper (defined below; tests run after module load).
+    for (const args of [["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "init"], ["worktree", "add", "-q", "wt"]]) {
+      const result = gitFixture(args, root);
+      assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+    }
     const rel = "tmp/gate-judge/o-r/pr-7/draft_gate-abc/j1-aa";
     fs.mkdirSync(path.join(root, rel), { recursive: true });
     fs.mkdirSync(path.join(root, "scripts"));

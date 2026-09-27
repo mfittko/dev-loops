@@ -1078,8 +1078,9 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
   deferred only when leaving it unfixed would change an operator-visible outcome (wrong
   guidance a conductor executes, a fail-closed gap reachable on a sanctioned path, or a
   demonstrable bug), and a genuinely non-blocking/cosmetic `low` that clears none of those
-  defaults to `reject`. When the judge's briefing
-  names an existing open issue covering the finding's territory, the `followUpDraft` MUST be
+  defaults to `reject`. When the judge's pulled inputs (the covering issue references in
+  the pulled spec, or the prior verdicts) name an existing open issue covering the finding's
+  territory, the `followUpDraft` MUST be
   titled `Append to issue N: ...`. Beyond that record, the conductor at most appends a comment
   to an existing covering issue (via `comment-issue.mjs`), and it files a new issue from a
   deferred finding only when the finding is a blocker (`MAIN-AGENT-FILING-BLOCKER-ONLY` in the

@@ -7,14 +7,14 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { computeSpecDigest } from "@dev-loops/core/loop/spec-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
-import { buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath } from "../github/_gate-artifact-paths.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
@@ -149,7 +149,10 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   }
   const plan = { ...identityTriple, roundId, materializationHash: materializationHash(text), promptPath, dispatchPrompt, workOrder };
   const planPath = path.join(dir, "judge-emit-plan.json");
-  await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+  // Atomic: a concurrent pull never reads a half-written plan.
+  const tempPath = `${planPath}.tmp-${roundId}`;
+  await writeFile(tempPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+  await rename(tempPath, planPath);
   return { ...plan, planPath };
 }
 
@@ -174,7 +177,13 @@ export async function locateJudgeUnit({ ref, tmpRoots }) {
   for (const tmpRoot of tmpRoots) {
     const prDir = path.dirname(judgeDir({ repo, pr, gate, headSha, tmpRoot }));
     for (const name of (await readdir(prDir).catch(() => [])).filter((entry) => headDirRe.test(entry))) {
-      const plan = await readJson(path.join(prDir, name, "judge-emit-plan.json"));
+      const planPath = path.join(prDir, name, "judge-emit-plan.json");
+      // A corrupt plan at another head is absent; at the ref's own head it is a named refusal.
+      const plan = await readJson(planPath).catch((err) => {
+        if (!(err instanceof SyntaxError)) throw err;
+        if (name === `${gate}-${headSha}`) throw new WorkOrderRefusal("local_materialization_integrity_failure", `judge emit plan ${planPath} is not valid JSON; re-emit the judge work order, never hand-repair the plan`);
+        return undefined;
+      });
       if (!plan) continue;
       if (!newest || isNewer(plan, newest)) newest = plan;
       if (plan.workOrderRef === ref) own ??= { plan, tmpRoot };

@@ -58,6 +58,18 @@ test("J1: a spec/identity or head mismatch refuses; a changed ledger changes the
   });
 });
 
+test("J1: a prior verdict is a required read and a rewritten prior changes the digest", async () => {
+  await withDir(async (root) => {
+    const sources = { ...(await seed(root)), priorVerdicts: ["judge-fixture/prior-verdict.json"] };
+    const priorPath = path.join(root, "judge-fixture", "prior-verdict.json");
+    await writeFile(priorPath, JSON.stringify({ dispositions: [{ index: 0, disposition: "act" }] }));
+    const base = await emitJudgeWorkOrder(sources);
+    assert.equal(base.workOrder.requiredReads.find((read) => read.kind === "prior-judge-verdict")?.path, priorPath);
+    await writeFile(priorPath, JSON.stringify({ dispositions: [{ index: 0, disposition: "reject" }] }));
+    assert.notEqual((await emitJudgeWorkOrder(sources)).workOrderDigest, base.workOrderDigest);
+  });
+});
+
 test("J1: changed or missing gate-context evidence refuses", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
@@ -195,5 +207,18 @@ test("J6: with only the shared transport, a missing local work order refuses by 
     assert.equal(pull(fresh, root).status, 0);
     assert.equal(refusal(pull(plan, root)), "stale_dispatch");
     assert.equal(JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), fresh.workOrderRef), "utf8")).role, "judge");
+  });
+});
+
+test("J6: a corrupt plan at another head is skipped; a corrupt own plan refuses by name and re-emission recovers", async () => {
+  await withDir(async (root) => {
+    const old = await emitJudgeWorkOrder({ ...(await seed(root, { headSha: "e".repeat(40) })), roundId: "j1-aa" });
+    const sources = await seed(root);
+    const current = await emitJudgeWorkOrder({ ...sources, roundId: "j2-bb" });
+    await writeFile(old.planPath, "{ truncated");
+    assert.equal(pull(current, root).status, 0);
+    await writeFile(current.planPath, "{ truncated");
+    assert.equal(refusal(pull(current, root)), "local_materialization_integrity_failure");
+    assert.equal(pull(await emitJudgeWorkOrder(sources), root).status, 0);
   });
 });
