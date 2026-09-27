@@ -512,7 +512,7 @@ async function resolveNoIssueRefinementArtifact(body, expectedIssue) {
   }
   const reason = Number.isInteger(expectedIssue)
     ? `PR body fails the tracker-backed spec-of-record validation for expected issue #${expectedIssue} (validate-pr-body-spec: ${specResult.errors.map((e) => e.code).join(", ")}).`
-    : `PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`;
+    : `No usable spec: the draft PR closes no resolvable same-repo issue (no Closes/Fixes/Resolves #n reference) and names no promoted plan doc, and the PR body fails the issue-less lightweight spec-of-record validation (validate-pr-body-spec --no-issue: ${specResult.errors.map((e) => e.code).join(", ")}).`;
   return {
     status: "missing",
     linkedIssue: null,
