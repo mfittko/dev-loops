@@ -2,9 +2,7 @@
 
 ## Status
 
-Accepted — 2026-09-21 ([PR 2326](https://github.com/mfittko/dev-loops/pull/2326))
-
-Partially superseded by [0095](./0095-targeted-validation-and-full-run-authority.md) for local full-repository runs: delegate targeted checks to workers, and request full runs only through `dev-loops gate resolve-validation`. Tracked-file edits remain worker-delegated.
+Superseded by [0095](0095-targeted-validation-and-full-run-authority.md) — 2026-09-27 ([issue #2469](https://github.com/mfittko/dev-loops/issues/2469))
 
 ## Context
 
