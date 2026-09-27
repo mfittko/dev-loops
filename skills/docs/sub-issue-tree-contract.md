@@ -20,7 +20,7 @@ listing, attaching, ordering, and verifying the tree.
 | One issue blocks another but is not a structural child | Plain "blocked by #N" in body |
 | A PR implements an issue | PR body / `Closes #N` syntax (not sub-issue) |
 | Background investigation or spike precedes a slice | Plain related reference; promote to sub-issue if it becomes a required step |
-| A follow-up is discovered while working a PR/loop | Note it on the originating issue (or the PR body); file a standalone issue only if the follow-up is genuinely independent of the PR **and** outlives it (a real separate bug/feature that would be lost as a note on a soon-closed issue) |
+| A follow-up is discovered while working a PR/loop | A comment on the originating issue, the PR body, or a comment on an existing issue or epic; a standalone issue only under `MAIN-AGENT-FILING-BLOCKER-ONLY` in [Main Agent Contract](./main-agent-contract.md#filing-from-runner-findings) |
 
 **Rule of thumb:** use the sub-issue tree when the parent issue's progress is structurally
 defined by completing its children in some intended order. Use plain references for everything
