@@ -2,14 +2,14 @@
 
 Canonical owner for the routed `issue_intake` procedure behind the public `dev-loop` façade: preflight, normalization, async refinement, epic decomposition, and Copilot handoff.
 
-Use it together with:
+Use it with:
 - [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md)
-- [Public Dev Loop Contract](./public-dev-loop-contract.md) — owner of `FACADE-LINKED-PR-SINGLE-ARTIFACT`, `FACADE-BOOTSTRAP-WATCH-ROUTE`, `FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION`
+- [Public Dev Loop Contract](./public-dev-loop-contract.md), owner of the `FACADE-*` rules cited below
 - [Retrospective Checkpoint Contract](./retrospective-checkpoint-contract.md) when the current step depends on async start/resume/status or retrospective enforcement
-- [Stop Conditions](./stop-conditions.md) — owner of `STOP-INITIAL-COPILOT-001` and the other strategy-wide stop/wait rules this procedure operationalizes
-- [Merge Preconditions](./merge-preconditions.md) — the merge gate this procedure defers to before merging (via the sanctioned wrapper `scripts/github/merge-pr.mjs`; raw `gh pr merge` is forbidden)
+- [Stop Conditions](./stop-conditions.md), owner of `STOP-INITIAL-COPILOT-001` and the other strategy-wide stop/wait rules
+- [Merge Preconditions](./merge-preconditions.md), the merge gate this procedure defers to
 
-When routed work is issue-first rather than already in active PR follow-up, use the procedure below before entering the shared post-PR loop. Treat this document as the issue-refinement specialist procedure for the routed `issue_intake` seam.
+Use this issue-refinement specialist procedure for issue-first routed work before entering the shared post-PR loop.
 
 ## New-idea safety layer (default contract in this repo)
 
@@ -26,14 +26,7 @@ For **all new ideas** that are not already anchored to an existing issue (includ
 - after approval, run a second async mutation pass (dispatched via the procedure) instead of mutating directly from inherited context
 - verify post-mutation artifact state and record what actually changed
 
-**Quick-capture exemption:** board quick-capture enqueue (the `/dev-loops:loop-enqueue` (or `/loop-enqueue` in the dev-loops repo itself) freeform
-path — freeform text turned directly into a minimal issue, gated on explicit human
-approval, then grilled inline and added to the board) MAY defer the up-front proposal
-artifact, the async classification pass, the async fan-out/fan-in proposal generation, and
-the second async mutation pass; its inline confirm→create→grill steps stand in for them,
-with grilling supplying classification/refinement after creation. The human-gated-mutation
-and create-new-only safeties still apply — it always creates a new issue and never
-repurposes/overwrites an existing one.
+**Quick-capture exemption:** the board quick-capture enqueue freeform path (`/dev-loops:loop-enqueue`, or `/loop-enqueue` in the dev-loops repo itself) MAY defer the up-front proposal artifact, the async classification pass, the async fan-out/fan-in proposal generation, and the second async mutation pass. Its inline human-approved confirm→create→grill steps stand in for them. The human-gated-mutation and create-new-only safeties still apply: it always creates a new issue and never repurposes/overwrites an existing one.
 
 Deterministic intake + mutation-gate state machine:
 
@@ -67,7 +60,7 @@ If the Phase 1 preflight verdict is `pause_for_clarification`, the procedure MUS
 If the intake state machine stops at `stopped_overlap_needs_decision` or `stopped_low_confidence`, the procedure MUST stop and ask.
 If the intake state machine stops at `stopped_explicit_reject`, the procedure MUST stop and record that the proposal was rejected; it MUST NOT mutate GitHub.
 
-After approval, start a separate async mutation pass (dispatched via the procedure) that consumes the approved proposal and emits a post-mutation verification artifact. Emit a concise post-mutation verification artifact and record what the mutation pass actually changed and verify the resulting issue/artifact state.
+After approval, the separate async mutation pass consumes the approved proposal. It must emit a concise post-mutation verification artifact that records what actually changed and the verified issue/artifact state.
 
 ## Unattended issue-first execution and automatic re-entry
 
@@ -154,7 +147,6 @@ Preflight verdicts:
   ```
 - If a matching issue exists:
   - if the matching issue is closed, stop for a user decision before proceeding
-  - if that matching issue turns out to be closed, stop for a user decision
   - if a PR already exists, classify bootstrap-wait versus follow-up
 - if a governing plan doc or roadmap section actually applies, follow the plan-doc normalization path above
 
@@ -177,50 +169,22 @@ When issue refinement would benefit from structural/slop discovery and the likel
 
 ## Phase 3b — Epic decomposition with GitHub sub-issue trees
 
-When the work item is an umbrella/epic issue that must be decomposed into bounded child slices,
-use **real GitHub sub-issue trees** as the default durable output — not body checklists, not
-a manual follow-up linking step.
+When an umbrella/epic issue must be decomposed into bounded, independently closable child slices, use **real GitHub sub-issue trees** as the default durable output. Prefer real sub-issue linkage over parent-body checklists. The parent issue body should stay lean: keep scope, acceptance criteria and non-goals there, under `SUBISSUE-LEAN-BODY-NO-DUPLICATE`.
 
-Prefer real sub-issue linkage over parent-body checklists when a work tree is intended.
-A parent issue body should stay lean once the tree exists: keep scope, acceptance criteria, and
-non-goals there, but do **not** duplicate the ordered child list in the body.
+Follow the "Default decomposition flow" in [Sub-Issue Tree Contract](./sub-issue-tree-contract.md), which owns the full `manage-sub-issues.mjs` contract and `SUBISSUE-NO-ADHOC-BYPASS`. Create children with `gh issue create --repo <resolved-repo> --assignee @me`, then:
 
-Full decomposition flow:
-
-1. refine umbrella issue framing (scope, acceptance criteria, non-goals)
-2. define bounded child slices — each slice must be independently closable
-3. create child issues with `gh issue create --repo <resolved-repo> --assignee @me`
-4. attach each child as a real sub-issue:
-   ```sh
-   node <resolved-skill-scripts>/github/manage-sub-issues.mjs add \
-     --repo <resolved-repo> --issue <parent-number> --child <child-number>
-   ```
-5. set execution order (highest priority first):
-   ```sh
-   node <resolved-skill-scripts>/github/manage-sub-issues.mjs reorder \
-     --repo <resolved-repo> --issue <parent-number> --order <n1,n2,...>
-   ```
-6. verify the resulting tree:
-   ```sh
-   node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
-     --repo <resolved-repo> --issue <parent-number> --expected <n1,n2,...> [--ordered]
-   ```
-7. keep the parent issue body lean — sequencing and progress now live in the sub-issue tree
-
-To inspect the current tree at any time:
 ```sh
+node <resolved-skill-scripts>/github/manage-sub-issues.mjs add \
+  --repo <resolved-repo> --issue <parent-number> --child <child-number>
+node <resolved-skill-scripts>/github/manage-sub-issues.mjs reorder \
+  --repo <resolved-repo> --issue <parent-number> --order <n1,n2,...>
+node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
+  --repo <resolved-repo> --issue <parent-number> --expected <n1,n2,...> [--ordered]
 node <resolved-skill-scripts>/github/manage-sub-issues.mjs list \
   --repo <resolved-repo> --issue <parent-number>
 ```
 
-Ad-hoc bypass of `manage-sub-issues.mjs` and duplicating the tree in the parent body are owned
-by `SUBISSUE-NO-ADHOC-BYPASS` and `SUBISSUE-LEAN-BODY-NO-DUPLICATE` in
-[Sub-Issue Tree Contract](./sub-issue-tree-contract.md); this procedure does not
-restate those rules.
-
-For the full `manage-sub-issues.mjs` contract, see [Sub-Issue Tree Contract](./sub-issue-tree-contract.md).
-
-When an existing sub-issue tree needs **scope alignment, AC/DoD contracts, and delegation boundary refinement** across all levels (parent → children → grandchildren), use the [Epic Tree Refinement Procedure](./epic-tree-refinement-procedure.md) — it owns the deterministic depth-first, top-down-then-bottom-up refinement protocol.
+The [Epic Tree Refinement Procedure](./epic-tree-refinement-procedure.md) owns scope alignment, AC/DoD contracts and delegation-boundary refinement of an existing tree across all levels. This procedure creates the tree.
 
 ## Phase 4 — Copilot handoff and bootstrap wait
 
@@ -249,13 +213,9 @@ formal review submission belongs to `GATE-REVIEW-SUBMIT-MODES` in
 [Gate Review Comment Contract](gate-review-comment-contract.md), including its
 interactive-confirmation boundary. Gate verdicts remain COMMENT reviews.
 
-The merge itself is gated, not implied by the lines above. The sanctioned merge path is the wrapper `scripts/github/merge-pr.mjs`, which runs all preconditions (green CI, clean `draft_gate` + current-head `pre_approval_gate`, zero unresolved threads, merge authorization) fail-closed before merging; a raw `gh pr merge` is forbidden (`RAW-GH-PR-MERGE-BYPASS`). See [Merge Preconditions](./merge-preconditions.md). Critically, when `autonomy.humanMergeOnly: true` is set, merge is a fixed human-only action — `resolveEffectiveMergeAuthorized` fails closed, the agent **never** merges, and instead reports merge-ready + gate evidence and hands off to a human. Only when **not** `humanMergeOnly` and merge is explicitly authorized may the agent run:
+The merge is gated by [Merge Preconditions](./merge-preconditions.md) through the sanctioned wrapper `scripts/github/merge-pr.mjs`; a raw `gh pr merge` is forbidden (`RAW-GH-PR-MERGE-BYPASS`). When `autonomy.humanMergeOnly: true` is set, the agent **never** merges; it reports merge-ready + gate evidence and hands off to a human. Only when **not** `humanMergeOnly` and merge is explicitly authorized may the agent run:
 ```sh
 node scripts/github/merge-pr.mjs --repo <resolved-repo> --pr <pr-number> --human-approved-by <login>
 ```
 
-Bootstrap-wait interpretation remains fail-closed and observational-first — same seam as Phase 2's `waiting_for_initial_copilot_implementation` handling above: `ready_for_followup` resumes from the now-substantive linked PR; `timed_out` is observational first; refresh authoritative state and re-apply the Phase 2 branching (still-waiting vs. seam-exit) rather than re-deriving it here.
-
-## Cross-references
-
-See the "Use it together with" list at the top; additionally, [Epic Tree Refinement Procedure](./epic-tree-refinement-procedure.md) refines an existing sub-issue tree, while this procedure creates it (Phase 3b).
+Bootstrap-wait interpretation stays fail-closed: `timed_out` is observational first; refresh authoritative state and apply the Phase 2 still-waiting versus seam-exit branching above.

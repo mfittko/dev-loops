@@ -28,6 +28,22 @@ function assertApprovalStopGates(content) {
     "gate table must stop at waiting_for_merge_authorization");
 }
 
+// The safety section must name the mutation pass input (the approved proposal) and
+// its output (the post-mutation verification artifact with the verified state).
+function assertMutationPassContract(doc) {
+  const section = doc.split("## New-idea safety layer")[1]?.split("\n## ")[0] ?? "";
+  for (const [needle, message] of [
+    [/mutation pass[^.]*approved proposal/i, "mutation pass must consume the approved proposal"],
+    [/post-mutation verification artifact[^.]*(?:changed|verified)/i, "mutation pass must emit a verification artifact of the verified change"],
+  ]) assert.match(section, needle, message);
+}
+
+// The plan-doc normalization branch must stop on a closed matching issue.
+function assertPlanDocClosedStop(doc) {
+  const section = doc.split("### From a plan-doc path")[1]?.split("\n### ")[0] ?? "";
+  assert.match(section, /matching issue is closed, stop for a user decision/i, "plan-doc path must stop on a closed matching issue");
+}
+
 async function readIssueIntakeSurface() {
   const [skill, intakeDoc, operationsDoc] = await Promise.all([
     readRepo("skills/copilot-pr-followup/SKILL.md"),
@@ -250,7 +266,7 @@ test("issue-intake docs define closed-match handling and keep the handoff helper
   const skillContent = await readIssueIntakeSurface();
 
   assert.match(skillContent, /if the matching issue is closed, stop for a user decision before proceeding/i);
-  assert.match(skillContent, /if that matching issue turns out to be closed, stop for a user decision/i);
+  assertPlanDocClosedStop(await readRepo("skills/docs/issue-intake-procedure.md"));
   assert.match(skillContent, /copilot-pr-handoff\.mjs --repo <resolved-repo> --pr <number>/);
 });
 
@@ -359,8 +375,7 @@ test("issue-intake safety layer contract is documented", async () => {
   for (const token of ["pause_for_clarification", "stopped_overlap_needs_decision", "stopped_low_confidence", "stopped_explicit_reject", "MUST stop", "MUST NOT mutate GitHub"]) {
     assert.ok(stopStatesRuleBlock.includes(token), `INTAKE-STOP-STATES rule block must cover ${token}`);
   }
-  assert.match(skillContent, /start a separate async mutation pass \(dispatched via the procedure\) that consumes the approved proposal and emits a post-mutation verification artifact/i);
-  assert.match(skillContent, /record what the mutation pass actually changed and verify the resulting issue\/artifact state/i);
+  assertMutationPassContract(await readRepo("skills/docs/issue-intake-procedure.md"));
   assert.match(skillContent, /tmp\/new-idea-intake\/<run-id>\/proposal\.md/i);
   assert.match(skillContent, /tmp\/new-idea-intake\/<run-id>\/proposal\.json/i);
   assert.match(skillContent, /human-readable Markdown proposal/i);
@@ -382,4 +397,16 @@ test("approval stop-gate check accepts reworded prose and rejects a lost stop or
     () => assertApprovalStopGates(publicContract.replace("routes to the human approval checkpoint", "routes to merge")),
     /must route final_approval to the human approval checkpoint/,
   );
+});
+
+test("mutation-pass and plan-doc closed-stop checks reject a dropped input, output or stop", async () => {
+  const doc = await readRepo("skills/docs/issue-intake-procedure.md");
+  assertMutationPassContract(doc.replace("the separate async mutation pass", "a distinct async mutation pass"));
+  assertPlanDocClosedStop(doc);
+  assert.throws(() => assertMutationPassContract(doc.replace("consumes the approved proposal", "reads chat context")),
+    /must consume the approved proposal/);
+  assert.throws(() => assertMutationPassContract(doc.replaceAll("post-mutation verification artifact", "note")),
+    /must emit a verification artifact/);
+  assert.throws(() => assertPlanDocClosedStop(doc.replace("if the matching issue is closed, stop for a user decision before proceeding", "continue")),
+    /plan-doc path must stop on a closed matching issue/);
 });
