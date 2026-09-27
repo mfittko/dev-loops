@@ -239,6 +239,9 @@ Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/a
 
 **Bounded Copilot/CI watch (enforced — #1660):** Use `dev-loops-run cli/index.mjs gate probe-copilot --timeout-ms 300000` (5min) or `timeout 600 <cmd>`; pass an explicit bounded timeout and re-check on timeout. Never launch an unbounded blocking watch.
 
+<!-- rule: DEV-LOOP-PROBE-TIMEOUT-CEILING -->
+`DEV-LOOP-PROBE-TIMEOUT-CEILING`: every explicit `--timeout-ms` on a Copilot or CI probe MUST stay below 600000 ms, the harness tool-call limit. The harness auto-backgrounds a call that outlives that limit, so a longer wait loops in separate foreground calls, each with its own bounded timeout below 600000 ms.
+
 **Foreground inline probe, never a backgrounded sleep-poll (enforced — #2065):** Under the Claude Code harness the Copilot/CI wait MUST be a bounded FOREGROUND inline probe — `probe-copilot-review.mjs` or `wait-pr-checks.mjs` with an explicit `--timeout`/`--timeout-ms` (`0` = a single immediate foreground check). Claude Code has no async wake, so a backgrounded wait is never joined and never exits: a backgrounded `until`/`while … sleep N … done` poll loop, or bare-`&` backgrounding of a probe/wait script (`dev-loops-run scripts/github/probe-copilot-review.mjs … &`), is FORBIDDEN — it orphans the shell past the agent stop. The PreToolUse Bash-gate denies these for the coordinator and every subagent (`commandContainsDetachedWaitTool`), actor-independently and fail-closed. Run the probe in the foreground and re-check on timeout. (A `SubagentStop` background-shell reaper safety-net, for whatever slips past prevention, is tracked as follow-up #2296.)
 
 **Bounded, exhaustively (dispatch discipline, #1907):** the two guardrails above name the two most-hit failure modes, not the boundary of the rule — every `bash` call this agent launches directly is `timeout`-bounded (or issued through a wrapper that already bounds itself), and every watch/probe carries an explicit `--timeout-ms` (or equivalent bounded flag); an unbounded blocking call is never sanctioned regardless of which command it wraps.
@@ -250,6 +253,15 @@ Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/a
 **Agent-level stall → auto-fresh-dispatch (#1669):** When a dev-loop child shows no turn progress for `workflow.stallDetection.thresholdMinutes` (default 5) with no pending supervisor request, auto-bail to a fresh-context dispatch (carrying worktree state + a recovery brief) instead of waiting through a manual interrupt+resume. Distinguish a TRUE stall (no turn progress) from a SANCTIONED long watch (an active bash/subagent tool call that heartbeats its runner claim) — a fresh runner-coordination heartbeat exempts a run from stall. Detector + probe: `dev-loops-run scripts/loop/detect-agent-stall.mjs --repo <owner/name> [--pr <n>] [--status <path>]`. See [Agent-level stall detection](../docs/agent-stall-detection.md). Interrupt+resume remains the manual fallback.
 
 **Round-cap budget check (enforced):** After every watch cycle, fix pass, or reply-resolve, check whether completed Copilot review rounds have reached the resolved round cap (`refinement.maxCopilotRounds`, default 5; light-dispatched PRs resolve the lower `resolveEffectiveCopilotRoundCap`, default 1 — owned by `COPILOT-FOLLOWUP-ROUND-CAP`). Stop re-requesting Copilot review when the limit is reached **within that review cycle**. Exception: the post-convergence new-cycle re-request carve-out is owned by `COPILOT-FOLLOWUP-ROUND-CAP`. It applies only with `refinement.requireCopilotConvergenceAtLatestHead: true`. Read these gate-cadence facts via the token-economical convention above (`run-watch-cycle.mjs --concise`, or `--jq`/`--silent` for a single field/predicate) — never `| python3` or `node -e`.
+
+<!-- rule: DEV-LOOP-RUNNER-STOP-CONDITIONS -->
+`DEV-LOOP-RUNNER-STOP-CONDITIONS`: the dev-loop coordinator MUST stop and report, and never self-waives, when any of these occurs:
+
+- a size-budget `escalate` or `block` outcome;
+- an ADR tripwire trip (`check-adr-tripwire.mjs`);
+- a harness permission or classifier denial, or an interruption.
+
+On a denial the coordinator quotes the denial text verbatim in its report and does not retry the denied call in any command form.
 
 ## Shorthand issue-based auto trigger contract
 

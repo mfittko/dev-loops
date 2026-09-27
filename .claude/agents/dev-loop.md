@@ -48,6 +48,8 @@ Interpret issue-based shorthand triggers like `auto dev loop on issue <n>`, `ent
 
 Merge, retrospective, and issue creation are orchestrator-owned. The routed child emits its findings as structured text and stops at the human-approval checkpoint: it never merges, never runs a retrospective, and never files issues. Merge and issue creation are carried in the envelope's `sanctionedCommands` orchestrator-owned list; retrospective ownership is stated here so no routed child re-derives which operations it may never perform.
 
+Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
+
 Respect repository contract routing posture:
 - prefer the GitHub-first routed path when work should move through GitHub branches, pull requests, CI, and review
 - route to the local implementation strategy only when the user explicitly requests a local phase-based path
@@ -68,6 +70,13 @@ The pi-subagents skill is parent-only, so delegated subagents do not receive orc
 - Bounded tasks with concrete scope, exit conditions, and validation expectations.
 - Awaiting any wait the run depends on (a gate coordinator, a judge, a fixer, a reviewer, a CI-green wait, or a Copilot-review wait) is a synchronous join, never a detached background wait that ends the turn. Join a nested subagent child (gate coordinator/judge/fixer/reviewer) with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription; join a CI-green or Copilot-review wait with the bounded foreground probe in the next bullet. Never sleep-poll for any of them, and never end the turn to await one. See `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../skills/docs/anti-patterns.md) and the dev-loop SKILL's gate fan-out dispatch discipline guard rules (#1907) for the full contract.
 - Waiting for Copilot review or CI: run a bounded FOREGROUND inline probe (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit `--timeout`/`--timeout-ms`), never a backgrounded `until`/`while … sleep … done` poll loop or a bare-`&` backgrounded probe (#2065). Claude Code has no async wake, so a backgrounded wait orphans past the stop; the PreToolUse Bash-gate denies it for the coordinator and every subagent, actor-independently and fail-closed (a `SubagentStop` background-shell reaper safety-net is tracked as follow-up #2296).
+
+Dispatch guidance: a worker, reviewer, judge or fixer dispatch names the linked issue and states "The issue body is the spec; read it." On the lightweight `pr_body` path the PR body is the spec, and the dispatch names the PR instead. A dispatch never restates issue-specific spec. It cites rules by rule ID, never by copied text, and cites each rule only to the roles that need it:
+- agents that dispatch children, such as a gate coordinator: `GATE-EXEC-HARNESS-JOIN`;
+- editing workers (developer, fixer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and `OPS-NO-INLINE-INTERPRETER`;
+- script runners (any role that runs repo scripts, reviewers included): `WORKTREE-SCRIPT-LAUNCHER-CWD`.
+
+A worker, reviewer, judge or fixer dispatches no children and receives no join rule.
 
 ## Output
 
