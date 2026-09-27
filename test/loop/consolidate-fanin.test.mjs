@@ -20,7 +20,8 @@ import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetr
 import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, renderBriefingPointerLine, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
-import { runNode } from "../_helpers.mjs";
+import { writeJson } from "@dev-loops/core/loop/phase-files";
+import { runNode, withTempDir } from "../_helpers.mjs";
 
 // #1592: several fixtures below deliberately keep pre-rename severity
 // spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
@@ -962,11 +963,11 @@ function matchingEmitPlan() {
   };
 }
 
-// The pull receipt the reviewer's pull-work-order.mjs run leaves for a plan unit (#2416).
-async function writeEmitPlanReceipt(receiptTmpRoot, unit = matchingEmitPlan().units[0]) {
-  const receiptPath = pullReceiptPath(receiptTmpRoot, unit.workOrderRef);
-  await mkdir(path.dirname(receiptPath), { recursive: true });
-  await writeFile(receiptPath, JSON.stringify({ role: "review", workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity }), "utf8");
+// The pull receipt the reviewer's pull-work-order.mjs run leaves for a plan
+// unit (#2416); `receipt` overrides the identity written at that unit's path.
+async function writeEmitPlanReceipt(receiptTmpRoot, unit = matchingEmitPlan().units[0], receipt = unit) {
+  const { workOrderRef, workOrderDigest, executionIdentity } = receipt;
+  await writeJson(pullReceiptPath(receiptTmpRoot, unit.workOrderRef), { role: "review", workOrderRef, workOrderDigest, executionIdentity });
 }
 
 test("parseConsolidateFaninCliArgs: no --emit-plan flag leaves emitPlan undefined", () => {
@@ -1037,53 +1038,32 @@ test("consolidateGateFanin fails closed on a missing, wrong-execution, wrong-uni
     [{ ...unit, workOrderRef: `review:o/r#7:review:${EMIT_HEAD}:review-docs` }, /unit_mismatch/],
     [{ ...unit, workOrderDigest: "sha256:other" }, /digest_mismatch/],
   ];
-  for (const [receiptUnit, reason] of cases) {
-    await withFindingsDir(
-      { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
-      async (dir) => {
-        const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
-        try {
-          const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
-          if (receiptUnit) {
-            // Written at the plan unit's receipt path, carrying the wrong identity.
-            await writeEmitPlanReceipt(planDir, receiptUnit);
-            if (receiptUnit.workOrderRef !== unit.workOrderRef) {
-              await writeFile(pullReceiptPath(planDir, unit.workOrderRef), await readFile(pullReceiptPath(planDir, receiptUnit.workOrderRef), "utf8"), "utf8");
-            }
-          }
-          await assert.rejects(
-            () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, receiptTmpRoot: planDir }),
-            (err) => reason.test(err.message) && /incomplete delivery evidence/.test(err.message),
-          );
-        } finally {
-          await rm(planDir, { recursive: true, force: true }).catch(() => {});
-        }
-      },
-    );
+  for (const [receipt, reason] of cases) {
+    await withFindingsDir({ "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } }, (dir) => withTempDir(async (planDir) => {
+      const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+      // Written at the plan unit's receipt path, carrying the wrong identity.
+      if (receipt) await writeEmitPlanReceipt(planDir, unit, receipt);
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, receiptTmpRoot: planDir }),
+        (err) => reason.test(err.message) && /incomplete delivery evidence/.test(err.message),
+      );
+    }));
   }
 });
 
 test("consolidateGateFanin classifies a matching receipt without a result artifact as an interrupted reviewer, never complete", async () => {
-  await withFindingsDir(
-    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
-    async (dir) => {
-      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
-      try {
-        const plan = matchingEmitPlan();
-        const docsUnit = { ...plan.units[0], scope: "review-docs", angles: ["docs"], workOrderRef: `review:o/r#7:review:${EMIT_HEAD}:review-docs`, executionIdentity: "r1-ab-u1" };
-        plan.units.push(docsUnit);
-        const planPath = await writeEmitPlan(planDir, plan);
-        await writeEmitPlanReceipt(planDir);
-        await writeEmitPlanReceipt(planDir, docsUnit);
-        await assert.rejects(
-          () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, receiptTmpRoot: planDir }),
-          /interrupted reviewer: unit review-docs .*no result for angle\(s\) docs/,
-        );
-      } finally {
-        await rm(planDir, { recursive: true, force: true }).catch(() => {});
-      }
-    },
-  );
+  await withFindingsDir({ "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } }, (dir) => withTempDir(async (planDir) => {
+    const plan = matchingEmitPlan();
+    const docsUnit = { ...plan.units[0], scope: "review-docs", angles: ["docs"], workOrderRef: `review:o/r#7:review:${EMIT_HEAD}:review-docs`, executionIdentity: "r1-ab-u1" };
+    plan.units.push(docsUnit);
+    const planPath = await writeEmitPlan(planDir, plan);
+    await writeEmitPlanReceipt(planDir);
+    await writeEmitPlanReceipt(planDir, docsUnit);
+    await assert.rejects(
+      () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, receiptTmpRoot: planDir }),
+      /interrupted reviewer: unit review-docs .*no result for angle\(s\) docs/,
+    );
+  }));
 });
 
 test("consolidateGateFanin fails closed on an emit-plan gate mismatch (same head), writing no outputs", async () => {

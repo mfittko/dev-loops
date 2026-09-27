@@ -3,11 +3,11 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import { WorkOrderRefusal, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { WorkOrderRefusal, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { withTempDir } from "../_helpers.mjs";
 import "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -21,15 +21,7 @@ const pull = (unit, cwd, over = {}) => run("pull-work-order.mjs", [
   "--ref", over.ref ?? unit.workOrderRef, "--digest", over.digest ?? unit.workOrderDigest, "--execution", over.execution ?? unit.executionIdentity,
 ], cwd);
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout));
-
-async function withDir(fn) {
-  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-pull-")));
-  try {
-    return await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-}
+const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-pull-" });
 
 // Seed one gate-context bundle and emit its round. The briefing prefix embeds
 // the checkout's absolute path, as the real write-gate-context.mjs prefix does.
@@ -150,8 +142,7 @@ test("the pull is role-keyed: a stub second role pulls through its adapter, an u
     const materializationPath = path.join(root, "stub.txt");
     await writeFile(materializationPath, "stub work order\n", "utf8");
     const workOrder = { role: "stub", task: "x" };
-    const located = { workOrder, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "e1", materializationPath,
-      materializationHash: (await import("@dev-loops/core/loop/review-dispatch-plan")).sha256Hex("stub work order\n"), subject: { id: 1 } };
+    const located = { workOrder, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "e1", materializationPath, materializationHash: materializationHash("stub work order\n"), subject: { id: 1 } };
     registerWorkOrderRole("stub", { locate: async ({ ref }) => (ref === "stub:1" ? located : null), validate: () => null });
     const args = { ref: "stub:1", digest: located.workOrderDigest, execution: "e1", tmpRoots: [], receiptTmpRoot: root };
     const pulled = await pullWorkOrder(args);

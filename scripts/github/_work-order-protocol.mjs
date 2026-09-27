@@ -12,8 +12,9 @@
  * that emit the same unit get the same digest. `materializationHash` is the
  * sha256 of the exact local work-order bytes.
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { writeJson } from "@dev-loops/core/loop/phase-files";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 // Local-only fields: the materialized file, absolute output refs, tmp roots,
@@ -116,8 +117,7 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
     materializationHash: unit.materializationHash, subject: unit.subject, pulledAt: new Date().toISOString(),
   };
   const receiptPath = pullReceiptPath(receiptTmpRoot, ref);
-  await mkdir(path.dirname(receiptPath), { recursive: true });
-  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+  await writeJson(receiptPath, receipt);
   return { workOrderText, receipt, receiptPath };
 }
 

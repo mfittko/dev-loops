@@ -5,10 +5,10 @@
  * executionIdentity} and runs this CLI to fetch and verify its own immutable
  * work order. The only write is the pull receipt.
  */
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { WorkOrderRefusal, pullWorkOrder, registerWorkOrderRole } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
@@ -29,14 +29,6 @@ Exit codes: 0 pulled, 1 refused, 2 usage/IO error.`;
 // executionIdentity = r<emit ms>-<hex>-u<n> (see emit-fanout-dispatch.mjs).
 const REVIEW_REF_RE = /^review:([^/\s#]+\/[^/\s#]+)#(\d+):([a-z_]+):([0-9a-f]{40}|[0-9a-f]{64}):([A-Za-z0-9-]+)$/;
 const EXECUTION_MS_RE = /^r(\d+)-/;
-
-async function readJson(file) {
-  try {
-    return JSON.parse(await readFile(file, "utf8"));
-  } catch {
-    return null;
-  }
-}
 
 // A round is retired once a GATE-EXEC-ROUND-RETIREMENT record for its gate+head
 // (retire-gate-round.mjs) was written at or after the round's emission time.
@@ -80,13 +72,8 @@ registerWorkOrderRole("review", {
 });
 
 export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), receiptTmpRoot } = {}) {
-  let values;
-  try {
-    ({ values } = parseArgs({ args: argv, options: { ref: { type: "string" }, digest: { type: "string" }, execution: { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" } } }));
-  } catch (err) {
-    process.stderr.write(`${err.message}\n${USAGE}\n`);
-    return 2;
-  }
+  // A parseArgs error throws to the CLI wrapper (exit 2).
+  const { values } = parseArgs({ args: argv, options: { ref: { type: "string" }, digest: { type: "string" }, execution: { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" } } });
   if (values.help) {
     process.stdout.write(`${USAGE}\n`);
     return 0;

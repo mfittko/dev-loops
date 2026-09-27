@@ -704,21 +704,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       workOrderDigest: workOrderDigest(workOrder),
       executionIdentity: `${roundId}-u${emitted.length}`,
     };
-    let dispatchPrompt;
-    try {
-      dispatchPrompt = buildDispatchPointer(identity);
-    } catch (err) {
-      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — ${err.message}` }, false);
-    }
+    // An over-cap envelope or unreadable record throws to the CLI wrapper (exit 2).
+    const dispatchPrompt = buildDispatchPointer(identity);
     // The dispatch-prompt record binds the compact reference the reviewer receives.
-    try {
-      const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha);
-      const record = JSON.parse(await readFile(recordPath, "utf8"));
-      await writeFile(recordPath, `${JSON.stringify({ ...record, compactReference: identity }, null, 2)}\n`, "utf8");
-    } catch (err) {
-      process.stderr.write(`${formatCliError(err)}\n`);
-      return 2;
-    }
+    const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha);
+    const record = JSON.parse(await readFile(recordPath, "utf8"));
+    await writeFile(recordPath, `${JSON.stringify({ ...record, compactReference: identity }, null, 2)}\n`, "utf8");
     emitted.push({
       scope, angles, group: unit.group, promptPath: result.promptPath, promptBytes, sectionBytes: result.sectionBytes,
       ...identity, materializationHash: materializationHash(promptText), dispatchPrompt, workOrder,
