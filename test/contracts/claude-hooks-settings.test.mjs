@@ -299,7 +299,7 @@ test("bash-gate hook denies a dev-loop coordinator running bun run verify under 
   assert.equal(code, 0);
   assert.ok(json, "expected a structured decision");
   assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
-  assert.match(json.hookSpecificOutput.permissionDecisionReason, /COORDINATOR-VERIFY-DELEGATION/);
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /COORDINATOR-VERIFY-BOUNDARY/);
 });
 
 test("bash-gate hook allows a worker subagent running bun run verify under strict coordinator enforcement (e2e)", () => {
@@ -332,7 +332,7 @@ test("bash-gate hook denies a namespaced dev-loops:dev-loop coordinator running 
   assert.equal(code, 0);
   assert.ok(json, "expected a structured decision");
   assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
-  assert.match(json.hookSpecificOutput.permissionDecisionReason, /COORDINATOR-VERIFY-DELEGATION/);
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /COORDINATOR-VERIFY-BOUNDARY/);
 });
 
 test("bash-gate hook allows a namespaced dev-loops:developer worker running bun run verify under strict coordinator enforcement (#2082 pre-PR review, e2e)", () => {
@@ -381,7 +381,7 @@ test("bash-gate hook denies a dev-loop coordinator running an env-flag-wrapped v
   assert.equal(code, 0);
   assert.ok(json, "expected a structured decision");
   assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
-  assert.match(json.hookSpecificOutput.permissionDecisionReason, /COORDINATOR-VERIFY-DELEGATION/);
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /COORDINATOR-VERIFY-BOUNDARY/);
 });
 
 test("bash-gate hook allows git stash in a repo with no .devloops config at all (unmanaged, pass-through)", () => {

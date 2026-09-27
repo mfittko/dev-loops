@@ -113,7 +113,7 @@ export function normalizeAgentType(agentType) {
  *   (`resolveHumanMergeOnly`); when true, `gh pr merge` is refused actor-independently
  *   (STOP-HUMAN-MERGE-001), because the main agent is the actor that performs GitHub writes and a
  *   subagent-only deny would enforce nothing.
- * @param {boolean} [params.enforceCoordinator] - Strict mode for the COORDINATOR-VERIFY-DELEGATION
+ * @param {boolean} [params.enforceCoordinator] - Strict mode for the COORDINATOR-VERIFY-BOUNDARY
  *   boundary, derived by the hook from `DEVLOOPS_COORDINATOR_READONLY=1` — the SAME flag that
  *   gates `decideCoordinatorWriteGuard`. Default fail-open (mirrors that boundary).
  * @returns {HookDecision}
@@ -133,7 +133,7 @@ export function decideBashGate({
     return ALLOW;
   }
 
-  // COORDINATOR-VERIFY-DELEGATION: a known code-verification/build entrypoint (bun run
+  // COORDINATOR-VERIFY-BOUNDARY: a known code-verification/build entrypoint (bun run
   // verify/test, vitest, npm test/run test/run build, ...) run inline by the dev-loop COORDINATOR
   // itself (agent_type "dev-loop"). WORKER subagents (developer/fixer/quality/review) may run these
   // freely — only the coordinator is scoped out, mirroring `decideCoordinatorWriteGuard`'s
@@ -144,7 +144,7 @@ export function decideBashGate({
     return {
       decision: "deny",
       reason:
-        "COORDINATOR-VERIFY-DELEGATION: the dev-loop coordinator must not run code-verification/build " +
+        "COORDINATOR-VERIFY-BOUNDARY: the dev-loop coordinator must not run code-verification/build " +
         "commands inline. Delegate the verification run to a fresh worker subagent (developer/fixer/" +
         "quality/review), which reports back a compact pass/fail plus any failing-test names — or, when " +
         "checking a pushed commit, prefer CI's structured conclusion (`gh pr checks` / " +

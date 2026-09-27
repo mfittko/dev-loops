@@ -98,7 +98,7 @@ const isReplyResolve =
 const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command, managedRepoSlug);
 const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
 const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
-// COORDINATOR-VERIFY-DELEGATION (#2082) — actor-scoped inside decideBashGate (agentType ===
+// COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType ===
 // "dev-loop"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
 const isVerifyEntrypoint = typeof command === "string" && commandContainsCodeVerificationEntrypoint(command);

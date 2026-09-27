@@ -206,8 +206,8 @@ clause reinforces that for the `dev-loop` dispatch pattern specifically.
   they fall through unaffected. See "Guarded surface and deliberate ceilings" below for what this
   does not cover.
 - **Coordinator verify-command delegation boundary (#2082).**
-  <!-- rule: COORDINATOR-VERIFY-DELEGATION -->
-  `COORDINATOR-VERIFY-DELEGATION`: the dev-loop coordinator MUST NOT run a known
+  <!-- rule: COORDINATOR-VERIFY-BOUNDARY -->
+  `COORDINATOR-VERIFY-BOUNDARY`: the dev-loop coordinator MUST NOT run a known
   code-verification/build entrypoint (`bun run verify`/`bun test`/`vitest`/`npm test`/
   `npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/`pnpm`) inline; it
   MUST delegate targeted runs to a fresh worker subagent (`developer`/`fixer`/`quality`/`review`) and request any local full-repository run through `dev-loops gate resolve-validation` instead. Enforced by the

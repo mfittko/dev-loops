@@ -1103,7 +1103,7 @@ const PACKAGE_MANAGER_VERIFY_RUN_RE = new RegExp(
 const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x\\s+)?vitest(?:\\s|$)`, "i");
 
 /**
- * COORDINATOR-VERIFY-DELEGATION: whether `command` contains a known code-verification/
+ * COORDINATOR-VERIFY-BOUNDARY: whether `command` contains a known code-verification/
  * build entrypoint in ANY shell segment — `bun test`/`bun run verify`/`bun run build`, `vitest`,
  * `npm test`/`npm run test`/`npm run build`, and the `yarn`/`pnpm` `test`/`build` equivalents
  * (with or without the `run` keyword). PreToolUse gate use only: the dev-loop COORDINATOR must

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * run-gate-validation.mjs — GATE-EXEC-VALIDATION-ARTIFACT producer.
+ * run-gate-validation.mjs — GATE-EXEC-VALIDATION-RESOLUTION producer.
  *
  * The gate preamble runs this round's validation suites ONCE and records the
  * results here, so every per-angle reviewer of the same gate pass reads this
@@ -33,7 +33,7 @@ const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 const USAGE = `Usage: run-gate-validation.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --suite <name> [--suite <name>]... [--tmp-root <dir>]
 Run this round's validation suites ONCE and record the results in the shared
-validation-results artifact (GATE-EXEC-VALIDATION-ARTIFACT) so every per-angle
+validation-results artifact (GATE-EXEC-VALIDATION-RESOLUTION) so every per-angle
 gate reviewer reads this record instead of re-running the same suites.
 Required:
   --repo <owner/name>

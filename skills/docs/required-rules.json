@@ -77,7 +77,7 @@
       "enforcementNote": "Seeking explicit confirmation is agent judgment; no script can require it."
     },
     {
-      "id": "COORDINATOR-VERIFY-DELEGATION",
+      "id": "COORDINATOR-VERIFY-BOUNDARY",
       "enforcement": "runtime"
     },
     {
@@ -399,7 +399,7 @@
       "enforcement": "runtime"
     },
     {
-      "id": "GATE-EXEC-VALIDATION-ARTIFACT",
+      "id": "GATE-EXEC-VALIDATION-RESOLUTION",
       "enforcement": "runtime"
     },
     {
