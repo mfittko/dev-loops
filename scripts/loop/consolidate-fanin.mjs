@@ -531,6 +531,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       "resolved-angles": { type: "string" },
       "repo-root": { type: "string" },
       "expected-dispatch-units": { type: "string" },
+      "cache-telemetry": { type: "string" },
       "emit-plan": { type: "string" },
       "tmp-root": { type: "string" },
       "spec-authority": { type: "string" },

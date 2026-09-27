@@ -102,6 +102,22 @@ test("parseConsolidateFaninCliArgs parses required + optional args", () => {
   assert.equal(result.prChecklist, "clean");
 });
 
+test("parseConsolidateFaninCliArgs accepts --cache-telemetry path", () => {
+  const result = parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--cache-telemetry", "/tmp/cache-telemetry.json"]);
+  assert.equal(result.cacheTelemetry, "/tmp/cache-telemetry.json");
+});
+
+test("parseConsolidateFaninCliArgs rejects missing or blank --cache-telemetry path", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--cache-telemetry"]),
+    /Missing value for --cache-telemetry/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--cache-telemetry", "   "]),
+    /--cache-telemetry requires a non-empty path/,
+  );
+});
+
 test("parseConsolidateFaninCliArgs rejects a whitespace-only --ledger-out value", () => {
   assert.throws(
     () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--ledger-out", "   "]),
