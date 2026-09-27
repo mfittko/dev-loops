@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 
 import { collectGeneratedAssets, checkAssets, writeAssets } from "../../scripts/claude/generate-claude-assets.mjs";
 import { stripPiOnlyBlocks, transformSkill } from "../../packages/core/src/claude/asset-generation.mjs";
+import { validateJudgeVerdict } from "../../packages/core/src/loop/gate-fanin.mjs";
+import { computeContentDigest, computeSpecDigest, specCriterionIds, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
 
 // #772: the committed .claude tree must be byte-reproducible from the canonical sources.
 // If a source agent/skill changes, the generator must be re-run and the result committed.
@@ -80,15 +82,54 @@ test("Pi-runtime-only prose is stripped from generated assets but retained in so
   }
 });
 
-test("judge retains verdict writes without process execution tools", () => {
+test("judge fixture writes both valid verdicts with only read, search, and write", () => {
   const source = fs.readFileSync(path.join(repoRoot, "agents/judge.agent.md"), "utf8");
   const generated = collectGeneratedAssets({ repoRoot }).find((a) => a.target === ".claude/agents/judge.md")?.content;
   assert.match(source, /^tools: read, search, write$/m);
   assert.ok(generated);
   assert.match(generated, /^tools: Read, Grep, Glob, Write$/m);
   assert.doesNotMatch(generated, /^tools:.*Bash/m);
-  assert.match(generated, /spec-authority-verdict\.json/);
-  assert.match(generated, /judge-verdict\.json/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "judge-tool-fixture-"));
+  try {
+    const headSha = "a".repeat(40);
+    const spec = { acceptanceCriteria: ["Fix the finding"], definitionOfDone: ["Both verdicts are valid"], nonGoals: ["No process execution"] };
+    const findings = [{ summary: "The finding needs a fix" }];
+    fs.writeFileSync(path.join(dir, "spec.json"), JSON.stringify(spec));
+    fs.writeFileSync(path.join(dir, "findings.json"), JSON.stringify(findings));
+    const paths = ["judge-verdict.json", "spec-authority-verdict.json"];
+    const tools = {
+      read: (name) => JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")),
+      search: (term) => source.includes(term) && generated.includes(term),
+      write: (name, value) => {
+        assert.ok(paths.includes(name), "judge writes only its two verdict artifacts");
+        fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
+      },
+    };
+    assert.ok(paths.every((name) => tools.search(name)), "both verdict paths are in both judge prompts");
+    const checkedSpec = tools.read("spec.json");
+    const checkedFindings = tools.read("findings.json");
+    const specDigest = computeSpecDigest(checkedSpec);
+    const contentDigest = computeContentDigest("reviewed content");
+    tools.write(paths[0], {
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "The finding matches the acceptance criterion", driftedAreas: [] },
+      dispositions: checkedFindings.map((_, index) => ({ index, disposition: "act", rationale: "Fix the finding", criterion: "ac:0" })),
+    });
+    tools.write(paths[1], {
+      specDigest, headSha, contentDigest,
+      decisions: checkedFindings.map((_, index) => ({
+        index, specDigest, headSha, contentDigest,
+        outcome: "valid_compliant", checkedCriteria: specCriterionIds(checkedSpec),
+        rationale: "The fix satisfies the complete fixture spec", authorizedRemediation: "Fix the finding",
+      })),
+    });
+    assert.equal(validateJudgeVerdict(tools.read(paths[0])).dispositions[0].disposition, "act");
+    assert.equal(validateSpecAuthorityVerdict(tools.read(paths[1]), {
+      findingsCount: checkedFindings.length, criterionIds: specCriterionIds(checkedSpec),
+    }).decisions[0].outcome, "valid_compliant");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("watch procedure preserves the shared projection and wait_watch route link", () => {

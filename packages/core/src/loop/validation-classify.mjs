@@ -1,19 +1,10 @@
 import { posix } from "node:path";
 import { verificationCommandSegments } from "./bash-command-classify.mjs";
+import { REGISTERED_ARTIFACT_SUITES } from "./ui-e2e-scoping.mjs";
 
 const COMPONENT_SUITES = new Set(["test:core", "test:scripts", "test:assets", "test:extension", "test:dev-loop", "test:pack", "test:docs", "test:workflows"]);
 const FULL_SUITES = ["test:all", "test:docs", "test:workflows"];
 const EXACT_TEST_FILE = /^(?:run\s+)?[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?(?:\s|$)/;
-const UI_SUITES = new Map([
-  ["docs/presentations/introducing-dev-loops.html", "intro-deck"],
-  ["docs/presentations/dev-loops-deep-dive.html", "deep-dive"],
-  ["docs/presentations/how-dev-loops-decided-itself.html", "how-decided-deck"],
-  ["docs/presentations/state-graph-surface.html", "state-graph-surface-deck"],
-  ["docs/presentations/finding-the-flow.html", "finding-the-flow-deck"],
-  ["docs/articles/introducing-dev-loops.html", "intro-article"],
-  ["docs/articles/dev-loops-deep-dive.html", "deep-dive-article"],
-  ["docs/articles/how-dev-loops-decided-itself.html", "how-decided-article"],
-]);
 
 /** Classify a shell command's validation reach, including compound commands. */
 export function classifyValidationCommand(command) {
@@ -63,13 +54,13 @@ export function resolveTargetedValidation(paths) {
     if (path.startsWith("packages/core/")) return ["core", "bun run test:core"];
     if (/^test\/(?:loop|github|docs|projects|pages|security)\/[^/]+\.test\.mjs$/.test(path)) return /^test\/(?:loop|github|docs|projects|pages|security)\/[A-Za-z0-9._-]+\.test\.mjs$/.test(path) ? ["scripts", `bun scripts/run-bun-test.mjs ${path}`] : null;
     if (path === "scripts/claude/generate-claude-assets.mjs") return ["generated", "bun run assets:check", "bun run test:doc-guard"];
-    if (UI_SUITES.has(path)) return ["ui", `bun run test:playwright:${UI_SUITES.get(path)}`];
+    if (REGISTERED_ARTIFACT_SUITES[path]) return ["ui", `bun run test:playwright:${REGISTERED_ARTIFACT_SUITES[path]}`];
     if (/^docs\/(?:presentations|articles)\/[^/]+\.html$/.test(path)) return null;
     if (path.startsWith("test/playwright/") && path.endsWith(".spec.mjs")) {
       const suite = path.slice("test/playwright/".length, -".spec.mjs".length);
       if (suite === "inspect-run-viewer") return ["ui", "bun run test:playwright:viewer"];
       if (suite === "deep-dive-deck") return ["ui", "bun run test:playwright:deep-dive"];
-      if ([...UI_SUITES.values()].includes(suite)) return ["ui", `bun run test:playwright:${suite}`];
+      if (Object.values(REGISTERED_ARTIFACT_SUITES).includes(suite)) return ["ui", `bun run test:playwright:${suite}`];
       return null;
     }
     if (path.startsWith("scripts/loop/inspect-run-viewer/")) return ["ui", "bun run test:playwright:viewer"];
