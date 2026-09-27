@@ -68,6 +68,17 @@ test("J1: changed or missing gate-context evidence refuses", async () => {
   });
 });
 
+test("J1: a cross-checkout --tmp-root resolves the context's evidence against the checkout that owns it", async () => {
+  await withDir(async (a) => withDir(async (b) => {
+    const sources = await seed(a);
+    await seed(b);
+    // A stale evidence copy in the cwd checkout must not be read.
+    await writeFile(path.join(a, "judge-fixture", "evidence.md"), "## PR body\nDeclared scope: stale copy.\n");
+    const plan = await emitJudgeWorkOrder({ ...sources, tmpRoot: path.join(b, "tmp") });
+    assert.equal(plan.workOrder.requiredReads.find((read) => read.kind === "evidence").path, path.join(b, "judge-fixture", "evidence.md"));
+  }));
+});
+
 test("J2: every dispatch is the fixed compact pointer under the shared cap, reused for resume and replacement", async () => {
   await withDir(async (root) => {
     const plan = await emitJudgeWorkOrder(await seed(root));
@@ -122,6 +133,16 @@ test("J3: a superseded ref, a changed spec or ledger, and a retired round refuse
     await mkdir(retired, { recursive: true });
     await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "pre_approval_gate", retiredAt: new Date().toISOString() }));
     assert.equal(refusal(pull(second, root)), "stale_dispatch");
+  });
+});
+
+test("J3: after the head moves, a newer emission at the new head supersedes the old head's ref at pull", async () => {
+  await withDir(async (root) => {
+    const first = await emitJudgeWorkOrder({ ...(await seed(root)), roundId: "j1-aa" });
+    const second = await emitJudgeWorkOrder({ ...(await seed(root, { headSha: "e".repeat(40) })), roundId: "j2-bb" });
+    const pullFrom = (plan) => pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [path.join(root, "tmp")], receiptTmpRoot: path.join(root, "tmp") });
+    await assert.rejects(pullFrom(first), (err) => err.refusal === "stale_dispatch" && err.message.includes(second.workOrderRef));
+    assert.ok((await pullFrom(second)).receipt);
   });
 });
 

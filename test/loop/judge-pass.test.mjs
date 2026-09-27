@@ -1516,6 +1516,17 @@ test("judge-pass J5: a verdict written before the pull (replayed or stale) and a
   await assert.rejects(runPass(), /not the ledger the judge work order pinned/);
 });
 
+test("judge-pass J5: a spec-authority verdict off its outputRef or written before the pull refuses", async () => {
+  const { root, plan, runPass } = await deliveryCase();
+  const specRef = plan.workOrder.outputRefs[1];
+  await writeVerdictAfterPull(path.join(root, "spec-verdict.json"), "{}");
+  await assert.rejects(runPass({ specAuthorityVerdict: "./spec-verdict.json" }), /--spec-authority-verdict \.\/spec-verdict\.json is not the judge work order's outputRef/);
+  await writeVerdictAfterPull(specRef, "{}");
+  await utimes(specRef, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  await assert.rejects(runPass({ specAuthorityVerdict: specRef }), /result_predates_pull\) for .*spec-authority-verdict\.json/);
+  assert.equal(existsSync(path.join(root, "act.json")), false);
+});
+
 test("judge-pass J5: a superseded round's late verdict never counts as the current round's", async () => {
   // Round A's judge pulled; round B was emitted and pulled; A's judge then writes late.
   const { root, plan: roundA, sources, runPass } = await deliveryCase();

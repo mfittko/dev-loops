@@ -7,7 +7,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
@@ -30,7 +30,7 @@ prior-round judge verdicts. It writes the immutable work order under
 The work order's two verdict outputRefs sit under that directory's <roundId>/ segment.
 --tmp-root must be a listed checkout's tmp directory (the default is <checkout root>/tmp).
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
-previous emission for this gate and head. It accepts no brief or summary input.
+previous emission for this PR and gate at any head. It accepts no brief or summary input.
 Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error.`;
 
 // ref = judge:<owner/repo>#<pr>:<gate>:<headSha>:<roundId>; executionIdentity = roundId.
@@ -103,8 +103,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   const context = await readJson(abs(buildGateContextPath({ repo, pr, gate, headSha, tmpRoot })));
   const evidenceRead = context?.requiredReads?.find((read) => read?.kind === "evidence");
   if (!evidenceRead) throw new Refusal(`no gate-context evidence read for ${gate} at ${headSha}; run write-gate-context.mjs for this round first`);
-  // write-gate-context records the evidence path relative to the checkout root.
-  const evidence = await readSource("evidence", path.resolve(checkoutRoot, evidenceRead.path));
+  // write-gate-context records the evidence path relative to the checkout that owns tmpRoot (<checkout>/tmp).
+  const evidence = await readSource("evidence", path.resolve(path.dirname(abs(tmpRoot)), evidenceRead.path));
   if (evidence.read.sha256 !== evidenceRead.sha256) throw new Refusal(`gate-context evidence ${evidenceRead.path} changed since the round was built; rebuild the round context`);
   const priors = [];
   for (const prior of priorVerdicts) priors.push(await readSource("prior-judge-verdict", abs(prior)));
@@ -153,8 +153,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   return { ...plan, planPath };
 }
 
-// Judge adapter. The newest emission for the gate and head across ALL checkouts
-// is current; an older ref is superseded. A retired gate round, or a required
+// Judge adapter. The newest emission for the PR and gate, at ANY head and across
+// ALL checkouts, is current; an older ref (including an old head's) is superseded. A retired gate round, or a required
 // source whose bytes changed since emission (spec, identity, ledger), makes the unit stale.
 const emissionOrder = (plan) => [Number(/^j(\d+)-/.exec(plan.roundId ?? "")?.[1]) || 0, String(plan.roundId ?? "")];
 const isNewer = (a, b) => {
@@ -170,11 +170,15 @@ export async function locateJudgeUnit({ ref, tmpRoots }) {
   try { judgeDir({ repo, pr, gate, headSha }); } catch { return null; }
   let newest = null;
   let own = null;
+  const headDirRe = new RegExp(`^${gate}-(?:[0-9a-f]{40}|[0-9a-f]{64})$`);
   for (const tmpRoot of tmpRoots) {
-    const plan = await readJson(path.join(judgeDir({ repo, pr, gate, headSha, tmpRoot }), "judge-emit-plan.json"));
-    if (!plan) continue;
-    if (!newest || isNewer(plan, newest)) newest = plan;
-    if (plan.workOrderRef === ref) own ??= { plan, tmpRoot };
+    const prDir = path.dirname(judgeDir({ repo, pr, gate, headSha, tmpRoot }));
+    for (const name of (await readdir(prDir).catch(() => [])).filter((entry) => headDirRe.test(entry))) {
+      const plan = await readJson(path.join(prDir, name, "judge-emit-plan.json"));
+      if (!plan) continue;
+      if (!newest || isNewer(plan, newest)) newest = plan;
+      if (plan.workOrderRef === ref) own ??= { plan, tmpRoot };
+    }
   }
   if (!newest) return null;
   if (!own || newest.workOrderRef !== ref) return { stale: `judge ref ${ref} was superseded by ${newest.workOrderRef}` };
