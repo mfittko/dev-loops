@@ -61,7 +61,7 @@ Persistent async watch/fix loop, not handoff-only behavior: `watch → detect �
 **PERSISTENCE MODEL: Subagents do bounded implementation tasks and exit on external wait. The main session drives the loop and re-dispatches when continuation is feasible.** If `cycleDisposition` is `pending` and `terminal` is `false`, the subagent exits on the wait boundary; the main session re-dispatches another watch boundary.
 <!-- /pi-only -->
 
-> Under the Claude Code harness, run this loop **inline in a single agent**: the helper-owned wait tools (`dev-loops loop watch-cycle`, `gh run watch`, `dev-loops gate probe-copilot`) block inline and return — when `cycleDisposition` is `pending` and `terminal` is `false`, run the next watch cycle yourself. Do not exit on the wait boundary to have a parent re-dispatch the loop; keep driving it in this agent until a terminal state or the watch budget expires. (Delegating a bounded fix to the `fixer` agent, per Step 6, is still fine — that is task delegation, not re-dispatching the watch loop.)
+> Under the Claude Code harness, run this loop **inline in a single agent**. The helper-owned wait tools (`dev-loops loop watch-cycle`, `gh run watch`, `dev-loops gate probe-copilot`) block inline and return. When `cycleDisposition` is `pending` and `terminal` is `false`, run the next watch cycle yourself. Do not exit on the wait boundary for a parent re-dispatch; drive the loop until a terminal state or the watch budget expires. A bounded fix may still go to the `fixer` agent (Step 6).
 
 Max watch timeout: **30 minutes** (from `policy-constants.mjs` COPILOT_REVIEW_WAIT_TIMEOUT_MS); expired budget + still `waiting_for_copilot_review` = hard stop. If the user explicitly asks for async handoff-only behavior, say that out loud and stop after the handoff boundary.
 
@@ -117,9 +117,7 @@ node <resolved-skill-scripts>/loop/resolve-verdict-ledger-source.mjs --jq .prefe
 
 - When `preferredSource` is `worktree`, run the verdict/ledger tooling (`upsert-checkpoint-verdict.mjs`, `write-gate-findings-log.mjs`, `detect-checkpoint-evidence.mjs`, and their gate helpers) from the worktree/source `scripts/` layout instead of the installed layout.
 - When `preferredSource` is `installed`, run them from the resolved skill-scripts layout (installed) as usual.
-- The helper compares the installed dev-loops CLI version against the current source/worktree version (bounded candidate detection); it never changes the gate-evidence CI-exclusion logic itself (`#1661` non-goal) and fails soft to the canonical installed layout when a version cannot be read.
-
-This selection changes the tooling source, not gate behavior.
+- The helper fails soft to the installed layout when a version cannot be read. The selection changes the tooling source, not gate behavior.
 
 ### Source files under review vs. helper-script paths
 
@@ -200,13 +198,12 @@ After ANY push that advances the head of a PR Copilot has already reviewed — a
 Copilot-thread fix, a rebase, a docs touch-up — the agent MUST run
 `request-copilot-review.mjs` for the new head and branch on its machine-readable result
 (`COPILOT-FOLLOWUP-REQUEST-BRANCHING`) BEFORE entering any watch. Copilot does not re-review
-a new head on its own, so a watch entered without that explicit request waits on a review
-that was never requested until the budget expires. The green-posture precondition
+a new head on its own. The green-posture precondition
 (`COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE`) and the round cap
 (`COPILOT-FOLLOWUP-ROUND-CAP`) still decide WHETHER the request is made; when either blocks
 it, or the result is a suppression, stop and report instead of entering a watch.
 
-Practical rules: do not poll manually. `waiting_for_copilot_review` → `run-watch-cycle.mjs` or report-and-resume. `waiting_for_ci` with pending/none CI → `dev-loops loop watch-ci --repo <owner/name> --pr <number>` (provider-agnostic; covers CircleCI / Actions / external commit-status) or report-and-resume; `gh run watch <run-id>` is an Actions-only fallback. `dev-loops loop watch-cycle` also auto-routes a `waiting_for_ci` boundary to this CI watcher. Before considering the bounded CI exception, read [Zero-suite local-validation exception](../docs/copilot-ci-status-contract.md#zero-suite-local-validation-exception), including its unavailable CLI input; never self-certify `none` as green. `ciStatus=failure` → stop/fix, never wait.
+Practical rules: do not poll manually. `waiting_for_copilot_review` → `run-watch-cycle.mjs` or report-and-resume. `waiting_for_ci` with pending/none CI → `dev-loops loop watch-ci` or report-and-resume; `dev-loops loop watch-cycle` also auto-routes a `waiting_for_ci` boundary to this CI watcher. Before considering the bounded CI exception, read [Zero-suite local-validation exception](../docs/copilot-ci-status-contract.md#zero-suite-local-validation-exception), including its unavailable CLI input; never self-certify `none` as green. `ciStatus=failure` → stop/fix, never wait.
 
 Preferred approach:
 - route decisions through `copilot-pr-handoff.mjs` output; enter watcher only on `action: "watch"` with `watchEntryConfirmed=true`; prefer `dev-loops loop watch-cycle` for deterministic handoff → watch
@@ -232,8 +229,7 @@ Every async dev-loop dispatch task body must include this clause verbatim so fre
 Key rules:
 - helper-owned sleep inside `dev-loops loop watch-cycle`, `dev-loops gate probe-copilot`, or `dev-loops loop watch-initial` is allowed
 - agent-authored shell polling is forbidden: do not use `nohup`, detached shell jobs, `tmux`, `screen`, or ad hoc `for i in $(seq ...)`, `while true`, `until ...; do sleep ...; done`, or `sleep`-retry bash loops
-- do not wrap repeated `gh pr view`, `gh pr checks`, `gh api`, or `detect-copilot-loop-state.mjs` calls inside shell polling loops
-- do not bypass session-based async notifications with detached shell automation
+- do not wrap repeated `gh pr view`, `gh pr checks`, `gh api`, or `detect-copilot-loop-state.mjs` calls inside shell polling loops, and do not bypass session-based async notifications with detached shell automation
 - if the designated async follow-up skill is not appropriate or available, stop and report rather than improvising a shell watcher
 - the async-start contract is enforced in code: `outer-loop.mjs` fails closed without a visible async run id when `workflow.asyncStartMode: required` (relaxed automatically under the Claude Code harness — see #830)
 
@@ -266,7 +262,7 @@ question is likewise unresolved feedback.
    - high: blocks gate; always fixed
    - medium: blocks gate when `blockCleanOnFindingSeverities` includes it; a LOCATABLE finding is also fixed through round 3 of the gate's chain even when not blocking (then deferred), while a NON-LOCATABLE one is deferred immediately (`GATE-EXEC-BLOCKING-ONLY-FIX` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md#phase-4--fix))
    - low / non-blocking / disagree (defer is the fixer's disposition for these, not a severity) — EXCEPT a low the judge disposed `act`, which is a fix target, not a defer candidate: decline it only on reproduction grounds (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`), the same way a judge `act` overrides a nit's no-fixer-cycle default
-   - question: never deferred; answer it (promoting to a defect severity if the answer reveals one, or escalating to the author when unanswerable) — an unanswered question blocks gate-close exactly like an open defect (unresolved feedback, same as a high finding), so it is never a thread to sweep past unanswered
+   - question: never deferred; answer it, promote it to a defect severity when the answer reveals one, or escalate to the author when it is unanswerable. An unanswered question blocks gate-close like an open defect.
    - nit: cosmetic, non-defect; resolved-with-rationale immediately, no fixer action on the severity axis (judge-acted nits excepted), and NEVER filed to the deferral comment (net-reduction disposition policy, #1846)
 4. apply only the accepted narrow fixes
 5. run the smallest validation that honestly proves the fix
@@ -293,7 +289,7 @@ question is likewise unresolved feedback.
     - do not stop at a local fix if GitHub-side reply/resolve is authorized
 11. after completing reply/resolve for a pass, verify zero unresolved threads remain via `dev-loops gate capture-threads` before proceeding
     - if the refreshed snapshot reports unresolved threads, re-enter the reply/resolve loop for the missed threads
-    - this thread-count check is necessary but not sufficient: `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` (in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md#finding-threads-and-disposition)) additionally fails closed on a THREAD the fixer's own handoff marks tackled whose fixing commit is not contained by the observed PR head, or whose reply/resolve/re-verify step is otherwise incomplete — a zero unresolved-thread count alone does not waive it, and it forbids requesting or re-requesting Copilot review (and every gate-dispatch action) until `scripts/github/verify-fixer-disposition.mjs` reports the tackled set complete
+    - a zero count does not waive `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` ([Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md#finding-threads-and-disposition)): do not request or re-request Copilot review, or take any gate-dispatch action, until `scripts/github/verify-fixer-disposition.mjs` reports the fixer's tackled set complete
 12. <!-- rule: COPILOT-FOLLOWUP-ROUND-CAP --> `COPILOT-FOLLOWUP-ROUND-CAP`: The agent MUST decide whether another Copilot pass is desired, applying the round-cap/signal-gating rules below, only after GitHub-side reply/resolve work is done for the addressed threads and the refreshed thread snapshot proves zero unresolved threads remain
     - resolve the review-round cap from config via `resolveRefinementConfig(config, "maxCopilotRounds")` from `@dev-loops/core/config`; default config ships `maxCopilotRounds: 5`. For a light-dispatched PR, resolve `resolveEffectiveCopilotRoundCap(config, { lightweight: true })` instead — `min(localImplementation.lightMode.maxCopilotRounds ?? 1, maxCopilotRounds)` (default lightweight cap: 1) — see the [Artifact Authority Contract](../docs/artifact-authority-contract.md) lightweight section (issue #1210)
     - for a light-dispatched PR, pass `--lightweight` on every round-cap-consuming helper invocation — `detect-copilot-loop-state.mjs`, `copilot-pr-handoff.mjs`, `detect-pr-gate-coordination-state.mjs`, `request-copilot-review.mjs`, and `upsert-checkpoint-verdict.mjs` — otherwise those tools resolve the full-PR cap and the composed lightweight cap is never enforced
@@ -301,7 +297,7 @@ question is likewise unresolved feedback.
     - **Opt out entirely:** `maxCopilotRounds: 0` disables the external Copilot review gate for the repo — the loop runs `draft_gate → pre_approval_gate` with the local harness only, never requesting or waiting on Copilot. Use this when the repo has no Copilot reviewer configured or prefers local-harness-only review.
     - use the completed Copilot review-round count from `detect-copilot-loop-state.mjs` / `copilot-pr-handoff.mjs` as the current PR's review-round count
     - if completed review rounds have reached the resolved round cap above, do **not** re-request Copilot review within that concluded cycle
-    - by default (converged-once, ADR 0090), once the loop converged, a later head needs no new Copilot cycle: the latest converged Copilot review stands for it whatever the delta, the request tool returns `suppressed_post_convergence`, and `pre_approval_gate` reviews the current head. A later Copilot review (for example the ruleset review when the PR becomes ready) replaces it and decides again (`COPILOT-STATE-CARRIED-CONVERGENCE`)
+    - by default (converged-once, ADR 0090), a later head needs no new Copilot cycle: the request tool returns `suppressed_post_convergence` (`COPILOT-FOLLOWUP-REQUEST-BRANCHING`). A later Copilot review, for example the ruleset review when the PR becomes ready, replaces the converged one and decides again (`COPILOT-STATE-CARRIED-CONVERGENCE`)
     - with `refinement.requireCopilotConvergenceAtLatestHead: true` (strict mode), if the loop already converged and then significant post-convergence changes land on a newer head (new/changed product or test logic, not doc/message/comment-only edits), treat that as a NEW cycle and re-request Copilot review when regular rounds are already > 0 (the prior cycle's cap does not suppress this new-cycle request)
     - the inverse — a pure doc/prose or integrate-only-base-move post-convergence head bump with zero unresolved threads must NOT force a fresh blocking Copilot round — is enforced in code at and below the cap by `COPILOT-STATE-CARRIED-CONVERGENCE` ([Copilot Loop State Graph](../docs/copilot-loop-state-graph.md)); at the cap it holds even under `--force-rerequest-review`. An explicit human-only operator withdrawal (issue 1441) records a marker honored under the same checks: see the "Head-advanced sibling case" in [Merge Preconditions](../docs/merge-preconditions.md) for that escape hatch; never invoke it as an automated substitute for a real re-request
     - at the round cap, a body-only Copilot finding (no inline thread) blocks `round_cap_clean_fallback` until a trusted disposition record for the current head clears it (`COPILOT-STATE-BODY-DISPOSITION-RECORD` in [Copilot Loop State Graph](../docs/copilot-loop-state-graph.md)). On a review of the current head only the `operator` form clears it; a human operator who accepts the finding posts it. After a fix push the finding sits on an earlier head: the fixer posts the `fix` form, naming a fix commit after the reviewed commit, and that clears it. In the default mode the record clears it whatever the delta. With `refinement.requireCopilotConvergenceAtLatestHead: true` it clears only when the fix delta is not significant (docs/comment-only), and a significant code fix at the cap still opens a new Copilot cycle per the rule above
@@ -311,10 +307,7 @@ question is likewise unresolved feedback.
     - **Signal-gated re-request suppression:** the `detect-copilot-loop-state.mjs` state machine classifies review-thread comments by signal level (High/Mid/Low). High-signal (bugs, security, contract violations) always re-requests; Low-signal (cosmetic nits) never re-requests. When low-signal detection is enabled and thresholds are met, the machine returns a low-signal-converged terminal state routing to `pre_approval_gate` without further re-requests. See [Copilot Loop Operations](../docs/copilot-loop-operations.md) for full signal-level semantics.
     - if that local validation is still known red, continue remediation instead of re-requesting Copilot
     - after a fix push advances the PR head SHA, re-run `detect-copilot-loop-state.mjs` for the new head and apply the [Copilot CI Status Contract](../docs/copilot-ci-status-contract.md). Previous-head CI is stale; only current-head results unblock CI-dependent steps. if GitHub CI/checks for the updated head are known red for a fixable issue, continue remediation instead of re-requesting Copilot. <!-- rule: COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE --> `COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE`: only once the updated head is green or credibly green, explicitly re-request Copilot review for the new head. Always use `request-copilot-review.mjs` — never `gh api POST repos/.../requested_reviewers` directly.
-    - only enter a wait/watch loop if the request result is confirmed as `requested` or `already-requested`
-    - for `requested` / `already-requested`, immediately re-baseline with `detect-copilot-loop-state.mjs`; if the returned state is `waiting_for_copilot_review`, use `dev-loops loop watch-cycle` or stop/resume later, and if the returned state is `waiting_for_ci`, use `dev-loops loop watch-ci` (provider-agnostic CI wait; `gh run watch` is an Actions-only fallback) or stop/resume later after that single detector refresh
-    - if the request result is `unavailable`, report that limitation and stop unless the user explicitly wants passive waiting anyway
-    - if the request command fails unexpectedly, stop and report the error rather than sleeping and hoping for a new review
+    - branch on the request result per `COPILOT-FOLLOWUP-REQUEST-BRANCHING`; enter a wait only for `requested` or `already-requested`. After that single detector refresh, `waiting_for_copilot_review` uses `dev-loops loop watch-cycle` and `waiting_for_ci` uses `dev-loops loop watch-ci`, or stop and resume later. On `unavailable`, stop unless the user explicitly wants passive waiting anyway
 13. after a confirmed re-requested Copilot pass, refresh PR thread state again before reporting completion; if fresh Copilot threads exist, return to this follow-up loop rather than stopping at `review requested`
 14. after a confirmed re-request returns the PR to `waiting_for_copilot_review`, jump back to Step 6 and keep the same session alive; do not exit on `review requested` alone
 15. if scope has broadened, stop and ask before continuing
@@ -341,7 +334,7 @@ node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --execution-mode fanout_fanin
 ```
 
-Pass `--findings-ledger` on EVERY round: use the durable log path returned by `write-gate-findings-log.mjs` (`tmp/gate-findings/<owner-name>/pr-<N>/<gate>-<headSha>.json`), NOT the flat `consolidate-fanin --ledger-out` file, which lacks the required repo/pr/gate/headSha identity. Without it there is no finding surface or finding threads. The helper, not the conductor, handles inline versus body-filed findings, suppression markers and rendered counts.
+Pass `--findings-ledger` on EVERY round: use the durable log path returned by `write-gate-findings-log.mjs` (`tmp/gate-findings/<owner-name>/pr-<N>/<gate>-<headSha>.json`), NOT the flat `consolidate-fanin --ledger-out` file, which lacks the required repo/pr/gate/headSha identity. Without it there is no finding surface or finding threads.
 
 `--findings-json` accepts per-angle results (`[{angle, verdict?, findings:[{severity, summary, file?, line?, disposition?}]}]`) or flat findings (`[{severity, summary, angle?, ...}]`, grouped by angle); unrecognized non-empty input fails closed. Use the sanctioned fan-in `--out`. If a withheld round removed or never wrote it, DO NOT substitute the unbudgeted `--ledger-out` file: that can exceed the render budget. Instead pass `--findings-summary "<summary>"` PLUS the durable `--findings-ledger <findings-log-path>`, never summary alone. [Phase 3 — Consolidation](../docs/gate-review-sub-loop-contract.md#phase-3--consolidation-fan-in-synthesis-and-disposition-ledger) owns provenance-based mandatory-angle proof and refusal when neither proof artifact is supplied.
 
@@ -367,12 +360,9 @@ Use the inline round's actually tallied counts, never an all-zero placeholder; s
 For a `pre_approval_gate` verdict, ALWAYS compute the size budget first and thread it into the upsert via `--size-budget-json`:
 
 ```sh
-# check-size-budget.mjs exits 0 (pass) or 1 (escalate|block) for a VALID
-# outcome — both leave <size-budget-json-path> populated. Only exit 2 means
-# an arg/runtime error with no usable JSON, so abort on that alone. Capture
-# the exit status via the `if` condition, not a bare `$?` after the command:
-# under `set -e` a bare command followed by `status=$?` never reaches the
-# capture, because the shell exits on the command's own nonzero status first.
+# Exit 0 (pass) and 1 (escalate|block) both write the JSON. Exit 2 is an
+# arg/runtime error with no usable JSON; abort on it alone. Capture the status
+# in the `if` condition: under `set -e` a bare `$?` capture is never reached.
 if node <resolved-skill-scripts>/loop/check-size-budget.mjs --base origin/<base-branch> --head <current_head_sha> > <size-budget-json-path>; then
   check_size_budget_status=0
 else
@@ -450,7 +440,7 @@ Both gates run this same checkpoint review chain, owned end-to-end by [Gate Revi
 
 ### Draft gate contract (before marking PR ready for review)
 
-The canonical checkpoint verdict comment contract is [Gate Review Comment Contract](../docs/gate-review-comment-contract.md). This section summarizes the procedural integration only.
+The canonical checkpoint verdict comment contract is [Gate Review Comment Contract](../docs/gate-review-comment-contract.md).
 
 - **Gate name:** Draft gate
 - **Trigger / boundary:** right before running `gh pr ready` (draft → ready for review)
@@ -460,13 +450,13 @@ The canonical checkpoint verdict comment contract is [Gate Review Comment Contra
 - **CI prerequisite:** resolve the draft gate config first (`resolveGateConfig(config, "draft")`). When `requireCi=true` (default), wait for green current-head CI before entering `draft_gate`. When `requireCi=false`, the draft gate may proceed without green CI. This draft-only override does **not** relax `pre_approval_gate` — that gate has its own separate `gates.preApproval.requireCi` knob (default `true`), which when set `false` opts the pre-approval boundary out of the CI precondition independently.
 - **Pass criteria:** all configured draft gate angles pass; all findings at severities in `blockCleanOnFindingSeverities` are addressed; validation passes; no unrelated files are included.
 - **Next step after passing:** mark the PR ready for review via `scripts/github/ready-for-review.mjs` — never a raw `gh pr ready` call or the GitHub UI's "Ready for review" button, both of which bypass its gate-authored-thread guard (`RAW-GH-PR-READY-BYPASS` in [Anti-patterns](../docs/anti-patterns.md)).
-- **Board status sync (built-in, after ready-for-review):** the In-Progress board move is now performed automatically as a deterministic tail of `ready-for-review.mjs` — marking the PR ready couples the board move to the ready transition (#1069), so no separate `sync-item-status` step is needed. It stays best-effort and NON-FATAL: it uses local `gh` auth (no CI/PAT), exits 0 when the board is not configured / the item is not on the board / the API fails, and never blocks marking the PR ready.
-- **Non-substitution rule:** a clean `draft_gate` comment only authorizes the draft → ready-for-review transition for that head SHA; cross-gate non-substitution is owned by `GATE-COMMENT-NON-SUBSTITUTION` in [Gate Review Comment Contract](../docs/gate-review-comment-contract.md). This skill does not restate that rule.
-- **Required PR comment:** post a visible checkpoint verdict comment using the mandatory [Gate comment command](#mandatory-gate-comment-command-contract). Comment field content and validation-reporting format are owned by `GATE-COMMENT-VALIDATION-REPORTING`; the draft-boundary comment requirement is owned by `GATE-COMMENT-DRAFT-REQUIREMENTS`; posting-failure fail-closed behavior is owned by `GATE-COMMENT-FAIL-CLOSED` — all in [Gate Review Comment Contract](../docs/gate-review-comment-contract.md). This skill does not restate those field/format/fail-closed rules.
+- **Board status sync (built-in, after ready-for-review):** `ready-for-review.mjs` performs the In-Progress board move as a deterministic tail (#1069); run no separate `sync-item-status` step. The move is best-effort and NON-FATAL and never blocks marking the PR ready.
+- **Non-substitution rule:** a clean `draft_gate` comment only authorizes the draft → ready-for-review transition for that head SHA; cross-gate non-substitution is owned by `GATE-COMMENT-NON-SUBSTITUTION` in [Gate Review Comment Contract](../docs/gate-review-comment-contract.md).
+- **Required PR comment:** post a visible checkpoint verdict comment using the mandatory [Gate comment command](#mandatory-gate-comment-command-contract). Comment field content and validation-reporting format are owned by `GATE-COMMENT-VALIDATION-REPORTING`; the draft-boundary comment requirement is owned by `GATE-COMMENT-DRAFT-REQUIREMENTS`; posting-failure fail-closed behavior is owned by `GATE-COMMENT-FAIL-CLOSED` — all in [Gate Review Comment Contract](../docs/gate-review-comment-contract.md).
 
 ### Pre-approval gate contract
 
-This is the default pre-approval gate for this workflow boundary. The canonical checkpoint verdict comment contract is [Gate Review Comment Contract](../docs/gate-review-comment-contract.md). This section summarizes the procedural integration only.
+The canonical checkpoint verdict comment contract is [Gate Review Comment Contract](../docs/gate-review-comment-contract.md).
 
 - **Gate name:** Pre-approval gate
 - **Trigger / boundary:** right before calling a PR/branch review-complete, approval-ready, merge-ready, or ready for final handoff
@@ -479,8 +469,8 @@ This is the default pre-approval gate for this workflow boundary. The canonical 
 - **Pass criteria:** the sub-loop completes with verdict `clean`; all configured angles pass, following the sequential-fallback rule owned by `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md).
 - **Acceptance criteria verification:** follow the canonical procedure in [Acceptance Criteria Verification](../docs/acceptance-criteria-verification.md) before posting the `pre_approval_gate` comment. After a clean verification this also ticks the verified PR-body checkboxes via `scripts/github/tick-verified-checkboxes.mjs`, so the merged PR shows checked AC.
 - **Next step after passing:** continue the Step 7 flow and then proceed to the human approval checkpoint below.
-- **Non-substitution rule:** a clean `pre_approval_gate` comment governs final-approval readiness for that head SHA and is separate from `draft_gate` evidence; cross-gate non-substitution is owned by `GATE-COMMENT-NON-SUBSTITUTION` in [Gate Review Comment Contract](../docs/gate-review-comment-contract.md). This skill does not restate that rule.
-- **Required PR comment:** post a visible checkpoint verdict comment using the mandatory [Gate comment command](#mandatory-gate-comment-command-contract). Comment field content and validation-reporting format are owned by `GATE-COMMENT-VALIDATION-REPORTING`; the pre-approval-boundary comment requirement is owned by `GATE-COMMENT-PREAPPROVAL-REQUIREMENTS`; posting-failure fail-closed behavior is owned by `GATE-COMMENT-FAIL-CLOSED` — all in [Gate Review Comment Contract](../docs/gate-review-comment-contract.md). This skill does not restate those field/format/fail-closed rules.
+- **Non-substitution rule:** a clean `pre_approval_gate` comment governs final-approval readiness for that head SHA and is separate from `draft_gate` evidence; cross-gate non-substitution is owned by `GATE-COMMENT-NON-SUBSTITUTION` in [Gate Review Comment Contract](../docs/gate-review-comment-contract.md).
+- **Required PR comment:** post a visible checkpoint verdict comment using the mandatory [Gate comment command](#mandatory-gate-comment-command-contract). Comment field content and validation-reporting format are owned by `GATE-COMMENT-VALIDATION-REPORTING`; the pre-approval-boundary comment requirement is owned by `GATE-COMMENT-PREAPPROVAL-REQUIREMENTS`; posting-failure fail-closed behavior is owned by `GATE-COMMENT-FAIL-CLOSED` — all in [Gate Review Comment Contract](../docs/gate-review-comment-contract.md).
 - <!-- rule: GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE --> `GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE`: Skipping the gate MUST NOT be treated as recoverable by asserting convergence.
 
 ### Conflict-resolution gate
@@ -505,32 +495,22 @@ See [Merge Preconditions](../docs/merge-preconditions.md). Verify: zero unresolv
 
 ### Human approval checkpoint
 
-After merge-ready preconditions pass, verify [Merge Preconditions](../docs/merge-preconditions.md) authoritatively before reporting merge-ready. Stop at the human approval checkpoint by default. Cross-check via `dev-loops gate capture-threads` (not prose assertion).
-Follow [Merge Preconditions](../docs/merge-preconditions.md): stop at `waiting_for_merge_authorization` after approval unless merge explicitly authorized. When authorized, merge through the sanctioned wrapper `node scripts/github/merge-pr.mjs --repo <owner/name> --pr <number> --human-approved-by <login>` — it runs the full pre-merge precondition set fail-closed before merging; a raw `gh pr merge` is forbidden.
+After merge-ready preconditions pass, verify [Merge Preconditions](../docs/merge-preconditions.md) authoritatively before reporting merge-ready, and cross-check threads via `dev-loops gate capture-threads` (not prose assertion). Stop at the human approval checkpoint by default, and stop at `waiting_for_merge_authorization` after approval unless merge is explicitly authorized. When authorized, merge through the sanctioned wrapper `node scripts/github/merge-pr.mjs --repo <owner/name> --pr <number> --human-approved-by <login>`. It runs the full pre-merge precondition set fail-closed before merging; a raw `gh pr merge` is forbidden.
 
 When `approval.enabled` is set, don't just park silently at this stop: run `dev-loops gate offer-human-handoff --repo <owner/name> --pr <number>` to surface candidate reviewers/assignees, then **offer** them to the operator. Only on operator confirmation, route the PR with `--assign <login>` / `--request-review <login>`. This is OFFER-only — never auto-assign. See the `approval` section in [Merge Preconditions](../docs/merge-preconditions.md); it pairs with `autonomy.humanMergeOnly`.
 
 ### Mechanical pre-merge gate evidence check
 
-The sanctioned merge wrapper is the canonical merge path and runs this check
-internally, fail-closed, before it merges:
-
-```sh
-node <resolved-skill-scripts>/github/merge-pr.mjs \
-  --repo <owner/name> \
-  --pr <number> \
-  --human-approved-by <login>
-```
-
-The wrapper reuses `detect-checkpoint-evidence.mjs` (always-on: it reads both verdict
+The sanctioned merge wrapper `merge-pr.mjs` (above) runs this check internally,
+fail-closed, before it merges. The wrapper reuses `detect-checkpoint-evidence.mjs` (always-on: it reads both verdict
 surfaces — the PR review stream, primary per `GATE-COMMENT-SINGLE-SURFACE`, and visible
 PR issue comments for legacy/fallback verdicts — and fails closed unless both required
 gate verdicts are visible: a clean `draft_gate` and a clean current-head
 `pre_approval_gate`). You may also run `detect-checkpoint-evidence.mjs --repo <owner/name>
 --pr <number>` standalone for a read-only pre-merge check. Resolved threads, green CI,
 clean Copilot rereview, or local notes never substitute for the wrapper's fail-closed
-verdict. A raw `gh pr merge` is forbidden (`RAW-GH-PR-MERGE-BYPASS`); if a final approval
-or merge boundary sees a raw `gh pr merge`, treat that as a workflow violation and stop.
+verdict. If a final approval or merge boundary sees a raw `gh pr merge`
+(`RAW-GH-PR-MERGE-BYPASS`), treat that as a workflow violation and stop.
 
 ### Stale runner-coordination lock held by a completed run
 
@@ -547,9 +527,7 @@ Before standing down or deciding dispatch, verify actual execution with the harn
 `subagent status`: LIVE means an actively updating `EXECUTING` workflow child.
 A fresh claim heartbeat alone is insufficient; a completed/control run may have left it.
 
-Manual takeover remains for older leaks or an unreleasable edge:
-
-If a stale claim still blocks the merge because the completing run could not release (crash, killed process, or a pre-#1109 run), the sanctioned recovery for a lock held by a COMPLETED run is an explicit takeover by the merge run:
+If a stale claim still blocks the merge because the completing run could not release it (crash, killed process, or a pre-#1109 run), the sanctioned recovery for a lock held by a COMPLETED run is an explicit takeover by the merge run:
 
 ```sh
 node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover \
@@ -599,12 +577,9 @@ Run from the main checkout before worktree removal: `queue sync-status` resolves
 the configured column; omit `--item` for a PR queue item (empty also falls back to `--pr`).
 Board/archive settings are `tracker.board` and `queue.archiveOlderThanDays` (default 7d),
 using local `gh` auth, no CI/cron/PAT. Both steps are best-effort and NON-FATAL; retain
-both `|| true` guards. Sync reports board/API skips in JSON with exit 0; usage errors
-exit 1, invalid `--jq` exits 2 and falsy `--silent` is non-zero. Archive exits 1 for
-usage, 2 for API/`--jq` errors and 3 for project-not-found. Neither failure blocks
-merge or retrospective.
+both `|| true` guards. Neither failure blocks merge or retrospective.
 
-`dev-loops queue reconcile` (idempotent, run best-effort at loop startup) is the fallback convergence path when the sync above is ever skipped or missed — it re-derives every item's column from live GitHub state, so a merge that could not run this hook still lands on Done at the next startup.
+`dev-loops queue reconcile` (idempotent, run best-effort at loop startup) is the fallback when the sync above is skipped: it re-derives every item's column from live GitHub state.
 
 The post-merge hook also fast-forwards the main checkout's local `main` to `origin/main` (#1596) so read-only gate scripts run current code; see [Merge Preconditions](../docs/merge-preconditions.md) "Post-merge" for the canonical step. Best-effort and non-blocking (`--ff-only` refuses a diverged main without rewriting history).
 
