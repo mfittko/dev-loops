@@ -28,8 +28,9 @@ else.
 
 **Conservatism clause:** prefer noting PR-scoped follow-ups on the originating artifact
 (issue body or PR body) rather than spinning up standalone tracker items for work that is part
-of the same effort or will be resolved imminently. Cross-cutting contract/policy changes and
-genuinely independent bugs that outlive the PR remain their own issues.
+of the same effort or will be resolved imminently. Cross-cutting contract/policy changes remain
+their own issues. A follow-up found during a PR or loop becomes a standalone issue only under
+`MAIN-AGENT-FILING-BLOCKER-ONLY`.
 
 ## Default decomposition flow
 

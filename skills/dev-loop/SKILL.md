@@ -261,7 +261,7 @@ Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/a
 
 **Bounded test runs (enforced — #1650):** Bound every directly launched focused suite containing gh mocks with `timeout 90 bun test <file>` (or an equivalent hard timeout). Output truncation does not bound execution. `bun run verify` already bounds its suites. Bun is the development runner; Node `>=24` consumer-runtime and npm publication checks remain explicit exceptions.
 
-**Bounded Copilot/CI watch (enforced — #1660):** Use `dev-loops gate probe-copilot --timeout-ms 300000` (5min) or `timeout 600 <cmd>`; pass an explicit bounded timeout and re-check on timeout. Never launch an unbounded blocking watch.
+**Bounded Copilot/CI watch (enforced — #1660):** Use `dev-loops gate probe-copilot --timeout-ms 300000` (5min) or `timeout 540 <cmd>`; pass an explicit bounded timeout and re-check on timeout. Never launch an unbounded blocking watch.
 
 <!-- rule: DEV-LOOP-PROBE-TIMEOUT-CEILING -->
 `DEV-LOOP-PROBE-TIMEOUT-CEILING`: every explicit `--timeout-ms` on a Copilot or CI probe MUST stay below 600000 ms, the harness tool-call limit. The harness auto-backgrounds a call that outlives that limit, so a longer wait loops in separate foreground calls, each with its own bounded timeout below 600000 ms.
