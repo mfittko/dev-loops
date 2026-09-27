@@ -34,7 +34,7 @@ export function classifyValidationCommand(command) {
       targeted = true;
       continue;
     }
-    const direct = segment.match(/^(?:bun\s+test|node\s+--test|(?:npx|bunx|bun\s+x)?\s*vitest)(?:\s+(.*))?$/i);
+    const direct = segment.match(/^(?:node\s+--test|(?:npx|bunx|bun\s+x)?\s*vitest)(?:\s+(.*))?$/i);
     if (direct) {
       if (!EXACT_TEST_FILE.test(direct[1] ?? "")) return "full-repository";
       targeted = true;
