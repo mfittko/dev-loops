@@ -554,6 +554,8 @@ test("decideBashGate DENIES a coordinator running a code-verification entrypoint
   });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /COORDINATOR-VERIFY-BOUNDARY/);
+  assert.match(d.reason, /targeted checks.*worker subagent/);
+  assert.match(d.reason, /full-repository validation.*dev-loops gate resolve-validation/);
   assert.match(d.reason, /main-agent-contract\.md/);
 });
 

@@ -135,8 +135,9 @@ export function decideBashGate({
 
   // COORDINATOR-VERIFY-BOUNDARY: a known code-verification/build entrypoint (bun run
   // verify/test, vitest, npm test/run test/run build, ...) run inline by the dev-loop COORDINATOR
-  // itself (agent_type "dev-loop"). WORKER subagents (developer/fixer/quality/review) may run these
-  // freely — only the coordinator is scoped out, mirroring `decideCoordinatorWriteGuard`'s
+  // itself (agent_type "dev-loop"). The hook allows WORKER subagents to run targeted checks;
+  // full-repository runs still belong to gate resolve-validation. Only the coordinator is scoped
+  // out here, mirroring `decideCoordinatorWriteGuard`'s
   // agent_type discriminator. Opt-in via the same `DEVLOOPS_COORDINATOR_READONLY=1` flag as the
   // write-guard boundary; default fail-open. Not scoped to `inManagedRepo` — this is a local
   // command-invocation boundary (which binary ran), not a GitHub-repo-targeting one.
@@ -145,8 +146,9 @@ export function decideBashGate({
       decision: "deny",
       reason:
         "COORDINATOR-VERIFY-BOUNDARY: the dev-loop coordinator must not run code-verification/build " +
-        "commands inline. Delegate the verification run to a fresh worker subagent (developer/fixer/" +
-        "quality/review), which reports back a compact pass/fail plus any failing-test names — or, when " +
+        "commands inline. Delegate targeted checks to a fresh worker subagent (developer/fixer/" +
+        "quality/review), which reports back a compact pass/fail plus any failing-test names. " +
+        "Request local full-repository validation through `dev-loops gate resolve-validation` on a clean commit; when " +
         "checking a pushed commit, prefer CI's structured conclusion (`gh pr checks` / " +
         "scripts/github/detect-checkpoint-evidence.mjs) over a local run. See skills/docs/main-agent-contract.md.",
     };
