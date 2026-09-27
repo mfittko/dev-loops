@@ -97,6 +97,23 @@ export function detectIndexErrors(names) {
   return errors;
 }
 
+/**
+ * ADR-PATH-NUMBERING repair path: a number collision that already merged is fixed
+ * by renaming one record to a free number. The deleted base record counts as that
+ * rename only when another current record still holds its number and exactly one
+ * current record carries its slug under a new number with the base text unchanged
+ * apart from the title number.
+ */
+export async function isCollisionRepairRename(root, names, baseName, baseText) {
+  const prefix = baseName.slice(0, 4);
+  const slug = baseName.slice(5);
+  if (!names.some((n) => n.startsWith(`${prefix}-`))) return false;
+  const renamed = names.filter((n) => n !== TEMPLATE && n.slice(5) === slug && !n.startsWith(`${prefix}-`));
+  if (renamed.length !== 1) return false;
+  const text = await readFile(path.join(root, DECISIONS_DIR, renamed[0]), "utf8");
+  return text === baseText.replace(new RegExp(`^# ${prefix}\\.`), `# ${renamed[0].slice(0, 4)}.`);
+}
+
 // createGitClient + resolveBaseRef are shared with validate-changelog-completeness.mjs
 // via ./_doc-git-client.mjs so the two base-ref-dependent validators cannot
 // drift. This validator scopes diffNameOnly to the decisions dir and, unlike the
@@ -169,6 +186,7 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
         currentText = await readFile(path.join(root, rel), "utf8");
       } catch (err) {
         if (err.code === "ENOENT") {
+          if (await isCollisionRepairRename(root, names, baseName, baseText)) continue;
           // Deleting an Accepted/Superseded record is itself a post-acceptance
           // rewrite; refuse it instead of passing silently.
           errors.push({
