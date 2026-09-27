@@ -52,6 +52,7 @@ test("validation commands have one shared classification", () => {
 test("changed surfaces select existing checks and unknown or mixed changes fail closed", () => {
   const cases = [
     [["packages/core/src/loop/validation-classify.mjs"], ["bun run test:core"], ["test:core"]],
+    [["packages/core/package.json"], ["bun run test:core", "bun run test:pack"], ["test:core", "test:pack"]],
     [["packages/core/test/foo.test.mjs"], ["bun scripts/run-bun-test.mjs packages/core/test/foo.test.mjs"], ["test:core"]],
     [["scripts/loop/run-gate-validation.mjs"], ["bun run test:scripts"], ["test:scripts"]],
     [["scripts/claude/generate-claude-assets.mjs"], ["bun run assets:check", "bun run test:doc-guard"], ["assets:check", "test:doc-guard"]],

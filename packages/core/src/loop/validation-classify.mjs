@@ -51,6 +51,7 @@ export function resolveTargetedValidation(paths) {
   const checks = paths.map((path) => {
     if (typeof path !== "string" || !path || path.startsWith("/") || path.includes("..") || path.includes("\\")) return null;
     if (/^packages\/core\/test\/[^/]+\.test\.mjs$/.test(path)) return /^packages\/core\/test\/[A-Za-z0-9._-]+\.test\.mjs$/.test(path) ? ["core", `bun scripts/run-bun-test.mjs ${path}`] : null;
+    if (path === "packages/core/package.json") return ["core", "bun run test:core", "bun run test:pack"];
     if (path.startsWith("packages/core/")) return ["core", "bun run test:core"];
     if (/^test\/(?:loop|github|docs|projects|pages|security)\/[^/]+\.test\.mjs$/.test(path)) return /^test\/(?:loop|github|docs|projects|pages|security)\/[A-Za-z0-9._-]+\.test\.mjs$/.test(path) ? ["scripts", `bun scripts/run-bun-test.mjs ${path}`] : null;
     if (path === "scripts/claude/generate-claude-assets.mjs") return ["generated", "bun run assets:check", "bun run test:doc-guard"];
