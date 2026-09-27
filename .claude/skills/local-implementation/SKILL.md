@@ -465,7 +465,7 @@ If the subagent ran asynchronously, update its summary when results arrive so fr
 
 ## Workflow-run subagent hand-off contract
 
-When handing off a full workflow run to a subagent (draft PR → gates → Copilot → merge), or
+When handing off a full workflow run to a subagent (draft PR, gates, Copilot, merge), or
 delegating GitHub-first routed follow-up (`copilot_pr_followup`, `issue_intake`), use the
 canonical [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) by path. Do not rely
 on abbreviated task summaries or operator memory. Read the resolver-derived envelope first

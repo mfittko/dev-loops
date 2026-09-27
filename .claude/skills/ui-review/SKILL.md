@@ -99,7 +99,9 @@ Map each captured failure to a source line and then to a PR diff anchor via
 mapping in `packages/core/src/loop/ui-review-diagnose.mjs`). It reuses PR
 state from `loop info --pr`, parses the top in-repo stack frame (skipping
 `node_modules`/`gems`/`vendor` frames) and resolves the source `file:line` to a
-diff anchor `{ path, line, side: RIGHT }` on the head.
+diff anchor `{ path, line, side: RIGHT }` on the head. Findings sort by severity,
+anchorability, kind, then source `file:line`, independent of wall-clock or input
+order.
 
 Only ADDED lines are anchor targets. A failure is NEVER silently dropped: one
 with no source location, a file outside the changed files, a line off a changed

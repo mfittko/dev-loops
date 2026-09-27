@@ -58,7 +58,7 @@ Per-file baseline: `public-dev-loop-contract.md` 43,380 / 5,607; `local-implemen
 
 ### Inventory
 
-Totals: 67 `pending`, one `in progress`, eight `non-prose`, four `blocked`; 80 files.
+Totals: 45 `pending`, one `in progress`, eight `changed`, 14 `unchanged`, eight `non-prose`, four `blocked`; 80 files.
 
 | File | Phase | Disposition | Rationale |
 | --- | --- | --- | --- |
@@ -145,7 +145,7 @@ Totals: 67 `pending`, one `in progress`, eight `non-prose`, four `blocked`; 80 f
 
 ### Phase 2 status
 
-Phase 2 worked every phase 2 row that was `pending`: eight changed, 14 unchanged. The four `blocked` rows stay blocked. Phase 3 rows under `skills/docs/` stay `pending`; phase 2 claims no whole-tree completion. Every `<!-- rule: ... -->` marker, MUST/MUST NOT/SHOULD/MAY count, CLI flag and link anchor in the changed files is retained. A backticked-token comparison against the start revision found only internal names and explanatory literals removed; each is listed in the trace below.
+Phase 2 worked every phase 2 row that was `pending`: eight changed, 14 unchanged. The four `blocked` rows stay blocked. Phase 3 rows under `skills/docs/` stay `pending`; phase 2 claims no whole-tree completion. Every `<!-- rule: ... -->` marker, MUST/MUST NOT/SHOULD/MAY count, CLI flag and link anchor in the changed files is retained. A backticked-token comparison against the start revision found only internal names and explanatory literals removed; each is listed in the trace below. The phase 2 gain is modest, about 1% of total canonical prose. Deeper condensation of the `copilot-pr-followup` restatements, such as the Required-PR-comment bullets and the `COPILOT-FOLLOWUP-ROUND-CAP` sub-bullets, is carried to phase 3.
 
 ### Phase 2 obligation trace
 
@@ -159,14 +159,14 @@ Phase 2 worked every phase 2 row that was `pending`: eight changed, 14 unchanged
 - Step 7 item 3 question severity: dropped the "unresolved feedback" restatement. The never-deferred rule, the three outcomes and the gate-close block stay.
 - Step 7 item 11: replaced the restatement of `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` with a point-of-use citation plus the operative stop (no request, re-request or gate dispatch until `verify-fixer-disposition.mjs` reports the tackled set complete). Owner: `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` in `skills/docs/gate-review-sub-loop-contract.md`.
 - Step 7 item 12 converged-once bullet: dropped the carry description. Owners: `COPILOT-FOLLOWUP-REQUEST-BRANCHING` (`suppressed_post_convergence`) and `COPILOT-STATE-CARRIED-CONVERGENCE`.
-- Step 7 item 12 request-result bullets: merged four bullets into one citation of `COPILOT-FOLLOWUP-REQUEST-BRANCHING`. The `unavailable` passive-waiting exception, the single detector refresh and the `watch-cycle`/`watch-ci` routing stay in the merged bullet. The unexpected-failure stop is owned by the branching rule.
+- Step 7 item 12 request-result bullets: merged four bullets into one citation of `COPILOT-FOLLOWUP-REQUEST-BRANCHING`. The `unavailable` passive-waiting exception, the reference to the immediate `detect-copilot-loop-state.mjs` re-baseline and the `watch-cycle`/`watch-ci` routing stay in the merged bullet. The unexpected-failure stop is owned by the branching rule.
 - Gate comment command: dropped the sentence that the helper handles inline versus body-filed findings. Owner: `upsert-checkpoint-verdict.mjs` and [Gate Review Comment Contract](../skills/docs/gate-review-comment-contract.md).
 - Size-budget shell comment: shortened. Exit 0/1 write JSON, exit 2 aborts, and the `set -e` capture rule stay.
 - Draft and pre-approval gate contracts: dropped "summarizes the procedural integration only" and "This skill does not restate" sentences. The owner links and rule IDs stay. Board sync: dropped the exit-code and auth detail. Owner: `ready-for-review.mjs`; the best-effort, NON-FATAL and never-blocks statements stay.
 - Human approval checkpoint: merged two paragraphs. The authoritative verify, the thread cross-check, both stops, the sanctioned `merge-pr.mjs` command and the raw `gh pr merge` prohibition stay.
 - Mechanical pre-merge check: dropped the duplicate `merge-pr.mjs` code block (same command in the checkpoint above). `RAW-GH-PR-MERGE-BYPASS` and the violation stop stay.
 - Stale lock takeover: dropped the lead-in sentence. The takeover trigger and command stay.
-- Post-merge board sync: dropped the exit-code table. Owners: `dev-loops queue sync-status` and `queue archive` help. Both `|| true` guards and the never-blocks rule stay. `queue reconcile` sentence: dropped the consequence clause.
+- Post-merge board sync: dropped the exit-code table. Owners: `scripts/projects/sync-item-status.mjs` and `scripts/projects/archive-done-items.mjs`. Both `|| true` guards and the never-blocks rule stay. `queue reconcile` sentence: dropped the consequence clause.
 - Reserved passages (`COPILOT-FOLLOWUP-REQUEST-BRANCHING`, Phase 5 retry and fixer triage step, `run-gate-validation.mjs` step, both "Review angles" bullets) are byte-identical.
 
 `skills/local-implementation/SKILL.md`:
@@ -187,19 +187,19 @@ Phase 2 worked every phase 2 row that was `pending`: eight changed, 14 unchanged
 - Step 1 items 1 and 2: dropped the `--jq` mechanics and envelope literals. The raw-body and bare-array input requirements and the fail-closed statement stay. The `detect_gaps`/`provenance_missing` consequence stays in Step 4.
 - Step 4 no-embed paragraph: dropped the "no embed, not sections only" aside.
 - Output format item 2: dropped the restated first-line consequence and `source:`/`bypass:` ordering. Owner: Step 4 `GRILL-SUBLOOP-RATIONALE-COMMENT`, which keeps both.
-- `--auto` capture bullet: dropped the harness-internals clause. The command and fallback stay.
+- `--auto` capture bullet: dropped the harness-internals clause. The command, fallback, runtime origin confinement and the final-screen-only persistence rule stay. Intermediate captures that can hold credential state after a `fill` are pruned as the walk advances.
 
 `skills/ui-review/SKILL.md`:
 
 - Provision stage: dropped the reused helper names (`ensure-worktree`, `provision-worktree`). Owner: `packages/core/src/loop/ui-review-provision.mjs`. The primary-checkout refusal and every fail-closed stop stay.
-- Drive stage: dropped the listener names (`response`, `requestfailed`, `pageerror`) and the buffer slicing mechanics. Owner: `packages/core/src/loop/ui-review-drive.mjs`. The recorded failure classes, the 3xx exclusion and the fail-closed step error stay.
-- Diagnose stage: dropped the stack-frame language list. Owner: `packages/core/src/loop/ui-review-diagnose.mjs`. The skip list, ADDED-lines rule and never-drop rule stay.
+- Drive stage: dropped the listener names (`response`, `requestfailed`, `pageerror`) and the buffer slicing mechanics. Owner: `packages/core/src/loop/ui-review-drive.mjs`. The recorded failure classes, the 3xx exclusion and the fail-closed step error stay. Dropped the "final report dedups per-state attribution" clause. No stage script implements that dedup; `ui-review-report` posts only diagnosed findings. The statement stays in [UI Artifact Contract](../skills/docs/ui-artifact-contract.md) and is a phase 3 review item.
+- Diagnose stage: dropped the stack-frame language list. Owner: `packages/core/src/loop/ui-review-diagnose.mjs`. The skip list, deterministic finding sort order (`rankFindings`), ADDED-lines rule and never-drop rule stay.
 - Remaining stages: removed implementation detail that the stage scripts own. Every command, flag, config key, trust-boundary statement and authorization rule stays.
 
 `skills/pi-session-audit/SKILL.md`:
 
 - Removed "Motivation & Context". The thresholds stay in the anti-pattern section (>100 turns, growth > 15x-30x).
-- Dedup and role-default paragraphs: dropped parser internals. The single-turn counting, replay rule, prompt-size definitions and role defaults stay. Owner of the mechanics: the audit script and its tests.
+- Dedup and role-default paragraphs: dropped parser internals, including the `.output` collection predicate (collect a background-task `.output` file only when its first non-empty line is a JSON object with a string `type` or an object `message`). Owner: `scripts/lib/audit-pi-session.mjs`. The single-turn counting, replay rule, prompt-size definitions and role defaults stay. Owner of the mechanics: the audit script and its tests.
 - Per-agent Turns column: cites the Total Turns definition. Dropped the "Uncached Input vs Cached Read" explanation.
 
 Templates and scripts:
@@ -210,21 +210,21 @@ Templates and scripts:
 
 ### Phase 2 measurements
 
-Method: `wc -c` and `wc -w` after the phase 2 commits, compared with the start revision.
+Method: `wc -c` and `wc -w` after the phase 2 commits and the phase 2 review fixes, compared with the start revision.
 
 | Surface | Baseline bytes / words | Phase 2 bytes / words |
 | --- | --- | --- |
-| `skills/copilot-pr-followup/SKILL.md` | 82,373 / 10,200 | 79,316 / 9,741 |
-| `skills/local-implementation/SKILL.md` | 51,013 / 6,549 | 48,738 / 6,201 |
-| `skills/loop-grill/SKILL.md` | 25,228 / 3,595 | 23,850 / 3,391 |
-| `skills/ui-review/SKILL.md` | 13,946 / 1,980 | 10,354 / 1,427 |
+| `skills/copilot-pr-followup/SKILL.md` | 82,373 / 10,200 | 79,413 / 9,744 |
+| `skills/local-implementation/SKILL.md` | 51,013 / 6,549 | 48,729 / 6,198 |
+| `skills/loop-grill/SKILL.md` | 25,228 / 3,595 | 23,992 / 3,414 |
+| `skills/ui-review/SKILL.md` | 13,946 / 1,980 | 10,469 / 1,442 |
 | `skills/pi-session-audit/SKILL.md` | 10,236 / 1,371 | 8,435 / 1,114 |
 | `skills/dev-loop/templates/pr-body.md` | 2,071 / 311 | 1,955 / 294 |
 | `skills/dev-loop/templates/ui-vision-review.md` | 7,195 / 917 | 6,709 / 850 |
 | `skills/dev-loop/scripts/init-phase.mjs` | 3,697 / 340 | 3,390 / 301 |
-| Total canonical `skills/` Markdown prose (70 files) | 1,105,439 / 144,970 | 1,092,937 / 143,093 |
-| Bundle A. Startup | 94,393 / 12,156 | 92,118 / 11,808 |
-| Bundle B. Copilot follow-up | 178,374 / 22,288 | 175,520 / 21,857 |
+| Total canonical `skills/` Markdown prose (70 files) | 1,105,439 / 144,970 | 1,093,282 / 143,131 |
+| Bundle A. Startup | 94,393 / 12,156 | 92,109 / 11,805 |
+| Bundle B. Copilot follow-up | 178,374 / 22,288 | 175,617 / 21,860 |
 | Bundle C. Gate coordinator | 251,582 / 33,069 | 251,582 / 33,069 |
 
 Bundle B includes the phase 1 folded item A (`copilot-loop-operations.md`, 20,103 / 2,534 to 20,306 / 2,562). Bundle C holds only `skills/docs/` files and changes in phase 3.

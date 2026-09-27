@@ -127,26 +127,44 @@ function assertLightweightIsNonDurable(content) {
   const durable = content.match(/Durable\/committed spec artifacts:([\s\S]*?)Non-durable spec-of-record/);
   assert.ok(durable, "missing durable / non-durable spec-of-record lists");
   assert.doesNotMatch(durable[1], /lightweight/i, "lightweight must not be listed as durable");
-  const nonDurable = content.match(/Non-durable spec-of-record \(no committed plan artifact\):\n\n([\s\S]*?)\n\n/);
+  const nonDurable = content.match(/Non-durable spec-of-record \(no committed plan artifact\):\n\n([\s\S]*?)(?:\n\n|$)/);
   assert.ok(nonDurable, "missing non-durable spec-of-record list");
-  assert.match(nonDurable[1], /lightweight PR-body-as-spec sessions/i);
-  assert.match(nonDurable[1], /`canonicalSpecSource: pr_body`/);
-  assert.match(nonDurable[1], /no phase\/plan doc/i);
+  assert.match(nonDurable[1], /lightweight PR-body-as-spec sessions/i, "non-durable list must name lightweight sessions");
+  assert.match(nonDurable[1], /`canonicalSpecSource: pr_body`/, "lightweight entry must name its pr_body spec source");
+  assert.match(nonDurable[1], /no phase\/plan doc/i, "lightweight entry must state it has no plan doc");
 }
 
-test("lightweight non-durable check fails when lightweight moves to the durable list", () => {
-  const moved = [
+test("lightweight non-durable check accepts a valid fixture and fails each broken fixture for its own reason", () => {
+  const valid = [
     "Durable/committed spec artifacts:",
     "",
-    "- lightweight PR-body-as-spec sessions",
+    "- phase-doc-backed local sessions",
     "",
     "Non-durable spec-of-record (no committed plan artifact):",
     "",
     "- lightweight PR-body-as-spec sessions (`canonicalSpecSource: pr_body`); no phase/plan doc",
     "",
   ].join("\n");
-  assert.throws(() => assertLightweightIsNonDurable(moved));
-  assert.throws(() => assertLightweightIsNonDurable(moved.replace("- lightweight PR-body-as-spec sessions\n", "- other\n").replace("; no phase/plan doc", "")));
+  assert.doesNotThrow(() => assertLightweightIsNonDurable(valid));
+  assert.doesNotThrow(() => assertLightweightIsNonDurable(`${valid}\n- trailing section\n`));
+
+  const moved = valid.replace("- phase-doc-backed local sessions", "- lightweight PR-body-as-spec sessions");
+  assert.throws(() => assertLightweightIsNonDurable(moved), /lightweight must not be listed as durable/);
+
+  const noLists = valid.replace("Non-durable spec-of-record (no committed plan artifact):", "Other sessions:");
+  assert.throws(() => assertLightweightIsNonDurable(noLists), /missing durable \/ non-durable spec-of-record lists/);
+
+  const noListBody = valid.replace("(no committed plan artifact):\n\n", "(no committed plan artifact):\n");
+  assert.throws(() => assertLightweightIsNonDurable(noListBody), /missing non-durable spec-of-record list/);
+
+  const noLightweight = valid.replace("lightweight PR-body-as-spec sessions", "other sessions");
+  assert.throws(() => assertLightweightIsNonDurable(noLightweight), /non-durable list must name lightweight sessions/);
+
+  const noSpecSource = valid.replace(" (`canonicalSpecSource: pr_body`)", "");
+  assert.throws(() => assertLightweightIsNonDurable(noSpecSource), /lightweight entry must name its pr_body spec source/);
+
+  const noPlanDoc = valid.replace("; no phase/plan doc", "");
+  assert.throws(() => assertLightweightIsNonDurable(noPlanDoc), /lightweight entry must state it has no plan doc/);
 });
 
 test("local workflow docs define tracker-backed local canonicality and no-dup rules", async () => {
