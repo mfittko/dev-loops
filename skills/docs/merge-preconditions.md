@@ -8,7 +8,7 @@ A PR that conflicts with its base gets **no `pull_request` CI run**, so the gate
 stall. Conflict-free is therefore a required gate precondition, checked at **two seams**:
 before requesting CI/Copilot, and again before merge.
 
-- `gh pr view --json mergeable,mergeStateStatus` drives it. A `CONFLICTING` /
+- The PR's `mergeable` / `mergeStateStatus` drive it. A `CONFLICTING` /
   `DIRTY` / `BEHIND` PR does **not** pass any gate (`gateBoundary:
   conflict_resolution`, `nextAction: resolve_merge_conflicts`).
 - A freshly-pushed head briefly reads `UNKNOWN`. The detect layer **re-polls a bounded

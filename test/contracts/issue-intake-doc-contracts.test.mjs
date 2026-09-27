@@ -11,6 +11,19 @@ import {
 import { assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
 import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
 import { parseReadyForReviewCliArgs } from "../../scripts/github/ready-for-review.mjs";
+import { parseEditPrCliArgs } from "../../scripts/github/edit-pr.mjs";
+
+// The intake PR edit example must run the sanctioned edit-pr.mjs wrapper with the
+// resolved repo and PR identity, and must not fall back to a raw `gh pr edit`.
+function assertIntakePrEditUsesWrapper(intake) {
+  const line = intake.match(/^node <resolved-skill-scripts>\/github\/edit-pr\.mjs (.+)$/m);
+  assert.ok(line, "intake must edit the PR through the edit-pr.mjs wrapper");
+  const args = line[1].replaceAll("<resolved-repo>", "owner/repo").replaceAll("<pr-number>", "42").split(/\s+/);
+  const parsed = parseEditPrCliArgs(args);
+  assert.equal(parsed.repo, "owner/repo", "edit-pr example must carry the resolved repo");
+  assert.equal(String(parsed.pr), "42", "edit-pr example must carry the PR number");
+  assert.doesNotMatch(intake, /^gh pr edit\b/m, "intake must not prescribe a raw gh pr edit");
+}
 
 const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
 
@@ -230,8 +243,8 @@ test("issue-intake flow carries the resolved repo slug through later GitHub issu
   assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --body-file <updated-body-file>/);
   assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee @me/);
   assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent/);
-  assert.match(skillContent, /gh pr edit <pr-number> --repo <resolved-repo> --title/);
   const intake = await readRepo("skills/docs/issue-intake-procedure.md");
+  assertIntakePrEditUsesWrapper(intake);
   const ready = intake.match(/^node <resolved-skill-scripts>\/github\/ready-for-review\.mjs (.+)$/m);
   assert.ok(ready, "intake must use the guarded ready wrapper");
   const args = ready[1].replaceAll("<resolved-repo>", "owner/repo").replaceAll("<pr-number>", "42").split(/\s+/);
@@ -409,4 +422,16 @@ test("mutation-pass and plan-doc closed-stop checks reject a dropped input, outp
     /must emit a verification artifact/);
   assert.throws(() => assertPlanDocClosedStop(doc.replace("if the matching issue is closed, stop for a user decision before proceeding", "continue")),
     /plan-doc path must stop on a closed matching issue/);
+});
+
+test("intake PR edit check rejects a raw gh pr edit or a wrapper call without repo identity", async () => {
+  const intake = await readRepo("skills/docs/issue-intake-procedure.md");
+  const wrapper = "node <resolved-skill-scripts>/github/edit-pr.mjs --repo <resolved-repo> --pr <pr-number>";
+  assertIntakePrEditUsesWrapper(intake.replace(`${wrapper} --title "..."`, `${wrapper} --title Refined`));
+  assert.throws(() => assertIntakePrEditUsesWrapper(intake.replace(wrapper, "gh pr edit <pr-number> --repo <resolved-repo>")),
+    /must edit the PR through the edit-pr\.mjs wrapper/);
+  assert.throws(() => assertIntakePrEditUsesWrapper(`${intake}\ngh pr edit <pr-number> --repo <resolved-repo> --title x\n`),
+    /must not prescribe a raw gh pr edit/);
+  assert.throws(() => assertIntakePrEditUsesWrapper(intake.replace(`${wrapper} --title`, "node <resolved-skill-scripts>/github/edit-pr.mjs --pr <pr-number> --title")),
+    /requires both --repo <owner\/name> and --pr <number>/);
 });

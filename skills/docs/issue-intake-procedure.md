@@ -202,7 +202,7 @@ node scripts/github/view-issue.mjs --repo <resolved-repo> --issue <number> --jso
 When the linked PR becomes substantive, keep the shared loop scoped to the resolved repo, for example:
 ```sh
 node <resolved-skill-scripts>/loop/copilot-pr-handoff.mjs --repo <resolved-repo> --pr <number>
-gh pr edit <pr-number> --repo <resolved-repo> --title "..." --body-file <body-file>
+node <resolved-skill-scripts>/github/edit-pr.mjs --repo <resolved-repo> --pr <pr-number> --title "..." --body-file <body-file>
 node <resolved-skill-scripts>/github/ready-for-review.mjs --repo <resolved-repo> --pr <pr-number>
 node <resolved-skill-scripts>/github/detect-checkpoint-evidence.mjs --repo <resolved-repo> --pr <pr-number>
 ```
