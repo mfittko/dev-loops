@@ -547,6 +547,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       "repo-root": { type: "string" },
       "expected-dispatch-units": { type: "string" },
       "primer-evidence": { type: "string" },
+      "cache-telemetry": { type: "string" },
       "emit-plan": { type: "string" },
       "primer-plan": { type: "string" },
       "tmp-root": { type: "string" },
