@@ -4,6 +4,7 @@ import { readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
+import { normalizeGate } from "../github/_gate-names.mjs";
 import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts } from "./run-gate-validation.mjs";
@@ -23,7 +24,7 @@ async function removeParseFailedArtifact(argv) {
   if (!["repo", "pr", "gate", "head-sha"].every((name) => identity[name])) return;
   try {
     const artifactPath = buildValidationResultsPath({
-      repo: identity.repo, pr: identity.pr, gate: identity.gate,
+      repo: identity.repo, pr: identity.pr, gate: normalizeGate(identity.gate),
       headSha: identity["head-sha"], tmpRoot: identity["tmp-root"] ?? "tmp",
     });
     const repoRoot = resolveRepoRoot(process.cwd());

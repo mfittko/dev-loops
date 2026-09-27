@@ -38,7 +38,7 @@ async function fixture(extraScripts = {}, pinnedBunVersion = bunVersion) {
   return { repoRoot, headSha };
 }
 
-const args = (headSha, profile = "full-repository") => ["--profile", profile, "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha];
+const args = (headSha, profile = "full-repository", gate = "draft_gate") => ["--profile", profile, "--repo", "owner/repo", "--pr", "1", "--gate", gate, "--head-sha", headSha];
 
 test("full validation resolves through gate CLI and preserves the legacy artifact", async () => {
   const { repoRoot, headSha } = await fixture();
@@ -173,7 +173,7 @@ test("targeted profile without an explicit suite is incomplete and runs nothing"
     assert.equal(complete.code, 0, complete.stderr);
     const stalePath = path.join(repoRoot, JSON.parse(complete.stdout).artifactPath);
     assert.equal(JSON.parse(await readFile(stalePath, "utf8")).allPassed, true);
-    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha, "targeted")], { cwd: repoRoot });
+    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha, "targeted", "DRAFT_GATE")], { cwd: repoRoot });
     assert.equal(out.code, 1);
     const result = JSON.parse(out.stdout);
     assert.equal(result.status, "incomplete");
