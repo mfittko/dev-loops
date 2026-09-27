@@ -355,10 +355,10 @@ function buildClaudeTurn(data, msg, usage, currentAgent, segmentId) {
     agent: data.agent || currentAgent || null,
     segmentId,
     promptTokens,
-    // Coordinator output bytes per subagent dispatch (ADR 0106): the prompt of
-    // each Agent/Task tool_use this message carries.
+    // Coordinator output bytes per reviewer dispatch (ADR 0106): the prompt of each
+    // Agent/Task tool_use whose subagent_type is review (bare or plugin-prefixed).
     dispatches: (Array.isArray(msg.content) ? msg.content : [])
-      .filter((block) => block?.type === "tool_use" && (block.name === "Agent" || block.name === "Task"))
+      .filter((block) => block?.type === "tool_use" && /^(Agent|Task)$/.test(block.name) && /(^|:)review$/.test(String(block.input?.subagent_type ?? "")))
       .map((block) => ({ id: block.id, bytes: Buffer.byteLength(String(block.input?.prompt ?? "")) })),
     usage: {
       input,

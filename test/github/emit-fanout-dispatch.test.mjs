@@ -449,6 +449,8 @@ test("fan-in join: sentinels written under the emitted scopes pair with the disp
 test("fan-in join: consolidateGateFanin consumes per-angle findings artifacts for every emitted angle, including the auto-chunk bundle's angles under its normalized group scope", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);
+    // A .devloops pins the pull's checkout root to tmpDir, even when TMPDIR sits inside a git checkout.
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\n", "utf8");
     const result = runEmitCli(
       ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
       { cwd: tmpDir },

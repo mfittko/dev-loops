@@ -1119,7 +1119,7 @@ export async function consolidateGateFanin(options) {
     // progressive/optional capture.
     const layoutVerdict = await verifyDispatchPromptLayoutForHead(tmpRoot, options.headSha);
     if (layoutVerdict.recordCount > 0 && !layoutVerdict.verified) {
-      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt did not bind to the sanctioned emitter's emitted unit. Re-run the sanctioned emitter (emit-fanout-dispatch.mjs) for the offending unit(s), re-dispatch from the emitted promptPath bytes, then re-consolidate.`);
+      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt did not bind to the sanctioned emitter's emitted unit. Re-run the sanctioned emitter (emit-fanout-dispatch.mjs) for the whole round, re-dispatch every unit's compact dispatchPrompt, then re-consolidate.`);
     }
     // The emitter writes a dispatch-prompt record per unit, so records on disk mark
     // a fan-out round; it must pass --emit-plan so every unit's pull receipt is checked

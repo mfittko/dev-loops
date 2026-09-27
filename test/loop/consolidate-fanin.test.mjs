@@ -1528,6 +1528,8 @@ test("emit CLI then consolidate-fanin CLI with --emit-plan: one round end to end
     const PREFIX_BYTES = "## Invariant prefix\nrepo: o/r\nhead: c\n";
     const dir = path.join(workDir, "tmp", "gate-context", "o-r", "pr-7");
     await mkdir(dir, { recursive: true });
+    // A .devloops pins the pull's checkout root to workDir, even when TMPDIR sits inside a git checkout.
+    await writeFile(path.join(workDir, ".devloops"), "version: 1\n", "utf8");
     await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.briefing-prefix.txt`), PREFIX_BYTES, "utf8");
     await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.briefing-volatile.txt`), "# volatile tail\n", "utf8");
     await writeFile(

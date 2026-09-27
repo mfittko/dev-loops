@@ -1656,7 +1656,7 @@ describe("audit-pi-session unit & integration", () => {
   it("reports Agent dispatch prompt bytes per dispatch for a Claude coordinator", async () => {
     const tmpDir = createTempDir();
     const usage = { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
-    const agent = (id, prompt) => ({ type: "tool_use", id, name: "Agent", input: { subagent_type: "review", prompt } });
+    const agent = (id, prompt, type = "review") => ({ type: "tool_use", id, name: "Agent", input: { subagent_type: type, prompt } });
     const pointer = buildDispatchPointer({
       workOrderRef: `review:o/r#7:pre_approval_gate:${"c".repeat(40)}:pre-approval-gate-coverage`,
       workOrderDigest: "a".repeat(64),
@@ -1665,9 +1665,10 @@ describe("audit-pi-session unit & integration", () => {
     const measure = async (prompt) => {
       const file = path.join(tmpDir, `agent-${prompt.length}.jsonl`);
       // Two records share msg_1 (one per content block): both dispatches count once.
+      // The judge dispatch is not a reviewer dispatch and stays out of the figure.
       writeClaudeTranscript(file, [
-        { id: "msg_1", usage, content: [agent("t1", prompt)] },
-        { id: "msg_1", usage, content: [agent("t2", prompt)] },
+        { id: "msg_1", usage, content: [agent("t1", prompt), agent("t3", prompt, "dev-loops:judge")] },
+        { id: "msg_1", usage, content: [agent("t2", prompt, "dev-loops:review")] },
       ]);
       return (await auditPiSession(file)).sessions[0].agentDispatch;
     };

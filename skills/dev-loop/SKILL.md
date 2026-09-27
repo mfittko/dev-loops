@@ -215,7 +215,7 @@ any record type. Full per-writer flag detail: Gate Review Sub-Loop Contract Phas
 ```sh
 dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate> \
   --expected-dispatch-units <n> --out <findings-json-path> --ledger-out <ledger-path> \
-  --spec-authority <identity-path> --jq '.severityCounts'
+  --emit-plan <emit-plan-path> --spec-authority <identity-path> --jq '.severityCounts'
 ```
 
 **Judge between fan-in and the fixer (Phase 3.5 wired, #1658):** after fan-in, before the
