@@ -540,30 +540,38 @@ const JUDGE_VERDICT_FILES = new Set(["judge-verdict.json", "spec-authority-verdi
 /**
  * Decide whether a PreToolUse Write/Edit/NotebookEdit by the read-only `judge` agent must be
  * denied (ADR 0106, agents/judge.agent.md tool boundary). The judge may write only its two
- * verdict files under a `tmp/gate-judge/` directory. Any other target could plant code that
- * the sanctioned `dev-loops-run` pull line then executes.
+ * verdict files in a round directory under one of `gateJudgeRoots`. Any other target could
+ * plant code that the sanctioned `dev-loops-run` pull line then executes, or overwrite a
+ * verdict outside the checkouts the pull scans.
  *
  * `targetPath` is the hook's realpath-normalized absolute target (symlinks, `..`, relative
- * paths and trailing slashes already resolved). A missing, relative or unnormalized path
- * denies fail-closed. Every non-judge agent is allowed here (the other boundaries apply).
+ * paths and trailing slashes already resolved). `gateJudgeRoots` are the realpath-normalized
+ * `<checkout>/tmp/gate-judge` roots of the repo's listed checkouts (the emitter's and pull's
+ * tmp roots). `symlinked` is true when the literal target or an existing path between it and
+ * its root is a symlink (a dangling one survives realpath). A missing, relative or unnormalized
+ * path, an empty root list, or a symlinked target denies fail-closed. Every non-judge agent is
+ * allowed here (the other boundaries apply).
  *
  * @param {Object} params
  * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload.
  * @param {string|null} [params.targetPath] - Realpath-normalized absolute target path.
+ * @param {string[]} [params.gateJudgeRoots] - Realpath-normalized allowed gate-judge roots.
+ * @param {boolean} [params.symlinked] - The target path crosses a symlink under its root.
  * @returns {HookDecision}
  */
-export function decideJudgeWriteGuard({ agentType = null, targetPath = null }) {
+export function decideJudgeWriteGuard({ agentType = null, targetPath = null, gateJudgeRoots = [], symlinked = false }) {
   if (normalizeAgentType(agentType) !== JUDGE_AGENT_TYPE) return ALLOW;
-  const segments = typeof targetPath === "string" && targetPath.startsWith("/") ? targetPath.split("/") : [];
-  const gateJudge = segments.findIndex((segment, i) => segment === "gate-judge" && segments[i - 1] === "tmp");
-  const allowed = gateJudge > 0 && segments.length > gateJudge + 2 && !segments.includes("..") && !segments.includes(".")
+  const root = typeof targetPath === "string" && targetPath.startsWith("/")
+    ? gateJudgeRoots.find((r) => typeof r === "string" && r.startsWith("/") && targetPath.startsWith(`${r}/`)) : undefined;
+  const segments = root ? targetPath.slice(root.length + 1).split("/") : [];
+  const allowed = !symlinked && segments.length >= 2 && !segments.some((s) => s === "" || s === "." || s === "..")
     && JUDGE_VERDICT_FILES.has(segments.at(-1));
   return allowed ? ALLOW : {
     decision: "deny",
     reason:
       `Judge write boundary (agents/judge.agent.md, ADR 0106): refusing to write ${JSON.stringify(targetPath)}. ` +
       "The judge writes only its judge-verdict.json and spec-authority-verdict.json at the outputRefs its " +
-      "pulled work order names under tmp/gate-judge/.",
+      "pulled work order names under a checkout's tmp/gate-judge/, never through a symlink.",
   };
 }
 

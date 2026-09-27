@@ -176,19 +176,30 @@ test("bash-gate hook lets the judge run only its work-order pull; shell, test an
   assert.equal(decide("npm test", "review"), "allow", "other workers keep their shell");
 });
 
-test("write-guard hook lets the judge write only its verdict files under tmp/gate-judge/ (ADR 0106)", () => {
+test("write-guard hook lets the judge write only its verdict files under a checkout's tmp/gate-judge/ (ADR 0106)", () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "judge-write-guard-")));
   try {
+    const git = (...args) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root, encoding: "utf8" });
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "init");
+    git("worktree", "add", "-q", "wt");
     const rel = "tmp/gate-judge/o-r/pr-7/draft_gate-abc/j1-aa";
     fs.mkdirSync(path.join(root, rel), { recursive: true });
     fs.mkdirSync(path.join(root, "scripts"));
     fs.symlinkSync(path.join(root, "scripts"), path.join(root, rel, "link"));
+    // Dangling symlinks: realpath cannot follow them, so only lstat sees the escape.
+    fs.symlinkSync(path.join(root, "scripts", "evil.mjs"), path.join(root, rel, "judge-verdict.json"));
+    fs.symlinkSync(path.join(root, "scripts", "missing"), path.join(root, "tmp/gate-judge/o-r/dangling"));
     const decide = (tool_input, agent_type = "dev-loops:judge", tool_name = "Write") =>
       runHook("pre-tool-use-write-guard.mjs", { tool_name, tool_input, cwd: root, agent_type }).json?.hookSpecificOutput?.permissionDecision ?? "allow";
-    assert.equal(decide({ file_path: path.join(root, rel, "judge-verdict.json") }), "allow");
+    assert.equal(decide({ file_path: path.join(root, rel, "spec-authority-verdict.json") }), "allow");
     assert.equal(decide({ file_path: `${rel}/spec-authority-verdict.json` }, "judge"), "allow", "relative path resolves against cwd");
+    assert.equal(decide({ file_path: path.join(root, "wt", rel, "judge-verdict.json") }), "allow", "a linked worktree's tmp root is an emit root");
     for (const tool_input of [{}, { file_path: "" }, { file_path: "package.json" }, { file_path: path.join(root, "scripts/github/pull-work-order.mjs") },
-      { file_path: `${rel}/../../../../../scripts/judge-verdict.json` }, { file_path: `${rel}/link/judge-verdict.json` }, { file_path: `${rel}/package.json` }]) {
+      { file_path: `${rel}/../../../../../scripts/judge-verdict.json` }, { file_path: `${rel}/link/judge-verdict.json` }, { file_path: `${rel}/package.json` },
+      { file_path: `${rel}/judge-verdict.json` }, { file_path: "tmp/gate-judge/o-r/dangling/judge-verdict.json" },
+      { file_path: path.join(root, "scripts/tmp/gate-judge/z/judge-verdict.json") },
+      { file_path: "/tmp/gate-judge/z/spec-authority-verdict.json" }]) {
       assert.equal(decide(tool_input), "deny", JSON.stringify(tool_input));
     }
     assert.equal(decide({ notebook_path: path.join(root, "x.ipynb") }, "judge", "NotebookEdit"), "deny");

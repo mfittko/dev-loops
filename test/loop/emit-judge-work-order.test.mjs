@@ -28,6 +28,10 @@ test("J1: the producer derives the work order from the round's sources, pins the
     const cli = (extra) => node("scripts/loop/emit-judge-work-order.mjs", ["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD,
       "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], root);
     for (const flag of ["--brief", "--payload", "--summary-file"]) assert.equal(cli([flag, "x"]).status, 2, `${flag} is not an input`);
+    assert.equal(JSON.parse(cli(["--tmp-root", "tmp"]).stdout).ok, true, "the checkout's own tmp root is accepted");
+    for (const tmpRoot of ["scripts/tmp", path.join(root, "..", "elsewhere")]) {
+      assert.match(JSON.parse(cli(["--tmp-root", tmpRoot]).stdout).error, /is not a checkout's tmp root/, tmpRoot);
+    }
     const ok = JSON.parse(cli([]).stdout);
     assert.equal(ok.ok, true);
     await rm(path.join(root, sources.specFile));

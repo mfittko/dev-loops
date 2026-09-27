@@ -5,9 +5,9 @@
  * Independent boundaries on a Write/Edit:
  *
  * 0. JUDGE write boundary (always on, ADR 0106): the read-only `judge` agent may
- *    write only judge-verdict.json / spec-authority-verdict.json under a
- *    tmp/gate-judge/ directory (realpath-resolved); every other target, and a
- *    missing or unparseable path, is denied.
+ *    write only judge-verdict.json / spec-authority-verdict.json under a listed
+ *    checkout's tmp/gate-judge/ (realpath-resolved, no symlink on the way); every
+ *    other target, and a missing or unparseable path, is denied.
  *
  * 1. WRONG-CHECKOUT guard (always on): when the call context is operating
  *    inside a linked worktree (the active cycle worktree) but the target resolves
@@ -29,9 +29,10 @@
  *    agentType facts computed for boundary 2.
  */
 import { execFileSync } from "node:child_process";
+import { lstatSync } from "node:fs";
 import path from "node:path";
 
-import { decideJudgeWriteGuard, decideWriteGuard, decideCoordinatorWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
+import { decideJudgeWriteGuard, JUDGE_AGENT_TYPE, normalizeAgentType, decideWriteGuard, decideCoordinatorWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
 import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
@@ -41,14 +42,35 @@ const filePath = input?.tool_input?.file_path ?? input?.tool_input?.notebook_pat
 const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 
 // --- Boundary 0: judge write boundary (ADR 0106) ------------------------------
-// The read-only judge writes only its two verdict files under tmp/gate-judge/. A
-// missing or unparseable path reaches the decider as null and denies fail-closed.
-const judgeDecision = decideJudgeWriteGuard({
-  agentType: typeof input?.agent_type === "string" ? input.agent_type : null,
-  targetPath: typeof filePath === "string" && filePath ? realpathNearestExisting(path.resolve(cwd, filePath)) : null,
-});
-if (judgeDecision.decision === "deny") {
-  emitDeny(judgeDecision.reason);
+// The read-only judge writes only its two verdict files under a listed checkout's
+// tmp/gate-judge/ (the roots the emitter writes and the pull scans). A missing or
+// unparseable path, an unresolvable checkout list, or a symlink on the way denies
+// fail-closed.
+if (typeof input?.agent_type === "string" && normalizeAgentType(input.agent_type) === JUDGE_AGENT_TYPE) {
+  const judgeAbs = typeof filePath === "string" && filePath ? path.resolve(cwd, filePath) : null;
+  let gateJudgeRoots = [];
+  try {
+    gateJudgeRoots = parseAllWorktreePaths(execFileSync("git", ["worktree", "list"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }))
+      .map((root) => `${realpathNearestExisting(root)}/tmp/gate-judge`);
+  } catch { /* no git context: no allowed root, so the decider denies */ }
+  // realpathNearestExisting walks past a dangling symlink and re-appends its literal name, so
+  // lstat every literal component from the target up to its gate-judge root.
+  const crossesSymlink = (p) => {
+    for (;;) {
+      if (lstatSync(p, { throwIfNoEntry: false })?.isSymbolicLink()) return true;
+      if (gateJudgeRoots.includes(realpathNearestExisting(p)) || path.dirname(p) === p) return false;
+      p = path.dirname(p);
+    }
+  };
+  const judgeDecision = decideJudgeWriteGuard({
+    agentType: input.agent_type,
+    targetPath: judgeAbs ? realpathNearestExisting(judgeAbs) : null,
+    gateJudgeRoots,
+    symlinked: judgeAbs ? crossesSymlink(judgeAbs) : false,
+  });
+  if (judgeDecision.decision === "deny") {
+    emitDeny(judgeDecision.reason);
+  }
 }
 
 if (typeof filePath !== "string" || !filePath) {

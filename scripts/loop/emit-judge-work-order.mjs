@@ -6,6 +6,7 @@
  * reader and receipt stay in _work-order-protocol.mjs.
  */
 import { createHash, randomBytes } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -17,6 +18,7 @@ import { buildDispatchPointer, materializationHash, registerWorkOrderRole, workO
 import { buildGateArtifactPath, buildGateContextPath } from "../github/_gate-artifact-paths.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
+import { resolveLedgerCheckouts } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--tmp-root <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
@@ -26,6 +28,7 @@ prior-round judge verdicts. It writes the immutable work order under
 <tmp-root>/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/ and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, planPath }.
 The work order's two verdict outputRefs sit under that directory's <roundId>/ segment.
+--tmp-root must be a listed checkout's tmp directory (the default is <cwd>/tmp).
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
 previous emission for this gate and head. It accepts no brief or summary input.
 Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error.`;
@@ -208,11 +211,21 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd() }
   const emit = (payload) => emitResult(payload, { jq: values.jq, silent: values.silent, fields: values.fields });
   const jqSyntaxError = preflightJqFilter(values.jq);
   if (jqSyntaxError !== undefined) return jqSyntaxError;
+  const tmpRoot = values["tmp-root"] ? path.resolve(cwd, values["tmp-root"]) : undefined;
+  if (tmpRoot) {
+    // The judge write guard allows verdicts only under a listed checkout's tmp/gate-judge,
+    // and the pull scans only those checkouts, so any other tmp root strands the round.
+    const canonical = (p) => { try { return realpathSync(p); } catch { return p; } };
+    const allowed = resolveLedgerCheckouts(cwd).map((root) => canonical(path.join(root, "tmp")));
+    if (!allowed.includes(canonical(tmpRoot))) {
+      return emit({ ok: false, error: `--tmp-root ${tmpRoot} is not a checkout's tmp root (${allowed.join(", ")}); the judge may write verdicts only under <checkout>/tmp/gate-judge, so omit --tmp-root or pass one of these` });
+    }
+  }
   try {
     const plan = await emitJudgeWorkOrder({
       repo: values.repo, pr: values.pr, gate: values.gate, headSha: values["head-sha"].toLowerCase(),
       findingsFile: values["findings-file"], specFile: values["spec-file"], identityFile: values["identity-file"],
-      priorVerdicts: values["prior-verdict"] ?? [], cwd, ...(values["tmp-root"] ? { tmpRoot: path.resolve(cwd, values["tmp-root"]) } : {}),
+      priorVerdicts: values["prior-verdict"] ?? [], cwd, ...(tmpRoot ? { tmpRoot } : {}),
     });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });
