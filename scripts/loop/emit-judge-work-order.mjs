@@ -18,7 +18,7 @@ import { buildDispatchPointer, materializationHash, registerWorkOrderRole, workO
 import { buildGateArtifactPath, buildGateContextPath } from "../github/_gate-artifact-paths.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
-import { resolveLedgerCheckouts } from "./_repo-root-resolver.mjs";
+import { resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--tmp-root <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
@@ -28,7 +28,7 @@ prior-round judge verdicts. It writes the immutable work order under
 <tmp-root>/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/ and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, planPath }.
 The work order's two verdict outputRefs sit under that directory's <roundId>/ segment.
---tmp-root must be a listed checkout's tmp directory (the default is <cwd>/tmp).
+--tmp-root must be a listed checkout's tmp directory (the default is <checkout root>/tmp).
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
 previous emission for this gate and head. It accepts no brief or summary input.
 Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error.`;
@@ -42,6 +42,11 @@ const PACKAGE_ROOT = new URL("../../", import.meta.url);
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const judgeDir = ({ repo, pr, gate, headSha, tmpRoot }) => buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, dir: "gate-judge" });
+const sortKeys = (value) => (Array.isArray(value) ? value.map(sortKeys)
+  : value !== null && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortKeys(value[key])]))
+    : value);
+/** Exact-content digest of parsed JSON (key order only is normalized); pins the ledger and prior verdicts. */
+export const jsonContentDigest = (value) => sha256(JSON.stringify(sortKeys(value)));
 
 class Refusal extends Error {}
 
@@ -55,7 +60,7 @@ function parseSource({ read, bytes }) {
   try { return JSON.parse(bytes.toString("utf8")); } catch { throw new Refusal(`required judge source ${read.kind} is not JSON: ${read.path}`); }
 }
 
-function renderWorkOrder(workOrder) {
+export function renderWorkOrder(workOrder) {
   const [verdictPath, specVerdictPath] = workOrder.outputRefs;
   return `# Judge work order (ADR 0106)
 
@@ -80,8 +85,11 @@ ${JSON.stringify(workOrder, null, 2)}
  * Emit one judge work order. Returns the plan record written beside it. Throws
  * Refusal on a missing or inconsistent source. `roundId` is injectable for tests.
  */
-export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile, specFile, identityFile, priorVerdicts = [], cwd = process.cwd(), tmpRoot = path.join(cwd, "tmp"), roundId = `j${Date.now()}-${randomBytes(4).toString("hex")}` }) {
+export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile, specFile, identityFile, priorVerdicts = [], cwd = process.cwd(), tmpRoot, roundId = `j${Date.now()}-${randomBytes(4).toString("hex")}` }) {
   if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Refusal(`--head-sha must be a full 40- or 64-char lowercase SHA, got ${headSha}`);
+  // Anchor at the checkout root, never a cwd subdirectory the pull and write guard never scan.
+  const checkoutRoot = resolveRepoRoot(cwd);
+  tmpRoot ??= path.join(checkoutRoot, "tmp");
   const abs = (p) => path.resolve(cwd, p);
   const dir = path.resolve(judgeDir({ repo, pr, gate, headSha, tmpRoot }));
   const findings = await readSource("findings", abs(findingsFile));
@@ -95,12 +103,13 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   const context = await readJson(abs(buildGateContextPath({ repo, pr, gate, headSha, tmpRoot })));
   const evidenceRead = context?.requiredReads?.find((read) => read?.kind === "evidence");
   if (!evidenceRead) throw new Refusal(`no gate-context evidence read for ${gate} at ${headSha}; run write-gate-context.mjs for this round first`);
-  const evidence = await readSource("evidence", abs(evidenceRead.path));
+  // write-gate-context records the evidence path relative to the checkout root.
+  const evidence = await readSource("evidence", path.resolve(checkoutRoot, evidenceRead.path));
   if (evidence.read.sha256 !== evidenceRead.sha256) throw new Refusal(`gate-context evidence ${evidenceRead.path} changed since the round was built; rebuild the round context`);
   const priors = [];
   for (const prior of priorVerdicts) priors.push(await readSource("prior-judge-verdict", abs(prior)));
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
-  const { config } = await loadDevLoopConfig({ repoRoot: cwd });
+  const { config } = await loadDevLoopConfig({ repoRoot: checkoutRoot });
 
   const workOrder = {
     role: "judge",
@@ -113,8 +122,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
       specDigest,
       contentDigest: identity.contentDigest,
       checkedCriteria: identity.checkedCriteria,
-      findingsDigest: workOrderDigest(parseSource(findings)),
-      priorVerdictDigests: priors.map((prior) => workOrderDigest(parseSource(prior))),
+      findingsDigest: jsonContentDigest(parseSource(findings)),
+      priorVerdictDigests: priors.map((prior) => jsonContentDigest(parseSource(prior))),
     },
     contracts,
     requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read)],
@@ -144,39 +153,46 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   return { ...plan, planPath };
 }
 
-// Judge adapter. The newest emission for the gate and head is current; an older
-// ref is superseded. A retired gate round, or a required source whose bytes
-// changed since emission (spec, identity, ledger), makes the unit stale.
-async function locateJudgeUnit({ ref, tmpRoots }) {
+// Judge adapter. The newest emission for the gate and head across ALL checkouts
+// is current; an older ref is superseded. A retired gate round, or a required
+// source whose bytes changed since emission (spec, identity, ledger), makes the unit stale.
+const emissionOrder = (plan) => [Number(/^j(\d+)-/.exec(plan.roundId ?? "")?.[1]) || 0, String(plan.roundId ?? "")];
+const isNewer = (a, b) => {
+  const [[aMs, aId], [bMs, bId]] = [emissionOrder(a), emissionOrder(b)];
+  return aMs !== bMs ? aMs > bMs : aId > bId;
+};
+
+export async function locateJudgeUnit({ ref, tmpRoots }) {
   const match = JUDGE_REF_RE.exec(ref);
   if (!match) return null;
   const [, repo, pr, gate, headSha, roundId, emittedAtMs] = match;
   // A typed gate/pr/repo the path builder rejects is a retryable typo, never an IO error.
   try { judgeDir({ repo, pr, gate, headSha }); } catch { return null; }
-  let superseded = null;
+  let newest = null;
+  let own = null;
   for (const tmpRoot of tmpRoots) {
     const plan = await readJson(path.join(judgeDir({ repo, pr, gate, headSha, tmpRoot }), "judge-emit-plan.json"));
     if (!plan) continue;
-    if (plan.workOrderRef !== ref) {
-      superseded ??= { stale: `judge ref ${ref} was superseded by ${plan.workOrderRef}` };
-      continue;
-    }
-    const retired = await findRetirementAfter(tmpRoot, gate, headSha, Number(emittedAtMs));
-    const changed = [];
-    for (const read of plan.workOrder?.requiredReads ?? []) {
-      const bytes = await readFile(read.path).catch(() => null);
-      if (bytes === null || sha256(bytes) !== read.sha256) changed.push(read.kind);
-    }
-    const stale = (retired && `judge execution ${roundId} belongs to a ${gate} round at ${headSha} retired as ${retired}`)
-      || (changed.length > 0 && `required judge source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`);
-    return {
-      ...plan,
-      materializationPath: plan.promptPath,
-      subject: { repo, pr: Number(pr), gate, headSha, roundId },
-      stale: stale || undefined,
-    };
+    if (!newest || isNewer(plan, newest)) newest = plan;
+    if (plan.workOrderRef === ref) own ??= { plan, tmpRoot };
   }
-  return superseded;
+  if (!newest) return null;
+  if (!own || newest.workOrderRef !== ref) return { stale: `judge ref ${ref} was superseded by ${newest.workOrderRef}` };
+  const { plan, tmpRoot } = own;
+  const retired = await findRetirementAfter(tmpRoot, gate, headSha, Number(emittedAtMs));
+  const changed = [];
+  for (const read of plan.workOrder?.requiredReads ?? []) {
+    const bytes = await readFile(read.path).catch(() => null);
+    if (bytes === null || sha256(bytes) !== read.sha256) changed.push(read.kind);
+  }
+  const stale = (retired && `judge execution ${roundId} belongs to a ${gate} round at ${headSha} retired as ${retired}`)
+    || (changed.length > 0 && `required judge source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`);
+  return {
+    ...plan,
+    materializationPath: plan.promptPath,
+    subject: { repo, pr: Number(pr), gate, headSha, roundId },
+    stale: stale || undefined,
+  };
 }
 
 registerWorkOrderRole("judge", {

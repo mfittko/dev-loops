@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath, verifyPullReceipt, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
@@ -45,9 +46,25 @@ test("J1: a spec/identity or head mismatch refuses; a changed ledger changes the
     const base = await emitJudgeWorkOrder(sources);
     await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ overallVerdict: "findings_present", findings: [{ severity: "low", summary: "other" }] }));
     assert.notEqual((await emitJudgeWorkOrder(sources)).workOrderDigest, base.workOrderDigest);
-    await assert.rejects(emitJudgeWorkOrder({ ...sources, headSha: "e".repeat(40) }), /no gate-context evidence read|is for head/);
+    // Fields the work-order canonicalizer drops (sha256, absolute-path strings) still change the ledger pin.
+    const pinOf = async (value) => {
+      await writeFile(path.join(root, sources.findingsFile), JSON.stringify({ findings: [{ severity: "low", summary: value, sha256: value }] }));
+      return (await emitJudgeWorkOrder(sources)).workOrder.authority.findingsDigest;
+    };
+    assert.notEqual(await pinOf("/abs/a"), await pinOf("/abs/b"));
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, headSha: "e".repeat(40) }), /is for head/);
     await writeFile(path.join(root, sources.specFile), JSON.stringify({ acceptanceCriteria: ["Changed"], definitionOfDone: [], nonGoals: [] }));
     await assert.rejects(emitJudgeWorkOrder(sources), /re-run spec-context\.mjs/);
+  });
+});
+
+test("J1: changed or missing gate-context evidence refuses", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    await writeFile(path.join(root, "judge-fixture", "evidence.md"), "## PR body\nDeclared scope: something else.\n");
+    await assert.rejects(emitJudgeWorkOrder(sources), /changed since the round was built/);
+    await rm(path.join(root, buildGateContextPath({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: HEAD })));
+    await assert.rejects(emitJudgeWorkOrder(sources), /no gate-context evidence read/);
   });
 });
 
@@ -105,6 +122,33 @@ test("J3: a superseded ref, a changed spec or ledger, and a retired round refuse
     await mkdir(retired, { recursive: true });
     await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "pre_approval_gate", retiredAt: new Date().toISOString() }));
     assert.equal(refusal(pull(second, root)), "stale_dispatch");
+  });
+});
+
+test("J3: a re-emission from another checkout supersedes the older ref in every scan order", async () => {
+  await withDir(async (a) => withDir(async (b) => {
+    const first = await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-aa" });
+    const second = await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j2-bb" });
+    const pullFrom = (plan, tmpRoots) => pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: a, tmpRoots, receiptTmpRoot: path.join(a, "tmp") });
+    for (const tmpRoots of [[path.join(a, "tmp"), path.join(b, "tmp")], [path.join(b, "tmp"), path.join(a, "tmp")]]) {
+      await assert.rejects(pullFrom(first, tmpRoots), (err) => err.refusal === "stale_dispatch" && err.message.includes(second.workOrderRef));
+      assert.ok((await pullFrom(second, tmpRoots)).receipt);
+    }
+  }));
+});
+
+test("J3: an emission from a checkout subdirectory lands under the checkout root and pulls", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+    const sub = path.join(root, "scripts");
+    await mkdir(sub);
+    const rel = (p) => path.join("..", p);
+    const out = JSON.parse(node("scripts/loop/emit-judge-work-order.mjs", ["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD,
+      "--findings-file", rel(sources.findingsFile), "--spec-file", rel(sources.specFile), "--identity-file", rel(sources.identityFile)], sub).stdout);
+    assert.equal(out.ok, true, out.error);
+    assert.ok(out.planPath.startsWith(path.join(root, "tmp", "gate-judge")), out.planPath);
+    assert.equal(pull(out, sub).status, 0);
   });
 });
 

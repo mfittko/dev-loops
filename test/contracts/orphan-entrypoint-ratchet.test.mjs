@@ -77,7 +77,6 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/loop/pre-write-remote-freshness-guard.mjs", "standalone — remote-freshness guard step, agent-invoked"],
   ["scripts/loop/resolve-verdict-ledger-source.mjs", "standalone — verdict/ledger tooling source resolver (issue #1661), skill-agent-invoked to prefer worktree-source when installed CLI stale"],
   ["scripts/loop/run-refinement-audit.mjs", "standalone — refinement audit step (documented in scripts/README), agent-invoked"],
-  ["scripts/loop/emit-judge-work-order.mjs", "standalone — judge work-order producer (ADR 0106); invoked from the Phase 3.5 contract prose, and pull-work-order.mjs imports it only to register the judge role adapter"],
   ["scripts/loop/spec-context.mjs", "standalone — spec/digest resolution CLI seam (ADR 0061 AC5); invoked from skills/dev-loop Phase 3.5 + gate-review-sub-loop-contract prose, which is not a code caller, so it stays orphaned by this ratchet's definition (issue 2008)"],
   ["scripts/loop/validate-pr-body-spec.mjs", "delete or wire — CLI superseded by core validatePrBodySpec; its --expected-issue option has no caller (issue #1620 orphan)"],
   ["scripts/refine/refine-plan-file.mjs", "standalone — refine-flow phase-file step, agent-invoked"],

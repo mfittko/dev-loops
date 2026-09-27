@@ -22,11 +22,12 @@ const HEAD = "0123456789abcdef".padEnd(40, "0");
 // Every CLI fixture is a freshly dispatched judge (ADR 0106): emit its work order
 // over the fixture's own ledger and spec, pull it, then write the verdicts after
 // the pull to the work order's outputRefs, as the judge does.
-async function judgePassCli(options, deps = {}) {
+// `pinned` overrides the spec file or content digest the work order pins (default: the options' own).
+async function judgePassCli(options, { pinned = {}, ...deps } = {}) {
   const root = options.repoRoot ? path.resolve(deps.repoRoot ?? process.cwd(), options.repoRoot) : deps.repoRoot ?? process.cwd();
   const sources = await seedJudgeSources(root, {
     repo: options.repo, pr: Number(options.pr), gate: options.gate, headSha: options.headSha,
-    findingsFile: options.findingsFile, specFile: options.specFile, contentDigest: options.contentDigest,
+    findingsFile: options.findingsFile, specFile: pinned.specFile ?? options.specFile, contentDigest: pinned.contentDigest ?? options.contentDigest,
   });
   const { plan, receiptTmpRoot } = await deliverJudge(root, sources);
   const delivered = { judgePlan: plan.planPath, ...options };
@@ -859,6 +860,25 @@ test("judgePassCli passes when the whole-spec authority verdict is valid", async
   assert.equal(payload.specAuthority.humanDecisionRequired, false);
 });
 
+test("judge-pass J5: a --spec-file or --content-digest other than the work order's pin refuses", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-pin-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  await writeSpecAuthorityCase(tmpDir, {
+    findings: [finding()],
+    decisions: {
+      identity: { specDigest, headSha: HEAD, contentDigest },
+      list: [{ index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" }],
+    },
+  });
+  await writeFile(path.join(tmpDir, "spec-b.json"), JSON.stringify({ ...SPEC_FIXTURE, acceptanceCriteria: [...SPEC_FIXTURE.acceptanceCriteria, "Other"] }));
+  const [options, deps] = specAuthorityArgs(tmpDir, contentDigest);
+  const withOut = { ...options, out: "./act.json" };
+  await assert.rejects(judgePassCli(withOut, { ...deps, pinned: { specFile: "./spec-b.json" } }), /pinned authority/);
+  const { computeContentDigest } = await import("@dev-loops/core/loop/spec-authority");
+  await assert.rejects(judgePassCli(withOut, { ...deps, pinned: { contentDigest: computeContentDigest("other-impl") } }), /pinned authority/);
+  assert.equal(existsSync(path.join(tmpDir, "act.json")), false);
+});
+
 test("judgePassCli fails closed when a finding needs a human spec decision", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-human-"));
   const { computeSpecDigest, computeContentDigest, specCriterionIds } = await import(
@@ -1507,6 +1527,24 @@ test("judge-pass J5: a superseded round's late verdict never counts as the curre
   await assert.rejects(runPass({ judgePlan: roundB.planPath, judgeVerdict: "./judge-verdict.json" }), /is not the judge work order's outputRef/);
   await writeVerdictAfterPull(roundB.workOrder.outputRefs[0], JSON.stringify(verdict()));
   assert.equal((await runPass({ judgePlan: roundB.planPath, judgeVerdict: roundB.workOrder.outputRefs[0] })).actCount, 1);
+});
+
+test("judge-pass J5: a plan with forged authority or a saved copy of a superseded plan refuses", async () => {
+  const { root, plan: roundA, sources, runPass } = await deliveryCase();
+  // Same ref/digest/execution, so the receipt matches; the edited pin no longer reproduces the digest.
+  const forged = { ...roundA, workOrder: { ...roundA.workOrder, authority: { ...roundA.workOrder.authority, findingsDigest: "0".repeat(64) } } };
+  await writeFile(path.join(root, "forged-plan.json"), JSON.stringify(forged));
+  await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), /does not reproduce the work order/);
+  // Output refs are local-only digest fields; the rendered work order still binds them.
+  const moved = { ...roundA, workOrder: { ...roundA.workOrder, outputRefs: [path.join(root, "elsewhere.json"), roundA.workOrder.outputRefs[1]] } };
+  await writeVerdictAfterPull(path.join(root, "elsewhere.json"), JSON.stringify(verdict()));
+  await writeFile(path.join(root, "moved-plan.json"), JSON.stringify(moved));
+  await assert.rejects(runPass({ judgePlan: "./moved-plan.json", judgeVerdict: path.join(root, "elsewhere.json") }), /does not reproduce the work order/);
+  await writeFile(path.join(root, "saved-plan-a.json"), JSON.stringify(roundA));
+  await deliverJudge(root, sources);
+  await writeVerdictAfterPull(roundA.workOrder.outputRefs[0], JSON.stringify(verdict()));
+  await assert.rejects(runPass({ judgePlan: "./saved-plan-a.json" }), /is not the current emission.*superseded/);
+  assert.equal(existsSync(path.join(root, "act.json")), false);
 });
 
 test("judge-pass J5: a round retired after emission refuses at acceptance", async () => {

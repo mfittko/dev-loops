@@ -29,9 +29,10 @@ import {
 import { commentDeferredFindings, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
-import { verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
-import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
+import { jsonContentDigest, locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
+import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "./_repo-root-resolver.mjs";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
   JQ_OUTPUT_USAGE,
@@ -66,8 +67,9 @@ Inputs:
                                --spec-authority-verdict are the plan's outputRefs,
                                a matching judge pull receipt exists under the main
                                checkout, both verdict artifacts were written after
-                               that pull, and --findings-file is the ledger the work
-                               order pinned. The pinned spec and content digests are
+                               that pull, the plan reproduces the pulled work order
+                               and is still the newest emission in every checkout,
+                               and --findings-file is the ledger the work order pinned. The pinned spec and content digests are
                                compared only when --spec-file is passed; without it
                                the pass checks no spec pin.
   --head-sha <sha>             The round's current head. The verdict's headSha must
@@ -798,15 +800,26 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
       throw new Error(`${flag} ${value} is not the judge work order's outputRef ${ref}; pass the plan's outputRefs for execution ${plan.executionIdentity}`);
     }
   }
+  let receipt;
   for (const resultPath of [options.judgeVerdict, options.specAuthorityVerdict].filter(Boolean)) {
     const check = await verifyPulledResult({
       receiptTmpRoot, role: "judge", workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity, resultPath: resolve(resultPath),
     });
     if (!check.ok) throw new Error(`judge delivery evidence failed (${check.reason}) for ${resultPath}: a verdict counts only after a matching pull of ${plan.workOrderRef} (execution ${plan.executionIdentity}) under ${receiptTmpRoot}; re-dispatch the judge with its compact dispatchPrompt`);
+    receipt = check.receipt;
+  }
+  // The plan's work order must be exactly what the judge pulled: its digest and its rendered bytes.
+  if (workOrderDigest(order) !== plan.workOrderDigest || materializationHash(renderWorkOrder(order)) !== receipt.materializationHash) {
+    throw new Error(`--judge-plan ${options.judgePlan} does not reproduce the work order execution ${plan.executionIdentity} pulled; pass the plan emit-judge-work-order.mjs wrote`);
   }
   const ledger = await readJsonArtifact(resolve(options.findingsFile), "--findings-file", parseError);
-  if (workOrderDigest(ledger) !== order.authority?.findingsDigest) {
+  if (jsonContentDigest(ledger) !== order.authority?.findingsDigest) {
     throw new Error(`--findings-file ${options.findingsFile} is not the ledger the judge work order pinned; re-emit the judge work order for this ledger and re-run the judge`);
+  }
+  // A copied plan of a superseded round never counts: the ref must still be the newest emission in every checkout.
+  const current = await locateJudgeUnit({ ref: plan.workOrderRef, tmpRoots: resolveLedgerCheckouts(resolvedRoot).map((root) => path.join(root, "tmp")) });
+  if (!current || current.stale || current.workOrderDigest !== plan.workOrderDigest || current.executionIdentity !== plan.executionIdentity) {
+    throw new Error(`judge execution ${plan.executionIdentity} is not the current emission for ${options.gate} at ${options.headSha} (${current?.stale ?? "no checkout holds its plan"}); re-emit the judge work order and re-run the judge`);
   }
   return order.authority;
 }

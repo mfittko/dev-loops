@@ -1166,8 +1166,9 @@ the fixer's **act list** for Phase 4: given `--findings-file` (the consolidated 
 verdict shape, fails closed unless the verdict's `headSha` matches the current head (a stale
 verdict must never feed the fixer), fails closed unless `--judge-plan` names this round's
 unretired emitted judge invocation with a matching judge pull receipt, both verdict paths equal
-the plan's `outputRefs` and were written after that pull, and the ledger and spec the work order
-pinned, applies the dispositions via `applyJudgeDispositions`, and
+the plan's `outputRefs` and were written after that pull, the plan is the current emission and
+reproduces the pulled work order, and the ledger the work order pinned is `--findings-file`
+(with `--spec-file`, the spec and content digests must also equal the pinned ones), applies the dispositions via `applyJudgeDispositions`, and
 emits exactly the findings the judge marked `act` (`--out`) plus the enriched ledger
 (`--ledger-out`). Every invocation ALSO carries the spec-authority flags derived above —
 `--spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict
