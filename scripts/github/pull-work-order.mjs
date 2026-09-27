@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Sanctioned read-only work-order pull (#2416, the #2282 pull protocol). A
+ * Sanctioned read-only work-order pull (ADR 0106). A
  * worker receives only a compact envelope {workOrderRef, workOrderDigest,
  * executionIdentity} and runs this CLI to fetch and verify its own immutable
  * work order. The only write is the pull receipt.

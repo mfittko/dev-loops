@@ -1,5 +1,5 @@
 /**
- * Role-independent work-order pull protocol (#2416, the #2282 pull protocol).
+ * Role-independent work-order pull protocol (ADR 0106).
  *
  * One canonical serializer, one compact dispatch envelope, one role-keyed
  * reader and one receipt primitive for every worker role. Role behavior (where
@@ -109,7 +109,7 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
   if (invalid) throw new WorkOrderRefusal("invalid_work_order", invalid);
   const workOrderText = await readFile(unit.materializationPath, "utf8").catch(() => null);
   if (workOrderText === null || materializationHash(workOrderText) !== unit.materializationHash) {
-    throw new WorkOrderRefusal("local_materialization_integrity_failure", `local work order ${unit.materializationPath} is missing or no longer matches materializationHash while workOrderDigest still reproduces; never re-dispatch a different work order (regeneration is #2418)`);
+    throw new WorkOrderRefusal("local_materialization_integrity_failure", `local work order ${unit.materializationPath} is missing or no longer matches materializationHash while workOrderDigest still reproduces; never re-dispatch a different work order`);
   }
   const receipt = {
     executionIdentity: execution, role, workOrderRef: ref, workOrderDigest: digest,

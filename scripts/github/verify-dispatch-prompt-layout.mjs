@@ -239,7 +239,7 @@ export function evaluateDispatchPromptLayout(records, prefixBytesByPath, emitted
       misaligned.push({ scope: r.scope, reason: "the emitted unit does not LEAD with the round's byte-identical invariant prefix INLINE (angle-first or pointer-seeded emitted prompt) — GATE-EXEC-BRIEFING-PREFIX requires the invariant prefix inlined as the emitted prompt's leading bytes" });
       continue;
     }
-    // Pull transport (#2416): the record binds the compact reference the
+    // Pull transport (ADR 0106): the record binds the compact reference the
     // reviewer was dispatched with to this unit.
     if (!r.compactReference?.workOrderRef.endsWith(`:${r.scope}`)) {
       misaligned.push({ scope: r.scope, reason: "dispatch-prompt record binds no compact work-order reference {workOrderRef, workOrderDigest, executionIdentity} for this unit, so the reviewer dispatch is not bound to the emitted work order (GATE-EXEC-FANOUT-DISPATCH-EMIT)" });

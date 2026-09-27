@@ -36,7 +36,7 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "agent-stall": "scripts/loop/detect-agent-stall.mjs",
     "size-budget": "scripts/loop/check-size-budget.mjs",
     // Its only write is the pull receipt (delivery evidence), so a read-only
-    // worker role pulls through it without an unrestricted shell (#2416).
+    // worker role pulls through it without an unrestricted shell (ADR 0106).
     "work-order-pull": "scripts/github/pull-work-order.mjs",
   }),
 

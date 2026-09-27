@@ -543,8 +543,8 @@ Omit `--expected-dispatch-units` at zero, as required by the existing consumer c
 
 | Dispatch | Delivery and limits |
 | --- | --- |
-| Code-driven Pi `runs.all` | ONE `workflowScriptPath` call per wave whose script body returns a single `runs.all([...])`, one item per emitted unit, each with its own unique `key` and the unit's `dispatchPrompt` as its task. Never N separate blocking per-unit calls. |
-| Agent-driven Claude Code Agent/Task | Copy the unit's `dispatchPrompt` into `prompt`, with NO preamble, wrapper or paraphrase. |
+| Code-driven Pi `runs.all` | ONE `workflowScriptPath` call per wave whose script body returns a single `runs.all([...])`, one item per emitted unit, each with its own unique `key` and the unit's `dispatchPrompt` as its task; the child pulls its work order and reads the referenced evidence itself. Never N separate blocking per-unit calls. |
+| Agent-driven Claude Code Agent/Task | Copy the unit's `dispatchPrompt` into `prompt`, with NO preamble, wrapper or paraphrase; the child pulls its work order and reads the referenced evidence itself. |
 | Agent-driven Codex | Uses the generic batch/agent adapter, like Claude Code; only Pi ships a concrete adapter. Codex production dispatch is NOT independently qualified by this repo. |
 
 Pull refusals (stdout JSON, exit 1): `dispatch_reference_mismatch` (a mistyped ref or digest; retryable, re-dispatch the SAME unit with its canonical envelope, never retire the round), `dispatch_identity_mismatch` (execution or role disagrees), `stale_dispatch` (the execution belongs to a retired same-head round; never retarget to the newest round), `semantic_identity_mismatch`, `local_materialization_integrity_failure` (the local file no longer matches `materializationHash`; regeneration is out of scope, fail closed). `workOrderDigest` hashes the canonical semantic work order without machine-local paths, so two checkouts emit the same digest; `materializationHash` hashes the local file bytes. Spawned-agent usage/cache-read telemetry stays unavailable on agent-driven harnesses: never claim verified provider reuse. See "Three identities, one honest boundary" below.

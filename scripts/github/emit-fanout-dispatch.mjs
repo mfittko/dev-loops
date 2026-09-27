@@ -697,7 +697,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       outputRefs: angles.map((angle) => path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`)),
       executionRules: { budget: REVIEWER_UNIT_BUDGET, prohibited: PROHIBITED_REVIEWER_OPERATIONS, widening: REVIEWER_WIDENING_RULE },
     };
-    // Pull transport (#2416): the coordinator relays only this compact
+    // Pull transport (ADR 0106): the coordinator relays only this compact
     // envelope; the reviewer pulls and verifies its work order itself.
     const identity = {
       workOrderRef: `review:${repo}#${pr}:${gate}:${headSha}:${scope}`,

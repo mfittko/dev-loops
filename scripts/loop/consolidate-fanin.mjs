@@ -498,7 +498,7 @@ async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAng
   return plan;
 }
 
-// Pull transport delivery evidence (#2416): every freshly dispatched unit needs
+// Pull transport delivery evidence (ADR 0106): every freshly dispatched unit needs
 // a pull receipt for its own execution/unit/digest, and a pulled unit without a
 // result for each of its angles is an interrupted reviewer, never complete.
 // Carried angles are not plan units, so their carry proof stays the authority.
