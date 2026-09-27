@@ -3,8 +3,9 @@ import { execFileSync } from "node:child_process";
 import { readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { parsePrNumber } from "../_cli-primitives.mjs";
 import { isDirectCliRun } from "../_core-helpers.mjs";
-import { normalizeGate } from "../github/_gate-names.mjs";
+import { normalizeGate, normalizeHeadSha } from "../github/_gate-names.mjs";
 import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts } from "./run-gate-validation.mjs";
@@ -18,14 +19,13 @@ async function removeParseFailedArtifact(argv) {
     const match = /^--(repo|pr|gate|head-sha|tmp-root)(?:=(.*))?$/.exec(argv[i]);
     if (!match) continue;
     const name = match[1];
-    if (identity[name] !== undefined) return;
     identity[name] = match[2] ?? argv[++i];
   }
   if (!["repo", "pr", "gate", "head-sha"].every((name) => identity[name])) return;
   try {
     const artifactPath = buildValidationResultsPath({
-      repo: identity.repo, pr: identity.pr, gate: normalizeGate(identity.gate),
-      headSha: identity["head-sha"], tmpRoot: identity["tmp-root"] ?? "tmp",
+      repo: identity.repo.trim(), pr: parsePrNumber(identity.pr), gate: normalizeGate(identity.gate),
+      headSha: normalizeHeadSha(identity["head-sha"]), tmpRoot: identity["tmp-root"]?.trim() ?? "tmp",
     });
     const repoRoot = resolveRepoRoot(process.cwd());
     const absolutePath = path.resolve(repoRoot, artifactPath);
