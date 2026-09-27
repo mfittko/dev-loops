@@ -1,3 +1,3 @@
 ### Changed
 
-- The decision-record guard accepts a pure ADR renumber (rename plus H1 number change) instead of refusing it, and still refuses a rename that edits the body (#2452)
+- Allow only duplicate-on-base ADR renumbers with the same slug and unchanged decision body, matched without Git rename heuristics (#2452)

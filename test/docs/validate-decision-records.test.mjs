@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -81,10 +82,8 @@ async function fixture(files, git) {
   return { root, git: git ?? makeGit() };
 }
 
-/** Fake git client: origin/main at a base whose decision files are served by the map.
- * `renames` feeds the rename-detecting read (`diffNameStatus`) only; `diffNameOnly`
- * keeps its `--no-renames` delete/add semantics, so the deletion guard stays exercised. */
-function makeGit(baseFiles = {}, renames = []) {
+/** Fake git client: base paths plus explicitly changed paths model --no-renames. */
+function makeGit(baseFiles = {}, changedPaths = []) {
   return {
     async symbolicRef() {
       return "refs/remotes/origin/main";
@@ -93,12 +92,10 @@ function makeGit(baseFiles = {}, renames = []) {
       return "base-sha";
     },
     async diffNameOnly(_base, _head, { dir } = {}) {
-      return Object.keys(baseFiles).filter((f) => f.startsWith(dir));
+      return [...new Set([...Object.keys(baseFiles), ...changedPaths])].filter((f) => f.startsWith(dir));
     },
-    async diffNameStatus(_base, _head, { dir } = {}) {
-      return renames
-        .filter(({ from }) => from.startsWith(dir))
-        .map(({ from, to, status = "R100" }) => ({ status, from, to }));
+    async listPaths() {
+      return Object.keys(baseFiles);
     },
     async show(spec) {
       const rel = spec.replace(/^base-sha:/, "");
@@ -262,13 +259,17 @@ test("deleting an accepted record fails, naming ADR-SUPERSEDE-NOT-REWRITE", asyn
   }
 });
 
-// --- Rule 3 renumber tolerance (0097): a pure renumber is legal, an editing rename is not ---
-test("renumbering an accepted record (rename + H1 number change) passes", async () => {
+// --- Rule 3 renumber tolerance (0097): only duplicate-on-base repair is legal ---
+const DUPLICATE_BASE = {
+  "docs/decisions/0047-something.md": ACCEPTED_4047,
+  "docs/decisions/0047-other.md": "# 0047. Other\n\n## Status\n\nAccepted\n\n## Context\n\nOther.\n",
+};
+const NEW_PATH = "docs/decisions/0048-something.md";
+test("renumbering a duplicate-on-base accepted record (same slug, new number and H1) passes", async () => {
   const { root, git } = await fixture({
     "docs/decisions/0048-something.md": ACCEPTED_4047_RENUMBERED,
-  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }, [
-    { from: "docs/decisions/0047-something.md", to: "docs/decisions/0048-something.md" },
-  ]));
+    "docs/decisions/0047-other.md": DUPLICATE_BASE["docs/decisions/0047-other.md"],
+  }, makeGit(DUPLICATE_BASE, [NEW_PATH]));
   try {
     const result = await validateDecisionRecords({ root, git });
     assert.equal(result.ok, true);
@@ -277,12 +278,11 @@ test("renumbering an accepted record (rename + H1 number change) passes", async 
   }
 });
 
-test("a rename that also edits the body outside the Status section still fails, naming ADR-SUPERSEDE-NOT-REWRITE", async () => {
+test("a renumber that edits the body outside Status is refused", async () => {
   const { root, git } = await fixture({
     "docs/decisions/0048-something.md": ACCEPTED_4047_RENUMBERED_EDITED,
-  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }, [
-    { from: "docs/decisions/0047-something.md", to: "docs/decisions/0048-something.md" },
-  ]));
+    "docs/decisions/0047-other.md": DUPLICATE_BASE["docs/decisions/0047-other.md"],
+  }, makeGit(DUPLICATE_BASE, [NEW_PATH]));
   try {
     const result = await validateDecisionRecords({ root, git });
     assert.equal(result.ok, false);
@@ -290,7 +290,7 @@ test("a rename that also edits the body outside the Status section still fails, 
     assert.ok(error);
     assert.equal(error.rule, "ADR-SUPERSEDE-NOT-REWRITE");
     assert.equal(error.file, "docs/decisions/0047-something.md");
-    assert.match(error.message, /outside its Status section/);
+    assert.match(error.message, /deleted/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -299,9 +299,8 @@ test("a rename that also edits the body outside the Status section still fails, 
 test("a rename into a subdirectory is refused (the record must stay a direct record)", async () => {
   const { root, git } = await fixture({
     "docs/decisions/archive/0048-something.md": ACCEPTED_4047_RENUMBERED,
-  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }, [
-    { from: "docs/decisions/0047-something.md", to: "docs/decisions/archive/0048-something.md" },
-  ]));
+    "docs/decisions/0047-other.md": DUPLICATE_BASE["docs/decisions/0047-other.md"],
+  }, makeGit(DUPLICATE_BASE, ["docs/decisions/archive/0048-something.md"]));
   try {
     const result = await validateDecisionRecords({ root, git });
     assert.equal(result.ok, false);
@@ -314,21 +313,86 @@ test("a rename into a subdirectory is refused (the record must stay a direct rec
   }
 });
 
-test("a rename whose destination H1 number does not match its new filename is refused", async () => {
+test("a renumber with stale destination H1 is refused", async () => {
   const { root, git } = await fixture({
-    // Renamed to 0048 but the H1 still says 0047: the body comparison passes
-    // (the H1 number is normalized away), so only the number check can catch it.
     "docs/decisions/0048-something.md": ACCEPTED_4047,
-  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }, [
-    { from: "docs/decisions/0047-something.md", to: "docs/decisions/0048-something.md" },
-  ]));
+    "docs/decisions/0047-other.md": DUPLICATE_BASE["docs/decisions/0047-other.md"],
+  }, makeGit(DUPLICATE_BASE, [NEW_PATH]));
   try {
     const result = await validateDecisionRecords({ root, git });
     assert.equal(result.ok, false);
     const error = result.errors.find((e) => e.kind === "adr_post_acceptance_rewrite");
     assert.ok(error);
     assert.equal(error.rule, "ADR-SUPERSEDE-NOT-REWRITE");
-    assert.match(error.message, /without matching its new record number/);
+    assert.match(error.message, /deleted/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+const REN_NUMBER = ACCEPTED_4047_RENUMBERED;
+const DUP_OTHER = DUPLICATE_BASE["docs/decisions/0047-other.md"];
+
+async function assertRefusedMove(name, files, base = DUPLICATE_BASE, changed = Object.keys(files)) {
+  const { root, git } = await fixture(files, makeGit(base, changed));
+  try {
+    const result = await validateDecisionRecords({ root, git });
+    assert.equal(result.ok, false, name);
+    assert.ok(result.errors.some((e) => e.kind === "adr_post_acceptance_rewrite"), name);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test("non-duplicate base source cannot move to an unused number", async () => {
+  await assertRefusedMove("non-duplicate", { [NEW_PATH]: REN_NUMBER },
+    { "docs/decisions/0047-something.md": ACCEPTED_4047 });
+});
+
+test("slug-only rename with unchanged number is refused", async () => {
+  await assertRefusedMove("slug-only", { "docs/decisions/0047-renamed.md": ACCEPTED_4047, "docs/decisions/0047-other.md": DUP_OTHER });
+});
+
+test("number and slug change is refused", async () => {
+  await assertRefusedMove("slug changed", { "docs/decisions/0048-renamed.md": REN_NUMBER, "docs/decisions/0047-other.md": DUP_OTHER });
+});
+
+test("skipping the next free base number is refused", async () => {
+  await assertRefusedMove("not next free", {
+    "docs/decisions/0049-something.md": REN_NUMBER.replace("# 0048.", "# 0049."),
+    "docs/decisions/0047-other.md": DUP_OTHER,
+  });
+});
+
+test("destination number already used by another HEAD record is refused", async () => {
+  await assertRefusedMove("used number", {
+    [NEW_PATH]: REN_NUMBER,
+    "docs/decisions/0048-other.md": DUP_OTHER.replaceAll("0047", "0048"),
+  });
+});
+
+test("real git: large Status change below rename similarity still permits duplicate repair", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-adr-real-git-"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+  try {
+    git("init", "-q", "-b", "main");
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.invalid");
+    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+    for (const [rel, text] of Object.entries(DUPLICATE_BASE)) await writeFile(path.join(root, rel), text);
+    git("add", "docs/decisions");
+    git("commit", "-qm", "base with duplicate number");
+    git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD").trim());
+    await rm(path.join(root, "docs/decisions/0047-something.md"));
+    await writeFile(path.join(root, NEW_PATH), ACCEPTED_4047_RENUMBERED.replace("Accepted — 2026-08-04", `Accepted — ${"status annotation ".repeat(300)}`));
+    git("add", "-A");
+    git("commit", "-qm", "repair duplicate with large status annotation");
+    const statuses = git("diff", "--find-renames", "--name-status", "origin/main", "HEAD", "--", "docs/decisions");
+    assert.match(statuses, /^D\s+docs\/decisions\/0047-something\.md/m);
+    assert.match(statuses, /^A\s+docs\/decisions\/0048-something\.md/m);
+    const result = await validateDecisionRecords({ root });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.rule3.state, "ran");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -435,28 +499,6 @@ test("rename-protection is mutation-anchored: diffNameOnly passes --no-renames",
   assert.ok(
     diffCall.includes("--no-renames"),
     "--no-renames must be passed so a git mv (rename) cannot collapse to the destination path and evade rule 3",
-  );
-});
-
-// --- Rule 3 rename detection: mutation-anchored on the --find-renames flag ---
-test("renumber detection is mutation-anchored: diffNameStatus passes --find-renames", async () => {
-  const calls = [];
-  const exec = async (_cmd, args) => {
-    calls.push(args);
-    return { stdout: "R100\tdocs/decisions/0047-something.md\tdocs/decisions/0048-something.md\n" };
-  };
-  const git = createGitClient("/tmp", exec);
-  const rows = await git.diffNameStatus("base-sha", "HEAD", { dir: "docs/decisions" });
-  assert.deepEqual(rows, [{
-    status: "R100",
-    from: "docs/decisions/0047-something.md",
-    to: "docs/decisions/0048-something.md",
-  }]);
-  const call = calls.find((a) => a.includes("--name-status"));
-  assert.ok(call, "expected a git diff --name-status invocation");
-  assert.ok(
-    call.includes("--find-renames"),
-    "--find-renames must be passed so a renumber is recognized instead of refused as a delete",
   );
 });
 

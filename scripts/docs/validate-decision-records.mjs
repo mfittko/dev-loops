@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { createGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
 
-const FILENAME_RE = /^\d{4}-[a-z0-9-]+\.md$/;
+const FILENAME_RE = /^(\d{4})-([a-z0-9-]+)\.md$/;
 const TEMPLATE = "0000-template.md"; // permanently reserved template, not a record
 const DECISIONS_DIR = "docs/decisions";
 
@@ -144,16 +144,12 @@ export { createGitClient };
  * pre-existing 0047 incident of that class was resolved by reverting the record, not by
  * retro-validation.
  *
- * Renumber tolerance (0097): a record that is already on the base branch cannot be
- * renumbered without a delete+add pair, so the deletion guard would refuse the only
- * legal repair for a duplicate record number. Rule 3 therefore also reads a
- * rename-detecting `diffNameStatus` and treats an `R` as a legal renumber only when
- * every one of these holds: the destination is a direct record-shaped file under
- * `docs/decisions` (a nested path would drop the record out of the catalog with no
- * guard firing), the destination's H1 number matches its new filename, and the body
- * outside `## Status` equals the base body with the H1 number normalized. Every other
- * rename is still refused, and the delete/add path (`diffNameOnly`, `--no-renames`) is
- * unchanged, so a bare delete and an add-only still fail closed.
+ * Renumber tolerance (0097): only a number duplicated in the base catalog may be
+ * repaired. The changed, newly added direct record must retain the source slug,
+ * change its number to an unused HEAD number, match its H1, and have identical body
+ * outside Status after normalizing the H1 number. Exactly one destination must
+ * match. This uses delete/add paths (`diffNameOnly`, `--no-renames`), never Git's
+ * heuristic rename detection; every other deletion remains refused.
  */
 export async function validateDecisionRecords({ root, git = createGitClient(root) }) {
   const dir = path.join(root, DECISIONS_DIR);
@@ -185,13 +181,24 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
     rule3 = { state: "degraded", notice: "base ref unavailable; skipping ADR-SUPERSEDE-NOT-REWRITE post-acceptance edit check" };
   } else {
     const changed = await git.diffNameOnly(base, "HEAD", { dir: DECISIONS_DIR });
-    // Rename detection is read separately (0097): the delete/add truth above stays
-    // `--no-renames`, so a rename can never collapse there and hide a delete.
-    const renameTargets = new Map(
-      (await git.diffNameStatus(base, "HEAD", { dir: DECISIONS_DIR }))
-        .filter(({ status }) => status.startsWith("R"))
-        .map(({ from, to }) => [from, to]),
-    );
+    const basePaths = await git.listPaths(base, DECISIONS_DIR);
+    const baseNumbers = new Map();
+    for (const rel of basePaths) {
+      if (path.posix.dirname(rel) !== DECISIONS_DIR) continue;
+      const match = FILENAME_RE.exec(path.posix.basename(rel));
+      if (match && path.posix.basename(rel) !== TEMPLATE) {
+        baseNumbers.set(match[1], (baseNumbers.get(match[1]) ?? 0) + 1);
+      }
+    }
+    const nextFreeNumber = String(Math.max(0, ...baseNumbers.keys().map(Number)) + 1).padStart(4, "0");
+    // Only paths changed this round and absent from the base can replace a deletion.
+    // The no-renames diff exposes both halves regardless of Git similarity scores.
+    const added = [];
+    for (const rel of changed) {
+      if (path.posix.dirname(rel) !== DECISIONS_DIR) continue;
+      const match = FILENAME_RE.exec(path.posix.basename(rel));
+      if (match && !(await git.pathExistsIn(base, rel))) added.push({ rel, match });
+    }
     for (const rel of changed) {
       const baseName = path.posix.basename(rel);
       if (baseName === TEMPLATE || !rel.endsWith(".md")) continue;
@@ -208,29 +215,20 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
         currentText = await readFile(path.join(root, rel), "utf8");
       } catch (err) {
         if (err.code === "ENOENT") {
-          const renamedTo = renameTargets.get(rel);
-          // A renumber is only ever a record-to-record move: the destination must
-          // stay a direct record under docs/decisions, and its H1 number must match
-          // its new filename. Anything else is not a renumber and is refused below.
-          const renamedBase = renamedTo === undefined ? null : path.posix.basename(renamedTo);
-          if (renamedTo !== undefined
-            && path.posix.dirname(renamedTo) === DECISIONS_DIR
-            && FILENAME_RE.test(renamedBase)) {
-            const renamedText = await readFile(path.join(root, renamedTo), "utf8");
-            const staleTitleNumber = recordTitleNumber(renamedText) !== renamedBase.slice(0, 4);
-            const editedBody = normalizeRecordNumber(splitStatus(renamedText).rest) !== normalizeRecordNumber(baseRest);
-            if (staleTitleNumber || editedBody) {
-              errors.push({
-                kind: "adr_post_acceptance_rewrite",
-                rule: "ADR-SUPERSEDE-NOT-REWRITE",
-                file: rel,
-                message: staleTitleNumber
-                  ? `accepted/superseded record '${rel}' was renamed to '${renamedTo}' without matching its new record number in the H1 (ADR-SUPERSEDE-NOT-REWRITE)`
-                  : `accepted/superseded record '${rel}' was renamed to '${renamedTo}' and edited outside its Status section (ADR-SUPERSEDE-NOT-REWRITE)`,
-              });
+          const source = FILENAME_RE.exec(baseName);
+          const matches = [];
+          if (source && (baseNumbers.get(source[1]) ?? 0) > 1) {
+            for (const { rel: dest, match } of added) {
+              if (match[1] === source[1] || match[1] !== nextFreeNumber || match[2] !== source[2]
+                || names.some((name) => name !== path.posix.basename(dest) && name.startsWith(`${match[1]}-`))) continue;
+              const text = await readFile(path.join(root, dest), "utf8");
+              if (recordTitleNumber(text) === match[1]
+                && normalizeRecordNumber(splitStatus(text).rest) === normalizeRecordNumber(baseRest)) {
+                matches.push(dest);
+              }
             }
-            continue;
           }
+          if (matches.length === 1) continue;
           // Deleting an Accepted/Superseded record is itself a post-acceptance
           // rewrite; refuse it instead of passing silently.
           errors.push({

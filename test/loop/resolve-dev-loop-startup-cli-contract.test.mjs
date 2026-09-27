@@ -207,6 +207,37 @@ test("resolve-dev-loop-startup rejects async-required strategy via stderr contra
   });
 });
 
+test("resolve-dev-loop-startup selects async-required strategy with native Pi child markers only", async () => {
+  await withInputFile({
+    currentState: {
+      target: { kind: "issue", issue: 89, linkedPr: 92 },
+      ownership: "copilot",
+      nextActor: "copilot",
+      status: "active",
+      authorization: "needs_confirmation",
+    },
+    artifactState: "open",
+    issueLinkageResolution: "resolved_linked_pr",
+    loopState: "unresolved_feedback_present",
+    retrospectiveCheckpointState: "complete",
+  }, async (inputPath, tmpDir) => {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+      !ASYNC_CONTEXT_ENV_MARKERS.includes(key) && key !== "CLAUDECODE" && key !== "DEVLOOPS_DETACHED"));
+    env.PI_SUBAGENT_CHILD = "1";
+    env.PI_SUBAGENT_PARENT_SESSION = "native-parent-session";
+    assert.equal(env.DEVLOOPS_RUN_ID, undefined);
+    assert.equal(env.PI_SUBAGENT_RUN_ID, undefined);
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--input", inputPath], {
+      cwd: tmpDir, encoding: "utf8", env,
+    });
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
+    assert.notEqual(parsed.asyncStartContract, "rejected");
+    assert.equal(parsed.canonicalStateSummary.requiresAsyncDispatch, true);
+  });
+});
+
 test("resolve-dev-loop-startup honors maintainer-controlled asyncStartMode=allowed from cwd config", async () => {
   await withInputFile({
     currentState: {

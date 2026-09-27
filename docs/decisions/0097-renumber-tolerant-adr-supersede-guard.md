@@ -14,18 +14,20 @@ That anchoring is right for a rewrite and wrong for a renumber. Two records can 
 
 ## Decision
 
-Rule 3 recognizes a pure renumber as legal, and nothing else changes.
+Rule 3 recognizes only a duplicate-on-base number repair, not an arbitrary rename.
 
-The validator keeps its delete/add read (`diffNameOnly`, `--no-renames`) as the guard's core: a bare delete is still refused, and a newly added record still cannot excuse a separate deletion. It additionally reads a rename-detecting `git diff --name-status --find-renames` scoped to `docs/decisions`. A base-present, Accepted-or-Superseded record that is absent at HEAD is treated as a legal renumber only when all three hold:
+The validator keeps its delete/add read (`diffNameOnly`, `--no-renames`) as the guard's core. It identifies replacements deterministically among changed, newly added paths, not through Git's heuristic rename detection. A base-present Accepted-or-Superseded record absent at HEAD is admitted only when exactly one candidate satisfies all of these:
 
-- the rename destination is a direct record-shaped file under `docs/decisions` (a nested destination such as `docs/decisions/archive/0047-something.md` is refused, because the index scans only direct children and the record would otherwise vanish from the catalog with no guard firing);
-- the destination's H1 number matches its new filename (`recordTitleNumber`); and
-- the destination's body outside `## Status`, with the H1's four-digit number normalized (`normalizeRecordNumber`), equals the base body's.
+- another direct record in the base catalog carries the source's four-digit number;
+- the candidate is a direct record-shaped file under `docs/decisions` with the identical slug;
+- its four-digit number differs from the source's and is unused by every other HEAD record (the repair uses the next free number);
+- its H1 number matches its filename (`recordTitleNumber`); and
+- its body outside `## Status`, with the H1's four-digit number normalized (`normalizeRecordNumber`), equals the base body's.
 
-Anything else is refused as a post-acceptance rewrite, naming the old and new paths. A rename with an edited body, a stale H1 number, a nested destination, and a plain delete each stay refused.
+Otherwise the ordinary deletion refusal applies. A non-duplicate move, slug change, unchanged number, edited body, stale H1, nested destination, ambiguous match, or plain delete is refused.
 
 The comparison stays inside the existing rule-3 scope boundary: only content outside `## Status` is compared, the H1 number is the only line treated as identity rather than content, and judging the correctness of a record's Status content remains a declared non-goal.
 
 ## Consequences
 
-A duplicate record number on the default branch is repairable in a branch by renaming one record to the next free number, which is the repair `ADR-PATH-NUMBERING` implies. The guard's bite is preserved on every other path: a rename that also edits the body fails, a rename that leaves a stale H1 number fails, a rename out of the direct `docs/decisions` directory fails, and a bare delete fails. `test/docs/validate-decision-records.test.mjs` pins each: a renumber passes; an editing rename, a stale-H1 rename and a nested-destination rename each fail with `ADR-SUPERSEDE-NOT-REWRITE`; and the rename-detecting read is mutation-anchored on `--find-renames` while the delete/add read stays anchored on `--no-renames`.
+A duplicate number already on the default branch is repairable at a free destination number while preserving the slug and decision text. Non-duplicate and slug-changing moves remain protected; Git similarity scores cannot reject a lawful repair with a large Status edit. Tests pin both admissible repairs and refusal cases with fake-git fixtures, anchor `--no-renames`, and exercise a low-similarity renumber in real Git.

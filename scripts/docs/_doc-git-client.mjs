@@ -40,25 +40,9 @@ export function createGitClient(root, exec = promisify(execFile)) {
         ? stdout.split("\0").filter(Boolean)
         : stdout.split(/\r?\n/).filter(Boolean);
     },
-    /**
-     * Changed paths with their status letter, rename detection ON.
-     * Used ONLY to recognize a rename (`R`) of a base-present record as a
-     * possible renumber; the delete/add truth is still read through
-     * `diffNameOnly` (`--no-renames`), which is what rule 3's guard is built on.
-     * A `git mv` therefore still surfaces as a delete+add pair there, so a bare
-     * delete or an add-only cannot hide behind a rename.
-     */
-    async diffNameStatus(a, b, { dir = null } = {}) {
-      const args = ["diff", "--find-renames", "--name-status", a, b];
-      if (dir) args.push("--", dir);
-      const { stdout } = await run(args);
-      return stdout
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .map((line) => {
-          const [status, from, to] = line.split("\t");
-          return { status, from, to: to ?? from };
-        });
+    async listPaths(rev, dir) {
+      const { stdout } = await run(["ls-tree", "-r", "--name-only", "-z", rev, "--", dir]);
+      return stdout.split("\0").filter(Boolean);
     },
 
     async diffAddedFiles(a, b, { nulDelimited = false } = {}) {
