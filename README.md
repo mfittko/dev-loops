@@ -211,8 +211,10 @@ docker run -it --rm -e GH_TOKEN="$GH_TOKEN" -v "$HOME/.pi:/home/node/.pi" -v /tm
 
 ```bash
 bun install --frozen-lockfile
-bun run verify   # canonical root verification (tests + dev-loop tests)
+bun run test:docs # example targeted check for documentation changes
 ```
+
+Choose targeted checks with `resolveTargetedValidation(changedPaths)` as described in the [validation policy](./skills/docs/validation-policy.md). For an authorized full local PR-gate run, use `node cli/index.mjs gate resolve-validation --profile full-repository --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA>` from the PR worktree.
 
 CI installs the exactly pinned Bun 1.4.1 and uses `bun install --frozen-lockfile`. It splits the complete Bun test inventory into four parallel, timing-balanced shards, runs docs and workflow validators separately, and joins them through a fail-closed `verify` gate. The conditional Playwright/WebKit viewer smoke remains a Node-run browser test and runs only when its bounded viewer surface or smoke-path dependencies change.
 

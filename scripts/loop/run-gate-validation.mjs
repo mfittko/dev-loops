@@ -31,7 +31,7 @@ import { verificationCommandSegments } from "@dev-loops/core/loop/bash-command-c
 const OUTPUT_TAIL_CHARS = 4000;
 const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
-const USAGE = `Usage: run-gate-validation.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--suite <name>]... [--tmp-root <dir>]
+const USAGE = `Usage: run-gate-validation.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --suite <name> [--suite <name>]... [--tmp-root <dir>]
 Run this round's validation suites ONCE and record the results in the shared
 validation-results artifact (GATE-EXEC-VALIDATION-ARTIFACT) so every per-angle
 gate reviewer reads this record instead of re-running the same suites.
@@ -40,12 +40,12 @@ Required:
   --pr <number>
   --gate <draft_gate|pre_approval_gate|review>
   --head-sha <sha>
-Optional:
   --suite <name>              npm script name to run (repeatable). MUST be a key
                                of this repo's package.json "scripts" map — an
                                unknown name fails closed (exit 1) BEFORE anything
-                               runs. Required. Full-repository
+                               runs. Full-repository
                                suites require dev-loops gate resolve-validation.
+Optional:
   --tmp-root <path>            Root tmp directory (default: tmp/)
 
 Output (stdout, JSON — the artifact itself):
