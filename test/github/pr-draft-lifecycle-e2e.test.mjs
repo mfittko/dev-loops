@@ -5,7 +5,7 @@
 // mutation. Claims-mode gh mock: each phase's calls are matched by
 // assertion, independent of call order across the three composed functions.
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -15,6 +15,7 @@ import { convertToDraft } from "../../scripts/github/convert-to-draft.mjs";
 import { upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { restoreReady } from "../../scripts/github/restore-ready.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
+import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 
 const REPO = "owner/repo";
 const PR = 17;
@@ -73,6 +74,10 @@ test("convert-to-draft -> fan-out draft_gate post -> restore-ready composes with
         ],
       }),
     }, { repoRoot: tempDir });
+    // The fanout_fanin post also needs run-gate-validation.mjs's artifact for the head.
+    const validationPath = path.join(tempDir, buildValidationResultsPath({ repo: REPO, pr: PR, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(validationPath), { recursive: true });
+    await writeFile(validationPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: "draft_gate", headSha, allPassed: true, suites: [] }), "utf8");
 
     const { runChild, calls } = makeGhMock([
       // --- Phase 1: convert-to-draft.mjs (_draft-transition.mjs's own GraphQL

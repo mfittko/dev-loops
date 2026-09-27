@@ -49,6 +49,8 @@ import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority"
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
+import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
+import { buildValidationResultsPath } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -2187,6 +2189,42 @@ async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = def
   }
 }
 
+/**
+ * Refuse a fanout_fanin verdict unless `run-gate-validation.mjs`'s artifact
+ * (`<gate>-<headSha>.validation.json`) exists for the reviewed head in any
+ * checkout of this repo, parses, and is stamped with that head. Throws a
+ * message naming the artifact path and `run-gate-validation.mjs`.
+ */
+export async function assertGateValidationArtifact({ repo, pr, gate, headSha, repoRoot }) {
+  const relPath = buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot: "tmp" });
+  const expectedHead = String(headSha).toLowerCase();
+  let problem = "is absent";
+  for (const root of resolveLedgerCheckouts(repoRoot)) {
+    let raw;
+    try {
+      raw = await readFile(path.resolve(root, relPath), "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      problem = `is unreadable (${error instanceof Error ? error.message : String(error)})`;
+      continue;
+    }
+    let artifact;
+    try {
+      artifact = JSON.parse(raw);
+    } catch {
+      problem = "is unreadable (not valid JSON)";
+      continue;
+    }
+    const stamped = typeof artifact?.headSha === "string" ? artifact.headSha.toLowerCase() : null;
+    if (stamped === expectedHead) return;
+    problem = `is stamped with head ${stamped ?? "(none)"}, not the reviewed head ${expectedHead}`;
+  }
+  throw new Error(
+    `Cannot post a fanout_fanin verdict for ${repo}#${pr} ${gate}: the validation artifact ${relPath} ${problem}. `
+    + `Run run-gate-validation.mjs --repo ${repo} --pr ${pr} --gate ${gate} --head-sha ${headSha} --suite <name> once before dispatching reviewers (GATE-EXEC-VALIDATION-ARTIFACT).`,
+  );
+}
+
 export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
   // Optional --spec-authority stamps the RETURNED result (this script's
@@ -2887,6 +2925,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         + `Write it with write-gate-findings-log.mjs (from consolidate-fanin.mjs's --ledger-out) before posting the verdict.`,
       );
     }
+    // GATE-EXEC-VALIDATION-ARTIFACT enforcement: the round must have run
+    // run-gate-validation.mjs once for the reviewed head. Same opt-out and
+    // placement as the ledger refusal above, so its message wins when both fire.
+    await assertGateValidationArtifact({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, repoRoot });
   }
   // FINDINGS-SOURCE FOOTGUN WARNING: a fanout_fanin round posted with
   // --findings-json but no --findings-ledger silently files ZERO inline
