@@ -1,26 +1,14 @@
 # UI-Review Run/Auth Recipe Contract
 
-The `/dev-loops:loop-review-ui` command (or `/loop-review-ui` in the dev-loops repo itself) reviews a pull request by proving the change in
-the **running app** from an isolated worktree, rather than reading the diff
-alone. To do that, the loop has to know how to boot your app, how to log in as
-the change's target role, and which UI flows to drive. None of that is
-hard-coded — every project declares its own recipe.
+The `/dev-loops:loop-review-ui` command (or `/loop-review-ui` in the dev-loops repo itself) reviews a pull request by proving the change in the **running app** from an isolated worktree. Each project declares its own recipe for booting the app, logging in as the change's target role and driving UI flows. This doc is the contract a **consuming repo** satisfies so the command can run against it.
 
-This doc is the contract a **consuming repo** satisfies so `/dev-loops:loop-review-ui` (or `/loop-review-ui` in the dev-loops repo itself)
-can run against it. All keys below exist in the shipped config schema
-(`packages/core/src/config/config.mjs`) and are enforced at load time. A
-docs-accuracy test (`test/docs/ui-review-recipe-doc.test.mjs`) fails CI if the
-enumerated config-key reference below drifts from the schema (in either
-direction).
+All keys below exist in the shipped config schema (`packages/core/src/config/config.mjs`) and are enforced at load time. `test/docs/ui-review-recipe-doc.test.mjs` fails CI if the [config key reference](#config-key-reference) drifts from the schema in either direction.
 
-Every value shown is a **generic example** — replace it with your project's own.
-No downstream or private identifiers belong in this repo.
+Every value shown is a **generic example**. Replace it with your project's own. No downstream or private identifiers belong in this repo.
 
 ## Prerequisites — install the browser runner
 
-Before the recipe matters, the consuming repo needs the browser the loop drives.
-Playwright is an **optional peer dependency** of `dev-loops`: a repo that never
-runs a UI review carries none of its weight, so nothing installs it for you.
+Playwright is an **optional peer dependency** of `dev-loops`, so nothing installs it for you.
 
 ```
 npm install --save-dev @playwright/test
@@ -75,13 +63,13 @@ drive your app.
 4. **Report** — posts a head-pinned **pending** PR review and produces a
    self-contained HTML artifact.
 5. **Teardown** — stops the booted app and, only with explicit confirmation,
-   drops the drive-tagged dev-DB rows (`uiReview.run.rowTeardown.deleteCommand`,
-   dev DB only), removes the worktree, and prunes the Stage-4 hosting gist
-   (`gh gist delete`, when a gist id is recorded in the report result). Row-drop
-   consumes the drive's emitted manifest and deletes exactly the rows tagged with
-   that run's drive-session id; an absent manifest, an untagged one, or a missing
-   `rowTeardown` recipe **fails closed** (rows may remain) rather than guessing. A
-   side-effect ledger is ALWAYS emitted, enumerating what was done vs. left behind.
+   drops the drive-tagged dev-DB rows (see `uiReview.run.rowTeardown`), removes
+   the worktree, and prunes the Stage-4 hosting gist (`gh gist delete`, when a
+   gist id is recorded in the report result). Row-drop deletes exactly the rows
+   the drive's manifest tags with that run's drive-session id. An absent
+   manifest, an untagged one, or a missing `rowTeardown` recipe **fails closed**
+   (rows may remain). A side-effect ledger is ALWAYS emitted, enumerating what
+   was done vs. left behind.
 
 ## Guardrails (non-negotiable)
 
@@ -222,12 +210,9 @@ allowlisted flow. The selection is capped and any overflow logged.
 - `uiReview.flows[].steps[].event` — optional event name for `dispatch`.
 - `uiReview.flows[].steps[].viewport` — optional `{ width, height }`; resizes the
   page before the step and slugs the capture so a responsive render lands in its
-  own reviewable directory. The viewport is **sticky**: it persists to later steps
-  until another step sets one, and an omitted `viewport` inherits the last set size
-  rather than resetting to default — so a later step's slug faithfully reflects the
-  size the page is actually at. There is no reset sentinel: to render a later step
-  at a different size (or back at the original one), give that step an explicit
-  `viewport` with the exact dimensions you want.
+  own reviewable directory. The viewport is **sticky**: an omitted `viewport`
+  inherits the last set size. There is no reset sentinel. To render a later step
+  at a different or the original size, give that step an explicit `viewport`.
 - `uiReview.flows[].steps[].interactionState` — optional `none`/`focus`/`hover`/`error`;
   labels a stateful render the route names, slugged into its own directory.
 
@@ -280,21 +265,18 @@ The report stage always produces a self-contained, CSP-safe HTML artifact
 (ranked findings plus the reproduced-evidence screenshot inlined as a data URI,
 no external resources).
 
-- On the **Claude Code** harness the stage emits a publishable directive and the
-  artifact is published via **Claude Code Artifacts** — a zero-setup hosted link
-  the review body links to. The module never calls an Artifacts tool itself; the
-  orchestrating agent publishes. This is an enhancement layered on top of the
-  portable default below, not a dependency of the core report flow.
+- On the **Claude Code** harness the stage emits a publishable directive, and the
+  orchestrating agent publishes the artifact via **Claude Code Artifacts**. The
+  review body links the hosted result. The module never calls an Artifacts tool
+  itself, and the core report flow does not depend on this path.
 - On **any other harness** the portable **GitHub-native default** publishes the
-  self-contained HTML as a **secret GitHub Gist** (`gh gist create`) — a real
-  per-run URL with zero repo pollution. The review body links it. Two honest
-  caveats: a gist **renders HTML as source, not a live page**, so the review body
-  links the gist and points at its **raw** file (the plain-text/download view); and
-  a gist accretes one secret entry per run, so **Stage 5 teardown prunes it**
-  (`gh gist delete`) when the run records the gist id in the report result and
-  teardown is confirmed. If gist creation does not yield a URL the stage **fails
-  closed with a stated reason** — the review body states the artifact is unhosted
-  and why, and never links a fabricated URL.
+  self-contained HTML as a **secret GitHub Gist** (`gh gist create`). The review
+  body links the gist and points at its **raw** file, because a gist renders HTML
+  as source. **Stage 5 teardown prunes the gist** (`gh gist delete`) when the run
+  records the gist id in the report result and teardown is confirmed. If gist
+  creation does not yield a URL, the stage **fails closed with a stated reason**:
+  the review body states the artifact is unhosted and why, and never links a
+  fabricated URL.
 
   Setup a consuming repo must provide: an authenticated **`gh`** with the **`gist`**
   scope (`gh auth login`/`gh auth refresh -s gist`). No `.devloops` config key is
@@ -303,10 +285,7 @@ no external resources).
 
 ## Config key reference
 
-Every `uiReview.*` and `worktree.*` key this doc references. This list is
-verified against the shipped zod schema by
-`test/docs/ui-review-recipe-doc.test.mjs`; it fails if any key here is absent
-from the schema or if the schema gains a key not listed here.
+Every `uiReview.*` and `worktree.*` key this doc references.
 
 <!-- ui-review-config-keys:start -->
 - `worktree.entries[].path`
