@@ -36,16 +36,17 @@ async function makeFixtureRepo(extraScripts = {}) {
       private: true,
       scripts: {
         verify: "bun scripts/verify.mjs",
-        "test:scripts": "bun scripts/suite.mjs",
-        passing: "bun scripts/passing.mjs",
-        failing: "bun scripts/failing.mjs",
+        "test:scripts": "bun scripts/docs/validate-links.mjs",
+        passing: "bun scripts/docs/validate-rule-ownership.mjs",
+        failing: "bun scripts/docs/validate-decision-records.mjs",
         ...extraScripts,
       },
     }, null, 2),
     "utf8",
   );
   await mkdir(path.join(repoRoot, "scripts"));
-  for (const [name, source] of Object.entries({ verify: "console.log('verify-ran')", suite: "console.log('scripts-ran')", passing: "console.log('passing-ran')", failing: "console.error('boom'); process.exit(2)" })) {
+  await mkdir(path.join(repoRoot, "scripts", "docs"));
+  for (const [name, source] of Object.entries({ verify: "console.log('verify-ran')", "docs/validate-links": "console.log('scripts-ran')", "docs/validate-rule-ownership": "console.log('passing-ran')", "docs/validate-decision-records": "console.error('boom'); process.exit(2)" })) {
     await writeFile(path.join(repoRoot, "scripts", `${name}.mjs`), source);
   }
   initGitFixture(repoRoot, { commit: null });
@@ -126,6 +127,17 @@ test("package script reach follows aliases and refuses recursion or unknown shel
   assert.equal(classifyPackageSuites(["test:quick"], { ...scripts, "test:quick": "bun scripts/../scripts/verify.mjs" }), "full-repository");
   assert.throws(() => classifyPackageSuites(["a"], scripts), /Recursive package script/);
   assert.throws(() => classifyPackageSuites(["unknown"], scripts), /Cannot classify package script/);
+  assert.throws(() => classifyPackageSuites(["test:quick"], { "test:quick": "bun scripts/run-full.mjs" }), /Cannot classify package script/);
+});
+
+test("legacy gate refuses an unknown script entrypoint before execution", async () => {
+  const { repoRoot, headSha } = await makeFixtureRepo({ "test:quick": "bun scripts/run-full.mjs" });
+  try {
+    const out = await runNode(SCRIPT, ["--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha, "--suite", "test:quick"], { cwd: repoRoot });
+    assert.equal(out.code, 1);
+    assert.match(out.stderr, /Cannot classify package script/);
+    assert.doesNotMatch(out.stdout, /should-not-run/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
 test("legacy gate refuses a dot-segment alias to full verification", async () => {
@@ -292,11 +304,12 @@ test("a suite name containing ':' writes its log under a '-'-mapped filename (Wi
       path.join(repoRoot, "package.json"),
       JSON.stringify({
         name: "fixture", version: "0.0.0", private: true,
-        scripts: { "verify": "bun scripts/verify.mjs", "assets:check": "bun scripts/colon.mjs" },
+        scripts: { "verify": "bun scripts/verify.mjs", "assets:check": "bun scripts/claude/generate-claude-assets.mjs --check" },
       }, null, 2),
       "utf8",
     );
-    await writeFile(path.join(repoRoot, "scripts", "colon.mjs"), "console.log('colon-ran')");
+    await mkdir(path.join(repoRoot, "scripts", "claude"));
+    await writeFile(path.join(repoRoot, "scripts", "claude", "generate-claude-assets.mjs"), "console.log('colon-ran')");
     const { code, stdout, stderr } = await runNode(SCRIPT, [
       "--repo", "owner/repo", "--pr", "10", "--gate", "draft_gate", "--head-sha", headSha,
       "--suite", "assets:check",

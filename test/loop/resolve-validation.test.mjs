@@ -18,14 +18,19 @@ async function fixture(extraScripts = {}, pinnedBunVersion = bunVersion) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "resolve-validation-"));
   await writeFile(path.join(repoRoot, "package.json"), JSON.stringify({
     name: "fixture", packageManager: `bun@${pinnedBunVersion}`,
-    scripts: { verify: "bun scripts/verify.mjs", test: "bun run verify", passing: "bun scripts/passing.mjs", "test:scripts": "bun scripts/suite.mjs", "test:all": "bun scripts/all.mjs", "test:docs": "bun scripts/docs.mjs", "test:workflows": "bun scripts/workflows.mjs", ...extraScripts },
+    scripts: { verify: "bun scripts/verify.mjs", test: "bun run verify", passing: "bun scripts/docs/validate-rule-ownership.mjs", "test:scripts": "bun scripts/docs/validate-links.mjs", "test:all": "bun scripts/run-bun-test.mjs --all", "test:docs": "bun scripts/docs/validate-decision-records.mjs", "test:workflows": "bun scripts/github/lint-workflows.mjs", ...extraScripts },
   }));
   await mkdir(path.join(repoRoot, "scripts"));
+  await mkdir(path.join(repoRoot, "scripts", "docs"));
+  await mkdir(path.join(repoRoot, "scripts", "github"));
   await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
   for (const name of ["verify", "passing", "suite", "all", "docs", "workflows"]) {
     await writeFile(path.join(repoRoot, "scripts", `${name}.mjs`), `console.log('${name}-ran')`);
   }
   await writeFile(path.join(repoRoot, "scripts", "fail.mjs"), "console.error('fixture failure'); process.exit(2);\n");
+  for (const name of ["docs/validate-rule-ownership", "docs/validate-links", "docs/validate-decision-records", "github/lint-workflows", "run-bun-test"]) {
+    await writeFile(path.join(repoRoot, "scripts", `${name}.mjs`), `console.log('${name}-ran')`);
+  }
   execFileSync("git", ["init", "-q"], { cwd: repoRoot });
   execFileSync("git", ["add", "package.json", ".gitignore", "scripts"], { cwd: repoRoot });
   execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], { cwd: repoRoot });
@@ -51,8 +56,12 @@ test("full validation resolves through gate CLI and preserves the legacy artifac
 });
 
 test("failed full suite returns an unsuccessful public result and retains failure artifact", async () => {
-  const { repoRoot, headSha } = await fixture({ verify: "bun scripts/fail.mjs" });
+  const { repoRoot } = await fixture();
   try {
+    await writeFile(path.join(repoRoot, "scripts", "verify.mjs"), "console.error('fixture failure'); process.exit(2);\n");
+    execFileSync("git", ["add", "scripts/verify.mjs"], { cwd: repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "failing verifier"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
     const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha)], { cwd: repoRoot });
     assert.equal(out.code, 1);
     const result = JSON.parse(out.stdout);
@@ -132,6 +141,20 @@ test("targeted profile rejects a full suite and allows an exact targeted script"
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("incomplete resolution removes earlier same-head validation evidence", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const options = parseResolveValidationArgs(args(headSha));
+    const complete = await resolveValidation(options, { repoRoot });
+    assert.equal(complete.status, "complete");
+    const stalePath = path.join(repoRoot, complete.artifactPath);
+    assert.equal(JSON.parse(await readFile(stalePath, "utf8")).allPassed, true);
+    const incomplete = await resolveValidation({ ...options, profile: "targeted" }, { repoRoot });
+    assert.equal(incomplete.status, "incomplete");
+    await assert.rejects(readFile(stalePath), /ENOENT/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("targeted gate refuses a dot-segment alias to full verification", async () => {
   const { repoRoot, headSha } = await fixture({ "test:quick": "bun scripts/../scripts/verify.mjs" });
   try {
@@ -166,10 +189,10 @@ test("dirty worktree cannot claim validation at the committed head", async () =>
 });
 
 test("suite changes to tracked files leave typed incomplete evidence and no complete artifact", async () => {
-  const { repoRoot } = await fixture({ verify: "bun scripts/mutate.mjs" });
+  const { repoRoot } = await fixture();
   try {
-    await writeFile(path.join(repoRoot, "scripts", "mutate.mjs"), "import { appendFileSync } from 'node:fs'; appendFileSync('package.json', '\\n');\n");
-    execFileSync("git", ["add", "scripts/mutate.mjs"], { cwd: repoRoot });
+    await writeFile(path.join(repoRoot, "scripts", "verify.mjs"), "import { appendFileSync } from 'node:fs'; appendFileSync('package.json', '\\n');\n");
+    execFileSync("git", ["add", "scripts/verify.mjs"], { cwd: repoRoot });
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "mutator"], { cwd: repoRoot });
     const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
     const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha)], { cwd: repoRoot });

@@ -192,7 +192,7 @@ export function classifyPackageSuites(suites, scripts) {
       if (nested) {
         if (!Object.hasOwn(scripts, nested[1])) throw new Error(`Unknown package script ${nested[1]} referenced by ${name}`);
         visit(nested[1], [...stack, name]);
-      } else if (classifyValidationCommand(segment) !== "non-validation" || /^(?:bun|node)\s+(?:scripts\/[\w./-]+\.mjs|\.\/node_modules\/@playwright\/test\/cli\.js)(?:\s|$)/.test(segment)) {
+      } else if (classifyValidationCommand(segment) !== "non-validation" || /^(?:bun|node)\s+(?:scripts\/(?:run-bun-test|docs\/validate-(?:links|rule-ownership|decision-records|changelog-completeness)|github\/lint-workflows|claude\/generate-claude-assets|generate-config-schema)\.mjs|\.\/node_modules\/@playwright\/test\/cli\.js)(?:\s|$)/.test(segment)) {
         commands.push(segment);
       } else {
         throw new Error(`Cannot classify package script ${name}: ${segment}`);

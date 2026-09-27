@@ -29,7 +29,7 @@ export function classifyValidationCommand(command) {
       targeted = true;
       continue;
     }
-    const packageRun = segment.match(/^(?:bun|npm|pnpm|yarn)(?:\s+--\S+)*\s+(?:run\s+)?(test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)(?:\s|$)/i);
+    const packageRun = segment.match(/^(?:bun|npm|pnpm|yarn)(?:\s+(?:(?:--prefix|--dir|--cwd)\s+\S+|--\S+))*\s+(?:run\s+)?(test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)(?:\s|$)/i);
     if (packageRun) {
       const name = packageRun[1].toLowerCase();
       if (["test", "verify"].includes(name)) return "full-repository";

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
@@ -31,7 +31,11 @@ export function parseResolveValidationArgs(argv) {
 }
 
 export async function resolveValidation(options, { repoRoot = resolveRepoRoot(process.cwd()), env = process.env } = {}) {
-  const incomplete = (reason) => ({ ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason });
+  const artifactPath = path.resolve(repoRoot, buildValidationResultsPath(options));
+  const incomplete = async (reason) => {
+    await rm(artifactPath, { force: true });
+    return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason };
+  };
   try {
     const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
     const currentTreeProblem = () => {
@@ -55,9 +59,8 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     const artifact = { ...await buildValidationArtifact(options, { repoRoot }), profile: options.profile, toolchain: pinned };
     const afterProblem = currentTreeProblem();
     if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem}`);
-    const artifactPath = buildValidationResultsPath(options);
-    await writeFile(path.resolve(repoRoot, artifactPath), `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
-    return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath, artifact };
+    await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+    return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
   } catch (error) {
     return incomplete(error instanceof Error ? error.message : String(error));
   }
