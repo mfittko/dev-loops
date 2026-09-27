@@ -684,6 +684,22 @@ function normalizeConfigInputSource(value) {
   if (value === "tracker") return "tracker";
   return "tracker";
 }
+/**
+ * Draft-start route marker for an existing draft PR (#2456). The route enters
+ * `draft_gate` while the PR stays draft. The gate-coordination pre-flight owns
+ * the per-head decision: `run_draft_gate` when the current head has no clean
+ * verdict, `report_blocked` with the spec-precondition reason when no spec
+ * exists. Ready-for-review and the Copilot request stay forbidden until a clean
+ * current-head `draft_gate` verdict exists.
+ */
+export function buildDraftStart({ repo, pr }) {
+  const preflight = `dev-loops loop gate-coordination --repo ${repo} --pr ${pr}`;
+  return {
+    selectedGate: "draft_gate",
+    preflight,
+    nextAction: `PR #${pr} is an existing draft: a valid start target. Run the draft-start pre-flight \`${preflight}\` and follow its nextAction (\`run_draft_gate\` enters draft_gate while the PR stays draft; \`report_blocked\` reports the spec precondition and stops). The Copilot handoff's \`pr_draft\` stop belongs to the Copilot-only follow-up path and is not an abort here. Do not mark ready or request Copilot review until a clean current-head draft_gate verdict exists.`,
+  };
+}
 export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, inputSource, uiReview = false, review = false, env = process.env }) {
   // The viewer-login memo exists to dedupe gh calls WITHIN one resolution
   // (PR + linked-issue checks); reset it per invocation so a long-lived
@@ -843,15 +859,17 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   let artifactState;
   let prAssignees = [];
   let linkedIssueNumbers = [];
+  let prDraft = false;
   try {
     const prJson = ghJson(
-      ["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt,assignees,closingIssuesReferences,body"],
+      ["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt,assignees,closingIssuesReferences,body,isDraft"],
       repoRoot,
       env,
     );
     artifactState = prJson.mergedAt ? "merged" : mapGhState(prJson.state);
     prAssignees = prJson.assignees || [];
     linkedIssueNumbers = resolveLinkedIssuesFromPr(prJson);
+    prDraft = prJson.isDraft === true && artifactState === "open";
   } catch {
     // A plain review is ownership-exempt, so unlike the gated strategies the
     // ownership gate cannot backstop an unreadable PR: fail closed rather than
@@ -926,6 +944,14 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         }
       }
     }
+  }
+  // Draft-start route (#2456): an existing draft PR is a valid start target.
+  // The Copilot handoff pre-flight stops on `pr_draft` by design (Copilot-only
+  // path), so the plain --pr route points the entrypoint at the gate-coordination
+  // pre-flight, which selects `draft_gate` or reports the spec precondition.
+  // Review selectors keep their read-only routes untouched.
+  if (prDraft && !review && !uiReview) {
+    return { ...result, draftStart: buildDraftStart({ repo, pr }) };
   }
   return result;
 }
@@ -1217,7 +1243,7 @@ export function buildResolveDevLoopStartupResult(input, {
   // `canonicalSpecSource`). Strip them before evaluation and re-attach to the
   // result; `planFileExempt` waives the worktree-isolation guard because a
   // pre-promotion plan has no issue to key a worktree on.
-  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, ...routingInput } = input;
+  const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, draftStart = null, ...routingInput } = input;
   input = routingInput;
   // Retrospective checkpoint gate (RETRO-ENFORCEMENT-CONFIG-GATED). The
   // durable checkpoint file, when present, is always honored. Cycle scoping
@@ -1345,18 +1371,22 @@ export function buildResolveDevLoopStartupResult(input, {
       );
     }
   }
+  // Draft-start route (#2456): only the plain PR follow-up route carries it.
+  const draftStartApplies = draftStart !== null && strategyKey === "copilot_pr_followup";
+  const routedBundle = draftStartApplies ? { ...bundle, nextAction: draftStart.nextAction } : bundle;
   return {
     ok: true,
     bundleKind: bundle.bundleKind,
     selectedStrategy: strategyKey,
     requiredReads: STRATEGY_REQUIRED_READS[strategyKey],
     operatorBriefing: OPERATOR_BRIEFING,
-    nextAction: bundle.nextAction,
-    canonicalStateSummary: summarizeCanonicalState(bundle),
+    nextAction: routedBundle.nextAction,
+    canonicalStateSummary: summarizeCanonicalState(routedBundle),
     ...(planFileIntakeState !== null ? { planFileIntakeState } : {}),
     ...(spikeIntakeState !== null ? { spikeIntakeState } : {}),
     ...(canonicalSpecSource !== null ? { canonicalSpecSource } : {}),
-    bundle,
+    ...(draftStartApplies ? { draftStart } : {}),
+    bundle: routedBundle,
   };
 }
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, adapter = createPiAdapter() } = {}) {
@@ -1398,6 +1428,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       delete parsed.planFileIntakeState;
       delete parsed.spikeIntakeState;
       delete parsed.canonicalSpecSource;
+      delete parsed.draftStart;
     }
     input = parsed;
   } else if (options.issue !== undefined) {

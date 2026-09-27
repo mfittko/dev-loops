@@ -1780,6 +1780,53 @@ test("--pr assigned to the viewer proceeds", async () => {
   }, { prefix: "resolve-dev-loop-ownership-pr-me-" });
 });
 
+test("#2456: --pr on an existing draft PR routes into draft_gate instead of the pr_draft stop", async () => {
+  await withTempDir(async (tempDir) => {
+    await initRepoWithOrigin(tempDir);
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "740"],
+        stdout: JSON.stringify({ state: "OPEN", isDraft: true, mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+      },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "740"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true);
+    assert.notEqual(parsed.action, "stop");
+    assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
+    assert.equal(parsed.draftStart.selectedGate, "draft_gate");
+    assert.equal(parsed.draftStart.preflight, "dev-loops loop gate-coordination --repo mfittko/dev-loops --pr 740");
+    assert.match(parsed.nextAction, /existing draft: a valid start target/);
+    assert.match(parsed.nextAction, /Do not mark ready or request Copilot review until a clean current-head draft_gate verdict exists/);
+  }, { prefix: "resolve-dev-loop-draft-start-" });
+});
+
+test("#2456: --pr on a non-draft PR and --review on a draft PR carry no draftStart", async () => {
+  for (const [isDraft, extra] of [[false, []], [true, ["--review"]]]) {
+    await withTempDir(async (tempDir) => {
+      await initRepoWithOrigin(tempDir);
+      const ghStub = await writeGhStubHelper(tempDir, [
+        {
+          assertArgs: ["pr", "view", "740"],
+          stdout: JSON.stringify({ state: "OPEN", isDraft, mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+        },
+        { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+      ], { matchMode: "claims" });
+      const result = await runNode(["--pr", "740", ...extra], {
+        cwd: tempDir,
+        env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+      });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).draftStart, undefined);
+    }, { prefix: "resolve-dev-loop-no-draft-start-" });
+  }
+});
+
 test("--pr --ui-review routes to the ui_review strategy end-to-end (issue #1362)", async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
