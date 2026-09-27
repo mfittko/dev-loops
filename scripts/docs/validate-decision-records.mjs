@@ -229,10 +229,11 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
               try {
                 text = await readFile(path.join(root, dest), "utf8");
               } catch (err) {
-                // A dangling symlink (or otherwise unreadable candidate) cannot be
-                // the selected destination: treat it as a non-match rather than
-                // crashing the guard with an uncaught ENOENT (fail closed below).
-                if (err.code === "ENOENT") continue;
+                // A candidate with no readable record body — a dangling symlink
+                // (ENOENT) or one pointing at a directory (EISDIR) — simply does
+                // not match, and must not crash the guard with an uncaught error
+                // instead of reaching its own fail-closed refusal below.
+                if (err.code === "ENOENT" || err.code === "EISDIR") continue;
                 throw err;
               }
               if (normalizeRecordNumber(splitStatus(text).rest) === normalizeRecordNumber(baseRest)) {
