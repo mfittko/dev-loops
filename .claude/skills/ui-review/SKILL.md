@@ -148,7 +148,9 @@ blocks on hosting. Every bounded cap is logged.
 Teardown consumes prior-stage results and ALWAYS emits a side-effect ledger. Invoke
 `dev-loops-run cli/index.mjs loop ui-review-teardown --repo-root <p> --provision-result <p> [--drive-result <p>] [--report-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
 (source-repo fallback: `dev-loops-run scripts/loop/ui-review-teardown.mjs ...`; pure
-decisions in `packages/core/src/loop/ui-review-teardown.mjs`).
+decisions in `packages/core/src/loop/ui-review-teardown.mjs`). When Stage 4
+published a gist, pass its report result as `--report-result`. The gist id comes
+from that file.
 
 The destructive steps (dev-DB row drops, worktree removal, and pruning the
 Stage-4 hosting gist named in `--report-result`) run ONLY with an
@@ -160,8 +162,9 @@ delegates to `scripts/loop/cleanup-worktree.mjs`, which refuses any path outside
 the loop namespace.
 
 The ledger enumerates migrations applied (applied-not-reverted), rows
-created/dropped or left behind, the worktree path and whether it was removed, and
-the process status. A failed kill/drop/removal is reported in the ledger and the
+created/dropped or left behind, the worktree path and whether it was removed, the
+hosting gist and whether it was deleted, and the process status. A failed
+kill/drop/removal/gist deletion is reported in the ledger and the
 result's `errors` list.
 
 The drive tags the rows it creates with its drive-session id and emits a row
