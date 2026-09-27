@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, listPriorFindingsLogHeads, main } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, listPriorFindingsLogHeads, main } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
@@ -1691,6 +1691,43 @@ test("buildAngleNamingSuffix names angles and carries their supplied instruction
 // #2372: the suffix states the unit's own emitted scope verbatim as the
 // --scope value, never a value derived from the unit name inside the suffix
 // text itself (an auto-chunk unit's raw name is not a valid scope).
+test("buildAngleNamingSuffix adds the fixed verifiedItems instruction to every unit carrying an AC angle, keyed on membership", () => {
+  const units = [
+    { name: "acceptance-criteria", angles: ["acceptance-criteria"] },
+    { name: "pr-checklist", angles: ["pr-checklist"] },
+    { name: "acceptance-criteria#2", angles: ["acceptance-criteria-delta-at-abc1234"] },
+    ...packDispatchUnits([
+      { name: "coverage", angles: ["coverage"] },
+      { name: "pr-checklist", angles: ["pr-checklist"] },
+      { name: "dry", angles: ["dry"] },
+    ], 1),
+  ];
+  assert.equal(units[3].angles.length, 3, "a packed unit holding pr-checklist with other angles");
+  for (const unit of units) {
+    const suffix = buildAngleNamingSuffix(unit, "pre-approval-gate-x", [{ angle: unit.angles[0], persona: "review", prompt: "UNRELATED FOCUS" }]);
+    assert.ok(suffix.includes(REVIEWER_VERIFIED_ITEMS_INSTRUCTION), unit.name);
+  }
+  for (const unit of [{ name: "coverage", angles: ["coverage"] }, ...packDispatchUnits([{ name: "dry", angles: ["dry"] }, { name: "kiss", angles: ["kiss"] }], 1)]) {
+    const suffix = buildAngleNamingSuffix(unit, "pre-approval-gate-x");
+    assert.doesNotMatch(suffix, /verifiedItems/, unit.name);
+  }
+});
+
+test("a packed unit carrying acceptance-criteria emits the verifiedItems instruction and stays under the work-order ceiling", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const angles = ["acceptance-criteria", "coverage", "dry", "kiss", "scope"];
+    const [packed] = packDispatchUnits(angles.map((name) => ({ name, angles: [name] })), 1);
+    await writeAnglePrompts(tmpDir, angles);
+    await seedBundle(tmpDir, { fanout: { groups: [packed], pendingGroups: [packed] } });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    const prompt = await readFile(payload.units[0].promptPath, "utf8");
+    assert.ok(prompt.includes(REVIEWER_VERIFIED_ITEMS_INSTRUCTION));
+    assert.ok(Buffer.byteLength(prompt) < REVIEWER_WORK_ORDER_MAX_BYTES, `${Buffer.byteLength(prompt)} bytes`);
+  });
+});
+
 test("buildAngleNamingSuffix states the unit's emitted scope verbatim as the --scope value", () => {
   const scope = "pre-approval-gate-group-determinism-state-concurrency";
   const suffix = buildAngleNamingSuffix({ name: "group:determinism+state-concurrency", angles: ["determinism", "state-concurrency"] }, scope);

@@ -1453,10 +1453,18 @@ export async function consolidateGateFanin(options) {
       options.specAuthority !== undefined ? path.resolve(options.repoRoot ?? process.cwd(), options.specAuthority) : undefined,
       parseError,
     );
-    const ledgerRecord = stampOptionalSpecAuthority(
-      { overallVerdict: consolidated.verdict, findings },
-      specAuthorityIdentity,
-    );
+    // verifiedItems: the deduplicated, trimmed union of the AC/DoD labels this
+    // round's fresh reviewers verified at this head (validateAngleResult already
+    // limited the field to the acceptance-criteria/pr-checklist angles). A
+    // carried-forward entry verified nothing at this head and the synthetic
+    // --pr-checklist entry carries no field, so neither contributes. Omitted
+    // when empty, so a round without it writes the same ledger as before.
+    const verifiedItems = [...new Set(rawArtifacts
+      .filter((a) => typeof a.carriedFromHead !== "string" && Array.isArray(a.verifiedItems))
+      .flatMap((a) => a.verifiedItems.map((item) => item.trim())))];
+    const ledgerWrapper = { overallVerdict: consolidated.verdict, findings };
+    if (verifiedItems.length > 0) ledgerWrapper.verifiedItems = verifiedItems;
+    const ledgerRecord = stampOptionalSpecAuthority(ledgerWrapper, specAuthorityIdentity);
     await writeFile(options.ledgerOut, `${JSON.stringify(ledgerRecord, null, 2)}\n`, "utf8");
   }
 

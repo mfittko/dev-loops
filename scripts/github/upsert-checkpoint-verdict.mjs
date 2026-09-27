@@ -11,7 +11,11 @@ import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defa
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
-import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { loadPrGateCoordinationContext, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
+import { applyTick } from "./tick-verified-checkboxes.mjs";
+import { editPr } from "./edit-pr.mjs";
+import { editIssue } from "./edit-issue.mjs";
 import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-checkpoint-evidence.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
@@ -1499,13 +1503,16 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     // ledger records the underlying review verdict and the proven blockers.
     // Neither label matches a parsed field, so the parse contract is unchanged.
     ...(reviewVerdict ? [`**Review verdict:** ${reviewVerdict}`] : []),
-    ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockers(gateBlockers)}`] : []),
+    ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
     renderExecutionModeLine(executionMode, inlineReason),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
   );
   if ((verdict === "findings_present" || verdict === "blocked") && blockCleanOnFindingSeverities && blockCleanOnFindingSeverities.length > 0) {
     const sevs = blockCleanOnFindingSeverities.join(", ");
     lines.push(`**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`);
+  }
+  if (Array.isArray(gateBlockers) && gateBlockers.length > 0) {
+    lines.push("", renderGateBlockerItemsBlock(gateBlockers));
   }
   // When structured per-angle fan-in data is supplied (--findings-json), the
   // `**Findings summary:**` digest is computed from it; otherwise the digest
@@ -2076,6 +2083,34 @@ export function collectPreApprovalGateBlockers(gate, refinementArtifact) {
   return blockers;
 }
 
+// ACCEPT-CRITERIA-VERIFY-AND-REFLECT automatic tick (pre_approval_gate with a
+// --findings-ledger only): tick the ledger's reviewer-verified labels in the PR
+// body and, when the spec-of-record still has unticked AC items, in each linked
+// issue body. Exact-label match, never unchecks, one edit per changed body. A
+// failed fetch or edit throws, so no verdict is posted. Returns the refinement
+// artifact reloaded from the ticked bodies; labels no reviewer verified stay
+// unchecked in it and still block.
+async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordinationContext }, { env, ghCommand, runChild }) {
+  const prData = coordinationContext.prData ?? {};
+  const prTick = await applyTick(typeof prData.body === "string" ? prData.body : "", verifiedItems, false, (bodyFile) =>
+    editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
+  );
+  const artifact = coordinationContext.refinementArtifact;
+  if (Array.isArray(artifact?.uncheckedAcItems) && artifact.uncheckedAcItems.length > 0) {
+    for (const issue of artifact.linkedIssues ?? []) {
+      const issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
+      await applyTick(issueBody, verifiedItems, false, (bodyFile) =>
+        editIssue({ repo, issue, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
+      );
+    }
+  }
+  const state = String(prData.state || "").toUpperCase();
+  return loadRefinementArtifact(
+    { repo, prData: { ...prData, body: prTick.body }, prDraft: Boolean(prData.isDraft), prClosed: state === "CLOSED", prMerged: state === "MERGED" },
+    { env, ghCommand, runChild },
+  );
+}
+
 // GATE-COMMENT-VERDICT-VALUES layer composition: the fan-in ledger's
 // overallVerdict is the REVIEW verdict; the checkpoint verdict composes it with
 // deterministic gate blockers. A blocked review stays blocked, any proven
@@ -2085,14 +2120,24 @@ export function composeCheckpointVerdict({ reviewVerdict, blockers = [] }) {
   return reviewVerdict;
 }
 
-const MAX_RENDERED_GATE_BLOCKERS = 10;
-function formatGateBlockers(blockers) {
-  const rendered = blockers
-    .slice(0, MAX_RENDERED_GATE_BLOCKERS)
-    .map(({ kind, item }) => `${kind}: \`${sanitizeCodeSpan(neutralizeBareIssuePrIds(item))}\``)
-    .join("; ");
-  const hidden = blockers.length - MAX_RENDERED_GATE_BLOCKERS;
-  return hidden > 0 ? `${rendered}; +${hidden} more` : rendered;
+// The `**Gate blockers:**` line and the verdict-contradiction error state only
+// the count per kind; the item text lives in the collapsed block below.
+function formatGateBlockerCounts(blockers) {
+  const counts = new Map();
+  for (const { kind } of blockers) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  return [...counts].map(([kind, count]) => `${count} ${kind}`).join("; ");
+}
+
+// Every remaining blocker item, one per line, uncapped, in a collapsed block.
+function renderGateBlockerItemsBlock(blockers) {
+  return [
+    "<details>",
+    `<summary>Remaining gate blocker items (${blockers.length})</summary>`,
+    "",
+    ...blockers.map(({ kind, item }) => `- ${kind}: \`${sanitizeCodeSpan(neutralizeBareIssuePrIds(item))}\``),
+    "",
+    "</details>",
+  ].join("\n");
 }
 
 // GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS
@@ -2433,6 +2478,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (options.findingsLedger) {
     preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
   }
+  // Tick the reviewer-verified AC/DoD labels BEFORE composing, then read the
+  // reloaded artifact everywhere below (blocker collection and the clean guards).
+  if (options.gate === "pre_approval_gate" && preloadedFindingsLedger?.verifiedItems?.length > 0) {
+    coordinationContext.refinementArtifact = await tickReviewerVerifiedItems({
+      repo: options.repo,
+      pr: options.pr,
+      verifiedItems: preloadedFindingsLedger.verifiedItems,
+      coordinationContext,
+    }, gh);
+  }
   // Set only when the posted checkpoint verdict differs from the ledger's review
   // verdict (a proven pre-approval blocker over a completed ledger), so the
   // render records both layers. The ledger object itself is never mutated.
@@ -2457,7 +2512,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // decision to override. `blocked` over a completed ledger is accepted
       // only through a proven blocker, i.e. only when it IS the composed value.
       const compositionNote = composedVerdict !== ledgerVerdict
-        ? ` Composed with ${gateBlockers.length} deterministic pre-approval blocker(s) (${formatGateBlockers(gateBlockers)}), the checkpoint verdict is "${composedVerdict}".`
+        ? ` Composed with ${gateBlockers.length} deterministic pre-approval blocker(s) (${formatGateBlockerCounts(gateBlockers)}), the checkpoint verdict is "${composedVerdict}".`
         : (options.verdict === "blocked"
           ? ` No deterministic pre-approval blocker is proven, so "blocked" cannot sit over this completed ledger; the composed checkpoint verdict is "${composedVerdict}".`
           : "");

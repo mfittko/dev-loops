@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 
 import {
@@ -16,6 +17,7 @@ import {
   extractChecklistItems,
   extractPrBodyUncheckedChecklistItems,
   extractUncheckedChecklistItems,
+  isGateOutcomeItem,
   parseMarkdownSections,
   summarizeRefinementGateCheck,
   validatePrBodySpec,
@@ -274,6 +276,47 @@ test("#1951 derivePrChecklistsFromIssueMatrix dedupes repeated criterion/evidenc
   const { acChecklist, dodChecklist } = derivePrChecklistsFromIssueMatrix({ body });
   assert.deepEqual(acChecklist, ["the feature works end to end"]);
   assert.deepEqual(dodChecklist, ["a focused test proves the feature works"]);
+});
+
+test("derivePrChecklistsFromIssueMatrix renders gate and merge outcomes as prose, never as a checkbox", () => {
+  const gateRow = "draft_gate and pre_approval_gate pass on the final head; merge only on a full gate pass";
+  const body = [
+    "## AC / DoD matrix", "",
+    "| Criterion outcome | Required completion evidence |",
+    "|---|---|",
+    "| the feature works end to end | a focused test proves the feature works |",
+    `| the change is reviewed | ${gateRow} |`,
+    "| the `pre_approval_gate` next-action row in the contract describes the automatic tick | a contract test pins the row wording |",
+    "",
+  ].join("\n");
+  const { acChecklist, dodChecklist, gateOutcomes, markdown } = derivePrChecklistsFromIssueMatrix({ body });
+  assert.deepEqual(gateOutcomes, [gateRow]);
+  assert.equal(dodChecklist.includes(gateRow), false);
+  assert.ok(acChecklist.includes("the `pre_approval_gate` next-action row in the contract describes the automatic tick"));
+  // No generated checkbox depends on a gate being evaluated.
+  const checkboxes = markdown.split("\n").filter((line) => /^- \[ \] /.test(line));
+  assert.ok(checkboxes.length > 0);
+  for (const line of checkboxes) assert.equal(isGateOutcomeItem(line.slice(6)), false, line);
+  assert.match(markdown, /\nGate and merge outcomes are not checkboxes; the gates and merge-pr enforce them: draft_gate and pre_approval_gate pass on the final head; merge only on a full gate pass\.\n/);
+});
+
+test("isGateOutcomeItem stays narrow: no row of a real tool-behavior matrix is a gate outcome", async () => {
+  const body = await readFile(new URL("./fixtures/refinement/gate-tick-issue-matrix.md", import.meta.url), "utf8");
+  const matrix = detectAcDodMatrix(body);
+  assert.equal(matrix.rows.length, 10);
+  for (const row of matrix.rows) {
+    assert.equal(isGateOutcomeItem(row.criterion), false, row.criterion);
+    assert.equal(isGateOutcomeItem(row.evidence), false, row.evidence);
+  }
+  assert.deepEqual(derivePrChecklistsFromIssueMatrix({ matrix }).gateOutcomes, []);
+  for (const outcome of [
+    "`draft_gate` and `pre_approval_gate` pass on the final head",
+    "the pre_approval_gate is clean at the final head",
+    "the PR is merged after a full gate pass",
+    "merge only on a full gate pass",
+  ]) {
+    assert.equal(isGateOutcomeItem(outcome), true, outcome);
+  }
 });
 
 test("derivePrChecklistsFromIssueMatrix fails closed on a missing/malformed matrix", () => {

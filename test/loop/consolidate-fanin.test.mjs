@@ -404,6 +404,66 @@ test("consolidateGateFanin writes --ledger-out as the { overallVerdict, findings
   );
 });
 
+test("consolidateGateFanin writes the deduplicated, trimmed verifiedItems union into --ledger-out", async () => {
+  await withFindingsDir(
+    {
+      "acceptance-criteria.json": { angle: "acceptance-criteria", verdict: "clean", findings: [], verifiedItems: [" item one ", "item two"] },
+      "pr-checklist.json": { angle: "pr-checklist", verdict: "clean", findings: [], verifiedItems: ["item two", "item three"] },
+      "scope.json": { angle: "scope", verdict: "clean", findings: [] },
+    },
+    async (dir) => {
+      const ledgerPath = path.join(dir, "out", "ledger.json");
+      await consolidateGateFanin({ findingsDir: dir, ledgerOut: ledgerPath });
+      const written = JSON.parse(await readFile(ledgerPath, "utf8"));
+      assert.deepEqual(written.verifiedItems, ["item one", "item two", "item three"]);
+    },
+  );
+});
+
+test("consolidateGateFanin: carried-forward and synthetic pr-checklist entries contribute no verifiedItems", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "acceptance-criteria.json": { angle: "acceptance-criteria", verdict: "clean", findings: [], verifiedItems: ["fresh item"] } },
+      async (dir) => {
+        const ledgerPath = path.join(dir, "out", "ledger.json");
+        const plan = JSON.parse(carryForwardPlanJson(["dry"])).carried.map((e) => ({ ...e, verifiedItems: ["carried item"] }));
+        await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          ledgerOut: ledgerPath,
+          prChecklist: "clean",
+          carriedAngles: ["dry"],
+          carryForwardPlan: plan,
+        });
+        const written = JSON.parse(await readFile(ledgerPath, "utf8"));
+        assert.deepEqual(written.verifiedItems, ["fresh item"]);
+      },
+    );
+    await withFindingsDir(
+      { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
+      async (dir) => {
+        const ledgerPath = path.join(dir, "out", "ledger.json");
+        await consolidateGateFanin({ findingsDir: dir, ledgerOut: ledgerPath, prChecklist: "clean" });
+        const written = JSON.parse(await readFile(ledgerPath, "utf8"));
+        assert.equal("verifiedItems" in written, false);
+      },
+    );
+  });
+});
+
+test("consolidateGateFanin fails closed on verifiedItems from a non-AC angle", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], verifiedItems: ["x"] } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "out", "ledger.json") }),
+        /verifiedItems/,
+      );
+    },
+  );
+});
+
 // AC1 (issue 2008 / ADR-0061): optional --spec-authority stamping of --ledger-out.
 test("consolidateGateFanin: --spec-authority stamps --ledger-out; absent is a byte-identical no-op", async () => {
   await withFindingsDir(

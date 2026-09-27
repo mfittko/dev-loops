@@ -573,16 +573,42 @@ export function detectAcDodMatrix(body = "") {
   };
 }
 
+// A gate outcome ("draft_gate and pre_approval_gate pass on the final head") or
+// a merge outcome ("merge only on a full gate pass") can only become true after
+// the gate that checks the PR-body boxes has already run, so as a checkbox it
+// would block that gate forever.
+// ponytail: keyword heuristic; it catches "<gate> [and <gate>] pass/is clean"
+// and "merge only"/"is merged" phrasings and misses paraphrases such as
+// "approval succeeds". Upgrade path: an explicit gate-outcome marker in the
+// issue matrix instead of text matching.
+const GATE_OUTCOME_RE = /\b(?:draft_gate|pre_approval_gate|gates?)`?(?:\s+(?:and|or)\s+`?(?:draft_gate|pre_approval_gate)`?)*\s+(?:pass(?:es|ed)?|succeeds?|(?:is|are|stays?|closes?)\s+clean)\b/i;
+const MERGE_OUTCOME_RE = /\bmerges?\s+only\b|\b(?:is|was|gets?)\s+merged\b/i;
+
+/**
+ * True when a matrix item's satisfaction depends on a gate or merge being
+ * evaluated. A row that only names a gate while describing tool behavior is
+ * not a gate outcome.
+ *
+ * @param {string} item
+ * @returns {boolean}
+ */
+export function isGateOutcomeItem(item) {
+  return GATE_OUTCOME_RE.test(item) || MERGE_OUTCOME_RE.test(item);
+}
+
 /**
  * Project an issue's AC→DoD mapping matrix into self-contained list-form PR
  * checklists: the PR carries list-form Acceptance criteria and
  * Definition of done checkboxes derived from the matrix — never a matrix/table,
- * never checkboxes inside table cells. Accepts a pre-parsed `matrix` (from
+ * never checkboxes inside table cells. Gate and merge outcomes
+ * ({@link isGateOutcomeItem}) are never checkboxes: they are returned in
+ * `gateOutcomes` and rendered as a prose paragraph stating that the gates and
+ * merge-pr enforce them. Accepts a pre-parsed `matrix` (from
  * {@link detectAcDodMatrix}) or a raw `body` to parse. Fails closed on a
  * missing/malformed matrix rather than emitting empty checklists.
  *
  * @param {{ matrix?: ReturnType<typeof detectAcDodMatrix>, body?: string }} input
- * @returns {{ acChecklist: string[], dodChecklist: string[], markdown: string }}
+ * @returns {{ acChecklist: string[], dodChecklist: string[], gateOutcomes: string[], markdown: string }}
  */
 export function derivePrChecklistsFromIssueMatrix({ matrix = null, body = "" } = {}) {
   const m = matrix ?? detectAcDodMatrix(body);
@@ -593,12 +619,18 @@ export function derivePrChecklistsFromIssueMatrix({ matrix = null, body = "" } =
     );
   }
   const dedupe = (items) => [...new Set(items.map((s) => s.trim()).filter((s) => s.length > 0))];
-  const acChecklist = dedupe(m.rows.map((r) => r.criterion));
-  const dodChecklist = dedupe(m.rows.map((r) => r.evidence));
+  const allAc = dedupe(m.rows.map((r) => r.criterion));
+  const allDod = dedupe(m.rows.map((r) => r.evidence));
+  const acChecklist = allAc.filter((t) => !isGateOutcomeItem(t));
+  const dodChecklist = allDod.filter((t) => !isGateOutcomeItem(t));
+  const gateOutcomes = dedupe([...allAc, ...allDod].filter(isGateOutcomeItem));
   const render = (heading, items) =>
     `## ${heading}\n\n${items.map((t) => `- [ ] ${t}`).join("\n")}\n`;
-  const markdown = `${render("Acceptance criteria", acChecklist)}\n${render("Definition of done", dodChecklist)}`;
-  return { acChecklist, dodChecklist, markdown };
+  const outcomes = gateOutcomes.length > 0
+    ? `\nGate and merge outcomes are not checkboxes; the gates and merge-pr enforce them: ${gateOutcomes.map((t) => t.replace(/[.;]+$/, "")).join("; ")}.\n`
+    : "";
+  const markdown = `${render("Acceptance criteria", acChecklist)}\n${render("Definition of done", dodChecklist)}${outcomes}`;
+  return { acChecklist, dodChecklist, gateOutcomes, markdown };
 }
 
 /**

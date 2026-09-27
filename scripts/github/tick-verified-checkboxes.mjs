@@ -162,19 +162,21 @@ export function parseTickVerifiedCliArgs(argv) {
 }
 
 // Tick `currentBody` for the verified labels and, when something flips (and not a
-// dry run), persist it via `writeEdited(bodyFile)`. Shared by the PR and issue
-// targets so the temp-file write/cleanup lives in one place.
-async function applyTick(currentBody, verified, dryRun, writeEdited) {
+// dry run), persist it with ONE `writeEdited(bodyFile)` call. Shared by the PR
+// and issue targets here and by upsert-checkpoint-verdict's pre_approval_gate
+// tick, so the temp-file write/cleanup lives in one place. `body` is the ticked
+// body (equal to `currentBody` when nothing flipped).
+export async function applyTick(currentBody, verified, dryRun, writeEdited) {
   const { body: nextBody, flipped, unmatched } = tickVerifiedCheckboxes(currentBody, verified);
   if (flipped.length === 0 || dryRun) {
-    return { flipped, unmatched, edited: false };
+    return { body: nextBody, flipped, unmatched, edited: false };
   }
   const dir = await mkdtemp(join(tmpdir(), "tick-verified-"));
   try {
     const bodyFile = join(dir, "body.md");
     await writeFile(bodyFile, nextBody, "utf8");
     await writeEdited(bodyFile);
-    return { flipped, unmatched, edited: true };
+    return { body: nextBody, flipped, unmatched, edited: true };
   } finally {
     // Clean up the temp dir on success or failure; never let cleanup mask the result/error.
     try {
