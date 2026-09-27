@@ -14,6 +14,20 @@ import { parseReadyForReviewCliArgs } from "../../scripts/github/ready-for-revie
 
 const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
 
+// The gate table must route approval to the human checkpoint and stop for merge
+// authorization. Row cells are parsed; surrounding prose may change.
+function assertApprovalStopGates(content) {
+  const rows = new Map(content.split("\n")
+    .map((line) => line.match(/^\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*([^|]*)\|\s*([^|]*)\|/))
+    .filter(Boolean)
+    .map(([, gate, routeKind, strategy, meaning]) => [gate, { routeKind, strategy: strategy.trim(), meaning }]));
+  const approval = rows.get("final_approval");
+  assert.ok(approval?.routeKind === "route" && /human approval checkpoint/i.test(approval.meaning),
+    "gate table must route final_approval to the human approval checkpoint");
+  assert.equal(rows.get("waiting_for_merge_authorization")?.routeKind, "stop",
+    "gate table must stop at waiting_for_merge_authorization");
+}
+
 async function readIssueIntakeSurface() {
   const [skill, intakeDoc, operationsDoc] = await Promise.all([
     readRepo("skills/copilot-pr-followup/SKILL.md"),
@@ -130,8 +144,7 @@ test("issue-based shorthand auto dev-loop trigger is documented as one public in
   assertRuleOwned("FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION", PUBLIC_CONTRACT_PATH);
   assert.match(publicContract, /non-terminal follow-up\/wait states[\s\S]*waiting_for_copilot_review[\s\S]*continuation boundaries/i);
   assert.match(publicContract, /async child exits before the requested stop boundary[\s\S]*re-dispatch via the main session driver/i);
-  assert.match(publicContract, /R --> A\[Human approval checkpoint\]/i);
-  assert.match(publicContract, /R --> M\[Wait for merge authorization\]/i);
+  assertApprovalStopGates(publicContract);
 
   assert.match(devLoopSkill, /Shorthand issue-based auto trigger contract/i);
   assert.match(devLoopSkill, /public `dev-loop` intent `auto_continue_current`/i);
@@ -356,4 +369,17 @@ test("issue-intake safety layer contract is documented", async () => {
   assert.match(skillContent, /emit a concise post-mutation verification artifact/i);
   assert.match(planContent, /Proposal-first new-idea safety layer/i);
   assert.match(planContent, /stopped_overlap_needs_decision`, `stopped_low_confidence`, `stopped_explicit_reject`/i);
+});
+
+test("approval stop-gate check accepts reworded prose and rejects a lost stop or checkpoint route", async () => {
+  const publicContract = await readRepo(PUBLIC_CONTRACT_PATH);
+  assertApprovalStopGates(publicContract.replace("Do not remove surfaced internal loop names", "Keep surfaced internal loop names"));
+  assert.throws(
+    () => assertApprovalStopGates(publicContract.replace("| `waiting_for_merge_authorization` | `stop` |", "| `waiting_for_merge_authorization` | `route` |")),
+    /must stop at waiting_for_merge_authorization/,
+  );
+  assert.throws(
+    () => assertApprovalStopGates(publicContract.replace("routes to the human approval checkpoint", "routes to merge")),
+    /must route final_approval to the human approval checkpoint/,
+  );
 });
