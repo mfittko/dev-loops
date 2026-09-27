@@ -62,32 +62,32 @@ Totals: 67 `pending`, one `in progress`, eight `non-prose`, four `blocked`; 80 f
 
 | File | Phase | Disposition | Rationale |
 | --- | --- | --- | --- |
-| `skills/copilot-pr-followup/SKILL.md` | 2 | pending | Routed entrypoint, +128/-107. Reserved passages stay untouched: `COPILOT-FOLLOWUP-REQUEST-BRANCHING` and the Phase 5 retry and fixer triage step (issue 2438); the `run-gate-validation.mjs` step and both "Review angles" bullets (issue 2442). |
+| `skills/copilot-pr-followup/SKILL.md` | 2 | changed | Removed restatements owned by `COPILOT-FOLLOWUP-REQUEST-BRANCHING`, the gate comment contract and merge preconditions, plus helper internals that change no agent decision. Reserved passages of issues 2438 and 2442 are byte-identical. |
 | `skills/dev-loop/SKILL.md` | 2 | blocked | Owner: parallel unit PR 2480 (issue 2456) edits this file. It also holds the bounded Copilot/CI watch rule (issue 2438) and the "Blocking join for a nested single-child step" paragraph (issue 2442). |
 | `skills/dev-loop/scripts/dev-mode-context.mjs` | 1 | non-prose | Context extraction code with no comments; behavior, payload keys and diagnostics only. |
 | `skills/dev-loop/scripts/dev-mode-context.test.mjs` | 1 | non-prose | Test fixtures and assertions with no comments. |
-| `skills/dev-loop/scripts/init-phase.mjs` | 2 | pending | Script comments, +4/-10. Two comment blocks restate `ARTIFACT-TRACKER-FIRST-NO-DUP`; review them with the local-implementation entrypoint. |
+| `skills/dev-loop/scripts/init-phase.mjs` | 2 | changed | Comments only. The two inline blocks that restated `ARTIFACT-TRACKER-FIRST-NO-DUP` now cite the header comment. No code change. |
 | `skills/dev-loop/scripts/log-bash-exit-1.mjs` | 1 | non-prose | Re-export shim with no comments. |
 | `skills/dev-loop/scripts/phase-files.mjs` | 1 | non-prose | Re-export shim with no comments. |
-| `skills/dev-loop/scripts/post-gate-verdict-fallback.mjs` | 2 | pending | About 90 comment lines, including the degraded-semantics header and inline guard notes, +1/-3. Review them with the dev-loop fallback caller. |
+| `skills/dev-loop/scripts/post-gate-verdict-fallback.mjs` | 2 | unchanged | The comments document the security invariants of hand-copied zero-dep guards (head SHA, id guard, marker encoding, continuation blockquoting) for maintainers. No route loads the file as instructions. The usage string is a single line. |
 | `skills/dev-loop/scripts/post-gate-verdict-fallback.test.mjs` | 1 | non-prose | Test suite. Its comments explain security and compatibility cases and carry no agent instruction. |
 | `skills/dev-loop/scripts/render-template.mjs` | 1 | non-prose | Template renderer code with no comments. |
 | `skills/dev-loop/scripts/render-template.test.mjs` | 1 | non-prose | Test fixtures and assertions with no comments. |
-| `skills/dev-loop/templates/bootstrap-agents.md` | 2 | pending | Template; unchanged since baseline. |
-| `skills/dev-loop/templates/bootstrap-implementation-state.md` | 2 | pending | Template; unchanged since baseline. |
-| `skills/dev-loop/templates/bootstrap-implementation-workflow.md` | 2 | pending | Template; unchanged since baseline. |
-| `skills/dev-loop/templates/dev-mode-retrospective.md` | 2 | pending | Template; unchanged since baseline. |
-| `skills/dev-loop/templates/dev-mode-review.md` | 2 | pending | Template; unchanged since baseline. |
-| `skills/dev-loop/templates/dev-mode-skill-changes.md` | 2 | pending | Template; unchanged since baseline. |
-| `skills/dev-loop/templates/merged-phase-plan.md` | 2 | pending | Template; unchanged since baseline. |
-| `skills/dev-loop/templates/phase-doc.md` | 2 | pending | Template; unchanged since baseline. |
-| `skills/dev-loop/templates/phase-summary.md` | 2 | pending | Template; unchanged since baseline. |
-| `skills/dev-loop/templates/phase-variant.md` | 2 | pending | Template; unchanged since baseline. |
-| `skills/dev-loop/templates/pr-body.md` | 2 | pending | Template, new since baseline (+52). |
-| `skills/dev-loop/templates/retrospective.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/bootstrap-agents.md` | 2 | unchanged | Consumer bootstrap scaffold. Its text is the rendered product and restates no skill rule. |
+| `skills/dev-loop/templates/bootstrap-implementation-state.md` | 2 | unchanged | Consumer bootstrap scaffold. Its text is the rendered product and restates no skill rule. |
+| `skills/dev-loop/templates/bootstrap-implementation-workflow.md` | 2 | unchanged | Consumer bootstrap scaffold. Its text is the rendered product and restates no skill rule. |
+| `skills/dev-loop/templates/dev-mode-retrospective.md` | 2 | unchanged | Heading skeleton for a rendered artifact. No condensable prose. |
+| `skills/dev-loop/templates/dev-mode-review.md` | 2 | unchanged | Heading skeleton for a rendered artifact. No condensable prose. |
+| `skills/dev-loop/templates/dev-mode-skill-changes.md` | 2 | unchanged | Heading skeleton for a rendered artifact. No condensable prose. |
+| `skills/dev-loop/templates/merged-phase-plan.md` | 2 | unchanged | Heading skeleton for a rendered artifact. No condensable prose. |
+| `skills/dev-loop/templates/phase-doc.md` | 2 | unchanged | Heading skeleton for a rendered artifact. No condensable prose. |
+| `skills/dev-loop/templates/phase-summary.md` | 2 | unchanged | Heading skeleton for a rendered artifact. No condensable prose. |
+| `skills/dev-loop/templates/phase-variant.md` | 2 | unchanged | Heading skeleton for a rendered artifact. No condensable prose. |
+| `skills/dev-loop/templates/pr-body.md` | 2 | changed | Removed two explanatory clauses. The required sections, `validate-pr-body-spec` boundary and `OPS-PR-VALIDATION-STABLE-EVIDENCE` stay. |
+| `skills/dev-loop/templates/retrospective.md` | 2 | unchanged | Heading skeleton for a rendered artifact. No condensable prose. |
 | `skills/dev-loop/templates/review.md` | 2 | blocked | Owner: issue 2442 reserves the whole file. |
-| `skills/dev-loop/templates/slides-story-review.md` | 2 | pending | Template; unchanged since baseline. |
-| `skills/dev-loop/templates/ui-vision-review.md` | 2 | pending | Template, +1/-1. |
+| `skills/dev-loop/templates/slides-story-review.md` | 2 | unchanged | Model-facing prompt payload with a strict output schema. It holds no duplicated rule. |
+| `skills/dev-loop/templates/ui-vision-review.md` | 2 | changed | Merged the per-lens artifact list that item 2 repeated and the repeated coverage paragraph. The JSON example, lens set, severity map and `checkedCriteria` rules stay. |
 | `skills/docs/ab-contrast-deslop-step.md` | 3 | pending | Shared doc, +0/-4. |
 | `skills/docs/acceptance-criteria-verification.md` | 3 | pending | Shared doc, +13/-2. |
 | `skills/docs/agent-stall-detection.md` | 3 | pending | Shared doc, +0/-13. |
@@ -136,12 +136,105 @@ Totals: 67 `pending`, one `in progress`, eight `non-prose`, four `blocked`; 80 f
 | `skills/docs/wait-watch-procedure.md` | 3 | pending | Shared doc, +21/-26. |
 | `skills/docs/workflow-handoff-contract.md` | 3 | pending | Shared doc, +8/-13. |
 | `skills/docs/worktree-guidance.md` | 3 | pending | Shared doc, +24/-18. Reserved passage: `WORKTREE-COMMIT-MSG-GUARD` (issue 2438). |
-| `skills/final-approval/SKILL.md` | 2 | pending | Routed entrypoint; unchanged since baseline. |
-| `skills/local-implementation/SKILL.md` | 2 | pending | Routed entrypoint, +19/-31. Loaded on the startup bundle. |
-| `skills/loop-grill/SKILL.md` | 2 | pending | Routed entrypoint, +22/-19. |
-| `skills/pi-session-audit/SKILL.md` | 2 | pending | Routed entrypoint, new since baseline (+120). |
+| `skills/final-approval/SKILL.md` | 2 | unchanged | Already a thin redirect to the follow-up skill's "Human approval checkpoint" section, which still exists under Step 7. |
+| `skills/local-implementation/SKILL.md` | 2 | changed | Merged the duplicated lightweight, handoff-path, commit-authorization and fan-out restatements into their in-file owners. Dropped rationale that changes no agent decision. |
+| `skills/loop-grill/SKILL.md` | 2 | changed | Dropped detector-internals rationale and the Output-format restatement of Step 4 posting rules. |
+| `skills/pi-session-audit/SKILL.md` | 2 | changed | Removed the motivation section and parser internals that change no reading of the output. |
 | `skills/review/SKILL.md` | 2 | blocked | Owner: parallel unit issue 2416 edits this file. |
-| `skills/ui-review/SKILL.md` | 2 | pending | Routed entrypoint, +7/-26. |
+| `skills/ui-review/SKILL.md` | 2 | changed | Removed stage implementation detail that the stage scripts own. Commands, flags, config keys, fail-closed stops, trust boundary and authorization rules stay. |
+
+### Phase 2 status
+
+Phase 2 worked every phase 2 row that was `pending`: eight changed, 14 unchanged. The four `blocked` rows stay blocked. Phase 3 rows under `skills/docs/` stay `pending`; phase 2 claims no whole-tree completion. Every `<!-- rule: ... -->` marker, MUST/MUST NOT/SHOULD/MAY count, CLI flag and link anchor in the changed files is retained. A backticked-token comparison against the start revision found only internal names and explanatory literals removed; each is listed in the trace below.
+
+### Phase 2 obligation trace
+
+`skills/copilot-pr-followup/SKILL.md`:
+
+- Claude inline-loop note: reworded into short sentences. The fixer-delegation exception stays (Step 6).
+- Stale-CLI source selection: dropped the version-comparison internals and the `#1661` non-goal note. The fail-soft to the installed layout and the "tooling source, not gate behavior" statement stay.
+- Step 6 re-request paragraph: dropped the consequence sentence about an unrequested watch. The MUST and `COPILOT-FOLLOWUP-REQUEST-BRANCHING` citation stay.
+- Step 6 practical rules: dropped the `watch-ci` flags, the provider list and the `gh run watch <run-id>` fallback. Owner: `COPILOT-FOLLOWUP-WAIT-TOOLS` in the same file, which keeps every literal.
+- Key rules: merged the two shell-polling bullets into one bullet. Both prohibitions stay.
+- Step 7 item 3 question severity: dropped the "unresolved feedback" restatement. The never-deferred rule, the three outcomes and the gate-close block stay.
+- Step 7 item 11: replaced the restatement of `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` with a point-of-use citation plus the operative stop (no request, re-request or gate dispatch until `verify-fixer-disposition.mjs` reports the tackled set complete). Owner: `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` in `skills/docs/gate-review-sub-loop-contract.md`.
+- Step 7 item 12 converged-once bullet: dropped the carry description. Owners: `COPILOT-FOLLOWUP-REQUEST-BRANCHING` (`suppressed_post_convergence`) and `COPILOT-STATE-CARRIED-CONVERGENCE`.
+- Step 7 item 12 request-result bullets: merged four bullets into one citation of `COPILOT-FOLLOWUP-REQUEST-BRANCHING`. The `unavailable` passive-waiting exception, the single detector refresh and the `watch-cycle`/`watch-ci` routing stay in the merged bullet. The unexpected-failure stop is owned by the branching rule.
+- Gate comment command: dropped the sentence that the helper handles inline versus body-filed findings. Owner: `upsert-checkpoint-verdict.mjs` and [Gate Review Comment Contract](../skills/docs/gate-review-comment-contract.md).
+- Size-budget shell comment: shortened. Exit 0/1 write JSON, exit 2 aborts, and the `set -e` capture rule stay.
+- Draft and pre-approval gate contracts: dropped "summarizes the procedural integration only" and "This skill does not restate" sentences. The owner links and rule IDs stay. Board sync: dropped the exit-code and auth detail. Owner: `ready-for-review.mjs`; the best-effort, NON-FATAL and never-blocks statements stay.
+- Human approval checkpoint: merged two paragraphs. The authoritative verify, the thread cross-check, both stops, the sanctioned `merge-pr.mjs` command and the raw `gh pr merge` prohibition stay.
+- Mechanical pre-merge check: dropped the duplicate `merge-pr.mjs` code block (same command in the checkpoint above). `RAW-GH-PR-MERGE-BYPASS` and the violation stop stay.
+- Stale lock takeover: dropped the lead-in sentence. The takeover trigger and command stay.
+- Post-merge board sync: dropped the exit-code table. Owners: `dev-loops queue sync-status` and `queue archive` help. Both `|| true` guards and the never-blocks rule stay. `queue reconcile` sentence: dropped the consequence clause.
+- Reserved passages (`COPILOT-FOLLOWUP-REQUEST-BRANCHING`, Phase 5 retry and fixer triage step, `run-gate-validation.mjs` step, both "Review angles" bullets) are byte-identical.
+
+`skills/local-implementation/SKILL.md`:
+
+- Lightweight session bullet: removed the "NOT a durable committed artifact" restatement. The bullet sits under the non-durable list, which carries the classification. The `pr_body` literals and no-phase-doc rule stay. Enforcement: `assertLightweightIsNonDurable` in `test/contracts/planning-doc-contracts.test.mjs`.
+- Lightweight exception in the bootstrap section: cites the tracker-backed section for the `pr_body` literals. The skip, no-commit and `tmp/phases/` rules stay.
+- Bootstrap authority paragraph: replaced the restated authority layers with a citation of [Deterministic logging structure](../skills/local-implementation/SKILL.md#deterministic-logging-structure). The no-duplicate-phase-doc rule stays.
+- Refinement: dropped the contamination rationale and the briefing sentence. The `refiner` role and parallel fresh-context rule stay.
+- Workflow handoff: merged three paragraphs into one. Owner: [Workflow Handoff Contract](../skills/docs/workflow-handoff-contract.md). The by-path rule, envelope read-first and PR Lifecycle ownership stay.
+- Implementation loop doc-guard bullet: dropped the `test:assets` rationale. The command and scope stay.
+- Commit-immediately bullet and step 11: replaced the restated subagent commit authorization with a citation of [Commit policy](../skills/local-implementation/SKILL.md#commit-policy).
+- Review guidance: replaced the fan-out restatement with `LOCAL-DEV-SELF-CHECK-NO-FANOUT`. Tracker handoff path: cites `LOCAL-TRACKER-NO-DIRECT-MERGE`.
+- Merge-commit integration: dropped the squash-merge explanation. The preference and force-push limit stay.
+- Commit policy: merged the `awaiting-finalization` bullet with step 14. The authorization set is commit, PR-creation or merge.
+
+`skills/loop-grill/SKILL.md`:
+
+- Step 1 items 1 and 2: dropped the `--jq` mechanics and envelope literals. The raw-body and bare-array input requirements and the fail-closed statement stay. The `detect_gaps`/`provenance_missing` consequence stays in Step 4.
+- Step 4 no-embed paragraph: dropped the "no embed, not sections only" aside.
+- Output format item 2: dropped the restated first-line consequence and `source:`/`bypass:` ordering. Owner: Step 4 `GRILL-SUBLOOP-RATIONALE-COMMENT`, which keeps both.
+- `--auto` capture bullet: dropped the harness-internals clause. The command and fallback stay.
+
+`skills/ui-review/SKILL.md`:
+
+- Provision stage: dropped the reused helper names (`ensure-worktree`, `provision-worktree`). Owner: `packages/core/src/loop/ui-review-provision.mjs`. The primary-checkout refusal and every fail-closed stop stay.
+- Drive stage: dropped the listener names (`response`, `requestfailed`, `pageerror`) and the buffer slicing mechanics. Owner: `packages/core/src/loop/ui-review-drive.mjs`. The recorded failure classes, the 3xx exclusion and the fail-closed step error stay.
+- Diagnose stage: dropped the stack-frame language list. Owner: `packages/core/src/loop/ui-review-diagnose.mjs`. The skip list, ADDED-lines rule and never-drop rule stay.
+- Remaining stages: removed implementation detail that the stage scripts own. Every command, flag, config key, trust-boundary statement and authorization rule stays.
+
+`skills/pi-session-audit/SKILL.md`:
+
+- Removed "Motivation & Context". The thresholds stay in the anti-pattern section (>100 turns, growth > 15x-30x).
+- Dedup and role-default paragraphs: dropped parser internals. The single-turn counting, replay rule, prompt-size definitions and role defaults stay. Owner of the mechanics: the audit script and its tests.
+- Per-agent Turns column: cites the Total Turns definition. Dropped the "Uncached Input vs Cached Read" explanation.
+
+Templates and scripts:
+
+- `skills/dev-loop/templates/pr-body.md`: dropped two rationale clauses. Owner of conformance: `validate-pr-body-spec`.
+- `skills/dev-loop/templates/ui-vision-review.md`: item 2 cites the per-lens artifact list above it. Merged the coverage paragraphs. The `checkedCriteria` shape, fail-closed marks, all-clean payload and `continue_ui_fix_loop` stay. Dropped the "report dedups" aside. Owner: `convergeUiReviewRouteFindings`.
+- `skills/dev-loop/scripts/init-phase.mjs`: two inline comments cite the header comment for `ARTIFACT-TRACKER-FIRST-NO-DUP`. No code change.
+
+### Phase 2 measurements
+
+Method: `wc -c` and `wc -w` after the phase 2 commits, compared with the start revision.
+
+| Surface | Baseline bytes / words | Phase 2 bytes / words |
+| --- | --- | --- |
+| `skills/copilot-pr-followup/SKILL.md` | 82,373 / 10,200 | 79,316 / 9,741 |
+| `skills/local-implementation/SKILL.md` | 51,013 / 6,549 | 48,738 / 6,201 |
+| `skills/loop-grill/SKILL.md` | 25,228 / 3,595 | 23,850 / 3,391 |
+| `skills/ui-review/SKILL.md` | 13,946 / 1,980 | 10,354 / 1,427 |
+| `skills/pi-session-audit/SKILL.md` | 10,236 / 1,371 | 8,435 / 1,114 |
+| `skills/dev-loop/templates/pr-body.md` | 2,071 / 311 | 1,955 / 294 |
+| `skills/dev-loop/templates/ui-vision-review.md` | 7,195 / 917 | 6,709 / 850 |
+| `skills/dev-loop/scripts/init-phase.mjs` | 3,697 / 340 | 3,390 / 301 |
+| Total canonical `skills/` Markdown prose (70 files) | 1,105,439 / 144,970 | 1,092,937 / 143,093 |
+| Bundle A. Startup | 94,393 / 12,156 | 92,118 / 11,808 |
+| Bundle B. Copilot follow-up | 178,374 / 22,288 | 175,520 / 21,857 |
+| Bundle C. Gate coordinator | 251,582 / 33,069 | 251,582 / 33,069 |
+
+Bundle B includes the phase 1 folded item A (`copilot-loop-operations.md`, 20,103 / 2,534 to 20,306 / 2,562). Bundle C holds only `skills/docs/` files and changes in phase 3.
+
+### Phase 2 contradiction list
+
+| Files | Conflict | Owner | Resolution |
+| --- | --- | --- | --- |
+| `skills/copilot-pr-followup/SKILL.md` (`COPILOT-FOLLOWUP-REQUEST-BRANCHING` versus Step 7 item 12) | The branching rule says `unavailable`: report and stop. Item 12 keeps the exception "unless the user explicitly wants passive waiting anyway". | Issue 2438 (reserved passage) | Left for issue 2438. Phase 2 kept the item 12 exception verbatim and did not edit the reserved rule. |
+| `skills/copilot-pr-followup/SKILL.md` (`COPILOT-FOLLOWUP-REQUEST-BRANCHING` versus `COPILOT-FOLLOWUP-WAIT-TOOLS`) | The `requested` branch names only `dev-loops loop watch-cycle` or `gh run watch` for a wait. `COPILOT-FOLLOWUP-WAIT-TOOLS` and item 12 also route `waiting_for_ci` to `dev-loops loop watch-ci`. | Issue 2438 (reserved passage) | Left for issue 2438. |
 
 ## Previous run — 2026-09-19 (issue 2236)
 
