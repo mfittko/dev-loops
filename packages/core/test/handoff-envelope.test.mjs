@@ -299,8 +299,8 @@ test("combo: local_implementation (branch)", () => {
   );
   assert.equal(env.currentGate, "default");
   assert.ok(env.acceptance.criteria.some((c) => c.id === "phase-ac"));
-  assert.ok(env.acceptance.criteria.some((c) => c.id === "verify-green"));
-  assert.ok(env.acceptance.criteria.some((c) => c.id === "verify-green" && c.must.includes("bun run verify")));
+  assert.ok(env.acceptance.criteria.some((c) => c.id === "validation-green"));
+  assert.ok(env.acceptance.criteria.some((c) => c.id === "validation-green" && c.must.includes("dev-loops gate resolve-validation")));
   assert.equal(env.acceptance.maxFinalizationTurns, 6);
   assert.ok(env.acceptance.evidence.includes("changed-files"));
 });

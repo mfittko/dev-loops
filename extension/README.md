@@ -259,10 +259,10 @@ Current Phase 3+ contract:
 - this phase does not yet claim a specific supported `gh` version; it only checks `gh` presence and authentication state
 - this phase does not require a separate compiled build or `dist/` pipeline
 
-Root verification and test commands are intentionally explicit:
+Validation and test suites are intentionally explicit:
 - Bun 1.4.1 is pinned exactly in `package.json` and is the contributor/CI installer, script runner, and unit-test runner; begin with `bun install --frozen-lockfile`
-- `bun run verify` is the canonical root verification path; it attempts every suite with attributable output, and any suite failing fails verify
-- `bun run test` aliases the current root verification command
+- Choose targeted checks with `resolveTargetedValidation(changedPaths)`; launch a local full-repository run only through `dev-loops gate resolve-validation --profile full-repository --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA>` from the PR worktree on a clean commit
+- The full suite runs `bun run verify` underneath; it attempts every suite with attributable output, and any suite failing fails verify. `bun run test` remains its alias
 - `bun run test:extension`
 - `bun run test:scripts`
 - `bun run test:assets`

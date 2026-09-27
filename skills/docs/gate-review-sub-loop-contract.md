@@ -251,13 +251,16 @@ Cache priming is an optional, non-semantic execution optimization. A harness or 
 
 These workflows use Pi/Claude Code agent harnesses, not a raw-API path: the conductor cannot set `prompt_cache_key` or explicit breakpoints, and the shipped agent-dispatch surfaces expose no provider usage/cache-read telemetry. Do not add a verification pass or invent a cache pin. The prefix-hash, required-read hash, sentinel, same-head rebuild/retirement, and fan-in provenance checks stay load-bearing and unchanged.
 
-<!-- rule: GATE-EXEC-VALIDATION-ARTIFACT -->
-`GATE-EXEC-VALIDATION-ARTIFACT`: The preamble MUST run the round's validation set exactly
-once, before any reviewer is dispatched, via `run-gate-validation.mjs`, and MUST persist
+<!-- rule: GATE-EXEC-VALIDATION-RESOLUTION -->
+`GATE-EXEC-VALIDATION-RESOLUTION`: The preamble MUST resolve the round's validation set exactly
+once, before any reviewer is dispatched, via `dev-loops gate resolve-validation`
+with each explicit targeted `gateSuites` entry from `resolveTargetedValidation(changedPaths)`
+from `@dev-loops/core/loop/validation-classify` (or its full-repository
+profile when targeting is unsafe), and MUST persist
 the result as `<gate>-<headSha>.validation.json` beside the gate-context artifact. When
 that artifact exists, the briefing prefix MUST point every reviewer at it
 (`write-gate-context.mjs --validation-results <path>`), and a reviewer MUST consume it
-rather than executing any suite it records. A reviewer that finds the artifact absent,
+rather than executing any suite it records. A missing full result remains typed incomplete; it does not authorize a reviewer or worker to run the full suite directly. A reviewer that finds the artifact absent,
 unreadable, or stamped with a different head SHA MUST report a gate-evidence finding; it
 MUST NOT silently run the suite itself and MUST NOT treat the gap as clean.
 
@@ -547,7 +550,7 @@ reuse. `promptContentHash` binds the record atomically to the emitted file; it c
 recorded paraphrases/mismatches, not a faithful file record paired with a drifted
 actual tool prompt. See "Three identities, one honest boundary" below.
 
-**Content inlining.** Use `write-gate-context.mjs`'s generated `<gate>-<headSha>.briefing-prefix.txt` and `<gate>-<headSha>.briefing-evidence.txt`, beside the JSON context artifact. `renderBriefingPrefix` owns the prefix's fixed section order and its trailing `## Required reads` manifest. `renderBriefingEvidence` owns the evidence file's separate author-controlled body/issue fences, diff fencing and conditional trailing validation section (`GATE-EXEC-VALIDATION-ARTIFACT`). Consume both files' bytes unchanged. The renderer, never issue-body text, supplies multi-issue labels outside those fences.
+**Content inlining.** Use `write-gate-context.mjs`'s generated `<gate>-<headSha>.briefing-prefix.txt` and `<gate>-<headSha>.briefing-evidence.txt`, beside the JSON context artifact. `renderBriefingPrefix` owns the prefix's fixed section order and its trailing `## Required reads` manifest. `renderBriefingEvidence` owns the evidence file's separate author-controlled body/issue fences, diff fencing and conditional trailing validation section (`GATE-EXEC-VALIDATION-RESOLUTION`). Consume both files' bytes unchanged. The renderer, never issue-body text, supplies multi-issue labels outside those fences.
 
 `filterDiffForInline` in `@dev-loops/core/loop/review-dispatch-plan` applies `DEFAULT_DIFF_EXCLUDE_GLOBS` plus caller `excludeGlobs`; caller exclusions never replace the defaults. The builder persists the filtered diff to `<gate>-<headSha>.filtered.diff` and binds it as the required `diff` read (sha256 and bytes) in both inline and pointer mode, so the required read never grows with lockfile or generated churn. Excluded files remain in the changed-files summary. The unfiltered diff stays at `scope.diffPath`, bound as the optional hashed `raw-diff` read for widening; `git diff` in the reviewed worktree also reaches it.
 

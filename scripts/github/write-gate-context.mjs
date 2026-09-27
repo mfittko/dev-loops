@@ -219,7 +219,7 @@ Optional:
   --pr-body <text>               PR description text, inlined into the rendered briefing evidence file. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
   --issue-body <text>            Linked-issue body text, inlined into the briefing evidence file under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the evidence file should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the evidence file entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
-  --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
+  --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-RESOLUTION) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
@@ -718,7 +718,7 @@ export function buildCarryForwardPlanPath({ repo, pr, gate, headSha, tmpRoot = "
 }
 
 // Deterministic path for the shared validation-results artifact
-// (GATE-EXEC-VALIDATION-ARTIFACT, `run-gate-validation.mjs`): the record of
+// (GATE-EXEC-VALIDATION-RESOLUTION, `run-gate-validation.mjs`): the record of
 // this round's validation suites, run once and read (not re-run) by every
 // per-angle reviewer via the briefing-prefix section. Exported so
 // `run-gate-validation.mjs` (the producer) and this module's CLI/context
@@ -1342,7 +1342,7 @@ export function renderBriefingPrefix({
  * @param {string[]} [input.changedFiles]
  * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output
  * @param {string|null} [input.validationResultsPath] — absolute path to the
- *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-ARTIFACT).
+ *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-RESOLUTION).
  *   When non-empty, ONE additional `## Validation results at this head` section is
  *   appended LAST. Omitted entirely when absent.
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES
@@ -2054,7 +2054,7 @@ export function buildGateContextArtifact(options) {
       acceptanceCriteria: options.acceptanceCriteria ?? null,
       validationPosture: options.validationPosture ?? null,
       // Absolute path to the run-gate-validation.mjs artifact for this head SHA
-      // (GATE-EXEC-VALIDATION-ARTIFACT), threaded into the rendered briefing
+      // (GATE-EXEC-VALIDATION-RESOLUTION), threaded into the rendered briefing
       // prefix's trailing "## Validation results at this head" section. Always
       // present (defaulting null) so every caller's scope object has the same
       // key set, unlike the conditionally-added acceptanceCriteriaSource/diffSource
@@ -2344,14 +2344,14 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     tmpRoot: options.tmpRoot || "tmp",
   });
 
-  // `--validation-results` (GATE-EXEC-VALIDATION-ARTIFACT): fail closed before
+  // `--validation-results` (GATE-EXEC-VALIDATION-RESOLUTION): fail closed before
   // any write when the supplied path is missing/unreadable — a reviewer must
   // never be pointed at a validation record that does not actually exist.
   // Resolved to an ABSOLUTE path (independent of prefix mode: this feeds
   // scope.validationResultsPath and, in self-rendered mode below, the trailing
   // briefing-prefix section) so the artifact and prefix always agree with
   // whatever CWD produced them, regardless of a later reader's own CWD.
-  // GATE-EXEC-VALIDATION-ARTIFACT (pointer half): when --validation-results is
+  // GATE-EXEC-VALIDATION-RESOLUTION (pointer half): when --validation-results is
   // omitted, derive the canonical path the producer (run-gate-validation.mjs via
   // buildValidationResultsPath) would have written and use it IF the artifact
   // exists. The export exists precisely so producer and consumer agree on the
@@ -2378,7 +2378,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       // closed exactly like the explicit --validation-results path, never
       // silently strip the validation evidence a reviewer depends on.
       if (err?.code !== "ENOENT") {
-        throw new Error(`GATE-EXEC-VALIDATION-ARTIFACT: derived validation-results ${JSON.stringify(derivedValidationResultsPath)} is unreadable: ${err?.message ?? err}`);
+        throw new Error(`GATE-EXEC-VALIDATION-RESOLUTION: derived validation-results ${JSON.stringify(derivedValidationResultsPath)} is unreadable: ${err?.message ?? err}`);
       }
     }
   }
@@ -2389,7 +2389,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     try {
       validationBytes = await readFile(resolvedValidationResultsPath);
     } catch (err) {
-      throw new Error(`GATE-EXEC-VALIDATION-ARTIFACT: --validation-results ${JSON.stringify(options.validationResultsPath)} is unreadable: ${err?.message ?? err}`);
+      throw new Error(`GATE-EXEC-VALIDATION-RESOLUTION: --validation-results ${JSON.stringify(options.validationResultsPath)} is unreadable: ${err?.message ?? err}`);
     }
     options.validationResultsPath = resolvedValidationResultsPath;
   }

@@ -3882,7 +3882,7 @@ test("writeGateContext: --prefix-file fails closed (throws) on an empty file", a
 });
 
 // ---------------------------------------------------------------------------
-// --validation-results (GATE-EXEC-VALIDATION-ARTIFACT) — AC3
+// --validation-results (GATE-EXEC-VALIDATION-RESOLUTION) — AC3
 // ---------------------------------------------------------------------------
 
 test("renderBriefingEvidence: validationResultsPath absent renders byte-identical to before (no trailing section)", () => {
@@ -3961,7 +3961,7 @@ test("writeGateContext: derives the canonical validation-results path when --val
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-derived-validation-"));
   try {
     // Write the artifact at buildValidationResultsPath's canonical location so
-    // the omitted-flag consumer derives the SAME path (GATE-EXEC-VALIDATION-ARTIFACT).
+    // the omitted-flag consumer derives the SAME path (GATE-EXEC-VALIDATION-RESOLUTION).
     const derivedValidationResultsFile = buildValidationResultsPath({
       repo: "owner/repo", pr: 87, gate: "draft_gate", headSha: "abc1234567890",
     });

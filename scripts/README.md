@@ -20,8 +20,9 @@ For the script surfaces documented here:
 ## Scripts
 
 Contributor automation uses the exactly pinned Bun 1.4.1 toolchain: install with
-`bun install --frozen-lockfile`, run the complete suite with `bun run verify`,
-and run focused script suites with `bun run test:scripts`. Published consumers
+`bun install --frozen-lockfile` and run the narrowest deterministic targeted check
+for the changed surface (for example `bun run test:scripts` for scripts). The complete
+local suite runs only through `dev-loops gate resolve-validation`. Published consumers
 still run on Node `>=24`; npm/npx commands in this document are intentional when
 they exercise the consumer CLI, Playwright installer compatibility, or npm
 registry/pack/publish/dist-tag/provenance behavior.

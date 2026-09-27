@@ -536,7 +536,7 @@ test("decideBashGate denies with a guard-failure reason when the gate could not 
 });
 
 // ---------------------------------------------------------------------------
-// decideBashGate — COORDINATOR-VERIFY-DELEGATION (#2082): a coordinator verify-command
+// decideBashGate — COORDINATOR-VERIFY-BOUNDARY (#2082): a coordinator verify-command
 // delegation boundary gated by the SAME DEVLOOPS_COORDINATOR_READONLY flag as
 // decideCoordinatorWriteGuard. Pi no-op rationale: Pi never invokes the Claude PreToolUse Bash
 // gate hook (nor sets its `agent_type` payload field), so this branch — and the flag that gates
@@ -553,7 +553,9 @@ test("decideBashGate DENIES a coordinator running a code-verification entrypoint
     enforceCoordinator: true,
   });
   assert.equal(d.decision, "deny");
-  assert.match(d.reason, /COORDINATOR-VERIFY-DELEGATION/);
+  assert.match(d.reason, /COORDINATOR-VERIFY-BOUNDARY/);
+  assert.match(d.reason, /targeted checks.*worker subagent/);
+  assert.match(d.reason, /full-repository validation.*dev-loops gate resolve-validation/);
   assert.match(d.reason, /main-agent-contract\.md/);
 });
 
@@ -593,7 +595,7 @@ test("decideBashGate DENIES a namespaced dev-loops:dev-loop coordinator running 
     enforceCoordinator: true,
   });
   assert.equal(d.decision, "deny");
-  assert.match(d.reason, /COORDINATOR-VERIFY-DELEGATION/);
+  assert.match(d.reason, /COORDINATOR-VERIFY-BOUNDARY/);
 });
 
 test("decideBashGate ALLOWS a namespaced dev-loops:developer worker running a code-verification entrypoint under strict coordinator enforcement (#2082 pre-PR review)", () => {

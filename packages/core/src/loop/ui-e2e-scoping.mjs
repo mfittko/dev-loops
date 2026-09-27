@@ -35,16 +35,17 @@ export const VIEWER_SOURCE_PATHS = Object.freeze([
 // (which pulls @playwright/test into core); the ui-e2e-scoping.test.mjs sync
 // test fails if a registry entry is added without updating this list, so it
 // can't silently drift.
-export const REGISTERED_ARTIFACT_PATHS = Object.freeze([
-  "docs/presentations/introducing-dev-loops.html",
-  "docs/presentations/dev-loops-deep-dive.html",
-  "docs/presentations/how-dev-loops-decided-itself.html",
-  "docs/presentations/state-graph-surface.html",
-  "docs/presentations/finding-the-flow.html",
-  "docs/articles/introducing-dev-loops.html",
-  "docs/articles/dev-loops-deep-dive.html",
-  "docs/articles/how-dev-loops-decided-itself.html",
-]);
+export const REGISTERED_ARTIFACT_SUITES = Object.freeze({
+  "docs/presentations/introducing-dev-loops.html": "intro-deck",
+  "docs/presentations/dev-loops-deep-dive.html": "deep-dive",
+  "docs/presentations/how-dev-loops-decided-itself.html": "how-decided-deck",
+  "docs/presentations/state-graph-surface.html": "state-graph-surface-deck",
+  "docs/presentations/finding-the-flow.html": "finding-the-flow-deck",
+  "docs/articles/introducing-dev-loops.html": "intro-article",
+  "docs/articles/dev-loops-deep-dive.html": "deep-dive-article",
+  "docs/articles/how-dev-loops-decided-itself.html": "how-decided-article",
+});
+export const REGISTERED_ARTIFACT_PATHS = Object.freeze(Object.keys(REGISTERED_ARTIFACT_SUITES));
 
 export const VIEWER_ARTIFACT_ID = "inspect-run-viewer";
 
