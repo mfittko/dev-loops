@@ -220,11 +220,11 @@ handoff: `handoffEnvelope.loopFamily` and `handoffEnvelope.entrypoint` are `null
 
 | # | `copilotState` | `reviewerState` | Other input | `routingOutcome` | `outerAction` | `loopFamily` | `entrypoint` |
 |---|---|---|---|---|---|---|---|
-| 1 | `"waiting_for_copilot_review"` | `"waiting_for_review_request"` | — | `"continue_current_wait"` | `"continue_wait"` | `"outer_loop"` | `"outer_loop_wait"` |
-| 2 | `"pr_ready_no_feedback"` | `"review_requested"` | — | `"handoff_to_reviewer_loop"` | `"reenter_reviewer_loop"` | `"reviewer_loop"` | `"reviewer_loop_handler"` |
-| 3 | `"unresolved_feedback_present"` | `"waiting_for_author_followup"` | — | `"handoff_to_copilot_loop"` | `"reenter_copilot_loop"` | `"copilot_loop"` | `"copilot_pr_handoff"` |
-| 4 | `"blocked_needs_user_decision"` | `"waiting_for_review_request"` | — | `"stop_needs_human"` (`stopReason` `"copilot_blocked"`) | `"stop"` | `null` | `null` |
-| 5 | `"done"` | any | — | `"done_terminal"` | `"done"` | `null` | `null` |
+| 1 | `"waiting_for_copilot_review"` | `"waiting_for_review_request"` | none | `"continue_current_wait"` | `"continue_wait"` | `"outer_loop"` | `"outer_loop_wait"` |
+| 2 | `"pr_ready_no_feedback"` | `"review_requested"` | none | `"handoff_to_reviewer_loop"` | `"reenter_reviewer_loop"` | `"reviewer_loop"` | `"reviewer_loop_handler"` |
+| 3 | `"unresolved_feedback_present"` | `"waiting_for_author_followup"` | none | `"handoff_to_copilot_loop"` | `"reenter_copilot_loop"` | `"copilot_loop"` | `"copilot_pr_handoff"` |
+| 4 | `"blocked_needs_user_decision"` | `"waiting_for_review_request"` | none | `"stop_needs_human"` (`stopReason` `"copilot_blocked"`) | `"stop"` | `null` | `null` |
+| 5 | `"done"` | any | none | `"done_terminal"` | `"done"` | `null` | `null` |
 | 6 | `"unresolved_feedback_present"` | `"waiting_for_author_followup"` | `ownershipState` `"live_owner"` (unit tests only) | `"stay_with_current_live_owner"` | `"continue_wait"` | `"outer_loop"` | `"outer_loop_wait"` |
 
 Non-target and noise inputs fail closed to `"needs_reconcile"`: `target` is `null`,

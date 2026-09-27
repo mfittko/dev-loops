@@ -58,7 +58,7 @@ Per-file baseline: `public-dev-loop-contract.md` 43,380 / 5,607; `local-implemen
 
 ### Inventory
 
-Totals: 45 `pending`, one `in progress`, eight `changed`, 14 `unchanged`, eight `non-prose`, four `blocked`; 80 files.
+Totals: 32 `pending`, 22 `changed`, 14 `unchanged`, eight `non-prose`, four `blocked`; 80 files.
 
 | File | Phase | Disposition | Rationale |
 | --- | --- | --- | --- |
@@ -91,32 +91,32 @@ Totals: 45 `pending`, one `in progress`, eight `changed`, 14 `unchanged`, eight 
 | `skills/docs/ab-contrast-deslop-step.md` | 3 | pending | Shared doc, +0/-4. |
 | `skills/docs/acceptance-criteria-verification.md` | 3 | pending | Shared doc, +13/-2. |
 | `skills/docs/agent-stall-detection.md` | 3 | pending | Shared doc, +0/-13. |
-| `skills/docs/anti-patterns.md` | 3 | pending | Shared doc, +2/-2. Reserved passage: `END-TURN-AND-AWAIT-WAKE` (issue 2442). |
-| `skills/docs/artifact-authority-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
-| `skills/docs/conductor-routing-contract.md` | 3 | pending | Shared doc, +1/-12. |
+| `skills/docs/anti-patterns.md` | 3 | changed | Phase 3a. Dropped incident narration and the ready-path self-correction internals; `RAW-GH-PR-READY-BYPASS` now cites `OPS-DRAFT-FIRST-PR` for the restore-ready exit. Reserved passage `END-TURN-AND-AWAIT-WAKE` (issue 2442) is byte-identical. |
+| `skills/docs/artifact-authority-contract.md` | 3 | changed | Phase 3a. Condensed the intro, the refinement-floor explanation, settings-layer prose and own-mode rationale. Every `ARTIFACT-*` rule, flag, finding code and anchor stays. |
+| `skills/docs/conductor-routing-contract.md` | 3 | changed | Phase 3a. Merged the relationship, boundary and non-goal lists into one boundary list and the six scenario tables into one table. Inputs, priority table, transitions and fail-closed rules stay. |
 | `skills/docs/confirmation-rules.md` | 3 | pending | Shared doc; unchanged since baseline. |
 | `skills/docs/contract-style-guide.md` | 3 | pending | Shared doc; unchanged since baseline. |
 | `skills/docs/copilot-ci-status-contract.md` | 3 | pending | Shared doc, +15/-14. |
-| `skills/docs/copilot-loop-operations.md` | 3 | in progress | Phase 1 changed only `OPS-DRAFT-FIRST-PR` (folded item A). The rest of the file is pending, +68/-55. Reserved passage: `OPS-NO-INLINE-INTERPRETER` (issue 2442). |
-| `skills/docs/copilot-loop-state-graph.md` | 3 | pending | Shared doc, +22/-5. |
+| `skills/docs/copilot-loop-operations.md` | 3 | changed | Phase 1 changed `OPS-DRAFT-FIRST-PR` (folded item A). Phase 3a replaced the carried-convergence and status-reporting restatements with owner citations and dropped the workflow sketch. Reserved passage `OPS-NO-INLINE-INTERPRETER` (issue 2442) and the Phase 1 `OPS-DRAFT-FIRST-PR` text are byte-identical. |
+| `skills/docs/copilot-loop-state-graph.md` | 3 | changed | Phase 3a. Condensed the overview, request-status derivation, clean-convergence and `unavailable` explanations, and replaced the green re-request list with an owner citation plus the snapshot predicates. Carried-convergence and body-disposition rules keep their full text. |
 | `skills/docs/cross-harness-regression-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
 | `skills/docs/decision-record-contract.md` | 3 | pending | Shared doc, +2/-4. |
 | `skills/docs/docs-grill-step.md` | 3 | pending | Shared doc, +1/-7. |
 | `skills/docs/entrypoint-strategies.md` | 3 | pending | Shared doc, +2/-2. |
 | `skills/docs/epic-tree-refinement-procedure.md` | 3 | pending | Shared doc, +2/-8. |
-| `skills/docs/gate-review-comment-contract.md` | 3 | pending | Shared doc, +72/-26. Reserved passage: the angle-resolution sentence (issue 2442). |
+| `skills/docs/gate-review-comment-contract.md` | 3 | changed | Phase 3a. Condensed the severity-floor, `review` parser, submit-mode, size-budget and verdict-enforcement prose. The "Review-angle ownership" section, including the reserved angle-resolution sentence (issue 2442), is byte-identical. |
 | `skills/docs/gate-review-sub-loop-contract.md` | 3 | blocked | Owner: parallel unit issue 2416 edits this file. It also holds reserved passages of issue 2438 (`GATE-EXEC-GATE-COORDINATOR`, `GATE-EXEC-VALIDATION-ARTIFACT`, `GATE-EXEC-BLOCKING-ONLY-FIX`, `GATE-EXEC-NO-CWD-DEPENDENCE`, the Phase 3 verdict list, the Phase 5 clean-pass bullet, the escalation table) and issue 2442 (the reviewer wave paragraph, `GATE-EXEC-COLLECTABLE-DISPATCH`, the per-harness delivery table, `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`). |
-| `skills/docs/issue-intake-procedure.md` | 3 | pending | Shared doc, +7/-3. Reserved passage: the follow-up-capture bullet (issue 2438). |
+| `skills/docs/issue-intake-procedure.md` | 3 | changed | Phase 3a. Removed the duplicate closed-issue bullet and mutation-pass sentence, pointed epic decomposition at the sub-issue tree flow, and routed the PR edit through `edit-pr.mjs`. Reserved passage: the follow-up-capture bullet (issue 2438) is byte-identical. |
 | `skills/docs/local-planning.md` | 3 | pending | Shared doc; unchanged since baseline. |
-| `skills/docs/main-agent-contract.md` | 3 | pending | Shared doc, +130/-23. Reserved passages: `COORDINATOR-VERIFY-DELEGATION` and `MAIN-AGENT-FILING-BLOCKER-ONLY` (issue 2438). |
-| `skills/docs/merge-preconditions.md` | 3 | pending | Shared doc, +70/-15. Reserved passage: the post-merge duties (issue 2438). |
-| `skills/docs/pr-lifecycle-contract.md` | 3 | pending | Shared doc, +5/-11. |
+| `skills/docs/main-agent-contract.md` | 3 | changed | Phase 3a. Merged the restated coordinator write boundary into the shared intro and dropped exemption history and dispatch rationale. Reserved passages (issue 2438) are byte-identical: the coordinator verify-delegation passage in the intro plus `COORDINATOR-VERIFY-BOUNDARY` (the table's `COORDINATOR-VERIFY-DELEGATION`; see the Phase 3 contradiction register), and `MAIN-AGENT-FILING-BLOCKER-ONLY`. |
+| `skills/docs/merge-preconditions.md` | 3 | changed | Phase 3a. Condensed the gate-evidence server-side narrative, title-marker rationale, size-budget and wrapper restatements, and dropped the removed `--local-validation-head-sha` flag. Reserved passage: the post-merge duties (issue 2438), byte-identical. |
+| `skills/docs/pr-lifecycle-contract.md` | 3 | changed | Phase 3a. Cited the merge-preconditions owner for title-marker constructions, condensed the changelog rule mechanics and removed history rows. Transition bullets and state vocabulary stay. |
 | `skills/docs/pre-pr-review-contract.md` | 3 | pending | Shared doc, new since baseline (+220). Reserved passages: Step 3 and `PRE-PUSH-DELTA-EXIT-BOUND` (issue 2447). |
-| `skills/docs/projects-queue-contract.md` | 3 | pending | Shared doc, +24/-12. |
-| `skills/docs/public-dev-loop-contract.md` | 3 | pending | Shared doc, +25/-13. Loaded on every startup route. |
+| `skills/docs/projects-queue-contract.md` | 3 | changed | Phase 3a. Merged duplicated Setup, Usage and configuration restatements into their owning sections and dropped GraphQL query bodies the helper scripts own. Every `QUEUE-*` rule, command, flag, reason literal and linked anchor stays. |
+| `skills/docs/public-dev-loop-contract.md` | 3 | changed | Phase 3a. Loaded on every startup route. Dropped the mermaid diagram, slice non-goals, example mappings and ownership-race narration, and merged the convergence posture restatement. Every `FACADE-*` rule, gate row, routing step and transition bullet stays. |
 | `skills/docs/release-runbook.md` | 3 | pending | Shared doc, +16/-15. |
 | `skills/docs/required-rules.json` | 1 | non-prose | Rule registry: IDs, enforcement values and enforcement notes that validators read. Schema and literals are exact data, not condensable prose. |
-| `skills/docs/retrospective-checkpoint-contract.md` | 3 | pending | Shared doc, +10/-9. |
+| `skills/docs/retrospective-checkpoint-contract.md` | 3 | changed | Phase 3a. Removed self-review rationale, verifier matching internals, the lifecycle-reconciliation history and repo-root rationale; routed the merge-commit read through `view-pr.mjs`. Every `RETRO-*` rule, state row and CLI flag stays. |
 | `skills/docs/reviewer-loop-state-graph.md` | 3 | pending | Shared doc, +1/-3. |
 | `skills/docs/slides-story-review-loop.md` | 3 | pending | Shared doc, +1/-20. |
 | `skills/docs/spec-authority-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
@@ -135,7 +135,7 @@ Totals: 45 `pending`, one `in progress`, eight `changed`, 14 `unchanged`, eight 
 | `skills/docs/validation-policy.md` | 3 | pending | Shared doc, +3/-3. |
 | `skills/docs/wait-watch-procedure.md` | 3 | pending | Shared doc, +21/-26. |
 | `skills/docs/workflow-handoff-contract.md` | 3 | pending | Shared doc, +8/-13. |
-| `skills/docs/worktree-guidance.md` | 3 | pending | Shared doc, +24/-18. Reserved passage: `WORKTREE-COMMIT-MSG-GUARD` (issue 2438). |
+| `skills/docs/worktree-guidance.md` | 3 | changed | Phase 3a. Condensed the create/provision, branch-resolution, guard and wrong-checkout prose and the duplicate cleanup block. Reserved passage: the `WORKTREE-COMMIT-MSG-GUARD` section (issue 2438), byte-identical. |
 | `skills/final-approval/SKILL.md` | 2 | unchanged | Already a thin redirect to the follow-up skill's "Human approval checkpoint" section, which still exists under Step 7. |
 | `skills/local-implementation/SKILL.md` | 2 | changed | Merged the duplicated lightweight, handoff-path, commit-authorization and fan-out restatements into their in-file owners. Dropped rationale that changes no agent decision. |
 | `skills/loop-grill/SKILL.md` | 2 | changed | Dropped detector-internals rationale and the Output-format restatement of Step 4 posting rules. |
@@ -235,6 +235,185 @@ Bundle B includes the phase 1 folded item A (`copilot-loop-operations.md`, 20,10
 | --- | --- | --- | --- |
 | `skills/copilot-pr-followup/SKILL.md` (`COPILOT-FOLLOWUP-REQUEST-BRANCHING` versus Step 7 item 12) | The branching rule says `unavailable`: report and stop. Item 12 keeps the exception "unless the user explicitly wants passive waiting anyway". | Issue 2438 (reserved passage) | Left for issue 2438. Phase 2 kept the item 12 exception verbatim and did not edit the reserved rule. |
 | `skills/copilot-pr-followup/SKILL.md` (`COPILOT-FOLLOWUP-REQUEST-BRANCHING` versus `COPILOT-FOLLOWUP-WAIT-TOOLS`) | The `requested` branch names only `dev-loops loop watch-cycle` or `gh run watch` for a wait. `COPILOT-FOLLOWUP-WAIT-TOOLS` and item 12 also route `waiting_for_ci` to `dev-loops loop watch-ci`. | Issue 2438 (reserved passage) | Left for issue 2438. |
+
+### Phase 3 status
+
+Phase 3 runs in two parts. Phase 3a worked the 14 highest-load shared docs under `skills/docs/`: `public-dev-loop-contract.md`, `merge-preconditions.md`, `projects-queue-contract.md`, `gate-review-comment-contract.md`, `retrospective-checkpoint-contract.md`, `copilot-loop-state-graph.md`, `artifact-authority-contract.md`, `worktree-guidance.md`, `copilot-loop-operations.md`, `issue-intake-procedure.md`, `main-agent-contract.md`, `conductor-routing-contract.md`, `pr-lifecycle-contract.md` and `anti-patterns.md`. All 14 rows are `changed`. Phase 3b works the remaining 32 `pending` rows; phase 3a claims no whole-tree completion.
+
+Every `<!-- rule: ... -->` marker in the 14 files is retained, and no MUST, MUST NOT, SHALL, SHOULD, SHOULD NOT or MAY count dropped in any of them. `extractRuleModalities` (`scripts/loop/check-adr-tripwire.mjs`) reports the same family for every rule, except `GATE-COMMENT-IDENTITY-DISJOINT`, which moved from no detected keyword to `must` because its MUST NOT now falls inside the scan window (not a reversal). Every heading that another file links to by anchor is unchanged. Reserved passages are byte-identical; the per-row rationale names them.
+
+### Phase 3 obligation trace
+
+`skills/docs/public-dev-loop-contract.md`:
+
+- Installed-layout rationale sentence and the "Accordingly" restatement of the single entrypoint: removed. The entrypoint, the read-only `review` selector and the MUST-callable surfaces stay in "Public surface".
+- Shorthand mapping table: folded into one sentence with the same literals (`auto dev loop on issue 112`, `dev-loop --intent auto_continue_current`).
+- Deprecation bar follow-up bullet "dev-loop remains the only intended visible write-capable entrypoint": removed. Owner: the taxonomy table row "Public write-capable workflow entrypoint" and "Public surface".
+- "Its tests are" list: replaced by the real test glob. The listed `packages/core/test/public-dev-loop-routing.test.mjs` does not exist (see the contradiction register).
+- Tracker-backed "Non-duplication rule" bullet "do not create, read, or update `docs/phases/phase-<n>.md`": removed. Owner: `ARTIFACT-TRACKER-FIRST-NO-DUP` in `artifact-authority-contract.md`, cited in the same section. The "reconcile an existing duplicate before continuing" duty stays.
+- Ownership gate: dropped the `issueAssignmentState` non-parameter aside (owner: "Bounded variation parameter contract" in the same file) and the interleaving and convergence narration. Every claim, re-read, tiebreak, loser self-unassign, winner removal, `claim_not_visible_post_read` skip, fail-closed and residual-window statement stays.
+- Required transitions preamble and trailer: shortened. Every transition bullet and terminal gate stays; `validate-state-machine-conformance.mjs` checks them.
+- `FACADE-PICKUP-INTEGRATE-BASE-FIRST` and `FACADE-NEVER-CI-WAIT-WHILE-DIRTY`: dropped the "same way without re-deriving" and PR #2028 deadlock narration. The MUST NEVER, integrate-first ordering, fail-closed stop and `runBasePickupPreflight` owner stay.
+- "Internal / external model" mermaid diagram: removed. Owner: the "Authoritative gate contract" table (`final_approval` routes to the human approval checkpoint; `waiting_for_merge_authorization` is a stop). Enforcement: `assertApprovalStopGates` in `test/contracts/issue-intake-doc-contracts.test.mjs`.
+- "Single-entrypoint convergence posture": dropped the two bullets that restate "Public surface" and the taxonomy. The three SHOULD bullets stay.
+- "Non-goals for this slice" and "Example mappings": removed. Owners: "Deterministic routing order" and "Representative translations" in the same file.
+
+`skills/docs/gate-review-comment-contract.md`:
+
+- Severity floor: dropped the non-goal quotation and restated rationale. Valid values, rank order, fold block, invisible marker, thread exclusion, schema rejection, fail-open, `question` never folds and `blockCleanOnFindingSeverities` independence stay.
+- `review` gate paragraph: dropped the `GATE_CONFIG_KEY` aside and the parser-fallthrough explanation. Header recognition, immediate non-evidence return and symmetric `GATE-COMMENT-NON-SUBSTITUTION` stay.
+- Submit modes: dropped the #1888 self-identification rationale and PR-scoped-limit narration. Every mode, the headless refusal, the `--interactive-confirm` requirement in the CLI and runtime, same-head submit, stale delete and discard stay.
+- `GATE-COMMENT-SIZE-BUDGET-FIELDS`: merged the two overlapping paragraphs. The MUST render, auto-derive, fail-closed escape hatch, draft/review opt-in rendering and "absent size evidence requires human approval" statement stay.
+- Verdict enforcement: merged two paragraphs into one list. The write-time and post-time refusals, the judge's non-revision, act-list composition, no override and the `blocked` exception stay.
+- "See also" list: folded into the relationship table.
+
+`skills/docs/anti-patterns.md`:
+
+- Item 6: dropped the #1973 narration. `WORKTREE-WRONG-CHECKOUT-GUARD` and its link stay.
+- Item 8: dropped the reconcile mechanics. Owner: `QUEUE-NEXTUP-SOURCE` in `projects-queue-contract.md`.
+- `ANTIPATTERN-FANIN-WAIT`: shortened the breach sentence. The three NEVERs, the #982 link, the advisory `rawCallViolations` entry and the sanctioned wait stay.
+- `RAW-GH-PR-READY-BYPASS`: the restore-ready clause now cites `OPS-DRAFT-FIRST-PR` in `copilot-loop-operations.md`; the self-correction mechanics are shortened. The mandatory wrapper, both prohibitions and the #1915 backstop stay.
+- `RAW-GH-PR-MERGE-BYPASS`: shortened the enforcement sentence; `check-retro-tooling.mjs` and `decideBashGate` stay.
+
+`skills/docs/copilot-loop-operations.md`:
+
+- Companion list: one sentence with the same three links.
+- Item 7 carried convergence: replaced the restatement with the default and strict-mode literals plus the owner. Owner: `COPILOT-STATE-CARRIED-CONVERGENCE` in `copilot-loop-state-graph.md` (ADR 0090).
+- "Workflow overview" sketch: removed; "Deterministic orchestration authority" owns routing.
+- Step 1 status bullets: replaced by a citation of `FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED` and the status reporting contract in `public-dev-loop-contract.md`. The startup-resolver linkage rule and "include the resolved artifact identity" stay.
+- PR description contract: dropped the "one validator, never drifting" rationale; both validator seams, the own-body requirement and the skeleton link stay.
+- Timeout policy and checkpoint lead-ins: shortened. Every default, the removed-flag warning and `buildCorrectedArgs` stay.
+- Shell-polling rule: merged the "watcher sleeping is not a blocker" line.
+
+`skills/docs/issue-intake-procedure.md`:
+
+- Companion list: the `FACADE-*` IDs are cited at point of use in Phases 2 and the unattended section. The merge wrapper duty moved to Phase 4.
+- Quick-capture exemption and mutation pass: shortened; every deferred step, the safeties and the verification artifact stay. Enforcement: `assertMutationPassContract`.
+- Duplicate closed-issue bullet in the plan-doc path: removed. Enforcement: `assertPlanDocClosedStop`.
+- Phase 3b: the seven-step flow is replaced by the owner citation plus every `manage-sub-issues.mjs` command. Owner: "Default decomposition flow", `SUBISSUE-NO-ADHOC-BYPASS` and `SUBISSUE-LEAN-BODY-NO-DUPLICATE` in `sub-issue-tree-contract.md`.
+- Phase 4 merge paragraph: dropped the precondition list and `resolveEffectiveMergeAuthorized` detail. Owner: `MERGE-PRECOND-REQUIRED` and "`autonomy.humanMergeOnly`" in `merge-preconditions.md`. The never-merge handoff and the authorized command stay.
+- Phase 4 PR edit example: `gh pr edit` is replaced by `edit-pr.mjs` (see the contradiction register). Enforcement: `assertIntakePrEditUsesWrapper`.
+
+`skills/docs/retrospective-checkpoint-contract.md`:
+
+- Self-review rationale and write-mechanism explanation: shortened; the disallowed inline retro and the self-attestation limit stay.
+- `RETROSPECTIVE_QUALIFYING_GATES` note, advisory-findings closing lines, #982 dogfooding sentence and write-op allowlist explanation: shortened; every flagged and allowed class and "none block" stay.
+- Verifier matching rules: dropped the per-form examples and evasion list. Owner: `scripts/loop/check-retro-tooling.mjs` and `test/loop/check-retro-tooling.test.mjs`.
+- "Lifecycle reconciliation": removed (history). Owner: `RETRO-ADVISORY-NEVER-GATE`.
+- Cycle scoping: dropped the `git log --merges` note and the short-sha and previously-optional history. Every MUST and fail-closed branch stays.
+- `RETRO-CHECKPOINT-REPO-ROOT`: dropped the cwd-relative rationale; the resolver, fallback and vendored copy stay.
+- Durable artifact: merged the `missing`/`none` notes into the marker and skip sections; removed the tests and AGENTS rows from the source table.
+
+`skills/docs/copilot-loop-state-graph.md`:
+
+- Overview, round-cap note and snapshot lead-in: shortened.
+- `COPILOT-STATE-ACTIVE-REQUEST-WAIT`: shortened the timeline comparison; the single derivation path, newer/older rule and fail-closed `requested` stay.
+- Clean convergence: shortened; the suppression condition, eligibility, `--force-rerequest-review` and `sameHeadCleanConverged` consumption stay.
+- `unavailable` section: merged two paragraphs.
+- Green re-request list: replaced by the owner citation and the snapshot predicates. Owners: `COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE` in `skills/copilot-pr-followup/SKILL.md` and the Copilot CI Status Contract.
+
+`skills/docs/merge-preconditions.md`:
+
+- Conflict-free section and resolver: shortened. Every state, bounded re-poll, fail-closed recheck and additive-only rule stays.
+- Item 2: dropped the removed `--local-validation-head-sha` flag name (see the contradiction register). The `crediblyGreen` rule stays.
+- Runner lock and stranded-request notes: shortened; the takeover command, never-takeover-active, withdraw guards, agent prohibition and the head-advanced conditions stay.
+- Wrapper bullets: dropped the `check-retro-tooling.mjs` restatement. Owner: `RAW-GH-PR-MERGE-BYPASS` in `anti-patterns.md`.
+- Server-side gate-evidence check: split the single paragraph into sub-bullets and dropped narration. Every trigger, definitive-status rule, two-job split, recovery path, `reconcile-gate-evidence-status.mjs` behavior, the unresolve residual and the branch-protection window stay.
+- `MERGE-PRECOND-REQUIRED-CONTEXT-IS-STATUS`, fan-out ledger exception, head-config resolution and #1172 separation: shortened; every MUST and fallback stays.
+- Title markers: restructured into constructions plus exemptions; every construction, exemption and enforcement point stays. Owner of mechanics: `findBlockingTitleMarkers`.
+- Size-budget gate: the populated-fields bullet now cites `GATE-COMMENT-SIZE-BUDGET-FIELDS` in `gate-review-comment-contract.md`.
+- Post-merge duties (reserved, issue 2438): byte-identical.
+
+`skills/docs/projects-queue-contract.md`:
+
+- GraphQL query bodies for discovery, fields and items: removed. Owners: the `scripts/projects/*` helpers and the "Required GraphQL operations" table, which stays.
+- Owner/project table, position semantics and error-shape prose: shortened.
+- Result-shape and reorder/dry-run/archive JSON samples: replaced by the field lists. Owners: `move-queue-item.mjs`, `reorder-queue-item.mjs` and `archive-done-items.mjs` output.
+- `QUEUE-ENQUEUE-REFINEMENT-GATE`: the matrix description now cites `ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR`. Every finding code, the interactive MUST, the headless MUST NOT and the park-column MUST stay.
+- Setup "Why", "How queue helpers use the board", repeated fail-closed, bootstrap and configuration pointers, Usage "How to opt in", "Typical workflow" and "How dev-loop treats board state": removed as restatements. Owners: `QUEUE-NEXTUP-SOURCE` and its fail-closed rules, `QUEUE-BOARD-DEVLOOPS-RESOLUTION`, "Fail-closed behavior", "Idempotent bootstrap exception" and "Configuration shape". The board reconcile step moved into the pickup behavior list.
+- "See also" issue list: reduced to the SPEC and the parent epic.
+
+`skills/docs/artifact-authority-contract.md`:
+
+- Intro: one paragraph. `ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR` and migration: shortened; the MUST, every finding code, the completeness-only boundary and the resolved-doc condition stay.
+- Lightweight notes, settings jobs, layer list and own-mode bullets: shortened. `inputSource` is defined once in the table.
+- "Distinction" subsection and non-goals: shortened to one sentence each.
+
+`skills/docs/worktree-guidance.md`:
+
+- Purpose, lifecycle intro, `WORKTREE-CREATE-PROVISION` fetch parenthetical, branch resolution, output and guard paragraphs: shortened. Every branch origin, the `diverged` report, fields and fail-soft rule stay.
+- Provisioning `node_modules` bullet: cites `WORKTREE-DEPS-ISOLATED`.
+- `WORKTREE-DEFAULT-BRANCH-GUARD`, `WORKTREE-WRONG-CHECKOUT-GUARD`, underlying-mechanism fallback, cleanup flow and `WORKTREE-NO-STASH`: shortened; every refusal, reduced-coverage path, override, fail-safe and prohibition stays. The second cleanup command block is replaced by a link to "Post-merge cleanup".
+- `WORKTREE-COMMIT-MSG-GUARD` section (reserved, issue 2438): byte-identical.
+
+`skills/docs/main-agent-contract.md`:
+
+- Shared intro: merged the restated coordinator write boundary and states its ceilings inline, because the Claude projection strips the Pi-only "Guarded surface" section it pointed to.
+- Pi-only coordinator write bullet: replaced by a reference to the intro. Pi-only ceilings list: shortened.
+- Sub-delegate commit bullet: dropped the `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT` history; the hook enforcement stays.
+- Model tier and async dispatch: shortened; `kind: "angle"`, null tiers and the no-`subagent_wait` MUST NOT stay.
+- Reserved (issue 2438), byte-identical: the intro verify-delegation passage, `COORDINATOR-VERIFY-BOUNDARY` and `MAIN-AGENT-FILING-BLOCKER-ONLY`.
+
+`skills/docs/conductor-routing-contract.md`:
+
+- Overview, relationship table, boundary list and non-goals: merged into one overview and one boundary list with the same issue references.
+- Ownership retirement notes: stated once in "Ownership availability note".
+- Scenario matrix: six tables merged into one; the noise-field non-goal moved to "Routing inputs".
+
+`skills/docs/pr-lifecycle-contract.md`:
+
+- Rationale line and history rows: removed.
+- Title-marker constructions: cited to "Title markers" in `merge-preconditions.md`.
+- `LIFECYCLE-CHANGELOG-COMPLETENESS`: shortened; the MUST, fragment path, Unreleased format, validator, exemption and release assembly stay.
+
+### Phase 3 test changes
+
+- `test/contracts/issue-intake-doc-contracts.test.mjs`: `assertApprovalStopGates` replaces the mermaid-edge pins. It parses the gate table rows and requires `final_approval` to route to the human approval checkpoint and `waiting_for_merge_authorization` to be a `stop`. Negative cases flip the route kind and the checkpoint text.
+- `test/contracts/issue-intake-doc-contracts.test.mjs`: `assertMutationPassContract` and `assertPlanDocClosedStop` replace the pins on a duplicated sentence and a duplicated bullet. Negative cases drop the approved-proposal input, the verification artifact and the closed-issue stop.
+- `test/contracts/issue-intake-doc-contracts.test.mjs`: `assertIntakePrEditUsesWrapper` replaces the raw `gh pr edit` pin. It parses the example with `parseEditPrCliArgs` and rejects a raw `gh pr edit`. Negative cases cover the raw command, an added raw line and a missing `--repo`.
+- `test/contracts/review-doc-contracts.test.mjs`: `assertReviewOwnershipExempt` replaces two sentence pins. It locates the ownership-gate sentences by role and requires all six write-capable strategies to be gated, `review` to be exempt through `STRATEGY_OWNERSHIP_GATE`, and write-capable routes to stay gated. Negative cases drop `reviewer_fixer` and remove `review` from the exempt list.
+
+### Phase 3 measurements
+
+Method: `wc -c` and `wc -w` after the phase 3a commits, compared with the start revision.
+
+| Surface | Baseline bytes / words | Phase 3a bytes / words |
+| --- | --- | --- |
+| `skills/docs/public-dev-loop-contract.md` | 43,380 / 5,607 | 36,891 / 4,648 |
+| `skills/docs/merge-preconditions.md` | 46,741 / 6,224 | 36,762 / 4,739 |
+| `skills/docs/projects-queue-contract.md` | 51,007 / 7,233 | 34,876 / 4,949 |
+| `skills/docs/gate-review-comment-contract.md` | 33,421 / 4,415 | 28,115 / 3,634 |
+| `skills/docs/retrospective-checkpoint-contract.md` | 27,388 / 3,432 | 22,256 / 2,707 |
+| `skills/docs/copilot-loop-state-graph.md` | 27,644 / 3,549 | 25,402 / 3,222 |
+| `skills/docs/artifact-authority-contract.md` | 23,844 / 3,093 | 20,974 / 2,666 |
+| `skills/docs/worktree-guidance.md` | 21,054 / 2,925 | 18,132 / 2,484 |
+| `skills/docs/copilot-loop-operations.md` | 20,103 / 2,534 | 18,489 / 2,303 |
+| `skills/docs/issue-intake-procedure.md` | 18,671 / 2,298 | 16,274 / 1,970 |
+| `skills/docs/main-agent-contract.md` | 18,291 / 2,420 | 15,332 / 2,020 |
+| `skills/docs/conductor-routing-contract.md` | 17,864 / 2,223 | 13,691 / 1,671 |
+| `skills/docs/pr-lifecycle-contract.md` | 17,021 / 2,115 | 15,204 / 1,863 |
+| `skills/docs/anti-patterns.md` | 9,580 / 1,196 | 8,536 / 1,036 |
+| The 14 phase 3a files | 376,009 / 49,264 | 310,934 / 39,912 |
+| Total canonical `skills/` Markdown prose (70 files) | 1,105,439 / 144,970 | 1,028,004 / 133,751 |
+| Bundle A. Startup | 94,393 / 12,156 | 85,620 / 10,846 |
+| Bundle B. Copilot follow-up | 178,374 / 22,288 | 162,179 / 19,917 |
+| Bundle C. Gate coordinator | 251,582 / 33,069 | 245,232 / 32,128 |
+
+The 14 files shrink by 17.3% (bytes). Bundle C still holds the blocked `gate-review-sub-loop-contract.md` at its baseline size.
+
+### Phase 3 contradiction register
+
+| Files | Conflict | Owner and evidence | Resolution |
+| --- | --- | --- | --- |
+| `public-dev-loop-contract.md` | "Its tests are" named `packages/core/test/public-dev-loop-routing.test.mjs`, which does not exist. | The routing tests are split into `packages/core/test/public-dev-loop-routing-*.test.mjs` (`ls`). | Resolved. The contract names the glob. |
+| `merge-preconditions.md` item 2 versus `copilot-ci-status-contract.md` | Item 2 still named the removed `--local-validation-head-sha` flag as the `crediblyGreen` exception. | Commit `2b6b9533` removed the flag; the CI status contract states the CLI rejects it (folded item B, #2139). | Resolved. Item 2 keeps the `crediblyGreen` rule without the flag name. |
+| `main-agent-contract.md` shared intro versus its Pi-only block | The shared intro pointed to "Guarded surface and deliberate ceilings", which sits inside `<!-- pi-only -->` and is absent from `.claude/skills/docs/main-agent-contract.md`. | Generated projection (67 lines, no such section). | Resolved. The shared intro states the ceilings; the Pi-only list stays. |
+| `issue-intake-procedure.md` Phase 4 versus `SANCTIONED_COMMANDS` | The example prescribed a raw `gh pr edit`, which `SANCTIONED_COMMANDS.forbidden` bars; `edit-pr.mjs` is the sanctioned wrapper. | `scripts/loop/sanctioned-commands.mjs`; `edit-pr.mjs --help`. | Resolved. The example uses `edit-pr.mjs`; `assertIntakePrEditUsesWrapper` parses it. |
+| `retrospective-checkpoint-contract.md` cycle scoping versus `SANCTIONED_COMMANDS` | The `--merge-commit` guidance prescribed a raw `gh pr view` read, which the index bars. | `scripts/loop/sanctioned-commands.mjs`; `view-pr.mjs` returns the oid under `.pr.mergeCommit.oid` (checked against PR 2479). | Resolved. The guidance uses `view-pr.mjs`. Descriptive raw-read mentions in `merge-preconditions.md` and `copilot-loop-state-graph.md` now name the field or the wrapper. |
+| `issue-intake-procedure.md` Phase 3b and `sub-issue-tree-contract.md` versus `SANCTIONED_COMMANDS.orchestratorOwned` | Child issues are created with raw `gh issue create`, while issue creation is orchestrator-owned through `create-issue.mjs`. | `main-agent-contract.md` "Sanctioned tooling" records both steps as known gaps outside its scope; `gh issue create` is not in `SANCTIONED_COMMANDS.forbidden`; #2173 tracks child-origin enforcement. | False for this pass: an acknowledged gap owned by `main-agent-contract.md`, not an unrecorded conflict. The intake text keeps the existing command. |
+| Reserved table versus `main-agent-contract.md` | The issue reserves `COORDINATOR-VERIFY-DELEGATION`, but no rule has that ID. The passage is the intro verify-delegation text plus `COORDINATOR-VERIFY-BOUNDARY`; `claude-hooks-settings.test.mjs` calls it the "coordinator-verify-delegation boundary". | `git grep` finds the ID only in this ledger. | Reserved (issue 2438). Both passages are byte-identical. |
+| `anti-patterns.md` `RAW-GH-PR-READY-BYPASS` versus `OPS-DRAFT-FIRST-PR` | Both describe the restore-ready exit. | `OPS-DRAFT-FIRST-PR` owns the exits; `restoreReady()` calls `readyForReview()`. | False. The texts agree; anti-patterns now cites the owner. |
+| `copilot-loop-operations.md` item 7 and `merge-preconditions.md` item 10 versus `COPILOT-STATE-CARRIED-CONVERGENCE` | Both restated the carry modes. | `copilot-loop-state-graph.md` owns the rule (ADR 0090). | False. The texts agree; operations now cites the owner, and item 10 is unchanged. |
 
 ## Previous run — 2026-09-19 (issue 2236)
 
