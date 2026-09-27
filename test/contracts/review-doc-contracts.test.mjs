@@ -306,17 +306,20 @@ function assertReviewOwnershipExempt(content) {
   const section = content.split("## Single-contributor ownership gate")[1]?.split("\n## ")[0] ?? "";
   const sentences = section.split(/(?<=\.)\s+/);
   const tokens = (s) => new Set([...(s ?? "").matchAll(/`([^`]+)`/g)].map((m) => m[1]));
-  const gated = tokens(sentences.find((s) => /applies ONLY/.test(s)));
+  const namesGate = (s) => s.includes("STRATEGY_OWNERSHIP_GATE");
+  const gated = tokens(sentences.find((s) => namesGate(s) && !/exempt/i.test(s)));
   for (const id of OWNERSHIP_GATED_STRATEGIES) assert.ok(gated.has(id), `ownership gate must cover ${id}`);
   assert.ok(!gated.has("review"), "ownership gate must not cover review");
-  const exempt = tokens(sentences.find((s) => /exempt/i.test(s) && s.includes("STRATEGY_OWNERSHIP_GATE")));
+  const exempt = tokens(sentences.find((s) => namesGate(s) && /exempt/i.test(s)));
   assert.ok(exempt.has("review"), "review must be exempt through STRATEGY_OWNERSHIP_GATE");
-  assert.match(section, /Every write-capable route stays gated/, "write-capable routes must stay gated");
 }
 
 test("ownership-gate exemption check rejects a gated review or a dropped write strategy", async () => {
   const publicContract = await readRepo("skills/docs/public-dev-loop-contract.md");
   assertReviewOwnershipExempt(publicContract.replace("unknown/future strategy defaults to gated", "unknown or future strategy is gated by default"));
+  assertReviewOwnershipExempt(publicContract
+    .replace("it applies ONLY to", "it covers only")
+    .replace("Every write-capable route stays gated.", "All write-capable routes remain gated."));
   assert.throws(() => assertReviewOwnershipExempt(publicContract.replace("`reviewer_fixer`, `final_approval`);", "`final_approval`);")),
     /ownership gate must cover reviewer_fixer/);
   assert.throws(() => assertReviewOwnershipExempt(publicContract.replace("Pure read/observe strategies (`review`, ", "Pure read/observe strategies (")),

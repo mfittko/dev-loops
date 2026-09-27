@@ -494,10 +494,12 @@ dev-loops queue archive-done --repo mfittko/dev-loops --project 1 --older-than 7
 dev-loops queue archive-done --repo mfittko/dev-loops --project 1 --dry-run
 ```
 
-The output reports `olderThan`, `scanned` (all board items of the repo, including open,
-closed and archived), `archivable` (the closed-duration subset), and `archived` (equal to
-`archivable`, or empty under `--dry-run`; each entry carries `itemId`, `issueNumber`,
-`prNumber`, `closedAt`). Open items (even in the `Done` column) and already-archived items
+The output reports `ok`, `olderThan`, `scanned` (the integer count of all board items of
+the repo, including open, closed and archived), `archivable` (the integer count of the
+closed-duration subset), and `archived` (one entry per archived item; each entry carries
+`itemId`, `issueNumber`, `prNumber`, `closedAt`). A `--dry-run` result carries
+`dryRun: true` and `mutations` (the planned archive mutations) and has no `archived`
+field. Open items (even in the `Done` column) and already-archived items
 are never touched.
 
 ## Usage

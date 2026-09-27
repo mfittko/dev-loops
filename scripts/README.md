@@ -691,7 +691,7 @@ Failure behavior:
 - when that refusal is specifically `lifecycleState=blocked_needs_user_decision` plus current-head `ciStatus="failure"`, the unforced error now points operators to `--force --force-reason` as the explicit CI-only escape hatch
 - `--force` does **not** bypass stale-head protection, non-draft `draft_gate` refusal, unresolved-feedback / unsettled-review `pre_approval_gate` refusal, merge-conflict handling, or closed/merged PR protection
 
-Use `--force` only after the user explicitly authorizes ignoring the current-head CI failure for this one gate-comment upsert. Prefer the normal paths first: green current-head CI, or the draft-gate policy knob `gates.draft.requireCi` (issue #351) when the desired behavior is a durable draft-gate policy rather than a one-off override.
+Use `--force` only after the user explicitly authorizes ignoring the current-head CI failure for this one gate-comment upsert. Prefer the normal paths first: green current-head CI, or the draft-gate policy knob `gates.draft.requireCi` (issue #351) for a durable draft-gate policy.
 
 ### `scripts/loop/run-refinement-audit.mjs`
 

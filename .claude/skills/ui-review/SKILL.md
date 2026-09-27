@@ -135,8 +135,11 @@ The stage always produces a CSP-safe, fully inlined HTML artifact. On the Claude
 Code harness it emits a publishable directive (`{ hosting: "claude-artifact", htmlPath,
 publishable: true }`); the orchestrating agent publishes it via Claude
 Artifacts, and the module never calls an Artifacts tool itself. On any other
-harness it fails closed with a stated reason (`{ hosting: "unavailable",
-reason, followup }`). The review body links a hosted artifact when one exists and
+harness it returns `{ hosting: "github-gist", publishable: true, htmlPath }`, and
+the CLI publishes the HTML as a secret GitHub Gist. An explicit `--hosted-url`
+or `--dry-run` skips the gist publish. When the gist publish yields no URL, the
+stage fails closed with a stated reason (`{ hosting: "unavailable", reason }`).
+The review body links a hosted artifact when one exists and
 otherwise states the artifact is unhosted with the reason, so the review never
 blocks on hosting. Every bounded cap is logged.
 

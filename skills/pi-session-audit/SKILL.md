@@ -49,9 +49,10 @@ Harness auto-detects per record from the usage envelope's field-naming shape (Cl
 `mixed`. If a forced `--harness` mode finds zero usage turns while the other shape was
 present, the error names the detected shape and suggests `--harness auto`.
 
-Claude records sharing one `message.id` count as a single turn. A turn replayed across
-resumed-session files (same `message.id` + `requestId`) counts once, in the
-chronologically first file. A Claude Code transcript's prompt size is
+Claude records sharing one `message.id` count as a single turn, even when the repeats
+are not adjacent. The deduped turn keeps the last record's usage. A turn replayed across
+resumed-session files (same `message.id` + `requestId`) counts once, in the file with
+the earliest usage-turn timestamp. Path order breaks a timestamp tie. A Claude Code transcript's prompt size is
 `input + cacheRead + cacheCreate` on its first/last turn (Pi's is `input + cacheRead`);
 this is the only place the two harnesses' metric definitions differ. Role and session
 name come from the sibling `agent-<id>.meta.json` (`agentType` / `description`) when

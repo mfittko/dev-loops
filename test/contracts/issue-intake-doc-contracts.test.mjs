@@ -404,7 +404,8 @@ test("issue-intake safety layer contract is documented", async () => {
 
 test("approval stop-gate check accepts reworded prose and rejects a lost stop or checkpoint route", async () => {
   const publicContract = await readRepo(PUBLIC_CONTRACT_PATH);
-  assertApprovalStopGates(publicContract.replace("Do not remove surfaced internal loop names", "Keep surfaced internal loop names"));
+  assertApprovalStopGates(publicContract.replace("approval-ready canonical state routes to the human approval checkpoint;",
+    "an approval-ready state is sent to the human approval checkpoint;"));
   assert.throws(
     () => assertApprovalStopGates(publicContract.replace("| `waiting_for_merge_authorization` | `stop` |", "| `waiting_for_merge_authorization` | `route` |")),
     /must stop at waiting_for_merge_authorization/,
