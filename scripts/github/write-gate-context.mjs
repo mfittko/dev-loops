@@ -57,26 +57,37 @@ import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 
 /**
- * Up-front gate-ORDERING tripwire (pure): a `pre_approval_gate` must come AFTER
- * a satisfied draft gate on a ready (non-draft) PR. Given the target gate and
- * the raw coordination facts (the PR's draft state and whether a clean
- * draft_gate verdict exists), return a refusal message when a pre_approval fan-
- * out is requested before the draft gate is satisfied, else null.
+ * Up-front gate-ORDERING tripwire (pure). Given the target gate and the raw
+ * coordination facts (the PR's draft state and whether a clean draft_gate
+ * verdict exists), return a refusal message for either ordering violation,
+ * else null:
  *
- * This is DELIBERATELY scoped to the one gate-ordering precondition where the
- * coordination detector and the verdict-post refusal can never disagree: it
- * reads only raw draft-state + draft-gate evidence, never the run-context-
- * specific Copilot-cycle / internal-only / lightweight guards. Those stay
+ * - `pre_approval_gate` before the draft gate is satisfied (the PR is still
+ *   draft, or no clean draft_gate verdict exists). Names run_draft_gate.
+ * - `draft_gate` on a non-draft PR whose draft gate is ALREADY satisfied. The
+ *   draft gate is a historical boundary receipt, so a new ready head takes a
+ *   Copilot re-request and a current-head pre_approval_gate instead. A
+ *   non-draft PR WITHOUT a satisfied draft gate returns null: that is the
+ *   sanctioned reconcile path (reconcile_draft_gate / run_draft_gate), where the
+ *   verdict post temporarily converts the PR to draft to record the receipt.
+ *
+ * This is DELIBERATELY scoped to ordering preconditions where the coordination
+ * detector and the verdict-post refusal can never disagree: it reads only raw
+ * draft-state + draft-gate evidence, never the run-context-specific
+ * Copilot-cycle / internal-only / lightweight guards. Those stay
  * verdict-post-authoritative (the fail-closed backstop), so this up-front check
- * can never false-block a legal gate — it only stops the unambiguous
- * pre_approval-before-draft-gate case before any reviewer fork, diff capture, or
- * gate-context tmp artifact is spent. `draft_gate` has no predecessor gate (no
- * up-front ordering obligation) and `review` carries none, so both return null.
+ * can never false-block a legal gate. It stops the unambiguous cases before any
+ * reviewer fork, diff capture, or gate-context tmp artifact is spent. `review`
+ * carries no ordering obligation and returns null.
  *
  * @param {{ gate: string, isDraft: boolean, draftGateSatisfied: boolean, repo: string, pr: number }} input
  * @returns {string|null}
  */
 export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied, repo, pr }) {
+  if (gate === "draft_gate") {
+    if (isDraft === true || draftGateSatisfied !== true) return null;
+    return `Refusing to build gate context for draft_gate on ${repo}#${pr}: the PR is already out of draft and its draft gate is satisfied (a historical boundary receipt), so draft_gate does not apply. For a new ready head, re-request Copilot review when the head answers Copilot findings, then run pre_approval_gate at the current head. Legal next actions: rerequest_copilot_review, run_pre_approval_gate.`;
+  }
   if (gate !== "pre_approval_gate") return null;
   if (isDraft !== true && draftGateSatisfied === true) return null;
   const why = isDraft === true
@@ -3378,21 +3389,22 @@ export async function main(
     // Gate-ORDERING tripwire — the FIRST action, before any spec-of-record read,
     // diff capture, gate-context tmp artifact, or fan-out dispatch plan. Refuse a
     // pre_approval_gate (exit non-zero, naming run_draft_gate) when the draft gate
-    // is not yet satisfied, so a premature pre_approval fan-out never spends
-    // reviewers. DELIBERATELY scoped to the pre_approval-before-draft ordering
-    // precondition — the one case the coordination detector and the verdict-post
-    // refusal can never disagree on — using only raw draft-state + draft-gate
-    // evidence. Every run-context-specific gate legality (Copilot-cycle /
+    // is not yet satisfied, and refuse a draft_gate on a non-draft PR whose draft
+    // gate is already satisfied (naming the Copilot re-request and
+    // run_pre_approval_gate), so a mis-ordered fan-out never spends reviewers.
+    // DELIBERATELY scoped to ordering preconditions the coordination detector and
+    // the verdict-post refusal can never disagree on, using only raw draft-state +
+    // draft-gate evidence. Every run-context-specific gate legality (Copilot-cycle /
     // internal-only / lightweight) stays at the verdict post
     // (upsert-checkpoint-verdict.mjs, the authoritative fail-closed backstop), so
-    // this check can never false-block a legal gate. draft_gate has no predecessor
-    // gate and review carries no obligation, so neither triggers a lookup. Skipped
+    // this check can never false-block a legal gate. review carries no ordering
+    // obligation, so it triggers no lookup. Skipped
     // under --prefix-file (never touches GitHub, same invariant that skips spec-of-
     // record resolution). A coordination-load FAILURE proceeds silently: an unread
     // state is not an ordering violation, a genuine read problem surfaces right
     // after at resolvePrSpecContext (fail-closed for every non-prefix-file mode),
     // and the verdict post is the authoritative backstop.
-    if (options.gate === "pre_approval_gate" && !options.prefixFile) {
+    if ((options.gate === "pre_approval_gate" || options.gate === "draft_gate") && !options.prefixFile) {
       let coordination = null;
       try {
         coordination = await loadCoordination({ repo: options.repo, pr: options.pr });

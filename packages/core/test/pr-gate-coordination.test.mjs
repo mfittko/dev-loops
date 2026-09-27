@@ -4510,3 +4510,30 @@ test("#2381: incomplete fixerDisposition on a NON-draft PR with no clean draft_g
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
   assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
 });
+
+// A ready PR whose head advanced past a clean draft_gate recorded on an older
+// head must never be steered back into draft_gate: the raw draft fact wins over
+// a stale pr_draft lifecycle label, and the draft gate is a historical receipt.
+test("a ready PR with an advanced head never advertises run_draft_gate, even under a stale pr_draft label", () => {
+  const readyAdvanced = (overrides) => evaluatePrGateCoordination({
+    pr: 2450,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "0ld1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "0ld1234", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate(),
+    preApprovalGateMarker: gate(),
+    ...overrides,
+  });
+
+  const staleLabel = readyAdvanced({ lifecycleState: STATE.PR_DRAFT });
+  assert.notEqual(staleLabel.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+  assert(!staleLabel.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert.notEqual(staleLabel.gateBoundary, PR_CHECKPOINT.DRAFT_REVIEW);
+
+  const readyState = readyAdvanced({ lifecycleState: STATE.READY_TO_REREQUEST_REVIEW });
+  assert.notEqual(readyState.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+  assert(!readyState.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+});

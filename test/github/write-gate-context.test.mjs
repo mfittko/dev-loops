@@ -2072,6 +2072,31 @@ test("prematureGateOrderingRefusal: refuses a premature pre_approval_gate; null 
   );
 });
 
+test("prematureGateOrderingRefusal: pins BOTH orderings as structured refusals (draft_gate on a ready PR with a satisfied draft gate; pre_approval before a satisfied draft gate)", () => {
+  let draftOnReady;
+  assert.doesNotThrow(() => {
+    draftOnReady = prematureGateOrderingRefusal({ gate: "draft_gate", isDraft: false, draftGateSatisfied: true, repo: "owner/repo", pr: 97 });
+  });
+  assert.equal(typeof draftOnReady, "string", "draft_gate on a ready PR with a satisfied draft gate yields a refusal string");
+  assert.match(draftOnReady, /draft_gate/, "names the refused gate");
+  assert.match(draftOnReady, /rerequest_copilot_review/, "names the Copilot re-request");
+  assert.match(draftOnReady, /run_pre_approval_gate/, "names the current-head pre_approval gate");
+  assert.doesNotMatch(draftOnReady, /Legal next action: run_draft_gate/, "never advises another draft gate");
+
+  let reconcile;
+  assert.doesNotThrow(() => {
+    reconcile = prematureGateOrderingRefusal({ gate: "draft_gate", isDraft: false, draftGateSatisfied: false, repo: "owner/repo", pr: 97 });
+  });
+  assert.equal(reconcile, null, "a ready PR WITHOUT a satisfied draft gate keeps the reconcile path open");
+
+  let premature;
+  assert.doesNotThrow(() => {
+    premature = prematureGateOrderingRefusal({ gate: "pre_approval_gate", isDraft: false, draftGateSatisfied: false, repo: "owner/repo", pr: 97 });
+  });
+  assert.equal(typeof premature, "string", "pre_approval before a satisfied draft gate yields a refusal string");
+  assert.match(premature, /run_draft_gate/);
+});
+
 test("CLI tripwire: a premature pre_approval_gate exits non-zero naming run_draft_gate, writing NO gate-context artifact and NO diff", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   const priorExitCode = process.exitCode;
@@ -2136,8 +2161,13 @@ test("CLI tripwire: a pre_approval_gate with a satisfied draft gate builds its c
   }
 });
 
-test("CLI tripwire: draft_gate never consults coordination (no predecessor gate, no ordering obligation)", async () => {
+test("CLI tripwire: a draft_gate on a ready PR with a satisfied draft gate exits non-zero naming the Copilot re-request and pre_approval, writing NO context, NO diff, NO emit plan", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  process.exitCode = undefined;
+  const origErr = process.stderr.write;
+  const stderrChunks = [];
+  process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
   try {
     await main([
       "--repo", "owner/repo", "--pr", "96", "--gate", "draft_gate",
@@ -2145,10 +2175,64 @@ test("CLI tripwire: draft_gate never consults coordination (no predecessor gate,
     ], {
       repoRoot,
       run: stubGhRun,
-      loadCoordination: async () => { throw new Error("coordination must not be consulted for draft_gate"); },
+      loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true } }),
     });
+
+    assert.equal(process.exitCode, 1, "draft_gate on a ready PR fails closed with a non-zero exit");
+    const stderrText = stderrChunks.join("");
+    assert.match(stderrText, /rerequest_copilot_review/, "the error names the Copilot re-request");
+    assert.match(stderrText, /run_pre_approval_gate/, "the error names the current-head pre_approval gate");
+    assert.doesNotMatch(stderrText, /Legal next action: run_draft_gate/, "the error never advises another draft gate");
+
     const artifact = await readGateContext({ repo: "owner/repo", pr: 96, gate: "draft_gate", headSha }, { repoRoot });
-    assert.ok(artifact, "draft_gate builds its context without any coordination lookup");
+    assert.equal(artifact, null, "no gate-context artifact is written");
+    const diffPath = path.resolve(repoRoot, buildGateDiffPath({ repo: "owner/repo", pr: 96, gate: "draft_gate", headSha }));
+    assert.equal(existsSync(diffPath), false, "no .diff tmp artifact is produced (refused before diff capture)");
+    const planPath = path.resolve(repoRoot, buildGateEmitPlanPath({ repo: "owner/repo", pr: 96, gate: "draft_gate", headSha }));
+    assert.equal(existsSync(planPath), false, "no emit plan / work order is produced");
+  } finally {
+    process.stderr.write = origErr;
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI tripwire: draft_gate on a still-draft PR consults coordination once and builds its context", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  let coordinationCalls = 0;
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "98", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], {
+      repoRoot,
+      run: stubGhRun,
+      loadCoordination: async () => {
+        coordinationCalls++;
+        return { prData: { isDraft: true }, gateEvidence: { draftGateSatisfied: false } };
+      },
+    });
+    assert.equal(coordinationCalls, 1, "draft_gate consults the ordering facts once");
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 98, gate: "draft_gate", headSha }, { repoRoot });
+    assert.ok(artifact, "a still-draft PR builds its draft_gate context");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI tripwire: draft_gate on a ready PR WITHOUT a satisfied draft gate builds its context (reconcile path)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "99", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], {
+      repoRoot,
+      run: stubGhRun,
+      loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: false } }),
+    });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 99, gate: "draft_gate", headSha }, { repoRoot });
+    assert.ok(artifact, "the reconcile path still builds its draft_gate context");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

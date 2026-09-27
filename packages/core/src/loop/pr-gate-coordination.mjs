@@ -1235,7 +1235,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  if (prDraft || effectiveLifecycleState === STATE.PR_DRAFT) {
+  // The raw draft fact wins: an explicit prDraft=false overrides a stale pr_draft lifecycle label.
+  if (prDraft || (input.prDraft !== false && effectiveLifecycleState === STATE.PR_DRAFT)) {
     if (refinementArtifactStatus === REFINEMENT_ARTIFACT_STATUS.MISSING) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
       pushUnique(forbiddenActions, [
