@@ -4510,3 +4510,24 @@ test("#2381: incomplete fixerDisposition on a NON-draft PR with no clean draft_g
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
   assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
 });
+
+// A ready PR whose head advanced past a clean draft_gate recorded on an older
+// head must never be steered back into draft_gate: the draft gate is a
+// historical receipt, so the new head takes a Copilot re-request.
+test("a ready PR with an advanced head re-requests Copilot review and never advertises run_draft_gate", () => {
+  const readyState = evaluatePrGateCoordination({
+    pr: 2450,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "0ld1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "0ld1234", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate(),
+    preApprovalGateMarker: gate(),
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+  });
+
+  assert.equal(readyState.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+  assert(!readyState.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+});
