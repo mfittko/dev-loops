@@ -539,6 +539,29 @@ describe("spec extraction from a tracker body", () => {
     assert.equal(computeSpecDigest(spec), computeSpecDigest(SPEC));
   });
 
+  test("a quoted # H1 Acceptance criteria ranks below the real ## section", () => {
+    const body = "# Acceptance criteria\n- [ ] quoted\n## Acceptance criteria\n- [ ] real\n## Definition of done\n- [ ] d";
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, ["real"]);
+    assert.deepEqual(spec.definitionOfDone, ["d"]);
+    assert.deepEqual(spec, h2OnlySpecFromBody(body));
+  });
+
+  test("an unselected nested spec-named heading and its siblings stay in the AC", () => {
+    const body = "## Acceptance criteria\n- [ ] a\n### DoD\n- [ ] b\n### More\n- [ ] c\n## Definition of done\n- [ ] d";
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, ["a", "b", "c"]);
+    assert.deepEqual(spec.definitionOfDone, ["d"]);
+    assert.deepEqual(spec, h2OnlySpecFromBody(body));
+  });
+
+  test("a nested heading of the same family stays in the AC", () => {
+    const body = "## Acceptance criteria\n- [ ] a\n#### Acceptance criteria\n- [ ] b\n## Definition of done\n- [ ] d";
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, ["a", "b"]);
+    assert.deepEqual(spec.definitionOfDone, ["d"]);
+  });
+
   test("requireSpecFromBody names the expected shape when AC or DoD is missing", () => {
     assert.throws(
       () => requireSpecFromBody("## Summary\nNo spec sections here."),
@@ -548,7 +571,7 @@ describe("spec extraction from a tracker body", () => {
     const noDod = "### Acceptance criteria\n- [ ] Ship a working demo\n";
     assert.throws(
       () => requireSpecFromBody(noDod),
-      /no definition of done; expected .*any heading level.*each with list items.*a PR-body spec must use `- \[ \]` checkbox items/,
+      /no definition of done; expected .*any heading level.*each with `- \[ \]` checkbox items or top-level `- ` bullets.*a PR-body spec must use `- \[ \]` checkbox items/,
     );
     assert.deepEqual(requireSpecFromBody(checklistBody("###")), extractSpecFromBody(checklistBody("##")));
   });

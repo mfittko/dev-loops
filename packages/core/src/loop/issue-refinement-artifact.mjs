@@ -183,9 +183,10 @@ function findAllSectionsByPatterns(sections, patterns) {
  * by joining the section and every following DEEPER-level section up to the
  * next same-or-shallower heading, so nested checklist items stay visible to
  * consumers that must see ALL of a canonical section's boxes. The optional
- * `stopAt(section)` predicate also ends the walk at a matching deeper section.
+ * `skip(index)` predicate drops a matching deeper section and its deeper
+ * descendants; the walk then continues.
  */
-function flattenSectionDeep(sections, startIndex, stopAt = () => false) {
+function flattenSectionDeep(sections, startIndex, skip = () => false) {
   const start = sections[startIndex];
   // Anti-spoof: the raw sub-heading NAME is NEVER re-injected into the text the
   // checklist parser re-parses. A fence-opening name (`### ``` `) would corrupt
@@ -194,8 +195,12 @@ function flattenSectionDeep(sections, startIndex, stopAt = () => false) {
   // Only already-classified bodyLines are joined; real boxes under sub-headings
   // stay visible because their bodyLines still join normally.
   const parts = [start.bodyLines.join("\n")];
+  let skipLevel = Infinity;
   for (let i = startIndex + 1; i < sections.length; i += 1) {
-    if (sections[i].level <= start.level || stopAt(sections[i])) break;
+    const { level } = sections[i];
+    if (level <= start.level) break;
+    if (level <= skipLevel) skipLevel = skip(i) ? level : Infinity;
+    if (skipLevel !== Infinity) continue;
     parts.push(sections[i].bodyLines.join("\n"));
   }
   return parts.join("\n");
@@ -1237,29 +1242,34 @@ const SPEC_SECTION_NAME_PATTERNS = Object.freeze({
   nonGoals: Object.freeze([/^non-goals$/i, /^non goals$/i]),
 });
 
-function isSpecSectionName(name) {
-  return Object.values(SPEC_SECTION_NAME_PATTERNS).some((patterns) =>
-    patterns.some((pattern) => pattern.test(name)),
-  );
+// `##` ranks first, deeper levels follow in ascending order, and `#` ranks
+// last: an H1 is usually a document title or a quoted heading.
+function specHeadingLevelRank(level) {
+  return level === 1 ? Infinity : level;
 }
 
 /**
- * Index of the section matching one spec name family: the shallowest heading
- * level wins, then name priority, then document order. So a quoted
- * `### Acceptance criteria` nested under `## Context` never outranks a real
- * `## Acceptance criteria` later in the body. -1 when none matches.
+ * Index of the section matching one spec name family: the best heading level
+ * rank wins (`##`, then `###` ... `######`, then `#`), then name priority,
+ * then document order. So a quoted `### Acceptance criteria` nested under
+ * `## Context` never outranks a real `## Acceptance criteria` later in the
+ * body. -1 when none matches.
  */
 function findSpecSectionIndex(sections, patterns) {
   let bestIndex = -1;
-  let bestLevel = Infinity;
+  let bestLevelRank = Infinity;
   let bestNameRank = Infinity;
   for (let i = 0; i < sections.length; i += 1) {
     const nameRank = patterns.findIndex((pattern) => pattern.test(sections[i].name));
     if (nameRank === -1) continue;
-    const { level } = sections[i];
-    if (level < bestLevel || (level === bestLevel && nameRank < bestNameRank)) {
+    const levelRank = specHeadingLevelRank(sections[i].level);
+    if (
+      bestIndex === -1 ||
+      levelRank < bestLevelRank ||
+      (levelRank === bestLevelRank && nameRank < bestNameRank)
+    ) {
       bestIndex = i;
-      bestLevel = level;
+      bestLevelRank = levelRank;
       bestNameRank = nameRank;
     }
   }
@@ -1269,26 +1279,28 @@ function findSpecSectionIndex(sections, patterns) {
 /**
  * Read the AC, DoD and Non-goals section bodies of a spec body at ANY heading
  * level (`##`, `###`, ...). Each body is flattened past deeper sub-headings,
- * so a `##` section keeps its nested `###` items, but the walk stops at a
- * deeper sub-section that is itself a spec section, so a `### Definition of
- * done` nested under `## Acceptance criteria` is never counted twice. A
- * missing section is null. Pure.
+ * so a `##` section keeps its nested `###` items. The flatten skips only a
+ * deeper sub-section that ANOTHER family selected (with its descendants), so
+ * a selected `### Definition of done` nested under `## Acceptance criteria`
+ * is never counted twice. A missing section is null. Pure.
  *
  * @param {string} body
  * @returns {{ acceptanceCriteria: string|null, definitionOfDone: string|null, nonGoals: string|null }}
  */
 export function readSpecSectionBodies(body) {
   const sections = parseMarkdownSections(typeof body === "string" ? body : "");
-  const read = (patterns) => {
-    const index = findSpecSectionIndex(sections, patterns);
-    return index === -1
-      ? null
-      : flattenSectionDeep(sections, index, (section) => isSpecSectionName(section.name));
+  const indices = {
+    acceptanceCriteria: findSpecSectionIndex(sections, SPEC_SECTION_NAME_PATTERNS.acceptanceCriteria),
+    definitionOfDone: findSpecSectionIndex(sections, SPEC_SECTION_NAME_PATTERNS.definitionOfDone),
+    nonGoals: findSpecSectionIndex(sections, SPEC_SECTION_NAME_PATTERNS.nonGoals),
   };
+  const selected = new Set(Object.values(indices).filter((index) => index !== -1));
+  const read = (index) =>
+    index === -1 ? null : flattenSectionDeep(sections, index, (i) => selected.has(i));
   return {
-    acceptanceCriteria: read(SPEC_SECTION_NAME_PATTERNS.acceptanceCriteria),
-    definitionOfDone: read(SPEC_SECTION_NAME_PATTERNS.definitionOfDone),
-    nonGoals: read(SPEC_SECTION_NAME_PATTERNS.nonGoals),
+    acceptanceCriteria: read(indices.acceptanceCriteria),
+    definitionOfDone: read(indices.definitionOfDone),
+    nonGoals: read(indices.nonGoals),
   };
 }
 

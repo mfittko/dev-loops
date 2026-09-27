@@ -104,7 +104,7 @@ test("GATE-EXEC-VALIDATION-RESOLUTION names the verdict writer as its enforcemen
   assert.match(flat, /It is incomplete evidence, never a pass\./);
   assert.match(flat, /absent, unreadable, incomplete, or stamped with a different head SHA MUST report a gate-evidence finding/);
   assert.match(flat, /A typed incomplete artifact satisfies this check\./);
-  assert.match(flat, /The verdict writer checks only the artifact's presence and head stamp\./);
+  assert.match(flat, /The verdict writer checks only the artifact's presence, readability and head stamp\./);
   assert.match(flat, /The reviewer gate-evidence finding path, not the verdict writer, prevents a `clean` verdict over an incomplete artifact\./);
 });
 
