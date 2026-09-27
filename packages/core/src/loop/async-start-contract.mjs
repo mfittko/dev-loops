@@ -182,13 +182,17 @@ export function validateAsyncStartContext({
     };
   }
 
-  // No marker found — fail closed.
-  // Derive the marker hint from ASYNC_CONTEXT_MARKERS (primary first, aliases after)
-  // so the message never drifts from the recognized-marker list.
+  // No complete async-context evidence found — fail closed. Keep the run-id carrier
+  // names sourced from the contract and describe native Pi evidence as harness-supplied,
+  // never as markers to set manually in a detached process.
   const [primaryMarker, ...aliasMarkers] = ASYNC_CONTEXT_MARKERS;
-  const markerHint = aliasMarkers.length
-    ? `Set ${primaryMarker} (or the ${aliasMarkers.join("/")} alias) to proceed. `
-    : `Set ${primaryMarker} to proceed. `;
+  const carrierHint = aliasMarkers.length
+    ? `${primaryMarker} (or the legacy ${aliasMarkers.join("/")} alias)`
+    : primaryMarker;
+  const markerHint =
+    `A harness-managed run may carry ${carrierHint}; native Pi async subagents supply ` +
+    `${NATIVE_PI_CHILD_MARKER}=1 together with a non-blank ${NATIVE_PI_PARENT_SESSION_MARKER}. ` +
+    "Restart via a harness-managed async subagent; do not set these markers in a detached process. ";
   return {
     status: ASYNC_START_STATUS.REJECTED,
     reason:

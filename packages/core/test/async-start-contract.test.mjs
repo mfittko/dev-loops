@@ -88,6 +88,10 @@ test("validateAsyncStartContext: native Pi markers corroborate but never substit
   ]) {
     const result = validateAsyncStartContext({ env: partial, asyncStartMode: ASYNC_START_MODE.REQUIRED });
     assert.equal(result.status, ASYNC_START_STATUS.REJECTED, JSON.stringify(partial));
+    assert.ok(result.reason.includes("PI_SUBAGENT_CHILD=1"));
+    assert.ok(result.reason.includes("non-blank PI_SUBAGENT_PARENT_SESSION"));
+    assert.ok(result.reason.includes("harness-managed async subagent"));
+    assert.ok(result.reason.includes("do not set these markers in a detached process"));
   }
 });
 
@@ -160,9 +164,13 @@ test("buildAsyncStartRejection: builds error payload from rejected validation", 
   assert.equal(rejection.ok, false);
   assert.equal(rejection.asyncStartContract, "rejected");
   assert.ok(rejection.error.includes("No async context detected"));
-  // The rejection names both the neutral var and the legacy pi-subagents alias (#830, restored #1008).
+  // The rejection names harness-carried run ids and native Pi child evidence without
+  // suggesting manual marker injection in a detached process.
   assert.ok(rejection.error.includes("DEVLOOPS_RUN_ID"));
   assert.ok(rejection.error.includes("PI_SUBAGENT_RUN_ID"));
+  assert.ok(rejection.error.includes("PI_SUBAGENT_CHILD=1"));
+  assert.ok(rejection.error.includes("non-blank PI_SUBAGENT_PARENT_SESSION"));
+  assert.ok(rejection.error.includes("do not set these markers in a detached process"));
 });
 
 // ---------------------------------------------------------------------------

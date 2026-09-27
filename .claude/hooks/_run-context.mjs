@@ -18,8 +18,9 @@
  * `PI_`-prefixed subprocess-env block entirely, so that legacy alias is no longer injected.
  * The native async runner instead marks a child with `PI_SUBAGENT_CHILD=1` plus a non-empty
  * `PI_SUBAGENT_PARENT_SESSION` (see `NATIVE_PI_ASYNC_MARKERS`). Those markers carry no run id,
- * so `resolveRunId` synthesizes a stable one from the parent session rather than returning
- * null and degrading every run-id consumer (runner ownership, checkpoint verdicts).
+ * so `resolveRunId` synthesizes a stable one from the child's `PI_SESSION_ID` when available,
+ * falling back to the parent session when it is absent (same parent session -> same id),
+ * rather than returning null and degrading run-id consumers (runner ownership, checkpoint verdicts).
  *
  * This module is pure except for the explicit file/IO helpers (writeRunContext/readRunContext),
  * which take an injectable `fs` and `root` for testability.
