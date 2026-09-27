@@ -99,6 +99,11 @@ test("GATE-EXEC-VALIDATION-RESOLUTION names the verdict writer as its enforcemen
   const section = passageWith(await readRepo(GATE_DOC), "<!-- rule: GATE-EXEC-VALIDATION-RESOLUTION -->");
   assert.match(section, /`upsert-checkpoint-verdict\.mjs` refuses a `fanout_fanin` verdict post/);
   assert.match(section, /`run-gate-validation\.mjs`/);
+  const flat = collapse(section);
+  assert.match(flat, /An `incomplete` resolution writes a typed incomplete artifact at the same path, stamped with the requested head/);
+  assert.match(flat, /It is incomplete evidence, never a pass\./);
+  assert.match(flat, /absent, unreadable, incomplete, or stamped with a different head SHA MUST report a gate-evidence finding/);
+  assert.match(flat, /A typed incomplete artifact satisfies this check\./);
 });
 
 test("GATE-EXEC-NO-CWD-DEPENDENCE cites WORKTREE-SCRIPT-LAUNCHER-CWD by ID", async () => {
@@ -183,6 +188,11 @@ test("DEV-LOOP-PROBE-TIMEOUT-CEILING pins the 600000 ms ceiling in the bounded w
   const rule = collapse(passageWith(skill, "<!-- rule: DEV-LOOP-PROBE-TIMEOUT-CEILING -->"));
   assert.match(rule, /`--timeout-ms` .*MUST stay below 600000 ms, the harness tool-call limit/);
   assert.match(rule, /a longer wait loops in separate foreground calls/);
+  // Every `timeout <seconds>` wrapper in the watch rule stays below the 600 s limit.
+  const watchLine = skill.slice(watch, skill.indexOf("\n", watch));
+  const seconds = [...watchLine.matchAll(/`timeout (\d+) /g)].map((m) => Number(m[1]));
+  assert.ok(seconds.length > 0, "expected a timeout wrapper in the bounded watch rule");
+  for (const value of seconds) assert.ok(value < 600, `timeout ${value} must stay below the 600 s tool-call limit`);
 });
 
 test("DEV-LOOP-RUNNER-STOP-CONDITIONS names all three conditions and the quote-and-do-not-retry rule", async () => {
@@ -312,13 +322,16 @@ for (const surface of DEV_LOOP_AGENT_SURFACES) {
 function followUpFilingViolations(passage) {
   const violations = [];
   if (!passage.includes("`MAIN-AGENT-FILING-BLOCKER-ONLY`")) violations.push("missing MAIN-AGENT-FILING-BLOCKER-ONLY citation");
-  if (/standalone issue only if[^|]*independent[^|]*outlives it/.test(passage)) violations.push("standalone-issue permission present");
+  const flat = collapse(passage);
+  if (/standalone issue only if[^|]*independent[^|]*outlives it/.test(flat)
+    || /independent bugs that outlive the PR/.test(flat)) violations.push("standalone-issue permission present");
   return violations;
 }
 
 const FOLLOW_UP_PASSAGES = [
   ["skills/docs/issue-intake-procedure.md", (doc) => doc.split("\n").find((line) => line.startsWith("- follow-up-capture rule:"))],
   ["skills/docs/sub-issue-tree-contract.md", (doc) => doc.split("\n").find((line) => line.startsWith("| A follow-up is discovered while working a PR/loop |"))],
+  ["skills/docs/sub-issue-tree-contract.md", (doc) => passageWith(doc, "**Conservatism clause:**")],
 ];
 
 test("the follow-up capture passages defer standalone filing to MAIN-AGENT-FILING-BLOCKER-ONLY", async () => {
@@ -334,4 +347,6 @@ test("negative fixture: restoring the old standalone-issue permission fails the 
   assert.ok(followUpFilingViolations(restored).includes("standalone-issue permission present"));
   const restoredWithCitation = `${restored} See \`MAIN-AGENT-FILING-BLOCKER-ONLY\`.`;
   assert.deepEqual(followUpFilingViolations(restoredWithCitation), ["standalone-issue permission present"]);
+  const restoredClause = "**Conservatism clause:** prefer noting PR-scoped follow-ups on the originating artifact. Cross-cutting contract/policy changes and\ngenuinely independent bugs that outlive the PR remain their own issues. See `MAIN-AGENT-FILING-BLOCKER-ONLY`.";
+  assert.deepEqual(followUpFilingViolations(restoredClause), ["standalone-issue permission present"]);
 });
