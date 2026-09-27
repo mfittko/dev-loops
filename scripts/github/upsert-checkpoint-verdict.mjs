@@ -2221,7 +2221,7 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
   }
   throw new Error(
     `Cannot post a fanout_fanin verdict for ${repo}#${pr} ${gate}: the validation artifact ${relPath} ${problem}. `
-    + `Run run-gate-validation.mjs --repo ${repo} --pr ${pr} --gate ${gate} --head-sha ${headSha} --suite <name> once before dispatching reviewers (GATE-EXEC-VALIDATION-ARTIFACT).`,
+    + `Resolve the round's validation once before dispatching reviewers with dev-loops gate resolve-validation --profile <targeted|full-repository> --repo ${repo} --pr ${pr} --gate ${gate} --head-sha ${headSha} [--suite <name>]..., which writes this artifact through run-gate-validation.mjs (GATE-EXEC-VALIDATION-RESOLUTION).`,
   );
 }
 
@@ -2925,7 +2925,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         + `Write it with write-gate-findings-log.mjs (from consolidate-fanin.mjs's --ledger-out) before posting the verdict.`,
       );
     }
-    // GATE-EXEC-VALIDATION-ARTIFACT enforcement: the round must have run
+    // GATE-EXEC-VALIDATION-RESOLUTION enforcement: the round must have run
     // run-gate-validation.mjs once for the reviewed head. Same opt-out and
     // placement as the ledger refusal above, so its message wins when both fire.
     await assertGateValidationArtifact({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, repoRoot });
