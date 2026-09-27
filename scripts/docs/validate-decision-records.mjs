@@ -100,14 +100,23 @@ export function detectIndexErrors(names) {
 /**
  * ADR-PATH-NUMBERING repair path: a number collision that already merged is fixed
  * by renaming one record to a free number. The deleted base record counts as that
- * rename only when another current record still holds its number and exactly one
+ * rename only when another record that already held its number at the base still
+ * holds it (the collision was merged, not created by this change) and exactly one
  * current record carries its slug under a new number with the base text unchanged
  * apart from the title number.
  */
-export async function isCollisionRepairRename(root, names, baseName, baseText) {
+export async function isCollisionRepairRename(root, names, baseName, baseText, git, base) {
   const prefix = baseName.slice(0, 4);
   const slug = baseName.slice(5);
-  if (!names.some((n) => n.startsWith(`${prefix}-`))) return false;
+  const holders = names.filter((n) => n !== baseName && n.startsWith(`${prefix}-`));
+  let mergedCollision = false;
+  for (const n of holders) {
+    if (await git.pathExistsIn(base, `${DECISIONS_DIR}/${n}`)) {
+      mergedCollision = true;
+      break;
+    }
+  }
+  if (!mergedCollision) return false;
   const renamed = names.filter((n) => n !== TEMPLATE && n.slice(5) === slug && !n.startsWith(`${prefix}-`));
   if (renamed.length !== 1) return false;
   const text = await readFile(path.join(root, DECISIONS_DIR, renamed[0]), "utf8");
@@ -186,7 +195,7 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
         currentText = await readFile(path.join(root, rel), "utf8");
       } catch (err) {
         if (err.code === "ENOENT") {
-          if (await isCollisionRepairRename(root, names, baseName, baseText)) continue;
+          if (await isCollisionRepairRename(root, names, baseName, baseText, git, base)) continue;
           // Deleting an Accepted/Superseded record is itself a post-acceptance
           // rewrite; refuse it instead of passing silently.
           errors.push({
