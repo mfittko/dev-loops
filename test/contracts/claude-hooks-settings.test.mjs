@@ -164,6 +164,18 @@ test("bash-gate hook passes through non-gh-pr-ready commands", () => {
   assert.equal(json, null, "no deny output for an allowed command");
 });
 
+test("bash-gate hook lets the judge run only its work-order pull; shell, test and build commands are denied (ADR 0106)", () => {
+  const pull = "dev-loops-run scripts/github/pull-work-order.mjs --ref judge:o/r#7:pre_approval_gate:abc:j1-aa --digest ab12 --execution j1-aa";
+  const decide = (command, agent_type = "dev-loops:judge") =>
+    runHook("pre-tool-use-bash-gate.mjs", { tool_name: "Bash", tool_input: { command }, cwd: repoRoot, agent_type }).json?.hookSpecificOutput?.permissionDecision ?? "allow";
+  assert.equal(decide(pull), "allow");
+  assert.equal(decide(pull, "judge"), "allow");
+  for (const command of ["npm test", "bun run verify", "cat /etc/passwd", `${pull}; id`, `${pull} > out.txt`, `${pull} $(id)`, `${pull} && bun test`, `${pull}\nid`]) {
+    assert.equal(decide(command), "deny", command);
+  }
+  assert.equal(decide("npm test", "review"), "allow", "other workers keep their shell");
+});
+
 test("bash-gate hook denies an ungated gh pr ready in the target repo (e2e, stubbed guard)", () => {
   // Stub the gate guard to exit 1 (no clean draft_gate evidence) so the spawn + deny wiring is
   // exercised deterministically without touching the network.

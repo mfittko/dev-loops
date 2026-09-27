@@ -1024,6 +1024,25 @@ prior-round judge verdict artifacts for this gate, and — engaged by default on
 round (issue 2008 / ADR 0061) — the structured spec plus `specDigest`/`headSha`/`contentDigest`
 the conductor derives via `scripts/loop/spec-context.mjs` (see the Dispatch bridge below).
 
+**Dispatch (pull transport, ADR 0106).** The conductor never writes the judge's brief. After
+fan-in it runs the deterministic producer over the round's sources:
+
+```sh
+dev-loops-run scripts/loop/emit-judge-work-order.mjs --repo <owner/name> --pr <N> --gate <gate> \
+  --head-sha <current_head_sha> --findings-file <ledger-path> --spec-file <spec-path> \
+  --identity-file <identity-path> [--prior-verdict <prior-judge-verdict-path> ...]
+```
+
+It refuses a missing or inconsistent source, pins the ledger, spec, identity, evidence and
+prior verdicts as hash-bound required reads, and prints `{ workOrderRef, workOrderDigest,
+executionIdentity, dispatchPrompt, planPath }`. The conductor dispatches the judge with the
+compact `dispatchPrompt` only, on the initial, a resumed and a replacement dispatch alike, and
+never appends task prose. Changed authority (a new ledger, spec or head) requires a new
+emission, which supersedes the prior reference; the pull refuses a superseded, retired or
+source-changed reference as `stale_dispatch` and a missing local work order as
+`local_materialization_integrity_failure`. Pass the printed `planPath` to `judge-pass` as
+`--judge-plan`.
+
 **Output:** the judge writes two verdict artifacts to deterministic paths under
 `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/` — its only writes: the relevance verdict
 (`judge-verdict.json`) and the spec-authority verdict (`spec-authority-verdict.json`, see
@@ -1145,7 +1164,9 @@ deterministic bridge `scripts/loop/judge-pass.mjs` (`dev-loops gate judge-pass`)
 the fixer's **act list** for Phase 4: given `--findings-file` (the consolidated ledger) and
 `--judge-verdict` (the judge's relevance-verdict artifact path), `judge-pass` validates the
 verdict shape, fails closed unless the verdict's `headSha` matches the current head (a stale
-verdict must never feed the fixer), applies the dispositions via `applyJudgeDispositions`, and
+verdict must never feed the fixer), fails closed unless `--judge-plan` names this round's
+emitted judge invocation with a matching judge pull receipt, both verdict artifacts written after
+that pull, and the ledger and spec the work order pinned, applies the dispositions via `applyJudgeDispositions`, and
 emits exactly the findings the judge marked `act` (`--out`) plus the enriched ledger
 (`--ledger-out`). Every invocation ALSO carries the spec-authority flags derived above —
 `--spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict
@@ -1157,7 +1178,8 @@ all-stale fallback):
 
 ```sh
 dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
-  --findings-file <ledger-path> --judge-verdict <verdict-path> --out <act-list-path> --ledger-out <enriched-ledger-path> \
+  --findings-file <ledger-path> --judge-verdict <verdict-path> --judge-plan <judge-plan-path> \
+  --out <act-list-path> --ledger-out <enriched-ledger-path> \
   --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
   [--prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path>] \
   [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>]
@@ -1166,7 +1188,7 @@ dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha 
 The conductor hands the act list — never the full unfiltered ledger —
 to the fixer pass (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`). If `judge-pass` fails closed (stale
 head, malformed verdict, out-of-range index, undisposed finding, mismatched spec-authority
-identity), the conductor re-runs the judge at the current head rather than degrading to
+identity, missing or mismatched judge delivery evidence), the conductor re-runs the judge at the current head rather than degrading to
 severity-only disposition or silently skipping spec authority for a wired gate. See
 `skills/docs/spec-authority-contract.md` for the enforcement rules these flags carry.
 

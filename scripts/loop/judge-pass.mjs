@@ -29,6 +29,8 @@ import {
 import { commentDeferredFindings, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
+import { verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
   JQ_OUTPUT_USAGE,
@@ -36,7 +38,7 @@ import {
   matchJqOutputToken,
 } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --findings-file <path> --judge-verdict <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>]
+const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>]
 
 Bridge the judge pass between gate fan-in (Phase 3) and the fixer pass (Phase 4).
 Reads the judge agent's verdict artifact, enforces current-head freshness, applies
@@ -55,6 +57,13 @@ Inputs:
                                current-head (headSha == --head-sha) or the pass
                                FAILS CLOSED — a stale verdict must not feed the
                                fixer's act list.
+  --judge-plan <path>          The judge-emit-plan.json that emit-judge-work-order.mjs
+                               wrote for this dispatch (ADR 0106). The pass FAILS
+                               CLOSED unless the plan names this repo/PR/gate/head,
+                               a matching judge pull receipt exists under the main
+                               checkout, both verdict artifacts were written after
+                               that pull, and --findings-file (and --spec-file) are
+                               the ledger and spec the work order pinned.
   --head-sha <sha>             The round's current head. The verdict's headSha must
                                equal this (trim+lowercase compare) or the pass fails
                                closed.
@@ -151,6 +160,7 @@ export function parseJudgePassCliArgs(argv) {
     headSha: undefined,
     findingsFile: undefined,
     judgeVerdict: undefined,
+    judgePlan: undefined,
     out: undefined,
     ledgerOut: undefined,
     repoRoot: undefined,
@@ -174,6 +184,7 @@ export function parseJudgePassCliArgs(argv) {
       "head-sha": { type: "string" },
       "findings-file": { type: "string" },
       "judge-verdict": { type: "string" },
+      "judge-plan": { type: "string" },
       out: { type: "string" },
       "ledger-out": { type: "string" },
       "repo-root": { type: "string" },
@@ -226,6 +237,10 @@ export function parseJudgePassCliArgs(argv) {
     }
     if (token.name === "judge-verdict") {
       options.judgeVerdict = token.value;
+      continue;
+    }
+    if (token.name === "judge-plan") {
+      options.judgePlan = token.value;
       continue;
     }
     if (token.name === "out") {
@@ -312,6 +327,8 @@ export function validateCliArgs(options) {
   options.headSha = sha;
   options.findingsFile = requireValue(options.findingsFile, "--findings-file", parseError);
   options.judgeVerdict = requireValue(options.judgeVerdict, "--judge-verdict", parseError);
+  // --judge-plan is enforced by judgePassCli (verifyJudgeDelivery), so an omitted flag still fails closed.
+  if (options.judgePlan !== undefined) options.judgePlan = requireValue(options.judgePlan, "--judge-plan", parseError);
   // Every configured path flag must be pairwise distinct: inputs must never be
   // clobbered by an output, and --out must never be silently deduped against
   // --ledger-out (which would yield no act list with no warning).
@@ -362,7 +379,7 @@ export function validateCliArgs(options) {
       }
     }
   }
-  const pathFlags = ["findingsFile", "judgeVerdict", "out", "ledgerOut", "specFile", "specAuthorityVerdict", "priorApprovals", "approvalsOut", "carryForwardProof", "changedPaths", "coverageMap"].filter(
+  const pathFlags = ["findingsFile", "judgeVerdict", "judgePlan", "out", "ledgerOut", "specFile", "specAuthorityVerdict", "priorApprovals", "approvalsOut", "carryForwardProof", "changedPaths", "coverageMap"].filter(
     (k) => options[k] !== undefined,
   );
   for (let i = 0; i < pathFlags.length; i += 1) {
@@ -744,11 +761,40 @@ async function resolveGateSettings(options, resolvedRoot) {
   return { blockingSeverities: resolveGateConfig(config, gateKey).blockCleanOnFindingSeverities, trackerProvider: resolveTrackerProvider(config) };
 }
 
+/**
+ * Pull transport binding (ADR 0106): a verdict counts only for the emitted judge
+ * invocation that --judge-plan records, after a matching judge pull receipt, with
+ * both verdict artifacts written after that pull, over the ledger the work order
+ * pinned. Returns the work order's pinned authority for the spec check.
+ */
+async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
+  if (!options.judgePlan) throw new Error("--judge-plan is required: a judge verdict counts only for a judge dispatched through emit-judge-work-order.mjs (ADR 0106)");
+  const resolve = (p) => path.resolve(resolvedRoot, p);
+  const plan = await readJsonArtifact(resolve(options.judgePlan), "--judge-plan", parseError);
+  const order = plan?.workOrder;
+  if (order?.role !== "judge" || order.target?.repo !== options.repo || order.target?.pr !== Number(options.pr)
+    || order.roundIdentity?.gate !== options.gate || order.headSha !== String(options.headSha).trim().toLowerCase()) {
+    throw new Error(`--judge-plan ${options.judgePlan} is not a judge invocation for ${options.repo}#${options.pr} ${options.gate} at ${options.headSha}; re-emit with emit-judge-work-order.mjs and re-run the judge`);
+  }
+  for (const resultPath of [options.judgeVerdict, options.specAuthorityVerdict].filter(Boolean)) {
+    const check = await verifyPulledResult({
+      receiptTmpRoot, role: "judge", workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity, resultPath: resolve(resultPath),
+    });
+    if (!check.ok) throw new Error(`judge delivery evidence failed (${check.reason}) for ${resultPath}: a verdict counts only after a matching pull of ${plan.workOrderRef} (execution ${plan.executionIdentity}) under ${receiptTmpRoot}; re-dispatch the judge with its compact dispatchPrompt`);
+  }
+  const ledger = await readJsonArtifact(resolve(options.findingsFile), "--findings-file", parseError);
+  if (workOrderDigest(ledger) !== order.authority?.findingsDigest) {
+    throw new Error(`--findings-file ${options.findingsFile} is not the ledger the judge work order pinned; re-emit the judge work order for this ledger and re-run the judge`);
+  }
+  return order.authority;
+}
+
 export async function judgePassCli(
   options,
-  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue } = {},
+  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot } = {},
 ) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
+  const pinned = await verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot ?? resolveGateArtifactTmpRoot(resolvedRoot));
   const { findings, overallVerdict } = await resolvePayload(options, resolvedRoot);
   const judgeVerdict = await readJsonArtifact(
     path.resolve(resolvedRoot, options.judgeVerdict),
@@ -761,6 +807,9 @@ export async function judgePassCli(
   // outcome fails closed here so the loop stops at the human-spec-decision state
   // and never writes an act list from an undecidable spec.
   const specAuthority = await enforceSpecAuthority(options, findings, resolvedRoot);
+  if (specAuthority && (specAuthority.specDigest !== pinned.specDigest || specAuthority.contentDigest !== pinned.contentDigest)) {
+    throw new Error(`--spec-file/--content-digest (${specAuthority.specDigest}, ${specAuthority.contentDigest}) differ from the judge work order's pinned authority (${pinned.specDigest}, ${pinned.contentDigest}); re-emit the judge work order and re-run the judge`);
+  }
   if (specAuthority && specAuthority.humanDecisionRequired) {
     return {
       ok: false,

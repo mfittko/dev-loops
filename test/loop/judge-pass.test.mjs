@@ -6,14 +6,33 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import {
+  judgePassCli as judgePassCliRaw,
   parseJudgePassCliArgs,
   runJudgePass,
   validateCliArgs,
 } from "../../scripts/loop/judge-pass.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
+import { deliverJudge, seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 
-const HEAD = "0123456789abcdef";
+const HEAD = "0123456789abcdef".padEnd(40, "0");
+
+// Every CLI fixture is a freshly dispatched judge (ADR 0106): emit its work order
+// over the fixture's own ledger and spec, pull it, then write the verdicts after
+// the pull, as the judge does.
+async function judgePassCli(options, deps = {}) {
+  const root = options.repoRoot ? path.resolve(deps.repoRoot ?? process.cwd(), options.repoRoot) : deps.repoRoot ?? process.cwd();
+  const sources = await seedJudgeSources(root, {
+    repo: options.repo, pr: Number(options.pr), gate: options.gate, headSha: options.headSha,
+    findingsFile: options.findingsFile, specFile: options.specFile, contentDigest: options.contentDigest,
+  });
+  const { plan, receiptTmpRoot } = await deliverJudge(root, sources);
+  for (const verdictPath of [options.judgeVerdict, options.specAuthorityVerdict].filter(Boolean)) {
+    const bytes = await readFile(path.resolve(root, verdictPath)).catch(() => null);
+    if (bytes !== null) await writeFile(path.resolve(root, verdictPath), bytes);
+  }
+  return judgePassCliRaw({ judgePlan: plan.planPath, ...options }, { receiptTmpRoot, ...deps });
+}
 const HEAD_8 = HEAD.slice(0, 8);
 
 function ledger(...findings) {
@@ -273,7 +292,6 @@ test("judgePassCli resolves a relative findings-file against repo-root (#1658)",
     path.join(tmpDir, "judge-verdict.json"),
     JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }] })),
   );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   // Run from a cwd that is NOT tmpDir (<repo-root>); findings/judge/out are all
   // relative and must resolve against tmpDir, not the process cwd.
   const payload = await judgePassCli(
@@ -322,7 +340,6 @@ test("judgePassCli --out is deduped to one remediation per acted cluster; --ledg
       }),
     ),
   );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   // Index 3 defers with a followUpDraft, which drives applyDeferralComment; stub
   // the gh deps (as the sibling tests do) so it never hits the real GitHub
   // API.
@@ -381,7 +398,6 @@ test("judgePassCli accepts a clean verdict whose acts are all non-blocking, prod
       { index: 1, disposition: "act", rationale: "fix while touching this code" },
     ] })),
   );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli(
     {
       repo: "mfittko/dev-loops",
@@ -417,7 +433,6 @@ test("judgePassCli fails closed when a clean verdict carries an act on a blockin
     path.join(tmpDir, "judge-verdict.json"),
     JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "must fix now" }] })),
   );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   await assert.rejects(
     judgePassCli(
       {
@@ -443,7 +458,6 @@ test("judgePassCli fails closed when a clean verdict carries an act on a blockin
 // guard-level unit test covers the widened set in isolation, this covers the
 // resolveBlockingSeverities config->gateKey->guard wiring the CLI actually runs.
 test("judgePassCli reads a configured widened block set and fails a clean+medium-act round closed, per gate key (#2246)", async () => {
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   // gate -> the .devloops config section resolveBlockingSeverities must select.
   // The informational `review` gate has no config section of its own and reuses
   // pre_approval_gate's blocking severities (matching consolidate-fanin.mjs).
@@ -485,7 +499,6 @@ test("judgePassCli reads a configured widened block set and fails a clean+medium
 // than silently degrading to the ["high"] default — a broken config must not
 // let a would-be-blocking act slip through as clean.
 test("judgePassCli fails closed when the gate config cannot be loaded (#2246)", async () => {
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-bad-config-"));
   // A schema-invalid blockCleanOnFindingSeverities (unknown severity) makes
   // loadDevLoopConfig return a non-empty errors[]; resolveBlockingSeverities
@@ -550,7 +563,6 @@ test("judgePassCli: rejecting a clean+act round posts no deferral comment and wr
       { index: 1, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
     ] }),
   );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const { deps, runCalls, commentCalls } = stubDeferralDeps();
   const approvalsPath = path.join(tmpDir, "approvals.json");
   await assert.rejects(
@@ -607,7 +619,6 @@ async function runDeferRound({ findings, dispositions, deps, config, pr = "1658"
   if (config) await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify(config));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions })));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli(
     { repo: "mfittko/dev-loops", pr, gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
     { repoRoot: tmpDir, ...deps },
@@ -836,7 +847,6 @@ test("judgePassCli passes when the whole-spec authority verdict is valid", async
       ],
     },
   });
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli(...specAuthorityArgs(tmpDir, contentDigest));
   assert.equal(payload.ok, true);
   assert.equal(payload.specAuthority.specDigest, specDigest);
@@ -874,7 +884,6 @@ test("judgePassCli fails closed when a finding needs a human spec decision", asy
       ],
     }),
   );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli(
     {
       repo: "mfittko/dev-loops",
@@ -922,7 +931,6 @@ test("judgePassCli fails closed on a supportive-only (partial) criterion citatio
       ],
     }),
   );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   await assert.rejects(
     judgePassCli(
       {
@@ -980,7 +988,6 @@ test("judgePassCli drops a finding_conflicts finding from the act list even if r
       { index: 1, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "valid and compliant", authorizedRemediation: "fix it" },
     ] }),
   );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli(...specAuthorityArgs(tmpDir, contentDigest));
   assert.equal(payload.ok, true);
   assert.equal(payload.actCount, 1, "the finding_conflicts finding is removed; only the valid_compliant one acts");
@@ -1005,7 +1012,6 @@ test("judgePassCli wires resolveCriterionInvalidation: a spec change stales all 
   // Prior approvals under a DIFFERENT (superseded) specDigest -> all stale.
   const priorDigest = computeSpecDigest({ ...SPEC_FIXTURE, acceptanceCriteria: [...SPEC_FIXTURE.acceptanceCriteria, "old extra"] });
   await writeFile(path.join(tmpDir, "prior.json"), JSON.stringify({ specDigest: priorDigest, headSha: "f".repeat(40), contentDigest, approvedCriteria: criterionIds }));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli(
     {
       repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
@@ -1040,7 +1046,6 @@ test("judgePassCli approves the whole criterion set only on a clean round (no ac
       { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
     ] }),
   );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli(
     {
       repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
@@ -1068,7 +1073,6 @@ test("judgePassCli rejects a finding_conflicts finding even when its relevance d
       { index: 0, outcome: "finding_conflicts", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, conflictingCriteria: ["ng:0"], rationale: "conflicts with a non-goal" },
     ] }),
   );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   // Stub deferral deps: a finding_conflicts finding must NOT reach the deferral comment.
   const { deps, runCalls, commentCalls } = stubDeferralDeps();
   const [opts] = specAuthorityArgs(tmpDir, contentDigest);
@@ -1093,7 +1097,6 @@ test("judgePassCli flags a remediation_conflicts finding as remediationRejected 
       { index: 0, outcome: "remediation_conflicts", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, conflictingCriteria: ["ng:0"], rationale: "proposed remedy flattens voice; route to a compliant alternative" },
     ] }),
   );
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli(...specAuthorityArgs(tmpDir, contentDigest));
   assert.equal(payload.actCount, 1, "the finding stays actionable");
   assert.equal(payload.act[0].remediationRejected, true);
@@ -1109,7 +1112,6 @@ test("judgePassCli fails closed on a malformed --prior-approvals record", async 
     { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
   ] }));
   await writeFile(path.join(tmpDir, "prior.json"), JSON.stringify({ specDigest, approvedCriteria: "not-an-array" }));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   await assert.rejects(
     judgePassCli({
       repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
@@ -1148,7 +1150,6 @@ test("judgePassCli fails closed when the verdict's specDigest mismatches the com
   await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest: wrong, headSha: HEAD, contentDigest, decisions: [
     { index: 0, outcome: "valid_compliant", specDigest: wrong, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
   ] }));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   await assert.rejects(judgePassCli(...specAuthorityArgs(tmpDir, contentDigest)), /does not match the current spec digest/);
 });
 
@@ -1164,7 +1165,6 @@ test("judgePassCli --carry-forward-proof carries an unaffected criterion at the 
   // Prior approvals at the SAME specDigest; proof carries ac:0, others stale.
   await writeFile(path.join(tmpDir, "prior.json"), JSON.stringify({ specDigest, headSha: "f".repeat(40), contentDigest, approvedCriteria: criterionIds }));
   await writeFile(path.join(tmpDir, "proof.json"), JSON.stringify({ "ac:0": { specTextUnchanged: true, coveredSurfaceUnchanged: true } }));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli({
     repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
     findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
@@ -1245,7 +1245,6 @@ test("judgePassCli AC7: changed-paths + coverage-map narrows affectedCriteria to
     affected: ["src/dedup.mjs"],
     coverage: { "ac:0": ["src/dedup.mjs"], "ac:1": ["src/demo.mjs"], "dod:0": ["package.json"], "ng:0": ["src/voice.mjs"] },
   });
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli({
     repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
     findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
@@ -1273,7 +1272,6 @@ test("judgePassCli AC7: narrowed affectedCriteria + carry-forward-proof carries 
     "dod:0": { specTextUnchanged: true, coveredSurfaceUnchanged: true },
     "ng:0": { specTextUnchanged: true, coveredSurfaceUnchanged: true },
   }));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli({
     repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
     findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
@@ -1299,7 +1297,6 @@ test("judgePassCli AC7: an unmatched changed path is uncertain -> fails closed t
     "dod:0": { specTextUnchanged: true, coveredSurfaceUnchanged: true },
     "ng:0": { specTextUnchanged: true, coveredSurfaceUnchanged: true },
   }));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli({
     repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
     findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
@@ -1321,7 +1318,6 @@ test("judgePassCli AC7: a malformed --changed-paths file fails closed", async ()
     coverage: { "ac:0": ["src/dedup.mjs"] },
   });
   await writeFile(path.join(tmpDir, "changed.json"), "not json");
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const { contentDigest } = await specDigests();
   await assert.rejects(
     judgePassCli({
@@ -1341,7 +1337,6 @@ test("judgePassCli AC7: a malformed --coverage-map file fails closed", async () 
     coverage: { "ac:0": ["src/dedup.mjs"] },
   });
   await writeFile(path.join(tmpDir, "coverage.json"), "{ not valid json");
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const { contentDigest } = await specDigests();
   await assert.rejects(
     judgePassCli({
@@ -1364,7 +1359,6 @@ test("judgePassCli AC6: approvals record persists humanDecision/authorizedRemedi
   });
   // Round is clean (relevance-rejected the only finding) so approvedCriteria
   // is the full set, exercising the "clean round" persistence path.
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli({
     repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
     findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
@@ -1393,7 +1387,6 @@ test("judgePassCli AC6: humanDecision surfaces required+reason on a spec_cannot_
       { index: 0, outcome: "spec_cannot_decide", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "spec is internally contradictory" },
     ],
   }));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   const payload = await judgePassCli({
     repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
     findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
@@ -1420,7 +1413,6 @@ test("judgePassCli AC1: --ledger-out carries the specAuthority stamp when engage
       { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
     ],
   }));
-  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   await judgePassCli({
     repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
     findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
@@ -1451,4 +1443,52 @@ test("judgePassCli AC1: --ledger-out carries the specAuthority stamp when engage
   const enrichedNoop = JSON.parse(await readFile(path.join(tmpDir2, "enriched.json"), "utf8"));
   assert.ok(Array.isArray(actNoop), "--out stays a bare array when spec-authority is not engaged");
   assert.equal("specAuthority" in enrichedNoop, false);
+});
+
+// Pull transport (ADR 0106, issue 2419 J5): the act list requires the emitted judge
+// invocation, a matching judge pull receipt, and verdicts written after that pull.
+async function deliveryCase({ pull = true } = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "judge-pass-delivery-"));
+  await writeFile(path.join(root, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  const sources = await seedJudgeSources(root, { repo: "mfittko/dev-loops", pr: 1, gate: "draft_gate", headSha: HEAD, findingsFile: "ledger.json" });
+  const { emitJudgeWorkOrder } = await import("../../scripts/loop/emit-judge-work-order.mjs");
+  const { plan, receiptTmpRoot } = pull ? await deliverJudge(root, sources) : { plan: await emitJudgeWorkOrder(sources), receiptTmpRoot: path.join(root, "tmp") };
+  await writeFile(path.join(root, "judge-verdict.json"), JSON.stringify(verdict()));
+  const options = { repo: "mfittko/dev-loops", pr: "1", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", judgePlan: plan.planPath, out: "./act.json" };
+  const runPass = (over = {}) => judgePassCliRaw({ ...options, ...over }, { repoRoot: root, receiptTmpRoot });
+  return { root, plan, runPass };
+}
+
+test("judge-pass J5: a matching receipt plus a post-pull current verdict yields the act list", async () => {
+  const { root, runPass } = await deliveryCase();
+  assert.equal((await runPass()).actCount, 1);
+  assert.equal(JSON.parse(await readFile(path.join(root, "act.json"), "utf8")).length, 1);
+});
+
+test("judge-pass J5: prose-only, receipt-missing and foreign-invocation dispatches produce no act list", async () => {
+  const unpulled = await deliveryCase({ pull: false });
+  await assert.rejects(unpulled.runPass(), /receipt_missing/);
+  await assert.rejects(unpulled.runPass({ judgePlan: undefined }), /--judge-plan is required/);
+  const { root, plan, runPass } = await deliveryCase();
+  for (const [key, value, reason] of [["executionIdentity", `${plan.executionIdentity}x`, /execution_mismatch/], ["workOrderDigest", "f".repeat(64), /digest_mismatch/], ["workOrderRef", plan.workOrderRef.replace(/:j/, ":jx"), /receipt_missing/]]) {
+    await writeFile(path.join(root, "forged-plan.json"), JSON.stringify({ ...plan, [key]: value }));
+    await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), reason);
+  }
+  await writeFile(path.join(root, "review-plan.json"), JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, role: "review" } }));
+  await assert.rejects(runPass({ judgePlan: "./review-plan.json" }), /is not a judge invocation/);
+  await assert.rejects(runPass({ gate: "pre_approval_gate" }), /is not a judge invocation/);
+  assert.equal(existsSync(path.join(root, "act.json")), false);
+});
+
+test("judge-pass J5: a verdict written before the pull (replayed or stale) and a swapped ledger refuse", async () => {
+  const { root, plan, runPass } = await deliveryCase();
+  const { pullWorkOrder } = await import("../../scripts/github/_work-order-protocol.mjs");
+  await pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [path.join(root, "tmp")], receiptTmpRoot: path.join(root, "tmp") });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const { utimes } = await import("node:fs/promises");
+  await utimes(path.join(root, "judge-verdict.json"), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  await assert.rejects(runPass(), /result_predates_pull/);
+  await writeFile(path.join(root, "judge-verdict.json"), JSON.stringify(verdict()));
+  await writeFile(path.join(root, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "a different defect" })] }));
+  await assert.rejects(runPass(), /not the ledger the judge work order pinned/);
 });

@@ -221,10 +221,10 @@ dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_s
 **Judge between fan-in and the fixer (Phase 3.5 wired, #1658):** after fan-in, before the
 durable findings-log write, the gate coordinator (`GATE-EXEC-GATE-COORDINATOR`) follows
 [Phase 3.5](../docs/gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525)
-and dispatches the dedicated `judge` agent (`agents/judge.agent.md`) — seeded with the
-consolidated ledger, the linked issue's AC/DoD/non-goals, the PR's declared scope, the
-prior-round judge ledgers, and the spec-context output (the structured spec at `<spec-path>`,
-`specDigest`, `contentDigest`) — and awaits its two verdict artifacts: the relevance verdict at
+and dispatches the dedicated `judge` agent (`agents/judge.agent.md`) with only the compact
+`dispatchPrompt` that `scripts/loop/emit-judge-work-order.mjs` prints (ADR 0106); the judge pulls
+its work order, which pins the consolidated ledger, the spec-context output, the round's evidence
+(PR declared scope and diff) and the prior-round judge verdicts. It then awaits its two verdict artifacts: the relevance verdict at
 `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json` and the spec-authority
 verdict at the sibling `spec-authority-verdict.json` (its only writes). The gate coordinator
 writes the durable ledger with `write-gate-findings-log --judge-verdict <verdict-path>
@@ -235,13 +235,14 @@ durable-approval flags across re-entry:
 
 ```sh
 dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
-  --findings-file <ledger-path> --judge-verdict <verdict-path> --out <act-list-path> --ledger-out <enriched-ledger-path> \
+  --findings-file <ledger-path> --judge-verdict <verdict-path> --judge-plan <judge-plan-path> \
+  --out <act-list-path> --ledger-out <enriched-ledger-path> \
   --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
   [--prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path>] \
   [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>]
 ```
 
-`--prior-approvals`/`--approvals-out` thread across re-entry rounds (the first round on a fresh
+`--judge-plan` is the emitter's printed `planPath`. `--prior-approvals`/`--approvals-out` thread across re-entry rounds (the first round on a fresh
 approval chain has no prior-approvals record to pass yet); `--changed-paths`/`--coverage-map` are
 supplied together only when a coverage map exists for the linked issue and this round is a
 fixer-push re-entry (`resolveAffectedCriteria`, ADR 0061 AC7) — otherwise judge-pass keeps its

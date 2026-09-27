@@ -82,7 +82,19 @@ export function normalizeAgentType(agentType) {
 }
 
 /**
+ * The read-only judge holds Bash only to pull its work order (ADR 0106). The one allowed command
+ * is the dispatch envelope's pull line with shell-inert values (the same charset
+ * `buildDispatchPointer` enforces), so chaining, redirection and substitution cannot match.
+ */
+export const JUDGE_AGENT_TYPE = "judge";
+const PULL_VALUE = "[A-Za-z0-9][\\w.:/#-]*";
+const SANCTIONED_WORK_ORDER_PULL_RE = new RegExp(`^dev-loops-run scripts/github/pull-work-order\\.mjs --ref ${PULL_VALUE} --digest ${PULL_VALUE} --execution ${PULL_VALUE}$`);
+
+/**
  * Decide whether a PreToolUse Bash command must be blocked by a dev-loop gate boundary.
+ *
+ * The `judge` agent (plugin-namespaced or bare) may run ONLY the sanctioned work-order pull;
+ * every other command, including test/build entrypoints, is denied fail-closed.
  *
  * Gated commands on the target repo (each rationale sits inline at its check):
  *   - `gh pr create` — blocked outright; PR creation must flow through the canonical wrapper
@@ -129,6 +141,16 @@ export function decideBashGate({
   humanMergeOnly = false,
   enforceCoordinator = false,
 }) {
+  if (normalizeAgentType(agentType) === JUDGE_AGENT_TYPE) {
+    return typeof command === "string" && SANCTIONED_WORK_ORDER_PULL_RE.test(command.trim()) ? ALLOW : {
+      decision: "deny",
+      reason:
+        "Judge read-only boundary (agents/judge.agent.md, ADR 0106): the judge may run only its " +
+        "dispatched `dev-loops-run scripts/github/pull-work-order.mjs --ref <ref> --digest <digest> " +
+        "--execution <execution>` line, alone, with no chaining, redirection or substitution. Read " +
+        "files with Read/Grep/Glob; never run shell, test or build commands.",
+    };
+  }
   if (typeof command !== "string") {
     return ALLOW;
   }

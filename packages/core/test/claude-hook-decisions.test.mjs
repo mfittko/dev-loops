@@ -1358,3 +1358,13 @@ test("decideWorktreeCheckoutGuard allows an outside-repo / gitignored scratch wr
 test("WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV reuses the default-branch-guard override (one operator flag)", () => {
   assert.equal(WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, "DEVLOOPS_ALLOW_MAIN");
 });
+
+test("decideBashGate lets the judge run only the sanctioned work-order pull, fail-closed (ADR 0106)", () => {
+  const pull = "dev-loops-run scripts/github/pull-work-order.mjs --ref judge:o/r#7:draft_gate:abc:j1-aa --digest ab12 --execution j1-aa";
+  assert.equal(decideBashGate({ command: pull, agentType: "judge" }).decision, "allow");
+  assert.equal(decideBashGate({ command: ` ${pull}\n`, agentType: "dev-loops:judge" }).decision, "allow");
+  for (const command of [undefined, "ls", "bun test", "node scripts/github/pull-work-order.mjs --ref a --digest b --execution c", `${pull} | tee x`, `${pull} \`id\``, `${pull} --tmp-root /x`]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", String(command));
+  }
+  assert.equal(decideBashGate({ command: "bun test", agentType: "review" }).decision, "allow");
+});
