@@ -371,7 +371,7 @@ diagnostic rather than failing opaque. The consolidated findings-log **ledger** 
 it is anchored at the MAIN worktree automatically (#2315 — so the merge, running from the main
 checkout, can read it and it survives linked-worktree pruning), so the `write-gate-findings-log.mjs`
 ledger writer MUST NOT be `--tmp-root`-pinned to the linked worktree (pinning it loses the ledger
-on prune and refuses the merge for missing provenance). Angle identity MUST appear
+on prune and refuses the merge for missing provenance). If the context bundle was relocated with `--tmp-root`, pass that same root as `--context-tmp-root` on the ledger write: the ledger writer's `--tmp-root` controls only the ledger destination, not where it reads recorded dispatch membership. Angle identity MUST appear
 ONLY in the suffix (the angle-specific prompt, e.g.
 `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`'s persona prompt) and the reviewer's `--scope` flag
 — never inside the invariant block, or the byte-identity requirement is violated by
