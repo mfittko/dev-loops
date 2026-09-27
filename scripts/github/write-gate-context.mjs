@@ -3364,9 +3364,10 @@ export async function main(
     // Injectable so the tripwire test can supply the raw coordination facts
     // directly instead of stubbing the whole gh coordination surface. The
     // default reads the raw coordination context (loadPrGateCoordinationContext):
-    // the ordering tripwire needs only the PR's draft state (prData.isDraft) and
-    // whether a clean draft_gate verdict exists (gateEvidence.draftGateSatisfied)
-    // — never the evaluated forbiddenActions, whose run-context-specific guards
+    // the ordering tripwire needs only the PR's draft state (prData.isDraft),
+    // whether a clean draft_gate verdict exists (gateEvidence.draftGateSatisfied,
+    // read by pre_approval_gate), and the unfolded draft_gate verdict fact
+    // (gateEvidence.draftGate verdict/headSha, read by draft_gate) — never the evaluated forbiddenActions, whose run-context-specific guards
     // (Copilot-cycle / internal-only / lightweight) diverge from the verdict
     // post. Consuming only the raw ordering facts is what keeps this check
     // impossible-to-false-block.
