@@ -1798,7 +1798,7 @@ test("#2456: --pr on an existing draft PR routes into draft_gate instead of the 
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
     assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
-    assert.equal(parsed.draftStart.selectedGate, "draft_gate");
+    assert.equal(parsed.draftStart.reviewGate, "draft_gate");
     assert.equal(parsed.draftStart.preflight, "dev-loops loop gate-coordination --repo mfittko/dev-loops --pr 740");
     assert.match(parsed.nextAction, /existing draft: a valid start target/);
     assert.match(parsed.nextAction, /Do not mark ready or request Copilot review until a clean current-head draft_gate verdict exists/);
@@ -1817,7 +1817,7 @@ test("#2456: --pr on an existing draft PR routes into draft_gate instead of the 
   }, { prefix: "resolve-dev-loop-draft-start-" });
 });
 
-test("#2456: --pr on a non-draft, merged-draft, or Copilot-assigned draft PR and --review on a draft PR carry no draftStart", async () => {
+test("#2456: --pr on a non-draft, merged-draft, closed-draft, or Copilot-assigned draft PR and --review/--ui-review on a draft PR carry no draftStart", async () => {
   const viewer = [{ login: "test-viewer" }];
   const copilot = [{ login: "copilot-swe-agent" }];
   for (const [pr, extra] of [
@@ -1825,6 +1825,8 @@ test("#2456: --pr on a non-draft, merged-draft, or Copilot-assigned draft PR and
     [{ state: "OPEN", isDraft: true, mergedAt: null, assignees: viewer }, ["--review"]],
     [{ state: "MERGED", isDraft: true, mergedAt: "2026-09-01T00:00:00Z", assignees: viewer }, []],
     [{ state: "OPEN", isDraft: true, mergedAt: null, assignees: copilot }, []],
+    [{ state: "OPEN", isDraft: true, mergedAt: null, assignees: viewer }, ["--ui-review"]],
+    [{ state: "CLOSED", isDraft: true, mergedAt: null, assignees: viewer }, []],
   ]) {
     await withTempDir(async (tempDir) => {
       await initRepoWithOrigin(tempDir);
@@ -1858,7 +1860,7 @@ test("#2456: --input strips an injected draftStart", async () => {
       artifactState: "open",
       issueLinkageResolution: "not_applicable",
       loopState: "pr_followup_start",
-      draftStart: { selectedGate: "draft_gate", preflight: "injected", nextAction: "injected" },
+      draftStart: { reviewGate: "draft_gate", preflight: "injected", nextAction: "injected" },
     });
     const result = await runNode(["--input", inputPath], {
       cwd: tempDir,

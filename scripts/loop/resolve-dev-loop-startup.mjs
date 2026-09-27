@@ -695,7 +695,7 @@ function normalizeConfigInputSource(value) {
 export function buildDraftStart({ repo, pr }) {
   const preflight = `dev-loops loop gate-coordination --repo ${repo} --pr ${pr}`;
   return {
-    selectedGate: "draft_gate",
+    reviewGate: "draft_gate",
     preflight,
     nextAction: `PR #${pr} is an existing draft: a valid start target. Run the draft-start pre-flight \`${preflight}\` and follow its nextAction (\`run_draft_gate\` enters draft_gate while the PR stays draft; \`report_blocked\` reports the spec precondition and stops). The Copilot handoff's \`pr_draft\` stop belongs to the Copilot-only follow-up path and is not an abort here. Do not mark ready or request Copilot review until a clean current-head draft_gate verdict exists.`,
   };
