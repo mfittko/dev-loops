@@ -535,6 +535,38 @@ export function decideCoordinatorWriteGuard({ filePath, isRepoMutation, enforce 
   };
 }
 
+const JUDGE_VERDICT_FILES = new Set(["judge-verdict.json", "spec-authority-verdict.json"]);
+
+/**
+ * Decide whether a PreToolUse Write/Edit/NotebookEdit by the read-only `judge` agent must be
+ * denied (ADR 0106, agents/judge.agent.md tool boundary). The judge may write only its two
+ * verdict files under a `tmp/gate-judge/` directory. Any other target could plant code that
+ * the sanctioned `dev-loops-run` pull line then executes.
+ *
+ * `targetPath` is the hook's realpath-normalized absolute target (symlinks, `..`, relative
+ * paths and trailing slashes already resolved). A missing, relative or unnormalized path
+ * denies fail-closed. Every non-judge agent is allowed here (the other boundaries apply).
+ *
+ * @param {Object} params
+ * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload.
+ * @param {string|null} [params.targetPath] - Realpath-normalized absolute target path.
+ * @returns {HookDecision}
+ */
+export function decideJudgeWriteGuard({ agentType = null, targetPath = null }) {
+  if (normalizeAgentType(agentType) !== JUDGE_AGENT_TYPE) return ALLOW;
+  const segments = typeof targetPath === "string" && targetPath.startsWith("/") ? targetPath.split("/") : [];
+  const gateJudge = segments.findIndex((segment, i) => segment === "gate-judge" && segments[i - 1] === "tmp");
+  const allowed = gateJudge > 0 && segments.length > gateJudge + 2 && !segments.includes("..") && !segments.includes(".")
+    && JUDGE_VERDICT_FILES.has(segments.at(-1));
+  return allowed ? ALLOW : {
+    decision: "deny",
+    reason:
+      `Judge write boundary (agents/judge.agent.md, ADR 0106): refusing to write ${JSON.stringify(targetPath)}. ` +
+      "The judge writes only its judge-verdict.json and spec-authority-verdict.json at the outputRefs its " +
+      "pulled work order names under tmp/gate-judge/.",
+  };
+}
+
 /**
  * Env var that authorizes a deliberate main-checkout mutation while a worktree
  * cycle is active. Reuses the existing default-branch-guard override

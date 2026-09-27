@@ -5,3 +5,5 @@
 - `pull-work-order.mjs` registers the `judge` role and refuses a superseded, retired or source-changed judge reference as `stale_dispatch` (#2419)
 - `judge-pass.mjs` requires `--judge-plan` and fails closed without a matching judge pull receipt, with a verdict written before the pull, or with a ledger or spec the work order did not pin (#2419)
 - The judge agent gains Bash for the pull only; the Claude Bash gate denies every other judge command (#2419)
+- Judge verdict outputRefs gain a `<roundId>/` segment; `judge-pass.mjs` requires them and refuses a retired round (#2419)
+- The Claude write guard limits judge writes to its two verdict files under `tmp/gate-judge/` (#2419)

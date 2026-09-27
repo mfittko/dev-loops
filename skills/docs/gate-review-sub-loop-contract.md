@@ -1043,8 +1043,8 @@ source-changed reference as `stale_dispatch` and a missing local work order as
 `local_materialization_integrity_failure`. Pass the printed `planPath` to `judge-pass` as
 `--judge-plan`.
 
-**Output:** the judge writes two verdict artifacts to deterministic paths under
-`tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/` — its only writes: the relevance verdict
+**Output:** the judge writes two verdict artifacts to the work order's `outputRefs` under
+`tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/<roundId>/` — its only writes: the relevance verdict
 (`judge-verdict.json`) and the spec-authority verdict (`spec-authority-verdict.json`, see
 `agents/judge.agent.md` "Immutable spec authority"). The relevance verdict's shape is validated
 by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
@@ -1165,8 +1165,9 @@ the fixer's **act list** for Phase 4: given `--findings-file` (the consolidated 
 `--judge-verdict` (the judge's relevance-verdict artifact path), `judge-pass` validates the
 verdict shape, fails closed unless the verdict's `headSha` matches the current head (a stale
 verdict must never feed the fixer), fails closed unless `--judge-plan` names this round's
-emitted judge invocation with a matching judge pull receipt, both verdict artifacts written after
-that pull, and the ledger and spec the work order pinned, applies the dispositions via `applyJudgeDispositions`, and
+unretired emitted judge invocation with a matching judge pull receipt, both verdict paths equal
+the plan's `outputRefs` and were written after that pull, and the ledger and spec the work order
+pinned, applies the dispositions via `applyJudgeDispositions`, and
 emits exactly the findings the judge marked `act` (`--out`) plus the enriched ledger
 (`--ledger-out`). Every invocation ALSO carries the spec-authority flags derived above —
 `--spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict

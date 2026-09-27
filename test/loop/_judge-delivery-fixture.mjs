@@ -3,7 +3,7 @@
 // through the shared reader so a pull receipt exists.
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { computeContentDigest, computeSpecDigest, specCriterionIds } from "@dev-loops/core/loop/spec-authority";
 import { pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
@@ -40,6 +40,17 @@ export async function seedJudgeSources(root, { repo = "o/r", pr = 7, gate = "pre
   await mkdir(path.dirname(contextPath), { recursive: true });
   await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: evidence.length, required: true }] }));
   return { repo, pr, gate, headSha, findingsFile, specFile, identityFile, cwd: root };
+}
+
+/**
+ * Write a verdict the way a judge does after its pull. The explicit mtime keeps the
+ * post-pull ordering deterministic where file mtimes trail Date.now() (Linux).
+ */
+export async function writeVerdictAfterPull(filePath, bytes) {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, bytes);
+  const later = new Date(Date.now() + 5_000);
+  await utimes(filePath, later, later);
 }
 
 /** Emit and pull; returns the emitted plan (with planPath) and the receipt tmp root. */

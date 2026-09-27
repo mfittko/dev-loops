@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -13,13 +13,15 @@ import {
 } from "../../scripts/loop/judge-pass.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
-import { deliverJudge, seedJudgeSources } from "./_judge-delivery-fixture.mjs";
+import { pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
+import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
+import { deliverJudge, seedJudgeSources, writeVerdictAfterPull } from "./_judge-delivery-fixture.mjs";
 
 const HEAD = "0123456789abcdef".padEnd(40, "0");
 
 // Every CLI fixture is a freshly dispatched judge (ADR 0106): emit its work order
 // over the fixture's own ledger and spec, pull it, then write the verdicts after
-// the pull, as the judge does.
+// the pull to the work order's outputRefs, as the judge does.
 async function judgePassCli(options, deps = {}) {
   const root = options.repoRoot ? path.resolve(deps.repoRoot ?? process.cwd(), options.repoRoot) : deps.repoRoot ?? process.cwd();
   const sources = await seedJudgeSources(root, {
@@ -27,11 +29,14 @@ async function judgePassCli(options, deps = {}) {
     findingsFile: options.findingsFile, specFile: options.specFile, contentDigest: options.contentDigest,
   });
   const { plan, receiptTmpRoot } = await deliverJudge(root, sources);
-  for (const verdictPath of [options.judgeVerdict, options.specAuthorityVerdict].filter(Boolean)) {
-    const bytes = await readFile(path.resolve(root, verdictPath)).catch(() => null);
-    if (bytes !== null) await writeFile(path.resolve(root, verdictPath), bytes);
+  const delivered = { judgePlan: plan.planPath, ...options };
+  for (const [key, ref] of [["judgeVerdict", plan.workOrder.outputRefs[0]], ["specAuthorityVerdict", plan.workOrder.outputRefs[1]]]) {
+    if (options[key] === undefined) continue;
+    const bytes = await readFile(path.resolve(root, options[key])).catch(() => null);
+    if (bytes !== null) await writeVerdictAfterPull(ref, bytes);
+    delivered[key] = ref;
   }
-  return judgePassCliRaw({ judgePlan: plan.planPath, ...options }, { receiptTmpRoot, ...deps });
+  return judgePassCliRaw(delivered, { receiptTmpRoot, ...deps });
 }
 const HEAD_8 = HEAD.slice(0, 8);
 
@@ -1446,17 +1451,18 @@ test("judgePassCli AC1: --ledger-out carries the specAuthority stamp when engage
 });
 
 // Pull transport (ADR 0106, issue 2419 J5): the act list requires the emitted judge
-// invocation, a matching judge pull receipt, and verdicts written after that pull.
+// invocation, a matching judge pull receipt, and verdicts written after that pull
+// to the work order's per-round outputRefs.
 async function deliveryCase({ pull = true } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "judge-pass-delivery-"));
   await writeFile(path.join(root, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
   const sources = await seedJudgeSources(root, { repo: "mfittko/dev-loops", pr: 1, gate: "draft_gate", headSha: HEAD, findingsFile: "ledger.json" });
-  const { emitJudgeWorkOrder } = await import("../../scripts/loop/emit-judge-work-order.mjs");
   const { plan, receiptTmpRoot } = pull ? await deliverJudge(root, sources) : { plan: await emitJudgeWorkOrder(sources), receiptTmpRoot: path.join(root, "tmp") };
-  await writeFile(path.join(root, "judge-verdict.json"), JSON.stringify(verdict()));
-  const options = { repo: "mfittko/dev-loops", pr: "1", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", judgePlan: plan.planPath, out: "./act.json" };
+  const verdictPath = plan.workOrder.outputRefs[0];
+  await writeVerdictAfterPull(verdictPath, JSON.stringify(verdict()));
+  const options = { repo: "mfittko/dev-loops", pr: "1", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: verdictPath, judgePlan: plan.planPath, out: "./act.json" };
   const runPass = (over = {}) => judgePassCliRaw({ ...options, ...over }, { repoRoot: root, receiptTmpRoot });
-  return { root, plan, runPass };
+  return { root, plan, sources, verdictPath, runPass };
 }
 
 test("judge-pass J5: a matching receipt plus a post-pull current verdict yields the act list", async () => {
@@ -1481,14 +1487,33 @@ test("judge-pass J5: prose-only, receipt-missing and foreign-invocation dispatch
 });
 
 test("judge-pass J5: a verdict written before the pull (replayed or stale) and a swapped ledger refuse", async () => {
-  const { root, plan, runPass } = await deliveryCase();
-  const { pullWorkOrder } = await import("../../scripts/github/_work-order-protocol.mjs");
+  const { root, plan, verdictPath, runPass } = await deliveryCase();
   await pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [path.join(root, "tmp")], receiptTmpRoot: path.join(root, "tmp") });
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  const { utimes } = await import("node:fs/promises");
-  await utimes(path.join(root, "judge-verdict.json"), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  await utimes(verdictPath, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
   await assert.rejects(runPass(), /result_predates_pull/);
-  await writeFile(path.join(root, "judge-verdict.json"), JSON.stringify(verdict()));
+  await writeVerdictAfterPull(verdictPath, JSON.stringify(verdict()));
   await writeFile(path.join(root, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "a different defect" })] }));
   await assert.rejects(runPass(), /not the ledger the judge work order pinned/);
+});
+
+test("judge-pass J5: a superseded round's late verdict never counts as the current round's", async () => {
+  // Round A's judge pulled; round B was emitted and pulled; A's judge then writes late.
+  const { root, plan: roundA, sources, runPass } = await deliveryCase();
+  const { plan: roundB } = await deliverJudge(root, sources);
+  assert.notDeepEqual(roundA.workOrder.outputRefs, roundB.workOrder.outputRefs);
+  await writeVerdictAfterPull(roundA.workOrder.outputRefs[0], JSON.stringify(verdict()));
+  await assert.rejects(runPass({ judgePlan: roundB.planPath }), /is not the judge work order's outputRef/);
+  await assert.rejects(runPass({ judgePlan: roundB.planPath, judgeVerdict: roundB.workOrder.outputRefs[0] }), /result_missing/);
+  await assert.rejects(runPass({ judgePlan: roundB.planPath, judgeVerdict: "./judge-verdict.json" }), /is not the judge work order's outputRef/);
+  await writeVerdictAfterPull(roundB.workOrder.outputRefs[0], JSON.stringify(verdict()));
+  assert.equal((await runPass({ judgePlan: roundB.planPath, judgeVerdict: roundB.workOrder.outputRefs[0] })).actCount, 1);
+});
+
+test("judge-pass J5: a round retired after emission refuses at acceptance", async () => {
+  const { root, runPass } = await deliveryCase();
+  const retired = path.join(root, "tmp", "retired-gate-rounds", HEAD, "r1");
+  await mkdir(retired, { recursive: true });
+  await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date().toISOString() }));
+  await assert.rejects(runPass(), /retired as r1/);
+  assert.equal(existsSync(path.join(root, "act.json")), false);
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -30,6 +30,7 @@ import { commentDeferredFindings, fingerprintFinding } from "../github/_gate-fin
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -52,18 +53,23 @@ Inputs:
                                or a bare findings array). Same unwrap semantics as
                                write-gate-findings-log --findings-file.
   --judge-verdict <path>       The judge agent's verdict artifact (JSON) at the
-                               deterministic tmp/gate-judge/.../judge-verdict.json
-                               path. Validated by validateJudgeVerdict and must be
+                               work order's per-round outputRef
+                               tmp/gate-judge/.../<gate>-<headSha>/<roundId>/judge-verdict.json.
+                               Validated by validateJudgeVerdict and must be
                                current-head (headSha == --head-sha) or the pass
                                FAILS CLOSED — a stale verdict must not feed the
                                fixer's act list.
   --judge-plan <path>          The judge-emit-plan.json that emit-judge-work-order.mjs
                                wrote for this dispatch (ADR 0106). The pass FAILS
                                CLOSED unless the plan names this repo/PR/gate/head,
+                               its round is not retired, --judge-verdict and
+                               --spec-authority-verdict are the plan's outputRefs,
                                a matching judge pull receipt exists under the main
                                checkout, both verdict artifacts were written after
-                               that pull, and --findings-file (and --spec-file) are
-                               the ledger and spec the work order pinned.
+                               that pull, and --findings-file is the ledger the work
+                               order pinned. The pinned spec and content digests are
+                               compared only when --spec-file is passed; without it
+                               the pass checks no spec pin.
   --head-sha <sha>             The round's current head. The verdict's headSha must
                                equal this (trim+lowercase compare) or the pass fails
                                closed.
@@ -775,6 +781,22 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   if (order?.role !== "judge" || order.target?.repo !== options.repo || order.target?.pr !== Number(options.pr)
     || order.roundIdentity?.gate !== options.gate || order.headSha !== String(options.headSha).trim().toLowerCase()) {
     throw new Error(`--judge-plan ${options.judgePlan} is not a judge invocation for ${options.repo}#${options.pr} ${options.gate} at ${options.headSha}; re-emit with emit-judge-work-order.mjs and re-run the judge`);
+  }
+  // Round validity on acceptance: a round retired after its emission refuses here too.
+  const emittedAtMs = Number(/^j(\d+)-/.exec(plan.executionIdentity ?? "")?.[1]);
+  if (!Number.isFinite(emittedAtMs)) throw new Error(`--judge-plan ${options.judgePlan} carries no judge execution identity; re-emit with emit-judge-work-order.mjs`);
+  // The plan sits at <tmpRoot>/gate-judge/<slug>/pr-<N>/<gate>-<headSha>/; the main checkout's tmp is checked too.
+  const planTmpRoot = path.resolve(path.dirname(resolve(options.judgePlan)), "../../../..");
+  let retired = null;
+  for (const tmpRoot of new Set([planTmpRoot, path.resolve(receiptTmpRoot)])) retired ??= await findRetirementAfter(tmpRoot, order.roundIdentity.gate, order.headSha, emittedAtMs);
+  if (retired) throw new Error(`judge execution ${plan.executionIdentity} belongs to a ${options.gate} round retired as ${retired}; re-emit the judge work order and re-run the judge`);
+  // A verdict counts only at this round's outputRefs, so a superseded round's late write never passes as this one's.
+  const canonical = (p) => realpath(p).catch(() => path.resolve(p));
+  const refs = Array.isArray(order.outputRefs) ? order.outputRefs : [];
+  for (const [flag, value, ref] of [["--judge-verdict", options.judgeVerdict, refs[0]], ["--spec-authority-verdict", options.specAuthorityVerdict, refs[1]]]) {
+    if (value !== undefined && (typeof ref !== "string" || await canonical(resolve(value)) !== await canonical(ref))) {
+      throw new Error(`${flag} ${value} is not the judge work order's outputRef ${ref}; pass the plan's outputRefs for execution ${plan.executionIdentity}`);
+    }
   }
   for (const resultPath of [options.judgeVerdict, options.specAuthorityVerdict].filter(Boolean)) {
     const check = await verifyPulledResult({

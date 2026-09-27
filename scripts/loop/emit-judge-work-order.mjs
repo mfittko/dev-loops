@@ -25,6 +25,7 @@ ledger (consolidate-fanin --ledger-out), the structured spec and identity stamp
 prior-round judge verdicts. It writes the immutable work order under
 <tmp-root>/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/ and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, planPath }.
+The work order's two verdict outputRefs sit under that directory's <roundId>/ segment.
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
 previous emission for this gate and head. It accepts no brief or summary input.
 Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error.`;
@@ -114,7 +115,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     },
     contracts,
     requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read)],
-    outputRefs: [path.join(dir, "judge-verdict.json"), path.join(dir, "spec-authority-verdict.json")],
+    // Per-round paths: a superseded round's late verdict never lands where this round's is read.
+    outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],
     executionRules: { widening: JUDGE_WIDENING_RULE, contract: "agents/judge.agent.md" },
   };
   const identityTriple = {

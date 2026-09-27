@@ -2,7 +2,12 @@
 /**
  * PreToolUse Write/Edit guard hook (#773).
  *
- * Two independent boundaries on a Write/Edit:
+ * Independent boundaries on a Write/Edit:
+ *
+ * 0. JUDGE write boundary (always on, ADR 0106): the read-only `judge` agent may
+ *    write only judge-verdict.json / spec-authority-verdict.json under a
+ *    tmp/gate-judge/ directory (realpath-resolved); every other target, and a
+ *    missing or unparseable path, is denied.
  *
  * 1. WRONG-CHECKOUT guard (always on): when the call context is operating
  *    inside a linked worktree (the active cycle worktree) but the target resolves
@@ -26,18 +31,30 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-import { decideWriteGuard, decideCoordinatorWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
+import { decideJudgeWriteGuard, decideWriteGuard, decideCoordinatorWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
 import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 
 const input = readHookInput();
-const filePath = input?.tool_input?.file_path;
+const filePath = input?.tool_input?.file_path ?? input?.tool_input?.notebook_path;
+const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+
+// --- Boundary 0: judge write boundary (ADR 0106) ------------------------------
+// The read-only judge writes only its two verdict files under tmp/gate-judge/. A
+// missing or unparseable path reaches the decider as null and denies fail-closed.
+const judgeDecision = decideJudgeWriteGuard({
+  agentType: typeof input?.agent_type === "string" ? input.agent_type : null,
+  targetPath: typeof filePath === "string" && filePath ? realpathNearestExisting(path.resolve(cwd, filePath)) : null,
+});
+if (judgeDecision.decision === "deny") {
+  emitDeny(judgeDecision.reason);
+}
+
 if (typeof filePath !== "string" || !filePath) {
   emitAllow();
 }
 
-const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 const abs = path.resolve(cwd, filePath);
 
 // --- Boundary 1: wrong-checkout guard (always on) ----------------------------

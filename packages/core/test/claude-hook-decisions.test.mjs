@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { decideBashGate, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType } from "../src/claude/hook-decisions.mjs";
+import { decideBashGate, decideJudgeWriteGuard, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType } from "../src/claude/hook-decisions.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -1367,4 +1367,19 @@ test("decideBashGate lets the judge run only the sanctioned work-order pull, fai
     assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", String(command));
   }
   assert.equal(decideBashGate({ command: "bun test", agentType: "review" }).decision, "allow");
+});
+
+test("decideJudgeWriteGuard lets the judge write only its verdict files under tmp/gate-judge/, fail-closed (ADR 0106)", () => {
+  const dir = "/r/tmp/gate-judge/o-r/pr-7/draft_gate-abc/j1-aa";
+  for (const agentType of ["judge", "dev-loops:judge"]) {
+    assert.equal(decideJudgeWriteGuard({ agentType, targetPath: `${dir}/judge-verdict.json` }).decision, "allow");
+    assert.equal(decideJudgeWriteGuard({ agentType, targetPath: `${dir}/spec-authority-verdict.json` }).decision, "allow");
+  }
+  for (const targetPath of [null, "", "tmp/gate-judge/o-r/judge-verdict.json", "/r/scripts/github/pull-work-order.mjs", "/r/package.json",
+    `${dir}/package.json`, `${dir}/judge-emit-plan.json`, "/r/tmp/gate-judge/judge-verdict.json", `${dir}/../../../../../scripts/judge-verdict.json`,
+    "/r/gate-judge/o-r/pr-7/x/judge-verdict.json", "/r/tmp/gate-context/o-r/pr-7/x/judge-verdict.json"]) {
+    assert.equal(decideJudgeWriteGuard({ agentType: "judge", targetPath }).decision, "deny", String(targetPath));
+  }
+  assert.equal(decideJudgeWriteGuard({ agentType: "developer", targetPath: "/r/package.json" }).decision, "allow");
+  assert.equal(decideJudgeWriteGuard({ agentType: null, targetPath: null }).decision, "allow");
 });

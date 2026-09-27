@@ -201,7 +201,7 @@ and dispatches the dedicated `judge` agent (`agents/judge.agent.md`) with only t
 `dispatchPrompt` that `scripts/loop/emit-judge-work-order.mjs` prints (ADR 0106); the judge pulls
 its work order, which pins the consolidated ledger, the spec-context output, the round's evidence
 (PR declared scope and diff) and the prior-round judge verdicts. It then awaits its two verdict artifacts: the relevance verdict at
-`tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json` and the spec-authority
+`tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/<roundId>/judge-verdict.json` and the spec-authority
 verdict at the sibling `spec-authority-verdict.json` (its only writes). The gate coordinator
 writes the durable ledger with `write-gate-findings-log --judge-verdict <verdict-path>
 --spec-authority <identity-path>` using those completed verdicts; posting the visible gate
