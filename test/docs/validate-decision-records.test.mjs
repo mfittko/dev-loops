@@ -373,12 +373,45 @@ test("concurrent unrelated addition takes the next base number, so the smallest 
   }
 });
 
+test("an unrelated symlink addition does not veto a lawful regular renumber", async () => {
+  const unrelated = "docs/decisions/0049-something.md";
+  const { root, git } = await fixture({
+    [NEW_PATH]: REN_NUMBER,
+    "docs/decisions/0047-other.md": DUP_OTHER,
+    "docs/unrelated.md": "# Unrelated\n",
+  }, makeGit(DUPLICATE_BASE, [NEW_PATH, unrelated]));
+  try {
+    await symlink("../unrelated.md", path.join(root, unrelated));
+    const result = await validateDecisionRecords({ root, git });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("two normalized-body-matching renumber additions are ambiguous and refused", async () => {
   await assertRefusedMove("ambiguous bodies", {
     [NEW_PATH]: REN_NUMBER,
     "docs/decisions/0049-something.md": REN_NUMBER.replace("# 0048.", "# 0049."),
     "docs/decisions/0047-other.md": DUP_OTHER,
   });
+});
+
+test("a matching symlink clone makes a regular renumber ambiguous", async () => {
+  const clone = "docs/decisions/0049-something.md";
+  const { root, git } = await fixture({
+    [NEW_PATH]: REN_NUMBER,
+    "docs/decisions/0047-other.md": DUP_OTHER,
+    "docs/clone.md": REN_NUMBER.replace("# 0048.", "# 0049."),
+  }, makeGit(DUPLICATE_BASE, [NEW_PATH, clone]));
+  try {
+    await symlink("../clone.md", path.join(root, clone));
+    const result = await validateDecisionRecords({ root, git });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.kind === "adr_post_acceptance_rewrite"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("skipping the next free base number is refused", async () => {

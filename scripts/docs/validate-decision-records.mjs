@@ -217,24 +217,24 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
         if (err.code === "ENOENT") {
           const source = FILENAME_RE.exec(baseName);
           const matches = [];
-          let nonRegularCandidate = false;
           if (source && (baseNumbers.get(source[1]) ?? 0) > 1) {
             for (const { rel: dest, match } of added) {
               if (match[1] === source[1] || match[2] !== source[2]) continue;
-              // Never follow a symlink (or read a directory) as a replacement record.
-              if (!(await lstat(path.join(root, dest))).isFile()) {
-                nonRegularCandidate = true;
-                continue;
-              }
+              const entry = await lstat(path.join(root, dest));
+              // A symlink can have matching body content, so count it for
+              // ambiguity, but never accept it as the selected destination.
+              // Other non-regular entries (e.g. directories) have no record body.
+              if (!entry.isFile() && !entry.isSymbolicLink()) continue;
               const text = await readFile(path.join(root, dest), "utf8");
               if (normalizeRecordNumber(splitStatus(text).rest) === normalizeRecordNumber(baseRest)) {
-                matches.push({ dest, number: match[1], text });
+                matches.push({ dest, number: match[1], text, regular: entry.isFile() });
               }
             }
           }
-          // Count all body matches before filtering by number: a cloned record
-          // cannot become unambiguous just because one clone has a later number.
-          if (matches.length === 1 && !nonRegularCandidate) {
+          // Count all body matches before filtering by number or file type: a
+          // cloned record cannot become unambiguous just because one clone has
+          // a later number or is symlinked.
+          if (matches.length === 1 && matches[0].regular) {
             const { dest, number, text } = matches[0];
             const others = new Set(names.filter((name) => name !== path.posix.basename(dest))
               .map((name) => FILENAME_RE.exec(name)?.[1]).filter(Boolean).map(Number));
