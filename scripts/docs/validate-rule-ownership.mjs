@@ -518,6 +518,9 @@ export function detectNearDuplicates(definitions) {
  * yields no match. Returns the embedded definitions ({ id, file, line, body }).
  */
 export function findEmbeddedRuleBodies(text, sources) {
+  // ponytail: compares only the first-line rule body as an exact normalized
+  // substring; bodies under MIN_NORMALIZED_BODY_LENGTH and paraphrases go
+  // undetected. Upgrade path: sentence-level shingles.
   const haystack = ` ${normalizeRuleBody(String(text ?? ""))} `;
   const embedded = [];
   for (const { file, content } of sources) {
