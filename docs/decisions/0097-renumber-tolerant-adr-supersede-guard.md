@@ -2,13 +2,13 @@
 
 ## Status
 
-Accepted — 2026-09-27 ([operator-directed red-main repair, PR #2452](https://github.com/mfittko/dev-loops/pull/2452))
+Accepted — 2026-09-27 ([operator-directed red-main repair, issue #2481](https://github.com/mfittko/dev-loops/issues/2481))
 
 Refines [ADR-SUPERSEDE-NOT-REWRITE](../../skills/docs/decision-record-contract.md), whose refusal set was wider than its intent.
 
 ## Context
 
-The operator explicitly directed PR #2452 to carry the red-main duplicate-record repair using this deterministic guard approach; that direction is the acceptance event for this decision.
+This record is part of the operator-directed red-main duplicate-record repair tracked by [issue #2481](https://github.com/mfittko/dev-loops/issues/2481); [PR #2452](https://github.com/mfittko/dev-loops/pull/2452) is its implementation vehicle.
 
 `scripts/docs/validate-decision-records.mjs` rule 3 (`ADR-SUPERSEDE-NOT-REWRITE`) refuses any post-acceptance rewrite of a record whose base Status is `Accepted` or `Superseded`. It reads changed paths through `diffNameOnly`, which passes `--no-renames` deliberately so a `git mv` surfaces as a delete+add pair instead of collapsing to the destination path and evading the guard.
 
