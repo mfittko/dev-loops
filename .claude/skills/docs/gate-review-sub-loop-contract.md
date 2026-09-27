@@ -322,7 +322,7 @@ limited to the light-mode `scopeUnderThreshold` carve-out or explicit per-PR ope
 Each reviewer:
 
 - starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. A grouped reviewer runs this ONCE for the whole group, passing the emitted unit's `scope` verbatim as `--scope` — exactly as its prompt states, never composed from the unit name — not once per angle it covers. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle(s), and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
-- is composed via the sanctioned composer (`GATE-EXEC-BRIEFING-PREFIX`'s "The composer" paragraph): the same step that runs `verify-fresh-review-context.mjs` (above) is `scripts/github/emit-fanout-dispatch.mjs --repo <repo> --pr <n> --gate <gate> --head-sha <sha>`, which for each dispatch unit writes that unit's angle-suffix and drives the composer core (`composeAndRecordReviewerPrompt`) internally — inlining this round's invariant-prefix bytes as the leading bytes, appending the volatile tail and the angle suffix, writing the composed prompt, and recording its dispatch-prompt layout ATOMICALLY (no separate `record-dispatch-prompt-layout.mjs` call needed on this path — the composer core already made it). The orchestrator then delivers each emitted unit's `promptPath` bytes to its reviewer per the "Per-harness delivery" paragraph below. Hand-composing a prompt and calling `record-dispatch-prompt-layout.mjs` directly against it remains possible as the underlying primitive, but is no longer the sanctioned fan-out path; the composer's own CLI (`compose-reviewer-prompt.mjs`) refuses every direct fan-out invocation (it never writes the keyed emit-plan.json fan-in requires) and names this emitter instead.
+- is composed via the sanctioned composer (`GATE-EXEC-BRIEFING-PREFIX`'s "The composer" paragraph): the same step that runs `verify-fresh-review-context.mjs` (above) is `scripts/github/emit-fanout-dispatch.mjs --repo <repo> --pr <n> --gate <gate> --head-sha <sha>`, which for each dispatch unit writes that unit's angle-suffix and drives the composer core (`composeAndRecordReviewerPrompt`) internally — inlining this round's invariant-prefix bytes as the leading bytes, appending the volatile tail and the angle suffix, writing the composed prompt, and recording its dispatch-prompt layout ATOMICALLY (no separate `record-dispatch-prompt-layout.mjs` call needed on this path — the composer core already made it). The orchestrator then delivers each emitted unit's compact `dispatchPrompt` to its reviewer per the "Per-harness delivery" paragraph below. Hand-composing a prompt and calling `record-dispatch-prompt-layout.mjs` directly against it remains possible as the underlying primitive, but is no longer the sanctioned fan-out path; the composer's own CLI (`compose-reviewer-prompt.mjs`) refuses every direct fan-out invocation (it never writes the keyed emit-plan.json fan-in requires) and names this emitter instead.
 - reads the neutral evidence its work order references (`requiredReads`: the evidence file with the diff, or for a scoped unit its `scoped-evidence` variant in place of that file, and the filtered diff file as the required `diff` read in both modes, for a scoped unit too; the unfiltered `.diff` is the optional `raw-diff` widening read) in full as its base. It reads the `prior-dispositions` list and the `known-findings` list in full when the volatile tail names them. It queries the context artifact's `.adjacentCode` (an optional navigation aid, never a required full read) and the optional validation record field by field with `jq`, and widens (loads more files) only when a covered angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph. When it widens, it records in the findings artifact's optional `contextWidened` field ONLY the files that actually moved its judgment, never every file it opened. Absence of `contextWidened` (or an empty one) means "not consulted" — never "consulted and clean"; carry-forward and audit logic MUST NOT infer clean-ness from that omission.
 - is scoped to exactly one review angle (one angle per unit under `mode: per-angle`, which bypasses configured groups; every angle in its resolved group (grouped mode, the default — including `gate:full`, which dispatches grouped) — each angle keeps its own prompt, all appended after the one shared invariant prefix (`GATE-EXEC-BRIEFING-PREFIX`)
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
@@ -427,8 +427,12 @@ disk, the emitter reads the artifact's fan-out dispatch plan (`artifact.fanout.g
 `artifact.fanout.pendingGroups` under `--pending`) and, for EACH resolved dispatch unit,
 writes the unit's angle-suffix and drives the composer core above (`composeAndRecordReviewerPrompt`,
 the shared atomic compose-and-record core). It emits one
-`{ scope, angles, group, promptPath, promptBytes, sectionBytes, workOrder }`
-per DISPATCH unit plus a `maxConcurrent` field. Each unit's prompt is a bounded work order and
+`{ scope, angles, group, promptPath, promptBytes, sectionBytes, workOrderRef, workOrderDigest, materializationHash, executionIdentity, dispatchPrompt, workOrder }`
+per DISPATCH unit plus a `maxConcurrent` field. The coordinator relays only `dispatchPrompt`
+(the compact envelope); the reviewer pulls the work order through `pull-work-order.mjs`
+(see "Per-harness delivery"). The execution rules carry the widening rule: the reviewer MAY
+read further code, spec, contracts or prior findings when a concrete dependency or ambiguity
+requires it, and records each widened read in the `contextWidened` result field. Each unit's prompt is a bounded work order and
 uses reference seeding: the `workOrder` carries the target, the round identity (gate, head,
 prefix sha256), the merged-config sha256 (informational only; nothing verifies it), the assigned angles with each angle's resolved persona
 and prompt (`angleInstructions`), the `requiredReads` manifest (the context artifact's shared
@@ -439,7 +443,7 @@ files. The emitter refuses (exit 1) a work order over `REVIEWER_WORK_ORDER_MAX_B
 naming the unit, its angles and the byte count, or one carrying an inline `diff --git` line
 (a heuristic guard). The
 conductor then dispatches those emitted units in one wave (under Pi: ONE call per wave; one fresh-context `review`
-subagent per unit, whose task is that unit's work order, its `promptPath` bytes relayed unchanged), records each unit's
+subagent per unit, whose task is that unit's compact `dispatchPrompt`; the reviewer pulls its work order itself), records each unit's
 `group` on Phase 3's `--provenance`
 (null for an unsplit single-angle resolved unit; the original resolved unit's own name —
 configured or auto-chunk — for every split sub-unit, including a one-angle tail, and for an
@@ -535,20 +539,15 @@ duplicate findings fail closed because no fresh reviewer ran.
 Missing, altered or fresh provenance fails closed. Same-head completed-only resumes do not qualify.
 Omit `--expected-dispatch-units` at zero, as required by the existing consumer contract.
 
-**Per-harness delivery.** Relay only the bounded work order: the emitted unit's `promptPath` bytes, unchanged. The child reviewer reads the referenced evidence after spawn, so the relay stays under `REVIEWER_WORK_ORDER_MAX_BYTES` whatever the diff or spec size:
+**Per-harness delivery.** Relay only the emitted unit's compact `dispatchPrompt`: the JSON envelope `{workOrderRef, workOrderDigest, executionIdentity}`, under `DISPATCH_POINTER_MAX_BYTES` (< 500 bytes; the emitter refuses over it). Never relay the `promptPath` bytes and never append task prose. The reviewer first runs `pull-work-order.mjs --ref <workOrderRef> --digest <workOrderDigest> --execution <executionIdentity>`, which verifies the reference against the canonical emitted unit, prints the exact emitted work order (inline invariant prefix first) and writes a pull receipt under the main checkout's `tmp/work-order-receipts/`. The same rule holds on every harness:
 
 | Dispatch | Delivery and limits |
 | --- | --- |
-| Code-driven Pi `runs.all` | ONE `workflowScriptPath` call per wave whose script body returns a single `runs.all([...])`, one item per emitted unit, each with its own unique `key`; the driver reads each unit's work order file and directly supplies it as the spawned reviewer's prompt, without agent paraphrase, and the reviewer reads the referenced evidence itself. Never N separate blocking per-unit calls. |
-| Agent-driven Claude Code Agent/Task | Run the emitter, read the unit's work order file, and copy its exact bytes into `prompt`, with NO preamble, wrapper or paraphrase; the child reads the referenced evidence after spawn. No primitive injects those bytes independently of that agent-authored parameter. |
-| Agent-driven Codex | Uses the generic batch/agent adapter, like Claude Code; only Pi ships a concrete adapter. Fixtures distinguish the generic adapters by environment. Codex production dispatch is NOT independently qualified by this repo. |
+| Code-driven Pi `runs.all` | ONE `workflowScriptPath` call per wave whose script body returns a single `runs.all([...])`, one item per emitted unit, each with its own unique `key` and the unit's `dispatchPrompt` as its task. Never N separate blocking per-unit calls. |
+| Agent-driven Claude Code Agent/Task | Copy the unit's `dispatchPrompt` into `prompt`, with NO preamble, wrapper or paraphrase. |
+| Agent-driven Codex | Uses the generic batch/agent adapter, like Claude Code; only Pi ships a concrete adapter. Codex production dispatch is NOT independently qualified by this repo. |
 
-For both agent-driven harnesses, the final relay is not mechanically observed and
-spawned-agent usage/cache-read telemetry is unavailable. Claim only emitted-unit
-byte identity, inline alignment, ordering and fingerprints, never verified provider
-reuse. `promptContentHash` binds the record atomically to the emitted file; it catches
-recorded paraphrases/mismatches, not a faithful file record paired with a drifted
-actual tool prompt. See "Three identities, one honest boundary" below.
+Pull refusals (stdout JSON, exit 1): `dispatch_reference_mismatch` (a mistyped ref or digest; retryable, re-dispatch the SAME unit with its canonical envelope, never retire the round), `dispatch_identity_mismatch` (execution or role disagrees), `stale_dispatch` (the execution belongs to a retired same-head round; never retarget to the newest round), `semantic_identity_mismatch`, `local_materialization_integrity_failure` (the local file no longer matches `materializationHash`; regeneration is out of scope, fail closed). `workOrderDigest` hashes the canonical semantic work order without machine-local paths, so two checkouts emit the same digest; `materializationHash` hashes the local file bytes. Spawned-agent usage/cache-read telemetry stays unavailable on agent-driven harnesses: never claim verified provider reuse. See "Three identities, one honest boundary" below.
 
 **Content inlining.** Use `write-gate-context.mjs`'s generated `<gate>-<headSha>.briefing-prefix.txt` and `<gate>-<headSha>.briefing-evidence.txt`, beside the JSON context artifact. `renderBriefingPrefix` owns the prefix's fixed section order and its trailing `## Required reads` manifest. `renderBriefingEvidence` owns the evidence file's separate author-controlled body/issue fences, diff fencing and conditional trailing validation section (`GATE-EXEC-VALIDATION-RESOLUTION`). Consume both files' bytes unchanged. The renderer, never issue-body text, supplies multi-issue labels outside those fences.
 
@@ -586,9 +585,11 @@ Both paths write `tmp/checkpoint-dispatch-prompt-<scope>-<headSha>.json`: leadin
 - Its full-content hash matches the canonical `<gate>-<headSha>.dispatch-prompt-<scope>.txt`, rediscovered under `<tmp-root>/gate-context/**`, never trusted from the record's stored path.
 - That emitted file begins with the round's byte-identical invariant prefix **inline**, with angle-specific text strictly after it.
 
-Missing/malformed `prefixPath` or leading bytes, missing `promptContentHash`, a missing emitted file, altered suffixes/hash mismatches, and pointer-seeded or angle-first emitted prompts fail closed (exit 1), never grandfathered.
+- The record binds the unit's compact reference (`compactReference`: `workOrderRef`, `workOrderDigest`, `executionIdentity`), written by the emitter.
 
-**Three identities, one honest boundary.** This binds recorded-layout identity to generated-file identity, **not delivered-task identity**. Claude Code's orchestrator must relay emitted bytes verbatim into the Agent prompt, but the check cannot observe that final hop. It catches honestly recorded delivery drift; recording emitted bytes while delivering different bytes remains unverified. Do not present an emitted-file hash as proof of delivery. The same boundary holds for evidence reads: the sentinel proves each hashed required read still matches its recorded bytes before the reviewer starts, not that the reviewer read it in full. The per-harness delivery limitations above and `GATE-EXEC-FANOUT-DISPATCH-EMIT` still apply.
+Missing/malformed `prefixPath` or leading bytes, missing `promptContentHash`, a missing emitted file, a missing compact reference, altered suffixes/hash mismatches, and pointer-seeded or angle-first emitted prompts fail closed (exit 1), never grandfathered.
+
+**Three identities, one honest boundary.** The layout check binds recorded-layout identity to generated-file identity. The pull receipt binds delivered-task identity: `pull-work-order.mjs` writes it only after the reviewer's supplied reference matched the canonical emitted unit, and fan-in requires a matching receipt (execution, unit, digest) for every freshly dispatched unit. A missing or mismatched receipt fails closed; a receipt without the unit's result artifacts is an interrupted reviewer, never complete. Carried-only units need no receipt; their carry proof stays the authority. The remaining boundary holds for evidence reads: the sentinel proves each hashed required read still matches its recorded bytes before the reviewer starts, not that the reviewer read it in full. The per-harness delivery limitations above and `GATE-EXEC-FANOUT-DISPATCH-EMIT` still apply.
 
 Zero dispatch-prompt records do not themselves fail this check: capture remains progressive/optional for non-composer callers, including legacy offline rounds. This does not waive the records-floor below. Recovery requires re-emitting and actually redispatching compliant prompts before reconsolidating; regenerating files cannot certify old delivery. For unchanged prefix bytes, use the same-head retry guard below. For changed bytes, follow `GATE-EXEC-ROUND-RETIREMENT`: retire before rebuilding, then redispatch. Preserve the original review history and audit records.
 
@@ -1603,7 +1604,7 @@ and hash-binds it as a required read when at least one thread exists. The block 
 byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX` hashes. The snapshot is build-time: a
 `--same-head-retry` replays it, and a retry that must see threads posted after the build uses
 `GATE-EXEC-ROUND-RETIREMENT` (retire, then rebuild). The conductor
-relays each work order's `promptPath` bytes unchanged and never appends anything after them.
+relays only each unit's compact `dispatchPrompt` and never appends anything to it.
 
 <!-- rule: GATE-EXEC-THREAD-DISPOSITION -->
 `GATE-EXEC-THREAD-DISPOSITION`: A gate-authored thread's severity decides how it closes. A
