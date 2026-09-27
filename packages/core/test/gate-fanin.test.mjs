@@ -545,12 +545,12 @@ describe("freshAngleNames", () => {
 });
 
 describe("ledgerAngleNames", () => {
-  test("returns distinct angle names in ledger order, fresh and carried", () => {
+  test("returns distinct angle names (fresh and carried) in catalog order", () => {
     assert.deepEqual(
-      ledgerAngleNames([{ angle: "a" }, { angle: "c", carriedFromHead: "abc1234" }, { angle: "a" }, { angle: " " }, null, { angle: "b" }]),
-      ["a", "c", "b"],
+      ledgerAngleNames([{ angle: "a" }, { angle: "c", carriedFromHead: "abc1234" }, { angle: "a" }, { angle: " " }, null, { angle: "b" }], ["a", "b", "c"]),
+      ["a", "b", "c"],
     );
-    assert.deepEqual(ledgerAngleNames(null), []);
+    assert.deepEqual(ledgerAngleNames(null, []), []);
   });
 
   test("with catalogOrder, follows catalog order and puts unknown angles last in lexicographic order", () => {

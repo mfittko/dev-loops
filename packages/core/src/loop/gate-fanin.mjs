@@ -544,14 +544,17 @@ export function freshAngleNames(perAngle) {
  * Auto-chunk boundaries follow input order, so a re-deriving caller passes
  * `catalogOrder` (the gate's resolved angle pool, the order dispatch resolves
  * angles in). The result then follows that order, with angles outside it last
- * in lexicographic order, and never depends on ledger order. Without
- * `catalogOrder` the result keeps ledger order. Pure.
+ * in lexicographic order, and never depends on ledger order. Pure.
+ *
+ * `catalogOrder` is required: the ledger-order mode this helper was introduced
+ * to eliminate is not a supported shape, so every caller passes the gate's
+ * resolved pool and the result is always catalog-ordered.
  *
  * @param {unknown} perAngle
- * @param {string[]|null} [catalogOrder]
+ * @param {string[]} catalogOrder
  * @returns {string[]}
  */
-export function ledgerAngleNames(perAngle, catalogOrder = null) {
+export function ledgerAngleNames(perAngle, catalogOrder) {
   if (!Array.isArray(perAngle)) return [];
   const angles = new Set();
   for (const entry of perAngle) {
@@ -559,7 +562,7 @@ export function ledgerAngleNames(perAngle, catalogOrder = null) {
     const angle = typeof entry.angle === "string" ? entry.angle.trim() : "";
     if (angle) angles.add(baseAngleName(angle));
   }
-  return Array.isArray(catalogOrder) ? orderAnglesByCatalog([...angles], catalogOrder) : [...angles];
+  return orderAnglesByCatalog([...angles], catalogOrder);
 }
 
 /**

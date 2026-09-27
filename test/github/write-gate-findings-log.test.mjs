@@ -12,6 +12,7 @@ import {
   verifyEmitPlanProvenance,
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
+import { buildGateArtifactPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
 const writeGateFindingsLogScript = path.resolve("scripts/github/write-gate-findings-log.mjs");
@@ -632,6 +633,42 @@ test("writeGateFindingsLog rejects malformed repo format in buildLogPath", async
       findings: "[]",
     });
   }, /owner\/name format/);
+});
+
+// Regression coverage for the renderer-security finding on
+// scripts/github/_gate-artifact-paths.mjs: buildLogPath interpolated `gate` and
+// `headSha` raw while its sibling buildGateArtifactPath validated them through
+// validatePathSegments, so a `../../..` gate (or a `/`-bearing headSha) escaped
+// the intended tmp/gate-findings/<repo>/pr-<N>/ directory. Both builders in the
+// leaf module must reject the same traversal inputs, while a legitimate
+// gate/headSha still builds the expected path.
+test("buildLogPath and buildGateArtifactPath reject the same unsafe gate/headSha segments", () => {
+  const repo = "owner/repo";
+  const pr = 42;
+  const headSha = "945391c0abcdef1234567890abcdef1234567890";
+
+  // An escaping gate is REFUSED by buildLogPath, never interpolated.
+  assert.throws(() => buildLogPath({ repo, pr, gate: "../../..", headSha, tmpRoot: "tmp" }), /gate.*unsafe/);
+  assert.throws(() => buildLogPath({ repo, pr, gate: "draft_gate/../..", headSha, tmpRoot: "tmp" }), /gate.*unsafe/);
+  assert.throws(() => buildLogPath({ repo, pr, gate: "..", headSha, tmpRoot: "tmp" }), /gate.*unsafe/);
+  // A `/`-bearing headSha is REFUSED too.
+  assert.throws(() => buildLogPath({ repo, pr, gate: "draft_gate", headSha: "../../etc/passwd", tmpRoot: "tmp" }), /head-sha.*unsafe/);
+
+  // The sibling builder refuses the same traversal inputs identically.
+  assert.throws(() => buildGateArtifactPath({ repo, pr, gate: "../../..", headSha, tmpRoot: "tmp" }), /gate.*unsafe/);
+  assert.throws(() => buildGateArtifactPath({ repo, pr, gate: "draft_gate", headSha: "../../etc/passwd", tmpRoot: "tmp" }), /head-sha.*unsafe/);
+
+  // A safe non-GATE_NAMES pseudo-gate still resolves (the fixer-disposition
+  // ledger keys buildLogPath on it), and a legitimate gate/headSha builds the
+  // expected path.
+  assert.equal(
+    buildLogPath({ repo, pr, gate: "fixer-disposition", headSha, tmpRoot: "tmp" }),
+    path.join("tmp", "gate-findings", "owner-repo", "pr-42", `fixer-disposition-${headSha}.json`),
+  );
+  assert.equal(
+    buildLogPath({ repo, pr, gate: "draft_gate", headSha, tmpRoot: "tmp" }),
+    path.join("tmp", "gate-findings", "owner-repo", "pr-42", `draft_gate-${headSha}.json`),
+  );
 });
 
 test("writeGateFindingsLog includes resolvedIn when present", async () => {

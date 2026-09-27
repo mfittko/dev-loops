@@ -52,7 +52,15 @@ export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" 
 
 // Deterministic artifact path for the durable per-round findings log. Mirrors
 // buildGateContextPath's scheme in the "gate-findings" family, keyed by the
-// FULL head SHA so a new head never reuses a prior head's ledger.
+// FULL head SHA so a new head never reuses a prior head's ledger. Validates the
+// repo segments here and the pr/gate/headSha segments through
+// {@link assertSafeSegment}, so both builders in this leaf module reject a
+// traversal sequence (a `../../..` gate, a `/`-bearing SHA) identically rather
+// than interpolating it into the `gate-findings/<repo>/pr-<N>/` directory. The
+// check is a bare segment-safety one (not buildGateArtifactPath's GATE_NAMES
+// vocabulary + canonical-form check): this ledger also keys the pseudo-gate
+// `fixer-disposition`, and its readers derive only the DIRECTORY from the
+// sample path, so a safe non-hex headSha label must still resolve.
 export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
   const parts = repo.split("/");
   if (parts.length !== 2 || parts.some(p => p.length === 0)) {
@@ -64,7 +72,10 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
     }
   }
   const repoSlug = parts.join("-");
-  return path.join(tmpRoot, "gate-findings", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
+  const safePr = assertSafeSegment("pr", pr);
+  const safeGate = assertSafeSegment("gate", gate);
+  const safeSha = assertSafeSegment("head-sha", headSha);
+  return path.join(tmpRoot, "gate-findings", repoSlug, `pr-${safePr}`, `${safeGate}-${safeSha}.json`);
 }
 
 /**
@@ -105,6 +116,21 @@ export function validatePathSegments({ pr, gate, headSha }) {
     throw new Error(`--head-sha segment ${JSON.stringify(headSha)} is unsafe (expected a 7-64 character hex SHA)`);
   }
   return { pr: prNum, gate, headSha: sha };
+}
+
+// Reject a single path segment that would escape or alias the intended
+// directory: an empty string, a bare `.`/`..`, or any path separator, whitespace,
+// or backslash. buildLogPath applies it to its `pr`/`gate`/`headSha` segments, so
+// a traversal value (`../../..`, a `/`-bearing SHA) is refused rather than
+// interpolated. It is deliberately weaker than validatePathSegments' GATE_NAMES
+// vocabulary + canonical-form checks because buildLogPath also keys the
+// pseudo-gate `fixer-disposition` and its readers only need the directory.
+function assertSafeSegment(name, value) {
+  const str = typeof value === "string" ? value : String(value);
+  if (str.length === 0 || str === "." || str === ".." || /[/\\\s]/.test(str)) {
+    throw new Error(`--${name} segment ${JSON.stringify(value)} is unsafe (a "." or ".." path segment, or contains a separator, whitespace, or backslash)`);
+  }
+  return str;
 }
 
 // Validate the repo string and return its `owner-name` slug, applying the same

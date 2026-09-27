@@ -19,8 +19,9 @@ import { expandDispatchUnits, isPackedUnitName, normalizeUnitAngles, sanitizeSco
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
 head whose write-gate-context.mjs bundle is already on disk, it reads the resolved
-fan-out plan (the artifact's fanout.groups / fanout.pendingGroups, from
-resolveFanoutGroups) and, for each dispatch unit, composes a ready-to-dispatch
+fan-out plan (the artifact's fanout.groups / fanout.pendingGroups, resolveFanoutGroups
+output, packed by write-gate-context.mjs when the round would otherwise need a
+second wave) and, for each dispatch unit, composes a ready-to-dispatch
 reviewer prompt via compose-reviewer-prompt.mjs's atomic composer. It is the ONE
 place the gate-context bundle is turned into per-unit reviewer prompts, so a
 coordinator never re-derives persona/prompt composition and never spelunks
