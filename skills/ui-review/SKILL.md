@@ -17,19 +17,17 @@ running app from an isolated PR worktree. Orchestrate the five CLI stages below
 in order, threading each result JSON into the next; there is no chaining helper.
 
 The two browser-driving stages (`ui-review-drive`, and the `visual-grill-capture`
-stage the loop-grill uses) launch headless WebKit through Playwright, which is an
-**optional** peer dependency: a consumer who never runs a UI review carries none
-of its weight. Where one is run, install it once —
+stage the loop-grill uses) launch headless WebKit through Playwright, an
+optional peer dependency. Install it once where a UI review runs:
 `npm install --save-dev @playwright/test`, then
-`npx playwright install webkit`. When either the package or the browser binary is
+`npx playwright install webkit`. When the package or the browser binary is
 missing, both stages stop with those instructions as the stop reason and carry no
 failure entries. Thread `failures` onward, even on stopped results: runner-unavailable has none, while a missing recipe carries a `must-fix`. Diagnose never drops a failure; a setup gap must not become a PR defect.
 
 `@axe-core/playwright` is a separate opt-in
-(`npm install --save-dev @axe-core/playwright`) that drives only the
-computed-a11y artifact: without it every `axe.json` is a deterministic JSON
-`null`, so a11y findings lose their grounding while the rest of the review still
-works.
+(`npm install --save-dev @axe-core/playwright`) for the computed-a11y artifact.
+Without it every `axe.json` is a JSON `null` and a11y findings lose their
+grounding.
 
 The route's handoff envelope carries its stop rules and acceptance
 self-validation (defined in `handoff-envelope.mjs`): no product-code writes,
@@ -38,108 +36,82 @@ must be acknowledged before they run.
 
 ## Provision + boot
 
-The route's first operational step provisions an isolated worktree for the PR
-head and boots the branch's app to a ready state, via
+Provision an isolated worktree for the PR head and boot the branch's app via
 `dev-loops loop ui-review-provision --repo-root <p> --pr <n>`
 (source-repo fallback: `node scripts/loop/ui-review-provision.mjs --repo-root <p> --pr <n>`; pure orchestration in
-`packages/core/src/loop/ui-review-provision.mjs`). It
-reuses the worktree machinery (`ensure-worktree`, `provision-worktree`), refuses
-to operate in the primary checkout, installs only the dependency-lock delta,
-runs pending dev-DB migrations, then boots the app and polls an HTTP readiness
-probe. It fails closed to a stated stop reason on: a primary-checkout target, a
-missing run recipe, a run-recipe `cwd` that resolves outside the provisioned
-worktree (worktree traversal), a destructive migration lacking
-`--ack-destructive-migration`, or a readiness probe that times out. Every
-bounded cap is logged.
+`packages/core/src/loop/ui-review-provision.mjs`). It refuses the primary
+checkout, installs the dependency-lock delta, runs pending dev-DB migrations,
+boots the app and polls an HTTP readiness probe. It fails closed to a stated stop
+reason on: a primary-checkout target, a missing run recipe, a run-recipe `cwd`
+that resolves outside the provisioned worktree, a destructive migration lacking
+`--ack-destructive-migration`, or a readiness probe timeout. Every bounded cap is
+logged.
 
-The run recipe is per-project and never hard-coded: a project declares
-`uiReview.run` in `.devloops` — a boot `command`, an HTTP `readyUrl`, probe
-`readyTimeoutMs`/`readyIntervalMs`, an optional worktree-relative `cwd`, and an
-optional `migrate` sub-recipe (`statusCommand`/`applyCommand`, plus a
-`destructivePattern` guard). The destructive guard matches `destructivePattern`
-against the migration STATUS OUTPUT, not the migration files: the shipped
-default only detects SQL-bearing status output (DROP/TRUNCATE/DELETE FROM). A
-project whose status output lists migration identifiers/filenames instead gets
-no protection from the default and MUST set a `destructivePattern` matching its
-own status format (or emit the destructive SQL/marker from `statusCommand`) —
-otherwise the guard is silently inert.
+A project declares the run recipe as `uiReview.run` in `.devloops`: a boot
+`command`, an HTTP `readyUrl`, probe `readyTimeoutMs`/`readyIntervalMs`, an
+optional worktree-relative `cwd`, and an optional `migrate` sub-recipe
+(`statusCommand`/`applyCommand`, plus a `destructivePattern` guard). The guard
+matches `destructivePattern` against the migration STATUS OUTPUT. The shipped
+default detects only SQL-bearing status output (DROP/TRUNCATE/DELETE FROM). A
+project whose status output lists migration identifiers or filenames MUST set a
+`destructivePattern` matching its own status format (or emit the destructive
+SQL/marker from `statusCommand`); otherwise the guard is inert.
 
-Threat boundary: the run recipe is branch-controlled, and its `command` is
-executed as a shell command in the worktree. Every later stage inherits this
-assumption — a run recipe is trusted-branch input, not untrusted data.
+Threat boundary: the run recipe is branch-controlled, and its `command` runs as a
+shell command in the worktree. Every later stage treats a run recipe as
+trusted-branch input.
 
 ## Drive
 
-Once the app is booted, the route drives the changed UI flows against the
-handed-off app URL via
+Drive the changed UI flows against the handed-off app URL via
 `dev-loops loop ui-review-drive --repo-root <p> --app-url <url> --output-dir <p> [--changed-path <p> ...]`
 (source-repo fallback: `node scripts/loop/ui-review-drive.mjs ...`; pure
-orchestration in `packages/core/src/loop/ui-review-drive.mjs`). It launches
-one headless WebKit context, authenticates as the change's target role through a
-project-provided dev-login recipe, dismisses config-declared interstitials once
-per context, then walks the selected flows — rendering each page and exercising
-its declared create/edit/reorder/upload/toggle interactions — capturing a step
+orchestration in `packages/core/src/loop/ui-review-drive.mjs`). It authenticates
+as the change's target role through the project's dev-login recipe, dismisses
+declared interstitials, walks the selected flows and captures a step
 screenshot + sibling `state.json` + `snapshot.json` + `axe.json` + `console.json` per step via `captureNamedUiState`. It fails
 closed to a stated stop reason when it cannot authenticate, and drives nothing.
 
-Throughout the walk, `response`, `requestfailed`, and `pageerror` listeners run
-and the project server log is tailed, so a swallowed error response (a 500 the UI
-hides behind a success state) is still recorded. An error response is a status
-<200 or >=400; 3xx redirects are normal navigation (login/canonical) and are not
-flagged. Each per-step capture SLICES that listener buffer into the step's
-`console.json` (per-state attribution of console errors + failed requests)
-WITHOUT clearing it, so the same classified events still reach the walk-level
-failure gate — a captured step-scoped error deterministically fails the drive
-closed and keeps its source-line anchoring. The stage emits an ordered set of
-step screenshots plus a structured captured-failures list (error responses,
-request failures, page errors, server-log exceptions, and step failures) that
-feeds the next stage; the final report dedups per-state attribution against that
-list so the same error is not posted twice. Every bounded cap — max
-screenshots, screens skipped, and the fixed no-retry policy — is logged
-explicitly.
+The stage records error responses (status <200 or >=400; 3xx redirects are not
+flagged), request failures, page errors, server-log exceptions and step failures,
+including errors the UI hides behind a success state. It emits ordered step
+screenshots plus a structured captured-failures list that feeds the next stage.
+A captured step-scoped error fails the drive closed. Every bounded cap (max
+screenshots, screens skipped, the fixed no-retry policy) is logged.
 
-Which flows are driven is a bounded heuristic over an explicit allowlist, never
-an unbounded crawl: each `uiReview.flows` entry declares `pathPatterns` matched
-against the PR's changed file paths; an entry with none is always driven, and an
+Flow selection is a bounded heuristic over an explicit allowlist, never an
+unbounded crawl. Each `uiReview.flows` entry declares `pathPatterns` matched
+against the PR's changed file paths. An entry with none is always driven, and an
 unknown diff drives every allowlisted flow. The selection is capped and the
 overflow logged.
 
-The drive recipe is per-project and never hard-coded: a project declares
-`uiReview.login` (a `loginUrl`, optional username/password field selectors with
-their dev-only values, a `submitSelector`, and a `successSelector` proving the
-session), optional `interstitials` (dismiss selectors), the `flows` allowlist,
-optional `caps` (clamped to the shipped ceilings — a project may only tighten
-them), and an optional `serverLogPath` (with a `serverLogExceptionPattern`
-defaulting to a heuristic that a project MUST override when its log format
-differs). The login form is branch-controlled trusted input, same threat
-boundary as the run recipe.
+A project declares the drive recipe as `uiReview.login` (a `loginUrl`, optional
+username/password field selectors with their dev-only values, a `submitSelector`,
+and a `successSelector` proving the session), optional `interstitials` (dismiss
+selectors), the `flows` allowlist, optional `caps` (clamped to the shipped
+ceilings; a project may only tighten them), and an optional `serverLogPath`. The
+default `serverLogExceptionPattern` is a heuristic that a project MUST override
+when its log format differs. The login form is branch-controlled trusted input,
+same threat boundary as the run recipe.
 
 ## Diagnose + anchor
 
-Once failures are captured, the route maps each one to a source line and then to
-a PR diff line so the poster can anchor an inline comment on a real changed line,
-via
+Map each captured failure to a source line and then to a PR diff anchor via
 `dev-loops loop ui-review-diagnose --pr <n> --drive-result <p> [--repo <slug>]`
 (source-repo fallback: `node scripts/loop/ui-review-diagnose.mjs ...`; pure
 mapping in `packages/core/src/loop/ui-review-diagnose.mjs`). It reuses PR
-state from `loop info --pr` rather than re-fetching, fetches the PR's unified
-diff, and for each failure parses the exception type/message plus the top in-repo
-stack frame (JS `at` frame, Ruby/Python traceback frame; vendor/framework frames
-in `node_modules`/`gems`/`vendor` are skipped). It then resolves the source
-`file:line` to a diff anchor `{ path, line, side: RIGHT }` on the head.
+state from `loop info --pr`, parses the top in-repo stack frame (skipping
+`node_modules`/`gems`/`vendor` frames) and resolves the source `file:line` to a
+diff anchor `{ path, line, side: RIGHT }` on the head.
 
-Only ADDED lines are anchor targets: an inline comment lands on code the PR
-introduced, never on an unchanged context line. A failure is NEVER silently
-dropped — one with no source location, a file that is not among the changed
-files, a line that is not on a changed diff line, or a file that maps
-ambiguously to more than one changed file is retained as a finding flagged
-non-anchorable (with a stated reason) so the poster body-attaches it instead of
-inlining. Each finding carries a reference to the drive's final captured
-screenshot/state artifact when one exists (null otherwise) — a single shared
-object across all findings, NOT per-failure attribution — so a Stage-4 consumer
-null-checks it and must not present it as proof of a specific finding.
-
-Findings sort by severity, anchorability, kind, then source `file:line`, independent of wall-clock or input order.
+Only ADDED lines are anchor targets. A failure is NEVER silently dropped: one
+with no source location, a file outside the changed files, a line off a changed
+diff line, or an ambiguous file mapping is retained as a non-anchorable finding
+with a stated reason, and the poster body-attaches it. Each finding references
+the drive's final captured screenshot/state artifact when one exists (null
+otherwise). That reference is one shared object across all findings, so a
+Stage-4 consumer null-checks it and must not present it as proof of a specific
+finding.
 
 ## Report
 
@@ -148,79 +120,59 @@ Produce a head-pinned PENDING PR review and self-contained screenshot artifact v
 (source-repo fallback: `node scripts/loop/ui-review-report.mjs ...`; pure
 decisions in `packages/core/src/loop/ui-review-report.mjs`). It reuses the
 shared pending-review poster (`scripts/github/stage-reviewer-draft.mjs` +
-`buildDraftReviewPayload`) — a caller/adapter, not a new poster. Each anchorable
-finding becomes an inline comment on its exact `{path,line,side:RIGHT}` anchor
-carrying the reproduced exception + a fix direction; non-anchorable findings are
-retained in the review body (never dropped). It reuses the live head SHA from
-`loop info` and fails closed when the diagnosed head is missing or the live head
-has advanced since diagnose, so the inline anchors always bind to the exact
-reviewed commit.
+`buildDraftReviewPayload`). Each anchorable finding becomes an inline comment on
+its exact `{path,line,side:RIGHT}` anchor with the reproduced exception and a fix
+direction. Non-anchorable findings stay in the review body. The stage fails
+closed when the diagnosed head is missing or the live head from `loop info` has
+advanced since diagnose.
 
-The review defaults to **pending/draft** (no `event`) — this stage never
+The review defaults to pending/draft (no `event`); this stage never
 auto-submits. A confirmed user-facing server error (a must-fix error-response /
-server-log-exception) maps to `REQUEST_CHANGES` **only when submit is
-authorized**; otherwise the review stays pending with the severity recorded. The
-severity->event decision is emitted as guidance; submitting via the events
-endpoint is a separate authorized action outside this stage.
+server-log-exception) maps to `REQUEST_CHANGES` only when submit is authorized;
+otherwise the review stays pending with the severity recorded. Submitting via the
+events endpoint is a separate authorized action outside this stage.
 
-The self-contained artifact is always produced: a CSP-safe, fully inlined HTML
-(ranked findings + the reproduced-evidence screenshot as a data URI, no external
-resources). Hosting is harness-aware: on the **Claude Code** harness the stage
-emits a publishable directive (`{ hosting: "claude-artifact", htmlPath,
-publishable: true }`) for the orchestrating agent to publish via Claude
-Artifacts — the module never calls an Artifacts tool itself. On any other
-harness it **fails closed with a stated reason** (`{ hosting: "unavailable",
-reason, followup }`); the GitHub-native fallback publisher is deferred. The
-review body links a hosted artifact when one exists and otherwise states the
-artifact is unhosted (with the reason), so the review never blocks on hosting.
-Every bounded cap — findings truncated past the artifact cap, an oversized or
-unreadable evidence screenshot omitted — is logged, never silent.
+The stage always produces a CSP-safe, fully inlined HTML artifact. On the Claude
+Code harness it emits a publishable directive (`{ hosting: "claude-artifact", htmlPath,
+publishable: true }`); the orchestrating agent publishes it via Claude
+Artifacts, and the module never calls an Artifacts tool itself. On any other
+harness it fails closed with a stated reason (`{ hosting: "unavailable",
+reason, followup }`). The review body links a hosted artifact when one exists and
+otherwise states the artifact is unhosted with the reason, so the review never
+blocks on hosting. Every bounded cap is logged.
 
 ## Teardown + side-effect ledger
 
 Teardown consumes prior-stage results and ALWAYS emits a side-effect ledger. Invoke
 `dev-loops loop ui-review-teardown --repo-root <p> --provision-result <p> [--drive-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
 (source-repo fallback: `node scripts/loop/ui-review-teardown.mjs ...`; pure
-decisions in `packages/core/src/loop/ui-review-teardown.mjs`). It reads
-the prior-stage result JSON — the app PID + applied migrations + worktree path
-from provision, and the rows-created signal from the drive.
+decisions in `packages/core/src/loop/ui-review-teardown.mjs`).
 
 The destructive steps (dev-DB row drops and worktree removal) run ONLY with an
 explicit `--confirm`. Without it, those steps are skipped and the ledger records
-what remains; stopping the app still runs, because it is a clean shutdown of a
-process the loop itself started, not a mutation of persisted state. The app is
-stopped via the provision boot PID (SIGTERM, then a LOGGED SIGKILL fallback); a
-null PID is never a blind kill — the ledger reports the process may still be
-running. On win32 the app-stop fails closed (process-group kill is unsupported,
-so the kill is not attempted): the ledger reports may-be-running rather than a
-false stopped. Worktree removal delegates to `scripts/loop/cleanup-worktree.mjs`,
-which refuses any path outside the loop namespace and leaves the primary
-checkout untouched.
+what remains. Stopping the app still runs because the loop itself started that
+process. A null PID is never a blind kill, and win32 app-stop fails closed; in
+both cases the ledger reports the process may still be running. Worktree removal
+delegates to `scripts/loop/cleanup-worktree.mjs`, which refuses any path outside
+the loop namespace.
 
-The side-effect ledger is emitted in EVERY case (success, skip, partial
-failure) and enumerates: migrations applied (recorded as applied-not-reverted —
-reversing a dev-DB migration is a separate explicit action, never a default),
-rows created/dropped or left behind, the worktree path + whether it was removed,
-and the process status. A failed kill/drop/removal is reported in the ledger and
-the result's `errors` list, never swallowed.
+The ledger enumerates migrations applied (applied-not-reverted), rows
+created/dropped or left behind, the worktree path and whether it was removed, and
+the process status. A failed kill/drop/removal is reported in the ledger and the
+result's `errors` list.
 
-Row dropping is honest about a known limitation: the drive does not tag the
-dev-DB rows it creates with a session id or manifest, so this stage cannot know
-which rows to drop and MUST NOT guess. It drops rows only from an explicit
-manifest handed in; when the drive walked mutating flows without one, the ledger
-reports rows "may remain (untagged)". Making the drop real requires row/session
-tagging upstream in the drive. The CLI's row-drop seam is not yet wired: a
-confirmed manifest fails CLOSED (the ledger records a drop failure, never a drop)
-rather than silently no-op'ing, so a caller can never believe rows were dropped;
-wiring a real drop is a tracked follow-up.
+The drive does not tag the dev-DB rows it creates, so this stage MUST NOT guess
+which rows to drop. It drops rows only from an explicit manifest. When the drive
+walked mutating flows without one, the ledger reports rows "may remain
+(untagged)". The CLI's row-drop seam is not yet wired: a confirmed manifest
+fails CLOSED and the ledger records a drop failure.
 
 ## Non-goals
 
-The teardown stage never rolls back the branch's dev-DB migrations by default
-(the ledger records they were applied, not reverted) and never tears down a
-production DB. The stage does not auto-submit a review
+The teardown stage never rolls back the branch's dev-DB migrations by default and
+never tears down a production DB. The stage does not auto-submit a review
 without explicit authorization, publish to a production/non-dev posting target,
 ship the GitHub-native hosted-artifact fallback, auto-fix the located defects,
 pixel-diff for visual regression, run a cross-browser matrix, or touch a
-production DB — those are later stages or explicit non-goals. It does not
-replace the product/eng `review` angle or the Copilot gate.
+production DB. It does not replace the product/eng `review` angle or the Copilot
+gate.

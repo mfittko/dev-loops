@@ -13,16 +13,6 @@ claude-sync: false
 
 The `pi-session-audit` skill inspects Pi or Claude Code session usage transcripts to measure token efficiency, detect coordinator context snowballing, and report per-agent/per-unit token breakdowns. It is harness-agnostic: the snowball and threshold code is shared; each extractor supplies the per-turn prompt size (Pi input+cacheRead, Claude input+cacheRead+cacheCreate); see [Pi vs Claude Code](#pi-vs-claude-code). Harness is auto-detected from the record schema unless `--harness` overrides it.
 
-## Motivation & Context
-
-In complex agent orchestration workflows (such as multi-turn dev-loop runs), monolithic coordinator agents can retain conversation history across hundreds of turns. Because prompt context accumulates linearly or super-linearly with turn count, a long-running coordinator will repeatedly submit massive prompts on every turn. Even with prompt caching, a 400+ turn run can easily consume over 100M-150M tokens and incur substantial unnecessary cost ($15-$25+ per run).
-
-This skill provides an automated inspection tool to:
-1. Parse usage transcripts across the coordinator and child subagents.
-2. Group token consumption by model and agent role (`dev-loop`, `review`, `fixer`, `judge`, etc.).
-3. Measure context snowball metrics: turn count, initial vs final turn prompt sizes, prompt growth factor, and cache hit ratio.
-4. Flag anti-pattern thresholds (e.g. coordinator runs > 100 turns, context growth > 15x, low cache hit ratio).
-
 ## CLI Invocation
 
 The skill is backed by `scripts/loop/audit-pi-session.mjs` (available directly or via the CLI as `dev-loops loop audit-session`):
@@ -59,23 +49,15 @@ Harness auto-detects per record from the usage envelope's field-naming shape (Cl
 `mixed`. If a forced `--harness` mode finds zero usage turns while the other shape was
 present, the error names the detected shape and suggests `--harness auto`.
 
-Claude Code streams one JSONL record per content block; records sharing one `message.id`
-(including interleaved, not just adjacent, repeats) are deduped to a single turn in
-first-appearance order, keeping the last record's usage. A resumed Claude session can also
-replay prior history across files sharing one `message.id` + `requestId`; the file whose
-earliest usage turn is chronologically first wins a shared `message.id`:`requestId` pair
-(path order as tie-breaker), so later replays of the same turn in other files are skipped
-regardless of the files' name-sorted order. A Claude Code
-transcript's prompt size is `input + cacheRead + cacheCreate` on its first/last
-turn (Pi's is `input + cacheRead`, unchanged); this is the only place the two harnesses'
-metric definitions differ, per the issue that introduced Claude support. Role and session
+Claude records sharing one `message.id` count as a single turn. A turn replayed across
+resumed-session files (same `message.id` + `requestId`) counts once, in the
+chronologically first file. A Claude Code transcript's prompt size is
+`input + cacheRead + cacheCreate` on its first/last turn (Pi's is `input + cacheRead`);
+this is the only place the two harnesses' metric definitions differ. Role and session
 name come from the sibling `agent-<id>.meta.json` (`agentType` / `description`) when
-present; a Claude `agent-<id>.jsonl` transcript without a meta sidecar defaults to
-`subagent` instead, since the `coordinator` fallback is reserved for main-session Claude
-transcripts (`<uuid>.jsonl`). A background-task `.output` file is only
-collected when its first non-empty line parses as a JSON object shaped like a transcript
-record (a string `type`, or an object `message`); a plain-text or non-transcript-JSON
-`.output` file (e.g. `{"ok":true}`) is skipped rather than surfaced as malformed lines.
+present. Without a meta sidecar, a Claude `agent-<id>.jsonl` transcript defaults to
+`subagent` and a main-session transcript (`<uuid>.jsonl`) to `coordinator`. A `.output`
+file that is not a transcript (plain text or other JSON, e.g. `{"ok":true}`) is skipped.
 
 ## Interpreting Output
 
@@ -84,7 +66,6 @@ record (a string `type`, or an object `message`); a plain-text or non-transcript
 - **Resolved Target**: Absolute session path selected by `--latest` or supplied explicitly. A single transcript file target is audited alone; **Transcript Files Examined** makes that scope visible in Markdown.
 - **Total Turns**: Sum of assistant turns carrying a non-zero usage envelope (any of `input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, or `cost`). For a genuine fork transcript (its `session` header has a non-empty string `parentSession`), this excludes the inherited replay prefix and includes the fork's own turns; multiple `session_info` records in an ordinary transcript are all retained.
 - **Total Tokens**: Sum of `input + output + cacheRead + cacheWrite` when those provider dimensions are reported.
-- **Uncached Input vs Cached Read**: Demonstrates cache effectiveness.
 - **Cache Hit Ratio**: Calculated as `cachedRead / (uncachedInput + cachedRead)`. JSON reports a 0-1 fraction; Markdown reports a percentage. In long coordinator sessions with good prefix alignment, this should typically exceed 85-90%.
 - **Estimated Cost**: Sum of provider billed costs from message usage envelopes that report cost.
 - **Partial usage data**: Known values are still summed when only some envelopes report a dimension. JSON exposes `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `totalTokens`, `cacheHitRatio`, and `estimatedCost` under each `availability` object as `complete`, `partial`, or `unavailable`; the vocabulary is identical in `summary`, `sessions[]`, and `byModel[]`. Markdown appends `(partial)` to incomplete sums. A dimension renders as `n/a` only when no envelope reports it.
@@ -96,7 +77,7 @@ Breaks down token volume and cache ratios per model provider (e.g., `gemini-3.8-
 ### 3. Session Breakdown & Context Snowballing
 Each row represents one `session_info` agent segment within a transcript, so multiple rows can share the same `file`. In JSON, `file` identifies the transcript, `sessionName` preserves the segment's `session_info.name` (or is `null` when absent), and top-level `activeSessionsCount` is the number of emitted segment rows. Each row includes:
 - **Role**: Inferred agent role (`dev-loop`, `review`, `fixer`, etc.).
-- **Turns**: Count of assistant turns carrying a non-zero usage envelope (any of `input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, or `cost`) for that specific agent segment. In a fork snapshot, inherited replay turns are excluded when its timestamp boundary is resolved.
+- **Turns**: Usage-bearing assistant turns (same definition as Total Turns) for that agent segment. In a fork snapshot, inherited replay turns are excluded when its timestamp boundary is resolved.
 - **Init Prompt**: Size of the prompt on the first prompt-bearing turn (the first post-fork prompt-bearing turn for a fork snapshot): `input + cacheRead` for Pi, `input + cacheRead + cacheCreate` for Claude Code (see [Pi vs Claude Code](#pi-vs-claude-code)).
 - **Final Prompt**: Size of the prompt on the final prompt-bearing turn.
 - **Growth**: Growth factor `finalPromptTokens / initialPromptTokens`.
