@@ -11,6 +11,25 @@ import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: dev-loops gate resolve-validation --profile <targeted|full-repository> --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA> [--suite <script>]...\nTargeted profile requires at least one explicit --suite.\n${JQ_OUTPUT_USAGE}`;
 
+async function removeParseFailedArtifact(argv) {
+  const identity = {};
+  for (let i = 0; i < argv.length; i++) {
+    const match = /^--(repo|pr|gate|head-sha|tmp-root)(?:=(.*))?$/.exec(argv[i]);
+    if (!match) continue;
+    const name = match[1];
+    if (identity[name] !== undefined) return;
+    identity[name] = match[2] ?? argv[++i];
+  }
+  if (!["repo", "pr", "gate", "head-sha"].every((name) => identity[name])) return;
+  try {
+    const artifactPath = buildValidationResultsPath({
+      repo: identity.repo, pr: identity.pr, gate: identity.gate,
+      headSha: identity["head-sha"], tmpRoot: identity["tmp-root"] ?? "tmp",
+    });
+    await rm(path.resolve(resolveRepoRoot(process.cwd()), artifactPath), { force: true });
+  } catch { /* Invalid identity has no trustworthy keyed artifact to remove. */ }
+}
+
 export function parseResolveValidationArgs(argv) {
   const args = [...argv];
   if (args.includes("--help") || args.includes("-h")) return { help: true };
@@ -74,6 +93,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (options.help) { process.stdout.write(`${USAGE}\n`); return; }
     result = await resolveValidation(options);
   } catch (error) {
+    if (!options) await removeParseFailedArtifact(argv);
     result = { ok: false, status: "incomplete", profile: null, headSha: null, toolchain: null, reason: error instanceof Error ? error.message : String(error) };
   }
   const emitted = emitResult(result, { jq: options?.jq, silent: options?.silent });

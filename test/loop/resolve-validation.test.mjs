@@ -169,12 +169,17 @@ test("targeted gate refuses a dot-segment alias to full verification", async () 
 test("targeted profile without an explicit suite is incomplete and runs nothing", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
+    const complete = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha)], { cwd: repoRoot });
+    assert.equal(complete.code, 0, complete.stderr);
+    const stalePath = path.join(repoRoot, JSON.parse(complete.stdout).artifactPath);
+    assert.equal(JSON.parse(await readFile(stalePath, "utf8")).allPassed, true);
     const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha, "targeted")], { cwd: repoRoot });
     assert.equal(out.code, 1);
     const result = JSON.parse(out.stdout);
     assert.equal(result.status, "incomplete");
     assert.match(result.reason, /explicit --suite/);
     assert.equal(result.artifact, undefined);
+    await assert.rejects(readFile(stalePath), /ENOENT/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
