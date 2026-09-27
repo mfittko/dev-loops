@@ -1860,7 +1860,10 @@ test("#2456: --input strips an injected draftStart", async () => {
       loopState: "pr_followup_start",
       draftStart: { selectedGate: "draft_gate", preflight: "injected", nextAction: "injected" },
     });
-    const result = await runNode(["--input", inputPath], { cwd: tempDir });
+    const result = await runNode(["--input", inputPath], {
+      cwd: tempDir,
+      env: { ...process.env, ...resolverTestEnv() },
+    });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.draftStart, undefined);
