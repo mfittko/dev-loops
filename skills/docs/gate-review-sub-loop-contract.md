@@ -1473,8 +1473,12 @@ The conductor's fan-out round passes `--execution-mode fanout_fanin` on this cal
 `--findings-file` reads the same JSON from a file (identical validation) —
 use it for any non-trivial ledger so the array never rides a shell string;
 `post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
-`--ledger-out <path>` writes a `{ overallVerdict, findings }` wrapper — pass
+`--ledger-out <path>` writes a `{ overallVerdict, findings, verifiedItems? }` wrapper — pass
 that path straight to `--findings-file` on both tools, no hand extraction.
+`verifiedItems` is present only when non-empty. It holds the head-bound union of
+the `acceptance-criteria` and `pr-checklist` artifacts' `verifiedItems`, and
+the ledger carries it to the tick in step 5 of
+[Acceptance Criteria Verification](acceptance-criteria-verification.md).
 The sanctioned fan-out path also passes the emitter's keyed plan to this write
 via `--emit-plan`; the option remains additive for legacy/inline callers, but
 when present it requires `--provenance` and applies the correspondence guard

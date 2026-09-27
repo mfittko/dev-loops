@@ -296,10 +296,6 @@ describe("consolidateFanin — verdict", () => {
     }
   });
 
-  // Boundary fixture for MAX_ANGLE_NAME_LENGTH (200): pins the accept side so
-  // the 201-char reject fixture above cannot be satisfied by silently
-  // tightening the guard from `>` to `>=` (which would also reject a
-  // legitimate 200-char name).
   test("verifiedItems: rejects a non-array, a non-string or empty entry, and the field on another angle", () => {
     const cases = [
       { angle: "acceptance-criteria", verdict: "clean", findings: [], verifiedItems: "item" },
@@ -328,6 +324,10 @@ describe("consolidateFanin — verdict", () => {
     assert.deepEqual(result.malformed, []);
   });
 
+  // Boundary fixture for MAX_ANGLE_NAME_LENGTH (200): pins the accept side so
+  // the 201-char reject fixture above cannot be satisfied by silently
+  // tightening the guard from `>` to `>=` (which would also reject a
+  // legitimate 200-char name).
   test("an angle name at exactly the 200-char cap is accepted, not malformed", () => {
     const result = consolidateFanin({ angleResults: [cleanAngle("x".repeat(200))] });
     assert.equal(result.verdict, "clean");

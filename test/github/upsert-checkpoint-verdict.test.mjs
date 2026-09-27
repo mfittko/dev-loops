@@ -10410,8 +10410,12 @@ test("tick: a ledger verifying 20 of 22 items ticks exactly those 20 and posts b
 });
 
 test("tick: draft_gate never ticks, even with verifiedItems in the ledger", async () => {
-  await withCompositionRound({ overallVerdict: "clean", prBody: DEFAULT_TEST_PR_BODY, gate: "draft_gate", verifiedItems: ["anything"] }, async ({ post, calls }) => {
-    await post({ findingsSeverityCounts: CLEAN_COUNTS });
+  // Both labels match an unchecked box in the fixture body, so only the gate guard prevents the tick.
+  const verifiedItems = ["covered by the test", "tests pass"];
+  await withCompositionRound({ overallVerdict: "clean", prBody: DEFAULT_TEST_PR_BODY, gate: "draft_gate", verifiedItems }, async ({ post, editedBodies, calls }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.deepEqual(editedBodies, []);
     assert.equal(calls.some((c) => c.args[1] === "edit" && c.args.includes("--body-file")), false);
   });
 });

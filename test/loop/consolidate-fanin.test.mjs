@@ -456,6 +456,27 @@ test("consolidateGateFanin: the synthetic pr-checklist entry contributes no veri
   );
 });
 
+test("consolidateGateFanin: a carried entry contributes no verifiedItems", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "acceptance-criteria.json": { angle: "acceptance-criteria", verdict: "clean", findings: [], headSha: VERIFIED_HEAD, verifiedItems: ["fresh item"] } },
+      async (dir) => {
+        // acceptance-criteria and pr-checklist can never carry forward, so a
+        // carried entry is always another angle; its plan fields add nothing.
+        const carried = JSON.parse(carryForwardPlanJson(["dry"], { carriedFromHead: STALE_HEAD })).carried;
+        const written = await consolidateLedger(dir, {
+          headSha: VERIFIED_HEAD,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["dry"],
+          carryForwardPlan: carried.map((entry) => ({ ...entry, verifiedItems: ["carried item"] })),
+        });
+        assert.deepEqual(written.verifiedItems, ["fresh item"]);
+      },
+    );
+  });
+});
+
 test("consolidateGateFanin fails closed on verifiedItems from a non-AC angle", async () => {
   await withFindingsDir(
     { "scope.json": { angle: "scope", verdict: "clean", findings: [], verifiedItems: ["x"] } },

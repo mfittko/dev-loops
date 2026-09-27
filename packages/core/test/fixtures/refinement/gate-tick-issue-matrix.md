@@ -12,4 +12,5 @@
 | A new ADR records the decision. | A new ADR (Reserved ADR number: 0100 (tentative; renumber at merge if taken, per ADR-PATH-NUMBERING)) with Status `Accepted` records that reviewer output drives the gate tick and states that it amends no ADR; the bodies of ADR 0059, 0078, 0089 and 0095 are unchanged; `test:docs` passes. |
 | This issue runs first after #2414 merges, before #2448. | The PR's base contains the #2414 merge commit and no #2448 merge. The diff adds no #2448 change: no `specificity` field and no emitter continuation mode. |
 | The repo stays green. | Verdict-comment parsing and `detect-checkpoint-evidence` tests pass unchanged; `env -u DEVLOOPS_RUN_ID bun run verify` is green. |
+| Gate-outcome and merge-condition items are never emitted as checkboxes. | The PR template, `skills/dev-loop/templates/pr-body.md` and the PR-body generator (`issue-refinement-artifact.mjs`) emit gate-outcome and merge-condition items as prose, not checkboxes. A test asserts that a generated PR body has no checkbox whose satisfaction depends on the gate being evaluated. The pr-checklist prompt names the rule. |
 

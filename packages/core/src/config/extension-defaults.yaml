@@ -323,9 +323,11 @@ gates:
           Definition of done checklists is actually satisfied by the implementation — cite concrete
           code/test/behavior evidence; flag a dishonestly-ticked box as a blocking finding. Verify the
           PR checklists faithfully reflect the issue matrix (every matrix row is represented, nothing
-          invented or dropped) and that declared non-goals are respected (no scope creep). A gate or
-          merge outcome row appears in the "Gate and merge outcomes are not checkboxes" prose line,
-          not as a checkbox, and is not a dropped row. Do NOT
+          invented or dropped) and that declared non-goals are respected (no scope creep). Rule:
+          gate-outcome and merge-condition items are never checkboxes. A matrix row whose satisfaction
+          depends on a gate or merge being evaluated appears as a prose statement outside the AC/DoD
+          checklists, in any wording (for example the generator line "Gate and merge outcomes are not
+          checkboxes"), and is not a dropped row. Do NOT
           require a matrix on the PR — the matrix lives on the issue; the PR carries the derived
           checklists. The boundary is explicit: the deterministic block enforces completeness (nothing
           left unchecked/forgotten); you verify each [x] is real and faithfully derived.

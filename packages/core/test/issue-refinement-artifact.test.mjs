@@ -303,7 +303,7 @@ test("derivePrChecklistsFromIssueMatrix renders gate and merge outcomes as prose
 test("isGateOutcomeItem stays narrow: no row of a real tool-behavior matrix is a gate outcome", async () => {
   const body = await readFile(new URL("./fixtures/refinement/gate-tick-issue-matrix.md", import.meta.url), "utf8");
   const matrix = detectAcDodMatrix(body);
-  assert.equal(matrix.rows.length, 10);
+  assert.equal(matrix.rows.length, 11);
   for (const row of matrix.rows) {
     assert.equal(isGateOutcomeItem(row.criterion), false, row.criterion);
     assert.equal(isGateOutcomeItem(row.evidence), false, row.evidence);
@@ -335,6 +335,9 @@ test("isGateOutcomeItem needs an explicit gate subject and lifecycle merge phras
     "upsert-checkpoint-verdict refuses clean unless pre_approval_gate is clean on the head",
     "A draft_gate fan-out on a ready PR whose draft_gate passed is refused",
     "auto-merge merges only on an APPROVED review",
+    "Merge only after the data backfill has run in staging",
+    "merge only on green CI is enforced by merge-pr refusing a red head",
+    "merge only on a full gate pass is enforced by merge-pr",
   ]) {
     assert.equal(isGateOutcomeItem(item), false, item);
   }
@@ -349,6 +352,25 @@ test("derivePrChecklistsFromIssueMatrix fails closed on a missing/malformed matr
     () => derivePrChecklistsFromIssueMatrix({ body: "## AC / DoD matrix\n\n| AC | DoD |\n|---|---|\n| AC1 | D1 |\n" }),
     (err) => err.code === "MALFORMED_MATRIX_SOURCE",
   );
+});
+
+test("derivePrChecklistsFromIssueMatrix fails closed when a checklist would hold only gate outcomes", () => {
+  const matrixBody = (rows) => [
+    "## AC / DoD matrix", "",
+    "| Criterion outcome | Required completion evidence |",
+    "|---|---|",
+    ...rows,
+    "",
+  ].join("\n");
+  for (const body of [
+    matrixBody(["| the feature works end to end | merge only on a full gate pass |"]),
+    matrixBody(["| draft_gate and pre_approval_gate pass on the final head | a focused test proves the feature works |"]),
+  ]) {
+    assert.throws(
+      () => derivePrChecklistsFromIssueMatrix({ body }),
+      (err) => err.code === "MALFORMED_MATRIX_SOURCE" && /would be empty/.test(err.message),
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------

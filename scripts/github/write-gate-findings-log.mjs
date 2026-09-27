@@ -46,7 +46,7 @@ Optional:
                                  no two fresh (non-carried) angles may share one reviewer identity, and every fresh angle must record one (reviewer or dispatchId) — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
                                  EXCEPTION: fresh angles sharing a reviewer may all declare the same "group" name (grouped fan-out dispatch); differing or missing group names still fail closed
                                  Omitted, a "provenance" object embedded in the --findings/--findings-file wrapper
-                                 (any caller-supplied { overallVerdict, findings, provenance? } object, e.g. from
+                                 (any caller-supplied { overallVerdict, findings, provenance?, verifiedItems? } object, e.g. from
                                  consolidate-fanin.mjs's --ledger-out) is used instead, validated through this SAME
                                  check — a malformed wrapper provenance fails closed identically. Absent both, the log
                                  is written with no provenance, as before, UNLESS --execution-mode fanout_fanin is also

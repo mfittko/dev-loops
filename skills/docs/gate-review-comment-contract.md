@@ -269,7 +269,7 @@ with the fixed meaning below:
 Enforcement at write time and post time:
 
 - The consolidator (`consolidate-fanin.mjs`) computes the severity `overallVerdict`. It threads
-  through `--ledger-out`'s `{ overallVerdict, findings }` wrapper into the durable ledger
+  through `--ledger-out`'s `{ overallVerdict, findings, verifiedItems? }` wrapper into the durable ledger
   (`write-gate-findings-log.mjs`).
 - `write-gate-findings-log.mjs` refuses a `--verdict` that contradicts the
   `--findings`/`--findings-file` wrapper's `overallVerdict` before any ledger is written. The

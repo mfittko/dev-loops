@@ -7,7 +7,7 @@
  * "findingsJson"/--out is the NESTED per-angle shape (one section per source
  * artifact, clean angles included with an empty findings array); the stdout
  * "findings" result is the FLAT per-finding bare array, and --ledger-out
- * writes that same flat array wrapped as { overallVerdict, findings }.
+ * writes that same flat array wrapped as { overallVerdict, findings, verifiedItems? }.
  *
  * Per-angle findings artifact shape (one *.json file per angle in --findings-dir):
  *   {
@@ -113,6 +113,10 @@ Optional:
                                  threads it through) and on to upsert-checkpoint-verdict.mjs's
                                  enforcement (#1616) without an orchestrator hand-off — a value the
                                  orchestrator re-types as --verdict reproduces the same defect.
+                                 The optional verifiedItems field is present only when non-empty:
+                                 the deduplicated, trimmed union of the acceptance-criteria and
+                                 pr-checklist artifacts' verifiedItems stamped for --head-sha. A
+                                 carried or synthetic entry adds nothing.
                                  Rejected at parse time (exit 1) when
                                  it resolves to the same path as --out — one write would otherwise
                                  destroy the other. Neither --out nor --ledger-out may resolve to a

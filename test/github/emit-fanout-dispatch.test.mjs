@@ -1688,9 +1688,6 @@ test("buildAngleNamingSuffix names angles and carries their supplied instruction
   assert.match(group, /one findings artifact PER ANGLE/);
 });
 
-// #2372: the suffix states the unit's own emitted scope verbatim as the
-// --scope value, never a value derived from the unit name inside the suffix
-// text itself (an auto-chunk unit's raw name is not a valid scope).
 test("buildAngleNamingSuffix adds the fixed verifiedItems instruction to every unit carrying an AC angle, keyed on membership", () => {
   const units = [
     { name: "acceptance-criteria", angles: ["acceptance-criteria"] },
@@ -1728,6 +1725,9 @@ test("a packed unit carrying acceptance-criteria emits the verifiedItems instruc
   });
 });
 
+// #2372: the suffix states the unit's own emitted scope verbatim as the
+// --scope value, never a value derived from the unit name inside the suffix
+// text itself (an auto-chunk unit's raw name is not a valid scope).
 test("buildAngleNamingSuffix states the unit's emitted scope verbatim as the --scope value", () => {
   const scope = "pre-approval-gate-group-determinism-state-concurrency";
   const suffix = buildAngleNamingSuffix({ name: "group:determinism+state-concurrency", angles: ["determinism", "state-concurrency"] }, scope);
