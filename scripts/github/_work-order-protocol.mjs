@@ -18,8 +18,10 @@ import { writeJson } from "@dev-loops/core/loop/phase-files";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 // Local-only fields: the materialized file, absolute output refs, tmp roots,
-// and hashes of files that embed absolute paths (the reviewer briefing prefix).
-const LOCAL_MATERIAL_KEYS = new Set(["promptPath", "outputRefs", "tmpRoot", "prefixSha256"]);
+// and hashes/sizes of files that embed absolute paths (the briefing prefix, and
+// the required reads: the evidence file's validation pointer and validation.json).
+// Readers still verify each required read's sha256 from the materialized work order.
+const LOCAL_MATERIAL_KEYS = new Set(["promptPath", "outputRefs", "tmpRoot", "prefixSha256", "sha256", "bytes"]);
 
 /** Hard cap for the compact dispatch envelope every role sends (bytes). */
 export const DISPATCH_POINTER_MAX_BYTES = 499;
@@ -37,9 +39,7 @@ export function canonicalizeWorkOrder(value) {
   return out;
 }
 
-export function workOrderDigest(workOrder) {
-  return sha256Hex(JSON.stringify(canonicalizeWorkOrder(workOrder)));
-}
+export const workOrderDigest = (workOrder) => sha256Hex(JSON.stringify(canonicalizeWorkOrder(workOrder)));
 
 export const materializationHash = sha256Hex;
 
@@ -48,7 +48,7 @@ export const materializationHash = sha256Hex;
 export function buildDispatchPointer({ workOrderRef, workOrderDigest: digest, executionIdentity }) {
   const unsafe = [workOrderRef, digest, executionIdentity].find((value) => !/^[A-Za-z0-9][\w.:/#-]*$/.test(String(value)));
   if (unsafe !== undefined) throw new Error(`dispatch envelope value ${JSON.stringify(unsafe)} is not shell-safe`);
-  const text = `Run \`dev-loops-run scripts/github/pull-work-order.mjs --ref ${workOrderRef} --digest ${digest} --execution ${executionIdentity}\` and follow its printed work order exactly. On exit 1, stop and report its refusal JSON verbatim.`;
+  const text = `Run \`dev-loops-run scripts/github/pull-work-order.mjs --ref ${workOrderRef} --digest ${digest} --execution ${executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
   const bytes = Buffer.byteLength(text);
   if (bytes > DISPATCH_POINTER_MAX_BYTES) throw new Error(`dispatch envelope for ${workOrderRef} is ${bytes} bytes, over DISPATCH_POINTER_MAX_BYTES ${DISPATCH_POINTER_MAX_BYTES}`);
   return text;
@@ -63,22 +63,14 @@ export function buildDispatchPointer({ workOrderRef, workOrderDigest: digest, ex
  * the adapter; the located work order's header `role` must name the same role.
  */
 export const WORK_ORDER_ROLES = new Map();
-export function registerWorkOrderRole(role, adapter) {
-  WORK_ORDER_ROLES.set(role, adapter);
-}
+export const registerWorkOrderRole = (role, adapter) => WORK_ORDER_ROLES.set(role, adapter);
 
 export class WorkOrderRefusal extends Error {
-  constructor(refusal, message, retryable = false) {
-    super(message);
-    this.refusal = refusal;
-    this.retryable = retryable;
-  }
+  constructor(refusal, message, retryable = false) { super(message); Object.assign(this, { refusal, retryable }); }
 }
 
 /** Receipt location: one file per work-order ref under the MAIN checkout's tmp root. */
-export function pullReceiptPath(receiptTmpRoot, workOrderRef) {
-  return path.join(receiptTmpRoot, "work-order-receipts", `${sha256Hex(workOrderRef)}.json`);
-}
+export const pullReceiptPath = (receiptTmpRoot, workOrderRef) => path.join(receiptTmpRoot, "work-order-receipts", `${sha256Hex(workOrderRef)}.json`);
 
 /**
  * Verify a compact reference and pull its work order. Returns
@@ -91,29 +83,18 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
   const unit = await adapter.locate({ ref, digest, execution, cwd, tmpRoots });
   // Stale first: a retired or superseded round never retargets onto the newest unit.
   if (unit?.stale) throw new WorkOrderRefusal("stale_dispatch", `${unit.stale}; never retarget to the newest round, reconcile and re-dispatch the current lawful unit`);
-  if (!unit || unit.workOrderDigest !== digest) {
-    throw new WorkOrderRefusal("dispatch_reference_mismatch", `ref/digest ${ref} ${digest} matches no canonical emitted unit; re-dispatch the SAME unit with its canonical compact reference`, true);
-  }
-  if (unit.executionIdentity !== execution) {
-    throw new WorkOrderRefusal("dispatch_identity_mismatch", `execution ${execution} is not the execution emitted for ${ref}; do not count this worker's result`);
-  }
+  if (!unit || unit.workOrderDigest !== digest) throw new WorkOrderRefusal("dispatch_reference_mismatch", `ref/digest ${ref} ${digest} matches no canonical emitted unit; re-dispatch the SAME unit with its canonical compact reference`, true);
+  if (unit.executionIdentity !== execution) throw new WorkOrderRefusal("dispatch_identity_mismatch", `execution ${execution} is not the execution emitted for ${ref}; do not count this worker's result`);
   if (unit.workOrder?.role !== role) {
     const refusal = WORK_ORDER_ROLES.has(unit.workOrder?.role) ? "dispatch_identity_mismatch" : "unknown_role";
     throw new WorkOrderRefusal(refusal, `work order header role ${JSON.stringify(unit.workOrder?.role)} does not match ref role ${JSON.stringify(role)}`);
   }
-  if (workOrderDigest(unit.workOrder) !== unit.workOrderDigest) {
-    throw new WorkOrderRefusal("semantic_identity_mismatch", `the canonical work order for ${ref} no longer reproduces workOrderDigest ${unit.workOrderDigest}; fail closed and re-emit against current authority`);
-  }
+  if (workOrderDigest(unit.workOrder) !== unit.workOrderDigest) throw new WorkOrderRefusal("semantic_identity_mismatch", `the canonical work order for ${ref} no longer reproduces workOrderDigest ${unit.workOrderDigest}; fail closed and re-emit against current authority`);
   const invalid = adapter.validate(unit.workOrder);
   if (invalid) throw new WorkOrderRefusal("invalid_work_order", invalid);
   const workOrderText = await readFile(unit.materializationPath, "utf8").catch(() => null);
-  if (workOrderText === null || materializationHash(workOrderText) !== unit.materializationHash) {
-    throw new WorkOrderRefusal("local_materialization_integrity_failure", `local work order ${unit.materializationPath} is missing or no longer matches materializationHash while workOrderDigest still reproduces; never re-dispatch a different work order`);
-  }
-  const receipt = {
-    executionIdentity: execution, role, workOrderRef: ref, workOrderDigest: digest,
-    materializationHash: unit.materializationHash, subject: unit.subject, pulledAt: new Date().toISOString(),
-  };
+  if (workOrderText === null || materializationHash(workOrderText) !== unit.materializationHash) throw new WorkOrderRefusal("local_materialization_integrity_failure", `local work order ${unit.materializationPath} is missing or no longer matches materializationHash while workOrderDigest still reproduces; never re-dispatch a different work order`);
+  const receipt = { executionIdentity: execution, role, workOrderRef: ref, workOrderDigest: digest, materializationHash: unit.materializationHash, subject: unit.subject, pulledAt: new Date().toISOString() };
   const receiptPath = pullReceiptPath(receiptTmpRoot, ref);
   await writeJson(receiptPath, receipt);
   return { workOrderText, receipt, receiptPath };
@@ -125,12 +106,8 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
  * receipt_missing, unit_mismatch, role_mismatch, execution_mismatch, digest_mismatch.
  */
 export async function verifyPullReceipt({ receiptTmpRoot, workOrderRef, workOrderDigest: digest, executionIdentity, role }) {
-  let receipt;
-  try {
-    receipt = JSON.parse(await readFile(pullReceiptPath(receiptTmpRoot, workOrderRef), "utf8"));
-  } catch {
-    return { ok: false, reason: "receipt_missing" };
-  }
+  const receipt = await readFile(pullReceiptPath(receiptTmpRoot, workOrderRef), "utf8").then(JSON.parse).catch(() => undefined);
+  if (receipt === undefined) return { ok: false, reason: "receipt_missing" };
   if (receipt?.workOrderRef !== workOrderRef) return { ok: false, reason: "unit_mismatch" };
   if (receipt.role !== role) return { ok: false, reason: "role_mismatch" };
   if (receipt.executionIdentity !== executionIdentity) return { ok: false, reason: "execution_mismatch" };

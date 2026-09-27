@@ -4020,7 +4020,12 @@ test("#1841 AC1/AC2: a round whose dispatched reviewer prompt is prefix-first (i
           prefixPath,
           leading: `${bytes}## Angle: coverage\nDo the thing.`,
         });
-        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
+        // #2416: a fan-out round (records on disk) without --emit-plan cannot skip the receipt check.
+        await assert.rejects(() => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }), /no --emit-plan/);
+        const unit = { ...matchingEmitPlan().units[0], scope: "draft-gate-coverage", workOrderRef: `review:o/r#1:draft_gate:${HEAD_A}:draft-gate-coverage` };
+        await writeEmitPlanReceipt(tmpRoot, unit);
+        const emitPlan = await writeEmitPlan(tmpRoot, { ...matchingEmitPlan(), gate: "draft_gate", headSha: HEAD_A, units: [unit] });
+        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot, emitPlan, gate: "draft_gate", receiptTmpRoot: tmpRoot });
         assert.equal(result.overallVerdict, "clean");
       } finally {
         await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});

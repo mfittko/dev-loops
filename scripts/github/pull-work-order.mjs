@@ -41,14 +41,17 @@ async function findRetirementAfter(tmpRoot, gate, headSha, emittedAtMs) {
   return null;
 }
 
-// The search prefers a checkout whose unit carries the supplied digest; the
-// first located unit backs the refusal when none does.
+// Digests are equal across checkouts, so the search prefers a digest match whose
+// plan round is this execution's (not stale), then any digest match, then the first unit.
 async function locateReviewUnit({ ref, digest, execution, tmpRoots }) {
   const match = REVIEW_REF_RE.exec(ref);
   if (!match) return null;
   const [, repo, pr, gate, headSha] = match;
+  // A typed gate/pr/repo the path builder rejects is a retryable typo, never an IO error.
+  try { buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot: "tmp" }); } catch { return null; }
   const [, executionRound, emittedAtMs] = EXECUTION_ROUND_RE.exec(execution) ?? [];
-  let first = null;
+  const rank = (unit) => (unit.workOrderDigest === digest) * 2 + !unit.stale;
+  let best = null;
   for (const tmpRoot of tmpRoots) {
     const plan = await readJson(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }));
     const unit = plan?.units?.find((candidate) => candidate.workOrderRef === ref);
@@ -63,10 +66,9 @@ async function locateReviewUnit({ ref, digest, execution, tmpRoots }) {
       subject: { repo, pr: Number(pr), gate, headSha, roundId: plan.roundId, scope: unit.scope },
       stale: superseded || (retired && `execution ${execution} belongs to a ${gate} round at ${headSha} retired as ${retired}`),
     };
-    if (unit.workOrderDigest === digest) return located;
-    first ??= located;
+    if (!best || rank(located) > rank(best)) best = located;
   }
-  return first;
+  return best;
 }
 
 registerWorkOrderRole("review", {

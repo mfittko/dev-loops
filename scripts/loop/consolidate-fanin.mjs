@@ -232,7 +232,7 @@ Optional:
                                  proceeds unchanged (recording telemetry is progressive/optional).
   --emit-plan <path>            emit-fanout-dispatch.mjs's keyed emit-plan artifact
                                  (<gate>-<headSha>.emit-plan.json, GATE-EXEC-FANOUT-DISPATCH-EMIT) as a
-                                 path. Optional; when given, the fan-in verifies the plan's embedded
+                                 path. Required once the head has dispatch-prompt records; the fan-in verifies its embedded
                                  round key (gate, headSha) against the round being consolidated and
                                  FAILS CLOSED (exit 1, "cannot verify emit-plan key" / "is stamped for ...")
                                  on a mismatch, a missing/malformed key field, or an unreadable/non-JSON
@@ -1121,6 +1121,10 @@ export async function consolidateGateFanin(options) {
     if (layoutVerdict.recordCount > 0 && !layoutVerdict.verified) {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt did not bind to the sanctioned emitter's emitted unit. Re-run the sanctioned emitter (emit-fanout-dispatch.mjs) for the offending unit(s), re-dispatch from the emitted promptPath bytes, then re-consolidate.`);
     }
+    // The emitter writes a dispatch-prompt record per unit, so records on disk mark
+    // a fan-out round; it must pass --emit-plan so every unit's pull receipt is checked
+    // (ADR 0106). Disk evidence, never a conductor-typed flag, decides this.
+    if (emitPlan === undefined && layoutVerdict.recordCount > 0) throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: head ${options.headSha} has ${layoutVerdict.recordCount} dispatch-prompt record(s) but no --emit-plan, so fan-in cannot require a pull receipt for every freshly dispatched unit; pass emit-fanout-dispatch.mjs's emit plan (fail-closed)`);
   }
 
   // GATE-EXEC-CACHE-TELEMETRY: enforces the before/after cache-telemetry

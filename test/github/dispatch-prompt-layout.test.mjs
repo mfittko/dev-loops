@@ -75,10 +75,11 @@ test("evaluateDispatchPromptLayout: a record bound to the inline-aligned emitted
 });
 
 // #2416: the record binds the compact reference the reviewer was dispatched with.
-test("evaluateDispatchPromptLayout: REJECTS a record that binds no compact work-order reference, or one for another unit", () => {
+test("evaluateDispatchPromptLayout: REJECTS a record that binds no compact work-order reference, or one for another unit, gate or head", () => {
   const prefixPath = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
   const emitted = `${PREFIX_BYTES}## Angle: coverage\n`;
-  for (const compactReference of [null, { ...COMPACT_REFERENCE, workOrderRef: "review:o/r#1:draft_gate:abc:draft-gate-security" }]) {
+  const others = ["draft_gate:abc:draft-gate-security", "pre_approval_gate:abc:draft-gate-coverage", "draft_gate:abd:draft-gate-coverage"];
+  for (const compactReference of [null, ...others.map((key) => ({ ...COMPACT_REFERENCE, workOrderRef: `review:o/r#1:${key}` }))]) {
     const result = evaluateDispatchPromptLayout(
       [{ scope: "draft-gate-coverage", prefixPath, leading: emitted, promptContentHash: sha256Hex(emitted), compactReference }],
       new Map([[prefixPath, PREFIX_BYTES]]),
@@ -210,7 +211,7 @@ test("verifyDispatchPromptLayoutForHead: record bound to the on-disk inline-alig
     await writeEmittedPrompt(tmpDir, "draft-gate-coverage", emitted);
     await writeFile(
       dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA),
-      JSON.stringify({ scope: "draft-gate-coverage", headSha: HEAD_SHA, prefixPath: relPath, leading: emitted, promptContentHash: sha256Hex(emitted), compactReference: COMPACT_REFERENCE }),
+      JSON.stringify({ scope: "draft-gate-coverage", headSha: HEAD_SHA, prefixPath: relPath, leading: emitted, promptContentHash: sha256Hex(emitted), compactReference: { ...COMPACT_REFERENCE, workOrderRef: `review:o/r#1:draft_gate:${HEAD_SHA}:draft-gate-coverage` } }),
     );
     const result = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
     assert.equal(result.verified, true);

@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import { WorkOrderRefusal, buildDispatchPointer, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
@@ -23,15 +23,20 @@ const pull = (unit, cwd, over = {}) => run("pull-work-order.mjs", [
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout));
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-pull-" });
 
-// Seed one gate-context bundle and emit its round. The briefing prefix embeds
-// the checkout's absolute path, as the real write-gate-context.mjs prefix does.
+// Seed one gate-context bundle and emit its round. The briefing prefix and the
+// hashed required reads embed the checkout's absolute path, as the real prefix,
+// evidence validation pointer and validation.json do.
 async function emitRound(root, { prompt = "Review the coverage angle." } = {}) {
+  const evidence = `## Validation results at this head\n  ${root}/tmp/validation.json\n`;
   const dir = path.join(root, "tmp", "gate-context", "o-r", "pr-7");
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(root, ".devloops"), `version: 1\ngates:\n  preApproval:\n    angles:\n      - name: coverage\n        persona: review\n        prompt: ${prompt}\n`, "utf8");
   await writeFile(path.join(dir, `${GATE}-${HEAD}.briefing-prefix.txt`), `## Invariant prefix\nfindings: ${root}/tmp/gate-reviews\n`, "utf8");
   await writeFile(path.join(dir, `${GATE}-${HEAD}.briefing-volatile.txt`), "# volatile tail\n", "utf8");
-  await writeFile(path.join(dir, `${GATE}-${HEAD}.json`), JSON.stringify({ fanout: { groups: [{ name: "coverage", angles: ["coverage"] }] } }), "utf8");
+  await writeFile(path.join(dir, `${GATE}-${HEAD}.json`), JSON.stringify({ fanout: { groups: [{ name: "coverage", angles: ["coverage"] }] }, requiredReads: [
+    { kind: "evidence", path: "tmp/evidence.md", sha256: materializationHash(evidence), bytes: evidence.length, required: true },
+    { kind: "validation", path: "tmp/validation.json", sha256: materializationHash(root), bytes: root.length, required: false },
+  ] }), "utf8");
   const emitted = run("emit-fanout-dispatch.mjs", ["--repo", "o/r", "--pr", "7", "--gate", GATE, "--head-sha", HEAD], root);
   assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
   return JSON.parse(emitted.stdout).units[0];
@@ -64,9 +69,18 @@ test("the dispatchPrompt carries a shell-runnable pull command; shell metacharac
   });
 });
 
-test("workOrderDigest is equal across two checkout roots with different materializationHash; a semantic input change changes it", async () => {
+test("the dispatch envelope fits the cap for a worst-case sanctioned identity and throws one byte over it", () => {
+  const worst = { workOrderRef: `review:${"o".repeat(39)}/${"r".repeat(40)}#99999:pre_approval_gate:${"f".repeat(64)}:pre-approval-gate-${"g".repeat(30)}`, workOrderDigest: "f".repeat(64), executionIdentity: "r1790000000000-abcdef12-u99" };
+  assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
+  const pad = DISPATCH_POINTER_MAX_BYTES - Buffer.byteLength(buildDispatchPointer({ ...worst, workOrderRef: "a" }));
+  assert.equal(Buffer.byteLength(buildDispatchPointer({ ...worst, workOrderRef: "a".repeat(1 + pad) })), DISPATCH_POINTER_MAX_BYTES);
+  assert.throws(() => buildDispatchPointer({ ...worst, workOrderRef: "a".repeat(2 + pad) }), /over DISPATCH_POINTER_MAX_BYTES/);
+});
+
+test("workOrderDigest is equal across two checkout roots whose required reads hash differently; a semantic input change changes it", async () => {
   await withDir(async (a) => withDir(async (b) => withDir(async (c) => {
     const [ua, ub] = [await emitRound(a), await emitRound(b)];
+    assert.notEqual(ua.workOrder.requiredReads[0].sha256, ub.workOrder.requiredReads[0].sha256);
     assert.equal(ua.workOrderDigest, ub.workOrderDigest);
     assert.notEqual(ua.materializationHash, ub.materializationHash);
     const uc = await emitRound(c, { prompt: "Review the coverage angle, including error paths." });
@@ -79,7 +93,9 @@ test("a typed ref or digest is a retryable dispatch_reference_mismatch; the same
     const unit = await emitRound(root);
     const planPath = buildGateEmitPlanPath({ repo: "o/r", pr: "7", gate: GATE, headSha: HEAD, tmpRoot: path.join(root, "tmp") });
     const planBefore = await readFile(planPath, "utf8");
-    for (const over of [{ digest: `${unit.workOrderDigest.slice(0, -1)}0` }, { ref: `${unit.workOrderRef}x` }]) {
+    const typoDigest = `${unit.workOrderDigest.slice(0, -1)}${unit.workOrderDigest.endsWith("0") ? "1" : "0"}`;
+    const typoRefs = [`${unit.workOrderRef}x`, unit.workOrderRef.replace(GATE, "pre_aproval_gate"), unit.workOrderRef.replace("#7:", "#0:")];
+    for (const over of [{ digest: typoDigest }, ...typoRefs.map((ref) => ({ ref }))]) {
       const body = refusal(pull(unit, root, over));
       assert.equal(body.refusal, "dispatch_reference_mismatch");
       assert.equal(body.retryable, true);
@@ -107,6 +123,12 @@ test("semantic mutation refuses as semantic_identity_mismatch; a materialization
     assert.equal(refusal(pull(unit, root)).refusal, "local_materialization_integrity_failure");
     await rm(unit.promptPath);
     assert.equal(refusal(pull(unit, root)).refusal, "local_materialization_integrity_failure");
+    // A self-consistent work order without the widening rule fails the review adapter.
+    const [invalid] = plan.units;
+    delete invalid.workOrder.executionRules.widening;
+    invalid.workOrderDigest = workOrderDigest(invalid.workOrder);
+    await writeFile(planPath, JSON.stringify(plan), "utf8");
+    assert.equal(refusal(pull(unit, root, { digest: invalid.workOrderDigest })).refusal, "invalid_work_order");
   });
 });
 
@@ -139,13 +161,14 @@ test("a ref from a superseded same-head round refuses as stale_dispatch, never a
   });
 });
 
-test("the plan search prefers the checkout whose unit carries the supplied digest", async () => {
-  await withDir(async (a) => withDir(async (b) => {
+test("the plan search prefers the checkout holding the execution's own round, then the supplied digest", async () => {
+  await withDir(async (a) => withDir(async (b) => withDir(async (c) => {
     await emitRound(a, { prompt: "Other prompt." });
+    await emitRound(c); // an older same-ref plan with an EQUAL digest, searched first
     const unit = await emitRound(b);
-    const pulled = await pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, tmpRoots: [path.join(a, "tmp"), path.join(b, "tmp")], receiptTmpRoot: b });
+    const pulled = await pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, tmpRoots: [c, a, b].map((root) => path.join(root, "tmp")), receiptTmpRoot: b });
     assert.equal(pulled.receipt.materializationHash, unit.materializationHash);
-  }));
+  })));
 });
 
 test("a pull from a linked-worktree cwd writes the receipt under the main checkout, where fan-in resolves it", async () => {
