@@ -16,10 +16,16 @@ That anchoring is right for a rewrite and wrong for a renumber. Two records can 
 
 Rule 3 recognizes a pure renumber as legal, and nothing else changes.
 
-The validator keeps its delete/add read (`diffNameOnly`, `--no-renames`) as the guard's core: a bare delete and an add-only still fail closed exactly as before. It additionally reads a rename-detecting `git diff --name-status --find-renames` scoped to `docs/decisions`. When a base-present, Accepted-or-Superseded record is absent at HEAD but is the source of a detected rename, the destination's body is compared against the base body with the H1's four-digit number normalized (`normalizeRecordNumber`). Equal bodies mean a renumber: the record keeps its decision and takes a new unique number, and no error is raised. A rename whose normalized bodies differ is refused as a post-acceptance rewrite, naming the old and new paths.
+The validator keeps its delete/add read (`diffNameOnly`, `--no-renames`) as the guard's core: a bare delete is still refused, and a newly added record still cannot excuse a separate deletion. It additionally reads a rename-detecting `git diff --name-status --find-renames` scoped to `docs/decisions`. A base-present, Accepted-or-Superseded record that is absent at HEAD is treated as a legal renumber only when all three hold:
+
+- the rename destination is a direct record-shaped file under `docs/decisions` (a nested destination such as `docs/decisions/archive/0047-something.md` is refused, because the index scans only direct children and the record would otherwise vanish from the catalog with no guard firing);
+- the destination's H1 number matches its new filename (`recordTitleNumber`); and
+- the destination's body outside `## Status`, with the H1's four-digit number normalized (`normalizeRecordNumber`), equals the base body's.
+
+Anything else is refused as a post-acceptance rewrite, naming the old and new paths. A rename with an edited body, a stale H1 number, a nested destination, and a plain delete each stay refused.
 
 The comparison stays inside the existing rule-3 scope boundary: only content outside `## Status` is compared, the H1 number is the only line treated as identity rather than content, and judging the correctness of a record's Status content remains a declared non-goal.
 
 ## Consequences
 
-A duplicate record number on the default branch is repairable in a branch by renaming one record to the next free number, which is the repair `ADR-PATH-NUMBERING` implies. The guard's bite is preserved on every other path: a rename that also edits the body fails, a delete fails, and an add-only never satisfies the delete side. `test/docs/validate-decision-records.test.mjs` pins all three: a renumber passes, an editing rename fails with `ADR-SUPERSEDE-NOT-REWRITE`, and the rename-detecting read is mutation-anchored on `--find-renames` while the delete/add read stays anchored on `--no-renames`.
+A duplicate record number on the default branch is repairable in a branch by renaming one record to the next free number, which is the repair `ADR-PATH-NUMBERING` implies. The guard's bite is preserved on every other path: a rename that also edits the body fails, a rename that leaves a stale H1 number fails, a rename out of the direct `docs/decisions` directory fails, and a bare delete fails. `test/docs/validate-decision-records.test.mjs` pins each: a renumber passes; an editing rename, a stale-H1 rename and a nested-destination rename each fail with `ADR-SUPERSEDE-NOT-REWRITE`; and the rename-detecting read is mutation-anchored on `--find-renames` while the delete/add read stays anchored on `--no-renames`.

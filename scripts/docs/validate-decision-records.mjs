@@ -74,6 +74,17 @@ export function normalizeRecordNumber(bodyText) {
 }
 
 /**
+ * The four-digit number in a record's H1 (`# 0096. Title`), or null when the
+ * body does not open with one. The renumber exception requires the destination's
+ * H1 number to match its new filename, so a rename that leaves a stale H1 number
+ * behind is refused rather than silently creating a filename/H1 mismatch.
+ */
+export function recordTitleNumber(recordText) {
+  const match = recordText.match(/^#\s+(\d{4})\./);
+  return match ? match[1] : null;
+}
+
+/**
  * Index checks (ADR-PATH-NUMBERING): filename shape and unique four-digit prefix.
  * Returns a list of named errors, one per violation.
  */
@@ -136,10 +147,13 @@ export { createGitClient };
  * Renumber tolerance (0097): a record that is already on the base branch cannot be
  * renumbered without a delete+add pair, so the deletion guard would refuse the only
  * legal repair for a duplicate record number. Rule 3 therefore also reads a
- * rename-detecting `diffNameStatus` and treats an `R` whose destination body equals the
- * base body with the H1 number normalized as a legal renumber. Every other rename is
- * still refused, and the delete/add path (`diffNameOnly`, `--no-renames`) is unchanged,
- * so a bare delete or an add-only still fails closed.
+ * rename-detecting `diffNameStatus` and treats an `R` as a legal renumber only when
+ * every one of these holds: the destination is a direct record-shaped file under
+ * `docs/decisions` (a nested path would drop the record out of the catalog with no
+ * guard firing), the destination's H1 number matches its new filename, and the body
+ * outside `## Status` equals the base body with the H1 number normalized. Every other
+ * rename is still refused, and the delete/add path (`diffNameOnly`, `--no-renames`) is
+ * unchanged, so a bare delete and an add-only still fail closed.
  */
 export async function validateDecisionRecords({ root, git = createGitClient(root) }) {
   const dir = path.join(root, DECISIONS_DIR);
@@ -195,17 +209,24 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
       } catch (err) {
         if (err.code === "ENOENT") {
           const renamedTo = renameTargets.get(rel);
-          if (renamedTo) {
-            // A renumber keeps the decision and moves it to a new unique number,
-            // changing only the H1 number. Anything else in the body is still a
-            // post-acceptance rewrite and is refused.
+          // A renumber is only ever a record-to-record move: the destination must
+          // stay a direct record under docs/decisions, and its H1 number must match
+          // its new filename. Anything else is not a renumber and is refused below.
+          const renamedBase = renamedTo === undefined ? null : path.posix.basename(renamedTo);
+          if (renamedTo !== undefined
+            && path.posix.dirname(renamedTo) === DECISIONS_DIR
+            && FILENAME_RE.test(renamedBase)) {
             const renamedText = await readFile(path.join(root, renamedTo), "utf8");
-            if (normalizeRecordNumber(splitStatus(renamedText).rest) !== normalizeRecordNumber(baseRest)) {
+            const staleTitleNumber = recordTitleNumber(renamedText) !== renamedBase.slice(0, 4);
+            const editedBody = normalizeRecordNumber(splitStatus(renamedText).rest) !== normalizeRecordNumber(baseRest);
+            if (staleTitleNumber || editedBody) {
               errors.push({
                 kind: "adr_post_acceptance_rewrite",
                 rule: "ADR-SUPERSEDE-NOT-REWRITE",
                 file: rel,
-                message: `accepted/superseded record '${rel}' was renamed to '${renamedTo}' and edited outside its Status section (ADR-SUPERSEDE-NOT-REWRITE)`,
+                message: staleTitleNumber
+                  ? `accepted/superseded record '${rel}' was renamed to '${renamedTo}' without matching its new record number in the H1 (ADR-SUPERSEDE-NOT-REWRITE)`
+                  : `accepted/superseded record '${rel}' was renamed to '${renamedTo}' and edited outside its Status section (ADR-SUPERSEDE-NOT-REWRITE)`,
               });
             }
             continue;

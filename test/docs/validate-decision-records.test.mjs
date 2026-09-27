@@ -296,6 +296,44 @@ test("a rename that also edits the body outside the Status section still fails, 
   }
 });
 
+test("a rename into a subdirectory is refused (the record must stay a direct record)", async () => {
+  const { root, git } = await fixture({
+    "docs/decisions/archive/0048-something.md": ACCEPTED_4047_RENUMBERED,
+  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }, [
+    { from: "docs/decisions/0047-something.md", to: "docs/decisions/archive/0048-something.md" },
+  ]));
+  try {
+    const result = await validateDecisionRecords({ root, git });
+    assert.equal(result.ok, false);
+    const error = result.errors.find((e) => e.kind === "adr_post_acceptance_rewrite");
+    assert.ok(error);
+    assert.equal(error.rule, "ADR-SUPERSEDE-NOT-REWRITE");
+    assert.match(error.message, /deleted/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a rename whose destination H1 number does not match its new filename is refused", async () => {
+  const { root, git } = await fixture({
+    // Renamed to 0048 but the H1 still says 0047: the body comparison passes
+    // (the H1 number is normalized away), so only the number check can catch it.
+    "docs/decisions/0048-something.md": ACCEPTED_4047,
+  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }, [
+    { from: "docs/decisions/0047-something.md", to: "docs/decisions/0048-something.md" },
+  ]));
+  try {
+    const result = await validateDecisionRecords({ root, git });
+    assert.equal(result.ok, false);
+    const error = result.errors.find((e) => e.kind === "adr_post_acceptance_rewrite");
+    assert.ok(error);
+    assert.equal(error.rule, "ADR-SUPERSEDE-NOT-REWRITE");
+    assert.match(error.message, /without matching its new record number/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an already-Superseded record is also protected from non-status edits", async () => {
   const { root, git } = await fixture({
     "docs/decisions/0047-something.md": ACCEPTED_4047_EDITED,
