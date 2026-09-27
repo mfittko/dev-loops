@@ -224,10 +224,10 @@ test("Phase 2 routes known-findings reads to the full-body helper and dispositio
   // prove helper behavior, not the conductor's decision to invoke it correctly.
 });
 
-test("Phase 2 delivers known findings by reference and never appends after the promptPath bytes", async () => {
+test("Phase 2 delivers known findings by reference and never appends to the compact dispatchPrompt", async () => {
   const step = extractStep(await readRepo(SKILL), "2", SKILL).replace(/\s+/g, " ");
   assert.ok(step.includes("`--known-findings <path>`"), "known findings route through the context builder flag");
-  assert.ok(step.includes("never appends anything after the `promptPath` bytes"), "the conductor relays the work order unchanged");
+  assert.ok(step.includes("never appends anything to the compact `dispatchPrompt`"), "the conductor relays the compact reference unchanged");
   assert.doesNotMatch(step, /appended AFTER/i, "no instruction to append evidence after the angle prompt");
 });
 

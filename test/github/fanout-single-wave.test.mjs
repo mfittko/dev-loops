@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
 import { expandDispatchUnits, isPackedUnitName, packDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
 import { dispatchUnitScope } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { DISPATCH_POINTER_MAX_BYTES } from "../../scripts/github/_work-order-protocol.mjs";
 import { buildGateContextPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import {
   loadDevLoopConfig,
@@ -458,6 +459,15 @@ describe("no primer or lead-reviewer serialization precedes the first wave", () 
         assert.deepEqual(waves[0].map((u) => u.scope), payload.units.map((u) => u.scope));
         assert.ok(waves[0].length > 1);
         for (const u of payload.units) assert.doesNotMatch(u.scope, /prime/);
+        // Pull transport (#2416): the Agent prompt (Claude) and each runs.all
+        // item task (Pi) is the compact envelope only, under the fixed cap.
+        for (const u of payload.units) {
+          assert.ok(Buffer.byteLength(u.dispatchPrompt) <= DISPATCH_POINTER_MAX_BYTES);
+          // Self-describing: the pull command with concrete values, so a skewed reviewer definition still pulls.
+          assert.ok(u.dispatchPrompt.includes(`\`dev-loops-run scripts/github/pull-work-order.mjs --ref ${u.workOrderRef} --digest ${u.workOrderDigest} --execution ${u.executionIdentity}\``), u.dispatchPrompt);
+          assert.match(u.dispatchPrompt, /follow its printed work order exactly/);
+          assert.ok(u.promptBytes > 4 * Buffer.byteLength(u.dispatchPrompt), `${u.scope}: ${u.promptBytes} work-order bytes vs ${Buffer.byteLength(u.dispatchPrompt)} dispatch bytes`);
+        }
         for (const u of payload.units) assert.ok(u.angles.length <= REVIEWER_UNIT_MAX_ANGLES);
         assert.deepEqual(payload.units.flatMap((u) => u.angles).sort(), [...angles].sort());
         // holistic keeps its own prompt, findings artifact and provenance slot

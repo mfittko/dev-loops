@@ -26,6 +26,8 @@ already has an already-composed prompt file on disk); call it ONCE per
 dispatched reviewer/group, right after composing its prompt and BEFORE (or
 immediately after) spawning it, from the SAME orchestrator step that already
 runs write-gate-context.mjs's Phase 1.
+A record this CLI writes alone carries no compactReference, so the layout check and
+fan-in reject it and block the round; only emit-fanout-dispatch.mjs binds one.
 
 Required:
   --scope <name>       Reviewer/group scope, same vocabulary as

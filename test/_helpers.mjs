@@ -1,8 +1,18 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
+import { dispatchPromptLayoutRecordPath } from "../scripts/github/record-dispatch-prompt-layout.mjs";
+
+// Bind a compact work-order reference into a dispatch-prompt record, as
+// emit-fanout-dispatch.mjs does after composing a unit (#2416).
+export async function bindCompactReference(tmpRoot, scope, headSha, gate = "draft_gate") {
+  const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha);
+  const record = JSON.parse(await readFile(recordPath, "utf8"));
+  record.compactReference = { workOrderRef: `review:o/r#1:${gate}:${headSha}:${scope}`, workOrderDigest: "sha256:d", executionIdentity: "r1-ab-u0" };
+  await writeFile(recordPath, JSON.stringify(record), "utf8");
+}
 
 // Create an mkdtemp'd directory under os.tmpdir(), run `fn(dir)`, and always
 // remove it afterward (even on throw/rejection). Shared across suites so a
