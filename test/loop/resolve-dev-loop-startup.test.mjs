@@ -1786,6 +1786,7 @@ test("#2456: --pr on an existing draft PR routes into draft_gate instead of the 
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
+        assertArgContains: ["isDraft"],
         stdout: JSON.stringify({ state: "OPEN", isDraft: true, mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
       },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
