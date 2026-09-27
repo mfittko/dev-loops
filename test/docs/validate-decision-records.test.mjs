@@ -296,6 +296,40 @@ test("a collision-repair rename that edits the body still fails as a deletion", 
   }
 });
 
+test("a collision-repair rename onto a path that already existed at the base fails as a deletion", async () => {
+  const renumbered = ACCEPTED_4047.replace("# 0047.", "# 0049.");
+  const { root, git } = await fixture({
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+    "docs/decisions/0049-something.md": renumbered,
+  }, makeGit({
+    "docs/decisions/0047-something.md": ACCEPTED_4047,
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+    "docs/decisions/0049-something.md": renumbered,
+  }));
+  try {
+    const result = await validateDecisionRecords({ root, git });
+    assert.match(result.errors.map((e) => e.message).join("\n"), /was deleted/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a collision-repair rename onto the reserved 0000 prefix fails as a deletion", async () => {
+  const { root, git } = await fixture({
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+    "docs/decisions/0000-something.md": ACCEPTED_4047.replace("# 0047.", "# 0000."),
+  }, makeGit({
+    "docs/decisions/0047-something.md": ACCEPTED_4047,
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+  }));
+  try {
+    const result = await validateDecisionRecords({ root, git });
+    assert.match(result.errors.map((e) => e.message).join("\n"), /was deleted/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("renumbering an accepted record without a collision still fails as a deletion", async () => {
   const { root, git } = await fixture({
     "docs/decisions/0049-something.md": ACCEPTED_4047.replace("# 0047.", "# 0049."),

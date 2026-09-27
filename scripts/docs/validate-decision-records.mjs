@@ -103,7 +103,8 @@ export function detectIndexErrors(names) {
  * rename only when another record that already held its number at the base still
  * holds it (the collision was merged, not created by this change) and exactly one
  * current record carries its slug under a new number with the base text unchanged
- * apart from the title number.
+ * apart from the title number. The new path must be absent at the base and must not
+ * use the reserved 0000 prefix.
  */
 export async function isCollisionRepairRename(root, names, baseName, baseText, git, base) {
   const prefix = baseName.slice(0, 4);
@@ -119,6 +120,8 @@ export async function isCollisionRepairRename(root, names, baseName, baseText, g
   if (!mergedCollision) return false;
   const renamed = names.filter((n) => n !== TEMPLATE && n.slice(5) === slug && !n.startsWith(`${prefix}-`));
   if (renamed.length !== 1) return false;
+  // The destination must be a free number: never the reserved 0000, never a path already present at the base.
+  if (renamed[0].startsWith("0000-") || (await git.pathExistsIn(base, `${DECISIONS_DIR}/${renamed[0]}`))) return false;
   const text = await readFile(path.join(root, DECISIONS_DIR, renamed[0]), "utf8");
   return text === baseText.replace(new RegExp(`^# ${prefix}\\.`), `# ${renamed[0].slice(0, 4)}.`);
 }
