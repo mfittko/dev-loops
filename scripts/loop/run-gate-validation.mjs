@@ -188,8 +188,9 @@ export function classifyPackageSuites(suites, scripts) {
     if (typeof body !== "string" || !body.trim() || /\$\(|`|[<>|]|(?<!&)&(?!&)/.test(body)) throw new Error(`Cannot classify package script ${name}`);
     commands.push(`bun run ${name}`);
     for (const segment of verificationCommandSegments(body)) {
-      const nested = segment.match(/^(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?([A-Za-z0-9][A-Za-z0-9._:-]*)$/);
+      const nested = segment.match(/^(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?([A-Za-z0-9][A-Za-z0-9._:-]*)(?:\s+(.+))?$/);
       if (nested) {
+        if (nested[2]) throw new Error(`Cannot classify package script ${name}: ${segment}`);
         if (!Object.hasOwn(scripts, nested[1])) throw new Error(`Unknown package script ${nested[1]} referenced by ${name}`);
         visit(nested[1], [...stack, name]);
       } else if (classifyValidationCommand(segment) !== "non-validation" || /^(?:bun|node)\s+(?:scripts\/(?:run-bun-test|docs\/validate-(?:links|rule-ownership|decision-records|changelog-completeness)|github\/lint-workflows|claude\/generate-claude-assets|generate-config-schema)\.mjs|\.\/node_modules\/@playwright\/test\/cli\.js)(?:\s|$)/.test(segment)) {

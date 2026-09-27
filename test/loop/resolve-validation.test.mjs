@@ -116,6 +116,23 @@ test("targeted resolver rejects a full alias before it runs", async () => {
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("both validation entrypoints reject a full alias with trailing arguments", async () => {
+  const { repoRoot, headSha } = await fixture({ "test:full": "bun run verify", "test:quick": "bun run test:full --silent" });
+  try {
+    const legacy = await runNode(LEGACY, ["--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha, "--suite", "test:quick"], { cwd: repoRoot });
+    assert.equal(legacy.code, 1);
+    assert.match(legacy.stderr, /Cannot classify package script/);
+    assert.doesNotMatch(legacy.stdout, /verify-ran/);
+
+    const targeted = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha, "targeted"), "--suite", "test:quick"], { cwd: repoRoot });
+    assert.equal(targeted.code, 1);
+    const result = JSON.parse(targeted.stdout);
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /Cannot classify package script/);
+    assert.equal(result.artifact, undefined);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("head and toolchain failures are typed incomplete, with no artifact", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
