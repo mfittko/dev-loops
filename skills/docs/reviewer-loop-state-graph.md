@@ -112,7 +112,8 @@ this graph, not by this reviewer-loop machine itself.
 `REVIEWER-STATE-GATE-ANGLE-MAPPING`: For `dev-loops`, the default pre-approval gate before calling a branch/PR
 review-complete, approval-ready, merge-ready, or ready for final handoff uses
 review angles resolved from config (`resolveGateAngles(config, "preApproval")`
-from `@dev-loops/core/config`). Default config ships `dry`, `kiss`, `yagni`.
+from `@dev-loops/core/config`). Default config ships the `gates.preApproval.angles` set in
+`packages/core/src/config/extension-defaults.yaml`, starting with `dry`, `kiss`, `yagni`.
 These are workflow lenses that reviewer runs must cover for the change; they do
 not replace the state machine's supported review-angle taxonomy (`correctness`,
 `tests`, `maintainability`, `security`, `scope`). The config-resolved lens

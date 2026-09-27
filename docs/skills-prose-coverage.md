@@ -58,7 +58,7 @@ Per-file baseline: `public-dev-loop-contract.md` 43,380 / 5,607; `local-implemen
 
 ### Inventory
 
-Totals: 32 `pending`, 22 `changed`, 14 `unchanged`, eight `non-prose`, four `blocked`; 80 files.
+Totals: 0 `pending`, 0 `in progress`, 49 `changed`, 19 `unchanged`, eight `non-prose`, four `blocked`; 80 files.
 
 | File | Phase | Disposition | Rationale |
 | --- | --- | --- | --- |
@@ -88,53 +88,53 @@ Totals: 32 `pending`, 22 `changed`, 14 `unchanged`, eight `non-prose`, four `blo
 | `skills/dev-loop/templates/review.md` | 2 | blocked | Owner: issue 2442 reserves the whole file. |
 | `skills/dev-loop/templates/slides-story-review.md` | 2 | unchanged | Model-facing prompt payload with a strict output schema. It holds no duplicated rule. |
 | `skills/dev-loop/templates/ui-vision-review.md` | 2 | changed | Merged the per-lens artifact list that item 2 repeated and the repeated coverage paragraph. The JSON example, lens set, severity map and `checkedCriteria` rules stay. |
-| `skills/docs/ab-contrast-deslop-step.md` | 3 | pending | Shared doc, +0/-4. |
-| `skills/docs/acceptance-criteria-verification.md` | 3 | pending | Shared doc, +13/-2. |
-| `skills/docs/agent-stall-detection.md` | 3 | pending | Shared doc, +0/-13. |
+| `skills/docs/ab-contrast-deslop-step.md` | 3 | changed | Phase 3b. Dropped the #936 history sentence. The antipattern list, flow, rewrite rule and gate-angle scope stay. |
+| `skills/docs/acceptance-criteria-verification.md` | 3 | changed | Phase 3b. Condensed the fork intro, the #1951 restatements and the completeness-block rationale; step 1 now reads through `view-pr.mjs` (see the contradiction register). Every step, command, verdict row and refusal stays. |
+| `skills/docs/agent-stall-detection.md` | 3 | unchanged | Phase 3b. Already tight: the stall definition, config, detector API, probe flags and recovery procedure carry no restated owner. |
 | `skills/docs/anti-patterns.md` | 3 | changed | Phase 3a. Dropped incident narration and the ready-path self-correction internals; `RAW-GH-PR-READY-BYPASS` now cites `OPS-DRAFT-FIRST-PR` for the restore-ready exit. Reserved passage `END-TURN-AND-AWAIT-WAKE` (issue 2442) is byte-identical. |
 | `skills/docs/artifact-authority-contract.md` | 3 | changed | Phase 3a. Condensed the intro, the refinement-floor explanation, settings-layer prose and own-mode rationale. Every `ARTIFACT-*` rule, flag, finding code and anchor stays. |
 | `skills/docs/conductor-routing-contract.md` | 3 | changed | Phase 3a. Merged the relationship, boundary and non-goal lists into one boundary list and the six scenario tables into one table. Inputs, priority table, transitions and fail-closed rules stay. |
-| `skills/docs/confirmation-rules.md` | 3 | pending | Shared doc; unchanged since baseline. |
-| `skills/docs/contract-style-guide.md` | 3 | pending | Shared doc; unchanged since baseline. |
-| `skills/docs/copilot-ci-status-contract.md` | 3 | pending | Shared doc, +15/-14. |
+| `skills/docs/confirmation-rules.md` | 3 | unchanged | Phase 3b. A 1 KB owner of `CONFIRM-CORE-EXPLICIT` with its confirmation list; nothing to cut. |
+| `skills/docs/contract-style-guide.md` | 3 | unchanged | Phase 3b. A rule table of `STYLE-*` owners; every row is normative and owned here. |
+| `skills/docs/copilot-ci-status-contract.md` | 3 | changed | Phase 3b. Dropped the exclusion rationale sentence and merged the two merged-current-head exception bullets. Every exclusion, precedence and `crediblyGreen` statement and the linked anchor stay. |
 | `skills/docs/copilot-loop-operations.md` | 3 | changed | Phase 1 changed `OPS-DRAFT-FIRST-PR` (folded item A). Phase 3a replaced the carried-convergence and status-reporting restatements with owner citations and dropped the workflow sketch. Reserved passage `OPS-NO-INLINE-INTERPRETER` (issue 2442) and the Phase 1 `OPS-DRAFT-FIRST-PR` text are byte-identical. |
 | `skills/docs/copilot-loop-state-graph.md` | 3 | changed | Phase 3a. Condensed the overview, request-status derivation, clean-convergence and `unavailable` explanations, and replaced the green re-request list with an owner citation plus the snapshot predicates. Carried-convergence and body-disposition rules keep their full text. |
-| `skills/docs/cross-harness-regression-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
-| `skills/docs/decision-record-contract.md` | 3 | pending | Shared doc, +2/-4. |
-| `skills/docs/docs-grill-step.md` | 3 | pending | Shared doc, +1/-7. |
-| `skills/docs/entrypoint-strategies.md` | 3 | pending | Shared doc, +2/-2. |
-| `skills/docs/epic-tree-refinement-procedure.md` | 3 | pending | Shared doc, +2/-8. |
+| `skills/docs/cross-harness-regression-contract.md` | 3 | changed | Phase 3b. Shortened the two CI non-goal bullets. The seam list, coverage MUST, additive/no-op bar and suite inventory stay. |
+| `skills/docs/decision-record-contract.md` | 3 | changed | Phase 3b. Split the tripwire paragraph into a trigger list and dropped its history and the duplicate tracker cross-reference. Every `ADR-*` rule row is byte-identical. |
+| `skills/docs/docs-grill-step.md` | 3 | changed | Phase 3b. Dropped two rationale sentences about the core import boundary and testability. |
+| `skills/docs/entrypoint-strategies.md` | 3 | changed | Phase 3b. Shortened the standalone tracker-tooling paragraph. Every strategy block and linked anchor stays. |
+| `skills/docs/epic-tree-refinement-procedure.md` | 3 | changed | Phase 3b. Stated the AC/DoD matrix rule once in Definitions, removed the parallelism-model restatement and the relationship table, and fixed the Phase A step numbering. Every `EPIC-REFINEMENT-*` rule, command and phase step stays. |
 | `skills/docs/gate-review-comment-contract.md` | 3 | changed | Phase 3a. Condensed the severity-floor, `review` parser, submit-mode, size-budget and verdict-enforcement prose. The "Review-angle ownership" section, including the reserved angle-resolution sentence (issue 2442), is byte-identical. |
 | `skills/docs/gate-review-sub-loop-contract.md` | 3 | blocked | Owner: parallel unit issue 2416 edits this file. It also holds reserved passages of issue 2438 (`GATE-EXEC-GATE-COORDINATOR`, `GATE-EXEC-VALIDATION-ARTIFACT`, `GATE-EXEC-BLOCKING-ONLY-FIX`, `GATE-EXEC-NO-CWD-DEPENDENCE`, the Phase 3 verdict list, the Phase 5 clean-pass bullet, the escalation table) and issue 2442 (the reviewer wave paragraph, `GATE-EXEC-COLLECTABLE-DISPATCH`, the per-harness delivery table, `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`). |
 | `skills/docs/issue-intake-procedure.md` | 3 | changed | Phase 3a. Removed the duplicate closed-issue bullet and mutation-pass sentence, pointed epic decomposition at the sub-issue tree flow, and routed the PR edit through `edit-pr.mjs`. Reserved passage: the follow-up-capture bullet (issue 2438) is byte-identical. |
-| `skills/docs/local-planning.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/local-planning.md` | 3 | changed | Phase 3b. The validator payload, size-estimate rules and plan↔PR link are stated once and cited from the flow and example. Every linked anchor, command and stage stays. |
 | `skills/docs/main-agent-contract.md` | 3 | changed | Phase 3a. Merged the restated coordinator write boundary into the shared intro and dropped exemption history and dispatch rationale. Reserved passages (issue 2438) are byte-identical: the coordinator verify-delegation passage in the intro plus `COORDINATOR-VERIFY-BOUNDARY` (the table's `COORDINATOR-VERIFY-DELEGATION`; see the Phase 3 contradiction register), and `MAIN-AGENT-FILING-BLOCKER-ONLY`. |
 | `skills/docs/merge-preconditions.md` | 3 | changed | Phase 3a. Condensed the gate-evidence server-side narrative, title-marker rationale, size-budget and wrapper restatements, and dropped the removed `--local-validation-head-sha` flag. Reserved passage: the post-merge duties (issue 2438), byte-identical. |
 | `skills/docs/pr-lifecycle-contract.md` | 3 | changed | Phase 3a. Cited the merge-preconditions owner for title-marker constructions, condensed the changelog rule mechanics and removed history rows. Transition bullets and state vocabulary stay. |
-| `skills/docs/pre-pr-review-contract.md` | 3 | pending | Shared doc, new since baseline (+220). Reserved passages: Step 3 and `PRE-PUSH-DELTA-EXIT-BOUND` (issue 2447). |
+| `skills/docs/pre-pr-review-contract.md` | 3 | changed | Phase 3b. Removed "Why this phase exists" and rationale sentences inside the rules. Every `PRE-PR-*` and `PRE-PUSH-DELTA-*` rule keeps its MUST text. Reserved passages (issue 2447) are byte-identical: delta sequence Step 3 and `PRE-PUSH-DELTA-EXIT-BOUND`. |
 | `skills/docs/projects-queue-contract.md` | 3 | changed | Phase 3a. Merged duplicated Setup, Usage and configuration restatements into their owning sections and dropped GraphQL query bodies the helper scripts own. Every `QUEUE-*` rule, command, flag, reason literal and linked anchor stays. |
 | `skills/docs/public-dev-loop-contract.md` | 3 | changed | Phase 3a. Loaded on every startup route. Dropped the mermaid diagram, slice non-goals, example mappings and ownership-race narration, and merged the convergence posture restatement. Every `FACADE-*` rule, gate row, routing step and transition bullet stays. |
-| `skills/docs/release-runbook.md` | 3 | pending | Shared doc, +16/-15. |
+| `skills/docs/release-runbook.md` | 3 | changed | Phase 3b. Dropped the v1.0.0 incident narration, the npm-vs-Bun rationale and repeated changelog mechanics. Every command, staging rule, approval refusal and failure-mode recovery stays. |
 | `skills/docs/required-rules.json` | 1 | non-prose | Rule registry: IDs, enforcement values and enforcement notes that validators read. Schema and literals are exact data, not condensable prose. |
 | `skills/docs/retrospective-checkpoint-contract.md` | 3 | changed | Phase 3a. Removed self-review rationale, verifier matching internals, the lifecycle-reconciliation history and repo-root rationale; routed the merge-commit read through `view-pr.mjs`. Every `RETRO-*` rule, state row and CLI flag stays. |
-| `skills/docs/reviewer-loop-state-graph.md` | 3 | pending | Shared doc, +1/-3. |
-| `skills/docs/slides-story-review-loop.md` | 3 | pending | Shared doc, +1/-20. |
-| `skills/docs/spec-authority-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
-| `skills/docs/spike-mode-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
-| `skills/docs/stop-conditions.md` | 3 | pending | Shared doc; unchanged since baseline. |
-| `skills/docs/structural-quality.md` | 3 | pending | Shared doc, +1/-1. |
-| `skills/docs/sub-issue-tree-contract.md` | 3 | pending | Shared doc, +1/-3. Reserved passage: the follow-up row (issue 2438). |
-| `skills/docs/tracker-first-loop-state.md` | 3 | pending | Shared doc, +0/-4. |
-| `skills/docs/tracker-seam-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
-| `skills/docs/ui-artifact-contract.md` | 3 | pending | Shared doc, +9/-15. |
-| `skills/docs/ui-designer-review-loop.md` | 3 | pending | Shared doc, +1/-7. |
-| `skills/docs/ui-e2e-scoping-step.md` | 3 | pending | Shared doc, +0/-7. |
-| `skills/docs/ui-review-recipe-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
-| `skills/docs/ui-smoke-harness.md` | 3 | pending | Shared doc, +2/-3. |
-| `skills/docs/ui-validation-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
-| `skills/docs/validation-policy.md` | 3 | pending | Shared doc, +3/-3. |
-| `skills/docs/wait-watch-procedure.md` | 3 | pending | Shared doc, +21/-26. |
-| `skills/docs/workflow-handoff-contract.md` | 3 | pending | Shared doc, +8/-13. |
+| `skills/docs/reviewer-loop-state-graph.md` | 3 | changed | Phase 3b. Condensed the overview, reviewer-scope and guarantees prose, and corrected the stale default-angle list in `REVIEWER-STATE-GATE-ANGLE-MAPPING` (see the contradiction register). States, transitions and both rules keep their MUST text. |
+| `skills/docs/slides-story-review-loop.md` | 3 | changed | Phase 3b. Merged the entrypoint bullets and dropped the repeated sibling-loop bullet. Inputs, lens, outputs and fail-closed list stay. |
+| `skills/docs/spec-authority-contract.md` | 3 | changed | Phase 3b. Condensed the #2016 digest-boundary, enforcement, invalidation and parity prose; the composition paragraph cites its owners by rule ID. Every `SPEC-AUTHORITY-*` rule and CLI flag stays. |
+| `skills/docs/spike-mode-contract.md` | 3 | changed | Phase 3b. Dropped the shipping history, the "Why" column, a docs-only non-goal and repeated exit narration. Every `SPIKE-*` rule, command and worked-example payload stays. |
+| `skills/docs/stop-conditions.md` | 3 | unchanged | Phase 3b. Term and `STOP-*` rule tables only; every row is owned here. |
+| `skills/docs/structural-quality.md` | 3 | changed | Phase 3b. Merged the duplicated "apply during implementation" lead-ins and shortened the rule-ID comment rationale. |
+| `skills/docs/sub-issue-tree-contract.md` | 3 | changed | Phase 3b. Step 7 cites the lean-body section and the verify and compatibility prose is merged. Reserved passage: the follow-up row (issue 2438) and the adjacent conservatism clause are byte-identical. |
+| `skills/docs/tracker-first-loop-state.md` | 3 | changed | Phase 3b. Removed the event-trigger table, the text lifecycle diagram and the scope-boundary table that restated §1, §3.2, §4.1 and §5.2. Every `TRACKER-*` rule, state and the linked §3.1 anchor stay. |
+| `skills/docs/tracker-seam-contract.md` | 3 | changed | Phase 3b. Dropped rationale from the config bullets, scope and non-goals. Every interface method, config key and registration step stays. |
+| `skills/docs/ui-artifact-contract.md` | 3 | changed | Phase 3b. Merged the path list and the three best-effort artifact paragraphs, and corrected the report dedup claim (see the contradiction register). The state.json field list, severity map, failure policy and linked anchor stay. |
+| `skills/docs/ui-designer-review-loop.md` | 3 | changed | Phase 3b. The axe mapping cites the artifact contract, the route plumbing and lens-seam list are merged, and the dedup claim is corrected. Outcomes, coverage gate, fail-closed list and the linked lens anchor stay. |
+| `skills/docs/ui-e2e-scoping-step.md` | 3 | changed | Phase 3b. Dropped rationale sentences from the trigger, CI jobs and verification sections. Every glob, registry, gate outcome and job name stays. |
+| `skills/docs/ui-review-recipe-contract.md` | 3 | changed | Phase 3b. Condensed the intro, prerequisites, teardown, viewport and hosting prose. The config-key block and every key, default and fail-closed stop stay. |
+| `skills/docs/ui-smoke-harness.md` | 3 | changed | Phase 3b. Removed restatements of the scoping owner and the artifact slug owner and merged the config paragraphs. |
+| `skills/docs/ui-validation-contract.md` | 3 | changed | Phase 3b. The glob list is replaced by a citation of the scoping owner; history is shortened. The shared assertions and worked example stay. |
+| `skills/docs/validation-policy.md` | 3 | unchanged | Phase 3b. Three `VALIDATE-*` rules and the gate table; each sentence carries an obligation. |
+| `skills/docs/wait-watch-procedure.md` | 3 | changed | Phase 3b. Dropped two rationale sentences. The route deliberately restates watch and timeout policy so it need not load the follow-up skill; the dispatch clause pinned by `ASYNC_DISPATCH_CLAUSE` stays verbatim. |
+| `skills/docs/workflow-handoff-contract.md` | 3 | changed | Phase 3b. Merged the duplicate `sanctionedCommands` shape into the envelope schema, stated the terminal stop-rule exception once and shortened the #1462 history. |
 | `skills/docs/worktree-guidance.md` | 3 | changed | Phase 3a. Condensed the create/provision, branch-resolution, guard and wrong-checkout prose and the duplicate cleanup block. Reserved passage: the `WORKTREE-COMMIT-MSG-GUARD` section (issue 2438), byte-identical. |
 | `skills/final-approval/SKILL.md` | 2 | unchanged | Already a thin redirect to the follow-up skill's "Human approval checkpoint" section, which still exists under Step 7. |
 | `skills/local-implementation/SKILL.md` | 2 | changed | Merged the duplicated lightweight, handoff-path, commit-authorization and fan-out restatements into their in-file owners. Dropped rationale that changes no agent decision. |
@@ -241,6 +241,8 @@ Bundle B includes the phase 1 folded item A (`copilot-loop-operations.md`, 20,10
 Phase 3 runs in two parts. Phase 3a worked the 14 highest-load shared docs under `skills/docs/`: `public-dev-loop-contract.md`, `merge-preconditions.md`, `projects-queue-contract.md`, `gate-review-comment-contract.md`, `retrospective-checkpoint-contract.md`, `copilot-loop-state-graph.md`, `artifact-authority-contract.md`, `worktree-guidance.md`, `copilot-loop-operations.md`, `issue-intake-procedure.md`, `main-agent-contract.md`, `conductor-routing-contract.md`, `pr-lifecycle-contract.md` and `anti-patterns.md`. All 14 rows are `changed`. Phase 3b works the remaining 32 `pending` rows; phase 3a claims no whole-tree completion.
 
 Every `<!-- rule: ... -->` marker in the 14 files is retained, and no MUST, MUST NOT, SHALL, SHOULD, SHOULD NOT or MAY count dropped in any of them. `extractRuleModalities` (`scripts/loop/check-adr-tripwire.mjs`) reports the same family for every rule, except `GATE-COMMENT-IDENTITY-DISJOINT`, which moved from no detected keyword to `must` because its MUST NOT now falls inside the scan window (not a reversal). Every heading that another file links to by anchor is unchanged. Reserved passages are byte-identical; the per-row rationale names them.
+
+Phase 3b worked the remaining 32 `pending` rows: 27 `changed` and five `unchanged` (`agent-stall-detection.md`, `confirmation-rules.md`, `contract-style-guide.md`, `stop-conditions.md`, `validation-policy.md`). The `post-gate-verdict-fallback.mjs` row was already `unchanged` from phase 2 and needed no work. No inventory row is `pending` or `in progress`, so the whole-tree inventory is complete. In the 32 files, every rule marker is retained and no MUST, MUST NOT, SHALL, SHOULD, SHOULD NOT, MAY or NEVER count dropped (per-file grep against the start revision). `check-adr-tripwire.mjs --base origin/main` reports only the expected contract-doc triggers, with no modality reversal and no removed rule. Every inbound `#anchor` into these files (`local-planning.md`, `entrypoint-strategies.md`, `tracker-first-loop-state.md#31-required-pr-metadata`, `copilot-ci-status-contract.md#zero-suite-local-validation-exception`, `pre-pr-review-contract.md#delta-mode`, `ui-designer-review-loop.md#four-lenses-over-one-bundle-converged-deterministically`) still resolves. Phase 3b changed no test.
 
 ### Phase 3 obligation trace
 
@@ -366,6 +368,102 @@ Every `<!-- rule: ... -->` marker in the 14 files is retained, and no MUST, MUST
 - Title-marker constructions: cited to "Title markers" in `merge-preconditions.md`.
 - `LIFECYCLE-CHANGELOG-COMPLETENESS`: shortened; the MUST, fragment path, Unreleased format, validator, exemption and release assembly stay.
 
+Phase 3b:
+
+`skills/docs/ui-artifact-contract.md` and `skills/docs/ui-designer-review-loop.md`:
+
+- Report dedup claim: replaced by the implemented behavior (see the contradiction register). Enforcement: `packages/core/src/loop/ui-review-report.mjs` posts only diagnosed findings; `packages/core/src/loop/ui-review-diagnose.mjs` reads only the drive's failure feed.
+- Per-artifact path list: merged into the state directory plus the five file names. `test/contracts/ui-artifact-contract.test.mjs` pins the directory literal and the five names.
+- `snapshot.json`, `axe.json` and `console.json` "always emitted, never skipped, referenced from `state.json`": stated once under "Best-effort evidence files".
+- Designer loop axe mapping: cites `#axejson-contract` in the artifact contract. Enforcement: `mapAxeImpactToFindingSeverity` in `scripts/loop/ui-designer-review-contract.mjs`.
+- Designer loop console paragraph: cites `#consolejson-contract` for the two views of the events. The mechanical fail-closed signal and never-dropped rule stay in both files.
+- Designer loop "Current minimal validation seam" lens list: merged into "Four lenses" (`UI_REVIEW_LENSES`, `validateUiReviewLensResults`, `convergeUiReviewLenses`, `convergeUiReviewRouteFindings`). Heading renamed "Entry validation seam"; no file links to either heading.
+- Coverage attribution: dropped the "Reworking the dedupe key is a non-goal" aside. The `satisfied → continue` only direction stays.
+- Five vision-mode path-suffix bullets: merged into one bullet with the same five pairs. Enforcement: `validateUiDesignerReviewInput`.
+
+`skills/docs/ui-validation-contract.md`, `ui-smoke-harness.md`, `ui-e2e-scoping-step.md`, `ui-review-recipe-contract.md`:
+
+- Validation contract glob list and the "no annotation" paragraph: replaced by a citation. Owner: [UI e2e scoping step](../skills/docs/ui-e2e-scoping-step.md) "Trigger" and "Fail-closed semantics".
+- Smoke harness scoping sentences and slug explanation: owners are the scoping step and "Deterministic path contract" in the artifact contract.
+- Scoping step: dropped the "So a deck- or article-only PR has a CI check" and "bloats the suite" rationale. Every job name, glob and outcome stays.
+- Recipe contract: dropped the intro repetition, the optional-peer rationale, the viewport rationale, the hosting enhancement narration and the config-key test description (the test path stays in the intro). Row-drop details cite `uiReview.run.rowTeardown`.
+
+`skills/docs/pre-pr-review-contract.md`:
+
+- "Why this phase exists": removed (rationale).
+- `PRE-PR-ONE-FRESH-REVIEWER`: dropped the "implementer rationalizes" rationale. The MUST, fresh-context and separate-agent requirements stay; `test/contracts/pre-pr-review-contract.test.mjs` pins the keywords.
+- Checklist MUST: dropped "so the strong model reviews systematically".
+- `PRE-PR-MODEL-CONFIG-RESOLVED`: dropped the harness-parity sentence; resolution per harness stays.
+- `PRE-PR-EPHEMERAL-NO-ARTIFACTS`, `PRE-PR-BOUNDED-TWO-ROUNDS`, `PRE-PR-NOT-GATE-EVIDENCE`: dropped one rationale sentence each. `LOCAL-DEV-SELF-CHECK-NO-FANOUT` stays cited in `PRE-PR-ONE-FRESH-REVIEWER`.
+- Delta mode intro: dropped the regression-cost rationale and the gate-coordinator-returned aside. Step 3 and `PRE-PUSH-DELTA-EXIT-BOUND` (issue 2447) are byte-identical.
+
+`skills/docs/sub-issue-tree-contract.md`:
+
+- Step 7 lean-body restatement: cites "Lean parent issue bodies" (`SUBISSUE-LEAN-BODY-NO-DUPLICATE`).
+- `reorder` priority-call internals and the separate `missing`/`unexpected` paragraph: merged. Owner: `scripts/github/manage-sub-issues.mjs`.
+
+`skills/docs/spec-authority-contract.md`:
+
+- ADR 0061 adoption closing sentence and the #2016 section: shortened. Every edit class, the fail-closed fallback and the no-exemption statement stay.
+- Act-list enforcement paragraph: shortened; all three outcome effects stay. Enforcement: `scripts/loop/judge-pass.mjs`.
+- `--carry-forward-proof` sentence: cites the carry-forward bullet above it.
+- Composition paragraph: cites `COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE`, `COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY` and the gate sub-loop contract. The non-weakening list stays.
+
+`skills/docs/spike-mode-contract.md`:
+
+- Shipping-phase history and canonical-sequence sentence: removed.
+- Gate profile "Why for a spike" column: removed; the advisory meaning of `required: false` stays in its cell.
+- Non-goals: dropped the docs-only slice bullet and the discard bullet. Owner of the discard rule: `SPIKE-DISCARD-ZERO-MUTATION`.
+- Worked example closings: cite `SPIKE-DISCARD-ZERO-MUTATION` and the promotion path. Idempotence stays in "graduate".
+
+`skills/docs/tracker-first-loop-state.md` and `tracker-seam-contract.md`:
+
+- §4.2 event trigger table: replaced by one sentence; "report to user" moved into the §4.1 `pr_closed_unmerged` row. §4.3 is renumbered §4.2; nothing links to it.
+- §5 text diagrams: removed. Owners: §4.1 (actions) and §5.2 (transitions). "Report and stop" for `no_tracker_item` moved into §5.1.
+- Snapshot notes: merged. §6 scope table: one sentence citing §1 and §3.2.
+- Tracker seam: dropped rationale in the `fieldMappings`, `github-first`, board-wiring, singleton and non-goal bullets. Every method, key and non-goal topic stays.
+
+`skills/docs/local-planning.md`:
+
+- Step 1 payload description: cites [Validator](../skills/docs/local-planning.md#validator).
+- Step 3 and step 4 size-estimate restatements: cite [Size estimate (refinement)](../skills/docs/local-planning.md#size-estimate-refinement).
+- Front-matter plan↔PR link and idempotence: cite step 4, which keeps both.
+- Worked-example intro and closing restatements: shortened.
+
+`skills/docs/release-runbook.md`:
+
+- v1.0.0 incident narration and npm-vs-Bun rationale: removed. The non-transferable approval and the npm publish tooling stay.
+- Changelog assembly restatement in step 1: removed; the bump description above keeps it. The fail-closed Unreleased check stays.
+- Approval refusals: shortened; every refusal class stays. Enforcement: `scripts/release/verify-release-approval.mjs` (`resolveApprovalState`, `stripNonAssertionMarkdown`, `instructsApproval`).
+
+`skills/docs/reviewer-loop-state-graph.md`:
+
+- Observable-versus-prior-action rationale and the guarantees meta sentence: removed.
+- Detector reviewer-scope bullets: cite the `reviewerScope` values above.
+
+`skills/docs/epic-tree-refinement-procedure.md`:
+
+- AC/DoD matrix explanation in Phase A, Phase B and the completion table: stated once in Definitions (with the no-checklist rule). `EPIC-REFINEMENT-REQUIRED-CONTRACTS` keeps the full rule.
+- "Parallelism rule", "Parallelism model" and "Fan-out rule": removed. Owners: Phase B and Phase C intros and `EPIC-REFINEMENT-SERIAL-PHASE-GATE`.
+- Apply-step wrapper note and relationship table: removed. Owners: `EPIC-REFINEMENT-SCOPE-BOUNDARY` (keeps the raw fallback) and the intro.
+
+`skills/docs/acceptance-criteria-verification.md`:
+
+- Fork intro, P4 arm and #1951 asides in steps 3, 5 and 7: shortened. Every skip, validator command, failure reason and verdict row stays; `test/contracts/acceptance-criteria-verification-doc.test.mjs` parses the tick command and step 8.
+- Step 6: cites the step 5 call. The `--pr`-alone case stays.
+
+`skills/docs/workflow-handoff-contract.md`:
+
+- First `sanctionedCommands` snippet: merged into the envelope schema, which now carries its comments.
+- Terminal reconciliation stop rules: stated once under "Stop rules".
+- #1462 relocation history: shortened to the read path and the version rule.
+
+`skills/docs/wait-watch-procedure.md`, `decision-record-contract.md`, `entrypoint-strategies.md`, `structural-quality.md`, `cross-harness-regression-contract.md`, `copilot-ci-status-contract.md`, `docs-grill-step.md`, `ab-contrast-deslop-step.md`, `slides-story-review-loop.md`:
+
+- Wait-watch: dropped the "conditional reads" and "startup still checks retrospective" sentences.
+- Decision record: the tripwire paragraph is a trigger list; the "no longer purely advisory" history and the duplicate tracker cross-reference are removed. Enforcement: `scripts/loop/check-adr-tripwire.mjs`.
+- Entrypoint strategies, structural quality, cross-harness, CI status, docs-grill, deslop and slides loop: rationale and duplicate lead-ins only; see the rows above.
+
 ### Phase 3 test changes
 
 - `test/contracts/issue-intake-doc-contracts.test.mjs`: `assertApprovalStopGates` replaces the mermaid-edge pins. It parses the gate table rows and requires `final_approval` to route to the human approval checkpoint and `waiting_for_merge_authorization` to be a `stop`. Negative cases flip the route kind and the checkpoint text.
@@ -401,6 +499,21 @@ Method: `wc -c` and `wc -w` after the phase 3a commits, compared with the start 
 
 The 14 files shrink by 17.3% (bytes). Bundle C still holds the blocked `gate-review-sub-loop-contract.md` at its baseline size.
 
+Phase 3b and final result. Method: `wc -c` and `wc -w` after the phase 3b commits, compared with the start revision.
+
+| Surface | Baseline bytes / words | Final bytes / words | Change (bytes) |
+| --- | --- | --- | --- |
+| The 32 phase 3b files | 265,964 / 35,424 | 238,776 / 31,431 | -10.2% |
+| Total canonical `skills/**/*.md` (70 files) | 1,105,439 / 144,970 | 1,000,816 / 129,758 | -9.5% |
+| Bundle A. Startup | 94,393 / 12,156 | 85,620 / 10,846 | -9.3% |
+| Bundle B. Copilot follow-up | 178,374 / 22,288 | 161,938 / 19,879 | -9.2% |
+| Bundle C. Gate coordinator | 251,582 / 33,069 | 245,232 / 32,128 | -2.5% |
+| Reference: all tracked `skills/` files (80) | 1,203,872 / 154,175 | 1,098,942 / 138,924 | -8.7% |
+
+Phase 3b per file (bytes / words, before to after): `ab-contrast-deslop-step.md` 3,705 / 570 to 3,572 / 556; `acceptance-criteria-verification.md` 11,071 / 1,607 to 9,630 / 1,376; `copilot-ci-status-contract.md` 6,135 / 710 to 5,814 / 665; `cross-harness-regression-contract.md` 4,652 / 601 to 4,534 / 583; `decision-record-contract.md` 6,770 / 970 to 6,383 / 918; `docs-grill-step.md` 3,640 / 486 to 3,359 / 449; `entrypoint-strategies.md` 5,130 / 515 to 4,889 / 477; `epic-tree-refinement-procedure.md` 12,641 / 1,750 to 10,629 / 1,471; `local-planning.md` 14,958 / 2,055 to 12,526 / 1,701; `pre-pr-review-contract.md` 15,218 / 2,149 to 13,755 / 1,919; `release-runbook.md` 12,159 / 1,675 to 10,931 / 1,483; `reviewer-loop-state-graph.md` 11,826 / 1,368 to 11,059 / 1,284; `slides-story-review-loop.md` 4,899 / 695 to 4,697 / 667; `spec-authority-contract.md` 11,698 / 1,511 to 10,581 / 1,345; `spike-mode-contract.md` 13,362 / 1,801 to 12,346 / 1,628; `structural-quality.md` 2,971 / 410 to 2,793 / 380; `sub-issue-tree-contract.md` 6,271 / 869 to 5,880 / 812; `tracker-first-loop-state.md` 13,639 / 1,983 to 12,096 / 1,750; `tracker-seam-contract.md` 7,965 / 963 to 6,533 / 747; `ui-artifact-contract.md` 12,323 / 1,644 to 10,462 / 1,395; `ui-designer-review-loop.md` 15,885 / 2,176 to 12,649 / 1,690; `ui-e2e-scoping-step.md` 6,889 / 933 to 6,138 / 816; `ui-review-recipe-contract.md` 16,744 / 2,161 to 15,633 / 1,971; `ui-smoke-harness.md` 5,430 / 649 to 4,224 / 492; `ui-validation-contract.md` 5,193 / 658 to 3,841 / 473; `wait-watch-procedure.md` 7,340 / 959 to 7,177 / 937; `workflow-handoff-contract.md` 10,957 / 1,373 to 10,152 / 1,263. The five `unchanged` files keep their baseline size.
+
+Bundle A holds no phase 3b file. Bundle B changed only through `entrypoint-strategies.md`. Bundle C is unchanged since phase 3a; `gate-review-sub-loop-contract.md` (208,581 bytes) is blocked and is 85% of the bundle.
+
 ### Phase 3 contradiction register
 
 | Files | Conflict | Owner and evidence | Resolution |
@@ -414,6 +527,13 @@ The 14 files shrink by 17.3% (bytes). Bundle C still holds the blocked `gate-rev
 | Reserved table versus `main-agent-contract.md` | The issue reserves `COORDINATOR-VERIFY-DELEGATION`, but no rule has that ID. The passage is the intro verify-delegation text plus `COORDINATOR-VERIFY-BOUNDARY`; `claude-hooks-settings.test.mjs` calls it the "coordinator-verify-delegation boundary". | `git grep` finds the ID only in this ledger. | Reserved (issue 2438). Both passages are byte-identical. |
 | `anti-patterns.md` `RAW-GH-PR-READY-BYPASS` versus `OPS-DRAFT-FIRST-PR` | Both describe the restore-ready exit. | `OPS-DRAFT-FIRST-PR` owns the exits; `restoreReady()` calls `readyForReview()`. | False. The texts agree; anti-patterns now cites the owner. |
 | `copilot-loop-operations.md` item 7 and `merge-preconditions.md` item 10 versus `COPILOT-STATE-CARRIED-CONVERGENCE` | Both restated the carry modes. | `copilot-loop-state-graph.md` owns the rule (ADR 0090). | False. The texts agree; operations now cites the owner, and item 10 is unchanged. |
+| `ui-artifact-contract.md` `console.json` contract and `ui-designer-review-loop.md` console section versus the ui-review stage scripts (open phase 2 item) | Both docs claimed that "the final report dedups" per-state `console.json` attribution against the captured-failures list, so an error is not posted twice. | No stage deduplicates. `packages/core/src/loop/ui-review-diagnose.mjs` consumes only the drive's captured-failures feed; `packages/core/src/loop/ui-review-report.mjs` posts only those diagnosed findings and never reads `console.json`; the vision template tells the reviewer not to re-file `console.json` errors. | Resolved. Both docs now state that the report posts only diagnosed findings, does not read `console.json`, and that no stage deduplicates. The fail-closed signal and never-dropped rule are unchanged. The same stale claim remains in the `attachPageListeners` comment in `scripts/loop/ui-review-drive.mjs`, which is outside `skills/` and out of bounds for this run; reported to the orchestrator for a follow-up. |
+| `acceptance-criteria-verification.md` step 1 versus `SANCTIONED_COMMANDS` | Step 1 prescribed a raw `gh pr view ... --json closingIssuesReferences,body` read, which the index bars. | `scripts/loop/sanctioned-commands.mjs`; `view-pr.mjs --help` accepts any `--json` field list. | Resolved. Step 1 uses `view-pr.mjs` with the same fields. The remaining `gh pr view` mentions in `copilot-ci-status-contract.md` and `ui-e2e-scoping-step.md` describe helper internals and prescribe no agent call. |
+| `reviewer-loop-state-graph.md` `REVIEWER-STATE-GATE-ANGLE-MAPPING` versus `extension-defaults.yaml` | The rule said the default config ships `dry`, `kiss`, `yagni`. The shipped `gates.preApproval.angles` holds 16 angles, starting with those three. | `packages/core/src/config/extension-defaults.yaml` lines 257-368. | Resolved. The rule names the shipped set and its first three angles. The MUST text and modality are unchanged; the required lens set grows to the real one, which tightens nothing the resolver did not already enforce. |
+| `stop-conditions.md` `STOP-WAIT-001` versus `wait-watch-procedure.md` Claude Code paragraph | `STOP-WAIT-001` says a `waiting` state MUST be treated as a healthy wait and re-dispatched from the main session. The wait-watch procedure says that under Claude Code the agent continues pending waits inline and does not exit for a parent re-dispatch; only the Pi-only block re-dispatches from the main session. | Both texts are unchanged from the start revision. `END-TURN-AND-AWAIT-WAKE` (reserved, issue 2442) supports the Claude inline shape. | Reserved: needs an owner decision on whether `STOP-WAIT-001` is Pi-scoped. No owning issue exists yet; reported to the orchestrator for filing. Neither text was edited. |
+| `tracker-first-loop-state.md` §3.2 versus `decision-record-contract.md` `ADR-LINKS-ONLY` | Phase 3b removed the §6 scope table, which held ADR/RFC link-only rows that `ADR-LINKS-ONLY` cites. | §3.2 keeps the ADR and RFC rows ("Link only; no decision sync"). | False. The cited linkage rows still exist in §3.2. |
+
+Cumulative cross-file review. All 41 `skills/docs/` files changed in phases 3a and 3b, plus the phase 2 files, were checked against each other and against their implementation owners for these classes: rule restatements that disagree with the owner, stale commands or flags, raw `gh` reads that `SANCTIONED_COMMANDS` bars, config defaults stated in prose, and inbound anchors. Checked pairs include the UI doc family against the stage scripts and `ui-vision-review.md`; the scoping step, validation contract and smoke harness against `ui-e2e-scoping.mjs`; `spike-mode-contract.md` against `gates.spike` and `local-planning.md` anchors; `docs-grill-step.md` and `reviewer-loop-state-graph.md` against `gates.preApproval.angles`; `agent-stall-detection.md` against `workflow.stallDetection`; `validation-policy.md` against `copilot-ci-status-contract.md`; `wait-watch-procedure.md` against `copilot-loop-operations.md` timeouts, `stop-conditions.md` and `anti-patterns.md`; and `acceptance-criteria-verification.md` against `SANCTIONED_COMMANDS`. The rows above record every conflict found. No other contradiction was found.
 
 ## Previous run — 2026-09-19 (issue 2236)
 
