@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { composeAndRecordReviewerPrompt } from "../../scripts/github/compose-reviewer-prompt.mjs";
+import { bindCompactReference } from "../_helpers.mjs";
 
 const composeCliPath = path.resolve("scripts/github/compose-reviewer-prompt.mjs");
 const verifyCliPath = path.resolve("scripts/github/verify-dispatch-prompt-layout.mjs");
@@ -111,6 +112,7 @@ test("composeAndRecordReviewerPrompt composes an inline-prefix-first prompt, wri
     assert.equal(promptText, `${PREFIX_BYTES}${VOLATILE_BYTES}## Angle: coverage\nDo the thing.`);
     assert.ok(promptText.startsWith(PREFIX_BYTES), "composed prompt must lead with the invariant prefix bytes");
 
+    await bindCompactReference(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA);
     const verifyResult = runVerifyCli(["--head-sha", HEAD_SHA], { cwd: tmpDir });
     assert.equal(verifyResult.status, 0, verifyResult.stderr);
     const verifyPayload = JSON.parse(verifyResult.stdout);
@@ -146,6 +148,8 @@ test("AC1: two different dispatch units of the same round share a byte-identical
     const sharedSpanLength = (PREFIX_BYTES + VOLATILE_BYTES).length;
     assert.equal(coverageText.slice(0, sharedSpanLength), securityText.slice(0, sharedSpanLength));
 
+    await bindCompactReference(tmpRoot, "draft-gate-coverage", HEAD_SHA);
+    await bindCompactReference(tmpRoot, "draft-gate-security", HEAD_SHA);
     const verifyResult = runVerifyCli(["--head-sha", HEAD_SHA], { cwd: tmpDir });
     assert.equal(verifyResult.status, 0, verifyResult.stderr);
     assert.equal(JSON.parse(verifyResult.stdout).recordCount, 2);

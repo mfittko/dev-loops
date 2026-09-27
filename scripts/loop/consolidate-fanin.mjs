@@ -51,6 +51,8 @@ import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guar
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
+import { verifyPullReceipt } from "../github/_work-order-protocol.mjs";
+import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
@@ -230,7 +232,7 @@ Optional:
                                  proceeds unchanged (recording telemetry is progressive/optional).
   --emit-plan <path>            emit-fanout-dispatch.mjs's keyed emit-plan artifact
                                  (<gate>-<headSha>.emit-plan.json, GATE-EXEC-FANOUT-DISPATCH-EMIT) as a
-                                 path. Optional; when given, the fan-in verifies the plan's embedded
+                                 path. Required once the head has dispatch-prompt records; the fan-in verifies its embedded
                                  round key (gate, headSha) against the round being consolidated and
                                  FAILS CLOSED (exit 1, "cannot verify emit-plan key" / "is stamped for ...")
                                  on a mismatch, a missing/malformed key field, or an unreadable/non-JSON
@@ -492,6 +494,26 @@ async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAng
     if (proof.some((entry) => !isDeepStrictEqual(entry, supplied.find((item) => item.angle === entry.angle)))) {
       throw new Error("zero-unit carry proof differs from the emitted round's carry-forward plan");
     }
+  }
+  return plan;
+}
+
+// Pull transport delivery evidence (ADR 0106): every freshly dispatched unit needs
+// a pull receipt for its own execution/unit/digest, and a pulled unit without a
+// result for each of its angles is an interrupted reviewer, never complete.
+// Carried angles are not plan units, so their carry proof stays the authority.
+async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot) {
+  for (const unit of Array.isArray(plan?.units) ? plan.units : []) {
+    if (typeof unit?.workOrderRef !== "string") {
+      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: emit-plan unit ${JSON.stringify(unit?.scope)} carries no compact work-order reference; re-emit the round with emit-fanout-dispatch.mjs (fail-closed)`);
+    }
+    const check = await verifyPullReceipt({ receiptTmpRoot, role: "review", ...unit });
+    if (!check.ok) {
+      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: incomplete delivery evidence for unit ${unit.scope}: ${check.reason} (expected a pull receipt for execution ${unit.executionIdentity}, digest ${unit.workOrderDigest}) under ${receiptTmpRoot}; re-dispatch the unit with its compact reference (fail-closed)`);
+    }
+    // A result older than this execution's pull (or an unparseable pulledAt) is a stale prior-round file.
+    const missing = (await Promise.all((unit.angles ?? []).map(async (angle) => (resultAngles.has(angle) && (await stat(resultAngles.get(angle)[0])).mtimeMs >= Date.parse(check.receipt.pulledAt) ? null : angle)))).filter(Boolean);
+    if (missing.length > 0) throw new Error(`interrupted reviewer: unit ${unit.scope} (execution ${unit.executionIdentity}) pulled its work order but wrote no post-pull result for angle(s) ${missing.join(", ")}; the unit is not complete, retry it per the existing execution rules (fail-closed)`);
   }
 }
 
@@ -920,8 +942,9 @@ export async function consolidateGateFanin(options) {
   // normalized round head) and BEFORE the --findings-dir read, so a rejected
   // invocation writes no --out/--ledger-out and fails fastest. Validation does
   // not delete caller-owned files that predate this invocation.
+  let emitPlan;
   if (options.emitPlan !== undefined) {
-    await verifyEmitPlanKey(options.emitPlan, options);
+    emitPlan = await verifyEmitPlanKey(options.emitPlan, options);
     // The guard already proved this is a canonical string gate. Normalize it
     // for downstream guarded consumers without changing the omission
     // programmatic path, whose legacy pass-through behavior is preserved.
@@ -1038,6 +1061,11 @@ export async function consolidateGateFanin(options) {
       .join("; ");
     throw new Error(`--findings-dir "${dir}" has duplicate angle name(s) across multiple artifact files (ambiguous fan-out): ${detail}`);
   }
+  if (emitPlan !== undefined) {
+    // Receipts live under the MAIN checkout's tmp root (pull-work-order.mjs).
+    const receiptTmpRoot = options.receiptTmpRoot ?? resolveGateArtifactTmpRoot(path.dirname(path.resolve(options.tmpRoot ?? path.join(process.cwd(), "tmp"))));
+    await verifyUnitDeliveryReceipts(emitPlan, angleSourceFiles, receiptTmpRoot);
+  }
 
   // GATE-EXEC-BRIEFING-PREFIX: the fan-in runs verify-briefing-prefixes.mjs
   // before consolidation so a reviewer seeded with a divergent briefing
@@ -1090,8 +1118,12 @@ export async function consolidateGateFanin(options) {
     // progressive/optional capture.
     const layoutVerdict = await verifyDispatchPromptLayoutForHead(tmpRoot, options.headSha);
     if (layoutVerdict.recordCount > 0 && !layoutVerdict.verified) {
-      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt did not bind to the sanctioned emitter's emitted unit. Re-run the sanctioned emitter (emit-fanout-dispatch.mjs) for the offending unit(s), re-dispatch from the emitted promptPath bytes, then re-consolidate.`);
+      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt did not bind to the sanctioned emitter's emitted unit. Re-run the sanctioned emitter (emit-fanout-dispatch.mjs) for the whole round, re-dispatch every unit's compact dispatchPrompt, then re-consolidate.`);
     }
+    // The emitter writes a dispatch-prompt record per unit, so records on disk mark
+    // a fan-out round; it must pass --emit-plan so every unit's pull receipt is checked
+    // (ADR 0106). Disk evidence, never a conductor-typed flag, decides this.
+    if (emitPlan === undefined && layoutVerdict.recordCount > 0) throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: head ${options.headSha} has ${layoutVerdict.recordCount} dispatch-prompt record(s) but no --emit-plan, so fan-in cannot require a pull receipt for every freshly dispatched unit; pass emit-fanout-dispatch.mjs's emit plan (fail-closed)`);
   }
 
   // GATE-EXEC-CACHE-TELEMETRY: enforces the before/after cache-telemetry

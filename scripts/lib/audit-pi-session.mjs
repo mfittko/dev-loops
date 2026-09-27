@@ -355,6 +355,11 @@ function buildClaudeTurn(data, msg, usage, currentAgent, segmentId) {
     agent: data.agent || currentAgent || null,
     segmentId,
     promptTokens,
+    // Coordinator output bytes per reviewer dispatch (ADR 0106): the prompt of each
+    // Agent/Task tool_use whose subagent_type is review (bare or plugin-prefixed).
+    dispatches: (Array.isArray(msg.content) ? msg.content : [])
+      .filter((block) => block?.type === "tool_use" && /^(Agent|Task)$/.test(block.name) && /(^|:)review$/.test(String(block.input?.subagent_type ?? "")))
+      .map((block) => ({ id: block.id, bytes: Buffer.byteLength(String(block.input?.prompt ?? "")) })),
     usage: {
       input,
       output,
@@ -520,6 +525,8 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
             if (messageId === null) {
               turns.push(claudeTurn);
             } else if (claudeTurnIndexById.has(messageId)) {
+              // One record per content block: keep earlier blocks' dispatches.
+              claudeTurn.dispatches.unshift(...turns[claudeTurnIndexById.get(messageId)].dispatches);
               turns[claudeTurnIndexById.get(messageId)] = claudeTurn;
             } else {
               claudeTurnIndexById.set(messageId, turns.length);
@@ -790,6 +797,8 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
         ? Number((finalPromptTokens / initialPromptTokens).toFixed(2))
         : null;
 
+      const dispatchBytes = new Map(group.turns.flatMap((turn) => (turn.dispatches ?? []).map((d) => [d.id, d.bytes])));
+      const dispatchTotal = [...dispatchBytes.values()].reduce((sum, bytes) => sum + bytes, 0);
       const role = claudeMeta?.role ?? deriveSessionRole(file, {
         sessionInfo: group.agent ? { name: group.agent } : null,
         agent: group.agent,
@@ -812,6 +821,11 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
           finalPromptTokens,
           promptGrowthFactor,
           cacheHitRatio: aggregateCacheHitRatio(sessionAggregate),
+        },
+        agentDispatch: {
+          count: dispatchBytes.size,
+          promptBytes: dispatchTotal,
+          bytesPerDispatch: dispatchBytes.size > 0 ? Math.round(dispatchTotal / dispatchBytes.size) : null,
         },
       });
     }

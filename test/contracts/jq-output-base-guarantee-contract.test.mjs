@@ -79,6 +79,10 @@ const REFINE_HELPERS_REFERENCE_RE = /_refine-helpers\.mjs/;
 // or vague reason defeats the point of an explicit allowlist.
 const EXCLUDED = new Map([
   [
+    "github/pull-work-order.mjs",
+    "Reviewer-facing pull: success prints the raw work-order text the reviewer executes, not a JSON result; only the refusal envelope is JSON, so a --jq filter has no success payload to apply to.",
+  ],
+  [
     "claude/generate-claude-assets.mjs",
     "Build tool for the Claude asset pipeline (npm run build:claude), not a dev-loop operator-facing command surfaced via the SKILL/agent verb set.",
   ],

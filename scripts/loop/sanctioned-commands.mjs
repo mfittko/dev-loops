@@ -35,6 +35,9 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "gate-coordination": "scripts/loop/detect-pr-gate-coordination-state.mjs",
     "agent-stall": "scripts/loop/detect-agent-stall.mjs",
     "size-budget": "scripts/loop/check-size-budget.mjs",
+    // Its only write is the pull receipt (delivery evidence), so a read-only
+    // worker role pulls through it without an unrestricted shell (ADR 0106).
+    "work-order-pull": "scripts/github/pull-work-order.mjs",
   }),
 
   // Metadata edits.

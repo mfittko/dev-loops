@@ -76,14 +76,15 @@ test("the retired primer rules are gone from the contract and the registry; the 
   }
 });
 
-test("per-harness delivery: Pi and Claude relay only the work order; the child reads the evidence", () => {
+test("per-harness delivery: Pi and Claude relay only the compact work-order reference; the child reads the evidence", () => {
   const contract = read(CONTRACT);
   const table = contract.slice(contract.indexOf("**Per-harness delivery.**"), contract.indexOf("**Content inlining.**"));
   const piRow = table.split("\n").find((line) => line.startsWith("| Code-driven Pi"));
   const claudeRow = table.split("\n").find((line) => line.startsWith("| Agent-driven Claude Code"));
   for (const row of [piRow, claudeRow]) {
     assert.ok(row, "delivery row present");
-    assert.match(row, /work order/);
+    assert.match(row, /`dispatchPrompt`/);
+    assert.match(row, /pulls its work order/);
     assert.match(row, /reads? the (referenced )?evidence/i);
   }
 });

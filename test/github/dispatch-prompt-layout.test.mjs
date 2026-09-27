@@ -8,6 +8,9 @@ import { test } from "bun:test";
 import { renderBriefingPointerLine, sha256Hex, DISPATCH_PROMPT_LEADING_CAP_BYTES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { evaluateDispatchPromptLayout, verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
 import { validateBriefingPrefixPath, dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
+import { bindCompactReference } from "../_helpers.mjs";
+
+const COMPACT_REFERENCE = { workOrderRef: `review:o/r#1:draft_gate:abc:draft-gate-coverage`, workOrderDigest: "sha256:d", executionIdentity: "r1-ab-u0" };
 
 const recordCliPath = path.resolve("scripts/github/record-dispatch-prompt-layout.mjs");
 const verifyCliPath = path.resolve("scripts/github/verify-dispatch-prompt-layout.mjs");
@@ -64,11 +67,40 @@ test("evaluateDispatchPromptLayout: a record bound to the inline-aligned emitted
   const prefixPath = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
   const emitted = `${PREFIX_BYTES}## Angle: coverage\n`;
   const result = evaluateDispatchPromptLayout(
-    [{ scope: "draft-gate-coverage", prefixPath, leading: emitted, promptContentHash: sha256Hex(emitted) }],
+    [{ scope: "draft-gate-coverage", prefixPath, leading: emitted, promptContentHash: sha256Hex(emitted), compactReference: COMPACT_REFERENCE }],
     new Map([[prefixPath, PREFIX_BYTES]]),
     new Map([["draft-gate-coverage", { contentHash: sha256Hex(emitted), inlineAligned: true }]]),
   );
   assert.equal(result.verified, true);
+});
+
+// #2416: the record binds the compact reference the reviewer was dispatched with.
+test("evaluateDispatchPromptLayout: REJECTS a record that binds no compact work-order reference, or one for another unit, gate or head", () => {
+  const prefixPath = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
+  const emitted = `${PREFIX_BYTES}## Angle: coverage\n`;
+  const others = ["draft_gate:abc:draft-gate-security", "pre_approval_gate:abc:draft-gate-coverage", "draft_gate:abd:draft-gate-coverage"];
+  for (const compactReference of [null, ...others.map((key) => ({ ...COMPACT_REFERENCE, workOrderRef: `review:o/r#1:${key}` }))]) {
+    const result = evaluateDispatchPromptLayout(
+      [{ scope: "draft-gate-coverage", prefixPath, leading: emitted, promptContentHash: sha256Hex(emitted), compactReference }],
+      new Map([[prefixPath, PREFIX_BYTES]]),
+      new Map([["draft-gate-coverage", { contentHash: sha256Hex(emitted), inlineAligned: true }]]),
+    );
+    assert.equal(result.verified, false);
+    assert.match(result.misaligned[0].reason, /compact work-order reference/);
+  }
+});
+
+// The compact reference never replaces the inline invariant prefix proof.
+test("evaluateDispatchPromptLayout: a bound compact reference still fails closed when the emitted work order lacks its inline prefix", () => {
+  const prefixPath = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
+  const emitted = `${renderBriefingPointerLine(prefixPath)}\n## Angle: coverage\n`;
+  const result = evaluateDispatchPromptLayout(
+    [{ scope: "draft-gate-coverage", prefixPath, leading: emitted, promptContentHash: sha256Hex(emitted), compactReference: COMPACT_REFERENCE }],
+    new Map([[prefixPath, PREFIX_BYTES]]),
+    new Map([["draft-gate-coverage", { contentHash: sha256Hex(emitted), inlineAligned: false }]]),
+  );
+  assert.equal(result.verified, false);
+  assert.match(result.misaligned[0].reason, /INLINE/);
 });
 
 test("evaluateDispatchPromptLayout: REJECTS a record with no promptContentHash (coordinator-authored, never grandfathered)", () => {
@@ -179,7 +211,7 @@ test("verifyDispatchPromptLayoutForHead: record bound to the on-disk inline-alig
     await writeEmittedPrompt(tmpDir, "draft-gate-coverage", emitted);
     await writeFile(
       dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA),
-      JSON.stringify({ scope: "draft-gate-coverage", headSha: HEAD_SHA, prefixPath: relPath, leading: emitted, promptContentHash: sha256Hex(emitted) }),
+      JSON.stringify({ scope: "draft-gate-coverage", headSha: HEAD_SHA, prefixPath: relPath, leading: emitted, promptContentHash: sha256Hex(emitted), compactReference: { ...COMPACT_REFERENCE, workOrderRef: `review:o/r#1:draft_gate:${HEAD_SHA}:draft-gate-coverage` } }),
     );
     const result = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
     assert.equal(result.verified, true);
@@ -266,6 +298,7 @@ test("record-dispatch-prompt-layout.mjs records a full-content hash; the round p
     assert.equal(record.leading, promptBody);
     assert.equal(record.promptContentHash, sha256Hex(promptBody));
 
+    await bindCompactReference(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA);
     const verifyResult = runVerifyCli(["--head-sha", HEAD_SHA], { cwd: tmpDir });
     assert.equal(verifyResult.status, 0, verifyResult.stderr);
     assert.equal(JSON.parse(verifyResult.stdout).verified, true);
@@ -301,6 +334,7 @@ test("record-dispatch-prompt-layout.mjs binds a >cap prompt by FULL content (not
     assert.equal(record.leading.length, DISPATCH_PROMPT_LEADING_CAP_BYTES);
 
     // Binds against the full-bytes emitted file — the >cap tail is part of the proof.
+    await bindCompactReference(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA);
     const okResult = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
     assert.equal(okResult.verified, true);
 
@@ -424,6 +458,7 @@ test("verify-dispatch-prompt-layout.mjs recovery: a compliant replacement round 
       ["--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
       { cwd: tmpDir },
     );
+    await bindCompactReference(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA);
     const result = runVerifyCli(["--head-sha", HEAD_SHA], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).verified, true);

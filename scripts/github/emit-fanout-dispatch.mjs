@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
-import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
+import { HEAD_SHA_RE, VALID_SCOPE_RE, dispatchPromptLayoutRecordPath } from "./record-dispatch-prompt-layout.mjs";
+import { buildDispatchPointer, materializationHash, workOrderDigest } from "./_work-order-protocol.mjs";
 import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, renderRequiredReadLine } from "./write-gate-context.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
@@ -59,7 +60,8 @@ the reviewer reads them in full itself.
 Run write-gate-context.mjs FIRST (it writes the briefing prefix, evidence file,
 volatile tail, and the fanout dispatch plan this reads). Then dispatch ONE
 fresh-context \`review\` subagent per emitted unit whose task is that unit's
-work order (its promptPath bytes, relayed unchanged), and
+compact \`dispatchPrompt\` (the reviewer pulls its work order itself through
+pull-work-order.mjs; never paste the promptPath bytes), and
 record each unit's \`group\` on Phase 3's provenance (null for a singleton,
 including a one-angle packed bin; the original resolved unit's name for a
 shared unit or any split sub-unit).
@@ -86,9 +88,10 @@ Optional:
                                must match the write-gate-context.mjs call).
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "pending": <true|false>, "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "...",
+    "pending": <true|false>, "roundId": "...", "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "...",
+      "workOrderRef", "workOrderDigest", "materializationHash", "executionIdentity", "dispatchPrompt",
       "promptBytes": <n>, "sectionBytes": { "prefix": <n>, "volatile": <n>, "suffix": <n> },
-      "workOrder": { "target", "operation", "roundIdentity", "headSha", "configSha256", "assignedAngles",
+      "workOrder": { "role", "target", "operation", "roundIdentity", "headSha", "configSha256", "assignedAngles",
         "angleInstructions": [ { "angle": "...", "persona": "...", "prompt": "..." } ],
         "requiredReads", "outputRefs", "executionRules" } } ] }
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
@@ -169,6 +172,9 @@ const PROHIBITED_OPERATION_INSTRUCTIONS = {
  */
 export const REVIEWER_WORK_ORDER_MAX_BYTES = 30 * 1024;
 
+/** The reviewer widening rule, stated in every work order's execution rules. */
+export const REVIEWER_WIDENING_RULE = "requiredReads are the default context, not a ceiling. You MAY read further code, spec, contracts or prior findings when a concrete dependency or ambiguity requires it, and record in the `contextWidened` result field only the widened reads that moved your judgment";
+
 /**
  * The deterministic angle-suffix for a dispatch unit: it NAMES the unit's
  * angle(s), carries each angle's resolved persona and focus prompt
@@ -235,6 +241,7 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
 Budget: at most ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns and ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls for this unit.
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
 Prohibited: ${prohibited}.
+Widening: ${REVIEWER_WIDENING_RULE}.
 If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
   return `${header}\n\n${scopeLine}\n\n${reads}${body}\n\n${instructions}\n\n${contract}\n`;
 }
@@ -615,6 +622,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const sharedReads = Array.isArray(artifact.requiredReads) ? artifact.requiredReads.filter((read) => read?.kind !== "scoped-evidence") : [];
   const configSha256 = createHash("sha256").update(JSON.stringify(config ?? {})).digest("hex");
   const findingsDir = path.resolve(buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot }));
+  // This emission's round identity. Its ms timestamp lets the pull tool tell a
+  // round retired after it (GATE-EXEC-ROUND-RETIREMENT record) from a typo.
+  const roundId = `r${Date.now()}-${randomBytes(4).toString("hex")}`;
   let prefixSha256 = null;
   const emitted = [];
   const seenScopes = new Set();
@@ -674,20 +684,35 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     if (/^diff --git /m.test(promptText)) {
       return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — the work order for unit ${JSON.stringify(unit.name)} (scope ${scope}) carries inline diff text (a "diff --git" line); reference the diff through requiredReads instead` }, false);
     }
+    const workOrder = {
+      role: "review",
+      target: { repo, pr },
+      operation: "gate",
+      roundIdentity: { gate, headSha, prefixSha256 },
+      headSha,
+      configSha256,
+      assignedAngles: angles,
+      angleInstructions,
+      requiredReads: unitReads.length > 0 ? [...sharedReads.filter((read) => read.kind !== "evidence"), ...unitReads] : sharedReads,
+      outputRefs: angles.map((angle) => path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`)),
+      executionRules: { budget: REVIEWER_UNIT_BUDGET, prohibited: PROHIBITED_REVIEWER_OPERATIONS, widening: REVIEWER_WIDENING_RULE },
+    };
+    // Pull transport (ADR 0106): the coordinator relays only this compact
+    // envelope; the reviewer pulls and verifies its work order itself.
+    const identity = {
+      workOrderRef: `review:${repo}#${pr}:${gate}:${headSha}:${scope}`,
+      workOrderDigest: workOrderDigest(workOrder),
+      executionIdentity: `${roundId}-u${emitted.length}`,
+    };
+    // An over-cap envelope or unreadable record throws to the CLI wrapper (exit 2).
+    const dispatchPrompt = buildDispatchPointer(identity);
+    // The dispatch-prompt record binds the compact reference the reviewer receives.
+    const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha);
+    const record = JSON.parse(await readFile(recordPath, "utf8"));
+    await writeFile(recordPath, `${JSON.stringify({ ...record, compactReference: identity }, null, 2)}\n`, "utf8");
     emitted.push({
       scope, angles, group: unit.group, promptPath: result.promptPath, promptBytes, sectionBytes: result.sectionBytes,
-      workOrder: {
-        target: { repo, pr },
-        operation: "gate",
-        roundIdentity: { gate, headSha, prefixSha256 },
-        headSha,
-        configSha256,
-        assignedAngles: angles,
-        angleInstructions,
-        requiredReads: unitReads.length > 0 ? [...sharedReads.filter((read) => read.kind !== "evidence"), ...unitReads] : sharedReads,
-        outputRefs: angles.map((angle) => path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`)),
-        executionRules: { budget: REVIEWER_UNIT_BUDGET, prohibited: PROHIBITED_REVIEWER_OPERATIONS },
-      },
+      ...identity, materializationHash: materializationHash(promptText), dispatchPrompt, workOrder,
     });
   }
 
@@ -717,7 +742,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // success emit runs after the persist, so guarding here (rather than around
   // each earlier finish call, all of which run before the persist) is the one
   // complete seam.
-  const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, count: emitted.length, maxConcurrent, units: emitted };
+  const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, roundId, count: emitted.length, maxConcurrent, units: emitted };
   if (carryProof !== undefined) payload.carried = carryProof;
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   try {

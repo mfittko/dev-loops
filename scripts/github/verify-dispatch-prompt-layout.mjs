@@ -19,14 +19,16 @@ emitted unit:
      canonical \`<gate>-<headSha>.dispatch-prompt-<scope>.txt\` emitted file, and
   2. that emitted file LEADS with the round's byte-identical invariant prefix
      INLINE (never angle-first, never pointer-seeded).
+  3. It also binds emit-fanout-dispatch.mjs's compactReference, whose workOrderRef
+     ends with :<gate>:<headSha>:<scope> for this unit.
 This rejects the three failure modes prose discipline never held: a hand-composed
 pointer-seeding prompt, a paraphrased/altered suffix (a matching invariant prefix
 does NOT prove an unchanged suffix), and any mismatched delivered prompt. It binds
 recorded-layout identity to generated-file identity; it does NOT prove
 delivered-task identity — whether the spawned subagent actually received those
 bytes is the orchestrating-agent relay hop, which no Claude Code Agent-tool
-primitive exposes for independent verification (documented best-effort boundary,
-see GATE-EXEC-BRIEFING-PREFIX "Per-harness delivery").
+primitive exposes for verification here; the reviewer's pull receipt binds it
+instead, checked per unit by consolidate-fanin.mjs (ADR 0106).
 
 Ground truth is ALWAYS re-discovered on disk here (never trusted from a record's
 own stored path): each record's prefix basename names a (gate, headSha) pair, and
@@ -101,9 +103,11 @@ async function readDispatchPromptRecords(tmpRoot, headSha) {
       const prefixPath = typeof parsed?.prefixPath === "string" && parsed.prefixPath.length > 0 ? parsed.prefixPath : null;
       const leading = typeof parsed?.leading === "string" ? parsed.leading : null;
       const promptContentHash = typeof parsed?.promptContentHash === "string" && parsed.promptContentHash.length > 0 ? parsed.promptContentHash : null;
-      results.push({ scope, prefixPath, leading, promptContentHash });
+      const ref = parsed?.compactReference;
+      const compactReference = ["workOrderRef", "workOrderDigest", "executionIdentity"].every((key) => typeof ref?.[key] === "string" && ref[key].length > 0) ? ref : null;
+      results.push({ scope, prefixPath, leading, promptContentHash, compactReference });
     } catch {
-      results.push({ scope, prefixPath: null, leading: null, promptContentHash: null });
+      results.push({ scope, prefixPath: null, leading: null, promptContentHash: null, compactReference: null });
     }
   }
   return results;
@@ -236,6 +240,12 @@ export function evaluateDispatchPromptLayout(records, prefixBytesByPath, emitted
     if (!emitted.inlineAligned) {
       misaligned.push({ scope: r.scope, reason: "the emitted unit does not LEAD with the round's byte-identical invariant prefix INLINE (angle-first or pointer-seeded emitted prompt) — GATE-EXEC-BRIEFING-PREFIX requires the invariant prefix inlined as the emitted prompt's leading bytes" });
       continue;
+    }
+    // Pull transport (ADR 0106): the record binds the compact reference the reviewer
+    // was dispatched with to this unit's gate, head and scope (the verified prefix basename).
+    const unitSuffix = `:${path.basename(r.prefixPath, ".briefing-prefix.txt").replace(/-(?=[0-9a-f]+$)/, ":")}:${r.scope}`;
+    if (!r.compactReference?.workOrderRef.endsWith(unitSuffix)) {
+      misaligned.push({ scope: r.scope, reason: "dispatch-prompt record binds no compact work-order reference {workOrderRef, workOrderDigest, executionIdentity} for this unit's gate, head and scope, so the reviewer dispatch is not bound to the emitted work order (GATE-EXEC-FANOUT-DISPATCH-EMIT)" });
     }
   }
   if (misaligned.length > 0) {
