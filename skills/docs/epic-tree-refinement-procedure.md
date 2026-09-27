@@ -4,8 +4,8 @@ Canonical owner for depth-first, top-down-then-bottom-up refinement of an existi
 sub-issue tree (parent → children → grandchildren).
 
 Use it to align AC, DoD, scope boundaries, and delegation contracts across all levels of an
-existing tree. [Issue Intake Procedure](./issue-intake-procedure.md) Phase 3b creates a new tree
-and calls this procedure. [Sub-Issue Tree Contract](./sub-issue-tree-contract.md) owns the
+existing tree. [Issue Intake Procedure](./issue-intake-procedure.md) Phase 3b creates a new tree;
+this procedure refines it afterwards. [Sub-Issue Tree Contract](./sub-issue-tree-contract.md) owns the
 sub-issue tooling.
 
 ---
