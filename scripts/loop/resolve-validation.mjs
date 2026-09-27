@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
@@ -26,7 +26,13 @@ async function removeParseFailedArtifact(argv) {
       repo: identity.repo, pr: identity.pr, gate: identity.gate,
       headSha: identity["head-sha"], tmpRoot: identity["tmp-root"] ?? "tmp",
     });
-    await rm(path.resolve(resolveRepoRoot(process.cwd()), artifactPath), { force: true });
+    const repoRoot = resolveRepoRoot(process.cwd());
+    const absolutePath = path.resolve(repoRoot, artifactPath);
+    const relativePath = path.relative(repoRoot, absolutePath);
+    if (relativePath === ".." || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) return;
+    const realRelativePath = path.relative(await realpath(repoRoot), await realpath(path.dirname(absolutePath)));
+    if (realRelativePath === ".." || realRelativePath.startsWith(`..${path.sep}`) || path.isAbsolute(realRelativePath)) return;
+    await rm(absolutePath, { force: true });
   } catch { /* Invalid identity has no trustworthy keyed artifact to remove. */ }
 }
 

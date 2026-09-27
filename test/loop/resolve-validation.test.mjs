@@ -183,6 +183,26 @@ test("targeted profile without an explicit suite is incomplete and runs nothing"
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("parse failure cannot remove a validation artifact outside the repo", async () => {
+  const { repoRoot, headSha } = await fixture();
+  const externalRoot = await mkdtemp(path.join(os.tmpdir(), "external-validation-"));
+  try {
+    const tmpRoot = path.relative(repoRoot, externalRoot);
+    const artifactPath = path.resolve(repoRoot, buildValidationResultsPath({
+      repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot,
+    }));
+    await mkdir(path.dirname(artifactPath), { recursive: true });
+    await writeFile(artifactPath, '{"allPassed":true}\n');
+    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha, "targeted"), "--tmp-root", tmpRoot], { cwd: repoRoot });
+    assert.equal(out.code, 1);
+    assert.equal(JSON.parse(out.stdout).status, "incomplete");
+    assert.equal(JSON.parse(await readFile(artifactPath, "utf8")).allPassed, true);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(externalRoot, { recursive: true, force: true });
+  }
+});
+
 test("dirty worktree cannot claim validation at the committed head", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
