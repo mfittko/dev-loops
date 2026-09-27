@@ -685,7 +685,7 @@ function normalizeConfigInputSource(value) {
   return "tracker";
 }
 /**
- * Draft-start route marker for an existing draft PR (#2456). The route enters
+ * Draft-start route marker for an existing draft PR. The route enters
  * `draft_gate` while the PR stays draft. The gate-coordination pre-flight owns
  * the per-head decision: `run_draft_gate` when the current head has no clean
  * verdict, `report_blocked` with the spec-precondition reason when no spec
@@ -945,12 +945,16 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       }
     }
   }
-  // Draft-start route (#2456): an existing draft PR is a valid start target.
-  // The Copilot handoff pre-flight stops on `pr_draft` by design (Copilot-only
+  // Draft-start route: an existing draft PR is a valid start target. The
+  // Copilot handoff pre-flight stops on `pr_draft` by design (Copilot-only
   // path), so the plain --pr route points the entrypoint at the gate-coordination
   // pre-flight, which selects `draft_gate` or reports the spec precondition.
-  // Review selectors keep their read-only routes untouched.
-  if (prDraft && !review && !uiReview) {
+  // Review selectors keep their read-only routes untouched. A Copilot-assigned
+  // draft is the in-progress Copilot coding-agent path, where the `pr_draft`
+  // stop is intentional, so it carries no draft-start marker. The copilot check
+  // needs no viewer login, so it reuses the assignees already fetched above.
+  const copilotAssigned = classifyOwnership(prAssignees, null).state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT;
+  if (prDraft && !review && !uiReview && !copilotAssigned) {
     return { ...result, draftStart: buildDraftStart({ repo, pr }) };
   }
   return result;
@@ -1371,7 +1375,7 @@ export function buildResolveDevLoopStartupResult(input, {
       );
     }
   }
-  // Draft-start route (#2456): only the plain PR follow-up route carries it.
+  // Draft-start route: only the plain PR follow-up route carries it.
   const draftStartApplies = draftStart !== null && strategyKey === "copilot_pr_followup";
   const routedBundle = draftStartApplies ? { ...bundle, nextAction: draftStart.nextAction } : bundle;
   return {

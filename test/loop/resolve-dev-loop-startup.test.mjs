@@ -1797,23 +1797,41 @@ test("#2456: --pr on an existing draft PR routes into draft_gate instead of the 
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
-    assert.notEqual(parsed.action, "stop");
     assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
     assert.equal(parsed.draftStart.selectedGate, "draft_gate");
     assert.equal(parsed.draftStart.preflight, "dev-loops loop gate-coordination --repo mfittko/dev-loops --pr 740");
     assert.match(parsed.nextAction, /existing draft: a valid start target/);
     assert.match(parsed.nextAction, /Do not mark ready or request Copilot review until a clean current-head draft_gate verdict exists/);
+    // The startup output feeds `loop build-envelope`: the envelope must carry
+    // the draft-start nextAction and must not be a stop (reconcile) envelope.
+    const startupPath = path.join(tempDir, "startup.json");
+    await writeFile(startupPath, result.stdout);
+    const envelopeResult = await runNodeHelper(path.resolve("scripts/loop/build-handoff-envelope.mjs"), ["--input", startupPath, "--repo", "mfittko/dev-loops"], { cwd: tempDir });
+    assert.equal(envelopeResult.code, 0, envelopeResult.stderr);
+    const envelope = JSON.parse(envelopeResult.stdout);
+    assert.equal(envelope.nextAction, parsed.draftStart.nextAction);
+    assert.equal(Object.hasOwn(envelope, "routeKind"), false);
+    assert.equal(Object.hasOwn(envelope, "selectedStrategy"), false);
+    assert.notEqual(envelope.stopRules[0], "reconcile");
+    assert.equal(validateHandoffEnvelope(envelope).ok, true);
   }, { prefix: "resolve-dev-loop-draft-start-" });
 });
 
-test("#2456: --pr on a non-draft PR and --review on a draft PR carry no draftStart", async () => {
-  for (const [isDraft, extra] of [[false, []], [true, ["--review"]]]) {
+test("#2456: --pr on a non-draft, merged-draft, or Copilot-assigned draft PR and --review on a draft PR carry no draftStart", async () => {
+  const viewer = [{ login: "test-viewer" }];
+  const copilot = [{ login: "copilot-swe-agent" }];
+  for (const [pr, extra] of [
+    [{ state: "OPEN", isDraft: false, mergedAt: null, assignees: viewer }, []],
+    [{ state: "OPEN", isDraft: true, mergedAt: null, assignees: viewer }, ["--review"]],
+    [{ state: "MERGED", isDraft: true, mergedAt: "2026-09-01T00:00:00Z", assignees: viewer }, []],
+    [{ state: "OPEN", isDraft: true, mergedAt: null, assignees: copilot }, []],
+  ]) {
     await withTempDir(async (tempDir) => {
       await initRepoWithOrigin(tempDir);
       const ghStub = await writeGhStubHelper(tempDir, [
         {
           assertArgs: ["pr", "view", "740"],
-          stdout: JSON.stringify({ state: "OPEN", isDraft, mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+          stdout: JSON.stringify({ ...pr, closingIssuesReferences: [], body: "" }),
         },
         { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
       ], { matchMode: "claims" });
@@ -1825,6 +1843,29 @@ test("#2456: --pr on a non-draft PR and --review on a draft PR carry no draftSta
       assert.equal(JSON.parse(result.stdout).draftStart, undefined);
     }, { prefix: "resolve-dev-loop-no-draft-start-" });
   }
+});
+
+test("#2456: --input strips an injected draftStart", async () => {
+  await withTempDir(async (tempDir) => {
+    const inputPath = await writeTempJson(tempDir, "startup.json", {
+      currentState: {
+        target: { kind: "pr", issue: null, pr: 740 },
+        ownership: "copilot",
+        nextActor: "user",
+        status: "active",
+        authorization: "authorized",
+      },
+      artifactState: "open",
+      issueLinkageResolution: "not_applicable",
+      loopState: "pr_followup_start",
+      draftStart: { selectedGate: "draft_gate", preflight: "injected", nextAction: "injected" },
+    });
+    const result = await runNode(["--input", inputPath], { cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.draftStart, undefined);
+    assert.doesNotMatch(parsed.nextAction, /injected/);
+  }, { prefix: "resolve-dev-loop-input-draft-start-" });
 });
 
 test("--pr --ui-review routes to the ui_review strategy end-to-end (issue #1362)", async () => {
