@@ -51,6 +51,8 @@ import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guar
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
+import { verifyPullReceipt } from "../github/_work-order-protocol.mjs";
+import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
@@ -493,6 +495,27 @@ async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAng
       throw new Error("zero-unit carry proof differs from the emitted round's carry-forward plan");
     }
   }
+  return plan;
+}
+
+// Pull transport delivery evidence (#2416): every freshly dispatched unit needs
+// a pull receipt for its own execution/unit/digest, and a pulled unit without a
+// result for each of its angles is an interrupted reviewer, never complete.
+// Carried angles are not plan units, so their carry proof stays the authority.
+async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot) {
+  for (const unit of Array.isArray(plan?.units) ? plan.units : []) {
+    if (typeof unit?.workOrderRef !== "string") {
+      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: emit-plan unit ${JSON.stringify(unit?.scope)} carries no compact work-order reference; re-emit the round with emit-fanout-dispatch.mjs (fail-closed)`);
+    }
+    const check = await verifyPullReceipt({ receiptTmpRoot, role: "review", ...unit });
+    if (!check.ok) {
+      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: incomplete delivery evidence for unit ${unit.scope}: ${check.reason} (expected a pull receipt for execution ${unit.executionIdentity}, digest ${unit.workOrderDigest}) under ${receiptTmpRoot}; re-dispatch the unit with its compact reference (fail-closed)`);
+    }
+    const missing = (unit.angles ?? []).filter((angle) => !resultAngles.has(angle));
+    if (missing.length > 0) {
+      throw new Error(`interrupted reviewer: unit ${unit.scope} (execution ${unit.executionIdentity}) pulled its work order but wrote no result for angle(s) ${missing.join(", ")}; the unit is not complete, retry it per the existing execution rules (fail-closed)`);
+    }
+  }
 }
 
 export function parseConsolidateFaninCliArgs(argv) {
@@ -920,8 +943,9 @@ export async function consolidateGateFanin(options) {
   // normalized round head) and BEFORE the --findings-dir read, so a rejected
   // invocation writes no --out/--ledger-out and fails fastest. Validation does
   // not delete caller-owned files that predate this invocation.
+  let emitPlan;
   if (options.emitPlan !== undefined) {
-    await verifyEmitPlanKey(options.emitPlan, options);
+    emitPlan = await verifyEmitPlanKey(options.emitPlan, options);
     // The guard already proved this is a canonical string gate. Normalize it
     // for downstream guarded consumers without changing the omission
     // programmatic path, whose legacy pass-through behavior is preserved.
@@ -1037,6 +1061,11 @@ export async function consolidateGateFanin(options) {
       .map(([angle, paths]) => `"${angle}" declared in ${paths.join(", ")}`)
       .join("; ");
     throw new Error(`--findings-dir "${dir}" has duplicate angle name(s) across multiple artifact files (ambiguous fan-out): ${detail}`);
+  }
+  if (emitPlan !== undefined) {
+    // Receipts live under the MAIN checkout's tmp root (pull-work-order.mjs).
+    const receiptTmpRoot = options.receiptTmpRoot ?? resolveGateArtifactTmpRoot(path.dirname(path.resolve(options.tmpRoot ?? path.join(process.cwd(), "tmp"))));
+    await verifyUnitDeliveryReceipts(emitPlan, new Set(angleSourceFiles.keys()), receiptTmpRoot);
   }
 
   // GATE-EXEC-BRIEFING-PREFIX: the fan-in runs verify-briefing-prefixes.mjs

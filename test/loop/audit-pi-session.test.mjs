@@ -13,6 +13,7 @@ import {
   formatMarkdownSummary,
 } from "../../scripts/lib/audit-pi-session.mjs";
 import { runAuditCli } from "../../scripts/loop/audit-pi-session.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer } from "../../scripts/github/_work-order-protocol.mjs";
 
 function createTempDir(prefix = "pi-audit-test-") {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -64,7 +65,7 @@ function writeClaudeTranscript(filePath, turns) {
       model: turn.model ?? "claude-opus-5-5",
       id: turn.id ?? `msg_${index}`,
       role: "assistant",
-      content: [{ type: "text", text: "ok" }],
+      content: turn.content ?? [{ type: "text", text: "ok" }],
       usage: turn.usage,
     },
   }));
@@ -1647,6 +1648,34 @@ describe("audit-pi-session unit & integration", () => {
     assert.match(stderr.value, /No \.jsonl transcripts found/);
     assert.match(stderr.value, /\.output/);
 
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // #2416 measurement: coordinator output bytes per reviewer dispatch, before
+  // (relayed work-order bytes) and after (compact pull envelope).
+  it("reports Agent dispatch prompt bytes per dispatch for a Claude coordinator", async () => {
+    const tmpDir = createTempDir();
+    const usage = { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const agent = (id, prompt) => ({ type: "tool_use", id, name: "Agent", input: { subagent_type: "review", prompt } });
+    const pointer = buildDispatchPointer({
+      workOrderRef: `review:o/r#7:pre_approval_gate:${"c".repeat(40)}:pre-approval-gate-coverage`,
+      workOrderDigest: "a".repeat(64),
+      executionIdentity: "r1790531531554-6d7ad1c0-u0",
+    });
+    const measure = async (prompt) => {
+      const file = path.join(tmpDir, `agent-${prompt.length}.jsonl`);
+      // Two records share msg_1 (one per content block): both dispatches count once.
+      writeClaudeTranscript(file, [
+        { id: "msg_1", usage, content: [agent("t1", prompt)] },
+        { id: "msg_1", usage, content: [agent("t2", prompt)] },
+      ]);
+      return (await auditPiSession(file)).sessions[0].agentDispatch;
+    };
+    const before = await measure("w".repeat(24 * 1024));
+    const after = await measure(pointer);
+    assert.deepEqual(before, { count: 2, promptBytes: 2 * 24 * 1024, bytesPerDispatch: 24 * 1024 });
+    assert.deepEqual(after, { count: 2, promptBytes: 2 * Buffer.byteLength(pointer), bytesPerDispatch: Buffer.byteLength(pointer) });
+    assert.ok(after.bytesPerDispatch < DISPATCH_POINTER_MAX_BYTES);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });

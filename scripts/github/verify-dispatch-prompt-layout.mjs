@@ -101,9 +101,11 @@ async function readDispatchPromptRecords(tmpRoot, headSha) {
       const prefixPath = typeof parsed?.prefixPath === "string" && parsed.prefixPath.length > 0 ? parsed.prefixPath : null;
       const leading = typeof parsed?.leading === "string" ? parsed.leading : null;
       const promptContentHash = typeof parsed?.promptContentHash === "string" && parsed.promptContentHash.length > 0 ? parsed.promptContentHash : null;
-      results.push({ scope, prefixPath, leading, promptContentHash });
+      const ref = parsed?.compactReference;
+      const compactReference = ["workOrderRef", "workOrderDigest", "executionIdentity"].every((key) => typeof ref?.[key] === "string" && ref[key].length > 0) ? ref : null;
+      results.push({ scope, prefixPath, leading, promptContentHash, compactReference });
     } catch {
-      results.push({ scope, prefixPath: null, leading: null, promptContentHash: null });
+      results.push({ scope, prefixPath: null, leading: null, promptContentHash: null, compactReference: null });
     }
   }
   return results;
@@ -236,6 +238,11 @@ export function evaluateDispatchPromptLayout(records, prefixBytesByPath, emitted
     if (!emitted.inlineAligned) {
       misaligned.push({ scope: r.scope, reason: "the emitted unit does not LEAD with the round's byte-identical invariant prefix INLINE (angle-first or pointer-seeded emitted prompt) — GATE-EXEC-BRIEFING-PREFIX requires the invariant prefix inlined as the emitted prompt's leading bytes" });
       continue;
+    }
+    // Pull transport (#2416): the record binds the compact reference the
+    // reviewer was dispatched with to this unit.
+    if (!r.compactReference?.workOrderRef.endsWith(`:${r.scope}`)) {
+      misaligned.push({ scope: r.scope, reason: "dispatch-prompt record binds no compact work-order reference {workOrderRef, workOrderDigest, executionIdentity} for this unit, so the reviewer dispatch is not bound to the emitted work order (GATE-EXEC-FANOUT-DISPATCH-EMIT)" });
     }
   }
   if (misaligned.length > 0) {

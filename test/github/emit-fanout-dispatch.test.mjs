@@ -25,6 +25,11 @@ function runEmitCli(args = [], opts = {}) {
   return spawnSync("node", [emitCliPath, ...args], { encoding: "utf8", ...opts });
 }
 
+// The reviewer's first step (#2416): pull its work order with the compact reference.
+function runPullCli(unit, opts = {}) {
+  return spawnSync("node", [path.resolve("scripts/github/pull-work-order.mjs"), "--ref", unit.workOrderRef, "--digest", unit.workOrderDigest, "--execution", unit.executionIdentity], { encoding: "utf8", ...opts });
+}
+
 async function withTmpDir(fn) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-fanout-dispatch-"));
   try {
@@ -481,6 +486,10 @@ test("fan-in join: consolidateGateFanin consumes per-angle findings artifacts fo
       );
     }
 
+    for (const unit of payload.units) {
+      const pulled = runPullCli(unit, { cwd: tmpDir });
+      assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+    }
     const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
     const fanin = await consolidateGateFanin({
       findingsDir, repoRoot: tmpDir, tmpRoot, gate: GATE, headSha: HEAD_SHA,
@@ -908,7 +917,7 @@ test("a successful run persists the keyed emit-plan artifact with the full resul
     assert.equal(persisted.maxConcurrent, stdoutPayload.maxConcurrent);
     assert.deepEqual(persisted.units, stdoutPayload.units);
     for (const unit of persisted.units) {
-      assert.deepEqual(Object.keys(unit).sort(), ["angles", "group", "promptBytes", "promptPath", "scope", "sectionBytes", "workOrder"].sort());
+      assert.deepEqual(Object.keys(unit).sort(), ["angles", "dispatchPrompt", "executionIdentity", "group", "materializationHash", "promptBytes", "promptPath", "scope", "sectionBytes", "workOrder", "workOrderDigest", "workOrderRef"].sort());
     }
   });
 });

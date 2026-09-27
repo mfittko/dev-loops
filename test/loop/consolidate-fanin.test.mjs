@@ -19,6 +19,7 @@ import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-
 import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, renderBriefingPointerLine, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
+import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { runNode } from "../_helpers.mjs";
 
 // #1592: several fixtures below deliberately keep pre-rename severity
@@ -954,8 +955,18 @@ function matchingEmitPlan() {
     pr: "7",
     count: 1,
     maxConcurrent: 4,
-    units: [{ scope: "review-coverage", angles: ["coverage"], group: null, promptPath: "tmp/x" }],
+    units: [{
+      scope: "review-coverage", angles: ["coverage"], group: null, promptPath: "tmp/x",
+      workOrderRef: `review:o/r#7:review:${EMIT_HEAD}:review-coverage`, workOrderDigest: "sha256:d", executionIdentity: "r1-ab-u0",
+    }],
   };
+}
+
+// The pull receipt the reviewer's pull-work-order.mjs run leaves for a plan unit (#2416).
+async function writeEmitPlanReceipt(receiptTmpRoot, unit = matchingEmitPlan().units[0]) {
+  const receiptPath = pullReceiptPath(receiptTmpRoot, unit.workOrderRef);
+  await mkdir(path.dirname(receiptPath), { recursive: true });
+  await writeFile(receiptPath, JSON.stringify({ role: "review", workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity }), "utf8");
 }
 
 test("parseConsolidateFaninCliArgs: no --emit-plan flag leaves emitPlan undefined", () => {
@@ -998,14 +1009,76 @@ test("consolidateGateFanin accepts a matching emit-plan key and proceeds unchang
       const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
       try {
         const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+        await writeEmitPlanReceipt(planDir);
         const result = await consolidateGateFanin({
           findingsDir: dir,
           emitPlan: planPath,
           gate: "review",
           headSha: EMIT_HEAD,
+          receiptTmpRoot: planDir,
         });
         assert.equal(result.ok, true);
         assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// #2416: fan-in requires a matching pull receipt for every freshly dispatched
+// unit, and a receipt without a result is an interrupted reviewer. Carried-only
+// rounds need no receipt (emit-fanout-dispatch.test.mjs zero-unit carry test).
+test("consolidateGateFanin fails closed on a missing, wrong-execution, wrong-unit or wrong-digest pull receipt", async () => {
+  const unit = matchingEmitPlan().units[0];
+  const cases = [
+    [null, /receipt_missing/],
+    [{ ...unit, executionIdentity: "r2-cd-u0" }, /execution_mismatch/],
+    [{ ...unit, workOrderRef: `review:o/r#7:review:${EMIT_HEAD}:review-docs` }, /unit_mismatch/],
+    [{ ...unit, workOrderDigest: "sha256:other" }, /digest_mismatch/],
+  ];
+  for (const [receiptUnit, reason] of cases) {
+    await withFindingsDir(
+      { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+      async (dir) => {
+        const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
+        try {
+          const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+          if (receiptUnit) {
+            // Written at the plan unit's receipt path, carrying the wrong identity.
+            await writeEmitPlanReceipt(planDir, receiptUnit);
+            if (receiptUnit.workOrderRef !== unit.workOrderRef) {
+              await writeFile(pullReceiptPath(planDir, unit.workOrderRef), await readFile(pullReceiptPath(planDir, receiptUnit.workOrderRef), "utf8"), "utf8");
+            }
+          }
+          await assert.rejects(
+            () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, receiptTmpRoot: planDir }),
+            (err) => reason.test(err.message) && /incomplete delivery evidence/.test(err.message),
+          );
+        } finally {
+          await rm(planDir, { recursive: true, force: true }).catch(() => {});
+        }
+      },
+    );
+  }
+});
+
+test("consolidateGateFanin classifies a matching receipt without a result artifact as an interrupted reviewer, never complete", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
+      try {
+        const plan = matchingEmitPlan();
+        const docsUnit = { ...plan.units[0], scope: "review-docs", angles: ["docs"], workOrderRef: `review:o/r#7:review:${EMIT_HEAD}:review-docs`, executionIdentity: "r1-ab-u1" };
+        plan.units.push(docsUnit);
+        const planPath = await writeEmitPlan(planDir, plan);
+        await writeEmitPlanReceipt(planDir);
+        await writeEmitPlanReceipt(planDir, docsUnit);
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, receiptTmpRoot: planDir }),
+          /interrupted reviewer: unit review-docs .*no result for angle\(s\) docs/,
+        );
       } finally {
         await rm(planDir, { recursive: true, force: true }).catch(() => {});
       }
@@ -1133,11 +1206,13 @@ test("consolidateGateFanin accepts an emit-plan headSha that differs only in cas
       const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
       try {
         const upper = { ...matchingEmitPlan(), headSha: EMIT_HEAD.toUpperCase() };
+        await writeEmitPlanReceipt(planDir);
         const result = await consolidateGateFanin({
           findingsDir: dir,
           emitPlan: await writeEmitPlan(planDir, upper),
           gate: "review",
           headSha: EMIT_HEAD,
+          receiptTmpRoot: planDir,
         });
         assert.equal(result.ok, true);
       } finally {
@@ -1217,7 +1292,9 @@ test("consolidateGateFanin normalizes a programmatic gate: 'REVIEW' and processe
       const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-review-case-"));
       const tdir = await mkdtemp(path.join(os.tmpdir(), "cache-telemetry-review-case-"));
       try {
-        const planPath = await writeEmitPlan(planDir, { ...matchingEmitPlan(), headSha: TELEMETRY_HEAD });
+        const unit = { ...matchingEmitPlan().units[0], scope: "review-scope", angles: ["scope"], workOrderRef: `review:o/r#7:review:${TELEMETRY_HEAD}:review-scope` };
+        const planPath = await writeEmitPlan(planDir, { ...matchingEmitPlan(), headSha: TELEMETRY_HEAD, units: [unit] });
+        await writeEmitPlanReceipt(planDir, unit);
         // A cache-telemetry artifact stamped gate: "review" (this normalized
         // round's real gate). Under the old bug, gate: "REVIEW" reached the
         // cache-telemetry gate compare as the raw "REVIEW" string and was
@@ -1245,6 +1322,7 @@ test("consolidateGateFanin normalizes a programmatic gate: 'REVIEW' and processe
           cacheTelemetry: telemetryPath,
           gate: "REVIEW",
           headSha: TELEMETRY_HEAD,
+          receiptTmpRoot: planDir,
         });
         // 1. The uppercase spelling passed the emit-plan key check (the guard
         //    normalizes for its compare) and the round proceeded — including
@@ -1269,12 +1347,14 @@ test("consolidateGateFanin normalizes guarded gates but preserves gate pass-thro
       const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-pad-gate-"));
       try {
         const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+        await writeEmitPlanReceipt(planDir);
         // Padded spelling: key check passes, gate normalized to "review".
         const result = await consolidateGateFanin({
           findingsDir: dir,
           emitPlan: planPath,
           gate: "  review  ",
           headSha: EMIT_HEAD,
+          receiptTmpRoot: planDir,
         });
         assert.equal(result.ok, true);
         assert.equal(result.gate, "review");
@@ -1485,6 +1565,13 @@ test("emit CLI then consolidate-fanin CLI with --emit-plan: one round end to end
     assert.equal(emitPayload.count, 1);
     const planPath = path.join(dir, `${GATE}-${HEAD_SHA}.emit-plan.json`);
     assert.ok(existsSync(planPath), "the keyed emit-plan artifact exists");
+    const [unit] = emitPayload.units;
+    const pulled = await runNode(
+      path.join(import.meta.dirname, "..", "..", "scripts", "github", "pull-work-order.mjs"),
+      ["--ref", unit.workOrderRef, "--digest", unit.workOrderDigest, "--execution", unit.executionIdentity],
+      { cwd: workDir },
+    );
+    assert.equal(pulled.code, 0, pulled.stdout + pulled.stderr);
 
     // Per-angle findings dir OUTSIDE the emit tmp tree, stamped for the head.
     const findingsDir = path.join(workDir, "findings");
@@ -3915,7 +4002,8 @@ async function writeDispatchPromptRecord(tmpRoot, scope, headSha, { prefixPath, 
   await mkdir(tmpRoot, { recursive: true });
   await writeFile(
     dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha),
-    JSON.stringify({ scope, headSha, prefixPath, leading, promptContentHash: sha256Hex(leading) }),
+    // The emitter binds the compact work-order reference into the record (#2416).
+    JSON.stringify({ scope, headSha, prefixPath, leading, promptContentHash: sha256Hex(leading), compactReference: { workOrderRef: `review:o/r#1:${gate}:${headSha}:${scope}`, workOrderDigest: "sha256:d", executionIdentity: "r1-ab-u0" } }),
   );
   if (emitted !== null) {
     const dir = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646");
