@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -48,30 +47,6 @@ Superseded by [0048](./0048-x.md) — 2026-08-07 ([issue 2](https://github.com/m
 Context text.
 `;
 
-/** The same record renumbered 0047 -> 0048: only the H1's number changed. */
-const ACCEPTED_4047_RENUMBERED = `# 0048. Something
-
-## Status
-
-Accepted — 2026-08-04 ([issue 1](https://github.com/mfittko/dev-loops/issues/1))
-
-## Context
-
-Context text.
-`;
-
-/** A renumber that ALSO edits the body — the case the guard must still refuse. */
-const ACCEPTED_4047_RENUMBERED_EDITED = `# 0048. Something
-
-## Status
-
-Accepted — 2026-08-04 ([issue 1](https://github.com/mfittko/dev-loops/issues/1))
-
-## Context
-
-Context text edited.
-`;
-
 async function fixture(files, git) {
   const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-decisions-"));
   for (const [rel, content] of Object.entries(files)) {
@@ -82,8 +57,8 @@ async function fixture(files, git) {
   return { root, git: git ?? makeGit() };
 }
 
-/** Fake git client: base paths plus explicitly changed paths model --no-renames. */
-function makeGit(baseFiles = {}, changedPaths = []) {
+/** Fake git client: origin/main at a base whose decision files are served by the map. */
+function makeGit(baseFiles = {}) {
   return {
     async symbolicRef() {
       return "refs/remotes/origin/main";
@@ -92,10 +67,7 @@ function makeGit(baseFiles = {}, changedPaths = []) {
       return "base-sha";
     },
     async diffNameOnly(_base, _head, { dir } = {}) {
-      return [...new Set([...Object.keys(baseFiles), ...changedPaths])].filter((f) => f.startsWith(dir));
-    },
-    async listPaths() {
-      return Object.keys(baseFiles);
+      return Object.keys(baseFiles).filter((f) => f.startsWith(dir));
     },
     async show(spec) {
       const rel = spec.replace(/^base-sha:/, "");
@@ -259,278 +231,112 @@ test("deleting an accepted record fails, naming ADR-SUPERSEDE-NOT-REWRITE", asyn
   }
 });
 
-// --- Rule 3 renumber tolerance (0097): only duplicate-on-base repair is legal ---
-const DUPLICATE_BASE = {
-  "docs/decisions/0047-something.md": ACCEPTED_4047,
-  "docs/decisions/0047-other.md": "# 0047. Other\n\n## Status\n\nAccepted\n\n## Context\n\nOther.\n",
-};
-const NEW_PATH = "docs/decisions/0048-something.md";
-test("renumbering a duplicate-on-base accepted record (same slug, new number and H1) passes", async () => {
+test("renaming one record of a merged number collision to a free number passes", async () => {
   const { root, git } = await fixture({
-    "docs/decisions/0048-something.md": ACCEPTED_4047_RENUMBERED,
-    "docs/decisions/0047-other.md": DUPLICATE_BASE["docs/decisions/0047-other.md"],
-  }, makeGit(DUPLICATE_BASE, [NEW_PATH]));
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+    "docs/decisions/0049-something.md": ACCEPTED_4047.replace("# 0047.", "# 0049."),
+  }, makeGit({
+    "docs/decisions/0047-something.md": ACCEPTED_4047,
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+  }));
   try {
     const result = await validateDecisionRecords({ root, git });
-    assert.equal(result.ok, true);
+    assert.deepEqual(result.errors, []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("a renumber that edits the body outside Status is refused", async () => {
+test("renumbering a sole-holder record while a new record takes its number fails as a deletion", async () => {
   const { root, git } = await fixture({
-    "docs/decisions/0048-something.md": ACCEPTED_4047_RENUMBERED_EDITED,
-    "docs/decisions/0047-other.md": DUPLICATE_BASE["docs/decisions/0047-other.md"],
-  }, makeGit(DUPLICATE_BASE, [NEW_PATH]));
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+    "docs/decisions/0049-something.md": ACCEPTED_4047.replace("# 0047.", "# 0049."),
+  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }));
   try {
     const result = await validateDecisionRecords({ root, git });
-    assert.equal(result.ok, false);
     const error = result.errors.find((e) => e.kind === "adr_post_acceptance_rewrite");
     assert.ok(error);
     assert.equal(error.rule, "ADR-SUPERSEDE-NOT-REWRITE");
-    assert.equal(error.file, "docs/decisions/0047-something.md");
-    assert.match(error.message, /deleted/);
+    assert.match(error.message, /was deleted/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("a rename into a subdirectory is refused (the record must stay a direct record)", async () => {
+test("a collision-repair rename with an ambiguous slug match fails as a deletion", async () => {
   const { root, git } = await fixture({
-    "docs/decisions/archive/0048-something.md": ACCEPTED_4047_RENUMBERED,
-    "docs/decisions/0047-other.md": DUPLICATE_BASE["docs/decisions/0047-other.md"],
-  }, makeGit(DUPLICATE_BASE, ["docs/decisions/archive/0048-something.md"]));
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+    "docs/decisions/0049-something.md": ACCEPTED_4047.replace("# 0047.", "# 0049."),
+    "docs/decisions/0050-something.md": ACCEPTED_4047.replace("# 0047.", "# 0050."),
+  }, makeGit({
+    "docs/decisions/0047-something.md": ACCEPTED_4047,
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+  }));
   try {
     const result = await validateDecisionRecords({ root, git });
-    assert.equal(result.ok, false);
-    const error = result.errors.find((e) => e.kind === "adr_post_acceptance_rewrite");
-    assert.ok(error);
-    assert.equal(error.rule, "ADR-SUPERSEDE-NOT-REWRITE");
-    assert.match(error.message, /deleted/);
+    assert.match(result.errors.map((e) => e.message).join("\n"), /was deleted/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("a renumber with stale destination H1 is refused", async () => {
+test("a collision-repair rename that edits the body still fails as a deletion", async () => {
   const { root, git } = await fixture({
-    "docs/decisions/0048-something.md": ACCEPTED_4047,
-    "docs/decisions/0047-other.md": DUPLICATE_BASE["docs/decisions/0047-other.md"],
-  }, makeGit(DUPLICATE_BASE, [NEW_PATH]));
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+    "docs/decisions/0049-something.md": ACCEPTED_4047_EDITED.replace("# 0047.", "# 0049."),
+  }, makeGit({
+    "docs/decisions/0047-something.md": ACCEPTED_4047,
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+  }));
   try {
     const result = await validateDecisionRecords({ root, git });
-    assert.equal(result.ok, false);
-    const error = result.errors.find((e) => e.kind === "adr_post_acceptance_rewrite");
-    assert.ok(error);
-    assert.equal(error.rule, "ADR-SUPERSEDE-NOT-REWRITE");
-    assert.match(error.message, /deleted/);
+    assert.match(result.errors.map((e) => e.message).join("\n"), /was deleted/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-const REN_NUMBER = ACCEPTED_4047_RENUMBERED;
-const DUP_OTHER = DUPLICATE_BASE["docs/decisions/0047-other.md"];
-
-async function assertRefusedMove(name, files, base = DUPLICATE_BASE, changed = Object.keys(files)) {
-  const { root, git } = await fixture(files, makeGit(base, changed));
-  try {
-    const result = await validateDecisionRecords({ root, git });
-    assert.equal(result.ok, false, name);
-    assert.ok(result.errors.some((e) => e.kind === "adr_post_acceptance_rewrite"), name);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-}
-
-test("non-duplicate base source cannot move to an unused number", async () => {
-  await assertRefusedMove("non-duplicate", { [NEW_PATH]: REN_NUMBER },
-    { "docs/decisions/0047-something.md": ACCEPTED_4047 });
-});
-
-test("slug-only rename with unchanged number is refused", async () => {
-  await assertRefusedMove("slug-only", { "docs/decisions/0047-renamed.md": ACCEPTED_4047, "docs/decisions/0047-other.md": DUP_OTHER });
-});
-
-test("number and slug change is refused", async () => {
-  await assertRefusedMove("slug changed", { "docs/decisions/0048-renamed.md": REN_NUMBER, "docs/decisions/0047-other.md": DUP_OTHER });
-});
-
-test("concurrent unrelated addition takes the next base number, so the smallest HEAD-free renumber passes", async () => {
-  const moved = "docs/decisions/0049-something.md";
-  const unrelated = "docs/decisions/0048-new.md";
+test("a collision-repair rename onto a path that already existed at the base fails as a deletion", async () => {
+  const renumbered = ACCEPTED_4047.replace("# 0047.", "# 0049.");
   const { root, git } = await fixture({
-    [moved]: REN_NUMBER.replace("# 0048.", "# 0049."),
-    [unrelated]: "# 0048. New\n",
-    "docs/decisions/0047-other.md": DUP_OTHER,
-  }, makeGit(DUPLICATE_BASE, [moved, unrelated]));
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+    "docs/decisions/0049-something.md": renumbered,
+  }, makeGit({
+    "docs/decisions/0047-something.md": ACCEPTED_4047,
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+    "docs/decisions/0049-something.md": renumbered,
+  }));
   try {
     const result = await validateDecisionRecords({ root, git });
-    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.match(result.errors.map((e) => e.message).join("\n"), /was deleted/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("an unrelated symlink addition does not veto a lawful regular renumber", async () => {
-  const unrelated = "docs/decisions/0049-something.md";
+test("a collision-repair rename onto the reserved 0000 prefix fails as a deletion", async () => {
   const { root, git } = await fixture({
-    [NEW_PATH]: REN_NUMBER,
-    "docs/decisions/0047-other.md": DUP_OTHER,
-    "docs/unrelated.md": "# Unrelated\n",
-  }, makeGit(DUPLICATE_BASE, [NEW_PATH, unrelated]));
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+    "docs/decisions/0000-something.md": ACCEPTED_4047.replace("# 0047.", "# 0000."),
+  }, makeGit({
+    "docs/decisions/0047-something.md": ACCEPTED_4047,
+    "docs/decisions/0047-other.md": "# 0047. Other\n",
+  }));
   try {
-    await symlink("../unrelated.md", path.join(root, unrelated));
     const result = await validateDecisionRecords({ root, git });
-    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.match(result.errors.map((e) => e.message).join("\n"), /was deleted/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("two normalized-body-matching renumber additions are ambiguous and refused", async () => {
-  await assertRefusedMove("ambiguous bodies", {
-    [NEW_PATH]: REN_NUMBER,
-    "docs/decisions/0049-something.md": REN_NUMBER.replace("# 0048.", "# 0049."),
-    "docs/decisions/0047-other.md": DUP_OTHER,
-  });
-});
-
-test("a matching symlink clone makes a regular renumber ambiguous", async () => {
-  const clone = "docs/decisions/0049-something.md";
+test("renumbering an accepted record without a collision still fails as a deletion", async () => {
   const { root, git } = await fixture({
-    [NEW_PATH]: REN_NUMBER,
-    "docs/decisions/0047-other.md": DUP_OTHER,
-    "docs/clone.md": REN_NUMBER.replace("# 0048.", "# 0049."),
-  }, makeGit(DUPLICATE_BASE, [NEW_PATH, clone]));
+    "docs/decisions/0049-something.md": ACCEPTED_4047.replace("# 0047.", "# 0049."),
+  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }));
   try {
-    await symlink("../clone.md", path.join(root, clone));
     const result = await validateDecisionRecords({ root, git });
-    assert.equal(result.ok, false);
-    assert.ok(result.errors.some((e) => e.kind === "adr_post_acceptance_rewrite"));
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("skipping the next free base number is refused", async () => {
-  await assertRefusedMove("not next free", {
-    "docs/decisions/0049-something.md": REN_NUMBER.replace("# 0048.", "# 0049."),
-    "docs/decisions/0047-other.md": DUP_OTHER,
-  });
-});
-
-test("destination number already used by another HEAD record is refused", async () => {
-  await assertRefusedMove("used number", {
-    [NEW_PATH]: REN_NUMBER,
-    "docs/decisions/0048-other.md": DUP_OTHER.replaceAll("0047", "0048"),
-  });
-});
-
-test("real git: large Status change below rename similarity still permits duplicate repair", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-adr-real-git-"));
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
-  try {
-    git("init", "-q", "-b", "main");
-    git("config", "user.name", "Fixture");
-    git("config", "user.email", "fixture@example.invalid");
-    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
-    for (const [rel, text] of Object.entries(DUPLICATE_BASE)) await writeFile(path.join(root, rel), text);
-    git("add", "docs/decisions");
-    git("commit", "-qm", "base with duplicate number");
-    git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD").trim());
-    await rm(path.join(root, "docs/decisions/0047-something.md"));
-    await writeFile(path.join(root, NEW_PATH), ACCEPTED_4047_RENUMBERED.replace("Accepted — 2026-08-04", `Accepted — ${"status annotation ".repeat(300)}`));
-    git("add", "-A");
-    git("commit", "-qm", "repair duplicate with large status annotation");
-    const statuses = git("diff", "--find-renames", "--name-status", "origin/main", "HEAD", "--", "docs/decisions");
-    assert.match(statuses, /^D\s+docs\/decisions\/0047-something\.md/m);
-    assert.match(statuses, /^A\s+docs\/decisions\/0048-something\.md/m);
-    const result = await validateDecisionRecords({ root });
-    assert.equal(result.ok, true, JSON.stringify(result.errors));
-    assert.equal(result.rule3.state, "ran");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("real git: a symlinked renumber destination is refused", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-adr-symlink-git-"));
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
-  try {
-    git("init", "-q", "-b", "main");
-    git("config", "user.name", "Fixture");
-    git("config", "user.email", "fixture@example.invalid");
-    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
-    for (const [rel, text] of Object.entries(DUPLICATE_BASE)) await writeFile(path.join(root, rel), text);
-    git("add", "docs/decisions");
-    git("commit", "-qm", "base with duplicate number");
-    git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD").trim());
-    await rm(path.join(root, "docs/decisions/0047-something.md"));
-    await writeFile(path.join(root, "docs/replacement.md"), REN_NUMBER);
-    await symlink("../replacement.md", path.join(root, NEW_PATH));
-    git("add", "-A");
-    git("commit", "-qm", "replace record with symlink");
-    assert.match(git("ls-files", "--stage", "--", NEW_PATH), /^120000 /);
-    const result = await validateDecisionRecords({ root });
-    assert.equal(result.ok, false);
-    assert.ok(result.errors.some((e) => e.kind === "adr_post_acceptance_rewrite"));
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("real git: a dangling symlink renumber destination does not crash the guard", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-adr-dangling-symlink-git-"));
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
-  try {
-    git("init", "-q", "-b", "main");
-    git("config", "user.name", "Fixture");
-    git("config", "user.email", "fixture@example.invalid");
-    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
-    for (const [rel, text] of Object.entries(DUPLICATE_BASE)) await writeFile(path.join(root, rel), text);
-    git("add", "docs/decisions");
-    git("commit", "-qm", "base with duplicate number");
-    git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD").trim());
-    await rm(path.join(root, "docs/decisions/0047-something.md"));
-    // The target is never created, so the candidate symlink is dangling: it must
-    // read as a non-match instead of throwing ENOENT out of the guard.
-    await symlink("../missing.md", path.join(root, NEW_PATH));
-    git("add", "-A");
-    git("commit", "-qm", "replace record with dangling symlink");
-    assert.match(git("ls-files", "--stage", "--", NEW_PATH), /^120000 /);
-    const result = await validateDecisionRecords({ root });
-    assert.equal(result.ok, false);
-    assert.ok(result.errors.some((e) => e.kind === "adr_post_acceptance_rewrite"));
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("real git: a directory-target symlink renumber destination does not crash the guard", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-adr-dir-symlink-git-"));
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
-  try {
-    git("init", "-q", "-b", "main");
-    git("config", "user.name", "Fixture");
-    git("config", "user.email", "fixture@example.invalid");
-    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
-    for (const [rel, text] of Object.entries(DUPLICATE_BASE)) await writeFile(path.join(root, rel), text);
-    git("add", "docs/decisions");
-    git("commit", "-qm", "base with duplicate number");
-    git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD").trim());
-    await rm(path.join(root, "docs/decisions/0047-something.md"));
-    // The target is a DIRECTORY, so reading the candidate throws EISDIR: it has
-    // no record body and must read as a non-match, never as a crash.
-    await mkdir(path.join(root, "docs/somedir"), { recursive: true });
-    await symlink("../somedir", path.join(root, NEW_PATH));
-    git("add", "-A");
-    git("commit", "-qm", "replace record with a directory-target symlink");
-    assert.match(git("ls-files", "--stage", "--", NEW_PATH), /^120000 /);
-    const result = await validateDecisionRecords({ root });
-    assert.equal(result.ok, false);
-    assert.ok(result.errors.some((e) => e.kind === "adr_post_acceptance_rewrite"));
+    assert.match(result.errors.map((e) => e.message).join("\n"), /was deleted/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

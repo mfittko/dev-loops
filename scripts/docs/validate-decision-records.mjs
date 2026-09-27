@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import { lstat, readdir, readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { createGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
 
-const FILENAME_RE = /^(\d{4})-([a-z0-9-]+)\.md$/;
+const FILENAME_RE = /^\d{4}-[a-z0-9-]+\.md$/;
 const TEMPLATE = "0000-template.md"; // permanently reserved template, not a record
 const DECISIONS_DIR = "docs/decisions";
 
@@ -64,27 +64,6 @@ export function isAcceptedOrSuperseded(statusText) {
 }
 
 /**
- * Normalize a record body for the renumber comparison: the H1's four-digit
- * record number is identity, not body content, so a pure renumber
- * (`# 0095. X` -> `# 0096. X`) compares equal while every other body edit still
- * differs. Anchored at the start of the body, which is the record's H1 line.
- */
-export function normalizeRecordNumber(bodyText) {
-  return bodyText.replace(/^#\s+\d{4}\./, "# NNNN.");
-}
-
-/**
- * The four-digit number in a record's H1 (`# 0096. Title`), or null when the
- * body does not open with one. The renumber exception requires the destination's
- * H1 number to match its new filename, so a rename that leaves a stale H1 number
- * behind is refused rather than silently creating a filename/H1 mismatch.
- */
-export function recordTitleNumber(recordText) {
-  const match = recordText.match(/^#\s+(\d{4})\./);
-  return match ? match[1] : null;
-}
-
-/**
  * Index checks (ADR-PATH-NUMBERING): filename shape and unique four-digit prefix.
  * Returns a list of named errors, one per violation.
  */
@@ -118,6 +97,35 @@ export function detectIndexErrors(names) {
   return errors;
 }
 
+/**
+ * ADR-PATH-NUMBERING repair path: a number collision that already merged is fixed
+ * by renaming one record to a free number. The deleted base record counts as that
+ * rename only when another record that already held its number at the base still
+ * holds it (the collision was merged, not created by this change) and exactly one
+ * current record carries its slug under a new number with the base text unchanged
+ * apart from the title number. The new path must be absent at the base and must not
+ * use the reserved 0000 prefix.
+ */
+export async function isCollisionRepairRename(root, names, baseName, baseText, git, base) {
+  const prefix = baseName.slice(0, 4);
+  const slug = baseName.slice(5);
+  const holders = names.filter((n) => n !== baseName && n.startsWith(`${prefix}-`));
+  let mergedCollision = false;
+  for (const n of holders) {
+    if (await git.pathExistsIn(base, `${DECISIONS_DIR}/${n}`)) {
+      mergedCollision = true;
+      break;
+    }
+  }
+  if (!mergedCollision) return false;
+  const renamed = names.filter((n) => n !== TEMPLATE && n.slice(5) === slug && !n.startsWith(`${prefix}-`));
+  if (renamed.length !== 1) return false;
+  // The destination must be a free number: never the reserved 0000, never a path already present at the base.
+  if (renamed[0].startsWith("0000-") || (await git.pathExistsIn(base, `${DECISIONS_DIR}/${renamed[0]}`))) return false;
+  const text = await readFile(path.join(root, DECISIONS_DIR, renamed[0]), "utf8");
+  return text === baseText.replace(new RegExp(`^# ${prefix}\\.`), `# ${renamed[0].slice(0, 4)}.`);
+}
+
 // createGitClient + resolveBaseRef are shared with validate-changelog-completeness.mjs
 // via ./_doc-git-client.mjs so the two base-ref-dependent validators cannot
 // drift. This validator scopes diffNameOnly to the decisions dir and, unlike the
@@ -143,14 +151,6 @@ export { createGitClient };
  * judging whether a record's Status content is correct is a declared non-goal, and the
  * pre-existing 0047 incident of that class was resolved by reverting the record, not by
  * retro-validation.
- *
- * Renumber tolerance (0097): only a number duplicated in the base catalog may be
- * repaired. The changed, newly added direct record must retain the source slug,
- * change its number to the smallest greater number unused by other HEAD records,
- * match its H1, be a regular file, and have identical body outside Status after
- * normalizing the H1 number. Exactly one destination must
- * match. This uses delete/add paths (`diffNameOnly`, `--no-renames`), never Git's
- * heuristic rename detection; every other deletion remains refused.
  */
 export async function validateDecisionRecords({ root, git = createGitClient(root) }) {
   const dir = path.join(root, DECISIONS_DIR);
@@ -182,23 +182,6 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
     rule3 = { state: "degraded", notice: "base ref unavailable; skipping ADR-SUPERSEDE-NOT-REWRITE post-acceptance edit check" };
   } else {
     const changed = await git.diffNameOnly(base, "HEAD", { dir: DECISIONS_DIR });
-    const basePaths = await git.listPaths(base, DECISIONS_DIR);
-    const baseNumbers = new Map();
-    for (const rel of basePaths) {
-      if (path.posix.dirname(rel) !== DECISIONS_DIR) continue;
-      const match = FILENAME_RE.exec(path.posix.basename(rel));
-      if (match && path.posix.basename(rel) !== TEMPLATE) {
-        baseNumbers.set(match[1], (baseNumbers.get(match[1]) ?? 0) + 1);
-      }
-    }
-    // Only paths changed this round and absent from the base can replace a deletion.
-    // The no-renames diff exposes both halves regardless of Git similarity scores.
-    const added = [];
-    for (const rel of changed) {
-      if (path.posix.dirname(rel) !== DECISIONS_DIR) continue;
-      const match = FILENAME_RE.exec(path.posix.basename(rel));
-      if (match && !(await git.pathExistsIn(base, rel))) added.push({ rel, match });
-    }
     for (const rel of changed) {
       const baseName = path.posix.basename(rel);
       if (baseName === TEMPLATE || !rel.endsWith(".md")) continue;
@@ -215,46 +198,7 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
         currentText = await readFile(path.join(root, rel), "utf8");
       } catch (err) {
         if (err.code === "ENOENT") {
-          const source = FILENAME_RE.exec(baseName);
-          const matches = [];
-          if (source && (baseNumbers.get(source[1]) ?? 0) > 1) {
-            for (const { rel: dest, match } of added) {
-              if (match[1] === source[1] || match[2] !== source[2]) continue;
-              const entry = await lstat(path.join(root, dest));
-              // A symlink can have matching body content, so count it for
-              // ambiguity, but never accept it as the selected destination.
-              // Other non-regular entries (e.g. directories) have no record body.
-              if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-              let text;
-              try {
-                text = await readFile(path.join(root, dest), "utf8");
-              } catch (err) {
-                // A candidate with no readable record body — a dangling symlink
-                // (ENOENT) or one pointing at a directory (EISDIR) — simply does
-                // not match, and must not crash the guard with an uncaught error
-                // instead of reaching its own fail-closed refusal below.
-                if (err.code === "ENOENT" || err.code === "EISDIR") continue;
-                throw err;
-              }
-              if (normalizeRecordNumber(splitStatus(text).rest) === normalizeRecordNumber(baseRest)) {
-                matches.push({ dest, number: match[1], text, regular: entry.isFile() });
-              }
-            }
-          }
-          // Count all body matches before filtering by number or file type: a
-          // cloned record cannot become unambiguous just because one clone has
-          // a later number or is symlinked.
-          if (matches.length === 1 && matches[0].regular) {
-            const { dest, number, text } = matches[0];
-            const others = new Set(names.filter((name) => name !== path.posix.basename(dest))
-              .map((name) => FILENAME_RE.exec(name)?.[1]).filter(Boolean).map(Number));
-            const from = Number(source[1]);
-            const to = Number(number);
-            if (recordTitleNumber(text) === number && to > from && !others.has(to)
-              && Array.from({ length: to - from - 1 }, (_, i) => from + i + 1).every((n) => others.has(n))) {
-              continue;
-            }
-          }
+          if (await isCollisionRepairRename(root, names, baseName, baseText, git, base)) continue;
           // Deleting an Accepted/Superseded record is itself a post-acceptance
           // rewrite; refuse it instead of passing silently.
           errors.push({

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-09-21 ([PR 2326](https://github.com/mfittko/dev-loops/pull/2326)); verification ownership superseded by [0096](0096-targeted-validation-and-full-run-authority.md), while the tracked-file edit boundary remains operative
+Accepted — 2026-09-21 ([PR 2326](https://github.com/mfittko/dev-loops/pull/2326)); verification ownership superseded by [0105](0105-targeted-validation-and-full-run-authority.md), while the tracked-file edit boundary remains operative
 
 ## Context
 

@@ -40,11 +40,6 @@ export function createGitClient(root, exec = promisify(execFile)) {
         ? stdout.split("\0").filter(Boolean)
         : stdout.split(/\r?\n/).filter(Boolean);
     },
-    async listPaths(rev, dir) {
-      const { stdout } = await run(["ls-tree", "-r", "--name-only", "-z", rev, "--", dir]);
-      return stdout.split("\0").filter(Boolean);
-    },
-
     async diffAddedFiles(a, b, { nulDelimited = false } = {}) {
       // Only genuinely-NEW paths. Rename detection is ON (--find-renames), so a
       // `git mv changes/old.md changes/new.md` is classified R (rename), NOT A,
