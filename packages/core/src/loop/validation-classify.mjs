@@ -64,7 +64,7 @@ export function resolveTargetedValidation(paths) {
       if (Object.values(REGISTERED_ARTIFACT_SUITES).includes(suite)) return ["ui", `bun run test:playwright:${suite}`];
       return null;
     }
-    if (path.startsWith("scripts/loop/inspect-run-viewer/")) return ["ui", "bun run test:playwright:viewer"];
+    if (path === "scripts/loop/inspect-run-viewer.mjs" || path.startsWith("scripts/loop/inspect-run-viewer/")) return ["ui", "bun run test:playwright:viewer"];
     if (path.startsWith("scripts/") || path.startsWith("cli/") || path.startsWith("lib/")) return ["scripts", "bun run test:scripts"];
     if (path.startsWith("skills/docs/") || path.startsWith("docs/") || path === "AGENTS.md" || path === "README.md") return ["docs", "bun run test:docs", "bun run test:doc-guard"];
     if (path.startsWith(".github/workflows/")) return ["workflow", "bun run test:workflows"];

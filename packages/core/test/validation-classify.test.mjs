@@ -62,6 +62,7 @@ test("changed surfaces select existing checks and unknown or mixed changes fail 
     [["extension/index.ts"], ["bun run test:extension"], ["test:extension"]],
     [[".claude/agents/judge.md"], ["bun run assets:check", "bun run test:assets"], ["assets:check", "test:assets"]],
     [["scripts/loop/inspect-run-viewer/client.mjs"], ["bun run test:playwright:viewer"], ["test:playwright:viewer"]],
+    [["scripts/loop/inspect-run-viewer.mjs"], ["bun run test:playwright:viewer"], ["test:playwright:viewer"]],
     [["docs/presentations/dev-loops-deep-dive.html"], ["bun run test:playwright:deep-dive"], ["test:playwright:deep-dive"]],
     [["docs/articles/introducing-dev-loops.html"], ["bun run test:playwright:intro-article"], ["test:playwright:intro-article"]],
     [["test/playwright/deep-dive-deck.spec.mjs"], ["bun run test:playwright:deep-dive"], ["test:playwright:deep-dive"]],
