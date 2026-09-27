@@ -28,7 +28,7 @@ Exit codes: 0 pulled, 1 refused, 2 usage/IO error.`;
 // Gate reviewer adapter. ref = review:<owner/repo>#<pr>:<gate>:<headSha>:<scope>;
 // executionIdentity = r<emit ms>-<hex>-u<n> (see emit-fanout-dispatch.mjs).
 const REVIEW_REF_RE = /^review:([^/\s#]+\/[^/\s#]+)#(\d+):([a-z_]+):([0-9a-f]{40}|[0-9a-f]{64}):([A-Za-z0-9-]+)$/;
-const EXECUTION_MS_RE = /^r(\d+)-/;
+const EXECUTION_ROUND_RE = /^(r(\d+)-[0-9a-f]+)-u/;
 
 // A round is retired once a GATE-EXEC-ROUND-RETIREMENT record for its gate+head
 // (retire-gate-round.mjs) was written at or after the round's emission time.
@@ -41,24 +41,32 @@ async function findRetirementAfter(tmpRoot, gate, headSha, emittedAtMs) {
   return null;
 }
 
-async function locateReviewUnit({ ref, execution, tmpRoots }) {
+// The search prefers a checkout whose unit carries the supplied digest; the
+// first located unit backs the refusal when none does.
+async function locateReviewUnit({ ref, digest, execution, tmpRoots }) {
   const match = REVIEW_REF_RE.exec(ref);
   if (!match) return null;
   const [, repo, pr, gate, headSha] = match;
+  const [, executionRound, emittedAtMs] = EXECUTION_ROUND_RE.exec(execution) ?? [];
+  let first = null;
   for (const tmpRoot of tmpRoots) {
     const plan = await readJson(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }));
     const unit = plan?.units?.find((candidate) => candidate.workOrderRef === ref);
     if (!unit) continue;
-    const emittedAtMs = Number(EXECUTION_MS_RE.exec(execution)?.[1]);
-    const retired = Number.isFinite(emittedAtMs) ? await findRetirementAfter(tmpRoot, gate, headSha, emittedAtMs) : null;
-    return {
+    const retired = executionRound ? await findRetirementAfter(tmpRoot, gate, headSha, Number(emittedAtMs)) : null;
+    // A parsed round other than the plan's was superseded by a re-emission.
+    const superseded = executionRound && executionRound !== plan.roundId
+      && `execution ${execution} belongs to ${gate} round ${executionRound} at ${headSha}, superseded by round ${plan.roundId}`;
+    const located = {
       ...unit,
       materializationPath: unit.promptPath,
       subject: { repo, pr: Number(pr), gate, headSha, roundId: plan.roundId, scope: unit.scope },
-      stale: retired && `execution ${execution} belongs to a ${gate} round at ${headSha} retired as ${retired}`,
+      stale: superseded || (retired && `execution ${execution} belongs to a ${gate} round at ${headSha} retired as ${retired}`),
     };
+    if (unit.workOrderDigest === digest) return located;
+    first ??= located;
   }
-  return null;
+  return first;
 }
 
 registerWorkOrderRole("review", {

@@ -58,7 +58,7 @@ export function buildDispatchPointer({ workOrderRef, workOrderDigest: digest, ex
 
 /**
  * Role registry. A role adapter is
- *   { locate({ ref, execution, cwd, tmpRoots }) -> Promise<located|null>, validate(workOrder) -> string|null }
+ *   { locate({ ref, digest, execution, cwd, tmpRoots }) -> Promise<located|null>, validate(workOrder) -> string|null }
  * where `located` is { workOrder, workOrderDigest, executionIdentity,
  * materializationPath, materializationHash, subject, stale?: string } for the
  * canonical emitted unit that holds `ref`. The ref's leading `<role>:` selects
@@ -90,8 +90,8 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
   const role = String(ref).split(":", 1)[0];
   const adapter = WORK_ORDER_ROLES.get(role);
   if (!adapter) throw new WorkOrderRefusal("unknown_role", `work-order role ${JSON.stringify(role)} has no registered adapter`);
-  const unit = await adapter.locate({ ref, execution, cwd, tmpRoots });
-  // Stale first: a retired round never retargets onto the newest unit.
+  const unit = await adapter.locate({ ref, digest, execution, cwd, tmpRoots });
+  // Stale first: a retired or superseded round never retargets onto the newest unit.
   if (unit?.stale) throw new WorkOrderRefusal("stale_dispatch", `${unit.stale}; never retarget to the newest round, reconcile and re-dispatch the current lawful unit`);
   if (!unit || unit.workOrderDigest !== digest) {
     throw new WorkOrderRefusal("dispatch_reference_mismatch", `ref/digest ${ref} ${digest} matches no canonical emitted unit; re-dispatch the SAME unit with its canonical compact reference`, true);

@@ -116,6 +116,28 @@ test("a ref bound to a retired same-head round refuses as stale even when a newe
   });
 });
 
+test("a ref from a superseded same-head round refuses as stale_dispatch, never as a retryable typo", async () => {
+  await withDir(async (root) => {
+    const old = await emitRound(root);
+    const current = await emitRound(root, { prompt: "Review the coverage angle, including error paths." });
+    assert.notEqual(current.workOrderDigest, old.workOrderDigest);
+    const body = refusal(pull(old, root));
+    assert.equal(body.refusal, "stale_dispatch");
+    assert.equal(body.retryable, false);
+    assert.match(body.error, /superseded/);
+    assert.equal(pull(current, root).status, 0);
+  });
+});
+
+test("the plan search prefers the checkout whose unit carries the supplied digest", async () => {
+  await withDir(async (a) => withDir(async (b) => {
+    await emitRound(a, { prompt: "Other prompt." });
+    const unit = await emitRound(b);
+    const pulled = await pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, tmpRoots: [path.join(a, "tmp"), path.join(b, "tmp")], receiptTmpRoot: b });
+    assert.equal(pulled.receipt.materializationHash, unit.materializationHash);
+  }));
+});
+
 test("a pull from a linked-worktree cwd writes the receipt under the main checkout, where fan-in resolves it", async () => {
   await withDir(async (base) => {
     const main = path.join(base, "main");
