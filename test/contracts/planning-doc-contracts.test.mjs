@@ -121,6 +121,34 @@ test("planning guidance keeps sub-issue trees as the durable decomposition owner
   assert.match(docsIndex, /sub-issue-tree-contract\.md/i);
 });
 
+// Structural: the lightweight input is listed under the non-durable heading
+// (not the durable list) and names its pr_body spec source.
+function assertLightweightIsNonDurable(content) {
+  const durable = content.match(/Durable\/committed spec artifacts:([\s\S]*?)Non-durable spec-of-record/);
+  assert.ok(durable, "missing durable / non-durable spec-of-record lists");
+  assert.doesNotMatch(durable[1], /lightweight/i, "lightweight must not be listed as durable");
+  const nonDurable = content.match(/Non-durable spec-of-record \(no committed plan artifact\):\n\n([\s\S]*?)\n\n/);
+  assert.ok(nonDurable, "missing non-durable spec-of-record list");
+  assert.match(nonDurable[1], /lightweight PR-body-as-spec sessions/i);
+  assert.match(nonDurable[1], /`canonicalSpecSource: pr_body`/);
+  assert.match(nonDurable[1], /no phase\/plan doc/i);
+}
+
+test("lightweight non-durable check fails when lightweight moves to the durable list", () => {
+  const moved = [
+    "Durable/committed spec artifacts:",
+    "",
+    "- lightweight PR-body-as-spec sessions",
+    "",
+    "Non-durable spec-of-record (no committed plan artifact):",
+    "",
+    "- lightweight PR-body-as-spec sessions (`canonicalSpecSource: pr_body`); no phase/plan doc",
+    "",
+  ].join("\n");
+  assert.throws(() => assertLightweightIsNonDurable(moved));
+  assert.throws(() => assertLightweightIsNonDurable(moved.replace("- lightweight PR-body-as-spec sessions\n", "- other\n").replace("; no phase/plan doc", "")));
+});
+
 test("local workflow docs define tracker-backed local canonicality and no-dup rules", async () => {
   const [workflowDoc, localImplSkill, scriptsReadme] = await Promise.all([
     readRepo("docs/IMPLEMENTATION_WORKFLOW.md"),
@@ -141,11 +169,11 @@ test("local workflow docs define tracker-backed local canonicality and no-dup ru
     /phase-doc-backed local sessions/i,
     /tracker-backed local sessions/i,
     /Non-durable spec-of-record \(no committed plan artifact\)/i,
-    /lightweight PR-body-as-spec sessions.*NOT a durable committed artifact/is,
     /ARTIFACT-TRACKER-FIRST-NO-DUP/,
     /do not read \[Phase Plan\]\(\.\.\/\.\.\/docs\/phases\/phase-x\.md\) for that same tracker-backed session/i,
     /keep `tmp\/` as temporary local execution state only/i,
   ], "skills/local-implementation/SKILL.md");
+  assertLightweightIsNonDurable(localImplSkill);
 
   assertMatchesAll(scriptsReadme, [
     /resolve-tracker-local-spec\.mjs/i,
