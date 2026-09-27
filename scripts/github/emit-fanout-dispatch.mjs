@@ -564,19 +564,26 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const dispatchUnits = expandDispatchUnits(units, configuredGroupNames);
 
   // GATE-EXEC-FANOUT-CAPACITY (emitter half): the emitted unit count is the wave
-  // width the coordinator uses. Refuse ONLY when BOTH (a) the artifact recorded a
-  // HIGHER plan-time effective concurrency than this harness resolves and (b) the
-  // emitted units genuinely exceed this harness's bound — the cross-harness
-  // mismatch this guard exists for (a plan packed for one harness's bound, then
-  // emitted under a tighter one, would be waved as a second wave). Comparing the
-  // recorded bound alone refused plans whose emitted units already fit one wave
-  // here and asserted a packing reason that was false for them. This mirrors
+  // width the coordinator uses, so a PRESENT plan record whose EMITTED units
+  // exceed this harness's bound is refused on the emitted count alone — the
+  // cross-harness mismatch this guard exists for (a plan packed for one harness's
+  // bound, then emitted under a tighter one, would be waved as a second wave).
+  // The recorded-bound comparison (`plannedConcurrency > maxConcurrent`) was
+  // dropped for two reasons: (1) a plan recording a bound EQUAL to (or stale
+  // below) this harness's but still emitting more units than this harness's bound
+  // was silently waved as multiple waves — exactly the over-capacity shape this
+  // guard must refuse, and the context artifact is not prefix-hash-bound so a
+  // stale/equal record cannot be trusted to bound the emitted set; (2) that
+  // comparison refused a plan recorded ABOVE this harness's bound whose emitted
+  // units already fit one wave here, asserting a packing reason that was false
+  // for it. Keying on the emitted count alone fixes both. This mirrors
   // write-gate-context.mjs's own packing decision (`singleWave && !sequential &&
   // !perAngleMode`): `gates.fanout.sequential` (effective 1, one unit per wave),
   // `mode: per-angle` (the gate-review contract's explicit multi-wave opt-out,
   // never packed), and the standalone `review` gate (never packed) all stay
-  // emittable. `gates.fanout.sequential` is already covered by plannedConcurrency
-  // resolving 1, but the live-config check keeps the mirror explicit.
+  // emittable. `gates.fanout.sequential` is already covered by the emitted plan
+  // resolving one unit per wave, but the live-config check keeps the mirror
+  // explicit.
   const plannedConcurrency = artifact.fanout?.effectiveConcurrency;
   // A PRESENT-but-non-integer OR non-positive bound is a malformed plan and
   // refuses fail-closed, matching this file's other malformed-plan handling (a
@@ -592,8 +599,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   }
   const singleWave = gate !== "review";
   const perAngleMode = config?.gates?.fanout?.mode === "per-angle";
+  // `plannedConcurrency !== undefined` preserves the fail-open boundary the
+  // malformed-plan branch above documents: only a genuinely ABSENT field (a
+  // pre-change artifact) skips the guard, while any PRESENT record whose emitted
+  // units exceed this harness's bound refuses.
   if (singleWave && !resolveFanoutSequential(config) && !perAngleMode
-    && plannedConcurrency > maxConcurrent && dispatchUnits.length > maxConcurrent) {
+    && plannedConcurrency !== undefined && dispatchUnits.length > maxConcurrent) {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-CAPACITY: refusing — the fanout plan emits ${dispatchUnits.length} dispatch units under a plan-time effective maxConcurrent ${plannedConcurrency}, above this harness's effective maxConcurrent ${maxConcurrent}; re-run write-gate-context.mjs under this harness so the round packs into one wave` }, false);
   }
 

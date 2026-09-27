@@ -302,16 +302,36 @@ const FanoutConfig = z.strictObject({
 });
 
 /**
- * Two `gates.fanout.groups` entries sharing one `name` would resolve to two
- * dispatch units with the same reviewer-sentinel scope (resolveFanoutGroups
- * keys the scope by group name) — reject at config-validation time rather
- * than let it degrade silently at dispatch time. Applied via `.superRefine`
- * where `FanoutConfig` is used (zod v4 rejects `.partial()` on a schema that
- * already carries a refinement), not on `FanoutConfig` itself.
+ * The reserved synthetic packed-bin name shape. Every bin `packDispatchUnits`
+ * generates (including a one-member bin) is named `packed:sha256:<64 lowercase
+ * hex>`, and `isPackedUnitName` infers a unit's packed origin from exactly this
+ * shape — so a configured `gates.fanout.groups[].name` matching it would make
+ * `expandDispatchUnits`/`dispatchUnitScope` give an ordinary one-angle group
+ * packed-bin scope semantics, and a crafted name could collide with a generated
+ * packed identity. This literal is re-declared here (not imported from
+ * `scripts/github/_dispatch-units.mjs`, which core must not depend on — see
+ * test/core-runtime-boundary.test.mjs) with the owner named for the mirror; a
+ * test asserts both declarations agree on the same sample names so they cannot
+ * drift. Mirrors the local re-declaration precedent in
+ * packages/core/src/loop/reviewer-unit-bound.mjs.
+ */
+export const RESERVED_PACKED_FANOUT_GROUP_NAME_RE = /^packed:sha256:[0-9a-f]{64}$/;
+
+/**
+ * Reject two `gates.fanout.groups` entries sharing one `name` — they would
+ * resolve to two dispatch units with the same reviewer-sentinel scope
+ * (resolveFanoutGroups keys the scope by group name) — and reject a group whose
+ * `name` matches the reserved synthetic packed-bin shape
+ * (RESERVED_PACKED_FANOUT_GROUP_NAME_RE), which would silently inherit
+ * packed-bin scope semantics and could collide with a generated packed
+ * identity. Both are rejected at config-validation time rather than letting
+ * them degrade silently at dispatch time. Applied via `.superRefine` where
+ * `FanoutConfig` is used (zod v4 rejects `.partial()` on a schema that already
+ * carries a refinement), not on `FanoutConfig` itself.
  * @param {{ groups?: Array<{ name: string }> }} val
  * @param {import("zod").RefinementCtx} ctx
  */
-function rejectDuplicateFanoutGroupNames(val, ctx) {
+function rejectInvalidFanoutGroupNames(val, ctx) {
   if (!Array.isArray(val.groups)) return;
   const seen = new Set();
   for (const [index, group] of val.groups.entries()) {
@@ -320,6 +340,13 @@ function rejectDuplicateFanoutGroupNames(val, ctx) {
         code: z.ZodIssueCode.custom,
         path: ["groups", index, "name"],
         message: `duplicate gates.fanout.groups name "${group.name}"`,
+      });
+    }
+    if (typeof group.name === "string" && RESERVED_PACKED_FANOUT_GROUP_NAME_RE.test(group.name)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["groups", index, "name"],
+        message: `gates.fanout.groups name "${group.name}" is in the reserved packed-bin namespace packed:sha256:<64 lowercase hex>; that shape is not usable as a configured group name`,
       });
     }
     seen.add(group.name);
@@ -393,7 +420,7 @@ const GatesConfig = z.strictObject({
   rejectForeignAngles: z.boolean().default(true),
   // Grouped vs per-angle fan-out dispatch policy + static grouping table.
   // GLOBAL, not per-gate — see resolveFanoutGroups.
-  fanout: FanoutConfig.superRefine(rejectDuplicateFanoutGroupNames).optional(),
+  fanout: FanoutConfig.superRefine(rejectInvalidFanoutGroupNames).optional(),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -795,7 +822,7 @@ const FileGatesConfig = z.strictObject({
   postFindingsComments: z.boolean().describe("Also post consolidated gate findings as a second marker-tagged PR comment, duplicating the verdict review's own findings (default false).").optional(),
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
-  fanout: FanoutConfig.partial().superRefine(rejectDuplicateFanoutGroupNames).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
+  fanout: FanoutConfig.partial().superRefine(rejectInvalidFanoutGroupNames).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
 });
 
 // ============================================================================

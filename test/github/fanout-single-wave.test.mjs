@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
-import { expandDispatchUnits, packDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
+import { expandDispatchUnits, isPackedUnitName, packDispatchUnits } from "../../scripts/github/_dispatch-units.mjs";
 import { dispatchUnitScope } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateContextPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import {
@@ -20,6 +20,7 @@ import {
   resolveFanoutEffectiveConcurrency,
   resolveFanoutGroups,
   resolveGateAngleContract,
+  RESERVED_PACKED_FANOUT_GROUP_NAME_RE,
 } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { fanoutReviewerPairingError, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
@@ -620,6 +621,29 @@ describe("emitter-side GATE-EXEC-FANOUT-CAPACITY is scoped to a cross-harness pa
     }
   });
 
+  // Copilot review (PR #2450): the guard must key on the EMITTED unit count, not
+  // on the recorded plan bound. A plan recording effectiveConcurrency EQUAL to
+  // this harness's bound (here 5) whose emitted units exceed it was previously
+  // waved as multiple waves. emitMutatedContext writes the artifact under piEnv
+  // (6 angles / maxAnglesPerGroup: 1 => 6 base units, recorded bound 8) and emits
+  // under claudeEnv (bound 5), so mutating the record to 5 gives exactly 6
+  // emitted units > 5 with a record that no longer exceeds this harness's bound.
+  test("a present plan recording a bound equal to this harness's but emitting more units refuses", async () => {
+    const devloops = "version: 1\ngates:\n  fanout:\n    maxConcurrent: 8\n    maxAnglesPerGroup: 1\n    groups: []\n";
+    const probeDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-capacity-probe-"));
+    await writeFile(path.join(probeDir, ".devloops"), devloops, "utf8");
+    const { config: probeConfig } = await loadDevLoopConfig({ repoRoot: probeDir });
+    await rm(probeDir, { recursive: true, force: true }).catch(() => {});
+    const angles = resolveGateAngleContract(probeConfig, "draft").pool.slice(0, 6);
+    const result = await emitMutatedContext(devloops, angles, (artifact) => { artifact.fanout.effectiveConcurrency = 5; });
+    assert.equal(result.status, 1, result.stderr || result.stdout);
+    const output = `${result.stdout}${result.stderr}`;
+    assert.match(output, /GATE-EXEC-FANOUT-CAPACITY/);
+    assert.match(output, /emits 6 dispatch units/);
+    assert.match(output, /plan-time effective maxConcurrent 5/);
+    assert.match(output, /this harness's effective maxConcurrent 5/);
+  });
+
   // Act index 4 (round 3): the guard's fail-open branch — a genuinely ABSENT
   // field, i.e. a gate-context artifact written before this change — must stay
   // emittable. Pinning it stops a future edit from flipping that boundary (to a
@@ -638,4 +662,32 @@ describe("emitter-side GATE-EXEC-FANOUT-CAPACITY is scoped to a cross-harness pa
     assert.equal(payload.maxConcurrent, 5, "this harness's clamp is still recorded");
     assert.equal(scheduleFanoutWaves(payload.units, payload.maxConcurrent).length, 2, "the guard is skipped, so the multi-wave plan stays emittable");
   });
+});
+
+// Copilot review (PR #2450): the reserved synthetic packed-bin name shape is
+// declared authoritatively in scripts/github/_dispatch-units.mjs
+// (PACKED_UNIT_NAME_RE, consumed by isPackedUnitName) and mirrored in
+// packages/core/src/config/config.mjs (config validation must not import
+// scripts/ — see test/core-runtime-boundary.test.mjs). Pin both declarations
+// against the same samples so the two literals cannot silently drift.
+test("the core reserved packed-group pattern and the dispatch-unit packed-name predicate agree", () => {
+  const hex = "0123456789abcdef".repeat(4);
+  const samples = [
+    `packed:sha256:${hex}`,
+    `packed:sha256:${hex.toUpperCase()}`,
+    `packed:sha256:${hex.slice(0, 63)}`,
+    `packed:sha256:${hex}0`,
+    "packed:sha256:",
+    `packed:sha256:${"g".repeat(64)}`,
+    `group:packed:sha256:${hex}`,
+    "docs-surface",
+    "",
+  ];
+  for (const sample of samples) {
+    assert.equal(
+      RESERVED_PACKED_FANOUT_GROUP_NAME_RE.test(sample),
+      isPackedUnitName(sample),
+      `pattern/predicate disagree on ${JSON.stringify(sample)}`,
+    );
+  }
 });

@@ -5257,6 +5257,62 @@ test("gates.fanout.groups schema validation: duplicate group names are rejected"
   }
 });
 
+// Copilot review (PR #2450): `isPackedUnitName` infers a synthetic packed bin
+// from the name shape alone, so a configured group named in that reserved
+// namespace would silently get packed-bin scope semantics and could collide
+// with a generated packed identity. Config validation reserves the namespace.
+test("gates.fanout.groups schema validation: a name in the reserved packed-bin namespace is rejected", async () => {
+  const packedName = `packed:sha256:${"0123456789abcdef".repeat(4)}`;
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-packed-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  fanout:",
+        "    groups:",
+        `      - name: ${JSON.stringify(packedName)}`,
+        "        angles: [holistic]",
+        "",
+      ].join("\n"),
+    );
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.ok(errors.length > 0);
+    assert.match(
+      errors.map((e) => e.message).join("\n"),
+      /reserved packed-bin namespace packed:sha256:<64 lowercase hex>/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("gates.fanout.groups schema validation: an ordinary group name still parses", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-fanout-ok-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  fanout:",
+        "    groups:",
+        "      - name: docs-surface",
+        "        angles: [holistic]",
+        "",
+      ].join("\n"),
+    );
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.equal(errors.length, 0, JSON.stringify(errors));
+    assert.equal(config.gates.fanout.groups[0].name, "docs-surface");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // ============================================================================
 // AC3 (#1572) — per-angle scoped briefings: gates.<gate>.angles[].scope +
 // resolveGateAngleScope
