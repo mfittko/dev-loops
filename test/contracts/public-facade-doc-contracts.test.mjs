@@ -335,7 +335,7 @@ function assertDraftBoundary(content) {
     bodyLines.includes("<!-- rule: OPS-DRAFT-FIRST-PR -->"))?.bodyLines.join("\n");
   assert.ok(section, "draft-first owner section must exist");
   const commands = [...section.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
-  for (const command of ["create-pr.mjs", "--ready", "ready-for-review.mjs"]) {
+  for (const command of ["create-pr.mjs", "--ready", "ready-for-review.mjs", "restore-ready.mjs"]) {
     assert.ok(commands.includes(command), `missing draft-boundary API: ${command}`);
   }
   // These are API routes, not proof of natural-language MUST/MUST NOT semantics.
@@ -346,11 +346,17 @@ function assertDraftBoundary(content) {
 test("draft-boundary routes tolerate rewritten guidance but not missing APIs or owner markers", async () => {
   const owner = await readRepo("skills/docs/copilot-loop-operations.md");
   assertDraftBoundary(owner.replace("New PRs MUST open", "Every new PR MUST begin")
-    .replace("gated on clean draft-gate evidence", "after a clean draft gate"));
+    .replace("for a normal ready flip", "for an ordinary ready transition"));
   for (const changed of [
     owner.replace("<!-- rule: OPS-DRAFT-FIRST-PR -->", ""),
     owner.replaceAll("`ready-for-review.mjs`", "`different-helper.mjs`"),
   ]) assert.throws(() => assertDraftBoundary(changed));
+});
+
+test("draft-boundary check requires the restore-ready exit", async () => {
+  const owner = await readRepo("skills/docs/copilot-loop-operations.md");
+  assert.throws(() => assertDraftBoundary(owner.replaceAll("`restore-ready.mjs`", "restore-ready")),
+    /missing draft-boundary API: restore-ready\.mjs/);
 });
 
 test("skill docs enforce self-assignment and draft-first rules for create commands", async () => {

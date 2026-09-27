@@ -165,8 +165,10 @@ judgment cannot substitute. The canonical conformant skeleton lives at
 
 <!-- rule: OPS-DRAFT-FIRST-PR -->
 `OPS-DRAFT-FIRST-PR`: New PRs MUST open as **draft** through `create-pr.mjs`, which
-rejects `--ready`. Agents MUST NOT create ready PRs. The only draft-exit path is
-`ready-for-review.mjs` (`gh pr ready`), gated on clean draft-gate evidence.
+rejects `--ready`. Agents MUST NOT create ready PRs. The two sanctioned draft exits are
+`ready-for-review.mjs` (`gh pr ready`) for a normal ready flip, and `restore-ready.mjs`
+only to restore a PR that `convert-to-draft.mjs` made a transient draft while CI is
+blocking. Both run through `readyForReview()` and require clean current-head `draft_gate` evidence.
 [TRACKER-PROJECTION-REQUIRED-METADATA](./tracker-first-loop-state.md#31-required-pr-metadata)
 owns the corresponding tracker metadata requirement.
 

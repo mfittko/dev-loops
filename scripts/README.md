@@ -678,7 +678,6 @@ Required:
 - `--next-action <text>`
 
 Optional:
-- `--local-validation-head-sha <sha>` — reuse the bounded `crediblyGreen` exception when GitHub created zero current-head suites/statuses and local verification already passed for that exact head
 - `--force --force-reason <text>` — narrow operator-authorized CI override for the helper-local gate-entry refusal only; `--force-reason` is required with `--force`, `--force-reason` without `--force` is rejected, and the reason text is whitespace-normalized for machine-readable output
 
 Success output shape:
@@ -692,7 +691,7 @@ Failure behavior:
 - when that refusal is specifically `lifecycleState=blocked_needs_user_decision` plus current-head `ciStatus="failure"`, the unforced error now points operators to `--force --force-reason` as the explicit CI-only escape hatch
 - `--force` does **not** bypass stale-head protection, non-draft `draft_gate` refusal, unresolved-feedback / unsettled-review `pre_approval_gate` refusal, merge-conflict handling, or closed/merged PR protection
 
-Use `--force` only after the user explicitly authorizes ignoring the current-head CI failure for this one gate-comment upsert. Prefer the normal paths first: green current-head CI, `--local-validation-head-sha` for the bounded `crediblyGreen` case, or the draft-gate policy knob from issue #351 when the desired behavior is a durable draft-gate policy rather than a one-off override.
+Use `--force` only after the user explicitly authorizes ignoring the current-head CI failure for this one gate-comment upsert. Prefer the normal paths first: green current-head CI, or the draft-gate policy knob `gates.draft.requireCi` (issue #351) when the desired behavior is a durable draft-gate policy rather than a one-off override.
 
 ### `scripts/loop/run-refinement-audit.mjs`
 

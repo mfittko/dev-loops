@@ -1,14 +1,149 @@
 # Skills prose cleanup coverage
 
-Tracking issue: [2236](https://github.com/mfittko/dev-loops/issues/2236). Baseline: `894a5a59080222cef5a47fc3f4e962824e05bfda`.
+Current run: tracking issue [2454](https://github.com/mfittko/dev-loops/issues/2454). Start revision: `6202c2ed70b5cd438051a90bee9aae89e56326f3`. The current run has its own inventory, phases and baseline measurements in the section below.
 
-Inventory: 77 tracked files under `skills/`, including 67 Markdown files and ten code/registry files. A pending row is not reviewed coverage. This record tracks execution; the issue remains the canonical specification.
+Previous run: tracking issue [2236](https://github.com/mfittko/dev-loops/issues/2236). Baseline: `894a5a59080222cef5a47fc3f4e962824e05bfda`. The previous run inventoried 77 tracked files under `skills/`, including 67 Markdown files and ten code/registry files. Its records start at the previous-run section and continue through the end of this file.
 
-Dispositions: `pending`, `in progress`, `changed`, `unchanged`, `generated`, `non-prose`, `blocked`. Generated `.claude/skills/` projections are outside this source inventory and must be regenerated, never edited by hand. All script/registry prose has been inspected. Runtime changes are limited to the explicitly authorized C17/C21 corrections below; schema and dependencies remain excluded.
+A pending row is not reviewed coverage. This record tracks execution; the tracking issue remains the canonical specification.
 
-Phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other routed entrypoints and their workflow contracts; 3 = remaining shared documentation, references, templates and script comments/help. The cross-phase contradiction pass has a final disposition for every decision row below. All phases use the same cleanup PR unless the human changes the scope.
+Dispositions: `pending`, `in progress`, `changed`, `unchanged`, `generated`, `non-prose`, `blocked`. Generated `.claude/skills/` projections are outside this source inventory and must be regenerated, never edited by hand. In the previous run, runtime changes were limited to the explicitly authorized C17/C21 corrections; schema and dependencies were excluded.
 
-## Current run — 2026-09-19
+Previous-run phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other routed entrypoints and their workflow contracts; 3 = remaining shared documentation, references, templates and script comments/help. The previous run's cross-phase contradiction pass has a final disposition for every decision row in its section.
+
+## Current run — 2026-09-27 (issue 2454)
+
+Start revision: `6202c2ed70b5cd438051a90bee9aae89e56326f3` (origin/main). Inventory: 80 tracked files under `skills/` (`git ls-files skills`), including 70 Markdown files and ten code/registry files.
+
+Disposition vocabulary: `pending` (not yet worked; the row names its phase), `in progress` (partly worked in an earlier phase), `changed`, `unchanged`, `generated`, `non-prose`, `blocked` (the whole file is reserved by another unit; the row names the owner). A partly reserved file stays in scope. Its row names each reserved passage and the owning issue. This run does not condense, move or reword a reserved passage.
+
+Phases:
+
+1. Inventory, baseline measurements and the folded items. Folded item A updates `OPS-DRAFT-FIRST-PR` in `skills/docs/copilot-loop-operations.md`. Folded item B removes the stale `--local-validation-head-sha` flag from `scripts/README.md`.
+2. Routed entrypoints (`skills/*/SKILL.md`) and their directly coupled references and templates: `skills/dev-loop/templates/*` and the comments and help of `skills/dev-loop/scripts/*`. Work starts with the files that changed most since baseline `894a5a59`.
+3. Remaining shared docs under `skills/docs/`, completion of inventory coverage, the cumulative cross-file contradiction review and cross-harness validation.
+
+The churn figures in the table count added and removed lines from `894a5a59` to the start revision (`git diff --numstat`).
+
+### Phase 1 status
+
+Folded item A is applied. `OPS-DRAFT-FIRST-PR` now names two sanctioned draft exits: `ready-for-review.mjs` for a normal ready flip, and `restore-ready.mjs` only for a transient draft that `convert-to-draft.mjs` made while CI is blocking. `restoreReady()` in `scripts/github/restore-ready.mjs` calls `readyForReview()` with the internal `skipCiPrecondition` seam, so both exits keep the clean current-head `draft_gate` evidence guard. `assertDraftBoundary` in `test/contracts/public-facade-doc-contracts.test.mjs` requires `restore-ready.mjs`, and a negative test strips it and expects the check to throw. `OPS-NO-INLINE-INTERPRETER` in the same file is unchanged.
+
+Folded item B is applied. `scripts/README.md` no longer lists the `--local-validation-head-sha` flag bullet. The "Prefer the normal paths first" sentence names only green current-head CI and the `gates.draft.requireCi` draft-gate policy knob.
+
+No other `skills/` source changed in phase 1.
+
+### Required-read bundles
+
+Each bundle is a fixed file list for a realistic route. Measurements count complete files, including frontmatter and code examples. Files outside `skills/` (for example `AGENTS.md`) and live issue, PR and source reads are excluded, because this issue does not condense them.
+
+| Bundle | Route assumption | Files |
+| --- | --- | --- |
+| A. Startup | `loop startup --issue <n>` resolves strategy `local_implementation`. Its `requiredReads` come from `STRATEGY_REQUIRED_READS.local_implementation` in `scripts/loop/resolve-dev-loop-startup.mjs`. | `skills/docs/public-dev-loop-contract.md`, `skills/local-implementation/SKILL.md` |
+| B. Copilot follow-up | Startup resolves strategy `copilot_pr_followup` (`requiredReads`: public contract, retrospective contract, follow-up skill, operations). The follow-up skill's "Required startup reads" section adds the entrypoint briefing `skills/docs/entrypoint-strategies.md`. The retrospective contract is counted because async state and resume apply on this route. | `skills/copilot-pr-followup/SKILL.md`, `skills/docs/entrypoint-strategies.md`, `skills/docs/public-dev-loop-contract.md`, `skills/docs/retrospective-checkpoint-contract.md`, `skills/docs/copilot-loop-operations.md` |
+| C. Gate coordinator | One `draft_gate` `fanout_fanin` round in a fresh-context gate coordinator (`GATE-EXEC-GATE-COORDINATOR`). The coordinator reads the gate owner in full, the comment contract that owns the required verdict evidence, and `anti-patterns.md` for the rule IDs cited at point of use (`END-TURN-AND-AWAIT-WAKE`, `SILENT-STDERR-PROBE`). The dispatching follow-up skill is loaded by the parent and is not counted. `acceptance-criteria-verification.md` applies only to `pre_approval_gate` and is not counted. | `skills/docs/gate-review-sub-loop-contract.md`, `skills/docs/gate-review-comment-contract.md`, `skills/docs/anti-patterns.md` |
+
+### Baseline measurements
+
+Method: `wc -c` (bytes) and `wc -w` (words) at the start revision, before any phase 1 edit. The raw command output is kept outside the repository with the run's scratch artifacts.
+
+| Surface | Files | Bytes | Words |
+| --- | --- | --- | --- |
+| Total canonical `skills/` Markdown prose (`git ls-files 'skills/**/*.md'`) | 70 | 1,105,439 | 144,970 |
+| Bundle A. Startup | 2 | 94,393 | 12,156 |
+| Bundle B. Copilot follow-up | 5 | 178,374 | 22,288 |
+| Bundle C. Gate coordinator | 3 | 251,582 | 33,069 |
+| Reference: all tracked `skills/` files, including code and registry | 80 | 1,203,872 | 154,175 |
+
+Per-file baseline: `public-dev-loop-contract.md` 43,380 / 5,607; `local-implementation/SKILL.md` 51,013 / 6,549; `copilot-pr-followup/SKILL.md` 82,373 / 10,200; `entrypoint-strategies.md` 5,130 / 515; `retrospective-checkpoint-contract.md` 27,388 / 3,432; `copilot-loop-operations.md` 20,103 / 2,534; `gate-review-sub-loop-contract.md` 208,581 / 27,458; `gate-review-comment-contract.md` 33,421 / 4,415; `anti-patterns.md` 9,580 / 1,196 (bytes / words).
+
+### Inventory
+
+Totals: 67 `pending`, one `in progress`, eight `non-prose`, four `blocked`; 80 files.
+
+| File | Phase | Disposition | Rationale |
+| --- | --- | --- | --- |
+| `skills/copilot-pr-followup/SKILL.md` | 2 | pending | Routed entrypoint, +128/-107. Reserved passages stay untouched: `COPILOT-FOLLOWUP-REQUEST-BRANCHING` and the Phase 5 retry and fixer triage step (issue 2438); the `run-gate-validation.mjs` step and both "Review angles" bullets (issue 2442). |
+| `skills/dev-loop/SKILL.md` | 2 | blocked | Owner: parallel unit PR 2480 (issue 2456) edits this file. It also holds the bounded Copilot/CI watch rule (issue 2438) and the "Blocking join for a nested single-child step" paragraph (issue 2442). |
+| `skills/dev-loop/scripts/dev-mode-context.mjs` | 1 | non-prose | Context extraction code with no comments; behavior, payload keys and diagnostics only. |
+| `skills/dev-loop/scripts/dev-mode-context.test.mjs` | 1 | non-prose | Test fixtures and assertions with no comments. |
+| `skills/dev-loop/scripts/init-phase.mjs` | 2 | pending | Script comments, +4/-10. Two comment blocks restate `ARTIFACT-TRACKER-FIRST-NO-DUP`; review them with the local-implementation entrypoint. |
+| `skills/dev-loop/scripts/log-bash-exit-1.mjs` | 1 | non-prose | Re-export shim with no comments. |
+| `skills/dev-loop/scripts/phase-files.mjs` | 1 | non-prose | Re-export shim with no comments. |
+| `skills/dev-loop/scripts/post-gate-verdict-fallback.mjs` | 2 | pending | About 90 comment lines, including the degraded-semantics header and inline guard notes, +1/-3. Review them with the dev-loop fallback caller. |
+| `skills/dev-loop/scripts/post-gate-verdict-fallback.test.mjs` | 1 | non-prose | Test suite. Its comments explain security and compatibility cases and carry no agent instruction. |
+| `skills/dev-loop/scripts/render-template.mjs` | 1 | non-prose | Template renderer code with no comments. |
+| `skills/dev-loop/scripts/render-template.test.mjs` | 1 | non-prose | Test fixtures and assertions with no comments. |
+| `skills/dev-loop/templates/bootstrap-agents.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/bootstrap-implementation-state.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/bootstrap-implementation-workflow.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/dev-mode-retrospective.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/dev-mode-review.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/dev-mode-skill-changes.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/merged-phase-plan.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/phase-doc.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/phase-summary.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/phase-variant.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/pr-body.md` | 2 | pending | Template, new since baseline (+52). |
+| `skills/dev-loop/templates/retrospective.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/review.md` | 2 | blocked | Owner: issue 2442 reserves the whole file. |
+| `skills/dev-loop/templates/slides-story-review.md` | 2 | pending | Template; unchanged since baseline. |
+| `skills/dev-loop/templates/ui-vision-review.md` | 2 | pending | Template, +1/-1. |
+| `skills/docs/ab-contrast-deslop-step.md` | 3 | pending | Shared doc, +0/-4. |
+| `skills/docs/acceptance-criteria-verification.md` | 3 | pending | Shared doc, +13/-2. |
+| `skills/docs/agent-stall-detection.md` | 3 | pending | Shared doc, +0/-13. |
+| `skills/docs/anti-patterns.md` | 3 | pending | Shared doc, +2/-2. Reserved passage: `END-TURN-AND-AWAIT-WAKE` (issue 2442). |
+| `skills/docs/artifact-authority-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/conductor-routing-contract.md` | 3 | pending | Shared doc, +1/-12. |
+| `skills/docs/confirmation-rules.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/contract-style-guide.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/copilot-ci-status-contract.md` | 3 | pending | Shared doc, +15/-14. |
+| `skills/docs/copilot-loop-operations.md` | 3 | in progress | Phase 1 changed only `OPS-DRAFT-FIRST-PR` (folded item A). The rest of the file is pending, +68/-55. Reserved passage: `OPS-NO-INLINE-INTERPRETER` (issue 2442). |
+| `skills/docs/copilot-loop-state-graph.md` | 3 | pending | Shared doc, +22/-5. |
+| `skills/docs/cross-harness-regression-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/decision-record-contract.md` | 3 | pending | Shared doc, +2/-4. |
+| `skills/docs/docs-grill-step.md` | 3 | pending | Shared doc, +1/-7. |
+| `skills/docs/entrypoint-strategies.md` | 3 | pending | Shared doc, +2/-2. |
+| `skills/docs/epic-tree-refinement-procedure.md` | 3 | pending | Shared doc, +2/-8. |
+| `skills/docs/gate-review-comment-contract.md` | 3 | pending | Shared doc, +72/-26. Reserved passage: the angle-resolution sentence (issue 2442). |
+| `skills/docs/gate-review-sub-loop-contract.md` | 3 | blocked | Owner: parallel unit issue 2416 edits this file. It also holds reserved passages of issue 2438 (`GATE-EXEC-GATE-COORDINATOR`, `GATE-EXEC-VALIDATION-ARTIFACT`, `GATE-EXEC-BLOCKING-ONLY-FIX`, `GATE-EXEC-NO-CWD-DEPENDENCE`, the Phase 3 verdict list, the Phase 5 clean-pass bullet, the escalation table) and issue 2442 (the reviewer wave paragraph, `GATE-EXEC-COLLECTABLE-DISPATCH`, the per-harness delivery table, `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`). |
+| `skills/docs/issue-intake-procedure.md` | 3 | pending | Shared doc, +7/-3. Reserved passage: the follow-up-capture bullet (issue 2438). |
+| `skills/docs/local-planning.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/main-agent-contract.md` | 3 | pending | Shared doc, +130/-23. Reserved passages: `COORDINATOR-VERIFY-DELEGATION` and `MAIN-AGENT-FILING-BLOCKER-ONLY` (issue 2438). |
+| `skills/docs/merge-preconditions.md` | 3 | pending | Shared doc, +70/-15. Reserved passage: the post-merge duties (issue 2438). |
+| `skills/docs/pr-lifecycle-contract.md` | 3 | pending | Shared doc, +5/-11. |
+| `skills/docs/pre-pr-review-contract.md` | 3 | pending | Shared doc, new since baseline (+220). Reserved passages: Step 3 and `PRE-PUSH-DELTA-EXIT-BOUND` (issue 2447). |
+| `skills/docs/projects-queue-contract.md` | 3 | pending | Shared doc, +24/-12. |
+| `skills/docs/public-dev-loop-contract.md` | 3 | pending | Shared doc, +25/-13. Loaded on every startup route. |
+| `skills/docs/release-runbook.md` | 3 | pending | Shared doc, +16/-15. |
+| `skills/docs/required-rules.json` | 1 | non-prose | Rule registry: IDs, enforcement values and enforcement notes that validators read. Schema and literals are exact data, not condensable prose. |
+| `skills/docs/retrospective-checkpoint-contract.md` | 3 | pending | Shared doc, +10/-9. |
+| `skills/docs/reviewer-loop-state-graph.md` | 3 | pending | Shared doc, +1/-3. |
+| `skills/docs/slides-story-review-loop.md` | 3 | pending | Shared doc, +1/-20. |
+| `skills/docs/spec-authority-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/spike-mode-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/stop-conditions.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/structural-quality.md` | 3 | pending | Shared doc, +1/-1. |
+| `skills/docs/sub-issue-tree-contract.md` | 3 | pending | Shared doc, +1/-3. Reserved passage: the follow-up row (issue 2438). |
+| `skills/docs/tracker-first-loop-state.md` | 3 | pending | Shared doc, +0/-4. |
+| `skills/docs/tracker-seam-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/ui-artifact-contract.md` | 3 | pending | Shared doc, +9/-15. |
+| `skills/docs/ui-designer-review-loop.md` | 3 | pending | Shared doc, +1/-7. |
+| `skills/docs/ui-e2e-scoping-step.md` | 3 | pending | Shared doc, +0/-7. |
+| `skills/docs/ui-review-recipe-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/ui-smoke-harness.md` | 3 | pending | Shared doc, +2/-3. |
+| `skills/docs/ui-validation-contract.md` | 3 | pending | Shared doc; unchanged since baseline. |
+| `skills/docs/validation-policy.md` | 3 | pending | Shared doc, +3/-3. |
+| `skills/docs/wait-watch-procedure.md` | 3 | pending | Shared doc, +21/-26. |
+| `skills/docs/workflow-handoff-contract.md` | 3 | pending | Shared doc, +8/-13. |
+| `skills/docs/worktree-guidance.md` | 3 | pending | Shared doc, +24/-18. Reserved passage: `WORKTREE-COMMIT-MSG-GUARD` (issue 2438). |
+| `skills/final-approval/SKILL.md` | 2 | pending | Routed entrypoint; unchanged since baseline. |
+| `skills/local-implementation/SKILL.md` | 2 | pending | Routed entrypoint, +19/-31. Loaded on the startup bundle. |
+| `skills/loop-grill/SKILL.md` | 2 | pending | Routed entrypoint, +22/-19. |
+| `skills/pi-session-audit/SKILL.md` | 2 | pending | Routed entrypoint, new since baseline (+120). |
+| `skills/review/SKILL.md` | 2 | blocked | Owner: parallel unit issue 2416 edits this file. |
+| `skills/ui-review/SKILL.md` | 2 | pending | Routed entrypoint, +7/-26. |
+
+## Previous run — 2026-09-19 (issue 2236)
 
 ### Contradiction-resolution pass — current authority
 
