@@ -291,12 +291,15 @@ profile when targeting is unsafe), and MUST persist
 the result as `<gate>-<headSha>.validation.json` beside the gate-context artifact. When
 that artifact exists, the briefing prefix MUST point every reviewer at it
 (`write-gate-context.mjs --validation-results <path>`), and a reviewer MUST consume it
-rather than executing any suite it records. A missing full result remains typed incomplete; it does not authorize a reviewer or worker to run the full suite directly. A reviewer that finds the artifact absent,
-unreadable, or stamped with a different head SHA MUST report a gate-evidence finding; it
+rather than executing any suite it records. A missing full result remains typed incomplete; it does not authorize a reviewer or worker to run the full suite directly. An `incomplete` resolution
+writes a typed incomplete artifact at the same path, stamped with the requested head, with
+`status: "incomplete"`, `allPassed: false`, the `reason`, and no suites. It is incomplete
+evidence, never a pass. A reviewer that finds the artifact absent, unreadable, incomplete,
+or stamped with a different head SHA MUST report a gate-evidence finding; it
 MUST NOT silently run the suite itself and MUST NOT treat the gap as clean. The verdict writer
 enforces this rule: `upsert-checkpoint-verdict.mjs` refuses a `fanout_fanin` verdict post when
 the head's `<gate>-<headSha>.validation.json` is absent, unreadable, or stamped with a different
-head SHA. The refusal names the artifact and `run-gate-validation.mjs`. It applies under the
+head SHA. A typed incomplete artifact satisfies this check. The refusal names the artifact and `run-gate-validation.mjs`. It applies under the
 same `gates.requireFanoutEvidence` condition as the durable-ledger refusal.
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle

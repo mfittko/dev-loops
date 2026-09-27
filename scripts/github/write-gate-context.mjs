@@ -1236,9 +1236,10 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
     `Read a field directly (never \`cat\`/\`head\` the whole file): \`jq '.allPassed' "${validationResultsPath}"\`.`,
     "",
     "Read that record for suite status, exit codes, and output tails. Executing a suite it",
-    "already records is outside a read-only angle review's scope. If the record is absent,",
-    `unreadable, or stamped with a head SHA other than ${headSha}, say so as a gate-evidence`,
-    "finding instead of substituting your own run.",
+    "already records is outside a read-only angle review's scope. A record with",
+    "`status: \"incomplete\"` ran no suite; it is incomplete evidence, never a pass. If the record",
+    `is absent, unreadable, incomplete, or stamped with a head SHA other than ${headSha}, say so`,
+    "as a gate-evidence finding instead of substituting your own run.",
   ];
 }
 

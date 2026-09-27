@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { parsePrNumber } from "../_cli-primitives.mjs";
@@ -58,9 +58,20 @@ export function parseResolveValidationArgs(argv) {
 
 export async function resolveValidation(options, { repoRoot = resolveRepoRoot(process.cwd()), env = process.env } = {}) {
   const artifactPath = path.resolve(repoRoot, buildValidationResultsPath(options));
+  // An incomplete outcome replaces any earlier same-head evidence with a typed
+  // incomplete record, so the verdict writer sees that the round resolved its
+  // validation and every reader sees `allPassed: false`. The old file goes
+  // first: a failed write leaves the artifact absent, never a stale pass.
   const incomplete = async (reason) => {
     await rm(artifactPath, { force: true });
-    return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason };
+    const artifact = {
+      ok: false, status: "incomplete", allPassed: false,
+      repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha,
+      profile: options.profile, reason, generatedAt: new Date().toISOString(), suites: [],
+    };
+    await mkdir(path.dirname(artifactPath), { recursive: true });
+    await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+    return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason, artifactPath: buildValidationResultsPath(options) };
   };
   try {
     const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };

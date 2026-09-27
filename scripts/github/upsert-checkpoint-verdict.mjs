@@ -2193,7 +2193,10 @@ async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = def
  * Refuse a fanout_fanin verdict unless `run-gate-validation.mjs`'s artifact
  * (`<gate>-<headSha>.validation.json`) exists for the reviewed head in any
  * checkout of this repo, parses, and is stamped with that head. Throws a
- * message naming the artifact path and `run-gate-validation.mjs`.
+ * message naming the artifact path and `run-gate-validation.mjs`. A typed
+ * incomplete artifact (`status: "incomplete"`, `allPassed: false`) passes this
+ * check: it proves the round resolved its validation, and reviewers already
+ * report it as incomplete evidence.
  */
 export async function assertGateValidationArtifact({ repo, pr, gate, headSha, repoRoot }) {
   const relPath = buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot: "tmp" });

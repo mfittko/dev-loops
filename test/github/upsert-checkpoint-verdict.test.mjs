@@ -6972,6 +6972,21 @@ async function stageValidationArtifact(repoRoot, { repo = "owner/repo", pr = 17,
       await assertGateValidationArtifact(args(tempDir));
     });
   });
+
+  test("assertGateValidationArtifact accepts a typed incomplete artifact stamped with the reviewed head", async () => {
+    await withTempDir(async (tempDir) => {
+      await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");
+      await stageValidationArtifact(tempDir, {
+        gate: "pre_approval_gate", headSha: VALIDATION_HEAD,
+        raw: JSON.stringify({
+          ok: false, status: "incomplete", allPassed: false, repo: "owner/repo", pr: 17, gate: "pre_approval_gate",
+          headSha: VALIDATION_HEAD, profile: "targeted", reason: "packageManager does not pin an exact Bun version",
+          generatedAt: "2026-09-28T00:00:00.000Z", suites: [],
+        }),
+      });
+      await assertGateValidationArtifact(args(tempDir));
+    });
+  });
 }
 
 // Two-arm guard: a requireFanoutEvidence fanout_fanin verdict-post is REFUSED

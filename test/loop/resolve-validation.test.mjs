@@ -73,7 +73,24 @@ test("failed full suite returns an unsuccessful public result and retains failur
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
-test("wrong installed Bun version returns incomplete and writes no complete artifact", async () => {
+async function assertTypedIncompleteArtifact(repoRoot, headSha, profile, reasonPattern) {
+  const artifactPath = buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" });
+  const artifact = JSON.parse(await readFile(path.join(repoRoot, artifactPath), "utf8"));
+  assert.equal(artifact.status, "incomplete");
+  assert.equal(artifact.ok, false);
+  assert.equal(artifact.allPassed, false);
+  assert.equal(artifact.repo, "owner/repo");
+  assert.equal(artifact.pr, 1);
+  assert.equal(artifact.gate, "draft_gate");
+  assert.equal(artifact.headSha, headSha);
+  assert.equal(artifact.profile, profile);
+  assert.match(artifact.reason, reasonPattern);
+  assert.ok(!Number.isNaN(Date.parse(artifact.generatedAt)));
+  assert.deepEqual(artifact.suites, []);
+  return artifactPath;
+}
+
+test("wrong installed Bun version returns incomplete and writes a typed incomplete artifact", async () => {
   const { repoRoot, headSha } = await fixture({}, "0.0.0");
   try {
     const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha)], { cwd: repoRoot });
@@ -83,8 +100,23 @@ test("wrong installed Bun version returns incomplete and writes no complete arti
     assert.equal(result.status, "incomplete");
     assert.match(result.reason, /differs from bun@0\.0\.0/);
     assert.equal(result.artifact, undefined);
-    const artifactPath = buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" });
-    await assert.rejects(readFile(path.join(repoRoot, artifactPath)), /ENOENT/);
+    const artifactPath = await assertTypedIncompleteArtifact(repoRoot, headSha, "full-repository", /differs from bun@0\.0\.0/);
+    assert.equal(result.artifactPath, artifactPath);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a repo without a pinned Bun writes a typed incomplete artifact at the requested head", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
+    delete packageJson.packageManager;
+    await writeFile(path.join(repoRoot, "package.json"), JSON.stringify(packageJson));
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "unpin bun"], { cwd: repoRoot });
+    const unpinnedHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation(parseResolveValidationArgs([...args(unpinnedHead, "targeted"), "--suite", "test:scripts"]), { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.ok, false);
+    await assertTypedIncompleteArtifact(repoRoot, unpinnedHead, "targeted", /does not pin an exact Bun version/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
@@ -158,7 +190,7 @@ test("targeted profile rejects a full suite and allows an exact targeted script"
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
-test("incomplete resolution removes earlier same-head validation evidence", async () => {
+test("incomplete resolution replaces earlier same-head passing evidence with a typed incomplete artifact", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
     const options = parseResolveValidationArgs(args(headSha));
@@ -168,7 +200,7 @@ test("incomplete resolution removes earlier same-head validation evidence", asyn
     assert.equal(JSON.parse(await readFile(stalePath, "utf8")).allPassed, true);
     const incomplete = await resolveValidation({ ...options, profile: "targeted" }, { repoRoot });
     assert.equal(incomplete.status, "incomplete");
-    await assert.rejects(readFile(stalePath), /ENOENT/);
+    await assertTypedIncompleteArtifact(repoRoot, headSha, "targeted", /targeted profile cannot run full-repository/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
