@@ -10,7 +10,7 @@ no mandatory async-subagent dispatch — i.e. no Pi-style main-agent→dev-loop 
 agent is invoked directly and owns the work end to end, at that outer level. This is distinct from
 the coordinator→worker delegation described next: the same dev-loop agent, now acting as
 COORDINATOR one level down, is itself read-only for TRACKED repo files (source, tests, docs) and
-MUST delegate every tracked-file implementation edit and verification run to a fresh WORKER
+MUST delegate every tracked-file implementation edit and targeted verification run to a fresh WORKER
 subagent (`developer`/`fixer`/`quality`/`docs`). The coordinator MAY still write EPHEMERAL artifacts
 directly — `tmp/`, the scratchpad, and sanctioned ledger paths (the PR body markdown, comment
 bodies, dispatch prompts, gate evidence/ledgers under `tmp/gate-findings/`) — because those are
