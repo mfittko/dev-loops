@@ -2090,6 +2090,12 @@ test("prematureGateOrderingRefusal: pins BOTH orderings as structured refusals (
   });
   assert.equal(reconcile, null, "a ready PR WITHOUT a satisfied draft gate keeps the reconcile path open");
 
+  assert.equal(
+    prematureGateOrderingRefusal({ gate: "draft_gate", isDraft: true, draftGateSatisfied: true, repo: "owner/repo", pr: 90 }),
+    null,
+    "a still-draft PR with a satisfied draft gate is never refused",
+  );
+
   let premature;
   assert.doesNotThrow(() => {
     premature = prematureGateOrderingRefusal({ gate: "pre_approval_gate", isDraft: false, draftGateSatisfied: false, repo: "owner/repo", pr: 97 });
