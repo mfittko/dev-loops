@@ -146,11 +146,12 @@ blocks on hosting. Every bounded cap is logged.
 ## Teardown + side-effect ledger
 
 Teardown consumes prior-stage results and ALWAYS emits a side-effect ledger. Invoke
-`dev-loops-run cli/index.mjs loop ui-review-teardown --repo-root <p> --provision-result <p> [--drive-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
+`dev-loops-run cli/index.mjs loop ui-review-teardown --repo-root <p> --provision-result <p> [--drive-result <p>] [--report-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
 (source-repo fallback: `dev-loops-run scripts/loop/ui-review-teardown.mjs ...`; pure
 decisions in `packages/core/src/loop/ui-review-teardown.mjs`).
 
-The destructive steps (dev-DB row drops and worktree removal) run ONLY with an
+The destructive steps (dev-DB row drops, worktree removal, and pruning the
+Stage-4 hosting gist named in `--report-result`) run ONLY with an
 explicit `--confirm`. Without it, those steps are skipped and the ledger records
 what remains. Stopping the app still runs because the loop itself started that
 process. A null PID is never a blind kill, and win32 app-stop fails closed; in
@@ -163,18 +164,21 @@ created/dropped or left behind, the worktree path and whether it was removed, an
 the process status. A failed kill/drop/removal is reported in the ledger and the
 result's `errors` list.
 
-The drive does not tag the dev-DB rows it creates, so this stage MUST NOT guess
-which rows to drop. It drops rows only from an explicit manifest. When the drive
-walked mutating flows without one, the ledger reports rows "may remain
-(untagged)". The CLI's row-drop seam is not yet wired: a confirmed manifest
-fails CLOSED and the ledger records a drop failure.
+The drive tags the rows it creates with its drive-session id and emits a row
+manifest. This stage MUST NOT guess which rows to drop. It drops rows only from
+an explicit manifest, with `--confirm`, through
+`uiReview.run.rowTeardown.deleteCommand`. When the drive walked mutating flows
+and no manifest is supplied, nothing is dropped and the ledger reports rows "may
+remain (untagged)". Row-drop fails CLOSED and the ledger records a drop failure
+when a manifest row is untagged or the rows carry more than one session, when
+`deleteCommand` is missing, or when the command exits nonzero.
 
 ## Non-goals
 
 The teardown stage never rolls back the branch's dev-DB migrations by default and
 never tears down a production DB. The stage does not auto-submit a review
 without explicit authorization, publish to a production/non-dev posting target,
-ship the GitHub-native hosted-artifact fallback, auto-fix the located defects,
+auto-fix the located defects,
 pixel-diff for visual regression, run a cross-browser matrix, or touch a
 production DB. It does not replace the product/eng `review` angle or the Copilot
 gate.

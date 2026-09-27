@@ -335,7 +335,7 @@ function assertDraftBoundary(content) {
     bodyLines.includes("<!-- rule: OPS-DRAFT-FIRST-PR -->"))?.bodyLines.join("\n");
   assert.ok(section, "draft-first owner section must exist");
   const commands = [...section.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
-  for (const command of ["create-pr.mjs", "--ready", "ready-for-review.mjs", "restore-ready.mjs"]) {
+  for (const command of ["create-pr.mjs", "--ready", "ready-for-review.mjs", "restore-ready.mjs", "convert-to-draft.mjs"]) {
     assert.ok(commands.includes(command), `missing draft-boundary API: ${command}`);
   }
   // These are API routes, not proof of natural-language MUST/MUST NOT semantics.
@@ -357,6 +357,12 @@ test("draft-boundary check requires the restore-ready exit", async () => {
   const owner = await readRepo("skills/docs/copilot-loop-operations.md");
   assert.throws(() => assertDraftBoundary(owner.replaceAll("`restore-ready.mjs`", "restore-ready")),
     /missing draft-boundary API: restore-ready\.mjs/);
+});
+
+test("draft-boundary check limits restore-ready to a convert-to-draft transient draft", async () => {
+  const owner = await readRepo("skills/docs/copilot-loop-operations.md");
+  assert.throws(() => assertDraftBoundary(owner.replaceAll("`convert-to-draft.mjs`", "convert-to-draft")),
+    /missing draft-boundary API: convert-to-draft\.mjs/);
 });
 
 test("skill docs enforce self-assignment and draft-first rules for create commands", async () => {

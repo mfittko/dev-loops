@@ -50,7 +50,9 @@ Harness auto-detects per record from the usage envelope's field-naming shape (Cl
 present, the error names the detected shape and suggests `--harness auto`.
 
 Claude records sharing one `message.id` count as a single turn, even when the repeats
-are not adjacent. The deduped turn keeps the last record's usage. A turn replayed across
+are not adjacent. The deduped turn keeps the last record's usage and the position of
+its first appearance. That position decides the first and last turn for the Init
+Prompt and Final Prompt metrics. A turn replayed across
 resumed-session files (same `message.id` + `requestId`) counts once, in the file with
 the earliest usage-turn timestamp. Path order breaks a timestamp tie. A Claude Code transcript's prompt size is
 `input + cacheRead + cacheCreate` on its first/last turn (Pi's is `input + cacheRead`);
