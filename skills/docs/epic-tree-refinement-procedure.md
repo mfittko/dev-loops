@@ -3,12 +3,10 @@
 Canonical owner for depth-first, top-down-then-bottom-up refinement of an existing GitHub
 sub-issue tree (parent → children → grandchildren).
 
-Use it together with:
-- [Issue Intake Procedure](./issue-intake-procedure.md) — Phase 3b calls this procedure for epic decomposition
-- [Sub-Issue Tree Contract](./sub-issue-tree-contract.md) — authoritative sub-issue tooling
-
-When you have a tree of GitHub issues that already exists and you need to align AC, DoD, scope
-boundaries, and delegation contracts across all levels, follow this procedure.
+Use it to align AC, DoD, scope boundaries, and delegation contracts across all levels of an
+existing tree. [Issue Intake Procedure](./issue-intake-procedure.md) Phase 3b creates a new tree
+and calls this procedure. [Sub-Issue Tree Contract](./sub-issue-tree-contract.md) owns the
+sub-issue tooling.
 
 ---
 
@@ -22,7 +20,7 @@ boundaries, and delegation contracts across all levels, follow this procedure.
 | **Leaf** | An issue with no sub-issue children |
 | **Phase table** | A section of the root/parent body that names each child and what it owns vs excludes |
 | **Scope boundary** | Explicit text in an issue body: `"This issue owns X. It does NOT own Y (#NNN)."` |
-| **AC/DoD matrix** | A two-column table mapping each acceptance-criterion outcome to its required completion evidence — the authoritative AC→DoD artifact (#1951); the PR carries the derived list-form checklists |
+| **AC/DoD matrix** | A two-column table mapping each acceptance-criterion outcome to its required completion evidence — the authoritative AC→DoD artifact (#1951). Do NOT author separate interactive issue-side AC / DoD checklists; the PR carries the derived list-form checklists |
 
 ---
 
@@ -45,9 +43,6 @@ and tree integrity in one deterministic pass.
 
 If the sub-issue tree does not yet exist, use [Issue Intake Procedure](./issue-intake-procedure.md) Phase 3b to decompose and attach it first.
 
-Every "Apply" step below writes back via `dev-loops issue edit` (the routed CLI subcommand); the
-raw `node scripts/github/edit-issue.mjs` wrapper remains only as a source-repo fallback.
-
 ---
 
 ## Phases
@@ -61,11 +56,11 @@ For the root issue:
 2. Confirm the problem statement is clear and scoped
 3. Confirm a **phase scope table** exists — one row per immediate child naming what each child
    owns and what it excludes; add or update this table if missing
-4. Confirm the **AC/DoD matrix** — a two-column table mapping each acceptance-criterion outcome (the end-to-end goal, not the implementation details owned by children) to its required completion evidence (the merge-ready condition for the root issue as a whole). This mapping matrix is the authoritative AC→DoD artifact (#1951); do NOT author separate interactive issue-side AC / DoD checklists — the PR carries the derived list-form checklists
-5. Confirm **non-goals** section — prevents scope creep into adjacent areas
-8. Write the updated body to a tmp file: `tmp/issues/<root>/refinement/root-body.md`
-9. Show the diff and obtain confirmation before mutating GitHub
-10. Apply: `dev-loops issue edit --repo <repo> --issue <root> --body-file tmp/issues/<root>/refinement/root-body.md`
+4. Confirm the **AC/DoD matrix** (see Definitions). For the root, each criterion outcome is the end-to-end goal, not the implementation details owned by children, and its completion evidence is the merge-ready condition for the root issue as a whole
+5. Confirm **non-goals** section
+6. Write the updated body to a tmp file: `tmp/issues/<root>/refinement/root-body.md`
+7. Show the diff and obtain confirmation before mutating GitHub
+8. Apply: `dev-loops issue edit --repo <repo> --issue <root> --body-file tmp/issues/<root>/refinement/root-body.md`
 
 <!-- rule: EPIC-REFINEMENT-SERIAL-PHASE-GATE -->
 **Gate:** Phase B MUST NOT start until Phase A is complete and the root body is updated on GitHub. The same serial-gate discipline applies at every phase boundary below: a level/phase MUST fully complete (siblings may run in parallel within it) before the next one starts.
@@ -86,14 +81,11 @@ parent's updated body, not each other's output.
 4. Identify any overlap with sibling issues (read sibling titles/bodies if needed)
 5. Refine the child body with:
    - **Scope boundary** (explicit): `"This issue owns X. It does NOT own Y (#NNN) or Z (#MMM)."`
-   - **AC/DoD matrix** specific to this child's bounded scope — each criterion outcome (when is this child independently closable?) mapped to its required completion evidence. This is the authoritative AC→DoD artifact (#1951); do NOT author separate interactive issue-side AC / DoD checklists
+   - **AC/DoD matrix** specific to this child's bounded scope — each criterion outcome (when is this child independently closable?) mapped to its required completion evidence
    - **Non-goals** — what this child intentionally excludes
 6. Write refined body to `tmp/issues/<child>/refinement/child-body.md`
 7. Show the diff and obtain confirmation before mutating (unless running unattended with explicit authorization)
 8. Apply: `dev-loops issue edit --repo <repo> --issue <child> --body-file tmp/issues/<child>/refinement/child-body.md`
-
-**Parallelism rule:** All siblings at the same level can be refined concurrently. No child needs
-another child's output; each child only reads the parent's contract and its own current body.
 
 **Serial gate between levels** ([EPIC-REFINEMENT-SERIAL-PHASE-GATE](#phase-a--root-refinement-serial)): all children at level N must complete before descending to level N+1.
 
@@ -175,27 +167,13 @@ each `dev-loops issue edit` mutation, unless running unattended with explicit au
 
 ---
 
-## Parallelism model
-
-```text
-Phase A:  [root]                            serial (1 step)
-Phase B:  [child1 || child2 || child3]      parallel per level (1 step per level)
-          [gc1a || gc1b || gc2a || gc3a]    parallel per level (1 step per level)
-Phase C:  [child1 || child2 || child3]      parallel per level (1 step per level)
-Phase D:  [root]                            serial (1 step)
-```
-
-**Fan-out rule:** At any level, when a parent is refined, ALL its children can be refined in parallel. Root/leaf/child ordering follows [EPIC-REFINEMENT-SERIAL-PHASE-GATE](#phase-a--root-refinement-serial) throughout.
-
----
-
 ## Completion criteria
 
 The procedure is complete when all issues in the tree satisfy [EPIC-REFINEMENT-REQUIRED-CONTRACTS](#rules), verified as:
 
 | Check | How to verify |
 |---|---|
-| AC/DoD matrix present + valid | Issue body contains a two-column `## AC / DoD matrix` table mapping each criterion outcome to concrete completion evidence (empty or identifier-only tables are rejected); this is the authoritative AC→DoD artifact (#1951) |
+| AC/DoD matrix present + valid | Issue body contains a two-column `## AC / DoD matrix` table mapping each criterion outcome to concrete completion evidence (empty or identifier-only tables are rejected) |
 | Non-goals present | Issue body contains `## Non-goals` section |
 | Scope boundary present | Issue body contains explicit `"This issue owns ... It does NOT own ..."` text |
 | No orphaned responsibilities | Each thing the parent delegates maps to exactly one child |
@@ -219,15 +197,3 @@ Phase D: #715 root reconcile
 ```
 
 Wall-clock serial steps: 5 (not 17).
-
----
-
-## Relationship to other procedures
-
-| Procedure | When to use it |
-|---|---|
-| [Issue Intake Procedure](./issue-intake-procedure.md) Phase 3b | *Creating* a new sub-issue tree from an umbrella issue |
-| **This procedure** | *Refining* an existing sub-issue tree to align scope, AC, DoD, and delegation contracts |
-| [Sub-Issue Tree Contract](./sub-issue-tree-contract.md) | Tooling for listing, attaching, ordering, and verifying sub-issue trees |
-
-These are complementary. Phase 3b creates the structure; this procedure aligns the contracts.

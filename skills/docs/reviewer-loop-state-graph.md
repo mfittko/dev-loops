@@ -4,9 +4,7 @@ Canonical owner for the reviewer-side PR loop state machine.
 
 ## Overview
 
-The reviewer loop captures observable PR/GitHub facts plus explicit local reviewer-loop metadata (planning/run/merge status) into one snapshot and deterministically maps that snapshot to exactly one current state.
-
-This document defines the reviewer-side review production/submission boundary. The broader family-local PR lifecycle that consumes this boundary is defined in [PR Lifecycle Contract](./pr-lifecycle-contract.md).
+The reviewer loop maps one snapshot of observable PR/GitHub facts plus local reviewer-loop metadata (planning/run/merge status) to exactly one current state. [PR Lifecycle Contract](./pr-lifecycle-contract.md) owns the broader PR lifecycle that consumes the review submission boundary.
 
 Implementation:
 
@@ -97,11 +95,9 @@ this graph, not by this reviewer-loop machine itself.
 - submitted review state: `submittedReviewPresent`, `submittedReviewCommitSha`, `submittedReviewState`
 - explicit prior action-result state: `reviewSubmissionStatus`
 
-`reviewerScope` is explicit machine-readable contract, not an inferred side note:
+`reviewerScope` values:
 - `single_reviewer` means detection was scoped to one reviewer identity and `reviewerLogin` is that normalized login
 - `all_reviewers` means no single requested reviewer was resolved and the detector intentionally aggregated reviewer state across the PR
-
-The contract separates observable current state (`submittedReviewPresent`, `submittedReviewCommitSha`, `submittedReviewState`, `draftReviewPosted`, `reviewRequested`) from prior action-result state (`reviewSubmissionStatus`) to avoid overloading one field.
 
 ## Deterministic Review Plan Contract
 
@@ -165,9 +161,7 @@ review artifact/verdict.
 - optional: `--review-requested <true|false>` (inject known request result)
 - optional: `--local-state <path>` (inject local planning/run/merge metadata)
 
-Reviewer-scope contract:
-- reviewer scope is auto-resolved from the PR's requested reviewers: a single resolved requested reviewer scopes detection to that identity, otherwise detection intentionally aggregates across all reviewers on the PR
-- success output snapshots always expose that choice through `snapshot.reviewerScope` and `snapshot.reviewerLogin`
+The detector auto-resolves reviewer scope from the PR's requested reviewers (see `reviewerScope` above). Success output snapshots always expose that choice through `snapshot.reviewerScope` and `snapshot.reviewerLogin`.
 
 Success output:
 
@@ -179,8 +173,4 @@ Failure output:
 
 ## Key Deterministic Guarantees
 
-State distinctness, invalidation, terminal/handoff boundary, and fail-closed guarantees are
-defined by [State Definitions](#state-definitions), [Required transitions](#required-transitions),
-and `REVIEWER-BOUNDARY-CONTRACT` above; this section does not restate them.
-
-- round-cap exhaustion in a concluded Copilot cycle is not a blanket stop: the strict-mode (`refinement.requireCopilotConvergenceAtLatestHead: true`) post-convergence new-cycle re-request carve-out is owned by `COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)
+Round-cap exhaustion in a concluded Copilot cycle is not a blanket stop. `COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) owns the strict-mode (`refinement.requireCopilotConvergenceAtLatestHead: true`) post-convergence new-cycle re-request carve-out.
