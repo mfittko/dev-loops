@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-27 ([issue #2469](https://github.com/mfittko/dev-loops/issues/2469))
 
+Partially supersedes [0080](./0080-coordinator-worker-delegation-boundary.md): its worker delegation continues for tracked-file edits and targeted checks; local full-repository runs go only through `dev-loops gate resolve-validation`.
+
 ## Context
 
 The former `VALIDATE-VERIFY-BEFORE-GATE` rule directed every worker to run the full repository suite. That repeated expensive work during implementation and conflicted with the gate's need for evidence tied to an exact commit. [Issue #2469](https://github.com/mfittko/dev-loops/issues/2469) makes targeted checks the default while retaining full coverage at the applicable gate. The choice applies to tracker-backed and phase-doc-backed local work alike; their spec sources remain distinct.
