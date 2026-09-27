@@ -4,9 +4,7 @@ This bounded loop reviews a deck's narrative. Visual review remains with the sib
 
 ## Public entrypoint and dependency boundary
 
-- `dev-loop` remains the single public entrypoint.
-- This review loop is an internal capability behind `dev-loop`; it does not introduce a second public workflow name.
-- It is a sibling of the visual designer/vision loop, not a replacement: visual and design changes remain the [Designer + Vision Review Loop](./ui-designer-review-loop.md)'s job.
+- `dev-loop` remains the single public entrypoint. This review loop is an internal capability behind it and adds no second public workflow name.
 - It consumes the deck source (and optionally the captured slide screenshots produced by the [UI Smoke Harness](./ui-smoke-harness.md)) plus acceptance criteria and a storytelling brief. It does not redefine browser capture or artifact naming.
 
 ## Required input bundle

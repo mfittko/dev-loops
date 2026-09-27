@@ -49,8 +49,8 @@ Symmetrically, for a change targeting the Claude-Code-specific seam that MUST NO
 
 ## Non-goals
 
-- No new or expanded CI matrix: `bun run verify` (which CI runs on every pull request) already covers `test:assets`, `test:extension`, `test:scripts`, `test:core`, `test:docs`, and `test:dev-loop` — every suite named above except `bun run smoke:headless`, which is manual/local-only by design (see the test inventory above).
-- No bespoke cross-harness enforcement script: naming the required suites here, combined with CI already running them on every pull request, satisfies the coverage bar.
+- No new or expanded CI matrix: `bun run verify` (which CI runs on every pull request) already covers `test:assets`, `test:extension`, `test:scripts`, `test:core`, `test:docs`, and `test:dev-loop`. Only `bun run smoke:headless` stays manual/local-only.
+- No bespoke cross-harness enforcement script: the named suites that CI runs on every pull request satisfy the coverage bar.
 - No rewriting of existing harness-specific code as part of adopting this contract.
 
 ## Cross-references
