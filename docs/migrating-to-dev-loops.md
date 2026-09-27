@@ -80,9 +80,10 @@ not own or define them) purely to integrate with the Pi harness. These keep thei
 names because the Pi runtime sets them. Most are read only at the harness-adapter
 boundary; the async-context markers are the exception (see below):
 
-`PI_SESSION`, `PI_INTERACTIVE`, `PI_AGENT_SESSIONS_DIR`, `PI_SUBAGENT_SESSIONS_DIR`,
-`PI_SUBAGENT_ASYNC_RUNS_DIR`, `PI_SUBAGENT_ASYNC_RESULTS_DIR`, `PI_SUBAGENT_CHILD`,
-`PI_SUBAGENT_PARENT_SESSION`, and the legacy run-id alias `PI_SUBAGENT_RUN_ID`.
+`PI_SESSION`, `PI_SESSION_ID`, `PI_INTERACTIVE`, `PI_AGENT_SESSIONS_DIR`,
+`PI_SUBAGENT_SESSIONS_DIR`, `PI_SUBAGENT_ASYNC_RUNS_DIR`, `PI_SUBAGENT_ASYNC_RESULTS_DIR`,
+`PI_SUBAGENT_CHILD`, `PI_SUBAGENT_PARENT_SESSION`, `PI_ASYNC_NATIVE_RUNNER`, and the legacy
+run-id alias `PI_SUBAGENT_RUN_ID`.
 
 The neutral `DEVLOOPS_RUN_ID` is the primary run-id marker and the only one dev-loops
 mints/propagates. Under Pi, async-start evidence is the native marker pair the async runner
