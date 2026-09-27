@@ -64,6 +64,16 @@ export function isAcceptedOrSuperseded(statusText) {
 }
 
 /**
+ * Normalize a record body for the renumber comparison: the H1's four-digit
+ * record number is identity, not body content, so a pure renumber
+ * (`# 0095. X` -> `# 0096. X`) compares equal while every other body edit still
+ * differs. Anchored at the start of the body, which is the record's H1 line.
+ */
+export function normalizeRecordNumber(bodyText) {
+  return bodyText.replace(/^#\s+\d{4}\./, "# NNNN.");
+}
+
+/**
  * Index checks (ADR-PATH-NUMBERING): filename shape and unique four-digit prefix.
  * Returns a list of named errors, one per violation.
  */
@@ -122,6 +132,14 @@ export { createGitClient };
  * judging whether a record's Status content is correct is a declared non-goal, and the
  * pre-existing 0047 incident of that class was resolved by reverting the record, not by
  * retro-validation.
+ *
+ * Renumber tolerance (0097): a record that is already on the base branch cannot be
+ * renumbered without a delete+add pair, so the deletion guard would refuse the only
+ * legal repair for a duplicate record number. Rule 3 therefore also reads a
+ * rename-detecting `diffNameStatus` and treats an `R` whose destination body equals the
+ * base body with the H1 number normalized as a legal renumber. Every other rename is
+ * still refused, and the delete/add path (`diffNameOnly`, `--no-renames`) is unchanged,
+ * so a bare delete or an add-only still fails closed.
  */
 export async function validateDecisionRecords({ root, git = createGitClient(root) }) {
   const dir = path.join(root, DECISIONS_DIR);
@@ -153,6 +171,13 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
     rule3 = { state: "degraded", notice: "base ref unavailable; skipping ADR-SUPERSEDE-NOT-REWRITE post-acceptance edit check" };
   } else {
     const changed = await git.diffNameOnly(base, "HEAD", { dir: DECISIONS_DIR });
+    // Rename detection is read separately (0097): the delete/add truth above stays
+    // `--no-renames`, so a rename can never collapse there and hide a delete.
+    const renameTargets = new Map(
+      (await git.diffNameStatus(base, "HEAD", { dir: DECISIONS_DIR }))
+        .filter(({ status }) => status.startsWith("R"))
+        .map(({ from, to }) => [from, to]),
+    );
     for (const rel of changed) {
       const baseName = path.posix.basename(rel);
       if (baseName === TEMPLATE || !rel.endsWith(".md")) continue;
@@ -169,6 +194,22 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
         currentText = await readFile(path.join(root, rel), "utf8");
       } catch (err) {
         if (err.code === "ENOENT") {
+          const renamedTo = renameTargets.get(rel);
+          if (renamedTo) {
+            // A renumber keeps the decision and moves it to a new unique number,
+            // changing only the H1 number. Anything else in the body is still a
+            // post-acceptance rewrite and is refused.
+            const renamedText = await readFile(path.join(root, renamedTo), "utf8");
+            if (normalizeRecordNumber(splitStatus(renamedText).rest) !== normalizeRecordNumber(baseRest)) {
+              errors.push({
+                kind: "adr_post_acceptance_rewrite",
+                rule: "ADR-SUPERSEDE-NOT-REWRITE",
+                file: rel,
+                message: `accepted/superseded record '${rel}' was renamed to '${renamedTo}' and edited outside its Status section (ADR-SUPERSEDE-NOT-REWRITE)`,
+              });
+            }
+            continue;
+          }
           // Deleting an Accepted/Superseded record is itself a post-acceptance
           // rewrite; refuse it instead of passing silently.
           errors.push({

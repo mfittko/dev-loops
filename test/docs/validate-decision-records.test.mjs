@@ -47,6 +47,30 @@ Superseded by [0048](./0048-x.md) — 2026-08-07 ([issue 2](https://github.com/m
 Context text.
 `;
 
+/** The same record renumbered 0047 -> 0048: only the H1's number changed. */
+const ACCEPTED_4047_RENUMBERED = `# 0048. Something
+
+## Status
+
+Accepted — 2026-08-04 ([issue 1](https://github.com/mfittko/dev-loops/issues/1))
+
+## Context
+
+Context text.
+`;
+
+/** A renumber that ALSO edits the body — the case the guard must still refuse. */
+const ACCEPTED_4047_RENUMBERED_EDITED = `# 0048. Something
+
+## Status
+
+Accepted — 2026-08-04 ([issue 1](https://github.com/mfittko/dev-loops/issues/1))
+
+## Context
+
+Context text edited.
+`;
+
 async function fixture(files, git) {
   const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-decisions-"));
   for (const [rel, content] of Object.entries(files)) {
@@ -57,8 +81,10 @@ async function fixture(files, git) {
   return { root, git: git ?? makeGit() };
 }
 
-/** Fake git client: origin/main at a base whose decision files are served by the map. */
-function makeGit(baseFiles = {}) {
+/** Fake git client: origin/main at a base whose decision files are served by the map.
+ * `renames` feeds the rename-detecting read (`diffNameStatus`) only; `diffNameOnly`
+ * keeps its `--no-renames` delete/add semantics, so the deletion guard stays exercised. */
+function makeGit(baseFiles = {}, renames = []) {
   return {
     async symbolicRef() {
       return "refs/remotes/origin/main";
@@ -68,6 +94,11 @@ function makeGit(baseFiles = {}) {
     },
     async diffNameOnly(_base, _head, { dir } = {}) {
       return Object.keys(baseFiles).filter((f) => f.startsWith(dir));
+    },
+    async diffNameStatus(_base, _head, { dir } = {}) {
+      return renames
+        .filter(({ from }) => from.startsWith(dir))
+        .map(({ from, to, status = "R100" }) => ({ status, from, to }));
     },
     async show(spec) {
       const rel = spec.replace(/^base-sha:/, "");
@@ -231,6 +262,40 @@ test("deleting an accepted record fails, naming ADR-SUPERSEDE-NOT-REWRITE", asyn
   }
 });
 
+// --- Rule 3 renumber tolerance (0097): a pure renumber is legal, an editing rename is not ---
+test("renumbering an accepted record (rename + H1 number change) passes", async () => {
+  const { root, git } = await fixture({
+    "docs/decisions/0048-something.md": ACCEPTED_4047_RENUMBERED,
+  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }, [
+    { from: "docs/decisions/0047-something.md", to: "docs/decisions/0048-something.md" },
+  ]));
+  try {
+    const result = await validateDecisionRecords({ root, git });
+    assert.equal(result.ok, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a rename that also edits the body outside the Status section still fails, naming ADR-SUPERSEDE-NOT-REWRITE", async () => {
+  const { root, git } = await fixture({
+    "docs/decisions/0048-something.md": ACCEPTED_4047_RENUMBERED_EDITED,
+  }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }, [
+    { from: "docs/decisions/0047-something.md", to: "docs/decisions/0048-something.md" },
+  ]));
+  try {
+    const result = await validateDecisionRecords({ root, git });
+    assert.equal(result.ok, false);
+    const error = result.errors.find((e) => e.kind === "adr_post_acceptance_rewrite");
+    assert.ok(error);
+    assert.equal(error.rule, "ADR-SUPERSEDE-NOT-REWRITE");
+    assert.equal(error.file, "docs/decisions/0047-something.md");
+    assert.match(error.message, /outside its Status section/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an already-Superseded record is also protected from non-status edits", async () => {
   const { root, git } = await fixture({
     "docs/decisions/0047-something.md": ACCEPTED_4047_EDITED,
@@ -332,6 +397,28 @@ test("rename-protection is mutation-anchored: diffNameOnly passes --no-renames",
   assert.ok(
     diffCall.includes("--no-renames"),
     "--no-renames must be passed so a git mv (rename) cannot collapse to the destination path and evade rule 3",
+  );
+});
+
+// --- Rule 3 rename detection: mutation-anchored on the --find-renames flag ---
+test("renumber detection is mutation-anchored: diffNameStatus passes --find-renames", async () => {
+  const calls = [];
+  const exec = async (_cmd, args) => {
+    calls.push(args);
+    return { stdout: "R100\tdocs/decisions/0047-something.md\tdocs/decisions/0048-something.md\n" };
+  };
+  const git = createGitClient("/tmp", exec);
+  const rows = await git.diffNameStatus("base-sha", "HEAD", { dir: "docs/decisions" });
+  assert.deepEqual(rows, [{
+    status: "R100",
+    from: "docs/decisions/0047-something.md",
+    to: "docs/decisions/0048-something.md",
+  }]);
+  const call = calls.find((a) => a.includes("--name-status"));
+  assert.ok(call, "expected a git diff --name-status invocation");
+  assert.ok(
+    call.includes("--find-renames"),
+    "--find-renames must be passed so a renumber is recognized instead of refused as a delete",
   );
 });
 
