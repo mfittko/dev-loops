@@ -231,8 +231,9 @@ Exemptions and anchoring:
 - The colon must close the tag (followed by whitespace or end-of-title), so `draft:latest`
   and `wip:branch` stay unflagged.
 - A dash-set-off trailing tag (`Fix login flow — WIP`) stays unflagged.
-- `DO NOT MERGE` and `🚧` match anywhere in the title. Only whitespace joins the words of
-  `DO NOT MERGE`, so `do-not-merge` does not flag.
+- `DO NOT MERGE` (case-insensitive) and `🚧` match anywhere in the title. Only whitespace
+  joins the words of `DO NOT MERGE`, so hyphen- or underscore-joined spellings such as
+  `do-not-merge` or `do_not_merge` do not flag.
 
 This is enforced at two points:
 

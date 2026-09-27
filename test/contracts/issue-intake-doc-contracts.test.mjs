@@ -22,7 +22,7 @@ function assertIntakePrEditUsesWrapper(intake) {
   const parsed = parseEditPrCliArgs(args);
   assert.equal(parsed.repo, "owner/repo", "edit-pr example must carry the resolved repo");
   assert.equal(String(parsed.pr), "42", "edit-pr example must carry the PR number");
-  assert.doesNotMatch(intake, /^gh pr edit\b/m, "intake must not prescribe a raw gh pr edit");
+  assert.doesNotMatch(intake, /(?:^|[\s`(;&|])gh pr edit\b/m, "intake must not prescribe a raw gh pr edit");
 }
 
 const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
@@ -51,10 +51,13 @@ function assertMutationPassContract(doc) {
   ]) assert.match(section, needle, message);
 }
 
-// The plan-doc normalization branch must stop on a closed matching issue.
+// The plan-doc normalization branch must stop on a closed matching issue. A list
+// item is located by role (closed issue, stop, user decision); its wording may change.
 function assertPlanDocClosedStop(doc) {
   const section = doc.split("### From a plan-doc path")[1]?.split("\n### ")[0] ?? "";
-  assert.match(section, /matching issue is closed, stop for a user decision/i, "plan-doc path must stop on a closed matching issue");
+  const stopItem = section.split("\n").find((line) => /^\s*-\s/.test(line)
+    && /\bclosed\b/i.test(line) && /\bstop\b/i.test(line) && /\buser\b/i.test(line));
+  assert.ok(stopItem, "plan-doc path must stop on a closed matching issue");
 }
 
 async function readIssueIntakeSurface() {
@@ -415,7 +418,11 @@ test("approval stop-gate check accepts reworded prose and rejects a lost stop or
 test("mutation-pass and plan-doc closed-stop checks reject a dropped input, output or stop", async () => {
   const doc = await readRepo("skills/docs/issue-intake-procedure.md");
   assertMutationPassContract(doc.replace("the separate async mutation pass", "a distinct async mutation pass"));
-  assertPlanDocClosedStop(doc);
+  assertPlanDocClosedStop(doc.replace("if the matching issue is closed, stop for a user decision before proceeding",
+    "when that issue is already closed, stop and ask the user to decide"));
+  assert.throws(() => assertPlanDocClosedStop(doc.replace("if the matching issue is closed, stop for a user decision before proceeding",
+    "if the matching issue is closed, reopen it and continue")),
+    /plan-doc path must stop on a closed matching issue/);
   assert.throws(() => assertMutationPassContract(doc.replace("consumes the approved proposal", "reads chat context")),
     /must consume the approved proposal/);
   assert.throws(() => assertMutationPassContract(doc.replaceAll("post-mutation verification artifact", "note")),
@@ -431,6 +438,10 @@ test("intake PR edit check rejects a raw gh pr edit or a wrapper call without re
   assert.throws(() => assertIntakePrEditUsesWrapper(intake.replace(wrapper, "gh pr edit <pr-number> --repo <resolved-repo>")),
     /must edit the PR through the edit-pr\.mjs wrapper/);
   assert.throws(() => assertIntakePrEditUsesWrapper(`${intake}\ngh pr edit <pr-number> --repo <resolved-repo> --title x\n`),
+    /must not prescribe a raw gh pr edit/);
+  assert.throws(() => assertIntakePrEditUsesWrapper(`${intake}\n  gh pr edit <pr-number> --repo <resolved-repo> --title x\n`),
+    /must not prescribe a raw gh pr edit/);
+  assert.throws(() => assertIntakePrEditUsesWrapper(`${intake}\nThen run \`gh pr edit <pr-number> --title x\` to rename it.\n`),
     /must not prescribe a raw gh pr edit/);
   assert.throws(() => assertIntakePrEditUsesWrapper(intake.replace(`${wrapper} --title`, "node <resolved-skill-scripts>/github/edit-pr.mjs --pr <pr-number> --title")),
     /requires both --repo <owner\/name> and --pr <number>/);

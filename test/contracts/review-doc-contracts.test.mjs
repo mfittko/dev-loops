@@ -321,6 +321,8 @@ test("ownership-gate exemption check rejects a gated review or a dropped write s
     /ownership gate must cover reviewer_fixer/);
   assert.throws(() => assertReviewOwnershipExempt(publicContract.replace("Pure read/observe strategies (`review`, ", "Pure read/observe strategies (")),
     /review must be exempt/);
+  assert.throws(() => assertReviewOwnershipExempt(publicContract.replace("`reviewer_fixer`, `final_approval`);", "`reviewer_fixer`, `final_approval`, `review`);")),
+    /ownership gate must not cover review/);
 });
 
 test("standalone review route stays structurally decoupled from the single-contributor ownership gate (issue #1850)", async () => {

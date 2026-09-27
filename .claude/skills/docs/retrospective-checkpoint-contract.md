@@ -9,7 +9,7 @@ A qualifying retrospective MUST be produced by a **fresh-context, independent di
 
 An **inline, self-authored retrospective**, written by the working/session context that did the work, is **disallowed and fails the checkpoint**, because it cannot see a systematic error that context committed.
 
-The write mechanism enforces points 2 and 3 below. Point 1 is agent discipline (`LOCAL-RETRO-FRESH-CONTEXT-DISPATCH`, `enforcement: "agent"`): provenance is self-attested at write time, so the durable guarantee is that no inline/legacy record passes the checkpoint, not that the attestation is verifiable.
+The CLI enforces point 2 and the read side enforces point 3. Point 1 is agent discipline (`LOCAL-RETRO-FRESH-CONTEXT-DISPATCH`, `enforcement: "agent"`): provenance is self-attested at write time, so the durable guarantee is that no inline/legacy record passes the checkpoint, not that the attestation is verifiable.
 
 1. the retro pass is dispatched as a fresh-context subagent (no inherited working/session context or self-narrative) with the record path as its primary input;
 2. the checkpoint CLI (`checkpoint-contract.mjs --state complete`) requires `--retro-context fresh` (an `inline` value is rejected outright) and `--record-source <path>` naming the record the retro was seeded with; `--record-source` MUST resolve (from the invocation cwd; absolute paths allowed) to an existing, non-empty file, so a retro attested against a record that does not exist is rejected at write time;
@@ -151,7 +151,7 @@ An otherwise green PR becomes merge-ready with the violations **recorded**, not 
 
 ### Internal-tooling-only rule (issue #982) — now advisory
 
-The loop.s own execution should use internal dev-loops tooling, not agent-level raw
+The loop's own execution should use internal dev-loops tooling, not agent-level raw
 `gh`/`python`/`node -e` escape hatches. **It no longer blocks.** The flagged calls
 are reported as advisory findings via the envelope + PR comment.
 
@@ -182,7 +182,7 @@ newline-delimited transcript of the shell commands the agent ran (one top-level
 command per line, via `--transcript` or stdin) and reports agent-level raw
 `gh`/`python`/`python3`/`node -e`/`node --eval` calls. It is a **findings-producer**:
 its JSON output (`{ ok, internalToolingOnly, rawCallViolations, allowedWriteOps }`)
-is returned to the conductor via the envelope.s `retrospectiveFindings` field (normalized
+is returned to the conductor via the envelope's `retrospectiveFindings` field (normalized
 to `{ internalToolingOnly, rawCallViolations, allowedWriteOps }`). It is **not** written to a
 checkpoint and **not** a gate. Exit code `1` when violations
 are found, `0` when clean. The pure `analyzeTranscript(transcript)` export returns

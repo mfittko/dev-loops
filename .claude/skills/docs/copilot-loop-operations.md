@@ -44,12 +44,10 @@ These routing guarantees are owned by [Copilot Loop State Graph](./copilot-loop-
 6. Follow the `nextAction` from the machine output. For stop states (`review_request_unavailable`,
    `blocked_needs_user_decision`), report to the user and do not proceed.
 
-7. After a converged Copilot review, a later head does not need another Copilot round by default:
-   `request-copilot-review.mjs` returns `suppressed_post_convergence`, and the gate coordination
-   detector allows `pre_approval_gate` on the current head. The strict mode
-   `refinement.requireCopilotConvergenceAtLatestHead: true` in `.devloops` carries convergence only
-   across a docs-only or integrate-only delta. `COPILOT-STATE-CARRIED-CONVERGENCE` in
-   [Copilot Loop State Graph](./copilot-loop-state-graph.md) owns both modes (ADR 0090).
+7. Before you request another Copilot round on a later head, apply `COPILOT-STATE-CARRIED-CONVERGENCE`
+   in [Copilot Loop State Graph](./copilot-loop-state-graph.md). It owns the carried-convergence
+   preconditions, the `suppressed_post_convergence` outcome and the
+   `refinement.requireCopilotConvergenceAtLatestHead` strict mode (ADR 0090).
 
 ## Judgment calls that remain in the agent layer
 

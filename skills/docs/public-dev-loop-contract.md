@@ -241,7 +241,7 @@ The public router currently maps to these deterministic internal strategies:
 
 Tracker-backed local implementation is an input-source addition to the existing `local_implementation` strategy. It does **not** create a new routing mode, strategy family, or public workflow entrypoint.
 
-For tracker-backed local sessions, the tracker issue is canonical; the no-duplicate-phase-doc rule is owned by `ARTIFACT-TRACKER-FIRST-NO-DUP` in [Artifact Authority Contract](artifact-authority-contract.md).
+For tracker-backed local sessions, the tracker issue is canonical. `ARTIFACT-TRACKER-FIRST-NO-DUP` in [Artifact Authority Contract](artifact-authority-contract.md) bars creating a duplicate phase doc.
 
 Deterministic GitHub-backed spec resolution:
 
@@ -253,7 +253,7 @@ Deterministic GitHub-backed spec resolution:
 
 Local branch state and `tmp/` artifacts remain local execution state. Durable scope / acceptance / status changes discovered during local execution SHOULD sync back to the tracker issue. There is no full bidirectional tracker sync and no tracker-provider adapter beyond the bounded GitHub-backed helper path above.
 
-If a duplicate local phase doc (`docs/phases/phase-<n>.md`) already exists for the same tracker-backed session, reconcile explicitly before continuing.
+Do not create, read, or update `docs/phases/phase-<n>.md` for the same tracker-backed session. If such a duplicate phase doc already exists, reconcile explicitly before continuing.
 
 ## Copilot-first issue-assignment seam (unassigned issues)
 

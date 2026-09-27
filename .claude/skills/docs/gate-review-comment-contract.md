@@ -226,7 +226,6 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 | **Findings summary** | Short truthful audit summary. Use `no issues found` only when the reviewed head needed no corrective change for that gate pass. |
 | **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval` |
 
-
 ## Optional size-budget fields
 
 <!-- rule: GATE-COMMENT-SIZE-BUDGET-FIELDS -->
@@ -372,7 +371,6 @@ so the two rules do not conflict.
 | Same head SHA rerun | Idempotent behavior: do not post a second visible surface for the same gate+head. An identical rerun posts nothing; if correction is needed, update the existing review's body in place (a legacy verdict issue comment is corrected on its own surface). Inline finding comments are never re-posted — a same-head correction body-files any still-unposted finding, since GitHub exposes no endpoint to add inline comments to a submitted review. |
 | New head SHA rerun on the recurring `pre_approval_gate` | A new visible checkpoint verdict review MUST be posted for the new head; the older-head surface remains but does not satisfy readiness for the new head |
 | New head SHA change on the one-time `draft_gate` after a clean transition record already exists | No new `draft_gate` verdict is triggered for the new head — the one-time transition boundary already closed (`GATE-COMMENT-DRAFT-REQUIREMENTS`) |
-
 
 ## Fail-closed behavior
 
