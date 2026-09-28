@@ -304,10 +304,10 @@ describe("withGraphqlRateLimitWait", () => {
     assert.equal(calls.ops, 2);
   });
 
-  test("a second rate-limit error after the retry fails closed with one sleep", async () => {
+  test("a second rate-limit error after the retry fails closed with one sleep and resetAt null", async () => {
     const reset = NOW / 1000 + 60;
     const { calls, run } = harness({ reset, outcomes: [RATE_LIMIT_ERROR(), RATE_LIMIT_ERROR(), "never"] });
-    await assertRateLimited(run, new Date(reset * 1000).toISOString());
+    await assertRateLimited(run, null);
     assert.equal(calls.reads.length, 1);
     assert.equal(calls.sleeps.length, 1);
     assert.equal(calls.ops, 2);

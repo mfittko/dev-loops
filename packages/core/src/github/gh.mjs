@@ -173,8 +173,8 @@ const GRAPHQL_RATE_LIMIT_MAX_RESET_AHEAD_MS = 24 * 60 * 60 * 1000;
  * that reset, and retry once. Fails closed with `code: "RATE_LIMITED"` and
  * `resetAt` (ISO 8601, or null when unknown) when GraphQL budget remains
  * (`remaining` is not 0), when the reset is unknown, in the past, more than 24h
- * ahead, or beyond `maxWaitMs`, or when the retry is rate limited again. Every
- * other error is rethrown unchanged.
+ * ahead, or beyond `maxWaitMs`, or when the retry is rate limited again (then
+ * `resetAt` is null). Every other error is rethrown unchanged.
  *
  * @param {() => Promise<any>} operation
  * @param {object} opts
@@ -206,18 +206,19 @@ export async function withGraphqlRateLimitWait(
   const resetDate = new Date(Number.isFinite(reset) ? reset * 1000 : Number.NaN);
   const resetAt = Number.isNaN(resetDate.getTime()) ? null : resetDate.toISOString();
   const graphqlBudgetLeft = Number.isFinite(graphql?.remaining) && graphql.remaining > 0;
-  const rateLimited = () => Object.assign(
+  const rateLimited = (reportedResetAt) => Object.assign(
     new Error(graphqlBudgetLeft
       ? "GitHub rate limit hit on a non-GraphQL budget; no reset wait"
-      : `GitHub GraphQL rate limit exhausted; retry after ${resetAt ?? "unknown reset"}`),
-    { code: "RATE_LIMITED", resetAt },
+      : `GitHub GraphQL rate limit exhausted; retry after ${reportedResetAt ?? "unknown reset"}`),
+    { code: "RATE_LIMITED", resetAt: reportedResetAt },
   );
-  if (!usable) throw rateLimited();
+  if (!usable) throw rateLimited(resetAt);
   await sleep(waitMs);
   try {
     return await operation();
   } catch (error) {
-    throw isRateLimitError(error) ? rateLimited() : error;
+    // The pre-sleep reset has already passed; report it as unknown rather than stale.
+    throw isRateLimitError(error) ? rateLimited(null) : error;
   }
 }
 

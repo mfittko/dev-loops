@@ -52,8 +52,10 @@ budget.
 Diagnostic output (stderr):
   { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
   { "ok": false, "error": "...", "usage"?: "..." }
-GraphQL rate limit (stdout, JSON, exit 1):
+GraphQL rate limit (JSON, exit 1):
   { "ok": false, "code": "RATE_LIMITED", "error": "...", "resetAt": "<ISO 8601>"|null }
+The RATE_LIMITED envelope is written to stdout when output is unfiltered, and
+always to stderr.
 On GraphQL rate-limit exhaustion the tool waits for the reset inside the
 remaining --timeout budget (heartbeats continue) and retries once; otherwise
 it returns RATE_LIMITED at once.
@@ -201,6 +203,8 @@ export async function runCli(
   } catch (error) {
     if (error?.code !== "RATE_LIMITED") throw error;
     result = rateLimitedResult(error);
+    // --jq/--silent would filter the envelope away; always keep code/resetAt on stderr.
+    stderr.write(`${JSON.stringify(result)}\n`);
   }
   if (options.jq !== undefined || options.silent) {
     return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.status === "success" });

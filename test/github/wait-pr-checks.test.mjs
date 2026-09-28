@@ -276,6 +276,20 @@ test("wait-pr-checks returns RATE_LIMITED with resetAt, without sleeping, when t
   assert.deepEqual(delays, []);
 });
 
+test("wait-pr-checks --jq keeps the RATE_LIMITED envelope on stderr", async () => {
+  const clock = 1_000_000_000_000;
+  const reset = clock / 1000 + 120;
+  const { runChild } = rateLimitedRunChild(reset);
+  const stderr = makeStream();
+  const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "60", "--jq", ".status"], {
+    stdout: makeStream(), stderr, env: {}, runChild, delayImpl: async () => {}, now: () => clock,
+  });
+  assert.equal(code, 1);
+  const envelope = stderr.text().split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((line) => line.code === "RATE_LIMITED");
+  assert.equal(envelope?.ok, false);
+  assert.equal(envelope.resetAt, new Date(reset * 1000).toISOString());
+});
+
 test("wait-pr-checks refreshes the runner lease while it waits for the GraphQL reset", async () => {
   let clock = 1_000_000_000_000;
   const { runChild } = rateLimitedRunChild(clock / 1000 + 100);
