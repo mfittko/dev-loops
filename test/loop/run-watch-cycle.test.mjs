@@ -36,6 +36,13 @@ afterAll(async () => {
 });
 const capPinnedHandoff = (opts, ctx) => runHandoff(opts, { ...ctx, repoRoot: capFixtureRepoRoot });
 
+// These cycles run in-process, so an omitted `env` defaults to `process.env`. Under a Pi
+// async-subagent session that env carries the native pi-subagents >= 0.65 markers, which
+// resolve to a synthesized run id and would engage the watcher-exclusivity lease gate — a
+// different path than the single-runner harness these tests model. Pass a marker-free env
+// explicitly instead of depending on the ambient one.
+const SINGLE_RUNNER_ENV = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
+
 const EMPTY_THREADS = JSON.stringify({
   data: {
     repository: {
@@ -169,6 +176,7 @@ test("runWatchCycle uses emitted non-zero watchArgs for normal async waiting", a
       probeOnly: false,
     },
     {
+      env: SINGLE_RUNNER_ENV,
       runHandoffImpl: async () => ({
         ok: true,
         action: "watch",
@@ -273,6 +281,7 @@ test("runWatchCycle keeps shared loopDisposition and reports needs_followup in c
       probeOnly: false,
     },
     {
+      env: SINGLE_RUNNER_ENV,
       runHandoffImpl: async () => ({
         ok: true,
         action: "watch",
@@ -352,6 +361,7 @@ test("runWatchCycle routes a waiting_for_ci boundary to the provider-agnostic CI
   const result = await runWatchCycle(
     { repo: "owner/repo", pr: 17 },
     {
+      env: SINGLE_RUNNER_ENV,
       runHandoffImpl: async () => ({
         ok: true,
         action: "stop",
@@ -390,6 +400,7 @@ test("runWatchCycle keeps a pending CI watch boundary non-terminal", async () =>
   const result = await runWatchCycle(
     { repo: "owner/repo", pr: 17 },
     {
+      env: SINGLE_RUNNER_ENV,
       runHandoffImpl: async () => ({
         ok: true,
         action: "stop",
@@ -656,6 +667,7 @@ test("runWatchCycle integration bounds active Copilot workflow waits by the emit
       probeOnly: false,
     },
     {
+      env: SINGLE_RUNNER_ENV,
       runHandoffImpl: async () => ({
         ok: true,
         action: "watch",

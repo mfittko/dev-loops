@@ -23,6 +23,12 @@ import {
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner, STALE_RUNNER_DEFAULT_MAX_AGE_MS } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordination.mjs";
+import {
+  NATIVE_PI_CHILD_MARKER,
+  NATIVE_PI_PARENT_SESSION_MARKER,
+  NATIVE_PI_SESSION_MARKER,
+  synthesizePiRunId,
+} from "@dev-loops/core/loop/run-context";
 
 const releaseClaimsFromKnownRoot = (options) => releaseRunClaimsOnExit({
   resolveCoordinationRoot: (root) => root,
@@ -1002,6 +1008,64 @@ test("recordWatchClaim requires a non-empty run id", async () => {
     const noRun = await recordWatchClaim({ repo: "owner/repo", pr: 17, runId: "", head: "abc123", waitKind: "ci", cwd: tempDir });
     assert.equal(noRun.ok, false);
     assert.equal(noRun.error, "run_id_required");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// pi-subagents >= 0.65 injects no run-id carrier, so the claim path resolves the synthesized
+// native Pi id. Before that fallback existed, resolveRunId returned null and runner ownership
+// claim (which requires an id) refused outright under Pi.
+test("runner coordination claim succeeds from a native Pi async-runner env with no run-id carrier", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const parentSession = "parent-session-abc";
+
+  try {
+    const env = { [NATIVE_PI_CHILD_MARKER]: "1", [NATIVE_PI_PARENT_SESSION_MARKER]: parentSession };
+    const claimed = await runPrRunnerCoordination(
+      { command: "claim", repo: "owner/repo", pr: 17 },
+      { env, cwd: tempDir },
+    );
+
+    assert.equal(claimed.ok, true);
+    assert.equal(claimed.status, "claimed_new");
+    assert.equal(claimed.activeRun.runId, synthesizePiRunId(parentSession));
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, synthesizePiRunId(parentSession));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// Sibling regression: runner coordination treats an EQUAL run id as an authorized refresh, not
+// a conflict, so two concurrent native Pi children of one parent session must NOT share an id —
+// otherwise the second silently takes over the first's lease on the same PR.
+test("two sibling native Pi children of one parent session cannot both claim the same PR", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const parentSession = "parent-session-shared";
+
+  try {
+    const siblingEnv = (childSession) => ({
+      [NATIVE_PI_CHILD_MARKER]: "1",
+      [NATIVE_PI_PARENT_SESSION_MARKER]: parentSession,
+      [NATIVE_PI_SESSION_MARKER]: childSession,
+    });
+
+    const first = await runPrRunnerCoordination(
+      { command: "claim", repo: "owner/repo", pr: 17 },
+      { env: siblingEnv("child-a"), cwd: tempDir },
+    );
+    assert.equal(first.ok, true);
+    assert.equal(first.activeRun.runId, "pi-session-child-a");
+
+    const second = await runPrRunnerCoordination(
+      { command: "claim", repo: "owner/repo", pr: 17 },
+      { env: siblingEnv("child-b"), cwd: tempDir },
+    );
+    assert.equal(second.ok, false, "the sibling must conflict, not refresh the first child's lease");
+    assert.equal(second.error, "active_run_exists");
+    assert.equal(second.activeRun.runId, "pi-session-child-a");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
