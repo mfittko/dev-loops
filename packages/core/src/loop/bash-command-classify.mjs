@@ -1118,3 +1118,34 @@ const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x
 export function commandContainsCodeVerificationEntrypoint(command) {
   return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
 }
+
+/**
+ * Every `git commit` / `git push` invocation in `command`, for the fixer Bash gate (ADR 0106).
+ * Conservative token scan per shell segment: a token `git` (or `.../git`) anywhere in the
+ * segment counts, so `sh -c 'git push'`, `(git commit)` and env/wrapper prefixes are caught.
+ * Git global options (`-C <dir>`, `-c <k=v>`, `--git-dir=...`) are skipped; each `-C` dir and
+ * every preceding `cd <dir>` segment is returned in `dirs` (in order) so the caller can resolve
+ * the checkout the invocation runs in. `args` are the tokens after the subcommand.
+ * ponytail: whitespace tokens with stripped quotes/brackets; git aliases are a known ceiling.
+ * @param {string} command
+ * @returns {{ subcommand: "commit"|"push", dirs: string[], args: string[] }[]}
+ */
+export function extractGitCommitPushInvocations(command) {
+  if (typeof command !== "string") return [];
+  const found = [];
+  const cdDirs = [];
+  for (const segment of shellSegments(command)) {
+    const tokens = segment.split(/\s+/).map((t) => t.replace(/^[\s'"`({$]+|[\s'"`)};]+$/g, "")).filter(Boolean);
+    if (tokens[0] === "cd" && tokens[1]) cdDirs.push(tokens[1]);
+    const at = tokens.findIndex((t) => t === "git" || t.endsWith("/git"));
+    if (at === -1) continue;
+    const dirs = [...cdDirs];
+    let i = at + 1;
+    while (i < tokens.length && tokens[i].startsWith("-")) {
+      if (tokens[i] === "-C") dirs.push(tokens[i + 1] ?? "");
+      i += tokens[i] === "-C" || tokens[i] === "-c" ? 2 : 1;
+    }
+    if (tokens[i] === "commit" || tokens[i] === "push") found.push({ subcommand: tokens[i], dirs, args: tokens.slice(i + 1) });
+  }
+  return found;
+}

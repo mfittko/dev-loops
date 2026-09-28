@@ -93,8 +93,8 @@ test(".claude/hooks/hooks.json wires the plugin hooks via ${CLAUDE_PLUGIN_ROOT} 
   assert.match(subagentStop.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/subagent-stop-uncommitted-guard\.mjs/);
 });
 
-test("the three hook scripts (+ _hook-io) exist under the plugin root", () => {
-  for (const script of ["_hook-io.mjs", "pre-tool-use-bash-gate.mjs", "pre-tool-use-write-guard.mjs", "post-tool-use-merge.mjs"]) {
+test("the three hook scripts (+ _hook-io, _fixer-grants) exist under the plugin root", () => {
+  for (const script of ["_hook-io.mjs", "_fixer-grants.mjs", "pre-tool-use-bash-gate.mjs", "pre-tool-use-write-guard.mjs", "post-tool-use-merge.mjs"]) {
     assert.ok(fs.existsSync(path.join(hooksDir, script)), `missing hook script ${script}`);
   }
 });

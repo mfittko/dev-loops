@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { decideBashGate, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType, decideFixerWriteGuard } from "../src/claude/hook-decisions.mjs";
+import { decideBashGate, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType, decideFixerWriteGuard, decideFixerBashGate } from "../src/claude/hook-decisions.mjs";
+import { extractGitCommitPushInvocations } from "../src/loop/bash-command-classify.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -1393,6 +1394,11 @@ test("decideFixerWriteGuard never widens authority: other path, branch, checkout
   assert.equal(fixer(`${FX_MAIN}/tmp/gate-fixer/o-r/pr-1/fixer-emit-plan.json`).decision, "deny");
   const grantMain = { ...FX_GRANT, branch: "main", allowedPaths: ["."] };
   assert.equal(fixer(`${FX_MAIN}/tmp/work-order-receipts/abc.json`, { grants: [grantMain] }).decision, "deny");
+  for (const rel of ["tmp/src/act.json", "tmp/gate-findings/x.json", "tmp/gate-fixer/o-r/pr-1/f1-0000abcd/other.json"]) {
+    assert.equal(fixer(`${FX_MAIN}/${rel}`, { grants: [grantMain] }).decision, "deny", rel);
+  }
+  assert.equal(fixer(`${FX_MAIN}/src/x.mjs`, { grants: [grantMain] }).decision, "allow");
+  assert.equal(fixer(FX_OUTPUT, { grants: [{ ...grantMain, outputRef: `${FX_OUTPUT}.other` }] }).decision, "deny", "only the exact outputRef");
   assert.match(fixer(`${FX_WT}/test/b.test.mjs`).reason, /"test\/b\.test\.mjs" on branch "issue-1"/);
 });
 
@@ -1402,6 +1408,23 @@ test("decideFixerWriteGuard allows scratch outside every checkout and fails clos
   assert.equal(fixer("src/x.mjs").decision, "deny");
   assert.equal(fixer(`${FX_WT}/src/x.mjs`, { symlinked: true }).decision, "deny");
   assert.equal(fixer("/private/tmp/scratch.txt", { checkouts: [] }).decision, "deny");
+});
+
+test("decideFixerBashGate binds git commit/push to a grant for the checked-out branch", () => {
+  const gate = (command, branch = "issue-1", over = {}) => decideFixerBashGate({
+    agentType: "fixer", invocations: extractGitCommitPushInvocations(command).map((i) => ({ ...i, branch })), grants: [FX_GRANT], ...over,
+  }).decision;
+  assert.deepEqual(extractGitCommitPushInvocations("cd a && git -C b -c x=y commit -m m; sh -c 'git push o'").map(({ subcommand, dirs }) => [subcommand, dirs]), [["commit", ["a", "b"]], ["push", ["a"]]]);
+  for (const command of ["git commit -m x", "git push", "git push -u origin HEAD", "git push origin issue-1", "git push --force-with-lease origin +refs/heads/issue-1", "npm test"]) {
+    assert.equal(gate(command), "allow", command);
+  }
+  for (const command of ["git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", "git push -d origin issue-1"]) {
+    assert.equal(gate(command), "deny", command);
+  }
+  assert.equal(gate("git commit -m x", "main"), "deny");
+  assert.equal(gate("git commit -m x", null), "deny");
+  assert.equal(gate("git commit -m x", "issue-1", { grants: [] }), "deny");
+  assert.equal(gate("git push origin main", "issue-1", { agentType: "developer" }), "allow");
 });
 
 test("decideFixerWriteGuard leaves every non-fixer agent to the other boundaries", () => {

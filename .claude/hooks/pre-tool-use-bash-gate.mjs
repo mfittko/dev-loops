@@ -18,12 +18,15 @@
  *     `npm run build` (and yarn/pnpm equivalents) — blocked ONLY from the dev-loop COORDINATOR
  *     (agent_type "dev-loop"), opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (#2082). Worker
  *     subagents (developer/fixer/quality/review) may run these freely.
+ *   - `git commit` / `git push` from the `fixer` agent — blocked (any repo) unless a current
+ *     fixer work-order pull grants the checked-out branch (ADR 0106, decideFixerBashGate).
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { decideBashGate } from "./_hook-decisions.mjs";
+import { decideBashGate, decideFixerBashGate, FIXER_AGENT_TYPE, normalizeAgentType } from "./_hook-decisions.mjs";
+import { branchCheckedOutAt, loadFixerContext } from "./_fixer-grants.mjs";
 import {
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
@@ -40,6 +43,7 @@ import {
   commandContainsCodeVerificationEntrypoint,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
+  extractGitCommitPushInvocations,
   normalizeGitHubRepoSlug,
 } from "./_bash-command-classify.mjs";
 
@@ -52,6 +56,21 @@ const command = input?.tool_input?.command;
 const agentType = typeof input?.agent_type === "string" ? input.agent_type : null;
 
 const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+
+// Fixer mutation boundary (ADR 0106, always on): a fixer `git commit` / `git push` needs a CURRENT
+// pull grant for the branch checked out in the invocation's cwd; other commands are unchanged.
+const fixerInvocations = normalizeAgentType(agentType) === FIXER_AGENT_TYPE ? extractGitCommitPushInvocations(command) : [];
+if (fixerInvocations.length > 0) {
+  let grants = [];
+  const invocations = fixerInvocations.map((invocation) => {
+    const dir = path.resolve(cwd, ...invocation.dirs);
+    const context = loadFixerContext([dir]);
+    grants = [...grants, ...context.grants];
+    return { ...invocation, branch: branchCheckedOutAt(dir, context.checkouts) };
+  });
+  const fixerDecision = decideFixerBashGate({ agentType, invocations, grants });
+  if (fixerDecision.decision === "deny") emitDeny(fixerDecision.reason);
+}
 
 let repoRoot = null;
 let repoSlug = null;

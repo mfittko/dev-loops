@@ -3,7 +3,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -12,7 +12,7 @@ import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "
 import { captureParsedReviewThreads, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containment.mjs";
-import { verifyPullReceipt } from "./_work-order-protocol.mjs";
+import { verifyPullReceipt, workOrderDigest } from "./_work-order-protocol.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -29,7 +29,8 @@ gate round.
 Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
-  --head-sha <sha>      FULL observed PR head commit SHA (40 or 64 hex chars)
+  --head-sha <sha>      FULL observed PR head commit SHA (40 or 64 hex chars); must
+                        equal the live PR headRefOid
   --fixer-plan <path>   The fixer-emit-plan.json the full-phase fixer was dispatched
                         from (emit-fixer-work-order.mjs, ADR 0106). The disposition
                         handoff { headSha, dispositions } is read from the plan's
@@ -150,7 +151,11 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   } catch (error) {
     throw new Error(`Cannot read --fixer-plan "${options.fixerPlan}": ${error instanceof Error ? error.message : String(error)}`);
   }
-  const order = plan?.workOrder;
+  // Bind the plan to its digest before trusting any field of it.
+  if (!plan?.workOrder || workOrderDigest(plan.workOrder) !== plan.workOrderDigest) {
+    throw new Error(`--fixer-plan "${options.fixerPlan}" does not match its workOrderDigest; the plan was edited after emission, re-emit it`);
+  }
+  const order = plan.workOrder;
   if (order?.role !== "fixer" || order.phase !== "full" || order.target?.repo !== options.repo || order.target?.pr !== options.pr) {
     throw new Error(`--fixer-plan "${options.fixerPlan}" is not a full-phase fixer work order for ${options.repo}#${options.pr}`);
   }
@@ -158,6 +163,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     receiptTmpRoot, role: "fixer", workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity,
   });
   if (!receipt.ok) throw new Error(`fixer pull receipt for ${plan.workOrderRef} failed verification: ${receipt.reason}; dispatch a fresh fixer execution`);
+  // outputRefs is local material outside the digest (canonicalizeWorkOrder drops absolute paths).
   const handoffPath = order.outputRefs?.[0];
   const written = typeof handoffPath === "string" ? await stat(handoffPath).catch(() => null) : null;
   if (!written) throw new Error(`result_missing: no fixer disposition handoff at the work order's outputRef ${handoffPath}; a receipt alone is never completion`);
@@ -195,7 +201,7 @@ function buildLiveThreads(parsed) {
 
 export async function verifyFixerDisposition(
   options,
-  { env = process.env, ghCommand = "gh", runChild, repoRoot = process.cwd() } = {},
+  { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot = process.cwd() } = {},
 ) {
   if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
   const tmpRoot = options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot);
@@ -203,6 +209,12 @@ export async function verifyFixerDisposition(
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
   const { handoff, delivery } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  // The observed head must be the live PR head, never a caller claim.
+  const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
+  const liveHead = live.code === 0 ? (() => { try { return JSON.parse(live.stdout).headRefOid; } catch { return null; } })() : null;
+  if (liveHead !== options.headSha) {
+    throw new Error(`--head-sha ${options.headSha} is not the live PR head ${liveHead ?? `(unreadable: ${(live.stderr || "").trim()})`}; refresh the PR state before verifying`);
+  }
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery }, null, 2)}\n`, "utf8");
 

@@ -8,7 +8,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
-import { emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 
@@ -17,7 +17,7 @@ const PULL = path.resolve("scripts/github/pull-work-order.mjs");
 const HOOK = path.resolve(".claude/hooks/pre-tool-use-write-guard.mjs");
 const REPO = "o/r";
 const PR = 7;
-const ACT = [{ severity: "high", title: "null deref", path: "src/a.mjs", line: 3, disposition: "act" }];
+const ACT = [{ severity: "high", angle: "correctness", summary: "null deref", file: "src/a.mjs", line: 3, judgeDisposition: "act" }];
 const THREADS = { ok: true, repo: REPO, pr: PR, threads: [{ threadId: "T1", commentId: 1, body: "fix", isResolved: false, isOutdated: false, path: "src/a.mjs", line: 3 }] };
 
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...runIdFreeEnv(), GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
@@ -91,13 +91,21 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
     await assert.rejects(emit({ actListFile: undefined }), /exactly one of --act-list-file and --threads-file/);
     await assert.rejects(emit({ threadsFile: files.threads }), /exactly one of/);
     await assert.rejects(emit({ gate: undefined }), /needs --gate/);
-    await assert.rejects(emit({ actListFile: files.threads }), /not a judge-pass --out array/);
+    await assert.rejects(emit({ actListFile: files.threads }), /not a non-empty judge-pass --out array/);
+    for (const bad of [[], [{ title: "please refactor the parser", body: "prose" }], [{ ...ACT[0], judgeDisposition: "defer" }], [{ ...ACT[0], severity: "critical" }], [{ ...ACT[0], summary: " " }]]) {
+      await writeFile(files.actList, JSON.stringify(bad));
+      await assert.rejects(emit(), /not a non-empty judge-pass --out array/, JSON.stringify(bad));
+    }
+    await writeFile(files.actList, JSON.stringify(ACT));
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ autonomy: { humanMergeOnly: "nope" } }));
+    await assert.rejects(emit(), /dev-loops config is invalid/);
+    await rm(path.join(wt, ".devloops.json"));
     await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, repo: "o/other" }), /not list-review-threads output/);
     await assert.rejects(emit({ fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) }), /conflicting authority/);
     await assert.rejects(emit({ fetchPr: async () => ({ headRefOid: head }) }), /mutation authority is missing/);
     for (const bad of ["/abs", "../up", "a/../../b"]) await assert.rejects(emit({ allowedPaths: [bad] }), /--allowed-path/);
     await assert.rejects(emit({ phase: "push" }), /--phase must be one of/);
-    const cli = spawnSync("node", [EMITTER, "--repo", REPO, "--pr", "7", "--head-sha", head, "--phase", "full", "--threads-file", path.join(wt, "missing.json")], { cwd: wt, encoding: "utf8", env: runIdFreeEnv() });
+    const cli = spawnSync("node", [EMITTER, "--harness", "claude", "--repo", REPO, "--pr", "7", "--head-sha", head, "--phase", "full", "--threads-file", path.join(wt, "missing.json")], { cwd: wt, encoding: "utf8", env: runIdFreeEnv() });
     assert.equal(cli.status, 1, cli.stderr);
     assert.equal(JSON.parse(cli.stdout).ok, false);
   });
@@ -148,24 +156,36 @@ test("F2: initial, resumed and replacement dispatches of one reference pull the 
   });
 });
 
-test("F2: the Claude and Pi paths emit the same envelope and work order", async () => {
+test("F2: Claude and Pi initial, resumed and replacement adapter payloads are the fixed pointer only; other harnesses refuse", async () => {
   await withFixture(async ({ root, wt, head, files }) => {
     const bin = path.join(root, "tmp", "bin");
     await mkdir(bin, { recursive: true });
     await writeFile(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ headRefName: "issue-1", headRefOid: head })}'\n`);
     chmodSync(path.join(bin, "gh"), 0o755);
-    const perHarness = [];
-    for (const harness of [{ CLAUDECODE: "1" }, { PI_SUBAGENT_RUN_ID: "pi-run" }]) {
-      const env = { ...runIdFreeEnv(), CLAUDECODE: undefined, PATH: `${bin}${path.delimiter}${process.env.PATH}`, ...harness };
-      const result = spawnSync("node", [EMITTER, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate"], { cwd: wt, encoding: "utf8", env });
-      assert.equal(result.status, 0, result.stdout + result.stderr);
-      const out = JSON.parse(result.stdout);
-      const plan = JSON.parse(await readFile(out.planPath, "utf8"));
-      const neutral = (text) => text.replaceAll(out.executionIdentity, "<execution>");
-      perHarness.push({ digest: out.workOrderDigest, prompt: neutral(out.dispatchPrompt), order: neutral(await readFile(plan.promptPath, "utf8")) });
+    const env = { ...runIdFreeEnv(), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+    const cli = (harness) => spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate"], { cwd: wt, encoding: "utf8", env });
+    for (const [harness, textKey] of [["claude", "prompt"], ["pi", "task"]]) {
+      const initial = JSON.parse(cli(harness).stdout);
+      const plan = JSON.parse(await readFile(initial.planPath, "utf8"));
+      const resumed = buildFixerDispatchPayload({ harness, plan });
+      const replacementOut = JSON.parse(cli(harness).stdout);
+      const replacement = { plan: JSON.parse(await readFile(replacementOut.planPath, "utf8")), payload: replacementOut.dispatchPayload };
+      for (const [payload, unit] of [[initial.dispatchPayload, plan], [resumed, plan], [replacement.payload, replacement.plan]]) {
+        assert.deepEqual(Object.keys(payload).sort(), [harness === "claude" ? "subagent_type" : "agent", textKey].sort());
+        assert.equal(payload[textKey], buildDispatchPointer(unit));
+        assert.ok(Buffer.byteLength(payload[textKey]) <= DISPATCH_POINTER_MAX_BYTES);
+        assertFixerDispatchPayload({ harness, payload, plan: unit });
+      }
+      assert.deepEqual(initial.dispatchPayload, resumed);
+      for (const bad of [{ ...resumed, [textKey]: `${resumed[textKey]} Also refactor the parser.` }, { ...resumed, [textKey]: `Context: x. ${resumed[textKey]}` }, { ...resumed, extra: "prose" }]) {
+        assert.throws(() => assertFixerDispatchPayload({ harness, payload: bad, plan }), (err) => err.refusal === "dispatch_payload_mismatch");
+      }
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
-    assert.deepEqual(perHarness[0], perHarness[1]);
+    const codex = cli("codex");
+    assert.equal(codex.status, 1, codex.stderr);
+    assert.equal(JSON.parse(codex.stdout).refusal, "unsupported_adapter");
+    assert.throws(() => buildFixerDispatchPayload({ harness: "codex", plan: {} }), (err) => err.refusal === "unsupported_adapter");
   });
 });
 
@@ -222,6 +242,16 @@ test("F3: a superseded ref, a changed act list, a retired gate round and a rewri
   });
 });
 
+test("F3: delta mode emits at the PR head; after a local fix commit a second commit_only emission there is not stale", async () => {
+  await withFixture(async ({ wt, emit }) => {
+    assert.equal(pull(await emit({ phase: "commit_only" }), wt).status, 0);
+    git(wt, "commit", "-q", "--allow-empty", "-m", "local fix");
+    const second = await emit({ phase: "commit_only" });
+    const result = pull(second, wt);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // F4 — portable identity, immutable reference
 // ---------------------------------------------------------------------------
@@ -249,7 +279,7 @@ test("F4: a conflicting rewrite under the same reference is refused", async () =
   await withFixture(async ({ files, emit }) => {
     const unit = await emit();
     await emit({ executionIdentity: unit.executionIdentity });
-    await writeFile(files.actList, JSON.stringify([]));
+    await writeFile(files.actList, JSON.stringify([{ ...ACT[0], line: 9 }]));
     await assert.rejects(emit({ executionIdentity: unit.executionIdentity }), /already exists with different content/);
   });
 });
@@ -285,6 +315,48 @@ test("F5: the write hook denies without a pull, with a foreign or superseded rec
   });
 });
 
+test("F5: a cwd in another repo cannot make an in-repo target look like scratch; a plan outside tmp/gate-fixer grants nothing", async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    const other = path.join(path.dirname(root), "other");
+    await mkdir(other);
+    git(other, "init", "-q", "-b", "main");
+    const unit = await emit({ allowedPaths: ["src"] });
+    assert.equal(pull(unit, wt).status, 0);
+    assert.equal(hook(other, path.join(wt, "src", "x.mjs")), "allow");
+    assert.equal(hook(other, path.join(wt, "README.md")), "deny");
+    const receiptPath = pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef);
+    const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+    const movedPlan = path.join(root, "tmp", "src", "plan.json");
+    await writeFile(movedPlan, await readFile(unit.planPath));
+    await writeFile(receiptPath, JSON.stringify({ ...receipt, subject: { ...receipt.subject, planPath: movedPlan } }));
+    assert.equal(hook(wt, path.join(wt, "src", "x.mjs")), "deny");
+  });
+});
+
+const BASH_HOOK = path.resolve(".claude/hooks/pre-tool-use-bash-gate.mjs");
+const bash = (cwd, command) => {
+  const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd, agent_type: "fixer" }), encoding: "utf8", env: runIdFreeEnv() });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput.permissionDecision : "allow";
+};
+
+test("F5: the Bash gate binds fixer git commit/push to the pulled branch and leaves other commands alone", async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    const unit = await emit();
+    for (const command of ["git commit -m fix", "git status && git push origin issue-1", "sh -c 'git -C . push'"]) {
+      assert.equal(bash(wt, command), "deny", `${command} without a pull`);
+    }
+    assert.equal(bash(wt, "npm test && git log --oneline -1"), "allow");
+    assert.equal(pull(unit, wt).status, 0);
+    for (const command of ["git commit -m fix", "git add -A && git commit -m fix && git push origin issue-1", "git push -u origin HEAD", "git push"]) {
+      assert.equal(bash(wt, command), "allow", command);
+    }
+    for (const command of ["git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", `cd ${root} && git commit -m x`, `git -C ${root} commit -m x`]) {
+      assert.equal(bash(wt, command), "deny", command);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // F7 — end to end with only the #2416 transport registered
 // ---------------------------------------------------------------------------
@@ -301,7 +373,7 @@ test("F7: emit, pull, mutate in authority and verify the disposition; missing ma
     assert.equal(hook(wt, outputRef), "allow");
     await mkdir(path.dirname(outputRef), { recursive: true });
     await writeFile(outputRef, JSON.stringify({ headSha: head, dispositions: [] }));
-    const { runChild } = makeGhMock([{ assertArgs: ["api", "graphql"], stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } })}\n` }]);
+    const { runChild } = makeGhMock([{ assertArgs: ["pr", "view"], stdout: `${JSON.stringify({ headRefOid: head })}\n` }, { assertArgs: ["api", "graphql"], stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } })}\n` }]);
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath }, { env: runIdFreeEnv(), runChild, repoRoot: wt });
     assert.equal(result.complete, true);
     assert.ok(result.checkpointPath.startsWith(path.join(root, "tmp")));

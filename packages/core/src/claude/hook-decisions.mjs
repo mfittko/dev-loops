@@ -743,7 +743,7 @@ const isInsidePath = (p, root) => p === root || p.startsWith(`${root}/`);
  * work-order pull: its outputRef, or a file under one of the grant's `allowedPaths` in a
  * checkout of the grant's branch. A target outside every listed checkout is scratch space,
  * never a repo mutation. A valid pull never widens authority: another branch, another path
- * and the main checkout's tmp/work-order-receipts and tmp/gate-fixer stay denied.
+ * and every path under the main checkout's tmp/ except the outputRef stay denied.
  *
  * `targetPath` is the hook's realpath-normalized absolute target. `checkouts` are the repo's
  * listed checkouts `[{ root, branch }]` (realpath-normalized roots, bare branch names), main
@@ -774,12 +774,12 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
   const roots = checkouts.filter((c) => typeof c?.root === "string" && c.root.startsWith("/"));
   if (roots.length === 0) return deny("no listed checkout could be resolved");
   if (grants.some((g) => g?.outputRef === targetPath)) return ALLOW;
-  if (["work-order-receipts", "gate-fixer"].some((dir) => isInsidePath(targetPath, `${roots[0].root}/tmp/${dir}`))) {
-    return deny("the work-order evidence roots are never fixer-writable");
-  }
   // The most specific checkout owns the target (linked worktrees nest under the main checkout).
   const checkout = roots.filter((c) => isInsidePath(targetPath, c.root)).sort((a, b) => b.root.length - a.root.length)[0];
   if (!checkout) return ALLOW;
+  if (checkout === roots[0] && isInsidePath(targetPath, `${roots[0].root}/tmp`)) {
+    return deny("the main checkout's tmp/ (work-order evidence and plans) is never fixer-writable beyond the outputRef");
+  }
   const rel = targetPath === checkout.root ? "." : targetPath.slice(checkout.root.length + 1);
   const granted = grants.some((g) => typeof g?.branch === "string" && g.branch === checkout.branch && Array.isArray(g.allowedPaths)
     && g.allowedPaths.some((p) => p === "." || rel === p || rel.startsWith(`${p}/`)));
@@ -787,4 +787,57 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
   return deny(grants.length === 0
     ? "no current fixer work-order pull grants a mutation authority"
     : `no current pull grants path ${JSON.stringify(rel)} on branch ${JSON.stringify(checkout.branch)}`);
+}
+
+const PUSH_BEYOND_BRANCH = new Set(["--all", "--mirror", "--tags", "--delete", "-d", "--prune"]);
+const PUSH_VALUE_OPTIONS = new Set(["-o", "--push-option", "--repo", "--receive-pack", "--exec"]);
+
+// A `git push` destination other than the grant branch, or null. `HEAD` pushes the checked-out branch.
+function pushBeyondGrant(args, branch) {
+  const positional = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (PUSH_BEYOND_BRANCH.has(args[i])) return `\`${args[i]}\` pushes beyond the grant branch`;
+    if (args[i].startsWith("-")) {
+      if (PUSH_VALUE_OPTIONS.has(args[i])) i += 1;
+      continue;
+    }
+    positional.push(args[i]);
+  }
+  for (const spec of positional.slice(1)) {
+    const bare = spec.replace(/^\+/u, "");
+    const dst = bare.split(":").pop().replace(/^refs\/heads\//u, "");
+    if (bare.startsWith(":") || (dst !== branch && dst !== "HEAD")) return `refspec ${JSON.stringify(spec)} names a destination other than ${JSON.stringify(branch)}`;
+  }
+  return null;
+}
+
+/**
+ * Decide whether a PreToolUse Bash command by the `fixer` agent must be denied (ADR 0106).
+ * Each `git commit` / `git push` invocation (extractGitCommitPushInvocations) needs a CURRENT
+ * fixer grant whose branch is the branch checked out in the invocation's cwd; a push whose
+ * explicit refspec names another destination is denied. Every other command is allowed here.
+ *
+ * @param {Object} params
+ * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload.
+ * @param {{ subcommand: string, args: string[], branch: string|null }[]} [params.invocations] - Resolved invocations.
+ * @param {{ branch: string }[]} [params.grants] - Current pull grants.
+ * @returns {HookDecision}
+ */
+export function decideFixerBashGate({ agentType = null, invocations = [], grants = [] }) {
+  if (normalizeAgentType(agentType) !== FIXER_AGENT_TYPE) return ALLOW;
+  for (const { subcommand, args = [], branch } of invocations) {
+    const grant = grants.find((g) => typeof g?.branch === "string" && g.branch === branch);
+    const why = !branch ? "the branch checked out in its cwd could not be resolved"
+      : !grant ? `no current fixer work-order pull grants branch ${JSON.stringify(branch)}`
+        : subcommand === "push" ? pushBeyondGrant(args, grant.branch) : null;
+    if (why) {
+      return {
+        decision: "deny",
+        reason: `Fixer mutation boundary (agents/fixer.agent.md, ADR 0106): refusing \`git ${subcommand}\`: ${why}. ` +
+          "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs --ref <ref> --digest <digest> --execution <execution>` first; " +
+          "a fixer commits and pushes only mutationAuthority.branch from its checkout.",
+      };
+    }
+  }
+  return ALLOW;
 }

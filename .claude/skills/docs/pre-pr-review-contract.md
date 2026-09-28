@@ -131,14 +131,17 @@ The dev-loop coordinator owns delta mode, because it dispatches the Phase 4
 fixer and owns the push. The sequence is:
 
 1. The dev-loop coordinator emits a `commit_only` fixer work order from the act
-   list with `scripts/loop/emit-fixer-work-order.mjs` and dispatches its
-   `dispatchPrompt` only (ADR 0106). The fixer commits the fix and hands back
-   the commit SHA unpushed.
+   list with `scripts/loop/emit-fixer-work-order.mjs --harness <claude|pi>` and
+   dispatches the printed `dispatchPayload` unchanged (ADR 0106). The fixer
+   commits the fix and hands back the commit SHA unpushed. Every fixer emission
+   in delta mode uses the PR head (`headRefOid`), never the local candidate
+   head, because the emitter pins the GitHub PR head and the local fix commits
+   descend from it.
 2. The dev-loop coordinator dispatches one fresh delta reviewer for the current
    worktree head.
 3. The coordinator follows the CLI `nextStep`. On `nextStep: fix_and_rereview`,
    it dispatches a fresh fixer again, commit-only, and returns to step 2. It
-   emits a new work order with `--delta-result <result>` at the current head.
+   emits a new work order with `--delta-result <result>` at the PR head.
    That fixer receives the delta result's `not_resolved` and `cannot_verify` act
    refs with their evidence, plus the result's medium-or-higher `newFindings`.
    On `nextStep: rereview_current_head`, the result is stale for the current

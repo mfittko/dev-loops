@@ -11,7 +11,7 @@ import {
   parseVerifyFixerDispositionCliArgs,
   verifyFixerDisposition,
 } from "../../scripts/github/verify-fixer-disposition.mjs";
-import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
+import { pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
 
 const REPO = "owner/repo";
 const PR = 1975;
@@ -48,8 +48,13 @@ async function withRepoRoot(fn) {
   }
 }
 
-function runtime(entries, repoRoot) {
-  const { runChild, calls } = makeGhMock(entries);
+function liveHeadEntry(headRefOid = HEAD_SHA) {
+  return { assertArgs: ["pr", "view", String(PR), "--json", "headRefOid"], stdout: `${JSON.stringify({ headRefOid })}\n` };
+}
+
+// Prepends the live-head read the verifier makes before any checkpoint write.
+function runtime(entries, repoRoot, { live = true } = {}) {
+  const { runChild, calls } = makeGhMock(live ? [liveHeadEntry(), ...entries] : entries);
   return { deps: { env: runIdFreeEnv(), ghCommand: "gh", runChild, repoRoot }, calls };
 }
 
@@ -62,10 +67,8 @@ async function deliver(repoRoot, dispositions, {
 } = {}) {
   const dir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
   const outputRef = path.join(dir, "f1-0000abcd", "fixer-disposition.json");
-  const plan = {
-    workOrderRef: REF, workOrderDigest: "d".repeat(64), executionIdentity: "f1-0000abcd",
-    workOrder: { role: "fixer", phase, target: { repo: REPO, pr: PR }, headSha: orderHead, outputRefs: [outputRef] },
-  };
+  const workOrder = { role: "fixer", phase, target: { repo: REPO, pr: PR }, headSha: orderHead, mutationAuthority: { branch: "issue-1" }, outputRefs: [outputRef] };
+  const plan = { workOrderRef: REF, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "f1-0000abcd", workOrder };
   const planPath = path.join(dir, "fixer-emit-plan.json");
   await mkdir(path.dirname(outputRef), { recursive: true });
   await writeFile(planPath, JSON.stringify(plan));
@@ -149,16 +152,39 @@ test("F6: a work order head not contained by the observed head refuses; a contai
   await withRepoRoot(async (repoRoot) => {
     const orderHead = "c".repeat(40);
     const fixerPlan = await deliver(repoRoot, [], { orderHead });
-    const diverged = runtime([compareEntry(orderHead, "diverged")], repoRoot);
+    const diverged = runtime([compareEntry(orderHead, "diverged")], repoRoot, { live: false });
     await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, diverged.deps), /not contained by the observed head/);
-    const ahead = runtime([compareEntry(orderHead, "ahead"), threadsCallEntry([])], repoRoot);
+    const ahead = runtime([compareEntry(orderHead, "ahead"), liveHeadEntry(), threadsCallEntry([])], repoRoot, { live: false });
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, ahead.deps);
     assert.equal(result.complete, true);
     const checkpoint = JSON.parse(await readFile(path.join(repoRoot, result.checkpointPath), "utf8"));
+    const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
     assert.deepEqual(
       { workOrderRef: checkpoint.workOrderRef, workOrderDigest: checkpoint.workOrderDigest, executionIdentity: checkpoint.executionIdentity },
-      { workOrderRef: REF, workOrderDigest: "d".repeat(64), executionIdentity: "f1-0000abcd" },
+      { workOrderRef: REF, workOrderDigest: plan.workOrderDigest, executionIdentity: "f1-0000abcd" },
     );
+  });
+});
+
+test("F6: a plan whose work order was edited in place after emission refuses before any read", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, TACKLED);
+    const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+    for (const workOrder of [{ ...plan.workOrder, mutationAuthority: { branch: "main" } }, { ...plan.workOrder, headSha: FIX_SHA }]) {
+      await writeFile(fixerPlan, JSON.stringify({ ...plan, workOrder }));
+      const { deps, calls } = runtime([], repoRoot);
+      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /does not match its workOrderDigest/);
+      assert.equal(calls.length, 0);
+    }
+  });
+});
+
+test("F6: a --head-sha other than the live PR head refuses before any checkpoint write", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, TACKLED);
+    const { deps } = runtime([liveHeadEntry(FIX_SHA)], repoRoot, { live: false });
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /is not the live PR head b{40}/);
+    assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-findings")), false);
   });
 });
 
@@ -195,7 +221,7 @@ test("records a checkpoint, replies+resolves a tackled thread with missing evide
     assert.deepEqual(result.incomplete, []);
     assert.equal(result.actions.length, 1);
     assert.equal(result.actions[0].step, "replied_and_resolved");
-    assert.equal(calls.length, 5);
+    assert.equal(calls.length, 6);
 
     const checkpointRaw = await readFile(path.join(repoRoot, result.checkpointPath), "utf8");
     const checkpoint = JSON.parse(checkpointRaw);
@@ -226,8 +252,8 @@ test("uncontained commit stays incomplete and never triggers a reply/resolve mut
     assert.equal(result.incomplete.length, 1);
     assert.equal(result.incomplete[0].failedStep, "commit_not_contained");
     assert.equal(result.actions.length, 0);
-    // Exactly the 2 read-only calls (threads capture + compare) — no reply/resolve/re-read.
-    assert.equal(calls.length, 2);
+    // Exactly the 3 read-only calls (live head + threads capture + compare) — no reply/resolve/re-read.
+    assert.equal(calls.length, 3);
     assert.ok(result.forbiddenActions.includes("request_copilot_review"));
     assert.ok(result.forbiddenActions.includes("rerequest_copilot_review"));
   });
@@ -322,7 +348,7 @@ test("resolve-only path (NOT_RESOLVED) proceeds via threadId alone when no comme
     assert.equal(result.actions[0].step, "resolved");
     // No POST .../replies call anywhere in this run's gh call log.
     assert.ok(calls.every((call) => !call.args.some((arg) => String(arg).includes("/replies"))));
-    assert.equal(calls.length, 4);
+    assert.equal(calls.length, 5);
   });
 });
 
@@ -363,7 +389,7 @@ test("resolve mutation reports isResolved:true but the live re-read still shows 
     assert.equal(result.actions[0].ok, true);
     // ... but the CLI re-fetched live rather than trusting that claim, so
     // overall completion still reflects the true unresolved state.
-    assert.equal(calls.length, 5);
+    assert.equal(calls.length, 6);
   });
 });
 
@@ -388,8 +414,8 @@ test("deferred/foreign/newly-arrived threads are never replied to or resolved", 
 
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
     assert.equal(result.complete, true);
-    // Only the read-only calls (threads capture + one compare) — T2/T3 never touched.
-    assert.equal(calls.length, 2);
+    // Only the read-only calls (live head + threads capture + one compare) — T2/T3 never touched.
+    assert.equal(calls.length, 3);
   });
 });
 

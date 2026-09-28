@@ -210,7 +210,7 @@ function listExistingAssetFiles(repoRoot) {
     ...listFilesRecursive(repoRoot, ".claude/commands"),
     ...listFilesRecursive(repoRoot, ".claude/skills"),
   ];
-  // `.claude/hooks/` mixes hand-authored scripts (hooks.json, _hook-io.mjs, the three hook
+  // `.claude/hooks/` mixes hand-authored scripts (hooks.json, _hook-io.mjs, _fixer-grants.mjs, the three hook
   // scripts) with generated bundle modules. Only the generated ones — identified by the
   // generator banner — participate in orphan detection, so a dropped/renamed HOOK_BUNDLE entry
   // is caught without false-flagging the hand-authored files.

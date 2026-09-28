@@ -27,13 +27,14 @@
  *    agentType facts computed for boundary 2.
  */
 import { execFileSync } from "node:child_process";
-import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import { decideFixerWriteGuard, FIXER_AGENT_TYPE, normalizeAgentType, decideWriteGuard, decideCoordinatorWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
 import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
+import { loadFixerContext, nearestExistingDir } from "./_fixer-grants.mjs";
 
 const input = readHookInput();
 const filePath = input?.tool_input?.file_path;
@@ -46,31 +47,8 @@ const filePath = input?.tool_input?.file_path;
 if (typeof input?.agent_type === "string" && normalizeAgentType(input.agent_type) === FIXER_AGENT_TYPE) {
   const fixerCwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   const fixerAbs = typeof filePath === "string" && filePath ? path.resolve(fixerCwd, filePath) : null;
-  let checkouts = [];
-  try {
-    const porcelain = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: fixerCwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    checkouts = porcelain.split(/\n\s*\n/u).map((block) => {
-      const lines = block.split("\n");
-      const field = (key) => lines.find((l) => l.startsWith(`${key} `))?.slice(key.length + 1);
-      const root = field("worktree");
-      return root ? { root: realpathNearestExisting(root), branch: field("branch")?.replace(/^refs\/heads\//u, "") ?? null } : null;
-    }).filter(Boolean);
-  } catch { /* no git context: no checkout, so the decider denies */ }
-  const grants = [];
-  const receiptsDir = checkouts[0] ? path.join(checkouts[0].root, "tmp", "work-order-receipts") : null;
-  let receiptFiles = [];
-  try { receiptFiles = receiptsDir ? readdirSync(receiptsDir).filter((name) => name.endsWith(".json")) : []; } catch { /* no receipts: no grant */ }
-  // ponytail: parses every receipt per fixer write; key receipts by role if the directory grows large.
-  for (const name of receiptFiles) {
-    try {
-      const receipt = JSON.parse(readFileSync(path.join(receiptsDir, name), "utf8"));
-      if (receipt?.role !== "fixer") continue;
-      const plan = JSON.parse(readFileSync(receipt.subject.planPath, "utf8"));
-      if (plan.workOrderRef !== receipt.workOrderRef || plan.workOrderDigest !== receipt.workOrderDigest || plan.executionIdentity !== receipt.executionIdentity) continue;
-      const { branch, allowedPaths } = plan.workOrder.mutationAuthority;
-      grants.push({ branch, allowedPaths, outputRef: realpathNearestExisting(plan.workOrder.outputRefs[0]) });
-    } catch { /* unreadable receipt or plan: no grant */ }
-  }
+  // The target's repo first, so a cwd outside the repo cannot make an in-repo target look like scratch.
+  const { checkouts, grants } = loadFixerContext([...(fixerAbs ? [nearestExistingDir(fixerAbs)] : []), fixerCwd]);
   const roots = checkouts.map((c) => c.root);
   // A dangling symlink, or one that resolves into a checkout, on the literal path.
   const crossesSymlink = (p) => {

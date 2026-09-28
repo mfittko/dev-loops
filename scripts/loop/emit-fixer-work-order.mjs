@@ -11,6 +11,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -20,7 +21,7 @@ import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
+const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
 or the unresolved review threads (list-review-threads.mjs --unresolved-only), plus the
 optional pre-push delta result (dev-loops loop pre-push-delta). The mutation authority is
@@ -28,9 +29,10 @@ the PR's own head branch (gh pr view headRefName) and the --allowed-path selecto
 (default "." = the whole repository). A PR head other than --head-sha refuses.
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/) and prints
-{ ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, planPath }.
-Each run supersedes the previous emission for this PR. Dispatch the fixer with the
-compact dispatchPrompt only. It accepts no brief, payload or summary input.
+{ ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath }.
+Each run supersedes the previous emission for this PR. Dispatch the printed
+dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
+unsupported harness refuses. It accepts no brief, payload or summary input.
 Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2 usage/IO error.`;
 
 // ref = fixer:<owner/repo>#<pr>:<headSha>:<executionIdentity>; executionIdentity = f<emit ms>-<8 hex>.
@@ -124,7 +126,10 @@ export async function emitFixerWorkOrder({
   const abs = (p) => path.resolve(cwd, p);
 
   const source = actListFile ? await readSource("act-list", abs(actListFile)) : await readSource("threads", abs(threadsFile));
-  if (actListFile && !Array.isArray(source.parsed)) throw new Refusal(`act list ${actListFile} is not a judge-pass --out array`);
+  const isActItem = (f) => f?.judgeDisposition === "act" && VALID_SEVERITIES.has(f.severity) && typeof f.summary === "string" && f.summary.trim() !== "";
+  if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
+    throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
+  }
   if (threadsFile && (!Array.isArray(source.parsed?.threads) || source.parsed.repo !== repo || Number(source.parsed.pr) !== Number(pr))) {
     throw new Refusal(`threads file ${threadsFile} is not list-review-threads output for ${repo}#${pr}`);
   }
@@ -136,7 +141,8 @@ export async function emitFixerWorkOrder({
   if (String(prState.headRefOid ?? "").toLowerCase() !== headSha) throw new Refusal(`PR ${repo}#${pr} head is ${prState.headRefOid}, not --head-sha ${headSha}; conflicting authority, refresh and re-emit`);
 
   const contracts = await Promise.all(FIXER_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
-  const { config } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
+  const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
+  if (errors?.length > 0) throw new Refusal(`dev-loops config is invalid; fix it before emitting: ${errors.map((e) => e?.message ?? String(e)).join("; ")}`);
   const workOrder = {
     role: "fixer",
     target: { repo, pr: Number(pr) },
@@ -181,6 +187,28 @@ export async function emitFixerWorkOrder({
   await writeFile(tempPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   await rename(tempPath, planPath);
   return { ...plan, planPath };
+}
+
+// The checked dispatch seam per harness: the adapter payload carries the fixed pointer only.
+const FIXER_DISPATCH_ADAPTERS = {
+  claude: (prompt) => ({ subagent_type: "fixer", prompt }),
+  pi: (prompt) => ({ agent: "fixer", task: prompt }),
+};
+
+/** The harness adapter payload for a fixer dispatch; any other harness refuses (never legacy prose). */
+export function buildFixerDispatchPayload({ harness, plan }) {
+  const adapter = Object.hasOwn(FIXER_DISPATCH_ADAPTERS, harness) ? FIXER_DISPATCH_ADAPTERS[harness] : null;
+  if (!adapter) throw new WorkOrderRefusal("unsupported_adapter", `harness ${JSON.stringify(harness)} has no fixer dispatch adapter; supported: ${Object.keys(FIXER_DISPATCH_ADAPTERS).join(", ")}`);
+  return adapter(plan.dispatchPrompt);
+}
+
+/** Refuses a payload whose agent is not `fixer` or whose prompt/task is not exactly the plan's pointer. */
+export function assertFixerDispatchPayload({ harness, payload, plan }) {
+  const expected = buildFixerDispatchPayload({ harness, plan: { dispatchPrompt: buildDispatchPointer(plan) } });
+  const [agentKey, textKey] = Object.keys(expected);
+  if (Object.keys(payload ?? {}).length !== 2 || payload[agentKey] !== "fixer" || payload[textKey] !== expected[textKey]) {
+    throw new WorkOrderRefusal("dispatch_payload_mismatch", `the ${harness} fixer dispatch must be { ${agentKey}: "fixer", ${textKey}: <the compact pointer> } unchanged`);
+  }
 }
 
 const emittedAt = (executionIdentity) => Number(/^f(\d+)-/.exec(executionIdentity ?? "")?.[1]) || 0;
@@ -256,14 +284,14 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     repo: { type: "string" }, pr: { type: "string" }, "head-sha": { type: "string" }, phase: { type: "string" },
     "act-list-file": { type: "string" }, gate: { type: "string" }, "threads-file": { type: "string" },
     "delta-result": { type: "string" }, "allowed-path": { type: "string", multiple: true },
-    "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" },
+    "tmp-root": { type: "string" }, harness: { type: "string" }, help: { type: "boolean", short: "h" },
     ...JQ_OUTPUT_PARSE_OPTIONS,
   } });
   if (values.help) {
     process.stdout.write(`${USAGE}\n\n${JQ_OUTPUT_USAGE}\n`);
     return 0;
   }
-  const required = ["repo", "pr", "head-sha", "phase"].filter((key) => !values[key]);
+  const required = ["repo", "pr", "head-sha", "phase", "harness"].filter((key) => !values[key]);
   if (required.length > 0) {
     process.stderr.write(`missing --${required.join(", --")}\n${USAGE}\n`);
     return 2;
@@ -272,6 +300,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   if (jqSyntaxError !== undefined) return jqSyntaxError;
   const emit = (payload) => emitResult(payload, { jq: values.jq, silent: values.silent, fields: values.fields });
   try {
+    buildFixerDispatchPayload({ harness: values.harness, plan: {} }); // refuse an unknown harness before emitting
     const plan = await emitFixerWorkOrder({
       repo: values.repo, pr: values.pr, headSha: values["head-sha"].toLowerCase(), phase: values.phase,
       actListFile: values["act-list-file"], gate: values.gate, threadsFile: values["threads-file"],
@@ -280,10 +309,11 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       ...(fetchPr ? { fetchPr } : {}),
     });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
-    return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });
+    const dispatchPayload = buildFixerDispatchPayload({ harness: values.harness, plan });
+    return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, dispatchPayload, planPath });
   } catch (err) {
-    if (!(err instanceof Refusal)) throw err;
-    return emit({ ok: false, error: err.message });
+    if (!(err instanceof Refusal || err instanceof WorkOrderRefusal)) throw err;
+    return emit({ ok: false, ...(err.refusal ? { refusal: err.refusal } : {}), error: err.message });
   }
 }
 
