@@ -102,7 +102,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   // The PR declared scope and the diff reach the judge through the round's evidence read.
   const context = await readJson(abs(buildGateContextPath({ repo, pr, gate, headSha, tmpRoot })));
   const evidenceRead = context?.requiredReads?.find((read) => read?.kind === "evidence");
-  if (!evidenceRead) throw new Refusal(`no gate-context evidence read for ${gate} at ${headSha}; run write-gate-context.mjs for this round first`);
+  if (!evidenceRead) throw new Refusal(`no gate-context evidence read for ${gate} at ${headSha}; pass the --tmp-root the round's context was written with, or run write-gate-context.mjs for this round first`);
   // write-gate-context records the evidence path relative to the checkout that owns tmpRoot (<checkout>/tmp).
   const evidence = await readSource("evidence", path.resolve(path.dirname(abs(tmpRoot)), evidenceRead.path));
   if (evidence.read.sha256 !== evidenceRead.sha256) throw new Refusal(`gate-context evidence ${evidenceRead.path} changed since the round was built; rebuild the round context`);
@@ -191,8 +191,10 @@ export async function locateJudgeUnit({ ref, tmpRoots }) {
   }
   if (!newest) return null;
   if (!own || newest.workOrderRef !== ref) return { stale: `judge ref ${ref} was superseded by ${newest.workOrderRef}` };
-  const { plan, tmpRoot } = own;
-  const retired = await findRetirementAfter(tmpRoot, gate, headSha, Number(emittedAtMs));
+  const { plan } = own;
+  // retire-gate-round writes under the checkout it ran in, so every checkout's record counts.
+  let retired = null;
+  for (const tmpRoot of tmpRoots) retired ??= await findRetirementAfter(tmpRoot, gate, headSha, Number(emittedAtMs));
   const changed = [];
   for (const read of plan.workOrder?.requiredReads ?? []) {
     const bytes = await readFile(read.path).catch(() => null);

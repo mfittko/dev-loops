@@ -1558,6 +1558,13 @@ test("judge-pass J5: a plan with forged authority or a saved copy of a supersede
   assert.equal(existsSync(path.join(root, "act.json")), false);
 });
 
+test("judge-pass J5: a non-ledger required read changed after the pull refuses at acceptance", async () => {
+  const { root, runPass } = await deliveryCase();
+  await writeFile(path.join(root, "judge-fixture", "evidence.md"), "## PR body\nDeclared scope: something else.\n");
+  await assert.rejects(runPass(), /is not the current emission.*evidence changed or vanished/);
+  assert.equal(existsSync(path.join(root, "act.json")), false);
+});
+
 test("judge-pass J5: a round retired after emission refuses at acceptance", async () => {
   const { root, runPass } = await deliveryCase();
   const retired = path.join(root, "tmp", "retired-gate-rounds", HEAD, "r1");

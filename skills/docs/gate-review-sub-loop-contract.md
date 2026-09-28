@@ -1030,10 +1030,12 @@ fan-in it runs the deterministic producer over the round's sources:
 ```sh
 dev-loops-run scripts/loop/emit-judge-work-order.mjs --repo <owner/name> --pr <N> --gate <gate> \
   --head-sha <current_head_sha> --findings-file <ledger-path> --spec-file <spec-path> \
-  --identity-file <identity-path> [--prior-verdict <prior-judge-verdict-path> ...]
+  --identity-file <identity-path> [--prior-verdict <prior-judge-verdict-path> ...] \
+  [--tmp-root <checkout>/tmp]
 ```
 
-It refuses a missing or inconsistent source, pins the ledger, spec, identity, evidence and
+If the round's context bundle was relocated with `--tmp-root`, pass that same root here; it
+must be a listed checkout's tmp directory. It refuses a missing or inconsistent source, pins the ledger, spec, identity, evidence and
 prior verdicts as hash-bound required reads, and prints `{ workOrderRef, workOrderDigest,
 executionIdentity, dispatchPrompt, planPath }`. The conductor dispatches the judge with the
 compact `dispatchPrompt` only, on the initial, a resumed and a replacement dispatch alike, and
@@ -1227,10 +1229,11 @@ wired the judge phase), the fixer falls back to the existing severity-based disp
 round. Reviewer fresh-context isolation (`GATE-EXEC-BUILD-ONCE-SEED`) is unchanged — the
 judge is a separate agent dispatched after fan-in, not a reviewer. The judge is the
 designated memory: it sees the round history precisely so it can notice accretion,
-self-renewing churn, or findings-about-a-fix. It is seeded with the conductor's accumulated
-state (prior-round ledgers, scope history) rather than a blank slate — the conductor hands
-it the prior-round judge verdict artifacts as an explicit input, so its memory is durable
-and auditable rather than implicit.
+self-renewing churn, or findings-about-a-fix. Its memory is durable and auditable rather
+than implicit: the conductor passes the prior-round judge verdict artifacts to
+`emit-judge-work-order.mjs` as `--prior-verdict`, which pins them as hash-bound required
+reads of the work order. Prior-round ledgers are reachable only through the work order's
+widening rule.
 
 ### Phase 4 — Fix
 

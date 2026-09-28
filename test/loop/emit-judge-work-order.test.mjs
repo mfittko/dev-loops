@@ -170,6 +170,19 @@ test("J3: a re-emission from another checkout supersedes the older ref in every 
   }));
 });
 
+test("J3: a round retired from another checkout refuses as stale_dispatch on pull", async () => {
+  await withDir(async (a) => withDir(async (b) => {
+    const plan = await emitJudgeWorkOrder(await seed(a));
+    const retired = path.join(b, "tmp", "retired-gate-rounds", HEAD, "r1");
+    await mkdir(retired, { recursive: true });
+    await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "pre_approval_gate", retiredAt: new Date().toISOString() }));
+    await assert.rejects(
+      pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: a, tmpRoots: [path.join(a, "tmp"), path.join(b, "tmp")], receiptTmpRoot: path.join(a, "tmp") }),
+      (err) => err.refusal === "stale_dispatch" && /retired as r1/.test(err.message),
+    );
+  }));
+});
+
 test("J3: an emission from a checkout subdirectory lands under the checkout root and pulls", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
