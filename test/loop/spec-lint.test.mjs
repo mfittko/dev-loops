@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -101,6 +101,41 @@ test("the amendment parser matches this repo's decision records", async () => {
   assert.ok(!amends("0069").has("0049"));
   assert.equal(amends("0100").size, 0);
   assert.ok(amends("0081").has("0074"));
+  assert.ok(amends("0072").has("0048"), "0072 amends 0048");
+});
+
+test("a missing or non-directory --repo-root exits 1", async () => {
+  const root = await fixtureRepo();
+  const bodyFile = path.join(root, "body.md");
+  await writeFile(bodyFile, "text");
+  for (const badRoot of [path.join(root, "nope"), bodyFile]) {
+    const stdout = buffer();
+    const stderr = buffer();
+    assert.equal(await main(["--body-file", bodyFile, "--repo-root", badRoot], { stdout: stdout.stream, stderr: stderr.stream }), 1);
+    assert.match(stderr.read(), /not an existing directory/);
+    assert.equal(stdout.read(), "");
+  }
+});
+
+test("an unreadable decision record exits 2 and names the file", async () => {
+  const root = await fixtureRepo({ decisions: { "0001-ok.md": "Accepted — 2026-01-01" } });
+  await symlink(path.join(root, "gone.md"), path.join(root, "docs", "decisions", "0002-dangling.md"));
+  const bodyFile = path.join(root, "body.md");
+  await writeFile(bodyFile, "ADR 0001");
+  const stderr = buffer();
+  assert.equal(await main(["--body-file", bodyFile, "--repo-root", root], { stdout: buffer().stream, stderr: stderr.stream }), 2);
+  assert.match(stderr.read(), /0002-dangling\.md/);
+});
+
+test("a wrong-shape registry exits 2 as malformed", async () => {
+  for (const rules of [{ requiredRules: {} }, { requiredRules: [], optOutRules: {} }]) {
+    const root = await fixtureRepo({ rules });
+    const bodyFile = path.join(root, "body.md");
+    await writeFile(bodyFile, "text");
+    const stderr = buffer();
+    assert.equal(await main(["--body-file", bodyFile, "--repo-root", root], { stdout: buffer().stream, stderr: stderr.stream }), 2);
+    assert.match(stderr.read(), /Malformed registry/);
+  }
 });
 
 test("the #2438 and #2528 failures reproduce against this repo", async () => {

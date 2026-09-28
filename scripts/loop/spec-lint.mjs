@@ -7,7 +7,7 @@
  * contradiction between an AC row and a rule or ADR stays with the grill and
  * the spec-authority judge.
  */
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -43,6 +43,7 @@ Exit codes: 0 lint completed (with or without findings); 1 usage error;
 const RECORD_FILE_RE = /^(\d{4})-[a-z0-9-]+\.md$/;
 const BODY_ADR_RE = /\bADR\s+(\d{4})\b|docs\/decisions\/(\d{4})-[\w-]*\.md/g;
 // ponytail: ADR numbers below 1000 carry a leading zero, so dates and issue numbers never match.
+// Once records pass 0999, match \d{4,} and keep only numbers present in the record index.
 const STATUS_ADR_RE = /\b(0\d{3})\b/g;
 
 function isMissing(error) {
@@ -72,10 +73,10 @@ async function loadKnownRuleIds(repoRoot) {
   } catch (error) {
     throw Object.assign(new Error(`Malformed JSON in ${file}`, { cause: error }), { exitCode: 2 });
   }
-  const entries = [...(parsed?.requiredRules ?? []), ...(parsed?.optOutRules ?? [])].map(normalizeRuleEntry);
-  if (!Array.isArray(parsed?.requiredRules) || entries.some((entry) => entry.invalid)) {
-    throw Object.assign(new Error(`Malformed registry in ${file}: requiredRules must be an array of rule entries`), { exitCode: 2 });
-  }
+  const malformed = () => Object.assign(new Error(`Malformed registry in ${file}: requiredRules must be an array of rule entries`), { exitCode: 2 });
+  if (!Array.isArray(parsed?.requiredRules) || !Array.isArray(parsed.optOutRules ?? [])) throw malformed();
+  const entries = [...parsed.requiredRules, ...(parsed.optOutRules ?? [])].map(normalizeRuleEntry);
+  if (entries.some((entry) => entry.invalid)) throw malformed();
   return { ids: new Set(entries.map((entry) => entry.id)) };
 }
 
@@ -113,13 +114,28 @@ function adrNumbersIn(text) {
 /**
  * Index docs/decisions/*.md by four-digit number. Amendment edges come from
  * Status sections only: "M amends N" in M, or "Amended by M" in N.
+ * Returns null when the directory is missing.
  */
 export async function indexDecisionRecords(decisionsDir) {
+  let names;
+  try {
+    names = await readdir(decisionsDir);
+  } catch (error) {
+    if (isMissing(error)) return null;
+    throw error;
+  }
   const records = new Map();
-  for (const name of (await readdir(decisionsDir)).sort()) {
+  for (const name of names.sort()) {
     const match = RECORD_FILE_RE.exec(name);
     if (!match || match[1] === "0000") continue;
-    const { status } = splitStatus(await readFile(path.join(decisionsDir, name), "utf8"));
+    const file = path.join(decisionsDir, name);
+    let text;
+    try {
+      text = await readFile(file, "utf8");
+    } catch (error) {
+      throw Object.assign(new Error(`Cannot read decision record ${file}: ${error.message}`, { cause: error }), { exitCode: 2 });
+    }
+    const { status } = splitStatus(text);
     const root = firstMeaningfulLine(status);
     const state = /^Proposed\b/.test(root) ? "proposed" : /^Superseded by\b/.test(root) ? "superseded" : isAcceptedOrSuperseded(status) ? "accepted" : "unknown";
     const supersededBy = state === "superseded" ? adrNumbersIn(statusSentences(root).join(" "))[0] ?? null : null;
@@ -135,7 +151,10 @@ export async function indexDecisionRecords(decisionsDir) {
       if (/\bamends no\b/i.test(sentence)) continue;
       const amends = /\b(?:partially\s+)?amends\b/i.exec(sentence);
       if (amends) {
-        for (const target of adrNumbersIn(clauseAfter(sentence, amends.index))) addEdge(record.id, target);
+        let targets = adrNumbersIn(clauseAfter(sentence, amends.index));
+        // "ADR N (amends its ...)" names the target before the verb.
+        if (targets.length === 0 && /^amends\s+(?:its|their)\b/i.test(sentence.slice(amends.index))) targets = adrNumbersIn(sentence.slice(0, amends.index));
+        for (const target of targets) addEdge(record.id, target);
       }
       const amendedBy = /\bamended by\b/i.exec(sentence);
       if (amendedBy) {
@@ -172,6 +191,11 @@ export function lintAdrCitations(body, records) {
 }
 
 export async function lintSpec({ body, repoRoot }) {
+  const rootStat = await stat(repoRoot).catch((error) => {
+    if (isMissing(error)) return null;
+    throw error;
+  });
+  if (!rootStat?.isDirectory()) throw Object.assign(new Error(`--repo-root ${repoRoot} is not an existing directory`), { usage: USAGE, exitCode: 1 });
   const findings = [];
   const checks = {};
   const rules = await loadKnownRuleIds(repoRoot);
@@ -182,16 +206,12 @@ export async function lintSpec({ body, repoRoot }) {
     checks.rules = { status: "ran" };
   }
   const decisionsDir = path.join(repoRoot, "docs", "decisions");
-  let records;
-  try {
-    records = await indexDecisionRecords(decisionsDir);
-  } catch (error) {
-    if (!isMissing(error)) throw error;
-    checks.adrs = { status: "skipped", reason: `no decision records directory at ${decisionsDir}` };
-  }
+  const records = await indexDecisionRecords(decisionsDir);
   if (records) {
     findings.push(...lintAdrCitations(body, records));
     checks.adrs = { status: "ran" };
+  } else {
+    checks.adrs = { status: "skipped", reason: `no decision records directory at ${decisionsDir}` };
   }
   return { ok: true, findings, checks };
 }
