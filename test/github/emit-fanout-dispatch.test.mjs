@@ -1937,6 +1937,14 @@ test("unitBudgetBasis counts an unparsed-path block in a docs-only unit", () => 
   assert.deepEqual(basis, { scope: "docs-only", files: 1, changedLines: 1 });
 });
 
+test("unitBudgetBasis counts every block when a unit mixes a docs-only angle with a full-scope angle", () => {
+  const basis = unitBudgetBasis({ angleScopes: { a: "docs-only", b: "full" } }, ["a", "b"], [
+    { path: "docs/x.md", header: "", hunks: ["@@ -0,0 +1,1 @@\n+x"] },
+    { path: "src/x.js", header: "", hunks: ["@@ -0,0 +1,1 @@\n+y"] },
+  ]);
+  assert.deepEqual(basis, { scope: "full", files: 2, changedLines: 2 });
+});
+
 test("buildAngleNamingSuffix prints a scaled unit's computed budget, never the floor constants", () => {
   const suffix = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] }, "pre-approval-gate-coverage", [], [], { maxModelTurns: 70, maxToolCalls: 75, maxAngles: 5 });
   assert.match(suffix, /Budget: at most 70 model turns and 75 tool calls for this unit/);

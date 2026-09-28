@@ -255,7 +255,7 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
     ? `${REVIEWER_VERIFIED_ITEMS_INSTRUCTION}.\n`
     : "";
   const contract = `## Bounded reviewer contract
-Budget: at most ${budget.maxModelTurns} model turns and ${budget.maxToolCalls} tool calls for this unit, computed from the size of the diff this unit reviews.
+Budget: at most ${budget.maxModelTurns} model turns and ${budget.maxToolCalls} tool calls for this unit, computed from the size of the diff blocks in this unit's scope (doc and unparsed-path blocks for a docs-only unit, every block otherwise).
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
 Prohibited: ${prohibited}.
 Widening: ${REVIEWER_WIDENING_RULE}.
