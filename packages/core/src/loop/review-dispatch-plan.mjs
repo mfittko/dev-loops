@@ -854,8 +854,9 @@ function extractDiffBlockPath(blockLines) {
  * Every path a diff file-block touches, read from its header lines only
  * (before the first `@@` hunk): the `diff --git a/X b/Y` tokens,
  * `rename from`/`rename to`, `copy from`/`copy to`, and `---`/`+++`. A
- * configured exclusion drops a block only when every one of these paths is
- * excluded, so a rename or copy across the boundary of a configured tree
+ * configured exclusion drops a block only when every one of these paths
+ * matches a configured glob (a default-excluded or protected partner keeps
+ * the block), so a rename or copy across the boundary of a configured tree
  * stays in the filtered diff (same rule as ADR 0108's scope count).
  * @param {string[]} blockLines
  * @returns {string[]}
@@ -923,7 +924,7 @@ export function filterDiffForInline(diffText, { excludeGlobs = [] } = {}) {
     const relPath = extractDiffBlockPath(blockLines);
     let reason = relPath ? classifyDiffFileExclusion(relPath, { excludeGlobs }) : null;
     if (reason === "configured"
-      && !extractDiffBlockTouchedPaths(blockLines).every((p) => classifyDiffFileExclusion(p, { excludeGlobs }) !== null)) {
+      && !extractDiffBlockTouchedPaths(blockLines).every((p) => classifyDiffFileExclusion(p, { excludeGlobs }) === "configured")) {
       reason = null;
     }
     if (reason) {

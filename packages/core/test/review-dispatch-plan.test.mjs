@@ -975,6 +975,13 @@ describe("filterDiffForInline — filtered diff for the shared per-head block (i
       assert.deepEqual(excludedFiles, []);
     });
 
+    test("a rename from a default-excluded path into the configured tree is kept", () => {
+      const block = renameBlock("package-lock.json", ".claude/skills/x.mjs");
+      const { filteredDiff, excludedFiles } = filterDiffForInline(block, opts);
+      assert.equal(filteredDiff, block);
+      assert.deepEqual(excludedFiles, []);
+    });
+
     test("a pure rename (no hunks) into an excluded tree is kept", () => {
       const block = [
         "diff --git a/src/hand.mjs b/.claude/skills/x.mjs",
