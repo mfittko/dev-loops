@@ -10,7 +10,7 @@ Amends [0013](0013-remove-coordinator-middleware.md): it admits one bounded `gat
 
 ADR 0013 removed the coordinator agent and made the agent hierarchy flat. ADR 0081 later introduced the gate-round capsule, and `GATE-EXEC-GATE-COORDINATOR` requires one fresh gate coordinator per round. The contract named no agent type for that capsule, and its enforcement was documentation only.
 
-Coordinators therefore ran rounds inline or dispatched the gate coordinator as `dev-loop` or `general-purpose`. On PR 2520, seven draft_gate rounds ran inline and the unit coordinator grew from 270K to 587K tokens. On PR 2533, 23 of 30 reviewer and judge prompts carried relay prose instead of the emitted `dispatchPrompt`. Gate coordinators dispatched as `dev-loop` also inherited the dev-loop agent's 1-hour prompt-cache TTL.
+Coordinators therefore ran rounds inline or dispatched the gate coordinator as `dev-loop` or `general-purpose`. On PR 2520, seven draft_gate rounds ran inline and the unit coordinator grew from 270K to 587K tokens. On PR 2533, 23 of 30 reviewer and judge prompts added relay prose to the emitted `dispatchPrompt`. Gate coordinators dispatched as `dev-loop` also inherited the dev-loop agent's 1-hour prompt-cache TTL.
 
 ## Decision
 
@@ -29,7 +29,7 @@ The capsule needs its own `agent_type` because the hook payload carries no other
 
 ## Consequences
 
-The unit coordinator can no longer run a gate round inline on Claude Code, and reviewer and judge prompts can no longer drift from the emitted work orders. Unlike the coordinator that ADR 0013 removed, this agent is no pass-through broker: it holds a whole round and its bulk reviewer output out of the unit coordinator's context.
+The unit coordinator can no longer run a gate round inline on Claude Code, and reviewer and judge prompts can no longer drift from the emitted work orders. This agent holds a whole round and its bulk reviewer output out of the unit coordinator's context. The coordinator that ADR 0013 removed only relayed messages between agents.
 
 A reviewer unit that wrote its sentinel but no artifact cannot be retried with an appended `--same-head-retry` prose. The round recovers by retirement and a fresh round until an emitter retry mode exists.
 

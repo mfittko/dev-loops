@@ -735,7 +735,7 @@ closed; changed briefing bytes require retirement instead. On Claude Code the ag
 guard denies any reviewer relay other than the emitted `dispatchPrompt`, so an interrupted
 reviewer at the same head recovers through `GATE-EXEC-ROUND-RETIREMENT` and a fresh round.
 
-Re-brief with the UNCHANGED invariant prefix; do not rerun `write-gate-context.mjs`.
+On a harness without the agent dispatch guard (Pi), re-brief with the UNCHANGED invariant prefix; do not rerun `write-gate-context.mjs`.
 Other angles' sentinels remain untouched and verify against the same prefix record;
 no full re-fan or manual deletion is needed. A same-head retry replays the
 build-time evidence file and known-findings snapshot, so it never sees a PR-body edit

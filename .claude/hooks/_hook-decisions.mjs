@@ -702,7 +702,7 @@ export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
  * stop instead. This is intentionally scoped to read-only roles: editing roles (`developer`,
  * `fixer`, `docs`, `quality`) and the orchestrator stay enforced.
  */
-export const READONLY_SUBAGENT_ROLES = Object.freeze(["judge", "review"]);
+export const READONLY_SUBAGENT_ROLES = Object.freeze(["judge", "review", "gate-coordinator"]);
 
 /** Whether `agentType` (Claude `agent_type` from the SubagentStop payload) is a read-only role. */
 export function isReadOnlySubagentRole(agentType) {
@@ -743,7 +743,7 @@ export function isReadOnlySubagentRole(agentType) {
  *   awaiting commit authorization (exempt) — derived by the hook script from the
  *   `DEVLOOPS_COMMIT_AUTH_PENDING=1` opt-in env signal.
  * @param {string|null} [params.agentType] - Claude `agent_type` from the SubagentStop payload;
- *   a read-only role (`judge`/`review`, per `READONLY_SUBAGENT_ROLES`) is exempt — its
+ *   a read-only role (`judge`/`review`/`gate-coordinator`, per `READONLY_SUBAGENT_ROLES`) is exempt — its
  *   contract forbids commits, so any dirty tracked edit in its worktree is foreign
  *   (orchestrator-owned) and must not be pinned on it.
  * @returns {HookDecision}

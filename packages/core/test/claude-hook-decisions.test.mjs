@@ -813,7 +813,7 @@ test("decideSubagentStopGuard treats a non-string cwd as out-of-scope (allow)", 
 // Read-only role exemption (#1925): a judge/review subagent's contract forbids commits, so a
 // dirty tracked edit in its worktree is foreign (orchestrator-owned). The guard must not force
 // the read-only role to commit it, and its message must name the orchestrator as responsible.
-for (const role of ["judge", "review"]) {
+for (const role of ["judge", "review", "gate-coordinator"]) {
   test(`decideSubagentStopGuard exempts a read-only "${role}" role from committing foreign uncommitted work (#1925)`, () => {
     const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/gate-fanin.mjs", agentType: role });
     assert.equal(d.decision, "allow");
