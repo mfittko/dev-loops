@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { collectGeneratedAssets, checkAssets, writeAssets } from "../../scripts/claude/generate-claude-assets.mjs";
 import { stripPiOnlyBlocks, transformSkill } from "../../packages/core/src/claude/asset-generation.mjs";
 import { validateJudgeVerdict } from "../../packages/core/src/loop/gate-fanin.mjs";
+import { decideBashGate } from "../../packages/core/src/claude/hook-decisions.mjs";
 import { computeContentDigest, computeSpecDigest, specCriterionIds, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
 
 // #772: the committed .claude tree must be byte-reproducible from the canonical sources.
@@ -82,13 +83,16 @@ test("Pi-runtime-only prose is stripped from generated assets but retained in so
   }
 });
 
-test("judge fixture writes both valid verdicts with only read, search, and write", () => {
+test("judge fixture writes both valid verdicts with read, search, write and a pull-only shell", () => {
   const source = fs.readFileSync(path.join(repoRoot, "agents/judge.agent.md"), "utf8");
   const generated = collectGeneratedAssets({ repoRoot }).find((a) => a.target === ".claude/agents/judge.md")?.content;
-  assert.match(source, /^tools: read, search, write$/m);
+  assert.match(source, /^tools: read, search, bash, write$/m);
   assert.ok(generated);
-  assert.match(generated, /^tools: Read, Grep, Glob, Write$/m);
-  assert.doesNotMatch(generated, /^tools:.*Bash/m);
+  assert.match(generated, /^tools: Read, Grep, Glob, Bash, Write$/m);
+  // Bash exists only for the work-order pull (ADR 0106); the Bash gate denies everything else.
+  const pull = "dev-loops-run scripts/github/pull-work-order.mjs --ref judge:o/r#1:draft_gate:abc:j1-aa --digest ab12 --execution j1-aa";
+  assert.equal(decideBashGate({ command: pull, agentType: "judge" }).decision, "allow");
+  assert.equal(decideBashGate({ command: "bun test", agentType: "judge" }).decision, "deny");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "judge-tool-fixture-"));
   try {
     const headSha = "a".repeat(40);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { decideBashGate, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType } from "../src/claude/hook-decisions.mjs";
+import { decideBashGate, decideJudgeWriteGuard, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType } from "../src/claude/hook-decisions.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -1357,4 +1357,34 @@ test("decideWorktreeCheckoutGuard allows an outside-repo / gitignored scratch wr
 
 test("WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV reuses the default-branch-guard override (one operator flag)", () => {
   assert.equal(WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, "DEVLOOPS_ALLOW_MAIN");
+});
+
+test("decideBashGate lets the judge run only the sanctioned work-order pull, fail-closed (ADR 0106)", () => {
+  const pull = "dev-loops-run scripts/github/pull-work-order.mjs --ref judge:o/r#7:draft_gate:abc:j1-aa --digest ab12 --execution j1-aa";
+  assert.equal(decideBashGate({ command: pull, agentType: "judge" }).decision, "allow");
+  assert.equal(decideBashGate({ command: ` ${pull}\n`, agentType: "dev-loops:judge" }).decision, "allow");
+  for (const command of [undefined, "ls", "bun test", "node scripts/github/pull-work-order.mjs --ref a --digest b --execution c", `${pull} | tee x`, `${pull} \`id\``, `${pull} --tmp-root /x`]) {
+    assert.equal(decideBashGate({ command, agentType: "judge" }).decision, "deny", String(command));
+  }
+  assert.equal(decideBashGate({ command: "bun test", agentType: "review" }).decision, "allow");
+});
+
+test("decideJudgeWriteGuard lets the judge write only its verdict files under an anchored gate-judge root, fail-closed (ADR 0106)", () => {
+  const gateJudgeRoots = ["/r/tmp/gate-judge", "/r/tmp/worktrees/w/tmp/gate-judge"];
+  const dir = "/r/tmp/gate-judge/o-r/pr-7/draft_gate-abc/j1-aa";
+  for (const agentType of ["judge", "dev-loops:judge"]) {
+    assert.equal(decideJudgeWriteGuard({ agentType, targetPath: `${dir}/judge-verdict.json`, gateJudgeRoots }).decision, "allow");
+    assert.equal(decideJudgeWriteGuard({ agentType, targetPath: `${dir}/spec-authority-verdict.json`, gateJudgeRoots }).decision, "allow");
+  }
+  assert.equal(decideJudgeWriteGuard({ agentType: "judge", targetPath: "/r/tmp/worktrees/w/tmp/gate-judge/o-r/x/judge-verdict.json", gateJudgeRoots }).decision, "allow");
+  for (const targetPath of [null, "", "tmp/gate-judge/o-r/judge-verdict.json", "/r/scripts/github/pull-work-order.mjs", "/r/package.json",
+    `${dir}/package.json`, `${dir}/judge-emit-plan.json`, "/r/tmp/gate-judge/judge-verdict.json", `${dir}/../../../../../scripts/judge-verdict.json`,
+    "/r/gate-judge/o-r/pr-7/x/judge-verdict.json", "/r/tmp/gate-context/o-r/pr-7/x/judge-verdict.json",
+    "/private/tmp/gate-judge/z/judge-verdict.json", "/r/scripts/tmp/gate-judge/z/judge-verdict.json", "/r/tmp/gate-judge-x/z/judge-verdict.json"]) {
+    assert.equal(decideJudgeWriteGuard({ agentType: "judge", targetPath, gateJudgeRoots }).decision, "deny", String(targetPath));
+  }
+  assert.equal(decideJudgeWriteGuard({ agentType: "judge", targetPath: `${dir}/judge-verdict.json` }).decision, "deny", "no roots denies");
+  assert.equal(decideJudgeWriteGuard({ agentType: "judge", targetPath: `${dir}/judge-verdict.json`, gateJudgeRoots, symlinked: true }).decision, "deny", "symlink denies");
+  assert.equal(decideJudgeWriteGuard({ agentType: "developer", targetPath: "/r/package.json" }).decision, "allow");
+  assert.equal(decideJudgeWriteGuard({ agentType: null, targetPath: null }).decision, "allow");
 });
