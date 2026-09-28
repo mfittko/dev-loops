@@ -777,14 +777,27 @@ export function matchesDiffExcludeGlob(relPath, pattern) {
   return compiled.test(relPath);
 }
 
+// Every file loadDevLoopConfig reads, plus each ancestor directory of those
+// files: a diff block for an ancestor directory is a symlink swap that
+// redirects the config read, so it must stay visible too.
+const EXTENSION_DEFAULTS_RE = /^packages\/core\/src\/config\/extension-defaults(\.(ya?ml|json))?$/;
+const CONFIG_SOURCE_DIRS = [".pi/dev-loop", "packages/core/src/config"];
+function isProtectedConfigPath(posix) {
+  return isDevLoopConfigSourcePath(posix)
+    || EXTENSION_DEFAULTS_RE.test(posix)
+    || posix.startsWith(".pi/dev-loop/")
+    || CONFIG_SOURCE_DIRS.some((dir) => dir === posix || dir.startsWith(`${posix}/`));
+}
+
 /**
  * Classify why a diff file is excluded from the filtered diff, or `null`
  * when it is kept. Checks {@link DEFAULT_DIFF_EXCLUDE_GLOBS} first, then
  * any caller-supplied `excludeGlobs` — the default set can never be
  * disabled by a caller's config. The dev-loop config sources
  * ({@link isDevLoopConfigSourcePath}: `.devloops` and its `.yaml`/`.yml`/`.json`
- * variants, `extension-defaults.yaml`) and `.pi/dev-loop/**` are never
- * excluded as `configured`: the globs load from
+ * variants), `extension-defaults` with or without a `.yaml`/`.yml`/`.json`
+ * extension, `.pi/dev-loop/**`, and every ancestor directory of those files
+ * (a symlink swap) are never excluded as `configured`: the globs load from
  * the reviewed head, so a PR that widens them keeps that config edit in the
  * filtered diff (fail closed).
  * @param {string} relPath
@@ -796,7 +809,7 @@ export function classifyDiffFileExclusion(relPath, { excludeGlobs = [] } = {}) {
   for (const pattern of DEFAULT_DIFF_EXCLUDE_GLOBS) {
     if (matchesDiffExcludeGlob(posix, pattern)) return "default";
   }
-  if (isDevLoopConfigSourcePath(posix) || posix.startsWith(".pi/dev-loop/")) return null;
+  if (isProtectedConfigPath(posix)) return null;
   for (const pattern of excludeGlobs) {
     if (matchesDiffExcludeGlob(posix, pattern)) return "configured";
   }

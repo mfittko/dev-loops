@@ -932,7 +932,11 @@ describe("filterDiffForInline — filtered diff for the shared per-head block (i
 
   test("a catch-all configured glob never hides the dev-loop config edit that set it", () => {
     const block = (p) => [`diff --git a/${p} b/${p}`, `--- a/${p}`, `+++ b/${p}`, "@@ -1 +1 @@", "-a", "+b"].join("\n");
-    const kept = [".devloops", ".devloops.yaml", ".pi/dev-loop/defaults", "packages/core/src/config/extension-defaults.yaml"];
+    const kept = [
+      ".devloops", ".devloops.yaml", ".pi/dev-loop/defaults",
+      "packages/core/src/config/extension-defaults.yaml", "packages/core/src/config/extension-defaults",
+      ".pi/dev-loop", ".pi", "packages/core/src/config",
+    ];
     const combined = `${SRC_HUNK}\n${kept.map(block).join("\n")}\n`;
     const { filteredDiff, excludedFiles, includedFiles } = filterDiffForInline(combined, { excludeGlobs: ["**"] });
     for (const p of kept) assert.ok(filteredDiff.includes(`+++ b/${p}`), p);
