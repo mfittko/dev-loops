@@ -338,6 +338,9 @@ test("isGateOutcomeItem needs an explicit gate subject and lifecycle merge phras
     "Merge only after the data backfill has run in staging",
     "merge only on green CI is enforced by merge-pr refusing a red head",
     "merge only on a full gate pass is enforced by merge-pr",
+    "draft_gate passes on the final head and the release notes are published",
+    "pre_approval_gate is clean on the head that also bumps the version",
+    "pre_approval_gate passes on a head where the data backfill has run in staging",
   ]) {
     assert.equal(isGateOutcomeItem(item), false, item);
   }

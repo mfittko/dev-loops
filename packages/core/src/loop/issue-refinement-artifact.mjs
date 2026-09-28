@@ -579,13 +579,15 @@ export function detectAcDodMatrix(body = "") {
 // would block that gate forever.
 // ponytail: anchored keyword heuristic. The item is split on ";" and every
 // clause must be, as a whole, either "<named gate>[ and <named gate>] [both]
-// pass/is clean [on|at <head>]" or "[the] [PR] merge [happens] only on|after
-// [a|the] [full|clean] gate pass|<named gate> [pass]". A gate named inside a longer behavioral sentence
-// never matches (fail closed: the item stays a checkbox). It misses
+// pass/is clean [on|at [the] [final|current|latest|pushed] head]" or "[the]
+// [PR] merge [happens] only on|after [a|the] [full|clean] gate pass|<named
+// gate> [pass]". A gate named inside a longer behavioral sentence, or a head
+// phrase followed by any further clause, never matches (fail closed: the item
+// stays a checkbox). It misses
 // paraphrases such as "approval succeeds", "the gates pass" (no named gate) or
 // "the PR is merged after a full gate pass". Upgrade path: an explicit
 // gate-outcome marker in the issue matrix instead of text matching.
-const GATE_OUTCOME_RE = /^\s*(?:the\s+|both\s+)?`?(?:draft_gate|pre_approval_gate)`?(?:\s*(?:,|and|or)\s*`?(?:draft_gate|pre_approval_gate)`?)*\s+(?:both\s+)?(?:pass(?:es|ed)?|succeeds?|(?:is|are|stays?|closes?)\s+clean)(?:\s+(?:on|at)\s+[^,;]*)?\.?\s*$/i;
+const GATE_OUTCOME_RE = /^\s*(?:the\s+|both\s+)?`?(?:draft_gate|pre_approval_gate)`?(?:\s*(?:,|and|or)\s*`?(?:draft_gate|pre_approval_gate)`?)*\s+(?:both\s+)?(?:pass(?:es|ed)?|succeeds?|(?:is|are|stays?|closes?)\s+clean)(?:\s+(?:on|at)\s+(?:the\s+)?(?:(?:final|current|latest|pushed)\s+)?head)?\.?\s*$/i;
 const MERGE_OUTCOME_RE = /^\s*(?:the\s+)?(?:PR\s+)?merges?\s+(?:happens\s+)?only\s+(?:on|after)\s+(?:an?\s+|the\s+)?(?:(?:full|clean)\s+)?(?:gate\s+pass|`?(?:draft_gate|pre_approval_gate)`?(?:\s+pass)?)\.?\s*$/i;
 
 /**

@@ -224,7 +224,14 @@ Optional:
   --findings-ledger <path>                  Path to this round's
                                             write-gate-findings-log.mjs ledger
                                             ({ repo, pr, gate, headSha, verdict,
-                                            findings[] }). Turns the posted review
+                                            findings[], verifiedItems? }). For
+                                            pre_approval_gate (never draft_gate),
+                                            the poster first ticks those exact
+                                            verifiedItems labels in the PR body
+                                            and in linked issue bodies with
+                                            unticked AC items, then composes; a
+                                            failed body fetch or edit posts no
+                                            verdict. Turns the posted review
                                             into the round's single finding
                                             surface: an in-diff file:line finding
                                             becomes an inline review comment, every
