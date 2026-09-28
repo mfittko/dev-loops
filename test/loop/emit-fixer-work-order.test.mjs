@@ -6,6 +6,7 @@ import { chmodSync, existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
+import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
@@ -32,6 +33,17 @@ const pull = (unit, cwd, over = {}) => {
   assert.equal(bash(cwd, pullLine(identity), over.agentId ?? AGENT), "allow");
   return spawnSync("node", [PULL, "--ref", identity.workOrderRef, "--digest", identity.workOrderDigest, "--execution", identity.executionIdentity], { cwd, encoding: "utf8", env: gitFreeEnv() });
 };
+// A real DeltaPrePushReviewResult for ACT reviewed against baseline `head`.
+const deltaResultFor = (head, over = {}) => ({
+  reviewBaselineHead: head,
+  candidateHead: "c".repeat(40),
+  actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: ACT }).actSetId,
+  actionableItems: [{ ref: "act-1", status: "not_resolved", evidence: ["deref still unguarded"] }],
+  newFindings: [],
+  widenedReads: [],
+  outcome: "bounded_out",
+  ...over,
+});
 let clock = 1_790_000_000_000;
 const nextExecution = () => `f${clock++}-0000abcd`;
 
@@ -57,7 +69,7 @@ async function withFixture(fn) {
     const files = { actList: path.join(src, "act.json"), threads: path.join(src, "threads.json"), delta: path.join(src, "delta.json") };
     await writeFile(files.actList, JSON.stringify(ACT));
     await writeFile(files.threads, JSON.stringify(THREADS));
-    await writeFile(files.delta, JSON.stringify({ nextStep: "fix_and_rereview", items: [{ ref: 0, status: "not_resolved" }] }));
+    await writeFile(files.delta, JSON.stringify(deltaResultFor(head)));
     const emit = (over = {}) => emitFixerWorkOrder({
       repo: REPO, pr: PR, headSha: head, phase: "full", actListFile: files.actList, gate: "draft_gate", cwd: wt,
       fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), executionIdentity: nextExecution(), ...over,
@@ -83,6 +95,16 @@ test("F1: real act-list, threads and delta inputs resolve into the work order un
     assert.deepEqual(threads.workOrder.requiredReads.map((read) => read.kind), ["threads"]);
     assert.equal(threads.workOrder.gate, undefined);
     assert.deepEqual(threads.workOrder.mutationAuthority.allowedPaths, ["src", "test/a.test.mjs"]);
+  });
+});
+
+test("F1: a delta result that does not belong to this act list and head refuses before dispatch", async () => {
+  await withFixture(async ({ head, files, emit }) => {
+    await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
+    for (const bad of [deltaResultFor("b".repeat(40)), deltaResultFor(head, { actSetId: "0".repeat(16) }), { nextStep: "fix_and_rereview", items: [{ ref: 0, status: "not_resolved" }] }, ACT]) {
+      await writeFile(files.delta, JSON.stringify(bad));
+      await assert.rejects(emit({ deltaResult: files.delta }), /does not belong to this act list/, JSON.stringify(bad));
+    }
   });
 });
 
