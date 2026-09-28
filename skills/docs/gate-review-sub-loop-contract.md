@@ -1163,7 +1163,7 @@ ledger via `write-gate-findings-log.mjs --judge-verdict <path> --spec-authority 
 ledger and the posted findings comment show what was consciously not acted on and why
 (`GATE-EXEC-POST-BEFORE-FIX`'s single-surface verdict review renders the judge suffix).
 
-**Disposition memory into a re-running reviewer's briefing (issue 2175, issue 2528, ADR 0098).**
+**Disposition memory into a re-running reviewer's briefing (issue 2175, issue 2528, ADR 0109).**
 Every `write-gate-context.mjs` run discovers the closed prior rounds of the same gate on the
 PR by itself; no caller flag selects them. It reads every `<gate>-<sha>.json` findings-log
 ledger at a head other than `--head-sha` (checked in both prefix directions) from the
@@ -2325,7 +2325,7 @@ clock dependencies (`packages/core/test/review-lineage.test.mjs`). This artifact
 composition does not replace the runtime gate chain: Phase 1 rebuilds current-head
 context on every head bump, and each rebuild discovers the gate's closed prior
 rounds to seed cumulative advisory disposition memory for reviewers that re-run
-(ADR 0070, amended by ADR 0098).
+(ADR 0070, amended by ADR 0109).
 
 ### Artifact model
 

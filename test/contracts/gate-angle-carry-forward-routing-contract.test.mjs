@@ -61,7 +61,7 @@ const PHASE_2_ROUTING = [
   /`--carried-angles <json>`/,
 ];
 // The context rebuild discovers prior rounds itself; write-gate-context.mjs
-// has no --prev-head (issue 2528, ADR 0098).
+// has no --prev-head (issue 2528, ADR 0109).
 const PHASE_2_REBUILD_NO_PREV_HEAD = /`[^`]*--carried-angles[^`]*--prev-head[^`]*`/;
 
 // Phase 3 (Fan-in): --provenance belongs to the LEDGER WRITE, not the comment
