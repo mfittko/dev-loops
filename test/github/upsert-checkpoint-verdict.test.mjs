@@ -10492,9 +10492,9 @@ test("tick: a failed post-tick issue re-fetch cannot drop the unverified issue A
 test("clean guards give the ledger path (rerun the gate for verifiedItems) and the ledger-less path (tick with the CLI before posting)", async () => {
   const guidance = (message) => {
     assert.match(message, /verifiedItems of the acceptance-criteria and pr-checklist review angles/);
-    assert.match(message, /With a --findings-ledger, have those reviewers verify the satisfied items, or finish the remaining work, then rerun the gate/);
-    assert.match(message, /Without a --findings-ledger, tick the verified items with scripts\/github\/tick-verified-checkboxes\.mjs before posting/);
-    assert.match(message, /skills\/docs\/acceptance-criteria-verification\.md/);
+    assert.match(message, /When the ledger carries trusted verifiedItems from a fan-out round, have those reviewers verify the satisfied items, or finish the remaining work, then rerun the gate/);
+    assert.match(message, /Otherwise \(no ledger, an inline round, or a ledger without a fresh acceptance-criteria or pr-checklist review\), tick the verified items with scripts\/github\/tick-verified-checkboxes\.mjs before posting/);
+    assert.match(message, /step 5 of skills\/docs\/acceptance-criteria-verification\.md/);
     assert.doesNotMatch(message, /Tick the satisfied ACs in the tracker issue|Tick the verified boxes via/);
     return true;
   };
