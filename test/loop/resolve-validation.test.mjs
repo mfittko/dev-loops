@@ -73,7 +73,24 @@ test("failed full suite returns an unsuccessful public result and retains failur
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
-test("wrong installed Bun version returns incomplete and writes no complete artifact", async () => {
+async function assertTypedIncompleteArtifact(repoRoot, headSha, profile, reasonPattern) {
+  const artifactPath = buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" });
+  const artifact = JSON.parse(await readFile(path.join(repoRoot, artifactPath), "utf8"));
+  assert.equal(artifact.status, "incomplete");
+  assert.equal(artifact.ok, false);
+  assert.equal(artifact.allPassed, false);
+  assert.equal(artifact.repo, "owner/repo");
+  assert.equal(artifact.pr, 1);
+  assert.equal(artifact.gate, "draft_gate");
+  assert.equal(artifact.headSha, headSha);
+  assert.equal(artifact.profile, profile);
+  assert.match(artifact.reason, reasonPattern);
+  assert.ok(!Number.isNaN(Date.parse(artifact.generatedAt)));
+  assert.deepEqual(artifact.suites, []);
+  return artifactPath;
+}
+
+test("wrong installed Bun version returns incomplete and writes a typed incomplete artifact", async () => {
   const { repoRoot, headSha } = await fixture({}, "0.0.0");
   try {
     const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha)], { cwd: repoRoot });
@@ -83,8 +100,23 @@ test("wrong installed Bun version returns incomplete and writes no complete arti
     assert.equal(result.status, "incomplete");
     assert.match(result.reason, /differs from bun@0\.0\.0/);
     assert.equal(result.artifact, undefined);
-    const artifactPath = buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" });
-    await assert.rejects(readFile(path.join(repoRoot, artifactPath)), /ENOENT/);
+    const artifactPath = await assertTypedIncompleteArtifact(repoRoot, headSha, "full-repository", /differs from bun@0\.0\.0/);
+    assert.equal(result.artifactPath, artifactPath);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a repo without a pinned Bun writes a typed incomplete artifact at the requested head", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
+    delete packageJson.packageManager;
+    await writeFile(path.join(repoRoot, "package.json"), JSON.stringify(packageJson));
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "unpin bun"], { cwd: repoRoot });
+    const unpinnedHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation(parseResolveValidationArgs([...args(unpinnedHead, "targeted"), "--suite", "test:scripts"]), { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.ok, false);
+    await assertTypedIncompleteArtifact(repoRoot, unpinnedHead, "targeted", /does not pin an exact Bun version/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
@@ -133,7 +165,7 @@ test("both validation entrypoints reject a full alias with trailing arguments", 
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
-test("head and toolchain failures are typed incomplete, with no artifact", async () => {
+test("head and toolchain failures are typed incomplete", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
     const options = parseResolveValidationArgs(args(headSha));
@@ -144,6 +176,94 @@ test("head and toolchain failures are typed incomplete, with no artifact", async
     assert.equal(missingBun.status, "incomplete");
     assert.equal(missingBun.ok, false);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a worktree HEAD that differs from the requested head leaves no artifact", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const requestedHead = "a".repeat(40);
+    const artifactPath = path.join(repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: requestedHead, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(artifactPath), { recursive: true });
+    await writeFile(artifactPath, '{"allPassed":true}\n');
+    const result = await resolveValidation({ ...parseResolveValidationArgs(args(headSha)), headSha: requestedHead }, { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /differs from requested head/);
+    await assert.rejects(readFile(artifactPath), /ENOENT/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a head check that cannot confirm the requested head leaves no artifact", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "resolve-validation-unborn-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+    const requestedHead = "a".repeat(40);
+    const artifactPath = path.join(repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: requestedHead, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(artifactPath), { recursive: true });
+    await writeFile(artifactPath, '{"allPassed":true}\n');
+    const result = await resolveValidation({ ...parseResolveValidationArgs(args(requestedHead)), headSha: requestedHead }, { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.ok, false);
+    assert.equal(result.artifactPath, undefined);
+    await assert.rejects(readFile(artifactPath), /ENOENT/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("an exception after the head check confirms a clean requested head writes a typed incomplete artifact", async () => {
+  const { repoRoot } = await fixture();
+  try {
+    await writeFile(path.join(repoRoot, "package.json"), "{ not json");
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "invalid package.json"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation({ ...parseResolveValidationArgs(args(headSha)), headSha }, { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.ok, false);
+    await assertTypedIncompleteArtifact(repoRoot, headSha, "full-repository", /JSON/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a suite that moves HEAD before a later step throws leaves no artifact", async () => {
+  const { repoRoot } = await fixture();
+  try {
+    await writeFile(path.join(repoRoot, "scripts", "verify.mjs"), "import { execFileSync } from 'node:child_process'; import { rmSync } from 'node:fs'; execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'x']); rmSync('tmp', { recursive: true, force: true });\n");
+    execFileSync("git", ["add", "scripts/verify.mjs"], { cwd: repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "head mover that removes the log dir"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /ENOENT/);
+    assert.equal(result.artifactPath, undefined);
+    const artifactPath = path.join(repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    await assert.rejects(readFile(artifactPath), /ENOENT/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a HEAD move during the complete artifact write removes the artifact", async () => {
+  const { repoRoot, headSha } = await fixture();
+  const shimDir = await mkdtemp(path.join(os.tmpdir(), "resolve-validation-git-shim-"));
+  try {
+    // The third `git rev-parse HEAD` is the post-write check: report a moved HEAD there.
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const counter = path.join(shimDir, "count");
+    await writeFile(path.join(shimDir, "git"), [
+      "#!/bin/sh",
+      `if [ "$1" = rev-parse ] && [ "$2" = HEAD ]; then`,
+      `  n=$(( $(cat '${counter}' 2>/dev/null || echo 0) + 1 )); echo $n > '${counter}'`,
+      `  if [ $n -ge 3 ]; then echo ${"b".repeat(40)}; exit 0; fi`,
+      "fi",
+      `exec '${realGit}' "$@"`,
+      "",
+    ].join("\n"), { mode: 0o755 });
+    const env = { ...process.env, PATH: `${shimDir}${path.delimiter}${process.env.PATH}` };
+    const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot, env });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /moved during the artifact write/);
+    assert.equal(result.artifactPath, undefined);
+    const artifactPath = path.join(repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    await assert.rejects(readFile(artifactPath), /ENOENT/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(shimDir, { recursive: true, force: true });
+  }
 });
 
 test("targeted profile rejects a full suite and allows an exact targeted script", async () => {
@@ -158,7 +278,7 @@ test("targeted profile rejects a full suite and allows an exact targeted script"
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
-test("incomplete resolution removes earlier same-head validation evidence", async () => {
+test("incomplete resolution replaces earlier same-head passing evidence with a typed incomplete artifact", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
     const options = parseResolveValidationArgs(args(headSha));
@@ -168,7 +288,7 @@ test("incomplete resolution removes earlier same-head validation evidence", asyn
     assert.equal(JSON.parse(await readFile(stalePath, "utf8")).allPassed, true);
     const incomplete = await resolveValidation({ ...options, profile: "targeted" }, { repoRoot });
     assert.equal(incomplete.status, "incomplete");
-    await assert.rejects(readFile(stalePath), /ENOENT/);
+    await assertTypedIncompleteArtifact(repoRoot, headSha, "targeted", /targeted profile cannot run full-repository/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
@@ -208,16 +328,18 @@ test("parse failure cannot remove a validation artifact outside the repo", async
   const { repoRoot, headSha } = await fixture();
   const externalRoot = await mkdtemp(path.join(os.tmpdir(), "external-validation-"));
   try {
-    const tmpRoot = path.relative(repoRoot, externalRoot);
-    const artifactPath = path.resolve(repoRoot, buildValidationResultsPath({
-      repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot,
-    }));
-    await mkdir(path.dirname(artifactPath), { recursive: true });
-    await writeFile(artifactPath, '{"allPassed":true}\n');
-    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha, "targeted"), "--tmp-root", tmpRoot], { cwd: repoRoot });
-    assert.equal(out.code, 1);
-    assert.equal(JSON.parse(out.stdout).status, "incomplete");
-    assert.equal(JSON.parse(await readFile(artifactPath, "utf8")).allPassed, true);
+    // Relative escape and absolute relocated root: both resolve outside the checkout.
+    for (const tmpRoot of [path.relative(repoRoot, externalRoot), externalRoot]) {
+      const artifactPath = path.resolve(repoRoot, buildValidationResultsPath({
+        repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot,
+      }));
+      await mkdir(path.dirname(artifactPath), { recursive: true });
+      await writeFile(artifactPath, '{"allPassed":true}\n');
+      const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha, "targeted"), "--tmp-root", tmpRoot], { cwd: repoRoot });
+      assert.equal(out.code, 1);
+      assert.equal(JSON.parse(out.stdout).status, "incomplete");
+      assert.equal(JSON.parse(await readFile(artifactPath, "utf8")).allPassed, true);
+    }
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
     await rm(externalRoot, { recursive: true, force: true });
@@ -247,5 +369,21 @@ test("suite changes to tracked files leave typed incomplete evidence and no comp
     assert.equal(result.status, "incomplete");
     assert.match(result.reason, /changed the worktree/);
     assert.equal(result.artifact, undefined);
+    await assertTypedIncompleteArtifact(repoRoot, headSha, "full-repository", /changed the worktree/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a suite that moves HEAD leaves no artifact", async () => {
+  const { repoRoot } = await fixture();
+  try {
+    await writeFile(path.join(repoRoot, "scripts", "verify.mjs"), "import { execFileSync } from 'node:child_process'; execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'x']);\n");
+    execFileSync("git", ["add", "scripts/verify.mjs"], { cwd: repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "head mover"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /changed the worktree: worktree HEAD .* differs from requested head/);
+    const artifactPath = path.join(repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    await assert.rejects(readFile(artifactPath), /ENOENT/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });

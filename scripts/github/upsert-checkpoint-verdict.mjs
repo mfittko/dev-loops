@@ -54,6 +54,8 @@ import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority"
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
+import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
+import { buildValidationResultsPath } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -408,6 +410,12 @@ Optional:
                                             helper. Never changes the rendered comment
                                             body. Pure no-op (result carries no
                                             specAuthority field) when absent.
+  --context-tmp-root <path>                 Root tmp directory holding this round's
+                                            gate-context bundle, including the
+                                            <gate>-<head>.validation.json artifact a
+                                            fanout_fanin verdict requires. Default:
+                                            tmp. When resolve-validation.mjs used an
+                                            explicit --tmp-root, pass that same path.
 Output (stdout, JSON):
   {
     "ok": true,
@@ -641,6 +649,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       auto: { type: "boolean" },
       "interactive-confirm": { type: "boolean" },
       "spec-authority": { type: "string" },
+      "context-tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -670,6 +679,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     auto: false,
     interactiveConfirm: false,
     specAuthority: undefined,
+    contextTmpRoot: undefined,
     jq: undefined,
     silent: false,
   };
@@ -831,6 +841,11 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     }
     if (token.name === "spec-authority") {
       options.specAuthority = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "context-tmp-root") {
+      options.contextTmpRoot = requireTokenValue(token, parseError).trim();
+      if (options.contextTmpRoot.length === 0) throw parseError("--context-tmp-root requires a non-empty path");
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -2298,6 +2313,45 @@ async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = def
   }
 }
 
+/**
+ * Refuse a fanout_fanin verdict unless `run-gate-validation.mjs`'s artifact
+ * (`<gate>-<headSha>.validation.json`) exists for the reviewed head in any
+ * checkout of this repo, parses, and is stamped with that head. Throws a
+ * message naming the artifact path and `run-gate-validation.mjs`. A typed
+ * incomplete artifact (`status: "incomplete"`, `allPassed: false`) passes this
+ * check: it proves the round resolved its validation, and reviewers already
+ * report it as incomplete evidence.
+ */
+export async function assertGateValidationArtifact({ repo, pr, gate, headSha, repoRoot, contextTmpRoot }) {
+  const relPath = buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot: contextTmpRoot || "tmp" });
+  const expectedHead = String(headSha).toLowerCase();
+  let problem = "is absent";
+  for (const root of resolveLedgerCheckouts(repoRoot)) {
+    let raw;
+    try {
+      raw = await readFile(path.resolve(root, relPath), "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      problem = `is unreadable (${error instanceof Error ? error.message : String(error)})`;
+      continue;
+    }
+    let artifact;
+    try {
+      artifact = JSON.parse(raw);
+    } catch {
+      problem = "is unreadable (not valid JSON)";
+      continue;
+    }
+    const stamped = typeof artifact?.headSha === "string" ? artifact.headSha.toLowerCase() : null;
+    if (stamped === expectedHead) return;
+    problem = `is stamped with head ${stamped ?? "(none)"}, not the reviewed head ${expectedHead}`;
+  }
+  throw new Error(
+    `Cannot post a fanout_fanin verdict for ${repo}#${pr} ${gate}: the validation artifact ${relPath} ${problem}. `
+    + `Resolve the round's validation once before dispatching reviewers with dev-loops gate resolve-validation --profile <targeted|full-repository> --repo ${repo} --pr ${pr} --gate ${gate} --head-sha ${headSha} [--suite <name>]..., which writes this artifact through run-gate-validation.mjs. If the round resolved validation under an explicit --tmp-root, pass that path as --context-tmp-root instead of re-running (GATE-EXEC-VALIDATION-RESOLUTION).`,
+  );
+}
+
 export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
   // Optional --spec-authority stamps the RETURNED result (this script's
@@ -3019,6 +3073,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         + `Write it with write-gate-findings-log.mjs (from consolidate-fanin.mjs's --ledger-out) before posting the verdict.`,
       );
     }
+    // GATE-EXEC-VALIDATION-RESOLUTION enforcement: the round must have run
+    // run-gate-validation.mjs once for the reviewed head. Same opt-out and
+    // placement as the ledger refusal above, so its message wins when both fire.
+    await assertGateValidationArtifact({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, repoRoot, contextTmpRoot: options.contextTmpRoot });
   }
   // FINDINGS-SOURCE FOOTGUN WARNING: a fanout_fanin round posted with
   // --findings-json but no --findings-ledger silently files ZERO inline

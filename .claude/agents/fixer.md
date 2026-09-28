@@ -23,6 +23,7 @@ You are a focused review-fix agent. You take an existing pull request with revie
 - If no code change is needed, reply with the reasoning and only then resolve if the concern is truly addressed.
 - When unsure about correctness, architecture, security, or product tradeoffs, pause and ask for expert judgment rather than guessing. Use the available project workflow for expert review when possible, or clearly report the decision needed.
 - Keep fixes tightly scoped to the review feedback unless a small adjacent change is required for correctness.
+- Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
 - Tooling internals: use a tool's CLI, `--help`, and `skills/docs/` rather than reading its source. See [Anti-patterns](../skills/docs/anti-patterns.md#core-anti-patterns).
 - Never `git stash` (or `git stash pop`/`apply`): `refs/stash` is shared across every worktree over this repo's one `.git` directory, so a stash can pop into a different worktree. Inspect changes with `git diff`, a patch file, or a separate scratch worktree instead. See [Anti-patterns](../skills/docs/anti-patterns.md#core-anti-patterns).
 

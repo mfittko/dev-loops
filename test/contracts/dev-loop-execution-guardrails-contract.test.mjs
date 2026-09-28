@@ -55,7 +55,7 @@ test("dev-loop SKILL enforces bounded Copilot/CI watch (#1660)", async () => {
     /dev-loops gate probe-copilot --timeout-ms 300000/,
     "the bounded-watch guardrail should name the bounded probe invocation",
   );
-  assert.match(skill, /timeout 600 <cmd>/);
+  assert.match(skill, /timeout 540 <cmd>/);
   // Prior-stall anecdotes and wording cannot prove the timeout policy.
   // probe-copilot-review/run-watch-cycle tests cover executable timeout behavior.
 

@@ -145,6 +145,14 @@
       "id": "COPILOT-STATE-WATCH-PERSISTENCE"
     },
     {
+      "id": "DEV-LOOP-PROBE-TIMEOUT-CEILING",
+      "enforcement": "doc"
+    },
+    {
+      "id": "DEV-LOOP-RUNNER-STOP-CONDITIONS",
+      "enforcement": "doc"
+    },
+    {
       "id": "END-TURN-AND-AWAIT-WAKE",
       "enforcement": "doc"
     },
@@ -265,6 +273,10 @@
     {
       "id": "GATE-EXEC-ARTIFACT-HEAD-STAMP",
       "enforcement": "runtime"
+    },
+    {
+      "id": "GATE-EXEC-BASE-REFRESH",
+      "enforcement": "doc"
     },
     {
       "id": "GATE-EXEC-BLOCKING-ONLY-FIX"
@@ -462,6 +474,10 @@
       "id": "LIFECYCLE-FAIL-CLOSED"
     },
     {
+      "id": "LIFECYCLE-NO-PRIVATE-REPO-NAMES",
+      "enforcement": "doc"
+    },
+    {
       "id": "LIFECYCLE-ONE-STATE"
     },
     {
@@ -540,6 +556,10 @@
     },
     {
       "id": "MERGE-PRECOND-REQUIRED-CONTEXT-IS-STATUS",
+      "enforcement": "doc"
+    },
+    {
+      "id": "MERGE-POSTMERGE-FULL-SHA-REPORT",
       "enforcement": "doc"
     },
     {
@@ -929,6 +949,14 @@
       "id": "WORKTREE-NO-STASH",
       "enforcement": "agent",
       "enforcementNote": "Agent discipline across harnesses; the Claude PreToolUse Bash gate additionally refuses git stash."
+    },
+    {
+      "id": "WORKTREE-NONINTERACTIVE-FILE-OPS",
+      "enforcement": "doc"
+    },
+    {
+      "id": "WORKTREE-SCRIPT-LAUNCHER-CWD",
+      "enforcement": "doc"
     },
     {
       "id": "WORKTREE-WRONG-CHECKOUT-GUARD",

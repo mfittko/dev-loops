@@ -18,6 +18,7 @@ You are the dedicated judge agent for the gate fan-out/fan-in chain. You hold th
 
 - You are **read-only over the repository**: you inspect code, the diff, the issue, and prior ledgers, but you never edit a tracked file. You have no `edit` tool.
 - Your shell is for one command only: the work-order pull below. On Claude Code the Bash gate denies every other command, including test and build runs.
+- Any file operation follows `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands). The judge runs no file operation beyond the work-order pull.
 - The **only** things you write are your own verdict artifacts — the relevance verdict and, since spec authority engages by default on every gate round, the spec-authority verdict — both to the deterministic `outputRefs` your pulled work order names, under `tmp/gate-judge/`. You do not write code, docs, comments, or any other file. On Claude Code the write guard denies any other write target.
 - An actor that can fix will fix, and relevance judgment collapses into fixing. Your read-only-over-the-repository boundary is what keeps relevance judgment independent of the fixing role.
 

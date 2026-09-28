@@ -7,6 +7,7 @@ import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, withTempDir, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
+  assertGateValidationArtifact,
   buildCoordinationEvaluatorInput,
   buildInlineExecutionWarning,
   collectPreApprovalGateBlockers,
@@ -22,6 +23,7 @@ import {
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, detectCheckpointEvidence, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
+import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
 // #1592: several fixtures below deliberately keep pre-rename severity
@@ -6921,7 +6923,87 @@ async function stageDurableLedger(repoRoot, { repo = "owner/repo", pr = 17, gate
   const ledgerPath = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: "tmp" }));
   await mkdir(path.dirname(ledgerPath), { recursive: true });
   await writeFile(ledgerPath, JSON.stringify({ repo, pr, gate, headSha, verdict, findings }), "utf8");
+  // A fanout_fanin round also needs run-gate-validation.mjs's artifact for the head.
+  await stageValidationArtifact(repoRoot, { repo, pr, gate, headSha });
   return ledgerPath;
+}
+
+// Stage run-gate-validation.mjs's artifact at the path assertGateValidationArtifact
+// resolves. `stampedHead` overrides the recorded head; `raw` writes bytes verbatim.
+async function stageValidationArtifact(repoRoot, { repo = "owner/repo", pr = 17, gate = "draft_gate", headSha, stampedHead = headSha, raw }) {
+  const artifactPath = path.resolve(repoRoot, buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot: "tmp" }));
+  await mkdir(path.dirname(artifactPath), { recursive: true });
+  await writeFile(artifactPath, raw ?? JSON.stringify({ ok: true, repo, pr, gate, headSha: stampedHead, allPassed: true, suites: [] }), "utf8");
+  return artifactPath;
+}
+
+{
+  const VALIDATION_HEAD = "abc1234000000000000000000000000000000000";
+  const args = (repoRoot) => ({ repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: VALIDATION_HEAD, repoRoot });
+  const refusal = /validation artifact tmp\/gate-context\/owner-repo\/pr-17\/pre_approval_gate-abc1234000000000000000000000000000000000\.validation\.json .*run-gate-validation\.mjs/s;
+
+  test("assertGateValidationArtifact refuses when the artifact is absent", async () => {
+    await withTempDir(async (tempDir) => {
+      await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");
+      await assert.rejects(assertGateValidationArtifact(args(tempDir)), (error) => refusal.test(error.message) && /is absent/.test(error.message));
+    });
+  });
+
+  test("assertGateValidationArtifact refuses when the artifact is unreadable", async () => {
+    await withTempDir(async (tempDir) => {
+      await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");
+      await stageValidationArtifact(tempDir, { gate: "pre_approval_gate", headSha: VALIDATION_HEAD, raw: "{not json" });
+      await assert.rejects(assertGateValidationArtifact(args(tempDir)), (error) => refusal.test(error.message) && /is unreadable/.test(error.message));
+    });
+  });
+
+  test("assertGateValidationArtifact refuses when the artifact is stamped with another head", async () => {
+    await withTempDir(async (tempDir) => {
+      await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");
+      await stageValidationArtifact(tempDir, { gate: "pre_approval_gate", headSha: VALIDATION_HEAD, stampedHead: "b".repeat(40) });
+      await assert.rejects(assertGateValidationArtifact(args(tempDir)), (error) => refusal.test(error.message) && /stamped with head b{40}/.test(error.message));
+    });
+  });
+
+  test("assertGateValidationArtifact passes when a matching artifact is present", async () => {
+    await withTempDir(async (tempDir) => {
+      await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");
+      await stageValidationArtifact(tempDir, { gate: "pre_approval_gate", headSha: VALIDATION_HEAD });
+      await assertGateValidationArtifact(args(tempDir));
+    });
+  });
+
+  test("assertGateValidationArtifact accepts a typed incomplete artifact stamped with the reviewed head", async () => {
+    await withTempDir(async (tempDir) => {
+      await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");
+      await stageValidationArtifact(tempDir, {
+        gate: "pre_approval_gate", headSha: VALIDATION_HEAD,
+        raw: JSON.stringify({
+          ok: false, status: "incomplete", allPassed: false, repo: "owner/repo", pr: 17, gate: "pre_approval_gate",
+          headSha: VALIDATION_HEAD, profile: "targeted", reason: "packageManager does not pin an exact Bun version",
+          generatedAt: "2026-09-28T00:00:00.000Z", suites: [],
+        }),
+      });
+      await assertGateValidationArtifact(args(tempDir));
+    });
+  });
+
+  test("assertGateValidationArtifact reads a non-default --context-tmp-root and refuses it without the option", async () => {
+    await withTempDir(async (tempDir) => {
+      await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");
+      const artifactPath = path.resolve(tempDir, buildValidationResultsPath({ repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: VALIDATION_HEAD, tmpRoot: "alt-tmp" }));
+      await mkdir(path.dirname(artifactPath), { recursive: true });
+      await writeFile(artifactPath, JSON.stringify({ ok: true, headSha: VALIDATION_HEAD, allPassed: true, suites: [] }), "utf8");
+      await assertGateValidationArtifact({ ...args(tempDir), contextTmpRoot: "alt-tmp" });
+      await assert.rejects(assertGateValidationArtifact(args(tempDir)), (error) => refusal.test(error.message) && /is absent/.test(error.message));
+    });
+  });
+
+  test("parseUpsertCheckpointVerdictCliArgs reads --context-tmp-root and rejects an empty value", () => {
+    const required = ["--repo", "owner/repo", "--pr", "17", "--head-sha", VALIDATION_HEAD, "--verdict", "clean", "--findings-summary", "none", "--next-action", "merge", "--execution-mode", "fanout_fanin"];
+    assert.equal(parseUpsertCheckpointVerdictCliArgs([...required, "--context-tmp-root", "alt-tmp"]).contextTmpRoot, "alt-tmp");
+    assert.throws(() => parseUpsertCheckpointVerdictCliArgs(["--context-tmp-root", " "]), /--context-tmp-root requires a non-empty path/);
+  });
 }
 
 // Two-arm guard: a requireFanoutEvidence fanout_fanin verdict-post is REFUSED
@@ -6986,6 +7068,32 @@ test("upsert-checkpoint-verdict ACCEPTS a requireFanoutEvidence fanout_fanin ver
     assert.equal(result.code, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).executionMode, "fanout_fanin");
   }, { prefix: "dev-loops-upsert-postgate-fanout-accept-" });
+});
+
+test("upsert-checkpoint-verdict REFUSES a fanout_fanin verdict when the ledger exists but the validation artifact is absent", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    await stageDurableLedger(tempDir, { headSha: POSTGATE_FANOUT_HEAD });
+    await rm(path.resolve(tempDir, buildValidationResultsPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: POSTGATE_FANOUT_HEAD, tmpRoot: "tmp" })));
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+    ]), "utf8");
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", POSTGATE_FANOUT_HEAD,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-json", findingsPath, "--next-action", "mark ready for review",
+      "--execution-mode", "fanout_fanin",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 1, result.stderr);
+    const payload = JSON.parse(result.stderr);
+    assert.match(payload.error, /validation artifact .*draft_gate-abc1234000000000000000000000000000000000\.validation\.json is absent/);
+    assert.match(payload.error, /run-gate-validation\.mjs/);
+  }, { prefix: "dev-loops-upsert-postgate-validation-refuse-" });
 });
 
 test("upsert-checkpoint-verdict posts an inline verdict without restriction when requireFanoutEvidence is false", async () => {
