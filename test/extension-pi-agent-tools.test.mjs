@@ -505,3 +505,18 @@ test("project-agent sync tolerates the symlink disappearing before replacement",
   finally { fs.lstatSync = lstatSync; }
   assert.equal((await lstat(agentsDir)).isDirectory(), true);
 });
+
+test("renderPiAgent keeps a nested experimental map verbatim while rewriting tools", () => {
+  const raw = `---
+name: "x"
+tools: read, search
+experimental:
+  cacheTtl: 1h
+---
+
+body
+`;
+  const rendered = renderPiAgent(raw);
+  assert.match(rendered, /\nexperimental:\n  cacheTtl: 1h\n---\n/);
+  assert.equal(rendered.match(/^tools:\s*(.*)$/m)[1], "read, bash");
+});

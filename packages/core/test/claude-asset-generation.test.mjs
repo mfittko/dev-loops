@@ -240,3 +240,12 @@ test("transformAgent honors a config override for the generated model frontmatte
   const review = transformAgent({ source: "agents/review.agent.md", raw: agentSrcFor("review"), config });
   assert.equal(review.includes("model:"), false, "review demoted to inherit omits the field");
 });
+
+test("transformAgent passes the nested experimental map through to Claude frontmatter", () => {
+  const raw = `---\nname: "dev-loop"\ntools: read\nexperimental:\n  cacheTtl: 1h\n---\n\nbody\n`;
+  const out = transformAgent({ source: "agents/dev-loop.agent.md", raw });
+  assert.match(out, /\nexperimental:\n  cacheTtl: "1h"\n---\n/);
+  assert.deepEqual(splitFrontmatter(out).frontmatter.experimental, { cacheTtl: "1h" });
+  const plain = transformAgent({ source: "agents/developer.agent.md", raw: agentSrcFor("developer") });
+  assert.equal(plain.includes("experimental:"), false, "agents without the map emit no experimental key");
+});

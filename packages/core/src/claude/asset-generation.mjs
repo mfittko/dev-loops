@@ -266,6 +266,17 @@ export function transformAgent({ source, raw, version = "latest", config = {} })
     // JSON string literals are valid YAML double-quoted scalars.
     lines.push(`model: ${JSON.stringify(model)}`);
   }
+  // Claude Code reads the nested `experimental` map (e.g. `cacheTtl`); pass its scalars through.
+  const experimental = frontmatter.experimental;
+  if (experimental && typeof experimental === "object" && !Array.isArray(experimental)) {
+    const entries = Object.entries(experimental).filter(([, value]) => value == null || typeof value !== "object");
+    if (entries.length > 0) {
+      lines.push("experimental:");
+      for (const [key, value] of entries) {
+        lines.push(`  ${key}: ${JSON.stringify(value)}`);
+      }
+    }
+  }
   lines.push("---");
   lines.push(GENERATED_NOTE(source));
   lines.push("");
