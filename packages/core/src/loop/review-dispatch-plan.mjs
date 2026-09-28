@@ -780,7 +780,10 @@ export function matchesDiffExcludeGlob(relPath, pattern) {
  * Classify why a diff file is excluded from the filtered diff, or `null`
  * when it is kept. Checks {@link DEFAULT_DIFF_EXCLUDE_GLOBS} first, then
  * any caller-supplied `excludeGlobs` — the default set can never be
- * disabled by a caller's config.
+ * disabled by a caller's config. The dev-loop config files (`.devloops`,
+ * `.pi/dev-loop/**`) are never excluded as `configured`: the globs load from
+ * the reviewed head, so a PR that widens them keeps that config edit in the
+ * filtered diff (fail closed).
  * @param {string} relPath
  * @param {{ excludeGlobs?: string[] }} [opts]
  * @returns {"default"|"configured"|null}
@@ -790,6 +793,7 @@ export function classifyDiffFileExclusion(relPath, { excludeGlobs = [] } = {}) {
   for (const pattern of DEFAULT_DIFF_EXCLUDE_GLOBS) {
     if (matchesDiffExcludeGlob(posix, pattern)) return "default";
   }
+  if (posix === ".devloops" || posix.startsWith(".pi/dev-loop/")) return null;
   for (const pattern of excludeGlobs) {
     if (matchesDiffExcludeGlob(posix, pattern)) return "configured";
   }
