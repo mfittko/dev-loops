@@ -1183,7 +1183,8 @@ export function extractFixerGitInvocations(command) {
 }
 
 // `git` as a whole word or path segment (`/usr/bin/git`), never `.git`, `github` or `git-lfs`.
-const GIT_WORD_RE = /(?:^|[^\w.-])git(?![\w.-])/;
+// Case-insensitive: a case-insensitive filesystem (macOS APFS) runs `GIT`/`Git` as git.
+const GIT_WORD_RE = /(?:^|[^\w.-])git(?![\w.-])/i;
 const FIXER_GIT_READ_ONLY = new Set(["status", "diff", "log", "show", "rev-parse", "ls-files", "merge-base", "grep", "blame"]);
 const DIR_MOVE_WORDS = new Set(["cd", "pushd", "popd"]);
 const REDIRECT_RE = /^\d*(?:[<>]|&>)/;

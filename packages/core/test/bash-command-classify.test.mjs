@@ -1179,6 +1179,7 @@ test("extractFixerGitInvocations allows only the plain git allowlist and denies 
     "\\git commit -m x", "'git' push origin x", "/usr/bin/git push origin x", "env -C /o git push origin x", "env --chdir=/o git commit -m x",
     "GIT_DIR=/o/.git git commit -m x", "export GIT_WORK_TREE=/o; git push origin x", "nice git push origin x", "command git push origin x",
     "find . -execdir git commit -m x ;", "git commit -m git",
+    "GIT -C /main cherry-pick abc", "Git push origin main", "/usr/bin/GIT push origin x",
     // Anything outside a plain `&&`/`;` chain with head-only literal `cd`.
     "git push origin x 2>&1 | tail -5", "git commit -m \"$(cat <<'EOF'\nx\nEOF\n)\"", "git commit -F - <<EOF", "git push origin x # note",
     "git commit -m 'unterminated", "git commit -m `pwd`", "git commit -m x <(cd /o)", "sh -c 'git push'", "'sh' -c 'git push'",
