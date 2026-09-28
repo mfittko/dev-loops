@@ -298,7 +298,7 @@ test("info.mjs --pr produces human-readable output with gh stubs", async () => {
 // classifyBenignGateEvidenceUnstable; these integration cases exercise both the
 // wiring (statusCheckRollup requested + forwarded) and the UNSTABLE branch.
 // `rules` answers GET repos/<repo>/rules/branches/main; null makes the call fail.
-async function runPrInfoWithRollup(mergeStateStatus, statusCheckRollup, rules = []) {
+async function runPrInfoWithRollup(mergeStateStatus, statusCheckRollup, rules = [], extraArgs = []) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "info-test-unstable-"));
   const repoSlug = "test-owner/test-repo";
   const prNumber = 42;
@@ -335,7 +335,7 @@ async function runPrInfoWithRollup(mergeStateStatus, statusCheckRollup, rules = 
   await writeFile(ghPath, ghScript);
   await import("fs").then(fs => fs.promises.chmod(ghPath, 0o755));
   try {
-    const { code, stdout, stderr } = await runNode(["--pr", String(prNumber), "--repo", repoSlug], {
+    const { code, stdout, stderr } = await runNode(["--pr", String(prNumber), "--repo", repoSlug, ...extraArgs], {
       env: { ...process.env, PATH: `${tmpDir}:${process.env.PATH}` },
       cwd: tmpDir,
     });
@@ -391,6 +391,17 @@ test("summarizeBranchRules names the extra approval for unattributed changes onl
   assert.match(approvals[0], /extra approval for unattributed changes/);
   const withoutExtra = [{ type: "pull_request", parameters: { required_approving_review_count: 0 } }];
   assert.deepEqual(summarizeBranchRules(withoutExtra, []).operatorApprovals, []);
+});
+
+test("summarizeBranchRules omits a count-based approval the PR already satisfies", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const rules = [{ type: "pull_request", parameters: { required_approving_review_count: 2, require_extra_approval_for_unattributed_changes: true } }];
+  const pending = summarizeBranchRules(rules, [], "REVIEW_REQUIRED").operatorApprovals;
+  assert.equal(pending.length, 2);
+  assert.match(pending[0], /requires 2 approving review\(s\)/);
+  const approved = summarizeBranchRules(rules, [], "APPROVED").operatorApprovals;
+  assert.equal(approved.length, 1);
+  assert.match(approved[0], /extra approval for unattributed changes/);
 });
 
 test("summarizeBranchRules reports an unresolved ruleset lookup", async () => {
@@ -474,6 +485,17 @@ test("info.mjs --pr names a missing ruleset-required check and the operator appr
   assert.doesNotMatch(stdout, /CI success/);
   assert.doesNotMatch(stdout, /✅ MERGEABLE/);
   assert.match(stdout, /Operator blocker: .*extra approval for unattributed changes/);
+});
+
+test("info.mjs --pr --json emits the branchRules projection", async () => {
+  const resolved = await runPrInfoWithRollup("BLOCKED", GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, MAIN_RULESET, ["--json"]);
+  assert.equal(resolved.code, 0);
+  const { branchRules } = JSON.parse(resolved.stdout);
+  assert.equal(branchRules.resolved, true);
+  assert.deepEqual(branchRules.missingRequiredChecks, ["gate-evidence"]);
+  const failed = await runPrInfoWithRollup("CLEAN", GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, null, ["--json"]);
+  assert.equal(failed.code, 0);
+  assert.equal(JSON.parse(failed.stdout).branchRules.resolved, false);
 });
 
 test("info.mjs --pr renders no Operator blocker line when the merge state is not BLOCKED", async () => {

@@ -6,7 +6,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { runContextEnv } from "@dev-loops/core/loop/run-context";
-import { classifyBenignGateEvidenceUnstable, normalizeStatusCheckRollupStatus } from "@dev-loops/core/loop/copilot-ci-status";
+import { classifyBenignGateEvidenceUnstable, normalizeStatusCheckRollupStatus, partitionEntriesByCheckName } from "@dev-loops/core/loop/copilot-ci-status";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -118,8 +118,10 @@ function formatCiDisplay(ciStatus, ciConclusion) {
  * A required check is missing when no rollup entry carries its name (CheckRun
  * `name` or StatusContext `context`); a reported one is pending or failed by
  * its entry state.
+ * A count-based approval requirement is omitted when `reviewDecision` is
+ * APPROVED, so a satisfied count never reads as an outstanding blocker.
  */
-export function summarizeBranchRules(rules, statusCheckRollup) {
+export function summarizeBranchRules(rules, statusCheckRollup, reviewDecision = null) {
   if (!Array.isArray(rules)) {
     return { resolved: false, missingRequiredChecks: [], pendingRequiredChecks: [], failedRequiredChecks: [], operatorApprovals: [] };
   }
@@ -132,7 +134,7 @@ export function summarizeBranchRules(rules, statusCheckRollup) {
   const operatorApprovals = [];
   for (const rule of rules.filter((r) => r?.type === "pull_request")) {
     const count = rule.parameters?.required_approving_review_count ?? 0;
-    if (count > 0) {
+    if (count > 0 && reviewDecision !== "APPROVED") {
       operatorApprovals.push(`ruleset requires ${count} approving review(s)`);
     }
     if (rule.parameters?.require_extra_approval_for_unattributed_changes === true) {
@@ -143,7 +145,7 @@ export function summarizeBranchRules(rules, statusCheckRollup) {
   const pendingRequiredChecks = [];
   const failedRequiredChecks = [];
   for (const context of new Set(required)) {
-    const entries = rollup.filter((entry) => entry.name === context || entry.context === context);
+    const entries = partitionEntriesByCheckName(rollup, context).matched;
     if (entries.length === 0) {
       missingRequiredChecks.push(context);
       continue;
@@ -312,8 +314,8 @@ function formatIssueSummary(issueData, startupBundle, linkedPrData) {
 }
 
 function buildPrInfo(prNumber, repo, cwd) {
-  const prData = ghJson(["pr", "view", String(prNumber), "--repo", repo, "--json", "number,title,body,state,isDraft,headRefName,headRefOid,baseRefName,author,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,url,reviewRequests"], cwd);
-  
+  const prData = ghJson(["pr", "view", String(prNumber), "--repo", repo, "--json", "number,title,body,state,isDraft,headRefName,headRefOid,baseRefName,author,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,url,reviewRequests,reviewDecision"], cwd);
+
   let handoffResult = null;
   try {
     const handoffScript = path.join(REPO_ROOT, "scripts/loop/copilot-pr-handoff.mjs");
@@ -335,7 +337,7 @@ function buildPrInfo(prNumber, repo, cwd) {
     } catch {
       rules = null;
     }
-    branchRules = summarizeBranchRules(rules, prData.statusCheckRollup);
+    branchRules = summarizeBranchRules(rules, prData.statusCheckRollup, prData.reviewDecision);
   }
 
   return { prData, handoffResult, branchRules };

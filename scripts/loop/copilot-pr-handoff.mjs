@@ -786,7 +786,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       const carried = markerCarry.carried ? markerCarry : await resolveCarriedConvergence(carryFacts, runtime);
       if (carried.carried) {
         const { source, sourceReviewId, sourceHeadSha, reason, bodyDisposition } = carried;
-        carriedConvergence = { source,sourceReviewId, sourceHeadSha, reason, bodyDisposition };
+        carriedConvergence = { source, sourceReviewId, sourceHeadSha, reason, bodyDisposition };
         interpretation = toPostConvergenceSuppressed(interpretation);
       }
     }

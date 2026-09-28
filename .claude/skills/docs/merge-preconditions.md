@@ -21,7 +21,12 @@ before requesting CI/Copilot, and again before merge.
   beside it. A `BLOCKED` merge state never renders as mergeable: it names the
   missing, pending, or failed required checks and ruleset approvals it knows,
   and each approval also renders as an `Operator blocker:` line. A failed rules
-  lookup renders `INCOMPLETE` instead of a mergeable claim.
+  lookup renders `INCOMPLETE` instead of a mergeable claim. A count-based
+  approval requirement is omitted when the PR `reviewDecision` is `APPROVED`.
+  `loop info --pr --json` carries the same projection as a top-level
+  `branchRules` object with keys `resolved`, `missingRequiredChecks`,
+  `pendingRequiredChecks`, `failedRequiredChecks`, and `operatorApprovals`; it
+  is `null` for a PR that is not `OPEN`.
 
 ### Deterministic auto-resolve (additive CHANGELOG only)
 
