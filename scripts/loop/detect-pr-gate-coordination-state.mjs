@@ -651,6 +651,8 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       source: a.source,
       acItems: unionAc.length > 0 ? unionAc : a.acItems,
       uncheckedAcItems: unionUnchecked,
+      // The fetched issues whose unticked AC items fed uncheckedAcItems.
+      uncheckedAcIssues: evaluated.filter((e) => (e.artifact?.uncheckedAcItems?.length ?? 0) > 0).map((e) => e.issue),
       dodItems: unionDod.length > 0 ? unionDod : a.dodItems,
       ...prBodyUncheckedFields,
       sections: a.sections,

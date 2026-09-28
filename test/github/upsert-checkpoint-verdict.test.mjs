@@ -9014,7 +9014,7 @@ test("normalizeStructuredFindings aliases the legacy severity so no posted body 
 
 const VERDICT_LEDGER_HEAD = "abc1234000000000000000000000000000000000";
 
-async function writeVerdictLedger(tempDir, { overallVerdict, verdict, findings = [], gate = "draft_gate" }) {
+async function writeVerdictLedger(tempDir, { overallVerdict, verdict, findings = [], gate = "draft_gate", verifiedItems, provenance }) {
   const ledgerPath = path.join(tempDir, "verdict-ledger.json");
   const log = {
     repo: "owner/repo",
@@ -9027,6 +9027,12 @@ async function writeVerdictLedger(tempDir, { overallVerdict, verdict, findings =
   };
   if (overallVerdict !== undefined) {
     log.overallVerdict = overallVerdict;
+  }
+  if (verifiedItems !== undefined) {
+    log.verifiedItems = verifiedItems;
+  }
+  if (provenance) {
+    log.provenance = provenance;
   }
   await writeFile(ledgerPath, JSON.stringify(log), "utf8");
   return ledgerPath;
@@ -9083,9 +9089,13 @@ async function runVerdictEnforcement(args, { repoRoot, headSha }) {
   }
 }
 
+// Valid draft_gate provenance, so the ledger-coverage refusal (which runs
+// before verdict enforcement) passes and the contradiction refusal is reached.
+const DRAFT_GATE_PROVENANCE = { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "reviewer-a" }, { angle: "holistic", reviewer: "reviewer-b" }] };
+
 test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVerdict (findings_present posted for a clean round)", async () => {
   await withTempDir(async (tempDir) => {
-    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "clean" });
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "clean", provenance: DRAFT_GATE_PROVENANCE });
     const env = await writeGhStub(tempDir, verdictEnforcementEntries());
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
@@ -9104,7 +9114,7 @@ test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVer
 
 test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVerdict (clean posted for a findings round)", async () => {
   await withTempDir(async (tempDir) => {
-    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "findings_present" });
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "findings_present", provenance: DRAFT_GATE_PROVENANCE });
     const env = await writeGhStub(tempDir, verdictEnforcementEntries());
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
@@ -9263,21 +9273,42 @@ function makeAcRunChild({
   issueComments = [],
   ciSuccess = true,
   prBody = DEFAULT_TEST_PR_BODY,
+  // true fails every body edit; "pr" or "issue" fails only that kind. Mutable
+  // through the returned `control` so a second run can succeed.
+  failBodyEdit = false,
+  // Fail every `gh issue view` after this many successful ones (null: never).
+  failIssueViewAfter = null,
 } = {}) {
   const calls = [];
-  const prJson = JSON.stringify({
+  const control = { failBodyEdit };
+  let issueViews = 0;
+  // Body edits (`gh pr|issue edit --body-file`) update the served bodies, so a
+  // re-read after an edit sees the edited text. `editedBodies` records each one.
+  const editedBodies = [];
+  const issueBodies = { ...issueBodyByNumber };
+  let currentPrBody = prBody;
+  const prJson = () => JSON.stringify({
     number: 17, state: "OPEN", isDraft, headRefOid: headSha,
-    body: prBody, closingIssuesReferences: closingIssues,
+    body: currentPrBody, closingIssuesReferences: closingIssues,
     reviews, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: ciSuccess ? "SUCCESS" : "FAILURE", name: "ci" }],
   }) + "\n";
   const runChild = async (cmd, args = [], _env, _stdin = "") => {
     calls.push({ command: cmd, args: [...args], stdinText: _stdin ?? "" });
     if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
     const a = args.join(" ");
+    if ((args[0] === "pr" || args[0] === "issue") && args[1] === "edit" && args.includes("--body-file")) {
+      if (control.failBodyEdit === true || control.failBodyEdit === args[0]) return { code: 1, stdout: "", stderr: "HTTP 502: body edit failed\n" };
+      const body = await readFile(args[args.indexOf("--body-file") + 1], "utf8");
+      editedBodies.push({ kind: args[0], number: args[2], body });
+      if (args[0] === "pr") currentPrBody = body;
+      else issueBodies[args[2]] = body;
+      return { code: 0, stdout: "", stderr: "" };
+    }
     // gh issue view <n> --json body — the linked-issue spec-of-record fetch.
     if (args[0] === "issue" && args[1] === "view") {
       const issue = args[2];
-      const body = issueBodyByNumber[issue];
+      if (failIssueViewAfter !== null && issueViews++ >= failIssueViewAfter) return { code: 1, stdout: "", stderr: "HTTP 502: issue view failed\n" };
+      const body = issueBodies[issue];
       if (body === undefined) return { code: 1, stdout: "", stderr: "not found\n" };
       return { code: 0, stdout: JSON.stringify({ body }) + "\n", stderr: "" };
     }
@@ -9303,10 +9334,10 @@ function makeAcRunChild({
     if (jsonFields === "baseRefOid,labels") return { code: 0, stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n', stderr: "" };
     if (jsonFields === "headRefOid") return { code: 0, stdout: JSON.stringify({ headRefOid: headSha }) + "\n", stderr: "" };
     if (jsonFields === "files") return { code: 0, stdout: "src/db.mjs\n", stderr: "" };
-    if (args[0] === "pr" && args[1] === "view") return { code: 0, stdout: prJson, stderr: "" };
+    if (args[0] === "pr" && args[1] === "view") return { code: 0, stdout: prJson(), stderr: "" };
     return { code: 0, stdout: "{}\n", stderr: "" };
   };
-  return { runChild, calls };
+  return { runChild, calls, editedBodies, control };
 }
 
 // Stage a repoRoot whose .devloops mirrors the real config with
@@ -10124,12 +10155,15 @@ const COMPOSITION_UNCHECKED_AC_PR_BODY = [
   "- none", "",
 ].join("\n");
 
-function makeCompositionRunChild(prBody, extraComments = []) {
+function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKED_AC_ISSUE_BODY, failBodyEdit = false, failIssueViewAfter = null, closingIssues = [900] } = {}) {
   return makeAcRunChild({
     isDraft: false,
-    closingIssues: [{ number: 900 }],
-    issueBodyByNumber: { 900: TICKED_AC_ISSUE_BODY },
+    // Only issue 900 has a body; any other linked issue fails every fetch.
+    closingIssues: closingIssues.map((number) => ({ number })),
+    issueBodyByNumber: { 900: issueBody },
     prBody,
+    failBodyEdit,
+    failIssueViewAfter,
     reviews: [1, 2, 3, 4, 5].map((i) => ({
       author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
       submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
@@ -10147,14 +10181,18 @@ function makeCompositionRunChild(prBody, extraComments = []) {
   });
 }
 
-async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [] }, fn) {
+// A ledger's verifiedItems are trusted only with valid provenance recording a
+// fresh acceptance-criteria (or pr-checklist) review.
+const TICK_PROVENANCE = { distinctReviewers: 1, perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-ac" }] };
+
+async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, provenance = verifiedItems === undefined ? undefined : TICK_PROVENANCE, issueBody, failBodyEdit, failIssueViewAfter, closingIssues }, fn) {
   const repoRoot = await stageConfigRepoRoot(requireFanoutEvidence);
   try {
-    const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate });
+    const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate, verifiedItems, provenance });
     const ledgerBefore = await readFile(ledgerPath, "utf8");
-    const { runChild, calls } = gate === "draft_gate"
+    const { runChild, calls, editedBodies, control } = gate === "draft_gate"
       ? makeAcRunChild({ isDraft: true, prBody })
-      : makeCompositionRunChild(prBody, extraComments);
+      : makeCompositionRunChild(prBody, extraComments, { issueBody, failBodyEdit, failIssueViewAfter, closingIssues });
     const post = (overrides = {}) => upsertCheckpointVerdict({
       repo: "owner/repo", pr: 17, gate, headSha: GATE_FULL_HEAD,
       findingsSummary: "review round summary",
@@ -10168,7 +10206,7 @@ async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approv
       assert.ok(postCall, "a review was posted");
       return JSON.parse(postCall.stdinText).body;
     };
-    await fn({ post, postedBody, calls });
+    await fn({ post, postedBody, calls, editedBodies, ledgerPath, control });
     // The fan-in ledger is never mutated by the composition.
     assert.equal(await readFile(ledgerPath, "utf8"), ledgerBefore);
   } finally {
@@ -10226,7 +10264,8 @@ test("#2389 regression: a clean ledger plus an unchecked PR-body DoD item posts 
     assert.match(body, new RegExp(`\\*\\*Reviewed head SHA:\\*\\* \`${GATE_FULL_HEAD}\``));
     assert.match(body, /\*\*Verdict:\*\* blocked/);
     assert.match(body, /\*\*Review verdict:\*\* clean/);
-    assert.match(body, /\*\*Gate blockers:\*\* unchecked PR-body Definition of done: `post-merge smoke run recorded`/);
+    assert.match(body, /\*\*Gate blockers:\*\* 1 unchecked PR-body Definition of done\n/);
+    assert.match(body, /<details>\n<summary>Remaining gate blocker items \(1\)<\/summary>\n\n- unchecked PR-body Definition of done: `post-merge smoke run recorded`\n\n<\/details>/);
     assert.match(body, /\*\*Next action:\*\* rerun gate/);
     assert.equal(result.reviewVerdict, "clean");
     assert.deepEqual(result.gateBlockers, [{ kind: "unchecked PR-body Definition of done", item: "post-merge smoke run recorded" }]);
@@ -10243,7 +10282,8 @@ test("#2389: a findings_present ledger plus an unchecked AC item posts blocked a
     assert.match(body, /\*\*Verdict:\*\* blocked/);
     assert.match(body, /\*\*Review verdict:\*\* findings_present/);
     // The blocker text is neutralized so the issue/PR-id guard accepts the body.
-    assert.match(body, /\*\*Gate blockers:\*\* unchecked PR-body Acceptance criteria: `follow-up tracked in 123`/);
+    assert.match(body, /\*\*Gate blockers:\*\* 1 unchecked PR-body Acceptance criteria\n/);
+    assert.match(body, /^- unchecked PR-body Acceptance criteria: `follow-up tracked in 123`$/m);
     assert.doesNotMatch(body, /#123/);
   });
 });
@@ -10300,7 +10340,9 @@ test("#2389 negative: findings_present over a clean ledger is still refused when
     await assert.rejects(() => post({ verdict: "findings_present" }), (err) => {
       assert.match(err.message, /contradicts the consolidated ledger's overallVerdict "clean"/);
       assert.match(err.message, /the checkpoint verdict is "blocked"/);
-      assert.match(err.message, /post-merge smoke run recorded/);
+      // Counts form only: no criterion text in the error message.
+      assert.match(err.message, /1 deterministic pre-approval blocker\(s\) \(1 unchecked PR-body Definition of done\)/);
+      assert.doesNotMatch(err.message, /post-merge smoke run recorded/);
       return true;
     });
   });
@@ -10348,7 +10390,8 @@ test("#2389: the review-verdict and gate-blockers lines leave the parsed gate/he
     gateBlockers: [{ kind: "unchecked PR-body Definition of done", item: "Verdict: clean" }],
   });
   assert.match(composed, /\*\*Review verdict:\*\* clean/);
-  assert.match(composed, /\*\*Gate blockers:\*\* unchecked PR-body Definition of done: `Verdict: clean`/);
+  assert.match(composed, /\*\*Gate blockers:\*\* 1 unchecked PR-body Definition of done\n/);
+  assert.match(composed, /^- unchecked PR-body Definition of done: `Verdict: clean`$/m);
   assert.deepEqual(parseGateReviewCommentBody(composed), parseGateReviewCommentBody(plain));
   assert.equal(parseGateReviewCommentBody(composed).verdict, "blocked");
 });
@@ -10401,10 +10444,10 @@ test("#2389: a same-head non-composed blocked rerun over a composed comment upda
   });
 });
 
-test("#2389: gate blockers render at most ten items with a +N more suffix", async () => {
+test("gate blockers: the counts line carries no criterion text and the collapsed block lists every item once, uncapped", async () => {
   const prBody = [
     "## Acceptance criteria", "",
-    "- [x] first AC is done", "",
+    "- [x] first AC is done", "- [ ] ac item open", "",
     "## Definition of done", "",
     ...Array.from({ length: 12 }, (_, i) => `- [ ] dod item ${i + 1}`), "",
     "## Non-goals", "",
@@ -10413,8 +10456,284 @@ test("#2389: gate blockers render at most ten items with a +N more suffix", asyn
   await withCompositionRound({ overallVerdict: "clean", prBody }, async ({ post, postedBody }) => {
     await post();
     const body = postedBody();
-    assert.match(body, /`dod item 10`; \+2 more/);
-    assert.doesNotMatch(body, /dod item 11/);
+    const countsLine = body.split("\n").find((line) => line.startsWith("**Gate blockers:**"));
+    assert.equal(countsLine, "**Gate blockers:** 1 unchecked PR-body Acceptance criteria; 12 unchecked PR-body Definition of done");
+    assert.match(body, /<summary>Remaining gate blocker items \(13\)<\/summary>/);
+    for (const item of ["ac item open", ...Array.from({ length: 12 }, (_, i) => `dod item ${i + 1}`)]) {
+      assert.equal(body.split("\n").filter((line) => line.endsWith(`: \`${item}\``)).length, 1, item);
+    }
+    assert.doesNotMatch(body, /more/);
+  });
+});
+
+// ---- pre_approval_gate automatic tick of the ledger's reviewer-verified
+// AC/DoD items before the verdict is composed. ----
+
+const TICK_ITEMS = Array.from({ length: 22 }, (_, i) => `criterion number ${i + 1}`);
+const TICK_PR_BODY = [
+  "## Acceptance criteria", "",
+  ...TICK_ITEMS.slice(0, 12).map((t) => `- [ ] ${t}`), "",
+  "## Definition of done", "",
+  ...TICK_ITEMS.slice(12).map((t) => `- [ ] ${t}`), "",
+  "## Non-goals", "",
+  "- none", "",
+].join("\n");
+const CLEAN_COUNTS = { high: 0, medium: 0, low: 0, question: 0, nit: 0 };
+
+test("tick: a clean ledger verifying all 22 unchecked items ticks them in one PR-body edit and posts clean", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, postedBody, editedBodies }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.equal(editedBodies.length, 1);
+    assert.equal(editedBodies[0].kind, "pr");
+    for (const item of TICK_ITEMS) assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+    assert.doesNotMatch(editedBodies[0].body, /- \[ \]/);
+    assert.match(postedBody(), /\*\*Verdict:\*\* clean/);
+    assert.equal(result.gateBlockers, undefined);
+  });
+});
+
+test("tick: a ledger verifying 20 of 22 items ticks exactly those 20 and posts blocked naming the other 2", async () => {
+  const verified = TICK_ITEMS.filter((_, i) => i !== 3 && i !== 17);
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: verified }, async ({ post, postedBody, editedBodies }) => {
+    const result = await post();
+    assert.equal(editedBodies.length, 1);
+    const edited = editedBodies[0].body;
+    for (const item of verified) assert.match(edited, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+    assert.equal((edited.match(/- \[ \]/g) ?? []).length, 2);
+    assert.match(edited, /^- \[ \] criterion number 4$/m);
+    assert.match(edited, /^- \[ \] criterion number 18$/m);
+    const body = postedBody();
+    assert.match(body, /\*\*Verdict:\*\* blocked/);
+    assert.deepEqual(result.gateBlockers, [
+      { kind: "unchecked PR-body Acceptance criteria", item: "criterion number 4" },
+      { kind: "unchecked PR-body Definition of done", item: "criterion number 18" },
+    ]);
+  });
+});
+
+test("tick: draft_gate never ticks, even with verifiedItems in the ledger", async () => {
+  // Both labels match an unchecked box in the fixture body, so only the gate guard prevents the tick.
+  const verifiedItems = ["covered by the test", "tests pass"];
+  await withCompositionRound({ overallVerdict: "clean", prBody: DEFAULT_TEST_PR_BODY, gate: "draft_gate", verifiedItems }, async ({ post, editedBodies, calls }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.deepEqual(editedBodies, []);
+    assert.equal(calls.some((c) => c.args[1] === "edit" && c.args.includes("--body-file")), false);
+  });
+});
+
+test("tick: without --findings-ledger nothing is ticked", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls }) => {
+    await assert.rejects(
+      () => post({ findingsLedger: undefined, verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS }),
+      /unchecked Acceptance criteria box/,
+    );
+    assert.equal(calls.some((c) => c.args[1] === "edit" && c.args.includes("--body-file")), false);
+  });
+});
+
+test("tick: a failed PR-body edit posts no verdict and fails closed", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, failBodyEdit: true }, async ({ post, calls }) => {
+    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS }), /gh pr edit failed/);
+    assert.equal(calls.some((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST")), false);
+  });
+});
+
+test("tick: the linked issue's unticked AC items are ticked too, and the later clean guard reads the reloaded artifact", async () => {
+  const issueBody = [
+    "## Acceptance criteria", "",
+    "- [ ] criterion number 1", "- [ ] criterion number 2", "",
+  ].join("\n");
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody }, async ({ post, postedBody, editedBodies }) => {
+    // An explicit clean verdict reaches both later clean guards (uncheckedAcItems
+    // and prBodyUnchecked*); each would refuse on the stale, pre-tick artifact.
+    const result = await post({ verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17", "issue 900"]);
+    assert.match(editedBodies[1].body, /^- \[x\] criterion number 1$/m);
+    assert.match(editedBodies[1].body, /^- \[x\] criterion number 2$/m);
+    assert.match(postedBody(), /\*\*Verdict:\*\* clean/);
+  });
+});
+
+const TICK_ISSUE_BODY_WITH_UNVERIFIED = [
+  "## Acceptance criteria", "",
+  "- [ ] criterion number 1", "- [ ] unverified issue criterion", "",
+].join("\n");
+const reviewPosted = (calls) => calls.some((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
+
+test("tick: a failed post-tick issue re-fetch cannot drop the unverified issue AC item, so no clean is posted", async () => {
+  // Views 1 and 2 (coordination load, tick fetch) succeed; the reload re-fetch fails.
+  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED, failIssueViewAfter: 2 };
+  await withCompositionRound(round, async ({ post, calls }) => {
+    await assert.rejects(
+      () => post({ verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS }),
+      /1 unticked spec-of-record Acceptance criteria\), the checkpoint verdict is "blocked"/,
+    );
+    assert.equal(reviewPosted(calls), false);
+  });
+  await withCompositionRound(round, async ({ post, postedBody }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
+    assert.deepEqual(result.gateBlockers, [{ kind: "unticked spec-of-record Acceptance criteria", item: "unverified issue criterion" }]);
+  });
+});
+
+test("clean guards give the ledger path (rerun the gate for verifiedItems) and the ledger-less path (tick with the CLI before posting)", async () => {
+  const guidance = (message) => {
+    assert.match(message, /verifiedItems of the acceptance-criteria and pr-checklist review angles/);
+    assert.match(message, /When the ledger carries trusted verifiedItems from a fan-out round, have those reviewers verify the satisfied items, or finish the remaining work, then rerun the gate/);
+    assert.match(message, /Otherwise \(no ledger, an inline round, or a ledger without a fresh acceptance-criteria or pr-checklist review\), tick the verified items with scripts\/github\/tick-verified-checkboxes\.mjs before posting/);
+    assert.match(message, /step 5 of skills\/docs\/acceptance-criteria-verification\.md/);
+    assert.doesNotMatch(message, /Tick the satisfied ACs in the tracker issue|Tick the verified boxes via/);
+    return true;
+  };
+  const noLedger = { findingsLedger: undefined, verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS };
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY }, async ({ post }) => {
+    await assert.rejects(() => post(noLedger), (err) => guidance(err.message));
+  });
+  await withCompositionRound({ overallVerdict: "clean", prBody: FULLY_TICKED_PR_BODY, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED }, async ({ post }) => {
+    await assert.rejects(() => post(noLedger), (err) => /spec-of-record/.test(err.message) && guidance(err.message));
+  });
+});
+
+test("tick: a PR body that is not a string fails closed before any edit or verdict", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: null, verifiedItems: TICK_ITEMS }, async ({ post, calls }) => {
+    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS }), /PR body is not a string/);
+    assert.equal(calls.some((c) => c.args[1] === "edit" && c.args.includes("--body-file")), false);
+    assert.equal(reviewPosted(calls), false);
+  });
+});
+
+test("tick: a failed issue edit after a successful PR edit posts no verdict; the rerun ticks only the issue", async () => {
+  const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", ""].join("\n");
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody, failBodyEdit: "issue" }, async ({ post, calls, editedBodies, control }) => {
+    // The CLI main() maps this rejection to exit code 1.
+    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS }), /gh issue edit failed/);
+    assert.equal(reviewPosted(calls), false);
+    assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17"]);
+    control.failBodyEdit = false;
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17", "issue 900"]);
+    assert.match(editedBodies[1].body, /^- \[x\] criterion number 1$/m);
+  });
+});
+
+const bodyEdited = (calls) => calls.some((c) => c.args[1] === "edit" && c.args.includes("--body-file"));
+
+for (const [name, provenance] of [
+  ["no provenance", null],
+  ["inconsistent provenance", { distinctReviewers: 3, perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-ac" }] }],
+  ["only a carried acceptance-criteria angle", { distinctReviewers: 1, perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-ac", carriedFromHead: "1".repeat(40) }] }],
+  ["no acceptance-criteria or pr-checklist angle", { distinctReviewers: 1, perAngle: [{ angle: "yagni", reviewer: "reviewer-y" }] }],
+]) {
+  test(`tick: a ledger with ${name} ticks nothing and still posts its composed verdict`, async () => {
+    await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, provenance }, async ({ post, postedBody, calls }) => {
+      const result = await post();
+      assert.equal(result.action, "created");
+      assert.equal(bodyEdited(calls), false);
+      assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
+    });
+  });
+}
+
+test("tick: a fanout_fanin ledger whose provenance misses a mandatory angle is refused before any body edit", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls }) => {
+    await assert.rejects(
+      () => post({ executionMode: "fanout_fanin", inlineReason: undefined, findingsSeverityCounts: CLEAN_COUNTS }),
+      /provenance is missing mandatory angle\(s\)/,
+    );
+    assert.equal(bodyEdited(calls), false);
+    assert.equal(reviewPosted(calls), false);
+  });
+});
+
+// pre_approval_gate's mandatory angles (gates.preApproval.mandatoryAngles), each fresh.
+const FANOUT_TICK_PROVENANCE = {
+  distinctReviewers: 5,
+  perAngle: ["pr-checklist", "acceptance-criteria", "yagni", "contradiction-lens", "holistic"]
+    .map((angle) => ({ angle, reviewer: `reviewer-${angle}` })),
+};
+
+test("tick: a fanout_fanin ledger whose provenance passes angle coverage ticks all 22 items in one PR-body edit and posts clean", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, provenance: FANOUT_TICK_PROVENANCE }, async ({ post, postedBody, editedBodies }) => {
+    const result = await post({ executionMode: "fanout_fanin", inlineReason: undefined, findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.equal(editedBodies.length, 1);
+    assert.equal(editedBodies[0].kind, "pr");
+    for (const item of TICK_ITEMS) assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+    assert.doesNotMatch(editedBodies[0].body, /- \[ \]/);
+    assert.match(postedBody(), /\*\*Verdict:\*\* clean/);
+    assert.equal(result.gateBlockers, undefined);
+  });
+});
+
+test("tick: with --findings-json present, a ledger whose provenance fails angle coverage ticks nothing", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls, ledgerPath }) => {
+    const findingsPath = path.join(path.dirname(ledgerPath), "findings.json");
+    await writeFile(findingsPath, JSON.stringify([{ angle: "acceptance-criteria", verdict: "clean", findings: [] }]), "utf8");
+    await assert.rejects(
+      () => post({ executionMode: "fanout_fanin", inlineReason: undefined, findingsJson: findingsPath, findingsSeverityCounts: CLEAN_COUNTS }),
+      /--findings-json for pre_approval_gate is missing mandatory angle\(s\)/,
+    );
+    assert.equal(bodyEdited(calls), false);
+    assert.equal(reviewPosted(calls), false);
+  });
+});
+
+test("tick: a complete fanout_fanin ledger plus an incomplete --findings-json edits no body and posts nothing", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, provenance: FANOUT_TICK_PROVENANCE }, async ({ post, calls, ledgerPath }) => {
+    const findingsPath = path.join(path.dirname(ledgerPath), "findings.json");
+    await writeFile(findingsPath, JSON.stringify([{ angle: "acceptance-criteria", verdict: "clean", findings: [] }]), "utf8");
+    await assert.rejects(
+      () => post({ executionMode: "fanout_fanin", inlineReason: undefined, findingsJson: findingsPath, findingsSeverityCounts: CLEAN_COUNTS }),
+      /--findings-json for pre_approval_gate is missing mandatory angle\(s\)/,
+    );
+    assert.equal(bodyEdited(calls), false);
+    assert.equal(reviewPosted(calls), false);
+  });
+});
+
+test("tick: an AC label repeated under ## Validation flips only the AC line", async () => {
+  const prBody = `${TICK_PR_BODY}\n## Validation\n\n- [ ] criterion number 1\n`;
+  const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", "", "## Validation", "", "- [ ] criterion number 1", ""].join("\n");
+  await withCompositionRound({ overallVerdict: "clean", prBody, verifiedItems: TICK_ITEMS, issueBody }, async ({ post, editedBodies }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17", "issue 900"]);
+    for (const { body } of editedBodies) {
+      assert.match(body, /## Acceptance criteria\n\n- \[x\] criterion number 1\n/);
+      assert.match(body, /## Validation\n\n- \[ \] criterion number 1\n/);
+    }
+  });
+});
+
+test("tick: a permanently unfetchable linked issue does not block the post; the fetched issue is still ticked", async () => {
+  const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", "- [ ] unverified issue criterion", ""].join("\n");
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody, closingIssues: [900, 901] }, async ({ post, postedBody, editedBodies }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17", "issue 900"]);
+    assert.match(editedBodies[1].body, /^- \[x\] criterion number 1$/m);
+    assert.match(editedBodies[1].body, /^- \[ \] unverified issue criterion$/m);
+    assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
+    assert.deepEqual(result.gateBlockers, [{ kind: "unticked spec-of-record Acceptance criteria", item: "unverified issue criterion" }]);
+  });
+});
+
+test("tick: a verified label that matches only a box outside AC/DoD is never ticked", async () => {
+  const prBody = `${TICK_PR_BODY}\n## Validation\n\n- [ ] run the smoke suite\n`;
+  const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", "", "## Dependencies", "", "- [ ] upstream release cut", ""].join("\n");
+  const verifiedItems = [...TICK_ITEMS, "run the smoke suite", "upstream release cut"];
+  await withCompositionRound({ overallVerdict: "clean", prBody, verifiedItems, issueBody }, async ({ post, editedBodies }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17", "issue 900"]);
+    assert.match(editedBodies[0].body, /^- \[ \] run the smoke suite$/m);
+    assert.match(editedBodies[1].body, /^- \[x\] criterion number 1$/m);
+    assert.match(editedBodies[1].body, /^- \[ \] upstream release cut$/m);
   });
 });
 

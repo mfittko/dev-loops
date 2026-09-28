@@ -4,14 +4,19 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
-import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, composeReviewVerdict, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
-import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { loadPrGateCoordinationContext, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
+import { checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { applyTick } from "./tick-verified-checkboxes.mjs";
+import { editPr } from "./edit-pr.mjs";
+import { editIssue } from "./edit-issue.mjs";
 import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-checkpoint-evidence.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
@@ -221,7 +226,20 @@ Optional:
   --findings-ledger <path>                  Path to this round's
                                             write-gate-findings-log.mjs ledger
                                             ({ repo, pr, gate, headSha, verdict,
-                                            findings[] }). Turns the posted review
+                                            findings[], verifiedItems? }). For
+                                            pre_approval_gate (never draft_gate),
+                                            the poster first ticks those exact
+                                            verifiedItems labels, then composes.
+                                            The tick runs only when the ledger
+                                            provenance is consistent and records
+                                            a fresh acceptance-criteria or
+                                            pr-checklist angle (and, for
+                                            fanout_fanin, passes angle
+                                            coverage). It ticks only labels that
+                                            are unchecked PR-body AC/DoD items
+                                            or unchecked linked-issue AC items;
+                                            a failed body fetch or edit posts no
+                                            verdict. Turns the posted review
                                             into the round's single finding
                                             surface: an in-diff file:line finding
                                             becomes an inline review comment, every
@@ -1501,13 +1519,16 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     // ledger records the underlying review verdict and the proven blockers.
     // Neither label matches a parsed field, so the parse contract is unchanged.
     ...(reviewVerdict ? [`**Review verdict:** ${reviewVerdict}`] : []),
-    ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockers(gateBlockers)}`] : []),
+    ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
     renderExecutionModeLine(executionMode, inlineReason),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
   );
   if ((verdict === "findings_present" || verdict === "blocked") && blockCleanOnFindingSeverities && blockCleanOnFindingSeverities.length > 0) {
     const sevs = blockCleanOnFindingSeverities.join(", ");
     lines.push(`**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`);
+  }
+  if (Array.isArray(gateBlockers) && gateBlockers.length > 0) {
+    lines.push("", renderGateBlockerItemsBlock(gateBlockers));
   }
   // When structured per-angle fan-in data is supplied (--findings-json), the
   // `**Findings summary:**` digest is computed from it; otherwise the digest
@@ -2078,6 +2099,86 @@ export function collectPreApprovalGateBlockers(gate, refinementArtifact) {
   return blockers;
 }
 
+// A ledger's verifiedItems are trusted to tick only when its provenance is
+// consistent and records a fresh (not carried) acceptance-criteria or
+// pr-checklist review for this head.
+function ledgerVerifiesChecklist(ledger) {
+  if (provenanceConsistencyError(ledger?.provenance ?? null)) return false;
+  return freshAngleNames(ledger.provenance.perAngle)
+    .some((angle) => ["acceptance-criteria", "pr-checklist"].includes(baseAngleName(angle)));
+}
+
+// Non-throwing form of the ledger-provenance angle-coverage checks. A
+// fanout_fanin tick requires it: with --findings-json present the ledger's
+// provenance refusals do not run, so a ledger that fails them must tick nothing.
+function ledgerPassesAngleCoverage(ledger, config, gate) {
+  if (provenanceConsistencyError(ledger?.provenance ?? null)) return false;
+  return anglesPassCoverage(ledger.provenance.perAngle ?? [], config, gate);
+}
+
+// Non-throwing angle-less, mandatory-angle and foreign-angle checks over
+// per-angle entries (ledger provenance or --findings-json).
+function anglesPassCoverage(entries, config, gate) {
+  if (entries.some((e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0)) return false;
+  const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(entries, resolveGateAngleContract(config, GATE_CONFIG_KEY[gate]));
+  return missingMandatory.length === 0 && (foreignAngles.length === 0 || !resolveRejectForeignAngles(config));
+}
+
+// ACCEPT-CRITERIA-VERIFY-AND-REFLECT automatic tick (pre_approval_gate with a
+// trusted --findings-ledger only): tick the ledger's reviewer-verified labels
+// in the PR body's AC/DoD boxes and, for each linked issue whose unticked AC
+// items the coordination load read, in that issue body. A label outside those
+// unchecked lists is dropped; an issue whose body the coordination load could
+// not fetch is skipped (it stays spec-of-record unavailable). Exact-label
+// match, never unchecks, one edit per changed body. A failed fetch or edit of
+// a ticked body, or a PR body that is not a string, throws, so no verdict is
+// posted. Returns the refinement artifact reloaded from the ticked bodies;
+// labels no reviewer verified stay unchecked in it and still block. Only lines
+// inside the AC/DoD sections (the AC section for an issue body) are flipped, so
+// the same label under another heading stays unchecked.
+async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordinationContext }, { env, ghCommand, runChild }) {
+  const prData = coordinationContext.prData;
+  if (typeof prData?.body !== "string") {
+    throw new Error(`Cannot tick reviewer-verified items on PR ${pr}: the PR body is not a string.`);
+  }
+  const artifact = coordinationContext.refinementArtifact;
+  const inList = (list) => {
+    const allowed = new Set(Array.isArray(list) ? list : []);
+    return verifiedItems.filter((label) => allowed.has(String(label).trim()));
+  };
+  const inSections = (body, options) => {
+    const indices = checklistSectionLineIndices(body, options);
+    return (index) => indices.has(index);
+  };
+  const prTick = await applyTick(prData.body, inList([...(artifact?.prBodyUncheckedAcItems ?? []), ...(artifact?.prBodyUncheckedDodItems ?? [])]), false, (bodyFile) =>
+    editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
+  inSections(prData.body));
+  const issueLabels = inList(artifact?.uncheckedAcItems);
+  const tickedIssueBodies = [];
+  if (Array.isArray(artifact?.uncheckedAcItems) && artifact.uncheckedAcItems.length > 0) {
+    for (const issue of artifact.uncheckedAcIssues ?? []) {
+      const issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
+      const issueTick = await applyTick(issueBody, issueLabels, false, (bodyFile) =>
+        editIssue({ repo, issue, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
+      inSections(issueBody, { acOnly: true }));
+      tickedIssueBodies.push(issueTick.body);
+    }
+  }
+  const state = String(prData.state || "").toUpperCase();
+  const reloaded = await loadRefinementArtifact(
+    { repo, prData: { ...prData, body: prTick.body }, prDraft: Boolean(prData.isDraft), prClosed: state === "CLOSED", prMerged: state === "MERGED" },
+    { env, ghCommand, runChild },
+  );
+  if (tickedIssueBodies.length === 0) return reloaded;
+  // The spec-of-record unticked items come from the issue bodies this tick just
+  // fetched and edited, never from the reload's re-fetch: a failed re-fetch would
+  // drop them and let an unverified issue AC item pass the clean guard.
+  // Union with the reload's list so the result is never smaller than either source.
+  const local = tickedIssueBodies.flatMap((body) => detectIssueRefinementArtifact({ body }).uncheckedAcItems);
+  const uncheckedAcItems = [...new Set([...(reloaded.uncheckedAcItems ?? []), ...local])];
+  return { ...reloaded, uncheckedAcItems };
+}
+
 // GATE-COMMENT-VERDICT-VALUES layer composition: the fan-in ledger's
 // overallVerdict is the REVIEW verdict; the checkpoint verdict composes it with
 // deterministic gate blockers. A blocked review stays blocked, any proven
@@ -2087,14 +2188,24 @@ export function composeCheckpointVerdict({ reviewVerdict, blockers = [] }) {
   return reviewVerdict;
 }
 
-const MAX_RENDERED_GATE_BLOCKERS = 10;
-function formatGateBlockers(blockers) {
-  const rendered = blockers
-    .slice(0, MAX_RENDERED_GATE_BLOCKERS)
-    .map(({ kind, item }) => `${kind}: \`${sanitizeCodeSpan(neutralizeBareIssuePrIds(item))}\``)
-    .join("; ");
-  const hidden = blockers.length - MAX_RENDERED_GATE_BLOCKERS;
-  return hidden > 0 ? `${rendered}; +${hidden} more` : rendered;
+// The `**Gate blockers:**` line and the verdict-contradiction error state only
+// the count per kind; the item text lives in the collapsed block below.
+function formatGateBlockerCounts(blockers) {
+  const counts = new Map();
+  for (const { kind } of blockers) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  return [...counts].map(([kind, count]) => `${count} ${kind}`).join("; ");
+}
+
+// Every remaining blocker item, one per line, uncapped, in a collapsed block.
+function renderGateBlockerItemsBlock(blockers) {
+  return [
+    "<details>",
+    `<summary>Remaining gate blocker items (${blockers.length})</summary>`,
+    "",
+    ...blockers.map(({ kind, item }) => `- ${kind}: \`${sanitizeCodeSpan(neutralizeBareIssuePrIds(item))}\``),
+    "",
+    "</details>",
+  ].join("\n");
 }
 
 // GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS
@@ -2474,6 +2585,135 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (options.findingsLedger) {
     preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
   }
+  // Fan-out angle-coverage enforcement for a ledger-only round (no
+  // --findings-json): runs BEFORE the tick below, so a ledger this post refuses
+  // never leaves ticked boxes behind. The --findings-json coverage refusal runs
+  // later; the tick below checks that coverage without throwing first.
+  if ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin" && !options.findingsJson) {
+    const gateKey = GATE_CONFIG_KEY[options.gate];
+    const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
+    // Prove coverage from the round's disposition ledger —
+    // write-gate-findings-log.mjs's `provenance.perAngle`, written before
+    // this comment and unbudgeted (skills/docs/gate-review-sub-loop-contract.md).
+    // Reuses checkFanoutAngleCoverage, the SAME coverage function the
+    // structured branch below and detect-checkpoint-evidence.mjs's
+    // read-time re-validation both use, so write-time and read-time
+    // enforcement can never silently define "covered" differently. The
+    // neither-artifact refusal below stays keyed on mandatory angles only —
+    // a pool with no mandatory angle carries no proof obligation for a
+    // caller supplying neither artifact.
+    if (mandatoryAngles.length > 0 || (Array.isArray(pool) && pool.length > 0)) {
+      if (!options.findingsLedger) {
+        if (mandatoryAngles.length > 0) {
+          throw new Error(
+            `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}, derived from gates.${gateKey}.angles entries with mandatory: true) requires coverage proof via --findings-json or --findings-ledger.`,
+          );
+        }
+      } else {
+        const consistencyErr = provenanceConsistencyError(preloadedFindingsLedger?.provenance ?? null);
+        if (consistencyErr && mandatoryAngles.length > 0) {
+          throw new Error(
+            `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}) must be proven from --findings-ledger's recorded provenance instead, and it is invalid (${consistencyErr}). Write the ledger with --provenance covering the mandatory angles (write-gate-findings-log.mjs --provenance), or supply --findings-json.`,
+          );
+        }
+        // A gate with no mandatory angle carries no coverage-proof
+        // obligation: a ledger without valid provenance proves nothing but
+        // blocks nothing either (vacuously covered). Only a ledger that DOES
+        // record valid provenance gets the angle-less and foreign-angle
+        // passes below.
+        if (!consistencyErr) {
+          // Same angle-less guard as the --findings-json branch: a
+          // provenance.perAngle entry missing a non-empty .angle would otherwise
+          // be silently dropped by checkFanoutAngleCoverage's own filtering — it
+          // can then only ever fail to satisfy an angle, never satisfy one, but
+          // this fails closed with the real problem instead of a confusing
+          // missing-angle error.
+          const angleless = (preloadedFindingsLedger.provenance.perAngle ?? []).filter(
+            (e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0,
+          ).length;
+          if (angleless > 0) {
+            throw new Error(
+              `--findings-ledger's provenance for ${options.gate}: ${angleless} entr${angleless === 1 ? "y" : "ies"} lack a non-empty .angle — every provenance.perAngle entry must attribute its review to an angle.`,
+            );
+          }
+          const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(preloadedFindingsLedger.provenance.perAngle, { mandatoryAngles, pool });
+          if (missingMandatory.length > 0) {
+            throw new Error(
+              `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: --findings-ledger's provenance is missing mandatory angle(s): ${missingMandatory.join(", ")} (derived from gates.${gateKey}.angles entries with mandatory: true; the ledger's --provenance must record a per-angle entry for each).`,
+            );
+          }
+          enforceForeignAngles(foreignAngles, { sourceLabel: "--findings-ledger's provenance", gate: options.gate, gateKey, config, silent: options.silent });
+        }
+      }
+    }
+  }
+  // Structured per-angle findings (consolidated fan-in shape) take precedence
+  // over the free-text summary: when present, the verdict comment renders a
+  // multi-line per-angle breakdown and the `**Findings summary:**` line carries a
+  // single-line digest (so the marker/parse contract still round-trips).
+  // Parsed and validated BEFORE the tick below, so an input this post refuses
+  // never leaves ticked boxes behind.
+  let structuredFindings = null;
+  let rawFindingsInput = null;
+  if (options.findingsJson) {
+    let raw;
+    try {
+      raw = await readFile(options.findingsJson, "utf8");
+    } catch (err) {
+      throw new Error(`Cannot read --findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`--findings-json "${options.findingsJson}" is not valid JSON`);
+    }
+    // Accept either a bare array of per-angle entries or an object wrapping it
+    // under `angles` / `findings` (defensive against caller shape drift).
+    const candidate = Array.isArray(parsed)
+      ? parsed
+      : (Array.isArray(parsed?.angles) ? parsed.angles : (Array.isArray(parsed?.findings) ? parsed.findings : null));
+    rawFindingsInput = candidate;
+    try {
+      structuredFindings = normalizeStructuredFindings(candidate);
+    } catch (err) {
+      throw new Error(`--findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!structuredFindings) {
+      throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
+    }
+    // ADR 0089: without a ledger, the structured findings carry the judge act list.
+    // Read the RAW entries: normalization turns an unparseable finding into a bare marker and drops its judgeDisposition.
+    const flatFindings = preloadedFindingsLedger ? [] : candidate.flatMap((e) => (looksLikePerAngleEntry(e) ? e.findings : [e])).map((f) => ({
+      severity: f?.severity,
+      summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
+      judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
+    }));
+    const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
+    if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
+    const actItems = listOpenActItems(flatFindings);
+    if (options.verdict === "clean" && actItems.length > 0) {
+      throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
+    }
+  }
+  // Tick the reviewer-verified AC/DoD labels BEFORE composing, then read the
+  // reloaded artifact everywhere below (blocker collection and the clean guards).
+  // Only a ledger whose provenance records a fresh acceptance-criteria or
+  // pr-checklist review is trusted to tick. In fanout_fanin mode the ledger
+  // must also pass the angle-coverage checks, and so must --findings-json when
+  // present: its throwing coverage check runs later, so an input it refuses
+  // must tick nothing.
+  const tickCoverageOk = (options.executionMode ?? DEFAULT_EXECUTION_MODE) !== "fanout_fanin"
+    || (ledgerPassesAngleCoverage(preloadedFindingsLedger, config, options.gate)
+      && (!structuredFindings || (anglesPassCoverage(rawFindingsInput, config, options.gate) && anglesPassCoverage(structuredFindings, config, options.gate))));
+  if (options.gate === "pre_approval_gate" && preloadedFindingsLedger?.verifiedItems?.length > 0 && ledgerVerifiesChecklist(preloadedFindingsLedger) && tickCoverageOk) {
+    coordinationContext.refinementArtifact = await tickReviewerVerifiedItems({
+      repo: options.repo,
+      pr: options.pr,
+      verifiedItems: preloadedFindingsLedger.verifiedItems,
+      coordinationContext,
+    }, gh);
+  }
   // Set only when the posted checkpoint verdict differs from the ledger's review
   // verdict (a proven pre-approval blocker over a completed ledger), so the
   // render records both layers. The ledger object itself is never mutated.
@@ -2498,7 +2738,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // decision to override. `blocked` over a completed ledger is accepted
       // only through a proven blocker, i.e. only when it IS the composed value.
       const compositionNote = composedVerdict !== ledgerVerdict
-        ? ` Composed with ${gateBlockers.length} deterministic pre-approval blocker(s) (${formatGateBlockers(gateBlockers)}), the checkpoint verdict is "${composedVerdict}".`
+        ? ` Composed with ${gateBlockers.length} deterministic pre-approval blocker(s) (${formatGateBlockerCounts(gateBlockers)}), the checkpoint verdict is "${composedVerdict}".`
         : (options.verdict === "blocked"
           ? ` No deterministic pre-approval blocker is proven, so "blocked" cannot sit over this completed ledger; the composed checkpoint verdict is "${composedVerdict}".`
           : "");
@@ -2573,7 +2813,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const acArtifact = coordinationContext.refinementArtifact;
     const items = acArtifact.uncheckedAcItems;
     throw new Error(
-      `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the spec-of-record (linked issue(s) ${(acArtifact.linkedIssues ?? []).map((n) => `#${n}`).join(", ") || "?"}) still has ${items.length} unticked Acceptance criteria item(s): ${items.slice(0, 3).map((t) => `\`${t}\``).join(", ")}${items.length > 3 ? ", …" : ""}. Tick the satisfied ACs in the tracker issue before declaring the pre-approval gate clean — ACCEPT-CRITERIA-VERIFY-AND-REFLECT (skills/docs/acceptance-criteria-verification.md): a clean pre_approval_gate must not rely on a spec-of-record with unticked acceptance criteria.`,
+      `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the spec-of-record (linked issue(s) ${(acArtifact.linkedIssues ?? []).map((n) => `#${n}`).join(", ") || "?"}) still has ${items.length} unticked Acceptance criteria item(s): ${items.slice(0, 3).map((t) => `\`${t}\``).join(", ")}${items.length > 3 ? ", …" : ""}. The gate ticks an item only when it appears in the verifiedItems of the acceptance-criteria and pr-checklist review angles. When the ledger carries trusted verifiedItems from a fan-out round, have those reviewers verify the satisfied items, or finish the remaining work, then rerun the gate. Otherwise (no ledger, an inline round, or a ledger without a fresh acceptance-criteria or pr-checklist review), tick the verified items with scripts/github/tick-verified-checkboxes.mjs before posting (never blanket-check); see step 5 of skills/docs/acceptance-criteria-verification.md. ACCEPT-CRITERIA-VERIFY-AND-REFLECT (skills/docs/acceptance-criteria-verification.md): a clean pre_approval_gate must not rely on a spec-of-record with unticked acceptance criteria.`,
     );
   }
   // Deterministic pre-approval block: ANY unchecked `- [ ]` in the PR
@@ -2597,7 +2837,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         parts.push(`${uncheckedDod.length} unchecked Definition-of-done box(es): ${uncheckedDod.slice(0, 3).map((t) => `\`${t}\``).join(", ")}${uncheckedDod.length > 3 ? ", …" : ""}`);
       }
       throw new Error(
-        `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the PR body's own AC/DoD checklist still has ${parts.join("; ")}. Every acceptance criterion must be complete before approval — the deterministic pre-approval block (#1877) fails closed on any unchecked box. Tick the verified boxes via scripts/github/tick-verified-checkboxes.mjs (only actually-verified items; never blanket-check) or finish the remaining work — a box the gate could not verify stays unchecked and therefore blocks. This check enforces completeness, not truthfulness: verifying each [x] is real remains the reviewer's responsibility (skills/docs/acceptance-criteria-verification.md).`,
+        `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the PR body's own AC/DoD checklist still has ${parts.join("; ")}. Every acceptance criterion must be complete before approval — the deterministic pre-approval block (#1877) fails closed on any unchecked box. The gate ticks a box only when it appears in the verifiedItems of the acceptance-criteria and pr-checklist review angles. When the ledger carries trusted verifiedItems from a fan-out round, have those reviewers verify the satisfied items, or finish the remaining work, then rerun the gate. Otherwise (no ledger, an inline round, or a ledger without a fresh acceptance-criteria or pr-checklist review), tick the verified items with scripts/github/tick-verified-checkboxes.mjs before posting (never blanket-check); see step 5 of skills/docs/acceptance-criteria-verification.md. A box no reviewer verified stays unchecked and therefore blocks. This check enforces completeness, not truthfulness: verifying each [x] is real remains the reviewer's responsibility (skills/docs/acceptance-criteria-verification.md).`,
       );
     }
   }
@@ -2609,53 +2849,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate);
   if (derivedNextAction !== null) {
     options.nextAction = derivedNextAction;
-  }
-  // Structured per-angle findings (consolidated fan-in shape) take precedence
-  // over the free-text summary: when present, the verdict comment renders a
-  // multi-line per-angle breakdown and the `**Findings summary:**` line carries a
-  // single-line digest (so the marker/parse contract still round-trips).
-  let structuredFindings = null;
-  let rawFindingsInput = null;
-  if (options.findingsJson) {
-    let raw;
-    try {
-      raw = await readFile(options.findingsJson, "utf8");
-    } catch (err) {
-      throw new Error(`Cannot read --findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error(`--findings-json "${options.findingsJson}" is not valid JSON`);
-    }
-    // Accept either a bare array of per-angle entries or an object wrapping it
-    // under `angles` / `findings` (defensive against caller shape drift).
-    const candidate = Array.isArray(parsed)
-      ? parsed
-      : (Array.isArray(parsed?.angles) ? parsed.angles : (Array.isArray(parsed?.findings) ? parsed.findings : null));
-    rawFindingsInput = candidate;
-    try {
-      structuredFindings = normalizeStructuredFindings(candidate);
-    } catch (err) {
-      throw new Error(`--findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
-    }
-    if (!structuredFindings) {
-      throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
-    }
-    // ADR 0089: without a ledger, the structured findings carry the judge act list.
-    // Read the RAW entries: normalization turns an unparseable finding into a bare marker and drops its judgeDisposition.
-    const flatFindings = preloadedFindingsLedger ? [] : candidate.flatMap((e) => (looksLikePerAngleEntry(e) ? e.findings : [e])).map((f) => ({
-      severity: f?.severity,
-      summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
-      judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
-    }));
-    const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
-    if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
-    const actItems = listOpenActItems(flatFindings);
-    if (options.verdict === "clean" && actItems.length > 0) {
-      throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
-    }
   }
   // The clean-verdict guard above trusts --findings-severity-counts alone, so a
   // caller could hand-type an all-zero counts object even when --findings-json's
@@ -2697,10 +2890,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // coverage check and resolveFindingSurface so the same ledger file is never
   // read from disk twice for one round.
   // Fan-out angle-coverage enforcement (fail closed): a fanout_fanin verdict's
-  // per-angle results (structured, or the withheld branch's ledger provenance)
-  // must cover every configured mandatory angle, and (default) must not name
-  // an angle outside the gate's configured pool. gateKey/mandatoryAngles/pool
-  // are the same lookup either branch below needs, so resolve them once.
+  // structured per-angle results must cover every configured mandatory angle,
+  // and (default) must not name an angle outside the gate's configured pool.
+  // The ledger-provenance branch ran above, before the tick.
   if ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin") {
     const gateKey = GATE_CONFIG_KEY[options.gate];
     const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
@@ -2726,66 +2918,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         );
       }
       enforceForeignAngles(foreignAngles, { sourceLabel: "--findings-json", gate: options.gate, gateKey, config, silent: options.silent });
-    } else {
-      // No --findings-json: this comment carries no per-angle data, so prove
-      // coverage instead from the round's disposition ledger —
-      // write-gate-findings-log.mjs's `provenance.perAngle`, written before
-      // this comment and unbudgeted (skills/docs/gate-review-sub-loop-contract.md).
-      // Reuses checkFanoutAngleCoverage, the SAME coverage function the
-      // structured branch above and detect-checkpoint-evidence.mjs's
-      // read-time re-validation both use, so write-time and read-time
-      // enforcement can never silently define "covered" differently. The
-      // neither-artifact refusal below stays keyed on mandatory angles only —
-      // a pool with no mandatory angle carries no proof obligation for a
-      // caller supplying neither artifact.
-      if (mandatoryAngles.length > 0 || (Array.isArray(pool) && pool.length > 0)) {
-        if (!options.findingsLedger) {
-          if (mandatoryAngles.length > 0) {
-            throw new Error(
-              `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}, derived from gates.${gateKey}.angles entries with mandatory: true) requires coverage proof via --findings-json or --findings-ledger.`,
-            );
-          }
-        } else {
-          // Reuse the ledger loaded early for verdict enforcement —
-          // only load here if it was not (defensive; options.findingsLedger
-          // truthy at this point means the early load already populated it).
-          preloadedFindingsLedger ??= await loadMatchingFindingsLedger(options, canonicalHeadSha);
-          const consistencyErr = provenanceConsistencyError(preloadedFindingsLedger?.provenance ?? null);
-          if (consistencyErr && mandatoryAngles.length > 0) {
-            throw new Error(
-              `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: mandatory angle coverage (${mandatoryAngles.join(", ")}) must be proven from --findings-ledger's recorded provenance instead, and it is invalid (${consistencyErr}). Write the ledger with --provenance covering the mandatory angles (write-gate-findings-log.mjs --provenance), or supply --findings-json.`,
-            );
-          }
-          // A gate with no mandatory angle carries no coverage-proof
-          // obligation: a ledger without valid provenance proves nothing but
-          // blocks nothing either (vacuously covered). Only a ledger that DOES
-          // record valid provenance gets the angle-less and foreign-angle
-          // passes below.
-          if (!consistencyErr) {
-          // Same angle-less guard as the --findings-json branch above: a
-          // provenance.perAngle entry missing a non-empty .angle would otherwise
-          // be silently dropped by checkFanoutAngleCoverage's own filtering — it
-          // can then only ever fail to satisfy an angle, never satisfy one, but
-          // this fails closed with the real problem instead of a confusing
-          // missing-angle error.
-          const angleless = (preloadedFindingsLedger.provenance.perAngle ?? []).filter(
-            (e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0,
-          ).length;
-          if (angleless > 0) {
-            throw new Error(
-              `--findings-ledger's provenance for ${options.gate}: ${angleless} entr${angleless === 1 ? "y" : "ies"} lack a non-empty .angle — every provenance.perAngle entry must attribute its review to an angle.`,
-            );
-          }
-          const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(preloadedFindingsLedger.provenance.perAngle, { mandatoryAngles, pool });
-          if (missingMandatory.length > 0) {
-            throw new Error(
-              `Cannot post a fanout_fanin verdict for ${options.gate} without --findings-json: --findings-ledger's provenance is missing mandatory angle(s): ${missingMandatory.join(", ")} (derived from gates.${gateKey}.angles entries with mandatory: true; the ledger's --provenance must record a per-angle entry for each).`,
-            );
-          }
-          enforceForeignAngles(foreignAngles, { sourceLabel: "--findings-ledger's provenance", gate: options.gate, gateKey, config, silent: options.silent });
-          }
-        }
-      }
     }
   }
   // --findings-json takes precedence; when structured findings are present, do not

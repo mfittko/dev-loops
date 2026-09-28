@@ -4,9 +4,14 @@ import { parseTickVerifiedCliArgs } from "../../scripts/github/tick-verified-che
 
 const OWNER = "skills/docs/acceptance-criteria-verification.md";
 
-test("acceptance owner prescribes the combined issue/PR tick command with verified labels", async () => {
+test("acceptance owner describes the automatic ledger tick and keeps a parseable manual tick command", async () => {
   assertRuleOwned("ACCEPT-CRITERIA-VERIFY-AND-REFLECT", OWNER);
   const doc = await readRepo(OWNER);
+  const step5 = doc.split(/\n(?=\d+\. )/).find((text) => text.startsWith("5. "));
+  assert.ok(step5, "missing step 5");
+  for (const literal of ["verifiedItems", "upsert-checkpoint-verdict.mjs", "--findings-ledger", "draft_gate"]) {
+    assert.ok(step5.includes(`\`${literal}\``), `step 5 missing automatic-tick handoff: ${literal}`);
+  }
   const command = [...doc.matchAll(/`([^`]+)`/g)].map((match) => match[1])
     .find((text) => text.startsWith("node scripts/github/tick-verified-checkboxes.mjs "));
   assert.ok(command, "missing combined verification handoff");

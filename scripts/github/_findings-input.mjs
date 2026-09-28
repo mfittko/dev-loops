@@ -22,11 +22,13 @@ import { readFile } from "node:fs/promises";
 // one drops it). `provenance` is whatever the wrapper object itself carries
 // under that key (a caller-supplied field, not derived here) — absent on a
 // bare-array/legacy input, same as `overallVerdict`.
+// `verifiedItems` (the reviewer-verified AC/DoD labels) passes through the same
+// way, unvalidated here.
 function unwrapFindingsPayload(parsed) {
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Array.isArray(parsed.findings)) {
-    return { findings: parsed.findings, overallVerdict: parsed.overallVerdict, provenance: parsed.provenance };
+    return { findings: parsed.findings, overallVerdict: parsed.overallVerdict, provenance: parsed.provenance, verifiedItems: parsed.verifiedItems };
   }
-  return { findings: parsed, overallVerdict: undefined, provenance: undefined };
+  return { findings: parsed, overallVerdict: undefined, provenance: undefined, verifiedItems: undefined };
 }
 
 /**
@@ -74,6 +76,6 @@ export async function resolveFindingsInput(options, { parseError, validate }) {
     }
     flagLabel = "--findings";
   }
-  const { findings: payload, overallVerdict, provenance } = unwrapFindingsPayload(parsed);
-  return { findings: validate(payload, flagLabel), overallVerdict, provenance };
+  const { findings: payload, overallVerdict, provenance, verifiedItems } = unwrapFindingsPayload(parsed);
+  return { findings: validate(payload, flagLabel), overallVerdict, provenance, verifiedItems };
 }

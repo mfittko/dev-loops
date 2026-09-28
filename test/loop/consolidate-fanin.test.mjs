@@ -404,6 +404,91 @@ test("consolidateGateFanin writes --ledger-out as the { overallVerdict, findings
   );
 });
 
+const VERIFIED_HEAD = "b7".repeat(20);
+const STALE_HEAD = "a".repeat(40);
+
+async function consolidateLedger(dir, options) {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-verified-"));
+  try {
+    const ledgerPath = path.join(dir, "out", "ledger.json");
+    await consolidateGateFanin({ findingsDir: dir, ledgerOut: ledgerPath, tmpRoot, ...options });
+    return JSON.parse(await readFile(ledgerPath, "utf8"));
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+test("consolidateGateFanin writes the deduplicated, trimmed verifiedItems union into --ledger-out", async () => {
+  await withFindingsDir(
+    {
+      "acceptance-criteria.json": { angle: "acceptance-criteria", verdict: "clean", findings: [], headSha: VERIFIED_HEAD, verifiedItems: [" item one ", "item two"] },
+      "pr-checklist.json": { angle: "pr-checklist", verdict: "clean", findings: [], headSha: VERIFIED_HEAD, verifiedItems: ["item two", "item three"] },
+      "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: VERIFIED_HEAD },
+    },
+    async (dir) => {
+      const written = await consolidateLedger(dir, { headSha: VERIFIED_HEAD });
+      assert.deepEqual(written.verifiedItems, ["item one", "item two", "item three"]);
+      // Without --head-sha no artifact is bound to the round head, so none counts.
+      assert.equal("verifiedItems" in await consolidateLedger(dir, {}), false);
+    },
+  );
+});
+
+test("consolidateGateFanin: a stale-head artifact never contributes verifiedItems", async () => {
+  await withFindingsDir(
+    { "acceptance-criteria.json": { angle: "acceptance-criteria", verdict: "clean", findings: [], headSha: STALE_HEAD, verifiedItems: ["stale item"] } },
+    async (dir) => {
+      // Without --head-sha nothing binds the artifact to the round head.
+      assert.equal("verifiedItems" in await consolidateLedger(dir, {}), false);
+      // With --head-sha the stamp guard refuses the stale artifact outright.
+      await assert.rejects(() => consolidateLedger(dir, { headSha: VERIFIED_HEAD }), /is stamped for head/);
+    },
+  );
+});
+
+test("consolidateGateFanin: the synthetic pr-checklist entry contributes no verifiedItems", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: VERIFIED_HEAD } },
+    async (dir) => {
+      const written = await consolidateLedger(dir, { headSha: VERIFIED_HEAD, prChecklist: "clean" });
+      assert.equal("verifiedItems" in written, false);
+    },
+  );
+});
+
+test("consolidateGateFanin: a carried entry contributes no verifiedItems", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "acceptance-criteria.json": { angle: "acceptance-criteria", verdict: "clean", findings: [], headSha: VERIFIED_HEAD, verifiedItems: ["fresh item"] } },
+      async (dir) => {
+        // acceptance-criteria and pr-checklist can never carry forward, so a
+        // carried entry is always another angle; its plan fields add nothing.
+        const carried = JSON.parse(carryForwardPlanJson(["dry"], { carriedFromHead: STALE_HEAD })).carried;
+        const written = await consolidateLedger(dir, {
+          headSha: VERIFIED_HEAD,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["dry"],
+          carryForwardPlan: carried.map((entry) => ({ ...entry, verifiedItems: ["carried item"] })),
+        });
+        assert.deepEqual(written.verifiedItems, ["fresh item"]);
+      },
+    );
+  });
+});
+
+test("consolidateGateFanin fails closed on verifiedItems from a non-AC angle", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], verifiedItems: ["x"] } },
+    async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({ findingsDir: dir, ledgerOut: path.join(dir, "out", "ledger.json") }),
+        /verifiedItems/,
+      );
+    },
+  );
+});
+
 // AC1 (issue 2008 / ADR-0061): optional --spec-authority stamping of --ledger-out.
 test("consolidateGateFanin: --spec-authority stamps --ledger-out; absent is a byte-identical no-op", async () => {
   await withFindingsDir(

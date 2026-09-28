@@ -948,8 +948,26 @@ function validateAngleResult(result) {
   if (r.verdict === "clean" && r.findings.length > 0) {
     return `angle '${r.angle}' reported clean but carries findings`;
   }
+  if (r.verifiedItems !== undefined) {
+    if (!VERIFIED_ITEMS_ANGLES.has(baseAngleName(r.angle.trim()))) {
+      return `angle '${r.angle}' may not carry 'verifiedItems' (only ${[...VERIFIED_ITEMS_ANGLES].join(" and ")} may)`;
+    }
+    if (!Array.isArray(r.verifiedItems)) {
+      return `angle '${r.angle}' has a non-array 'verifiedItems'`;
+    }
+    if (r.verifiedItems.some((item) => typeof item !== "string" || item.trim().length === 0)) {
+      return `angle '${r.angle}' has a non-string or empty 'verifiedItems' entry`;
+    }
+  }
   return null;
 }
+
+/**
+ * The only angles whose per-angle result may carry `verifiedItems`: the exact
+ * trimmed AC/DoD checklist labels the reviewer verified at the reviewed head.
+ * The pre_approval_gate verdict poster ticks exactly these labels.
+ */
+export const VERIFIED_ITEMS_ANGLES = Object.freeze(new Set(["acceptance-criteria", "pr-checklist"]));
 
 /**
  * Consolidate the parallel per-angle review results into one gate verdict +

@@ -46,7 +46,7 @@ Optional:
                                  no two fresh (non-carried) angles may share one reviewer identity, and every fresh angle must record one (reviewer or dispatchId) — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
                                  EXCEPTION: fresh angles sharing a reviewer may all declare the same "group" name (grouped fan-out dispatch); differing or missing group names still fail closed
                                  Omitted, a "provenance" object embedded in the --findings/--findings-file wrapper
-                                 (any caller-supplied { overallVerdict, findings, provenance? } object, e.g. from
+                                 (any caller-supplied { overallVerdict, findings, provenance?, verifiedItems? } object, e.g. from
                                  consolidate-fanin.mjs's --ledger-out) is used instead, validated through this SAME
                                  check — a malformed wrapper provenance fails closed identically. Absent both, the log
                                  is written with no provenance, as before, UNLESS --execution-mode fanout_fanin is also
@@ -732,7 +732,16 @@ export async function readContextDispatchUnits({ repo, pr, gate, headSha, contex
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   // The ledger write resolves against repoRoot (process.cwd() on the CLI), so the guard does too.
   if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
-  const { findings: rawFindings, overallVerdict, provenance: wrapperProvenance } = await resolveFindings(options);
+  const { findings: rawFindings, overallVerdict, provenance: wrapperProvenance, verifiedItems: rawVerifiedItems } = await resolveFindings(options);
+  // The wrapper's reviewer-verified AC/DoD labels (consolidate-fanin's union).
+  // Fail closed on a malformed value; persisted trimmed and deduplicated.
+  let verifiedItems;
+  if (rawVerifiedItems !== undefined) {
+    if (!Array.isArray(rawVerifiedItems) || rawVerifiedItems.some((item) => typeof item !== "string" || item.trim().length === 0)) {
+      throw parseError('findings wrapper "verifiedItems" must be an array of non-empty strings');
+    }
+    verifiedItems = [...new Set(rawVerifiedItems.map((item) => item.trim()))];
+  }
   // When a judge verdict artifact is supplied, enrich the findings with the
   // judge's relevance-based dispositions (GATE-EXEC-JUDGE-PHASE) before writing the ledger:
   // applyJudgeDispositions fails closed on a malformed verdict, an
@@ -919,6 +928,11 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // gates.requireFanoutProvenance enforcement.
   if (provenance !== undefined) {
     log.provenance = provenance;
+  }
+  // Optional and additive, beside provenance: the head-bound record of the AC/DoD
+  // labels this round's reviewers verified. upsert-checkpoint-verdict ticks them.
+  if (verifiedItems !== undefined && verifiedItems.length > 0) {
+    log.verifiedItems = verifiedItems;
   }
   // The judge's scope-drift verdict on the PR as a whole (GATE-EXEC-JUDGE-PHASE); optional
   // and additive.

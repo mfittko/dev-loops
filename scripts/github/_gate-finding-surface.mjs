@@ -679,7 +679,18 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
   // re-validates with the same function rather than assuming a hand-edited
   // or shadow ledger is honest.
   const provenance = parsed.provenance !== undefined ? parsed.provenance : null;
-  return { repo: repoSlug, pr, gate, headSha: fullHeadSha, verdict, findings: normalizedFindings, provenance, overallVerdict: overallVerdictRaw !== undefined ? overallVerdictRaw : null };
+  // The reviewer-verified AC/DoD labels the pre_approval_gate poster ticks.
+  // Optional; a malformed value fails closed so a typo can never tick a label.
+  const verifiedItems = parsed.verifiedItems;
+  if (verifiedItems !== undefined
+    && (!Array.isArray(verifiedItems) || verifiedItems.some((item) => typeof item !== "string" || item.trim().length === 0))) {
+    throw fail(`Gate findings ledger "${ledgerPath}" "verifiedItems" must be an array of non-empty strings`);
+  }
+  return {
+    repo: repoSlug, pr, gate, headSha: fullHeadSha, verdict, findings: normalizedFindings, provenance,
+    overallVerdict: overallVerdictRaw !== undefined ? overallVerdictRaw : null,
+    verifiedItems: verifiedItems === undefined ? [] : verifiedItems.map((item) => item.trim()),
+  };
 }
 
 // ---------------------------------------------------------------------------
