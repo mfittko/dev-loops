@@ -506,7 +506,7 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
  * not key on run id at all.
  *
  * Denies only when ALL of: strict enforcement is on, the target is a tracked repo mutation, AND
- * the caller's `agent_type` is the coordinator's (`"dev-loop"`). Every other `agent_type` —
+ * the caller's `agent_type` is a coordinator's (`"dev-loop"` or `"gate-coordinator"`). Every other `agent_type` —
  * including `null` (the Pi main agent / an interactive Claude session with no subagent context,
  * which is `decideWriteGuard`'s boundary, not this one) and any worker role — is allowed here.
  * Strict enforcement is opt-in via `enforce` (the hook derives it from

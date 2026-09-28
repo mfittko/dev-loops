@@ -62,7 +62,7 @@ you set them (CI config, shell profiles, runner scripts):
 
 `DEVLOOPS_COORDINATOR_READONLY` is a new opt-in flag (#2082): under the Claude Code harness it
 enforces the coordinator→worker delegation boundary one level down from
-`DEVLOOPS_MAIN_AGENT_READONLY` — the dev-loop agent (acting as COORDINATOR) must delegate every
+`DEVLOOPS_MAIN_AGENT_READONLY` — a coordinator agent (the dev-loop agent or the gate-coordinator agent) must delegate every
 tracked-file implementation edit and targeted code-verification/build command to a fresh worker
 subagent. Local full-repository validation runs only through `dev-loops gate resolve-validation`;
 the hook still recognizes commands such as `bun run verify`, `vitest`, and `npm test`.
