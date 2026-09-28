@@ -884,9 +884,9 @@ describe("below the cap, the handoff, the detector, and merge agree on a post-co
 
 // The --watch-status readback (what `dev-loops loop info` runs): the loop
 // snapshot, then the carry facts fetch, and no requester call.
-async function runHandoffReadback(fixture, { root }) {
+async function runHandoffReadback(fixture, { root, factsFail = false }) {
   const snapshotEntries = handoffEntries(fixture).slice(0, 5);
-  const facts = { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,reviews,files"], stdout: line({ headRefOid: HEAD, reviews: fixture.reviews, files: [] }) };
+  const facts = { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,reviews,files"], stdout: line({ headRefOid: HEAD, reviews: fixture.reviews, files: [] }), ...(factsFail ? { exitCode: 1, stdout: "" } : {}) };
   const { runChild, unmatched, calls } = strictRunChild([...snapshotEntries, facts, ...fixture.shared]);
   const result = await runHandoff({ repo: REPO, pr: PR, watchStatus: "idle" }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "", GH_SEQUENCE_PATH: "1" }), ghCommand: "gh", runChild, repoRoot: root });
   assert.deepEqual(unmatched, [], "readback made an undeclared gh call");
@@ -905,8 +905,18 @@ describe("readback: the handoff's advice agrees with the request tool", () => {
     assert.notEqual(readback.state, "ready_to_rerequest_review");
     assert.doesNotMatch(readback.nextAction, /Re-request/);
     assert.equal(readback.carriedConvergence.source, "converged_once");
-    assert.equal(typeof readback.carriedConvergence.reason, "string");
     assert.equal(request.status, "suppressed_post_convergence");
+    // The request tool embeds the carry's machine reason in `detail`; both
+    // sides must name the same carry.
+    assert.ok(readback.carriedConvergence.reason.length > 0);
+    assert.ok(request.detail.includes(readback.carriedConvergence.reason), `${request.detail} vs ${readback.carriedConvergence.reason}`);
+  });
+
+  it("carry facts unavailable: the readback keeps the state and marks the advice unverified", async () => {
+    const readback = await runHandoffReadback(scenario({ delta: CODE_DELTA }), { root: convergedOnceWideRoot, factsFail: true });
+
+    assert.equal(readback.state, "ready_to_rerequest_review");
+    assert.deepEqual(readback.carriedConvergence, { resolved: false, reason: "carry facts unavailable" });
   });
 
   it("unconverged: the readback advises a re-request the request tool executes", async () => {

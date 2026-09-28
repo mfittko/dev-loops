@@ -15,9 +15,13 @@ before requesting CI/Copilot, and again before merge.
   number of times**; if it never settles, the gate **fails closed to a recheck**
   (`nextAction: wait_for_ci`). An unsettled merge state is never treated as clean.
 - `loop info` surfaces a **Mergeable:** line (mergeStateStatus included). It also
-  reads the base branch rules: a required check with no entry at the head replaces
-  the CI line, a ruleset approval renders as an `Operator blocker:` line, and a
-  failed rules lookup renders `INCOMPLETE` instead of a mergeable claim.
+  reads the repository rulesets for the base branch (classic branch protection
+  required checks are not read). A required check with no entry at the head
+  renders a `Required checks:` line, and green observed CI never reads as success
+  beside it. A `BLOCKED` merge state never renders as mergeable: it names the
+  missing, pending, or failed required checks and ruleset approvals it knows,
+  and each approval also renders as an `Operator blocker:` line. A failed rules
+  lookup renders `INCOMPLETE` instead of a mergeable claim.
 
 ### Deterministic auto-resolve (additive CHANGELOG only)
 

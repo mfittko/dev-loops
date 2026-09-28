@@ -483,7 +483,7 @@ Required:
 - `--pr <number>`
 
 Optional:
-- `--watch-status <changed|timeout|idle>` — refresh deterministic state after a prior watcher observation; this readback mode never requests review again, but it resolves the request tool's converged-once carry, so it never reads `ready_to_rerequest_review` where the request tool would return `suppressed_post_convergence` (the carry is reported as `carriedConvergence`)
+- `--watch-status <changed|timeout|idle>` — refresh deterministic state after a prior watcher observation; this readback mode never requests review again, but it resolves the request tool's converged-once carry, so it never reads `ready_to_rerequest_review` where the request tool would return `suppressed_post_convergence` (the carry is reported as `carriedConvergence`; when the carry facts are unavailable it keeps the state and reports `carriedConvergence.resolved: false`)
 
 Contract:
 - this helper is the source of truth for normal request/re-request/watch routing on Copilot PR follow-up

@@ -112,19 +112,21 @@ function formatCiDisplay(ciStatus, ciConclusion) {
 /**
  * Project the branch rules that apply to the PR base (GET
  * repos/{repo}/rules/branches/{branch}) onto the observed check rollup.
+ * Only repository rulesets are covered; classic branch protection required
+ * checks are not read.
  * `rules` that are not an array mean the lookup failed: resolved is false.
- * A required check has reported when any rollup entry carries its name
- * (CheckRun `name` or StatusContext `context`), whatever its state.
+ * A required check is missing when no rollup entry carries its name (CheckRun
+ * `name` or StatusContext `context`); a reported one is pending or failed by
+ * its entry state.
  */
 export function summarizeBranchRules(rules, statusCheckRollup) {
   if (!Array.isArray(rules)) {
-    return { resolved: false, missingRequiredChecks: [], operatorApprovals: [] };
+    return { resolved: false, missingRequiredChecks: [], pendingRequiredChecks: [], failedRequiredChecks: [], operatorApprovals: [] };
   }
-  const reported = new Set((Array.isArray(statusCheckRollup) ? statusCheckRollup : [])
-    .flatMap((entry) => [entry?.name, entry?.context]));
+  const rollup = (Array.isArray(statusCheckRollup) ? statusCheckRollup : []).filter((entry) => entry && typeof entry === "object");
   const required = rules
     .filter((rule) => rule?.type === "required_status_checks")
-    .flatMap((rule) => rule.parameters?.required_status_checks ?? [])
+    .flatMap((rule) => Array.isArray(rule.parameters?.required_status_checks) ? rule.parameters.required_status_checks : [])
     .map((check) => check?.context)
     .filter((context) => typeof context === "string");
   const operatorApprovals = [];
@@ -137,11 +139,27 @@ export function summarizeBranchRules(rules, statusCheckRollup) {
       operatorApprovals.push("ruleset requires an extra approval for unattributed changes");
     }
   }
-  return {
-    resolved: true,
-    missingRequiredChecks: [...new Set(required)].filter((context) => !reported.has(context)),
-    operatorApprovals,
-  };
+  const missingRequiredChecks = [];
+  const pendingRequiredChecks = [];
+  const failedRequiredChecks = [];
+  for (const context of new Set(required)) {
+    const entries = rollup.filter((entry) => entry.name === context || entry.context === context);
+    if (entries.length === 0) missingRequiredChecks.push(context);
+    else if (entries.some(isFailedCheck)) failedRequiredChecks.push(context);
+    else if (entries.some(isPendingCheck)) pendingRequiredChecks.push(context);
+  }
+  return { resolved: true, missingRequiredChecks, pendingRequiredChecks, failedRequiredChecks, operatorApprovals };
+}
+
+// StatusContext entries carry `state`; CheckRun entries carry `status`/`conclusion`.
+const FAILED_CHECK_RUN_CONCLUSIONS = new Set(["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
+function isFailedCheck(entry) {
+  if (typeof entry.state === "string") return entry.state === "FAILURE" || entry.state === "ERROR";
+  return FAILED_CHECK_RUN_CONCLUSIONS.has(entry.conclusion);
+}
+function isPendingCheck(entry) {
+  if (typeof entry.state === "string") return entry.state === "PENDING" || entry.state === "EXPECTED";
+  return entry.status !== "COMPLETED";
 }
 
 function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup = null, branchRules = null, baseRefName = null) {
@@ -160,8 +178,21 @@ function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup =
   if (branchRules && !branchRules.resolved) {
     return `⚠️ INCOMPLETE — ruleset for ${baseRefName ?? "base"} unresolved; mergeability unknown`;
   }
+  // BLOCKED is never mergeable: name what the ruleset projection knows.
+  if (s === "BLOCKED") {
+    const reasons = [];
+    if (branchRules?.missingRequiredChecks.length > 0) reasons.push(`ruleset-required check(s) not reported: ${branchRules.missingRequiredChecks.join(", ")}`);
+    if (branchRules?.pendingRequiredChecks.length > 0) reasons.push(`required check(s) pending: ${branchRules.pendingRequiredChecks.join(", ")}`);
+    if (branchRules?.failedRequiredChecks.length > 0) reasons.push(`required check(s) failed: ${branchRules.failedRequiredChecks.join(", ")}`);
+    reasons.push(...(branchRules?.operatorApprovals ?? []));
+    return `⏳ BLOCKED — ${reasons.length > 0 ? reasons.join("; ") : "reason not projected"}`;
+  }
   if (branchRules?.missingRequiredChecks.length > 0) {
-    return `⏳ BLOCKED${s ? ` (${s})` : ""} — ruleset-required check(s) not reported: ${branchRules.missingRequiredChecks.join(", ")}`;
+    const missing = `⏳ BLOCKED${s ? ` (${s})` : ""} — ruleset-required check(s) not reported: ${branchRules.missingRequiredChecks.join(", ")}`;
+    if (s !== "UNSTABLE") return missing;
+    // A real failure beside the missing check must stay visible.
+    const { benign, reason } = classifyBenignGateEvidenceUnstable(statusCheckRollup, mergeStateStatus);
+    return benign ? missing : `${missing}; ${reason}; investigate before merge`;
   }
   // A benign UNSTABLE is the cosmetic rollup noise from superseded Gate-evidence
   // job cancellations (runner or reporter) while the required gate-evidence
@@ -179,26 +210,31 @@ function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup =
   return s || m || "unknown";
 }
 
-function formatPrSummary(prData, handoffResult, branchRules = null) {
+export function formatPrSummary(prData, handoffResult, branchRules = null) {
   const lines = [];
   lines.push(`PR #${prData.number}: ${prData.title}`);
   lines.push(`  Branch: ${formatBranchDisplay(prData.headRefName, prData.baseRefName)}`);
   lines.push(`  State: ${prData.state}${prData.isDraft ? " (draft)" : ""}`);
   lines.push(`  Author: ${prData.author?.login || "unknown"}`);
   lines.push(`  Mergeable: ${formatMergeableDisplay(prData.mergeable, prData.mergeStateStatus, prData.statusCheckRollup, branchRules, prData.baseRefName)}`);
-  for (const approval of branchRules?.operatorApprovals ?? []) {
-    lines.push(`  Operator blocker: ${approval}`);
+  if (String(prData.mergeStateStatus).toUpperCase() === "BLOCKED") {
+    for (const approval of branchRules?.operatorApprovals ?? []) {
+      lines.push(`  Operator blocker: ${approval}`);
+    }
   }
-  // A ruleset-required check that never reported overrides the observed CI.
   const missingChecks = branchRules?.missingRequiredChecks ?? [];
   if (missingChecks.length > 0) {
-    lines.push(`  CI: ⏳ ruleset-required check(s) not reported at head: ${missingChecks.join(", ")}`);
+    lines.push(`  Required checks: not reported at head: ${missingChecks.join(", ")}`);
   }
 
   if (handoffResult?.snapshot) {
     const s = handoffResult.snapshot;
-    if (s.ciStatus !== undefined && missingChecks.length === 0) {
-      lines.push(`  CI: ${formatCiDisplay(s.ciStatus, s.ciConclusion)}`);
+    if (s.ciStatus !== undefined) {
+      // Green observed checks never read as success while a required check is absent.
+      const green = s.ciStatus === "success" || s.ciStatus === "crediblyGreen";
+      lines.push(missingChecks.length > 0 && green
+        ? `  CI: observed checks green; ruleset-required check(s) not reported: ${missingChecks.join(", ")}`
+        : `  CI: ${formatCiDisplay(s.ciStatus, s.ciConclusion)}`);
     }
     if (s.unresolvedThreadCount !== undefined) {
       lines.push(`  Unresolved threads: ${s.unresolvedThreadCount}`);
@@ -226,7 +262,9 @@ function formatPrSummary(prData, handoffResult, branchRules = null) {
     lines.push(`  Loop state: ${handoffResult.state}`);
   }
   const carried = handoffResult?.carriedConvergence;
-  if (carried) {
+  if (carried?.resolved === false) {
+    lines.push(`  Copilot: re-request advice unverified against the requester (${carried.reason})`);
+  } else if (carried) {
     lines.push(`  Copilot: re-request suppressed by the requester (${carried.source}: ${carried.reason})`);
   }
 
@@ -292,15 +330,20 @@ function buildPrInfo(prNumber, repo, cwd) {
   }
 
   // ponytail: one page of 100 rules; paginate if a base ever carries more.
-  let rules = null;
-  try {
-    if (prData.baseRefName) {
-      rules = ghJson(["api", `repos/${repo}/rules/branches/${prData.baseRefName}?per_page=100`], cwd);
+  // A closed or merged PR has no mergeability to project.
+  let branchRules = null;
+  if (prData.state === "OPEN") {
+    let rules = null;
+    try {
+      if (prData.baseRefName) {
+        const branch = prData.baseRefName.split("/").map(encodeURIComponent).join("/");
+        rules = ghJson(["api", `repos/${repo}/rules/branches/${branch}?per_page=100`], cwd);
+      }
+    } catch {
+      rules = null;
     }
-  } catch {
-    rules = null;
+    branchRules = summarizeBranchRules(rules, prData.statusCheckRollup);
   }
-  const branchRules = summarizeBranchRules(rules, prData.statusCheckRollup);
 
   return { prData, handoffResult, branchRules };
 }

@@ -399,13 +399,86 @@ test("summarizeBranchRules reports an unresolved ruleset lookup", async () => {
   assert.equal(summarizeBranchRules([], []).resolved, true);
 });
 
+test("summarizeBranchRules tolerates malformed rules and rollup entries", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const cases = [
+    { name: "Not Found object", rules: { message: "Not Found" }, rollup: [], resolved: false, missing: [] },
+    { name: "rule without parameters", rules: [{ type: "required_status_checks" }, { type: "pull_request" }], rollup: [], resolved: true, missing: [] },
+    { name: "non-array required_status_checks", rules: [{ type: "required_status_checks", parameters: { required_status_checks: { context: "gate-evidence" } } }], rollup: [], resolved: true, missing: [] },
+    { name: "non-string context", rules: [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: 7 }, { context: "gate-evidence" }] } }], rollup: [], resolved: true, missing: ["gate-evidence"] },
+    { name: "null rollup entries", rules: MAIN_RULESET, rollup: [null, { context: "gate-evidence", state: "SUCCESS" }], resolved: true, missing: [] },
+    { name: "empty rules array", rules: [], rollup: [null], resolved: true, missing: [] },
+  ];
+  for (const { name, rules, rollup, resolved, missing } of cases) {
+    const summary = summarizeBranchRules(rules, rollup);
+    assert.equal(summary.resolved, resolved, name);
+    assert.deepEqual(summary.missingRequiredChecks, missing, name);
+  }
+});
+
+test("summarizeBranchRules classifies reported required checks as pending or failed", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const rules = [{ type: "required_status_checks", parameters: { required_status_checks: ["a", "b", "c", "d", "e"].map((context) => ({ context })) } }];
+  const summary = summarizeBranchRules(rules, [
+    { context: "a", state: "PENDING" },
+    { context: "b", state: "ERROR" },
+    { name: "c", status: "IN_PROGRESS", conclusion: null },
+    { name: "d", status: "COMPLETED", conclusion: "TIMED_OUT" },
+    { name: "e", status: "COMPLETED", conclusion: "SUCCESS" },
+  ]);
+  assert.deepEqual(summary.pendingRequiredChecks, ["a", "c"]);
+  assert.deepEqual(summary.failedRequiredChecks, ["b", "d"]);
+  assert.deepEqual(summary.missingRequiredChecks, []);
+});
+
+test("formatPrSummary never renders a BLOCKED merge state as mergeable", async () => {
+  const { formatPrSummary, summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const pr = { number: 1, title: "t", state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED", statusCheckRollup: [] };
+  const unknown = formatPrSummary(pr, null, summarizeBranchRules([], []));
+  assert.match(unknown, /Mergeable: ⏳ BLOCKED — reason not projected/);
+  assert.doesNotMatch(unknown, /✅/);
+  const rules = [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "a" }, { context: "b" }] } }];
+  const known = formatPrSummary({ ...pr, statusCheckRollup: [{ context: "a", state: "PENDING" }, { context: "b", state: "FAILURE" }] }, null, summarizeBranchRules(rules, [{ context: "a", state: "PENDING" }, { context: "b", state: "FAILURE" }]));
+  assert.match(known, /Mergeable: ⏳ BLOCKED — required check\(s\) pending: a; required check\(s\) failed: b/);
+});
+
+test("formatPrSummary keeps the observed CI state beside a missing required check", async () => {
+  const { formatPrSummary, summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const pr = { number: 1, title: "t", state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED", statusCheckRollup: GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE };
+  const rules = summarizeBranchRules(MAIN_RULESET, GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE);
+  const green = formatPrSummary(pr, { snapshot: { ciStatus: "success" } }, rules);
+  assert.match(green, /CI: observed checks green; ruleset-required check\(s\) not reported: gate-evidence/);
+  assert.doesNotMatch(green, /CI success/);
+  const red = formatPrSummary(pr, { snapshot: { ciStatus: "failure", ciConclusion: "verify" } }, rules);
+  assert.match(red, /CI: CI ❌ \(verify\)/);
+  assert.match(red, /Required checks: not reported at head: gate-evidence/);
+});
+
 test("info.mjs --pr names a missing ruleset-required check and the operator approval instead of CI success", async () => {
   const { code, stdout } = await runPrInfoWithRollup("BLOCKED", GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, MAIN_RULESET);
   assert.equal(code, 0);
-  assert.match(stdout, /CI: .*gate-evidence/);
+  // The handoff subprocess fails under the gh stub, so no snapshot CI line renders.
+  assert.match(stdout, /Required checks: not reported at head: gate-evidence/);
   assert.doesNotMatch(stdout, /CI success/);
   assert.doesNotMatch(stdout, /✅ MERGEABLE/);
   assert.match(stdout, /Operator blocker: .*extra approval for unattributed changes/);
+});
+
+test("info.mjs --pr renders no Operator blocker line when the merge state is not BLOCKED", async () => {
+  const withGateEvidence = [...GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, { context: "gate-evidence", state: "SUCCESS" }];
+  const { code, stdout } = await runPrInfoWithRollup("CLEAN", withGateEvidence, MAIN_RULESET);
+  assert.equal(code, 0);
+  assert.doesNotMatch(stdout, /Operator blocker/);
+});
+
+test("info.mjs --pr keeps a real failure visible beside a missing ruleset-required check", async () => {
+  const { code, stdout } = await runPrInfoWithRollup("UNSTABLE", [
+    { name: "verify", status: "COMPLETED", conclusion: "FAILURE" },
+  ], MAIN_RULESET);
+  assert.equal(code, 0);
+  // Only the Mergeable line carries the failure here: the handoff subprocess
+  // fails under the gh stub, so no snapshot CI line renders.
+  assert.match(stdout, /Mergeable: ⏳ BLOCKED \(UNSTABLE\) — ruleset-required check\(s\) not reported: gate-evidence; .*investigate before merge/);
 });
 
 test("info.mjs --pr reports an incomplete projection when the ruleset lookup fails", async () => {

@@ -54,7 +54,7 @@ Output (stdout, JSON):
     "allowedTransitions": [...], "nextAction": "...", "snapshot": {...},
     "reviewRequestStatus"?: "...", "watchStatus"?: "...",
     "suppressedPostConvergence"?: true, "suppressedPostConvergenceDocsOnly"?: true,
-    "carriedConvergence"?: { "source", "sourceReviewId", "sourceHeadSha", "reason", "bodyDisposition" },
+    "carriedConvergence"?: { "resolved", "source"?, "sourceReviewId"?, "sourceHeadSha"?, "reason", "bodyDisposition"? },
     "autoRerequestEligible": true|false, "sameHeadCleanConverged": true|false,
     "roundCapCleanEligible": true|false, "loopDisposition": "...", "terminal": true|false,
     "requestWatchContract": {
@@ -89,9 +89,14 @@ suppressedPostConvergence:
   Copilot wait. requestWatchContract.requestStatus is "none" for this case.
 carriedConvergence:
   Present only on a --watch-status readback that would otherwise read
-  ready_to_rerequest_review while the request tool would suppress the request
-  (converged-once carry or operator marker). The state then maps to the
-  suppressed disposition above; "reason" is the requester's machine reason.
+  ready_to_rerequest_review. With "resolved": true, the request tool would
+  suppress the request (converged-once carry or operator marker); the state
+  then maps to the suppressed disposition above and "reason" is the
+  requester's machine reason.
+  When the carry facts cannot be fetched, the state stays
+  ready_to_rerequest_review and carriedConvergence is
+  { "resolved": false, "reason": "carry facts unavailable" }: the advice is
+  unverified against the request tool.
 Watch refresh rule:
   watcher timeout/idle is observational only. Re-run this helper with
   --watch-status and stop only when terminal=true. Pending or unresolved
@@ -760,22 +765,27 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       && options.watchStatus !== undefined
       && interpretation.state === STATE.READY_TO_REREQUEST_REVIEW) {
     const facts = await fetchReopenCycleFacts(options, { env, ghCommand, runChild });
-    const carryFacts = {
-      repo: options.repo,
-      pr: options.pr,
-      currentHeadSha: typeof facts?.headRefOid === "string" ? facts.headRefOid.trim() : null,
-      prData: { reviews: facts?.reviews },
-      copilotReviewRequestStatus: snapshot.copilotReviewRequestStatus ?? "none",
-      unresolvedThreadCount: snapshot.unresolvedThreadCount,
-      requireCopilotConvergenceAtLatestHead,
-    };
-    const runtime = { env, ghCommand, runChild };
-    const markerCarry = await resolvePostConvergenceReviewSuppressed(carryFacts, runtime);
-    const carried = markerCarry.carried ? markerCarry : await resolveCarriedConvergence(carryFacts, runtime);
-    if (carried.carried) {
-      const { source, sourceReviewId, sourceHeadSha, reason, bodyDisposition } = carried;
-      carriedConvergence = { source, sourceReviewId, sourceHeadSha, reason, bodyDisposition };
-      interpretation = toPostConvergenceSuppressed(interpretation);
+    if (facts === null) {
+      // Keep the state, but mark the projection unverified against the requester.
+      carriedConvergence = { resolved: false, reason: "carry facts unavailable" };
+    } else {
+      const carryFacts = {
+        repo: options.repo,
+        pr: options.pr,
+        currentHeadSha: typeof facts.headRefOid === "string" ? facts.headRefOid.trim() : null,
+        prData: { reviews: facts.reviews },
+        copilotReviewRequestStatus: snapshot.copilotReviewRequestStatus ?? "none",
+        unresolvedThreadCount: snapshot.unresolvedThreadCount,
+        requireCopilotConvergenceAtLatestHead,
+      };
+      const runtime = { env, ghCommand, runChild };
+      const markerCarry = await resolvePostConvergenceReviewSuppressed(carryFacts, runtime);
+      const carried = markerCarry.carried ? markerCarry : await resolveCarriedConvergence(carryFacts, runtime);
+      if (carried.carried) {
+        const { source, sourceReviewId, sourceHeadSha, reason, bodyDisposition } = carried;
+        carriedConvergence = { resolved: true, source, sourceReviewId, sourceHeadSha, reason, bodyDisposition };
+        interpretation = toPostConvergenceSuppressed(interpretation);
+      }
     }
   }
 
