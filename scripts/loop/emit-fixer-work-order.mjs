@@ -7,6 +7,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -189,23 +190,37 @@ export async function emitFixerWorkOrder({
   return { ...plan, planPath };
 }
 
+/**
+ * The Claude fixer agent type for the checkout at `cwd`. A dev-loops source checkout
+ * (the `.claude/bin/dev-loops-run` isCheckout rule: package.json name "dev-loops" plus a
+ * sibling scripts/) resolves its repo-local `fixer`; any other repo resolves the plugin
+ * install's `dev-loops:fixer`. The hooks accept both through normalizeAgentType.
+ */
+export function claudeFixerAgentType(cwd = process.cwd()) {
+  const root = resolveRepoRoot(cwd);
+  try {
+    if (existsSync(path.join(root, "scripts")) && JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).name === "dev-loops") return "fixer";
+  } catch { /* no readable package.json: not a source checkout */ }
+  return "dev-loops:fixer";
+}
+
 // The checked dispatch seam per harness: the adapter payload carries the fixed pointer only
 // (plus the fixed `description` the Claude Agent tool requires).
 const FIXER_DISPATCH_ADAPTERS = {
-  claude: (prompt) => ({ subagent_type: "fixer", description: "fixer work order", prompt }),
+  claude: (prompt, cwd) => ({ subagent_type: claudeFixerAgentType(cwd), description: "fixer work order", prompt }),
   pi: (prompt) => ({ agent: "fixer", task: prompt }),
 };
 
 /** The harness adapter payload for a fixer dispatch; any other harness refuses (never legacy prose). */
-export function buildFixerDispatchPayload({ harness, plan }) {
+export function buildFixerDispatchPayload({ harness, plan, cwd = process.cwd() }) {
   const adapter = Object.hasOwn(FIXER_DISPATCH_ADAPTERS, harness) ? FIXER_DISPATCH_ADAPTERS[harness] : null;
   if (!adapter) throw new WorkOrderRefusal("unsupported_adapter", `harness ${JSON.stringify(harness)} has no fixer dispatch adapter; supported: ${Object.keys(FIXER_DISPATCH_ADAPTERS).join(", ")}`);
-  return adapter(plan.dispatchPrompt);
+  return adapter(plan.dispatchPrompt, cwd);
 }
 
 /** Refuses a payload that is not exactly the harness adapter payload for the plan's pointer (same keys, same values). */
-export function assertFixerDispatchPayload({ harness, payload, plan }) {
-  const expected = buildFixerDispatchPayload({ harness, plan: { dispatchPrompt: buildDispatchPointer(plan) } });
+export function assertFixerDispatchPayload({ harness, payload, plan, cwd = process.cwd() }) {
+  const expected = buildFixerDispatchPayload({ harness, plan: { dispatchPrompt: buildDispatchPointer(plan) }, cwd });
   const keys = Object.keys(expected);
   if (Object.keys(payload ?? {}).length !== keys.length || keys.some((key) => payload[key] !== expected[key])) {
     throw new WorkOrderRefusal("dispatch_payload_mismatch", `the ${harness} fixer dispatch must be ${JSON.stringify({ ...expected, [keys.at(-1)]: "<the compact pointer>" })} unchanged`);
@@ -310,7 +325,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       ...(fetchPr ? { fetchPr } : {}),
     });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
-    const dispatchPayload = buildFixerDispatchPayload({ harness: values.harness, plan });
+    const dispatchPayload = buildFixerDispatchPayload({ harness: values.harness, plan, cwd });
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, dispatchPayload, planPath });
   } catch (err) {
     if (!(err instanceof Refusal || err instanceof WorkOrderRefusal)) throw err;

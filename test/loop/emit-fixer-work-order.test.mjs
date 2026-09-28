@@ -176,19 +176,20 @@ test("F2: Claude and Pi initial, resumed and replacement adapter payloads are th
     for (const [harness, textKey] of [["claude", "prompt"], ["pi", "task"]]) {
       const initial = JSON.parse(cli(harness).stdout);
       const plan = JSON.parse(await readFile(initial.planPath, "utf8"));
-      const resumed = buildFixerDispatchPayload({ harness, plan });
+      const resumed = buildFixerDispatchPayload({ harness, plan, cwd: wt });
       const replacementOut = JSON.parse(cli(harness).stdout);
       const replacement = { plan: JSON.parse(await readFile(replacementOut.planPath, "utf8")), payload: replacementOut.dispatchPayload };
       for (const [payload, unit] of [[initial.dispatchPayload, plan], [resumed, plan], [replacement.payload, replacement.plan]]) {
         assert.deepEqual(Object.keys(payload).sort(), (harness === "claude" ? ["subagent_type", "description"] : ["agent"]).concat(textKey).sort());
-        if (harness === "claude") assert.equal(payload.description, "fixer work order");
+        // A consumer checkout resolves the plugin-namespaced agent; the hooks normalize it to `fixer`.
+        if (harness === "claude") assert.deepEqual([payload.subagent_type, payload.description], ["dev-loops:fixer", "fixer work order"]);
         assert.equal(payload[textKey], buildDispatchPointer(unit));
         assert.ok(Buffer.byteLength(payload[textKey]) <= DISPATCH_POINTER_MAX_BYTES);
-        assertFixerDispatchPayload({ harness, payload, plan: unit });
+        assertFixerDispatchPayload({ harness, payload, plan: unit, cwd: wt });
       }
       assert.deepEqual(initial.dispatchPayload, resumed);
-      for (const bad of [{ ...resumed, [textKey]: `${resumed[textKey]} Also refactor the parser.` }, { ...resumed, [textKey]: `Context: x. ${resumed[textKey]}` }, { ...resumed, extra: "prose" }, ...(harness === "claude" ? [{ ...resumed, description: "fix the parser" }] : [])]) {
-        assert.throws(() => assertFixerDispatchPayload({ harness, payload: bad, plan }), (err) => err.refusal === "dispatch_payload_mismatch");
+      for (const bad of [{ ...resumed, [textKey]: `${resumed[textKey]} Also refactor the parser.` }, { ...resumed, [textKey]: `Context: x. ${resumed[textKey]}` }, { ...resumed, extra: "prose" }, ...(harness === "claude" ? [{ ...resumed, description: "fix the parser" }, { ...resumed, subagent_type: "fixer" }] : [])]) {
+        assert.throws(() => assertFixerDispatchPayload({ harness, payload: bad, plan, cwd: wt }), (err) => err.refusal === "dispatch_payload_mismatch");
       }
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
@@ -196,6 +197,8 @@ test("F2: Claude and Pi initial, resumed and replacement adapter payloads are th
     assert.equal(codex.status, 1, codex.stderr);
     assert.equal(JSON.parse(codex.stdout).refusal, "unsupported_adapter");
     assert.throws(() => buildFixerDispatchPayload({ harness: "codex", plan: {} }), (err) => err.refusal === "unsupported_adapter");
+    // The dev-loops source checkout resolves its repo-local agent.
+    assert.equal(buildFixerDispatchPayload({ harness: "claude", plan: {}, cwd: process.cwd() }).subagent_type, "fixer");
   });
 });
 
@@ -213,10 +216,11 @@ test("F3: the pull writes a fixer receipt under the main checkout", async () => 
   });
 });
 
-test("F3: wrong digest, execution or role and a malformed payload refuse by name", async () => {
+test("F3: wrong digest, execution, role or target and a malformed payload refuse by name", async () => {
   await withFixture(async ({ wt, emit }) => {
     const unit = await emit();
     assert.equal(refusal(pull(unit, wt, { digest: "0".repeat(64) })), "dispatch_reference_mismatch");
+    assert.equal(refusal(pull(unit, wt, { ref: unit.workOrderRef.replace(`#${PR}:`, `#${PR + 1}:`) })), "dispatch_reference_mismatch");
     assert.equal(refusal(pull(unit, wt, { execution: "f1-ffffffff" })), "dispatch_identity_mismatch");
     assert.equal(refusal(pull(unit, wt, { ref: unit.workOrderRef.replace(/^fixer:/, "review:") })), "dispatch_reference_mismatch");
     const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
@@ -445,7 +449,7 @@ test("F5: the Bash gate binds fixer git commit/push to the pulled branch and lea
       assert.equal(bash(wt, command), "allow", command);
     }
     for (const command of [
-      "git push", "git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", `cd ${root} && git commit -m x`, `git -C ${root} commit -m x`,
+      "git push", "git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", "git push --follow-tags origin issue-1", `cd ${root} && git commit -m x`, `git -C ${root} commit -m x`,
       `git -C ${root} cherry-pick HEAD`, `env -C ${root} git commit -m x`, "git -c push.default=matching push", "\\git commit -m x",
     ]) {
       assert.equal(bash(wt, command), "deny", command);
@@ -467,6 +471,10 @@ test("F5: a narrowed grant denies committing an out-of-authority file, commit_on
     await writeFile(path.join(wt, "README.md"), "changed via Bash\n");
     assert.equal(bash(wt, "git commit -am fix"), "deny", "README.md is outside --allowed-path src");
     git(wt, "checkout", "--", "README.md");
+    // A staged rename lists its out-of-authority source even under the default diff.renames.
+    git(wt, "mv", "README.md", "src/readme.md");
+    assert.equal(bash(wt, "git commit -m mv"), "deny", "the rename deletes README.md outside --allowed-path src");
+    git(wt, "mv", "src/readme.md", "README.md");
     await writeFile(path.join(wt, "src", "a.mjs"), "fixed\n");
     assert.equal(bash(wt, "git commit -am fix"), "allow");
     assert.equal(bash(wt, "git push origin issue-1"), "deny", "a commit_only pull never pushes");

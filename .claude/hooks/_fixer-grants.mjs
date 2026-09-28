@@ -48,8 +48,9 @@ const EXECUTION_RE = /^f(\d+)-[0-9a-f]{8}$/u;
 
 // Grant-to-agent binding. Verified by a headless PreToolUse stdin probe: a subagent's hook input
 // carries `agent_id` (e.g. "abea5f653d974dbf2"), identical across all tool calls of that subagent;
-// the main agent's input carries no `agent_id`. The fixer's write guard denies writes under the main
-// checkout's tmp/, so a fixer cannot forge a marker.
+// the main agent's input carries no `agent_id`. The fixer's write guard denies Write/Edit under the
+// main checkout's tmp/, but the hooks do not stop a non-git Bash write (a redirect, cp, an
+// interpreter) to a marker: ADR 0107 records that ceiling, closed by process-owned worker I/O (#2343).
 // Keyed by ref, digest AND execution, so a pull line with a wrong digest or execution never
 // overwrites the pulling fixer's marker.
 const bindingPath = (mainRoot, workOrderRef, workOrderDigest, executionIdentity) =>

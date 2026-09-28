@@ -77,7 +77,7 @@ async function deliver(repoRoot, dispositions, {
     const receiptPath = pullReceiptPath(path.join(repoRoot, "tmp"), REF);
     await mkdir(path.dirname(receiptPath), { recursive: true });
     await writeFile(receiptPath, JSON.stringify({
-      role: "fixer", workOrderRef: REF, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity, pulledAt, ...receipt,
+      role: "fixer", workOrderRef: REF, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity, pulledAt, subject: { planPath }, ...receipt,
     }));
     if (receiptMtime) await utimes(receiptPath, receiptMtime, receiptMtime);
   }
@@ -190,6 +190,22 @@ test("F6: an outputRef edited in place (outside the digest) refuses; the handoff
     await writeFile(fixerPlan, JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, outputRefs: [forged] } }));
     const { deps, calls } = runtime([], repoRoot);
     await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /is not the emitted handoff path/);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("F6: a plan copied to another directory with a matching outputRef refuses; the pulled plan location is bound", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, TACKLED);
+    const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+    const copyDir = path.join(repoRoot, "x");
+    const forged = path.join(copyDir, plan.executionIdentity, "fixer-disposition.json");
+    await mkdir(path.dirname(forged), { recursive: true });
+    await writeFile(forged, JSON.stringify({ headSha: HEAD_SHA, dispositions: [] }));
+    const copied = path.join(copyDir, "fixer-emit-plan.json");
+    await writeFile(copied, JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, outputRefs: [forged] } }));
+    const { deps, calls } = runtime([], repoRoot);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: copied, tmpRoot: "tmp" }, deps), /is not the plan the fixer pull read/);
     assert.equal(calls.length, 0);
   });
 });

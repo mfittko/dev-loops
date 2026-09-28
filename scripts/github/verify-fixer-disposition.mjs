@@ -163,6 +163,12 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     receiptTmpRoot, role: "fixer", workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity,
   });
   if (!receipt.ok) throw new Error(`fixer pull receipt for ${plan.workOrderRef} failed verification: ${receipt.reason}; dispatch a fresh fixer execution`);
+  // The plan location is caller-supplied: bind it to the plan the pull read, so a copied plan never names its own handoff.
+  const receiptPlanPath = receipt.receipt?.subject?.planPath;
+  const real = (p) => realpath(p).catch(() => path.resolve(p));
+  if (typeof receiptPlanPath !== "string" || await real(planPath) !== await real(receiptPlanPath)) {
+    throw new Error(`--fixer-plan "${options.fixerPlan}" is not the plan the fixer pull read (${receiptPlanPath}); pass the emitted plan`);
+  }
   // outputRefs is local material outside the digest, so an edited plan field is never trusted: the
   // handoff path is derived from the plan location and execution, exactly as the emitter builds it.
   const handoffPath = path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json");

@@ -790,7 +790,7 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
     : `no current pull grants path ${JSON.stringify(rel)} on branch ${JSON.stringify(checkout.branch)}`);
 }
 
-const PUSH_BEYOND_BRANCH = new Set(["--all", "--mirror", "--tags", "--delete", "-d", "--prune"]);
+const PUSH_BEYOND_BRANCH = new Set(["--all", "--mirror", "--tags", "--follow-tags", "--delete", "-d", "--prune"]);
 const PUSH_VALUE_OPTIONS = new Set(["-o", "--push-option", "--repo", "--receive-pack", "--exec"]);
 
 // A `git push` destination other than the grant branch, or null. `HEAD` pushes the checked-out branch.

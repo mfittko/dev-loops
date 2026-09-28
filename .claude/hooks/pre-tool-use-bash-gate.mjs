@@ -69,8 +69,9 @@ const commitPaths = (dir) => {
   try {
     const list = (...args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] }).split("\0").filter(Boolean);
     return [...new Set([
-      ...list("diff", "-z", "--no-relative", "--cached", "--name-only"),
-      ...list("diff", "-z", "--no-relative", "--name-only"),
+      // --no-renames: list both sides of a rename or copy whatever diff.renames says.
+      ...list("diff", "-z", "--no-relative", "--no-renames", "--cached", "--name-only"),
+      ...list("diff", "-z", "--no-relative", "--no-renames", "--name-only"),
       ...list("ls-files", "-z", "--others", "--exclude-standard", "--full-name", "--", ":/"),
     ])];
   } catch {

@@ -1181,10 +1181,23 @@ export function extractFixerGitInvocations(command) {
     } else if (!FIXER_GIT_READ_ONLY.has(subcommand) && subcommand !== "add"
       && !(subcommand === "branch" && (args.length === 0 || (args.length === 1 && args[0] === "--show-current")))) {
       return deny(`\`git ${subcommand}\``);
+    } else if (subcommand !== "add") {
+      const writer = args.find(writesOrRunsFile);
+      if (writer !== undefined) return deny(`\`git ${subcommand} ${writer}\` (writes a file or runs a pager command)`);
     }
   }
   return found;
 }
+
+// A read-only subcommand's option that writes a file or runs a command: `--output` (diff/log/show)
+// and `-O`/`--open-files-in-pager` (grep), with git's unique-prefix abbreviations (`--outp=`) and
+// short clusters (`-nO`). Any short cluster carrying `o`/`O` denies (fail-closed; use `--others`).
+const FILE_WRITING_LONG_OPTIONS = ["output", "open-files-in-pager"];
+const writesOrRunsFile = (arg) => {
+  if (/^-[^-][^=]*[oO]|^-[oO]/.test(arg)) return true;
+  const name = /^--([^=]+)/.exec(arg)?.[1];
+  return name !== undefined && FILE_WRITING_LONG_OPTIONS.some((option) => option.startsWith(name));
+};
 
 // `git` as a whole word or path segment (`/usr/bin/git`), never `.git`, `github` or `git-lfs`.
 // Case-insensitive: a case-insensitive filesystem (macOS APFS) runs `GIT`/`Git` as git.
