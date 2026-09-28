@@ -23,12 +23,14 @@
  *     work-order pull that grants the checked-out branch, every path the commit could include
  *     and (for a push) a `full` phase (ADR 0107, decideFixerBashGate). The grant must come from a
  *     pull this fixer ran: the sanctioned pull line records its agent_id as the binding.
+ *   - every command from the read-only `judge` subagent except its sanctioned work-order pull
+ *     (`dev-loops-run scripts/github/pull-work-order.mjs ...`, ADR 0106).
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { decideBashGate, decideFixerBashGate, FIXER_AGENT_TYPE, normalizeAgentType } from "./_hook-decisions.mjs";
+import { JUDGE_AGENT_TYPE, decideBashGate, decideFixerBashGate, FIXER_AGENT_TYPE, normalizeAgentType } from "./_hook-decisions.mjs";
 import { branchCheckedOutAt, gitEnv, listCheckouts, loadFixerContext, parseFixerPullCommand, recordFixerAgentBinding } from "./_fixer-grants.mjs";
 import {
   commandContainsGhPrReady,
@@ -149,10 +151,12 @@ const isWaitTool = typeof command === "string" && commandContainsDetachedWaitToo
 // "dev-loop"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
 const isVerifyEntrypoint = typeof command === "string" && commandContainsCodeVerificationEntrypoint(command);
+// The read-only judge may run only its work-order pull (ADR 0106); every judge command reaches the decider.
+const isJudge = normalizeAgentType(agentType) === JUDGE_AGENT_TYPE;
 if (
   !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
   !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool &&
-  !isVerifyEntrypoint
+  !isVerifyEntrypoint && !isJudge
 ) {
   emitAllow();
 }

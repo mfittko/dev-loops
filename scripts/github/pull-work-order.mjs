@@ -13,6 +13,7 @@ import { WorkOrderRefusal, pullWorkOrder, registerWorkOrderRole } from "./_work-
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import "../loop/emit-fixer-work-order.mjs"; // registers the fixer role adapter
+import "../loop/emit-judge-work-order.mjs"; // registers the judge role adapter
 
 const USAGE = `Usage: pull-work-order.mjs --ref <workOrderRef> --digest <workOrderDigest> --execution <executionIdentity> [--tmp-root <path>]
 Verifies the compact reference against the role's canonical emitted unit, prints

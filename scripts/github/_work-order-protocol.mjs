@@ -10,7 +10,7 @@
  * (vendored into the Claude hooks) and are re-exported here. `materializationHash` is the
  * sha256 of the exact local work-order bytes.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { writeJson } from "@dev-loops/core/loop/phase-files";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -93,4 +93,19 @@ export async function verifyPullReceipt({ receiptTmpRoot, workOrderRef, workOrde
   if (receipt.executionIdentity !== executionIdentity) return { ok: false, reason: "execution_mismatch" };
   if (receipt.workOrderDigest !== digest) return { ok: false, reason: "digest_mismatch" };
   return { ok: true, receipt };
+}
+
+/**
+ * verifyPullReceipt plus result binding: the result at `resultPath` counts only
+ * when it was written at or after the matching pull. A missing result, or one
+ * older than the pull (a replayed or prior-execution result), is reason
+ * result_missing / result_predates_pull.
+ */
+export async function verifyPulledResult({ resultPath, ...receiptQuery }) {
+  const check = await verifyPullReceipt(receiptQuery);
+  if (!check.ok) return check;
+  const writtenMs = await stat(resultPath).then((stats) => stats.mtimeMs, () => null);
+  if (writtenMs === null) return { ok: false, reason: "result_missing" };
+  // An unparseable pulledAt compares false, so it fails closed.
+  return writtenMs >= Date.parse(check.receipt.pulledAt) ? check : { ok: false, reason: "result_predates_pull" };
 }
