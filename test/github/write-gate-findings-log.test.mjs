@@ -2080,6 +2080,29 @@ test("#1616: writeGateFindingsLog persists overallVerdict from the {overallVerdi
   }
 });
 
+test("writeGateFindingsLog persists the wrapper's verifiedItems union in the durable ledger and refuses a malformed one", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-verified-"));
+  try {
+    const base = { repo: "o/n", pr: 7, gate: "pre_approval_gate", headSha: "a1".repeat(20), verdict: "clean", tmpRoot: tmpDir };
+    const result = await writeGateFindingsLog({
+      ...base,
+      findings: JSON.stringify({ overallVerdict: "clean", findings: [], verifiedItems: ["item one", " item one ", "item two"] }),
+    });
+    const parsed = JSON.parse(await readFile(result.path, "utf8"));
+    assert.deepEqual(parsed.verifiedItems, ["item one", "item two"]);
+    const bare = await writeGateFindingsLog({ ...base, findings: JSON.stringify({ overallVerdict: "clean", findings: [] }) });
+    assert.equal("verifiedItems" in JSON.parse(await readFile(bare.path, "utf8")), false);
+    for (const verifiedItems of ["item", ["ok", ""], [7]]) {
+      await assert.rejects(
+        () => writeGateFindingsLog({ ...base, findings: JSON.stringify({ overallVerdict: "clean", findings: [], verifiedItems }) }),
+        /"verifiedItems" must be an array of non-empty strings/,
+      );
+    }
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("#1641: writeGateFindingsLog rejects a --verdict contradicting the wrapper overallVerdict", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-ov-conflict-"));
   try {
