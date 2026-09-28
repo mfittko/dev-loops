@@ -104,21 +104,25 @@ If a harness cannot fan out at the gate coordinator's depth, the round fails clo
 `FANOUT_UNAVAILABLE_MESSAGE` ([below](#fail-closed-fan-out-unavailable--route-to-conductor))
 and never degrades to inline review.
 
-Dispatch guidance. A worker, reviewer, judge or fixer dispatch names the linked issue and states
-"The issue body is the spec; read it." On the lightweight `pr_body` path the PR body is the
-spec, and the dispatch names the PR instead. The dispatch never restates issue-specific spec.
+Dispatch guidance. A reviewer or judge dispatch is exactly the emitted `dispatchPrompt`. Its pulled
+work order carries the spec pointer and the rule citations. A worker or fixer dispatch names the
+linked issue and states "The issue body is the spec; read it." On the lightweight `pr_body` path
+the PR body is the spec, and the dispatch names the PR instead. The dispatch never restates issue-specific spec.
 It cites rules by rule ID, never by copied text, and it cites each rule only to the roles that
 need it:
 
 - agents that dispatch children, such as the gate coordinator: `GATE-EXEC-HARNESS-JOIN`;
 - editing workers (developer, fixer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and
   `OPS-NO-INLINE-INTERPRETER`;
-- script runners (any role that runs repo scripts, reviewers included):
+- script runners (any role that runs repo scripts; a reviewer gets it through its work order):
   `WORKTREE-SCRIPT-LAUNCHER-CWD`.
 
 A worker, reviewer, judge or fixer dispatches no children and receives no join rule.
 
-The standalone `review` gate is outside this rule's scope.
+The standalone `review` gate is outside this rule's scope, with one exception. On the dev-loop
+`--review` route, a `gate-coordinator` agent runs the review round's Phases 1 to 3 through fan-in
+and the ledger write. It returns the typed result without a judge summary. The dev-loop
+coordinator then posts the verdict and makes the submit choice.
 
 ### Base refresh before a gate round
 

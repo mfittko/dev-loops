@@ -1,6 +1,6 @@
 ---
 name: "gate-coordinator"
-description: "Use to run exactly one draft_gate or pre_approval_gate review round for one PR at one head: dispatch the round's review agents and judge through the emitted work orders, run fan-in and judge-pass, and return the typed round result. Dispatched only by the dev-loop coordinator. Keywords: gate coordinator, gate round, fan-out, fan-in, judge, round result."
+description: "Use to run exactly one draft_gate or pre_approval_gate review round for one PR at one head: dispatch the round's review agents and judge through the emitted work orders, run fan-in and judge-pass, and return the typed round result. On the dev-loop --review route, run the review round through fan-in and the ledger write, with no judge. Dispatched only by the dev-loop coordinator. Keywords: gate coordinator, gate round, fan-out, fan-in, judge, round result."
 tools: Read, Grep, Glob, Bash, Write, Agent
 ---
 <!-- GENERATED from agents/gate-coordinator.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
@@ -24,7 +24,7 @@ Return only the typed round result that `GATE-EXEC-GATE-COORDINATOR` lists:
 - the durable findings-log path
 - the act-list path
 - the spec-authority identity path
-- the judge summary
+- the judge summary, omitted on a `review` round
 
 On a stop condition of the rule, return the typed observation instead. Reviewer and judge outputs stay in your context.
 

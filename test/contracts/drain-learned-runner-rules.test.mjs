@@ -125,9 +125,10 @@ test("GATE-EXEC-GATE-COORDINATOR dispatch guidance points to the issue body and 
   const content = await readRepo(GATE_DOC);
   assert.ok(sectionFrom(content, "<!-- rule: GATE-EXEC-GATE-COORDINATOR -->").includes("Dispatch guidance."));
   const guidance = dispatchGuidance(content);
-  assert.match(guidance, /worker, reviewer, judge or fixer dispatch/);
+  assert.match(guidance, /A reviewer or judge dispatch is exactly the emitted `dispatchPrompt`/);
+  assert.match(guidance, /A worker or fixer dispatch names the\s+linked issue/);
   assert.match(guidance, /"The issue body is the spec; read it\."/);
-  assert.match(guidance, /`pr_body` path the PR body is the\s+spec/);
+  assert.match(guidance, /`pr_body` path\s+the PR body is the\s+spec/);
   assert.match(guidance, /never restates issue-specific spec/);
   assert.match(guidance, /cites rules by rule ID, never by copied text/);
   const bullet = (label) => {

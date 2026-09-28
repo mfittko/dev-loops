@@ -1,6 +1,6 @@
 ---
 name: "gate-coordinator"
-description: "Use to run exactly one draft_gate or pre_approval_gate review round for one PR at one head: dispatch the round's review agents and judge through the emitted work orders, run fan-in and judge-pass, and return the typed round result. Dispatched only by the dev-loop coordinator. Keywords: gate coordinator, gate round, fan-out, fan-in, judge, round result."
+description: "Use to run exactly one draft_gate or pre_approval_gate review round for one PR at one head: dispatch the round's review agents and judge through the emitted work orders, run fan-in and judge-pass, and return the typed round result. On the dev-loop --review route, run the review round through fan-in and the ledger write, with no judge. Dispatched only by the dev-loop coordinator. Keywords: gate coordinator, gate round, fan-out, fan-in, judge, round result."
 tools: read, search, bash, write, subagent
 argument-hint: "The round's arguments: repo, PR, gate, head SHA, and the prior heads for this gate from run state."
 systemPromptMode: append
@@ -27,7 +27,7 @@ Return only the typed round result that `GATE-EXEC-GATE-COORDINATOR` lists:
 - the durable findings-log path
 - the act-list path
 - the spec-authority identity path
-- the judge summary
+- the judge summary, omitted on a `review` round
 
 On a stop condition of the rule, return the typed observation instead. Reviewer and judge outputs stay in your context.
 
