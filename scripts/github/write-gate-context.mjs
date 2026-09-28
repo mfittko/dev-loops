@@ -1128,14 +1128,15 @@ export function collapsePureSubstitutionRuns(diffOutput) {
  * List the doc-file paths of a unified diff (AC3 `docs-only` scope): each
  * file block whose path classifies as `docs` (classifyFile), deduplicated,
  * in original order. The hunks themselves stay in the required `diff` read.
+ * Blocks whose path failed to parse are counted, never dropped silently.
  * @param {string} diffOutput
- * @returns {string[]}
+ * @returns {{ docFiles: string[], unparsedCount: number }}
  */
 function listDocFilesInDiff(diffOutput) {
-  const paths = parseDiffFileBlocks(diffOutput)
-    .map((b) => b.path)
-    .filter((p) => typeof p === "string" && p.length > 0 && classifyFile(p) === "docs");
-  return [...new Set(paths)];
+  const paths = parseDiffFileBlocks(diffOutput).map((b) => b.path);
+  const unparsedCount = paths.filter((p) => typeof p !== "string" || p.length === 0).length;
+  const docFiles = paths.filter((p) => typeof p === "string" && p.length > 0 && classifyFile(p) === "docs");
+  return { docFiles: [...new Set(docFiles)], unparsedCount };
 }
 
 /**
@@ -1286,11 +1287,13 @@ export function renderBriefingPrefix({
 // The diff section body shared by the evidence file and the changed-files
 // variant: the filtered diff is the hash-bound required `diff` read, so these
 // files only point at it and disclose its size, never repeat its bytes.
-function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, diffBytes, diffPath }) {
+// `filteredBytes` is the size of the pointed-at file; `collapsedBytes` only
+// explains the inline/pointer mode choice (AC8).
+function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes, filteredBytes, diffPath }) {
   if (!hasDiffText) return ["(no diff text captured for this bundle)"];
   const sizeNote = prefixMode === "pointer"
-    ? `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode.`
-    : `Filtered diff: ${diffBytes} bytes.`;
+    ? `Filtered diff: ${filteredBytes} bytes. Its collapsed size (${collapsedBytes} bytes) exceeds the ${capBytes}-byte inline cap — pointer mode.`
+    : `Filtered diff: ${filteredBytes} bytes.`;
   return [
     `${sizeNote} It is the required \`diff\` read; this file does not repeat it. Read the filtered diff from:`,
     `  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`,
@@ -1406,7 +1409,8 @@ export function renderBriefingEvidence({
   }
   lines.push(`## Diff at reviewed head (${headSha})`);
   lines.push("");
-  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, diffBytes, diffPath })) lines.push(line);
+  const filteredBytes = hasDiffText ? Buffer.byteLength(diffOutput, "utf8") : 0;
+  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPath })) lines.push(line);
   lines.push("");
   lines.push("## Changed files + adjacent-code summary");
   lines.push("");
@@ -1554,16 +1558,19 @@ export function renderScopedBriefingVariant(scope, {
   lines.push("");
   const diffBytes = hasDiffText ? Buffer.byteLength(collapsePureSubstitutionRuns(diffOutput), "utf8") : 0;
   const prefixMode = diffBytes > capBytes ? "pointer" : "inline";
-  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, diffBytes, diffPath: filteredDiffPath ?? diffPath })) lines.push(line);
+  const filteredBytes = hasDiffText ? Buffer.byteLength(diffOutput, "utf8") : 0;
+  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPath: filteredDiffPath ?? diffPath })) lines.push(line);
   if (scope === "docs-only") {
-    const docFiles = hasDiffText ? listDocFilesInDiff(diffOutput) : [];
+    const { docFiles, unparsedCount } = hasDiffText ? listDocFilesInDiff(diffOutput) : { docFiles: [], unparsedCount: 0 };
     lines.push("");
-    if (docFiles.length === 0) {
-      lines.push("(no doc files in this diff)");
-    } else {
+    if (docFiles.length > 0) {
       lines.push(`Doc files in this diff (${docFiles.length}); review their hunks in the \`diff\` read:`);
       for (const f of docFiles) lines.push(`- ${f}`);
+    } else if (unparsedCount === 0) {
+      lines.push("(no doc files in this diff)");
     }
+    // An unparsed block may be a doc file, so absence is never claimed then.
+    if (unparsedCount > 0) lines.push(`(${unparsedCount} file blocks with unparsed paths; check them in the diff read)`);
   }
 
   const trimmedValidationResultsPath = typeof validationResultsPath === "string"

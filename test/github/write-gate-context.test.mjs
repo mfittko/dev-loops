@@ -5435,6 +5435,26 @@ test("renderScopedBriefingVariant: docs-only scope with no doc-file hunks in the
   assert.ok(!text.includes("src/a.mjs"), "non-doc hunks are excluded from the docs-only variant");
 });
 
+test("renderScopedBriefingVariant: docs-only scope discloses file blocks with unparsed paths and never claims the diff has no doc files", () => {
+  const { text } = renderScopedBriefingVariant("docs-only", {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    evidencePath: "tmp/x.briefing-evidence.txt",
+    diffOutput: ["diff --git malformed-header", "@@ -1 +1 @@", "-old", "+new", ""].join("\n"),
+  });
+  assert.ok(text.includes("(1 file blocks with unparsed paths; check them in the diff read)"));
+  assert.ok(!text.includes("(no doc files in this diff)"));
+});
+
+test("renderScopedBriefingVariant: the pointer line discloses the uncollapsed filtered diff size", () => {
+  const diffOutput = ["diff --git a/docs/a.md b/docs/a.md", "@@ -1 +1 @@", "-old", "+new", ""].join("\n");
+  const { text } = renderScopedBriefingVariant("docs-only", {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    evidencePath: "tmp/x.briefing-evidence.txt", diffOutput,
+  });
+  assert.ok(text.includes(`Filtered diff: ${Buffer.byteLength(diffOutput, "utf8")} bytes.`));
+  assert.ok(text.includes("- docs/a.md"));
+});
+
 test("renderScopedBriefingVariant: rejects scope \"full\" and any non-GATE_ANGLE_SCOPES value", () => {
   const base = { repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234", evidencePath: "tmp/x.briefing-evidence.txt" };
   assert.throws(() => renderScopedBriefingVariant("full", base), /non-"full"/);
@@ -7600,6 +7620,32 @@ test("writeGateContext: round-4 prior dispositions accumulate every closed prior
       ["re-disposed", "round two"],
     ]);
     assert.equal(read.entries, 3);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext: a ledger directory holding only unusable ledgers (foreign identity, unsettled verdict, malformed JSON) omits the prior-dispositions read and volatile line", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-unusable-"));
+  try {
+    const head = "abc1234567890";
+    const ledgerDir = path.resolve(repoRoot, path.dirname(buildLogPath({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: head, tmpRoot: "tmp" })));
+    await mkdir(ledgerDir, { recursive: true });
+    const writeLedger = (sha, ledger) => writeFile(path.join(ledgerDir, `draft_gate-${sha}.json`), JSON.stringify({
+      repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: sha, verdict: "findings_present",
+      findings: [{ angle: "correctness", severity: "low", summary: "must not seed", judgeDisposition: "reject" }],
+      ...ledger,
+    }), "utf8");
+    await writeLedger("d".repeat(40), { repo: "other/repo" });
+    await writeLedger("1".repeat(40), { verdict: "blocked" });
+    await writeFile(path.join(ledgerDir, `draft_gate-${"4".repeat(40)}.json`), "{ not valid json", "utf8");
+
+    const result = await writeGateContext(parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate", "--head-sha", head, "--angles", '["correctness"]',
+    ]), { repoRoot });
+    assert.equal(result.artifact.requiredReads.find((r) => r.kind === "prior-dispositions"), undefined);
+    const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
+    assert.doesNotMatch(volatileBytes, /Prior-round dispositions/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
