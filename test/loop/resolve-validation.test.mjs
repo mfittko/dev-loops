@@ -178,6 +178,20 @@ test("head and toolchain failures are typed incomplete, with no artifact", async
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("a worktree HEAD that differs from the requested head leaves no artifact", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const requestedHead = "a".repeat(40);
+    const artifactPath = path.join(repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: requestedHead, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(artifactPath), { recursive: true });
+    await writeFile(artifactPath, '{"allPassed":true}\n');
+    const result = await resolveValidation({ ...parseResolveValidationArgs(args(headSha)), headSha: requestedHead }, { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /differs from requested head/);
+    await assert.rejects(readFile(artifactPath), /ENOENT/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("targeted profile rejects a full suite and allows an exact targeted script", async () => {
   const { repoRoot, headSha } = await fixture();
   try {

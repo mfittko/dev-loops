@@ -11,7 +11,7 @@ import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts } from "./run-gate-validation.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: dev-loops gate resolve-validation --profile <targeted|full-repository> --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA> [--suite <script>]...\nTargeted profile requires at least one explicit --suite.\n${JQ_OUTPUT_USAGE}`;
+const USAGE = `Usage: dev-loops gate resolve-validation --profile <targeted|full-repository> --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA> [--suite <script>]... [--tmp-root <dir>]\nTargeted profile requires at least one explicit --suite.\n${JQ_OUTPUT_USAGE}`;
 
 async function removeParseFailedArtifact(argv) {
   const identity = {};
@@ -62,8 +62,13 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
   // incomplete record, so the verdict writer sees that the round resolved its
   // validation and every reader sees `allPassed: false`. The old file goes
   // first: a failed write leaves the artifact absent, never a stale pass.
-  const incomplete = async (reason) => {
+  // A tree whose HEAD is not the requested head gets no artifact at all: the
+  // run is in the wrong checkout, so the verdict writer must see it as absent.
+  const incomplete = async (reason, { writeArtifact = true } = {}) => {
     await rm(artifactPath, { force: true });
+    if (!writeArtifact) {
+      return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason };
+    }
     const artifact = {
       ok: false, status: "incomplete", allPassed: false,
       repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha,
@@ -77,12 +82,12 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
     const currentTreeProblem = () => {
       const actualHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim().toLowerCase();
-      if (actualHead !== options.headSha) return `worktree HEAD ${actualHead} differs from requested head`;
+      if (actualHead !== options.headSha) return { reason: `worktree HEAD ${actualHead} differs from requested head`, writeArtifact: false };
       const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim();
-      return dirty ? "validation requires a clean worktree at the requested head" : null;
+      return dirty ? { reason: "validation requires a clean worktree at the requested head", writeArtifact: true } : null;
     };
     const beforeProblem = currentTreeProblem();
-    if (beforeProblem) return incomplete(beforeProblem);
+    if (beforeProblem) return incomplete(beforeProblem.reason, beforeProblem);
     const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
     const pinned = packageJson.packageManager;
     if (!/^bun@\d+\.\d+\.\d+$/.test(pinned ?? "")) return incomplete("packageManager does not pin an exact Bun version");
@@ -95,7 +100,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     if (options.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
     const artifact = { ...await buildValidationArtifact(options, { repoRoot }), profile: options.profile, toolchain: pinned };
     const afterProblem = currentTreeProblem();
-    if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem}`);
+    if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem.reason}`, afterProblem);
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
     return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
   } catch (error) {

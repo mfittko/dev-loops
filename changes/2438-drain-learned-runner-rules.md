@@ -2,7 +2,7 @@
 
 - The spec extractor reads AC, DoD and Non-goals at any heading level, and a spec without AC or DoD names the expected shape (#2438)
 - The verdict writer refuses a `fanout_fanin` post without the head's validation artifact and names `run-gate-validation.mjs` (#2438)
-- An `incomplete` validation resolution writes a typed incomplete artifact for the head, never a pass (#2438)
+- An `incomplete` validation resolution writes a typed incomplete artifact for the head; a worktree at another HEAD gets no artifact (#2438)
 - Drain-learned runner rules move into the contracts as `GATE-EXEC-BASE-REFRESH` and six more registered rule IDs (#2438)
 - ADR 0096 records the base refresh before every gate round and amends ADR 0066 (#2438)
 - The README names the Claude Code permission rules for the verdict post and the ready flip (#2438)
