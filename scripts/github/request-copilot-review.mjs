@@ -558,6 +558,27 @@ function classifyRequestFailure(detail) {
   }
   return undefined;
 }
+// Withdraws a lingering Copilot requested_reviewers entry so the next POST
+// registers a fresh review_requested event. A POST over a still-listed
+// reviewer can be a no-op that leaves the request settled by the error review.
+async function withdrawCopilotReviewRequest({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  const result = await runChild(
+    ghCommand,
+    [
+      "api",
+      `repos/${repo}/pulls/${pr}/requested_reviewers`,
+      "-X",
+      "DELETE",
+      "-f",
+      `reviewers[]=${COPILOT_REVIEWER_BOT_LOGIN}`,
+    ],
+    env,
+  );
+  if (result.code !== 0) {
+    const detail = result.stderr.trim() || `exit code ${result.code}`;
+    throw new Error(`gh command failed: ${detail}`);
+  }
+}
 async function requestCopilotReview({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   // REST requested_reviewers with the app-style `[bot]`-suffixed login:
   // `gh pr edit --add-reviewer @copilot` / the GraphQL requestReviews
@@ -951,6 +972,9 @@ export async function performCopilotReviewRequest(
         reviewer: "Copilot",
       });
     }
+  }
+  if (requestSettledByErrorReview) {
+    await withdrawCopilotReviewRequest(options, runtime);
   }
   const requestResult = await requestCopilotReview(options, runtime);
   if (requestResult.status === "unavailable") {

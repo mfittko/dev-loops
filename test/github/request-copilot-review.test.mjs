@@ -337,7 +337,8 @@ const lingeringRequestEntries = (requestedAt) => [
   { stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n' },
   { stdout: `{"isDraft":false,"state":"OPEN","number":17,"headRefOid":"newsha","reviews":[${lingeringErrorReview}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n` },
   { stdout: `{"login":"copilot-pull-request-reviewer[bot]","created_at":"${requestedAt}"}\n`, assertArgContains: ["/timeline"] },
-  { stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+  { stdout: '{"requested_reviewers":[]}\n', assertArgContains: ["DELETE"] },
+  { stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n', assertArgContains: ["POST"] },
   { stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n' },
   { stdout: `{"headRefOid":"newsha","reviews":[${lingeringErrorReview}]}\n` },
 ];
@@ -346,7 +347,11 @@ test("request-copilot-review re-requests when the request lingers after a curren
   const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], lingeringRequestEntries("2026-09-27T20:00:00Z"));
 
   assert.equal(result.status, "requested");
-  assert.ok(calls.some((c) => c.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]")));
+  // The lingering entry is withdrawn before the re-request POST, so the POST
+  // registers a fresh review_requested event instead of a no-op.
+  const deleteIndex = calls.findIndex((c) => c.args.includes("DELETE"));
+  const postIndex = calls.findIndex((c) => c.args.includes("POST"));
+  assert.ok(deleteIndex >= 0 && postIndex > deleteIndex);
 });
 
 test("request-copilot-review keeps already-requested when the request is newer than the error review", async () => {
@@ -354,6 +359,7 @@ test("request-copilot-review keeps already-requested when the request is newer t
 
   assert.equal(result.status, "already-requested");
   assert.ok(!calls.some((c) => c.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]")));
+  assert.ok(!calls.some((c) => c.args.includes("DELETE")));
 });
 
 
