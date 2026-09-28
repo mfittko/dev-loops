@@ -81,7 +81,9 @@ coordinator with the round's arguments, including the prior heads for this gate 
 run state, and awaits it with a blocking join (`END-TURN-AND-AWAIT-WAKE` in
 [Anti-patterns](./anti-patterns.md)). The gate coordinator reads the prior rounds' ledgers,
 judge verdicts, and prior-approvals record for this gate from their deterministic on-disk paths,
-keyed by the prior heads the dev-loop coordinator passes in the dispatch arguments, so
+keyed by the prior heads the dev-loop coordinator passes in the dispatch arguments (a prior
+judge verdict path comes from that head's `judge-emit-plan.json` `workOrder.outputRefs`, see
+Phase 3.5 Dispatch), so
 `GATE-EXEC-JUDGE-NOT-FRESH` inputs and `judge-pass`'s `--prior-approvals` survive the fresh
 context. The dev-loop coordinator never runs these steps in its own context. The gate
 coordinator returns only the round's typed result: the verdict, the execution mode
@@ -1024,8 +1026,35 @@ prior-round judge verdict artifacts for this gate, and — engaged by default on
 round (issue 2008 / ADR 0061) — the structured spec plus `specDigest`/`headSha`/`contentDigest`
 the conductor derives via `scripts/loop/spec-context.mjs` (see the Dispatch bridge below).
 
-**Output:** the judge writes two verdict artifacts to deterministic paths under
-`tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/` — its only writes: the relevance verdict
+**Dispatch (pull transport, ADR 0106).** The conductor never writes the judge's brief. After
+fan-in it runs the deterministic producer over the round's sources:
+
+```sh
+dev-loops-run scripts/loop/emit-judge-work-order.mjs --repo <owner/name> --pr <N> --gate <gate> \
+  --head-sha <current_head_sha> --findings-file <ledger-path> --spec-file <spec-path> \
+  --identity-file <identity-path> [--prior-verdict <prior-judge-verdict-path> ...] \
+  [--tmp-root <checkout>/tmp]
+```
+
+A prior head's verdict path is not derivable from the head alone, because each emission's
+`<roundId>` is random. The conductor reads it from the `workOrder.outputRefs` of
+`<tmp>/gate-judge/<repo-slug>/pr-<N>/<gate>-<priorHead>/judge-emit-plan.json`, searched across
+every listed checkout's `tmp` directory. It passes the relevance verdict (`outputRefs[0]`) as
+`--prior-verdict`.
+
+If the round's context bundle was relocated with `--tmp-root`, pass that same root here; it
+must be a listed checkout's tmp directory. It refuses a missing or inconsistent source, pins the ledger, spec, identity, evidence and
+prior verdicts as hash-bound required reads, and prints `{ workOrderRef, workOrderDigest,
+executionIdentity, dispatchPrompt, planPath }`. The conductor dispatches the judge with the
+compact `dispatchPrompt` only, on the initial, a resumed and a replacement dispatch alike, and
+never appends task prose. Changed authority (a new ledger, spec or head) requires a new
+emission, which supersedes the prior reference; the pull refuses a superseded, retired or
+source-changed reference as `stale_dispatch` and a missing local work order as
+`local_materialization_integrity_failure`. Pass the printed `planPath` to `judge-pass` as
+`--judge-plan`.
+
+**Output:** the judge writes two verdict artifacts to the work order's `outputRefs` under
+`tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/<roundId>/` — its only writes: the relevance verdict
 (`judge-verdict.json`) and the spec-authority verdict (`spec-authority-verdict.json`, see
 `agents/judge.agent.md` "Immutable spec authority"). The relevance verdict's shape is validated
 by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
@@ -1059,8 +1088,9 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
   deferred only when leaving it unfixed would change an operator-visible outcome (wrong
   guidance a conductor executes, a fail-closed gap reachable on a sanctioned path, or a
   demonstrable bug), and a genuinely non-blocking/cosmetic `low` that clears none of those
-  defaults to `reject`. When the judge's briefing
-  names an existing open issue covering the finding's territory, the `followUpDraft` MUST be
+  defaults to `reject`. When the judge's pulled inputs (the covering issue references in
+  the pulled spec, or the prior verdicts) name an existing open issue covering the finding's
+  territory, the `followUpDraft` MUST be
   titled `Append to issue N: ...`. Beyond that record, the conductor at most appends a comment
   to an existing covering issue (via `comment-issue.mjs`), and it files a new issue from a
   deferred finding only when the finding is a blocker (`MAIN-AGENT-FILING-BLOCKER-ONLY` in the
@@ -1145,7 +1175,11 @@ deterministic bridge `scripts/loop/judge-pass.mjs` (`dev-loops gate judge-pass`)
 the fixer's **act list** for Phase 4: given `--findings-file` (the consolidated ledger) and
 `--judge-verdict` (the judge's relevance-verdict artifact path), `judge-pass` validates the
 verdict shape, fails closed unless the verdict's `headSha` matches the current head (a stale
-verdict must never feed the fixer), applies the dispositions via `applyJudgeDispositions`, and
+verdict must never feed the fixer), fails closed unless `--judge-plan` names this round's
+unretired emitted judge invocation with a matching judge pull receipt, both verdict paths equal
+the plan's `outputRefs` and were written after that pull, the plan is the current emission and
+reproduces the pulled work order, and the ledger the work order pinned is `--findings-file`
+(with `--spec-file`, the spec and content digests must also equal the pinned ones), applies the dispositions via `applyJudgeDispositions`, and
 emits exactly the findings the judge marked `act` (`--out`) plus the enriched ledger
 (`--ledger-out`). Every invocation ALSO carries the spec-authority flags derived above —
 `--spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict
@@ -1157,7 +1191,8 @@ all-stale fallback):
 
 ```sh
 dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
-  --findings-file <ledger-path> --judge-verdict <verdict-path> --out <act-list-path> --ledger-out <enriched-ledger-path> \
+  --findings-file <ledger-path> --judge-verdict <verdict-path> --judge-plan <judge-plan-path> \
+  --out <act-list-path> --ledger-out <enriched-ledger-path> \
   --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
   [--prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path>] \
   [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>]
@@ -1166,7 +1201,7 @@ dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha 
 The conductor hands the act list — never the full unfiltered ledger —
 to the fixer pass (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`). If `judge-pass` fails closed (stale
 head, malformed verdict, out-of-range index, undisposed finding, mismatched spec-authority
-identity), the conductor re-runs the judge at the current head rather than degrading to
+identity, missing or mismatched judge delivery evidence), the conductor re-runs the judge at the current head rather than degrading to
 severity-only disposition or silently skipping spec authority for a wired gate. See
 `skills/docs/spec-authority-contract.md` for the enforcement rules these flags carry.
 
@@ -1202,10 +1237,11 @@ wired the judge phase), the fixer falls back to the existing severity-based disp
 round. Reviewer fresh-context isolation (`GATE-EXEC-BUILD-ONCE-SEED`) is unchanged — the
 judge is a separate agent dispatched after fan-in, not a reviewer. The judge is the
 designated memory: it sees the round history precisely so it can notice accretion,
-self-renewing churn, or findings-about-a-fix. It is seeded with the conductor's accumulated
-state (prior-round ledgers, scope history) rather than a blank slate — the conductor hands
-it the prior-round judge verdict artifacts as an explicit input, so its memory is durable
-and auditable rather than implicit.
+self-renewing churn, or findings-about-a-fix. Its memory is durable and auditable rather
+than implicit: the conductor passes the prior-round judge verdict artifacts to
+`emit-judge-work-order.mjs` as `--prior-verdict`, which pins them as hash-bound required
+reads of the work order. Prior-round ledgers are reachable only through the work order's
+widening rule.
 
 ### Phase 4 — Fix
 
