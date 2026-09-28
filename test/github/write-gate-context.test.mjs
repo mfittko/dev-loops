@@ -7817,6 +7817,22 @@ test("writeGateContext: a large lockfile hunk never enters the required diff rea
   }
 });
 
+test("writeGateContext: with an excluded lockfile block last, the evidence file's disclosed filtered-diff size equals the `diff` read's bytes", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-filtered-bytes-"));
+  try {
+    const diffOutput = "diff --git a/src/app.mjs b/src/app.mjs\n+SOURCE\ndiff --git a/package-lock.json b/package-lock.json\n+LOCK\n";
+    const result = await writeGateContext({
+      ...parseWriteGateContextCliArgs(["--repo", "o/r", "--pr", "3", "--gate", "draft_gate", "--head-sha", "abc1234", "--angles", '["scope"]']),
+      diffOutput, changedFiles: ["src/app.mjs", "package-lock.json"],
+    }, { repoRoot });
+    const diffRead = result.artifact.requiredReads.find((r) => r.kind === "diff");
+    const evidence = await readFile(path.resolve(repoRoot, result.evidencePath), "utf8");
+    assert.ok(evidence.includes(`Filtered diff: ${diffRead.bytes} bytes.`), evidence);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("writeGateContext: inline mode carries the filtered diff bytes in exactly one required read, the prefix-hash-bound `diff` read", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-diff-once-"));
   try {

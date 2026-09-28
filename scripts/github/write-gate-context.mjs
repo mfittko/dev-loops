@@ -1289,6 +1289,12 @@ export function renderBriefingPrefix({
 // files only point at it and disclose its size, never repeat its bytes.
 // `filteredBytes` is the size of the pointed-at file; `collapsedBytes` only
 // explains the inline/pointer mode choice (AC8).
+// writeGateContext persists the filtered diff newline-terminated, so the
+// disclosed size counts that newline and equals the `diff` read's `bytes`.
+function persistedDiffBytes(text) {
+  return Buffer.byteLength(text, "utf8") + (text.endsWith("\n") ? 0 : 1);
+}
+
 function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes, filteredBytes, diffPath }) {
   if (!hasDiffText) return ["(no diff text captured for this bundle)"];
   const sizeNote = prefixMode === "pointer"
@@ -1409,7 +1415,7 @@ export function renderBriefingEvidence({
   }
   lines.push(`## Diff at reviewed head (${headSha})`);
   lines.push("");
-  const filteredBytes = hasDiffText ? Buffer.byteLength(diffOutput, "utf8") : 0;
+  const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
   for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPath })) lines.push(line);
   lines.push("");
   lines.push("## Changed files + adjacent-code summary");
@@ -1558,7 +1564,7 @@ export function renderScopedBriefingVariant(scope, {
   lines.push("");
   const diffBytes = hasDiffText ? Buffer.byteLength(collapsePureSubstitutionRuns(diffOutput), "utf8") : 0;
   const prefixMode = diffBytes > capBytes ? "pointer" : "inline";
-  const filteredBytes = hasDiffText ? Buffer.byteLength(diffOutput, "utf8") : 0;
+  const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
   for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPath: filteredDiffPath ?? diffPath })) lines.push(line);
   if (scope === "docs-only") {
     const { docFiles, unparsedCount } = hasDiffText ? listDocFilesInDiff(diffOutput) : { docFiles: [], unparsedCount: 0 };
