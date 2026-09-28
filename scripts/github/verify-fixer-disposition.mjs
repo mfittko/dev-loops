@@ -34,7 +34,11 @@ Required:
   --fixer-plan <path>   The fixer-emit-plan.json the full-phase fixer was dispatched
                         from (emit-fixer-work-order.mjs, ADR 0106). The disposition
                         handoff { headSha, dispositions } is read from the plan's
-                        outputRef. It counts only with a matching fixer pull receipt,
+                        outputRef. Each dispositions entry is { threadId,
+                        fixingCommitSha, disposition: "tackled"|"deferred",
+                        fingerprint?, validation? }; threadId, fixingCommitSha
+                        and disposition are required on every entry.
+                        The handoff counts only with a matching fixer pull receipt,
                         when written at or after that pull, and when its headSha is
                         the observed --head-sha.
 Optional:

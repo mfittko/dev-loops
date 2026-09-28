@@ -373,6 +373,10 @@ test("F5: a symlink from scratch space into a checkout is denied at the hook", a
     const link = path.join(path.dirname(root), "scratch-link");
     await symlink(wt, link);
     assert.equal(hook(wt, path.join(link, "src", "x.mjs")), "deny", "crosses a symlink into a checkout");
+    // A dangling link cannot be resolved, so only the realpath-throws branch denies it.
+    const dangling = path.join(path.dirname(root), "scratch-dangling");
+    await symlink(path.join(wt, "src", "new.mjs"), dangling);
+    assert.equal(hook(wt, dangling), "deny", "a dangling symlink fails closed");
     assert.equal(hook(wt, path.join(wt, "src", "x.mjs")), "allow");
   });
 });
