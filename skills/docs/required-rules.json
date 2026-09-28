@@ -422,6 +422,11 @@
       "id": "GRILL-COUNT-AC-UNIT-DISPATCH-MODE"
     },
     {
+      "id": "GRILL-SPEC-LINT",
+      "enforcement": "agent",
+      "enforcementNote": "The grill agent runs the lint and applies the grill-clean refusal; the lint only reports findings."
+    },
+    {
       "id": "GRILL-SUBLOOP-FULL-REWRITE"
     },
     {

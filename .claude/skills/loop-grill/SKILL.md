@@ -89,6 +89,11 @@ Scan the loaded content and identify each gap. The minimum required gap detector
 
 Additional gaps discovered through semantic reading of the spec are also recorded.
 
+### Spec-lint of rule and ADR citations
+
+<!-- rule: GRILL-SPEC-LINT -->
+`GRILL-SPEC-LINT`: The grill MUST run `dev-loops-run cli/index.mjs loop spec-lint --body-file <path>` on the fetched body and record each finding as a gap. The lint is offline. It reports unregistered rule IDs and cited ADRs that are unknown, not accepted, superseded, or amended by a later accepted record. The grill resolves a finding in one of two ways. It corrects the citation in the rewritten body, or it records a disposition with cited evidence in the results comment (for example, a rule ID that this issue introduces). A finding the grill cannot resolve with cited evidence is an unresolved item. A check the lint reports as `skipped` produces no finding. Semantic contradiction between an AC row and a rule or ADR stays with the semantic reading and the spec-authority judge.
+
 ### Count-based acceptance criteria guardrail
 
 <!-- rule: GRILL-COUNT-AC-UNIT-DISPATCH-MODE -->
@@ -213,7 +218,7 @@ Before emitting the verdict for a tracker-first or PR-body grill whose semantic 
 
 After write-back (and, for tracker-first or PR-body, after the above verification passes), emit the verdict line to stdout:
 
-- `grill-clean` when no unresolved gaps remain.
+- `grill-clean` when no unresolved gaps remain. The grill refuses `grill-clean` while a `dev-loops-run cli/index.mjs loop spec-lint` finding is neither corrected in the body nor disposed in the results comment (`GRILL-SPEC-LINT`).
 - `N unresolved items` (e.g. `3 unresolved items`) when gaps remain after all questions are answered.
 
 ## Idempotency guarantee

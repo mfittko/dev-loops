@@ -47,7 +47,7 @@ const RUNTIME_FILE_RE = /\.(mjs|cjs|js|ts|sh|json)$/;
 // Registry-ID shape used to spot enforcement citations in runtime source.
 // First segment is 3+ uppercase chars so 3-letter prefixes (OPS-, ADR-) are
 // detectable, consistent with the canonical MARKER_RE grammar below.
-const RULE_ID_SHAPE_RE = /\b[A-Z][A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/g;
+export const RULE_ID_SHAPE_RE = /\b[A-Z][A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/g;
 
 // Refusal/error emission construct carried by the same line as an enforcement
 // citation. Enforcement credit is refusal-path-based: a runtime rule is
@@ -135,7 +135,7 @@ export const FORWARD_RULE_REFERENCES = Object.freeze(new Set(["GATE-EXEC-HARNESS
 // shape scan would flag FAIL-CLOSED / BEST-EFFORT / PROJ-123 as phantom rule
 // citations. A NEW unknown token in runtime source that is not a real registry
 // ID and not on this list is treated as a phantom citation (gating).
-const NON_RULE_TOKENS = new Set([
+export const NON_RULE_TOKENS = new Set([
   "ACCEPT-CRITERIA-VERIFY-AND",
   "AGENT-LEVEL",
   "AXIS-TEXT-DELIMITER",
