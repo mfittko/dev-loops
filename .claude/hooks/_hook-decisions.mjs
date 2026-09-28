@@ -169,16 +169,19 @@ export function decideBashGate({
   // write-guard boundary; default fail-open. Not scoped to `inManagedRepo` — this is a local
   // command-invocation boundary (which binary ran), not a GitHub-repo-targeting one.
   if (enforceCoordinator && COORDINATOR_AGENT_TYPES.has(normalizeAgentType(agentType)) && commandContainsCodeVerificationEntrypoint(command)) {
-    return {
-      decision: "deny",
-      reason:
-        "COORDINATOR-VERIFY-BOUNDARY: the dev-loop coordinator must not run code-verification/build " +
+    // A gate coordinator dispatches no worker (decideAgentDispatch), so its reason names its own path.
+    const reason = normalizeAgentType(agentType) === GATE_COORDINATOR_AGENT_TYPE
+      ? "COORDINATOR-VERIFY-BOUNDARY: the gate coordinator must not run code-verification/build " +
+        "commands inline. Run the round's full validation through `dev-loops gate resolve-validation`; " +
+        "for any other check, stop and return a typed observation to the dev-loop coordinator " +
+        "(GATE-EXEC-GATE-COORDINATOR). See skills/docs/main-agent-contract.md."
+      : "COORDINATOR-VERIFY-BOUNDARY: the dev-loop coordinator must not run code-verification/build " +
         "commands inline. Delegate targeted checks to a fresh worker subagent (developer/fixer/" +
         "quality/review), which reports back a compact pass/fail plus any failing-test names. " +
         "Request local full-repository validation through `dev-loops gate resolve-validation` on a clean commit; when " +
         "checking a pushed commit, prefer CI's structured conclusion (`gh pr checks` / " +
-        "scripts/github/detect-checkpoint-evidence.mjs) over a local run. See skills/docs/main-agent-contract.md.",
-    };
+        "scripts/github/detect-checkpoint-evidence.mjs) over a local run. See skills/docs/main-agent-contract.md.";
+    return { decision: "deny", reason };
   }
   // Normalize (trim + case-fold) so a divergent slug (surrounding whitespace, casing) does not
   // silently fail OPEN. A repo is dev-loops-managed when inManagedContext is true (a .devloops
@@ -531,13 +534,14 @@ export function decideCoordinatorWriteGuard({ filePath, isRepoMutation, enforce 
   if (!COORDINATOR_AGENT_TYPES.has(normalizeAgentType(agentType))) {
     return ALLOW; // not the coordinator — a worker subagent, or the main agent (the other boundary)
   }
-  return {
-    decision: "deny",
-    reason:
-      `Coordinator→worker delegation boundary: refusing to mutate repository path "${filePath}" as the ` +
+  const reason = normalizeAgentType(agentType) === GATE_COORDINATOR_AGENT_TYPE
+    ? `Coordinator write boundary: refusing to mutate repository path "${filePath}" as the gate ` +
+      "coordinator. Tracked-file edits belong to the dev-loop coordinator; write only round artifacts " +
+      "under tmp/ and return a typed observation (GATE-EXEC-GATE-COORDINATOR). See skills/docs/main-agent-contract.md."
+    : `Coordinator→worker delegation boundary: refusing to mutate repository path "${filePath}" as the ` +
       "dev-loop coordinator. Delegate this tracked-file edit to a fresh worker subagent (developer/fixer/" +
-      "quality/docs) instead of writing it directly. See skills/docs/main-agent-contract.md.",
-  };
+      "quality/docs) instead of writing it directly. See skills/docs/main-agent-contract.md.";
+  return { decision: "deny", reason };
 }
 
 const JUDGE_VERDICT_FILES = new Set(["judge-verdict.json", "spec-authority-verdict.json"]);

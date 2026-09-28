@@ -192,7 +192,10 @@ the full run.
   `npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/`pnpm`) inline; it
   MUST delegate targeted runs to a fresh worker subagent (`developer`/`fixer`/`quality`/`review`) and request any local full-repository run through `dev-loops gate resolve-validation` instead. Enforced by the
   `PreToolUse` Bash gate hook (`.claude/hooks/pre-tool-use-bash-gate.mjs`), which denies the
-  command when the caller's `agent_type` is a coordinator's own (`dev-loop` or `gate-coordinator`). Gated by the SAME
+  command when the caller's `agent_type` is a coordinator's own (`dev-loop` or `gate-coordinator`).
+  For a `gate-coordinator` caller, the deny reason names `dev-loops gate resolve-validation` for the
+  round's validation and a typed observation to the dev-loop coordinator for anything else, because a
+  gate coordinator dispatches no worker subagent. Gated by the SAME
   `DEVLOOPS_COORDINATOR_READONLY=1` flag as the write-guard boundary above (default fail-open); a
   worker subagent's `agent_type` is unaffected. The classifier tolerates a wrapping `env`
   invocation carrying either `NAME=value` assignments or common `env` options (`-i`, `-u <NAME>`,

@@ -560,6 +560,17 @@ test("decideBashGate DENIES a coordinator running a code-verification entrypoint
   assert.match(d.reason, /main-agent-contract\.md/);
 });
 
+test("decideBashGate's verify-boundary deny for a gate coordinator names its own path, not a worker dispatch", () => {
+  for (const agentType of ["gate-coordinator", "dev-loops:gate-coordinator"]) {
+    const d = decideBashGate({ command: "bun run verify", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType, enforceCoordinator: true });
+    assert.equal(d.decision, "deny");
+    assert.match(d.reason, /COORDINATOR-VERIFY-BOUNDARY/);
+    assert.match(d.reason, /resolve-validation/);
+    assert.match(d.reason, /typed observation/);
+    assert.doesNotMatch(d.reason, /worker subagent/);
+  }
+});
+
 test("decideBashGate ALLOWS a worker subagent running a code-verification entrypoint under strict coordinator enforcement", () => {
   const d = decideBashGate({
     command: "bun run verify",
@@ -691,6 +702,16 @@ test("decideCoordinatorWriteGuard denies a coordinator tracked-file mutation und
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /Coordinator→worker delegation boundary/);
   assert.match(d.reason, /x\.mjs/);
+});
+
+test("decideCoordinatorWriteGuard's deny for a gate coordinator names its own path, not a worker dispatch", () => {
+  for (const agentType of ["gate-coordinator", "dev-loops:gate-coordinator"]) {
+    const d = decideCoordinatorWriteGuard({ filePath: "packages/core/src/x.mjs", isRepoMutation: true, enforce: true, agentType });
+    assert.equal(d.decision, "deny");
+    assert.match(d.reason, /x\.mjs/);
+    assert.match(d.reason, /typed observation/);
+    assert.doesNotMatch(d.reason, /worker subagent/);
+  }
 });
 
 test("decideCoordinatorWriteGuard allows a worker subagent tracked-file mutation under strict enforcement", () => {
