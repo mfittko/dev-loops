@@ -2,6 +2,82 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.5-pre.0
+
+### Added
+
+- `dev-loops gate resolve-validation` records head-bound targeted checks or the sanctioned local full suite; changed surfaces select narrow checks by default (#2469)
+
+### Changed
+
+- The `pre_approval_gate` verdict poster ticks reviewer-verified AC/DoD checklist items before it composes the verdict (#2407)
+- Acceptance-criteria and PR-checklist reviewers list verified checklist labels in `verifiedItems`; fan-in carries them into the findings ledger (#2407)
+- Gate fan-out releases its first reviewer wave immediately; the mandatory cache primer and lead-reviewer wait are gone, and priming is an optional adapter optimization (#2414)
+- A reviewer unit and the `gates.fanout.maxAnglesPerGroup` default now hold up to 5 angles, and `holistic` joins the leftover pool instead of its own unit (#2414)
+- Grouped draft/pre-approval rounds pack or refuse into one wave; `sequential: true`, `mode: per-angle`, and standalone `review` retain documented multi-wave plans (#2414)
+- The `gates.fanout.maxConcurrent` default and the Claude fan-out cap rise from 4 to 5, so a full 22-angle draft round fits one wave (#2414)
+- `consolidate-fanin.mjs` no longer accepts `--primer-evidence` or `--primer-plan`; the `@dev-loops/core/loop/primer-evidence` export is removed (#2414)
+- Repos pinning `maxConcurrent` or `maxAnglesPerGroup` below 5 may get a `GATE-EXEC-FANOUT-CAPACITY` refusal on full rounds; raise `maxConcurrent`, disable angles, or rely on dynamic pruning (#2414)
+- A pre-change ledger with no recorded membership whose reviewer shared a 3-angle chunk of a >5-angle group needs a one-time re-gate (#2414)
+- Gate reviewers receive a compact `dispatchPrompt` reference and pull their work order with the new read-only `pull-work-order.mjs` instead of relayed work-order bytes (#2416)
+- `pull-work-order.mjs` refuses mismatched, tampered or retired-round references and writes a pull receipt under the main checkout gate evidence root (#2416)
+- `consolidate-fanin.mjs` fails closed when a freshly dispatched unit has no matching pull receipt; a receipt without a result artifact is an interrupted reviewer (#2416)
+- `consolidate-fanin.mjs` requires `--emit-plan` and fails closed without it once the head has dispatch-prompt records (#2416)
+- The layout check rejects dispatch-prompt records without a `compactReference`; a `record-dispatch-prompt-layout.mjs` record alone blocks the round (#2416)
+- The transcript audit reports coordinator output bytes per subagent dispatch (#2416)
+- ADR 0106 amends ADR 0086: workers pull deterministic work orders (#2416)
+- The judge receives only a compact `dispatchPrompt` and pulls its work order with `pull-work-order.mjs` (#2419)
+- The new `emit-judge-work-order.mjs` derives the judge work order from the ledger, spec, identity, evidence and prior verdicts (#2419)
+- `pull-work-order.mjs` registers the `judge` role and refuses a superseded, retired or source-changed judge reference as `stale_dispatch` (#2419)
+- `judge-pass.mjs` requires `--judge-plan` and fails closed without a matching judge pull receipt, with a verdict written before the pull, or with a ledger or spec the work order did not pin (#2419)
+- The judge agent gains Bash for the pull only; the Claude Bash gate denies every other judge command (#2419)
+- Judge verdict outputRefs gain a `<roundId>/` segment; `judge-pass.mjs` requires them and refuses a retired round (#2419)
+- The Claude write guard limits judge writes to its two verdict files under `tmp/gate-judge/` (#2419)
+- The fixer receives a compact `dispatchPayload` from the new `emit-fixer-work-order.mjs --harness <claude|pi>` and pulls its work order with `pull-work-order.mjs` (#2420)
+- Claude fixer Edit/Write outside the pulled work order's branch and allowed paths is denied by the hooks (#2420)
+- `verify-fixer-disposition.mjs` takes `--fixer-plan` and requires a digest-bound plan, a matching fixer pull receipt, a post-pull handoff and the live PR head (#2420)
+- `verify-fixer-disposition.mjs` no longer accepts `--dispositions` or `--dispositions-file` (#2420)
+- On Claude, the Edit/Write guard enforces the fixer write scope; the fixer Bash commit/push boundary moves to #2534. Pi has no tool-gating surface (#2420)
+- The emitter builds the per-harness fixer dispatch payload from the compact pointer only; `assertFixerDispatchPayload` is a test-time shape check, not a runtime dispatch gate (#2420)
+- The `pre-PR-reviewer` role is now `pre-push-reviewer` and also reviews gate act-list fixes before their push, at most three times (#2423)
+- A `.devloops` that still keys `models.roleTiers` or `models.roles` on `pre-PR-reviewer` now fails validation; rename the key to `pre-push-reviewer` (#2423)
+- `judge-pass` and `close-gate-findings` never create an issue; a round's deferred findings go as one comment on the linked spec issue or the PR (#2425)
+- The deferral comment targets the PR itself when the PR has no single closing issue or the configured tracker is not GitHub (#2425)
+- `close-gate-findings` no longer defer-closes an open thread whose finding the judge disposed `act` (#2425)
+- The orchestrator files a new issue from a runner finding only for a blocker; other findings go as comments on existing issues (#2425)
+- Condensed the routed skill entrypoints, dev-loop templates and shared `skills/docs/` contracts without loosening any obligation; the draft-first rule names both sanctioned draft exits (#2454)
+- The light-mode scope count skips changeset fragments and generated `.claude` skill, agent and command mirrors; risk-path floors still see every file (#2527)
+- This repo's light-mode cap moves to `maxFiles: 2`, `maxLines: 40` (ADR 0108) (#2527)
+- Gate reviewers read the filtered diff once: the evidence file, `changed-files` and `docs-only` point at the `diff` read; `docs-only` lists doc-file paths instead of inlining hunks (#2528)
+- The `correctness` angle checks what moved or re-hosted code used to guarantee and flags each guarantee the new path drops (#2528)
+- The `prior-dispositions` read carries the reject and defer dispositions of every closed prior round of the same gate, latest disposition per finding wins, with no caller flag (#2528)
+- `write-gate-context.mjs --prev-head` is removed; `resolve-angle-carry-forward.mjs --prev-head` is unchanged (#2528)
+- ADR 0109 amends ADR 0070: cumulative prior dispositions within one gate (#2528)
+- `wait-pr-checks` and `spec-context` wait for the GraphQL rate-limit reset and retry once when the GraphQL budget is exhausted; otherwise they return `RATE_LIMITED` with `resetAt` at once (#2529)
+
+### Fixed
+
+- Gate reviewers now see `.claude/` and `lib/` changes; default diff and adjacent-code excludes cover only lockfiles and generated trees (#1889)
+- `merge-pr.mjs` now fast-forwards the main checkout, removes the merged branch's worktree, and runs `postMerge.actions` after a merge (#2207)
+- The spec extractor reads AC, DoD and Non-goals at any heading level, and a spec without AC or DoD names the expected shape (#2438)
+- The verdict writer refuses a `fanout_fanin` post without the head's validation artifact and names `run-gate-validation.mjs` (#2438)
+- An `incomplete` validation resolution writes a typed incomplete artifact for the head; a worktree at another HEAD gets no artifact (#2438)
+- Drain-learned runner rules move into the contracts as `GATE-EXEC-BASE-REFRESH` and six more registered rule IDs (#2438)
+- ADR 0096 records the base refresh before every gate round and amends ADR 0066 (#2438)
+- The README names the Claude Code permission rules for the verdict post and the ready flip (#2438)
+- Dispatch guidance names the linked issue as the spec and cites rules by ID to the roles that need them (#2438)
+- The gate `clean` prose and the Copilot request branching match ADR 0089 and the request tool (#2438)
+- The follow-up capture rule files a standalone issue only under `MAIN-AGENT-FILING-BLOCKER-ONLY` (#2438)
+- Pi dev-loop startup no longer fails closed with `asyncStartContract: "rejected"`: pi-subagents >= 0.65 native markers count as async-start evidence and synthesize a run id (#2451)
+- Starting the dev-loop on an existing draft PR now runs `draft_gate` instead of stopping on the draft state (#2456)
+- `loop startup --pr <n> --review` selects ownership-exempt read-only review and ownership errors point reviewers to it (#2459)
+- Codex gate plans inherit the active session model instead of selecting a Claude model (#2465)
+- `consolidate-fanin` accepts the documented `--cache-telemetry` path (#2473)
+- A `draft_gate` fan-out on a ready PR whose draft gate is already satisfied is refused before any reviewer work, naming the Copilot re-request and `pre_approval_gate` (#2475)
+- `loop info` no longer advises a Copilot re-request the requester suppresses, and names missing ruleset-required checks and operator approvals instead of CI success (#2478)
+- ADR validation accepts renaming one record of an already-merged number collision to a free number with an unchanged body, and the duplicate 0095 record is renumbered to 0105 (#2479)
+- The test runner strips inherited run-id markers (DEVLOOPS_RUN_ID, PI_SUBAGENT_RUN_ID) so tests that leak on them fail locally as in CI (#2489)
+
 ## 1.0.4
 
 Gate review rounds cost about 30% less (lead agent about 50% less) and finish about twice as fast at equal diff size, measured over 47 rounds ([audit](https://github.com/mfittko/dev-loops/issues/2268#issuecomment-5808559733)).
