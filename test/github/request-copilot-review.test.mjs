@@ -354,6 +354,20 @@ test("request-copilot-review re-requests when the request lingers after a curren
   assert.ok(deleteIndex >= 0 && postIndex > deleteIndex);
 });
 
+test("request-copilot-review throws before the re-request POST when withdrawing the lingering request fails", async () => {
+  const entries = lingeringRequestEntries("2026-09-27T20:00:00Z");
+  entries[3] = { exitCode: 1, stderr: "delete denied\n", assertArgContains: ["DELETE"] };
+  await assert.rejects(
+    () => runInProcess(["--repo", "owner/repo", "--pr", "17"], entries),
+    (error) => {
+      assert.match(error.message, /delete denied/);
+      assert.ok(error.calls.some((c) => c.args.includes("DELETE")));
+      assert.ok(!error.calls.some((c) => c.args.includes("POST")));
+      return true;
+    },
+  );
+});
+
 test("request-copilot-review keeps already-requested when the request is newer than the error review", async () => {
   const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], lingeringRequestEntries("2026-09-27T21:00:00Z"));
 
