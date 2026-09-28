@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
 
 import { ghJson, ghGraphql, isRateLimitError, resolveOwner, withGraphqlRateLimitWait } from "../src/github/gh.mjs";
+import { GRAPHQL_RATE_LIMIT_MAX_WAIT_MS } from "../src/loop/policy-constants.mjs";
 
 function stubRunChild(result) {
   return async () => result;
@@ -260,7 +261,7 @@ describe("withGraphqlRateLimitWait", () => {
   const NOW = 1_000_000_000_000;
   const RATE_LIMIT_ERROR = () => Object.assign(new Error("gh command failed: GraphQL: API rate limit exceeded for user ID 1."), { code: "GH_API_ERROR" });
 
-  function harness({ reset, remaining = 0, readResult, outcomes, maxWaitMs = 900_000 }) {
+  function harness({ reset, remaining = 0, readResult, outcomes, maxWaitMs = GRAPHQL_RATE_LIMIT_MAX_WAIT_MS }) {
     const calls = { reads: [], sleeps: [], ops: 0 };
     const runChild = async (command, args) => {
       calls.reads.push([command, ...args]);

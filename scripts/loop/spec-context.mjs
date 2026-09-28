@@ -73,7 +73,7 @@ Optional (changed-paths mode):
                                 (default: process.cwd())
 
 GraphQL rate limit (extract mode): on GraphQL exhaustion the tool waits up to
-15 minutes for the reset and retries once. Otherwise it returns at once with
+${GRAPHQL_RATE_LIMIT_MAX_WAIT_MS / 60_000} minutes for the reset and retries once. Otherwise it returns at once with
   { "ok": false, "code": "RATE_LIMITED", "error": "...", "resetAt": "<ISO 8601>"|null }
 The RATE_LIMITED envelope is written to stdout when output is unfiltered, and
 always to stderr.
