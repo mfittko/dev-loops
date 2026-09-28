@@ -5451,13 +5451,13 @@ test("SCOPE_COUNT_EXCLUDE_GLOBS lists exactly the fragment and mirror globs and 
 
 test("parseGitNumstat skips excluded paths, counts binaries as 0 lines, and fails closed on renames", async () => {
   const { parseGitNumstat } = await import("../../../scripts/loop/detect-change-scope.mjs");
-  assert.deepEqual(parseGitNumstat(""), { filesChanged: 0, linesChanged: 0 });
+  assert.deepEqual(parseGitNumstat(""), { filesChanged: 0, linesChanged: 0, rawFilesChanged: 0, rawLinesChanged: 0 });
   const out = [
     "3\t1\tsrc/a.mjs", "5\t0\tchanges/1-x.md", "-\t-\timg.png", "2\t0\t.claude/skills/s/SKILL.md",
     "4\t0\t", "src/b.mjs", "changes/2-y.md", // counted: old path not excluded
     "7\t0\t", "changes/3-z.md", "changes/4-z.md", // skipped: both excluded
   ].join("\0") + "\0";
-  assert.deepEqual(parseGitNumstat(out), { filesChanged: 3, linesChanged: 8 });
+  assert.deepEqual(parseGitNumstat(out), { filesChanged: 3, linesChanged: 8, rawFilesChanged: 6, rawLinesChanged: 22 });
 });
 
 // ============================================================================

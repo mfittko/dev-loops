@@ -98,7 +98,7 @@ test("detectScope and detectMergeBaseScope skip a changes/*.md fragment from bot
     git(dir, "add", "-A");
     git(dir, "commit", "-qm", "head");
     for (const detect of [detectScope, detectMergeBaseScope]) {
-      assert.deepEqual(detect({ base, head: "HEAD", cwd: dir }), { ok: true, filesChanged: 2, linesChanged: 5 }, detect.name);
+      assert.deepEqual(detect({ base, head: "HEAD", cwd: dir }), { ok: true, filesChanged: 2, linesChanged: 5, rawFilesChanged: 3, rawLinesChanged: 9 }, detect.name);
       assert.equal(detect({ base, head: "does-not-exist", cwd: dir }).ok, false, detect.name);
     }
   } finally {

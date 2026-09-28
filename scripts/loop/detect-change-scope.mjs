@@ -63,19 +63,26 @@ function parseCliArgs(argv) {
 // Parses `git diff --numstat -z`, skipping SCOPE_COUNT_EXCLUDE_GLOBS paths. A
 // rename record is `a\td\t\0old\0new\0` and is skipped only when both paths are
 // excluded (fail closed). Binary `-\t-` counts as one file with zero lines.
+// rawFilesChanged/rawLinesChanged count every path; diff-class tier matching
+// reads them so the exclusion stays scoped to the light-mode cap.
 export function parseGitNumstat(output) {
   const tokens = output.split("\0");
   let filesChanged = 0;
   let linesChanged = 0;
+  let rawFilesChanged = 0;
+  let rawLinesChanged = 0;
   for (let i = 0; i < tokens.length; i += 1) {
     const match = /^(\d+|-)\t(\d+|-)\t(.*)$/s.exec(tokens[i]);
     if (!match) continue;
     const paths = match[3] === "" ? [tokens[++i], tokens[++i]] : [match[3]];
+    const lines = (Number(match[1]) || 0) + (Number(match[2]) || 0);
+    rawFilesChanged += 1;
+    rawLinesChanged += lines;
     if (paths.every(isScopeCountExcluded)) continue;
     filesChanged += 1;
-    linesChanged += (Number(match[1]) || 0) + (Number(match[2]) || 0);
+    linesChanged += lines;
   }
-  return { filesChanged, linesChanged };
+  return { filesChanged, linesChanged, rawFilesChanged, rawLinesChanged };
 }
 // Isolated from ambient GIT_DIR/GIT_WORK_TREE (gitEnvWithoutDirOverrides) and
 // diff-config drift (DIFF_ISOLATION_FLAGS), matching detectMergeBaseChangedFiles:

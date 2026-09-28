@@ -2635,7 +2635,9 @@ function selectFloorPlusJustifiedAngles(config, gate, changedFiles) {
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
  * @param {object} facts
- * @param {{ filesChanged?: number, linesChanged?: number }} [facts.scope]
+ * @param {{ filesChanged?: number, linesChanged?: number, rawFilesChanged?: number, rawLinesChanged?: number }} [facts.scope]
+ *   `filesChanged`/`linesChanged` feed the light-mode cap. Tier matching reads
+ *   the unfiltered `raw*` counts when present, matching resolveGateAnglesDynamic.
  * @param {string[]} [facts.changedFiles]
  * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome]
  * @param {boolean} [facts.hasFullLabel]
@@ -2652,8 +2654,8 @@ export function resolveReviewProportionality(config, gate, {
   const dispatch = resolveGateDispatchMode(config, gate, { scope, changedFiles, sizeOutcome, hasFullLabel, inlineFindingSeverities });
   const tier = resolveGateTier(config, gate, {
     changedFiles,
-    filesChanged: scope?.filesChanged,
-    linesChanged: scope?.linesChanged,
+    filesChanged: scope?.rawFilesChanged ?? scope?.filesChanged,
+    linesChanged: scope?.rawLinesChanged ?? scope?.linesChanged,
     hasFullLabel,
   });
   const floors = Object.freeze({
