@@ -1212,9 +1212,11 @@ and auditable rather than implicit.
 If findings with a severity in the gate's `blockCleanOnFindingSeverities` list are present:
 
 - The coordinator emits the fixer work order with `scripts/loop/emit-fixer-work-order.mjs
-  --harness <claude|pi>` from the act list (`--act-list-file`, `--gate`) and dispatches the
+  --repo <owner/name> --pr <n> --head-sha <headRefOid> --phase commit_only
+  --act-list-file <judge-pass --out> --gate <gate> --harness <claude|pi>` and dispatches the
   printed `dispatchPayload` unchanged, on initial, resumed and replacement dispatches alike
-  (ADR 0106).
+  (ADR 0106, 0107). The act-list fix pass is `commit_only`: the later `full` emission that
+  pushes and replies follows [delta mode](pre-pr-review-contract.md#delta-mode).
   A changed act list, delta result, head or phase requires a new emission.
 - When a judge verdict is present (Phase 3.5), the fix pass executes **only the `act` list**
   — findings the judge marked `act`. The fixer retains reproduction-based rejection (a finding

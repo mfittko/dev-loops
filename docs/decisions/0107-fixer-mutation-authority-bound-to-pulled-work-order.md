@@ -16,15 +16,15 @@ The fixer registers the `fixer` role adapter in `scripts/loop/emit-fixer-work-or
 
 `allowedPaths` defaults to the whole repository, so today's fixer policy is unchanged.
 
-The emitter prints a per-harness dispatch payload for Claude and Pi. An unsupported harness refuses. `assertFixerDispatchPayload` rejects any payload that is not the fixed compact pointer.
+The emitter prints a per-harness dispatch payload for Claude and Pi, built from the fixed compact pointer only. An unsupported harness refuses. `assertFixerDispatchPayload` is a test-time shape check of that payload. No dispatch seam runs it at runtime, so compactness rests on the coordinator dispatching the emitted payload unchanged.
 
-On Claude, PreToolUse hooks bound fixer mutation to a current pull. The Edit/Write guard and a commit/push Bash gate grant authority only from a fixer pull receipt in the main checkout. The receipt's plan must lie under `<main>/tmp/gate-fixer` and must still reproduce its digest.
+On Claude, PreToolUse hooks bound fixer mutation to a current pull. The Edit/Write guard and a commit/push Bash gate grant authority only from a fixer pull receipt in the main checkout. The receipt's plan must lie under `<main>/tmp/gate-fixer`, must still reproduce its digest and must pass the pull's own staleness checks: unchanged required reads, no retired gate round, and an authority branch that still contains the work order head. The write grant's outputRef is derived from the plan location and execution identity, never read from the plan's outputRefs field.
 
 The hooks deny writes and commits outside the grant branch and `allowedPaths`. They deny pushes to another destination and every push in the `commit_only` phase. They deny writes to the main checkout's `tmp/` except the work order's outputRef.
 
 Pi has no tool-gating surface. On Pi, the boundary is the pull contract plus the consumer checks.
 
-`verify-fixer-disposition.mjs` requires `--fixer-plan`. The `--dispositions` and `--dispositions-file` inputs are removed. The consumer re-digests the plan and verifies a matching fixer pull receipt. It reads the handoff only from the work order's outputRef and only when that file was written at or after the pull. The handoff must name the observed live PR head.
+`verify-fixer-disposition.mjs` requires `--fixer-plan`. The `--dispositions` and `--dispositions-file` inputs are removed. The consumer re-digests the plan and verifies a matching fixer pull receipt. It reads the handoff only from the outputRef derived from the plan location, refuses a plan whose outputRef differs, and reads it only when its mtime is not older than the receipt file's mtime. The handoff must name the observed live PR head.
 
 The canonical digest moved to `@dev-loops/core/loop/work-order-digest`, so the hook bundle reuses the one serializer. Digests are unchanged.
 
@@ -34,6 +34,6 @@ We rejected keeping prose fixer briefs, because they bless model-authored work o
 
 On Claude, a fixer dispatched without a work order can no longer mutate the repository. The consumer no longer trusts a disposition list that the caller supplies.
 
-The boundary has known ceilings. The Bash gate does not parse git aliases. A `git commit --amend` is checked only against the working-tree and index paths, never against the amended commit's earlier content. OutputRefs stay local material outside the digest.
+The boundary has known ceilings. The Bash gate does not parse git aliases. A `git commit --amend` is checked only against the working-tree and index paths, never against the amended commit's earlier content. OutputRefs stay local material outside the digest, so the hooks and the consumer derive the outputRef instead of trusting the field.
 
 `test/loop/emit-fixer-work-order.test.mjs`, `test/github/verify-fixer-disposition.test.mjs`, `packages/core/test/claude-hook-decisions.test.mjs` and `packages/core/test/bash-command-classify.test.mjs` pin this behavior.

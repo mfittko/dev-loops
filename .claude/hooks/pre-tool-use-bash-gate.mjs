@@ -20,7 +20,7 @@
  *     subagents (developer/fixer/quality/review) may run these freely.
  *   - `git commit` / `git push` from the `fixer` agent — blocked (any repo) unless a current
  *     fixer work-order pull grants the checked-out branch, every path the commit could include
- *     and (for a push) a `full` phase (ADR 0106, decideFixerBashGate).
+ *     and (for a push) a `full` phase (ADR 0107, decideFixerBashGate).
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -58,7 +58,7 @@ const agentType = typeof input?.agent_type === "string" ? input.agent_type : nul
 
 const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 
-// Fixer mutation boundary (ADR 0106, always on): a fixer `git commit` / `git push` needs a CURRENT
+// Fixer mutation boundary (ADR 0107, always on): a fixer `git commit` / `git push` needs a CURRENT
 // pull grant for the branch checked out in the invocation's cwd; other commands are unchanged.
 // Paths a commit could include in `dir`: staged, plus unstaged tracked and untracked (a same-command
 // `git add`/`-a`/pathspec may stage them before the commit runs). null on a git failure (deny).

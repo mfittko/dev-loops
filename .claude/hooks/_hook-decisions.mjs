@@ -733,7 +733,7 @@ export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthoriza
   };
 }
 
-/** The editing fixer agent: its repo mutations need a current pulled work order (ADR 0106). */
+/** The editing fixer agent: its repo mutations need a current pulled work order (ADR 0106, 0107). */
 export const FIXER_AGENT_TYPE = "fixer";
 
 const isInsidePath = (p, root) => p === root || p.startsWith(`${root}/`);
@@ -741,7 +741,7 @@ const isInsidePath = (p, root) => p === root || p.startsWith(`${root}/`);
 const inAllowedPaths = (rel, allowedPaths) => Array.isArray(allowedPaths) && allowedPaths.some((p) => p === "." || rel === p || rel.startsWith(`${p}/`));
 
 /**
- * Decide whether a PreToolUse Write/Edit by the `fixer` agent must be denied (ADR 0106,
+ * Decide whether a PreToolUse Write/Edit by the `fixer` agent must be denied (ADR 0107,
  * agents/fixer.agent.md). A fixer mutates only inside the mutation authority of a CURRENT
  * work-order pull: its outputRef, or a file under one of the grant's `allowedPaths` in a
  * checkout of the grant's branch. A target outside every listed checkout is scratch space,
@@ -768,7 +768,7 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
   const deny = (why) => ({
     decision: "deny",
     reason:
-      `Fixer mutation boundary (agents/fixer.agent.md, ADR 0106): refusing to write ${JSON.stringify(targetPath)}: ${why}. ` +
+      `Fixer mutation boundary (agents/fixer.agent.md, ADR 0107): refusing to write ${JSON.stringify(targetPath)}: ${why}. ` +
       "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs --ref <ref> --digest <digest> --execution <execution>` first. " +
       "A fixer writes only its work order's outputRef and files under mutationAuthority.allowedPaths in a checkout of mutationAuthority.branch.",
   });
@@ -814,11 +814,11 @@ function pushBeyondGrant(args, branch) {
 }
 
 /**
- * Decide whether a PreToolUse Bash command by the `fixer` agent must be denied (ADR 0106).
+ * Decide whether a PreToolUse Bash command by the `fixer` agent must be denied (ADR 0107).
  * Each `git commit` / `git push` invocation (extractGitCommitPushInvocations) needs a CURRENT
- * fixer grant whose branch is the branch checked out in the invocation's cwd. Denied as well:
- * an `unresolvable` invocation (--git-dir/--work-tree, GIT_DIR/GIT_WORK_TREE, `cd` inside
- * `sh -c`), a commit whose `paths` (the checkout-relative paths it could include, computed by
+ * fixer grant whose branch is the branch checked out in the invocation's cwd; when several
+ * grants name that branch, any one that permits the invocation allows it. Denied as well:
+ * an `unresolvable` invocation (see extractGitCommitPushInvocations), a commit whose `paths` (the checkout-relative paths it could include, computed by
  * the hook; null when git failed) are missing or leave the grant's allowedPaths, a push under
  * a `commit_only` grant, and a push whose explicit refspec names another destination.
  * Every other command is allowed here.
@@ -832,19 +832,25 @@ function pushBeyondGrant(args, branch) {
 export function decideFixerBashGate({ agentType = null, invocations = [], grants = [] }) {
   if (normalizeAgentType(agentType) !== FIXER_AGENT_TYPE) return ALLOW;
   for (const { subcommand, args = [], branch, unresolvable = false, paths = null } of invocations) {
-    const grant = grants.find((g) => typeof g?.branch === "string" && g.branch === branch);
-    const outside = subcommand === "commit" && Array.isArray(paths) ? paths.find((p) => !inAllowedPaths(p, grant?.allowedPaths)) : undefined;
-    const why = unresolvable ? "--git-dir, --work-tree, GIT_DIR, GIT_WORK_TREE or a `cd` inside `sh -c` hides the checkout it runs in"
+    // Why one grant does not permit this invocation, or null when it does.
+    const refusedBy = (grant) => {
+      const outside = subcommand === "commit" && Array.isArray(paths) ? paths.find((p) => !inAllowedPaths(p, grant.allowedPaths)) : undefined;
+      return subcommand === "commit" && !Array.isArray(paths) ? "the paths the commit would include could not be computed"
+        : outside !== undefined ? `the commit would include ${JSON.stringify(outside)}, outside the grant's allowedPaths`
+          : subcommand === "push" && grant.phase === "commit_only" ? "the pulled work order's phase is commit_only"
+            : subcommand === "push" ? pushBeyondGrant(args, grant.branch) : null;
+    };
+    // Every grant for the branch counts (the write guard's union), so grant order never decides.
+    const matching = grants.filter((g) => typeof g?.branch === "string" && g.branch === branch);
+    const reasons = matching.map(refusedBy);
+    const why = unresolvable ? "--git-dir, --work-tree, GIT_DIR, GIT_WORK_TREE, a `cd` inside `sh -c`, a subshell `cd`, `pushd`/`popd`, `cd -` or a shell-expanded dir hides the checkout it runs in"
       : !branch ? "the branch checked out in its cwd could not be resolved"
-        : !grant ? `no current fixer work-order pull grants branch ${JSON.stringify(branch)}`
-          : subcommand === "commit" && !Array.isArray(paths) ? "the paths the commit would include could not be computed"
-            : outside !== undefined ? `the commit would include ${JSON.stringify(outside)}, outside the grant's allowedPaths`
-              : subcommand === "push" && grant.phase === "commit_only" ? "the pulled work order's phase is commit_only"
-                : subcommand === "push" ? pushBeyondGrant(args, grant.branch) : null;
+        : matching.length === 0 ? `no current fixer work-order pull grants branch ${JSON.stringify(branch)}`
+          : reasons.includes(null) ? null : reasons[0];
     if (why) {
       return {
         decision: "deny",
-        reason: `Fixer mutation boundary (agents/fixer.agent.md, ADR 0106): refusing \`git ${subcommand}\`: ${why}. ` +
+        reason: `Fixer mutation boundary (agents/fixer.agent.md, ADR 0107): refusing \`git ${subcommand}\`: ${why}. ` +
           "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs --ref <ref> --digest <digest> --execution <execution>` first; " +
           "a fixer commits and pushes only mutationAuthority.branch from its checkout.",
       };

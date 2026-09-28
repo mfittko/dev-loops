@@ -1129,8 +1129,9 @@ export function commandContainsCodeVerificationEntrypoint(command) {
  * preceding `cd <dir>` segment is returned in `dirs` (in order) so the caller can resolve the
  * checkout the invocation runs in. `args` are the tokens after the subcommand. `unresolvable`
  * is true when the checkout cannot be resolved from `dirs`: a `--git-dir`/`--work-tree` option,
- * a `GIT_DIR=`/`GIT_WORK_TREE=` assignment earlier in the command, or a commit/push inside a
- * quoted `sh -c`/`bash -c` body that also runs `cd`.
+ * a `GIT_DIR=`/`GIT_WORK_TREE=` assignment earlier in the command, a commit/push inside a
+ * quoted `sh -c`/`bash -c` body that also runs `cd`, an earlier subshell `cd`, `pushd`/`popd`,
+ * `cd -` or bare `cd`, or a `cd`/`-C` operand the shell expands (`$`, `~`, backtick).
  * ponytail: whitespace tokens with stripped quotes/brackets; git aliases are a known ceiling.
  * @param {string} command
  * @returns {{ subcommand: "commit"|"push", dirs: string[], args: string[], unresolvable: boolean }[]}
@@ -1140,17 +1141,29 @@ export function extractGitCommitPushInvocations(command) {
   const found = [];
   const cdDirs = [];
   let gitEnvSet = false;
+  // A dir move the literal `dirs` cannot follow: a subshell `(cd x)` (its cd never reaches later
+  // segments), `pushd`/`popd`, `cd -`, a bare `cd`, or a shell-expanded operand ($, ~, backtick).
+  let dirUnknown = false;
+  const expands = (raw) => /[$~`]/.test(raw);
   for (const segment of shellSegments(command)) {
-    const tokens = segment.split(/\s+/).map((t) => t.replace(/^[\s'"`({$]+|[\s'"`)};]+$/g, "")).filter(Boolean);
-    if (tokens[0] === "cd" && tokens[1]) cdDirs.push(tokens[1]);
+    const pairs = segment.split(/\s+/).map((raw) => ({ raw, t: raw.replace(/^[\s'"`({$]+|[\s'"`)};]+$/g, "") })).filter((p) => p.t);
+    const tokens = pairs.map((p) => p.t);
+    if (tokens[0] === "pushd" || tokens[0] === "popd") dirUnknown = true;
+    if (tokens[0] === "cd") {
+      if (!tokens[1] || tokens[1] === "-" || expands(pairs[1].raw) || /^\$?\(/.test(segment)) dirUnknown = true;
+      else cdDirs.push(tokens[1]);
+    }
     const at = tokens.findIndex((t) => t === "git" || t.endsWith("/git"));
     if (tokens.slice(0, at === -1 ? tokens.length : at).some((t) => /^GIT_(?:DIR|WORK_TREE)=/.test(t))) gitEnvSet = true;
     if (at === -1) continue;
     const dirs = [...cdDirs];
-    let unresolvable = gitEnvSet;
+    let unresolvable = gitEnvSet || dirUnknown;
     let i = at + 1;
     while (i < tokens.length && tokens[i].startsWith("-")) {
-      if (tokens[i] === "-C") dirs.push(tokens[i + 1] ?? "");
+      if (tokens[i] === "-C") {
+        dirs.push(tokens[i + 1] ?? "");
+        if (!pairs[i + 1] || expands(pairs[i + 1].raw)) unresolvable = true;
+      }
       if (/^--(?:git-dir|work-tree)(?:=|$)/.test(tokens[i])) unresolvable = true;
       i += GIT_VALUE_OPTIONS.has(tokens[i]) ? 2 : 1;
     }

@@ -4,7 +4,7 @@
  *
  * Independent boundaries on a Write/Edit:
  *
- * 0. FIXER mutation boundary (always on, ADR 0106): the `fixer` agent writes only
+ * 0. FIXER mutation boundary (always on, ADR 0107): the `fixer` agent writes only
  *    inside the mutation authority of a current work-order pull (see the block below).
  *
  * 1. WRONG-CHECKOUT guard (always on): when the call context is operating
@@ -39,7 +39,7 @@ import { loadFixerContext, nearestExistingDir } from "./_fixer-grants.mjs";
 const input = readHookInput();
 const filePath = input?.tool_input?.file_path;
 
-// --- Fixer mutation boundary (ADR 0106, always on) ---------------------------
+// --- Fixer mutation boundary (ADR 0107, always on) ---------------------------
 // A `fixer` writes only inside the mutation authority of a CURRENT work-order pull:
 // a main-checkout receipt with role "fixer" whose plan still names the same ref,
 // digest and execution. No pull, a superseded or foreign receipt, another branch or

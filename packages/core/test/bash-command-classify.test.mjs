@@ -1155,6 +1155,9 @@ test("extractGitCommitPushInvocations skips value-taking global options and mark
     "git --git-dir /o/.git commit -m x", "git --git-dir=/o/.git commit -m x", "git --work-tree /o push", "git --work-tree=/o push",
     "GIT_DIR=/o/.git git commit -m x", "env GIT_WORK_TREE=/o git push", "export GIT_DIR=/o/.git && git commit -m x",
     "sh -c 'cd /o && git commit -m x'", "bash -lc \"cd /o; git push\"",
+    // Dir moves the literal dirs cannot follow (subshell cd, pushd, cd -, shell-expanded operands).
+    "(cd /o); git commit -m x", "( cd /o && git commit -m x )", "pushd /o && git commit -am x", "cd - && git push",
+    "cd && git push", "cd $X && git push", "cd ~/r && git commit -m x", "git -C \"$R\" push", "git -C ~/r commit -m x",
   ]) {
     assert.deepEqual(one(command).map((i) => i.unresolvable), [true], command);
   }

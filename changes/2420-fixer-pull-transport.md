@@ -5,4 +5,4 @@
 - `verify-fixer-disposition.mjs` takes `--fixer-plan` and requires a digest-bound plan, a matching fixer pull receipt, a post-pull handoff and the live PR head (#2420)
 - `verify-fixer-disposition.mjs` no longer accepts `--dispositions` or `--dispositions-file` (#2420)
 - On Claude, the fixer write scope is enforced by the Edit/Write guard and the fixer commit/push Bash gate. Pi has no tool-gating surface (#2420)
-- Fixer dispatch compactness is enforced by the emitter's per-harness payload plus `assertFixerDispatchPayload` (#2420)
+- The emitter builds the per-harness fixer dispatch payload from the compact pointer only; `assertFixerDispatchPayload` is a test-time shape check, not a runtime dispatch gate (#2420)

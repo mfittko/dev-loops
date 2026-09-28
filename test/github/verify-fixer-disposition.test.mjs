@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -64,6 +64,7 @@ const REF = `fixer:${REPO}#${PR}:${HEAD_SHA}:f1-0000abcd`;
 // receipt under <repoRoot>/tmp, and the disposition handoff at the plan's outputRef.
 async function deliver(repoRoot, dispositions, {
   handoffHead = HEAD_SHA, orderHead = HEAD_SHA, phase = "full", receipt = {}, writeReceipt = true, writeHandoff = true, pulledAt = new Date(Date.now() - 1000).toISOString(),
+  receiptMtime = null,
 } = {}) {
   const dir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
   const outputRef = path.join(dir, "f1-0000abcd", "fixer-disposition.json");
@@ -78,6 +79,7 @@ async function deliver(repoRoot, dispositions, {
     await writeFile(receiptPath, JSON.stringify({
       role: "fixer", workOrderRef: REF, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity, pulledAt, ...receipt,
     }));
+    if (receiptMtime) await utimes(receiptPath, receiptMtime, receiptMtime);
   }
   if (writeHandoff) await writeFile(outputRef, JSON.stringify({ headSha: handoffHead, dispositions }));
   return planPath;
@@ -124,7 +126,7 @@ for (const [name, setup, expected] of [
   ["a receipt for another execution", { receipt: { executionIdentity: "f2-0000abcd" } }, /execution_mismatch/],
   ["a receipt for another digest", { receipt: { workOrderDigest: "e".repeat(64) } }, /digest_mismatch/],
   ["a receipt without a handoff (receipt-only)", { writeHandoff: false }, /result_missing/],
-  ["a handoff written before the pull (stale or replayed)", { pulledAt: new Date(Date.now() + 60_000).toISOString() }, /result_predates_pull/],
+  ["a handoff written before the pull (stale or replayed)", { receiptMtime: new Date(Date.now() + 60_000) }, /result_predates_pull/],
   ["a handoff whose head is not the observed head", { handoffHead: FIX_SHA }, /not the observed head/],
   ["a commit_only plan", { phase: "commit_only" }, /not a full-phase fixer work order/],
 ]) {
@@ -176,6 +178,19 @@ test("F6: a plan whose work order was edited in place after emission refuses bef
       await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /does not match its workOrderDigest/);
       assert.equal(calls.length, 0);
     }
+  });
+});
+
+test("F6: an outputRef edited in place (outside the digest) refuses; the handoff is never read from it", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, TACKLED);
+    const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+    const forged = path.join(repoRoot, "forged.json");
+    await writeFile(forged, JSON.stringify({ headSha: HEAD_SHA, dispositions: [] }));
+    await writeFile(fixerPlan, JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, outputRefs: [forged] } }));
+    const { deps, calls } = runtime([], repoRoot);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /is not the emitted handoff path/);
+    assert.equal(calls.length, 0);
   });
 });
 

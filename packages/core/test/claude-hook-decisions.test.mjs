@@ -1361,7 +1361,7 @@ test("WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV reuses the default-branch-guard overr
 });
 
 // ---------------------------------------------------------------------------
-// decideFixerWriteGuard (ADR 0106, #2420 F5)
+// decideFixerWriteGuard (ADR 0107, #2420 F5)
 // ---------------------------------------------------------------------------
 
 const FX_MAIN = "/repo";
@@ -1415,10 +1415,10 @@ test("decideFixerBashGate binds git commit/push to a grant for the checked-out b
     agentType: "fixer", invocations: extractGitCommitPushInvocations(command).map((i) => ({ ...i, branch, paths })), grants: [{ ...FX_GRANT, phase: "full" }], ...over,
   }).decision;
   assert.deepEqual(extractGitCommitPushInvocations("cd a && git -C b -c x=y commit -m m; sh -c 'git push o'").map(({ subcommand, dirs }) => [subcommand, dirs]), [["commit", ["a", "b"]], ["push", ["a"]]]);
-  for (const command of ["git commit -m x", "git push", "git push -u origin HEAD", "git push origin issue-1", "git push --force-with-lease origin +refs/heads/issue-1", "npm test"]) {
+  for (const command of ["git commit -m x", "git push", "git push -u origin HEAD", "git push origin issue-1", "git push --force-with-lease origin +refs/heads/issue-1", "git push -o ci.skip origin issue-1", "npm test"]) {
     assert.equal(gate(command), "allow", command);
   }
-  for (const command of ["git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", "git push -d origin issue-1"]) {
+  for (const command of ["git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", "git push -d origin issue-1", "git push -o ci.skip origin main"]) {
     assert.equal(gate(command), "deny", command);
   }
   assert.equal(gate("git commit -m x", "main"), "deny");
@@ -1443,6 +1443,17 @@ test("decideFixerBashGate denies hidden checkouts, out-of-authority commit paths
   assert.equal(gate("git push", { paths: null }).decision, "allow", "a push includes no new paths");
   assert.match(gate("git push", { phase: "commit_only" }).reason, /phase is commit_only/);
   assert.equal(gate("git commit -m x", { phase: "commit_only" }).decision, "allow");
+});
+
+test("decideFixerBashGate evaluates every grant for the branch, so grant order never decides", () => {
+  const commitOnly = { ...FX_GRANT, phase: "commit_only" };
+  const full = { ...FX_GRANT, phase: "full" };
+  for (const grants of [[commitOnly, full], [full, commitOnly]]) {
+    const d = decideFixerBashGate({ agentType: "fixer", invocations: extractGitCommitPushInvocations("git push").map((i) => ({ ...i, branch: "issue-1" })), grants });
+    assert.equal(d.decision, "allow");
+  }
+  const d = decideFixerBashGate({ agentType: "fixer", invocations: extractGitCommitPushInvocations("git push").map((i) => ({ ...i, branch: "issue-1" })), grants: [commitOnly, commitOnly] });
+  assert.match(d.reason, /phase is commit_only/);
 });
 
 test("decideFixerWriteGuard leaves every non-fixer agent to the other boundaries", () => {

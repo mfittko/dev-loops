@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync } from "node:fs";
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
@@ -334,6 +334,42 @@ test("F5: a cwd in another repo cannot make an in-repo target look like scratch;
   });
 });
 
+test("F5: a symlink from scratch space into a checkout is denied at the hook", async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    assert.equal(pull(await emit(), wt).status, 0);
+    const link = path.join(path.dirname(root), "scratch-link");
+    await symlink(root, link);
+    assert.equal(hook(wt, path.join(link, "src", "x.mjs")), "deny", "resolves into the main checkout");
+    assert.equal(hook(wt, path.join(wt, "src", "x.mjs")), "allow");
+  });
+});
+
+test("F5: a pulled grant goes stale with the pull's own predicate; an edited outputRef never becomes a write grant", async () => {
+  await withFixture(async ({ root, wt, head, emit }) => {
+    const unit = await emit();
+    assert.equal(pull(unit, wt).status, 0);
+    const target = path.join(wt, "src", "x.mjs");
+    assert.equal(hook(wt, target), "allow");
+
+    const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
+    const forged = path.join(root, "tmp", "gate-findings", "forged.json");
+    await writeFile(unit.planPath, JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, outputRefs: [forged] } }));
+    assert.equal(hook(wt, forged), "deny", "outputRefs is outside the digest and never trusted");
+    assert.equal(hook(wt, unit.workOrder.outputRefs[0]), "allow", "the derived outputRef still is");
+    await writeFile(unit.planPath, JSON.stringify(plan));
+
+    const retired = path.join(root, "tmp", "retired-gate-rounds", head, "r1");
+    await mkdir(retired, { recursive: true });
+    await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date(clock).toISOString() }));
+    assert.equal(hook(wt, target), "deny", "a retired gate round grants nothing");
+    await rm(path.join(root, "tmp", "retired-gate-rounds"), { recursive: true });
+    assert.equal(hook(wt, target), "allow");
+
+    git(wt, "reset", "-q", "--hard", "HEAD~1");
+    assert.equal(hook(wt, target), "deny", "a branch that no longer contains the head grants nothing");
+  });
+});
+
 const BASH_HOOK = path.resolve(".claude/hooks/pre-tool-use-bash-gate.mjs");
 const bash = (cwd, command) => {
   const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd, agent_type: "fixer" }), encoding: "utf8", env: runIdFreeEnv() });
@@ -390,7 +426,7 @@ test("F5: a narrowed grant denies committing an out-of-authority file, commit_on
 // F7 — end to end with only the #2416 transport registered
 // ---------------------------------------------------------------------------
 
-test("F7: emit, pull, mutate in authority and verify the disposition; missing materialization and re-emission refuse", async () => {
+test("F7: emit, pull, mutate in authority and verify the disposition; missing materialization refuses and re-emission supersedes the old reference", async () => {
   await withFixture(async ({ root, wt, head, emit }) => {
     const unit = await emit();
     assert.equal(pull(unit, wt).status, 0);
