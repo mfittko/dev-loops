@@ -930,6 +930,63 @@ describe("filterDiffForInline — filtered diff for the shared per-head block (i
     assert.deepEqual(excludedFiles, [{ path: "vendor/generated.rb", reason: "configured" }]);
   });
 
+  describe("configured excludeGlobs and renames (issue #2504)", () => {
+    const renameBlock = (from, to) => [
+      `diff --git a/${from} b/${to}`,
+      "similarity index 90%",
+      `rename from ${from}`,
+      `rename to ${to}`,
+      "index 1111111..2222222 100644",
+      `--- a/${from}`,
+      `+++ b/${to}`,
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+    ].join("\n");
+    const opts = { excludeGlobs: [".claude/skills/**"] };
+
+    test("a rename into an excluded tree is kept, so the source deletion stays visible", () => {
+      const block = renameBlock("src/hand.mjs", ".claude/skills/x.mjs");
+      const { filteredDiff, excludedFiles, includedFiles } = filterDiffForInline(block, opts);
+      assert.equal(filteredDiff, block);
+      assert.deepEqual(excludedFiles, []);
+      assert.deepEqual(includedFiles, [".claude/skills/x.mjs"]);
+    });
+
+    test("a rename out of an excluded tree is kept", () => {
+      const block = renameBlock(".claude/skills/x.mjs", "src/hand.mjs");
+      const { filteredDiff, excludedFiles } = filterDiffForInline(block, opts);
+      assert.equal(filteredDiff, block);
+      assert.deepEqual(excludedFiles, []);
+    });
+
+    test("a pure rename (no hunks) into an excluded tree is kept", () => {
+      const block = [
+        "diff --git a/src/hand.mjs b/.claude/skills/x.mjs",
+        "similarity index 100%",
+        "rename from src/hand.mjs",
+        "rename to .claude/skills/x.mjs",
+      ].join("\n");
+      const { filteredDiff, excludedFiles } = filterDiffForInline(block, opts);
+      assert.equal(filteredDiff, block);
+      assert.deepEqual(excludedFiles, []);
+    });
+
+    test("a rename within the excluded tree is excluded as configured", () => {
+      const { filteredDiff, excludedFiles } = filterDiffForInline(renameBlock(".claude/skills/a.mjs", ".claude/skills/b.mjs"), opts);
+      assert.equal(filteredDiff, "");
+      assert.deepEqual(excludedFiles, [{ path: ".claude/skills/b.mjs", reason: "configured" }]);
+    });
+
+    test("a plain modify under the excluded tree is still excluded as configured", () => {
+      const p = ".claude/skills/x.mjs";
+      const block = [`diff --git a/${p} b/${p}`, `--- a/${p}`, `+++ b/${p}`, "@@ -1 +1 @@", "-a", "+b"].join("\n");
+      const { filteredDiff, excludedFiles } = filterDiffForInline(block, opts);
+      assert.equal(filteredDiff, "");
+      assert.deepEqual(excludedFiles, [{ path: p, reason: "configured" }]);
+    });
+  });
+
   test("AC4: the filtered diff, once inlined into a shared prefix, is byte-identical across the round's reviewers regardless of angle suffix", () => {
     const { filteredDiff } = filterDiffForInline(DIFF_WITH_LOCKFILE);
     const prefixBytes = `## Invariant prefix\nrepo: o/r\nhead: abc\n\n## Diff at reviewed head (abc)\n\n${filteredDiff}\n`;

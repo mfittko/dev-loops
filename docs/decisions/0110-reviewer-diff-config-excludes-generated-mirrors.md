@@ -14,7 +14,7 @@ Gate reviewers read the whole filtered diff, so their token cost scales with its
 
 ## Decision
 
-The global config key `gates.reviewDiff.excludeGlobs` takes an array of non-empty globs and defaults to empty. `scripts/github/write-gate-context.mjs` passes it to `filterDiffForInline`. It applies on every gate, on top of `DEFAULT_DIFF_EXCLUDE_GLOBS`. The configured globs never replace the defaults.
+The global config key `gates.reviewDiff.excludeGlobs` takes an array of non-empty globs and defaults to empty. `scripts/github/write-gate-context.mjs` passes it to `filterDiffForInline`. It applies on every gate, on top of `DEFAULT_DIFF_EXCLUDE_GLOBS`. The configured globs never replace the defaults. As in ADR 0108, a rename or copy is excluded as `configured` only when both its old and new paths match; otherwise it stays in the filtered diff.
 
 This repo's `.devloops` sets the key to `.claude/skills/**`, `.claude/agents/**` and `.claude/commands/**`. These are the values of `GENERATED_MIRROR_GLOBS` in `packages/core/src/config/config.mjs`. `scripts/claude/generate-claude-assets.mjs` owns every file under them.
 

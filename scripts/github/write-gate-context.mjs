@@ -1261,7 +1261,7 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
   return [
     "## Required reads",
     "",
-    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles and generated trees excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles, generated trees, and configured `gates.reviewDiff.excludeGlobs` paths excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
     "",
     ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
   ].join("\n");
@@ -1320,6 +1320,20 @@ export function renderBriefingPrefix({
   lines.push("");
   lines.push(renderRequiredReadsSection(requiredReads, worktreeRoot));
   return { text: lines.join("\n") + "\n" };
+}
+
+/**
+ * `Excluded from the filtered diff (n):` lines for filterDiffForInline's
+ * excludedFiles, or no lines when the list is empty.
+ * @param {{path: string, reason: "default"|"configured"}[]} excludedFiles
+ * @returns {string[]}
+ */
+function renderExcludedFilesLines(excludedFiles) {
+  if (!Array.isArray(excludedFiles) || excludedFiles.length === 0) return [];
+  return [
+    `Excluded from the filtered diff (${excludedFiles.length}):`,
+    ...excludedFiles.map((f) => `- ${f.path} (${f.reason})`),
+  ];
 }
 
 /**
@@ -1454,10 +1468,7 @@ export function renderBriefingEvidence({
   const files = Array.isArray(changedFiles) ? changedFiles : [];
   lines.push(`Changed files (${files.length}):`);
   for (const f of files) lines.push(`- ${f}`);
-  if (Array.isArray(excludedFiles) && excludedFiles.length > 0) {
-    lines.push(`Excluded from the filtered diff (${excludedFiles.length}):`);
-    for (const f of excludedFiles) lines.push(`- ${f.path} (${f.reason})`);
-  }
+  lines.push(...renderExcludedFilesLines(excludedFiles));
   const adjacentFiles = adjacentCode && Array.isArray(adjacentCode.files)
     ? adjacentCode.files.filter((f) => f.role !== "changed")
     : [];
@@ -1510,6 +1521,8 @@ export function renderBriefingEvidence({
  * @param {string|null} [input.diffOutput] — full diff text, when captured
  * @param {string|null} [input.diffPath] — persisted unfiltered `.diff`, linked unconditionally in the widen-back paragraph
  * @param {string|null} [input.filteredDiffPath] — persisted filtered diff (changed-files pointer-mode target; falls back to diffPath)
+ * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
+ *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the diff pointers, only when non-empty.
  * @param {string|null} [input.validationResultsPath]
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES; only consulted for "changed-files"
  * @returns {{ text: string }}
@@ -1518,7 +1531,7 @@ export function renderScopedBriefingVariant(scope, {
   repo, pr, gate, headSha, evidencePath, contextPath = null, worktreeRoot = null,
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
-  filteredDiffPath = null,
+  filteredDiffPath = null, excludedFiles = [],
   validationResultsPath = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
@@ -1543,6 +1556,7 @@ export function renderScopedBriefingVariant(scope, {
   // both without first reading the full prefix.
   lines.push(`Full diff (byte-exact): ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
   lines.push(`Context artifact: ${contextPath ?? "(context artifact path unavailable)"}`);
+  lines.push(...renderExcludedFilesLines(excludedFiles));
   lines.push("");
   if (worktreeRoot) {
     lines.push(renderSourceReadInvariantSection(worktreeRoot));
@@ -2564,6 +2578,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           diffOutput: inlineDiffOutput,
           diffPath: options.diffPath ?? null,
           filteredDiffPath: pendingFilteredDiff?.path ?? null,
+          excludedFiles: diffFilter?.excludedFiles ?? [],
           validationResultsPath: options.validationResultsPath ?? null,
         });
         pendingVariants.set(scope, { path: scopePath, text: variant.text });

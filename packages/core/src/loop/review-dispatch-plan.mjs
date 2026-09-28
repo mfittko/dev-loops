@@ -826,6 +826,35 @@ function extractDiffBlockPath(blockLines) {
 }
 
 /**
+ * Every path a diff file-block touches, read from its header lines only
+ * (before the first `@@` hunk): the `diff --git a/X b/Y` tokens,
+ * `rename from`/`rename to`, `copy from`/`copy to`, and `---`/`+++`. A
+ * configured exclusion drops a block only when every one of these paths is
+ * excluded, so a rename or copy across the boundary of a configured tree
+ * stays inlined (same rule as ADR 0108's scope count).
+ * @param {string[]} blockLines
+ * @returns {string[]}
+ */
+function extractDiffBlockTouchedPaths(blockLines) {
+  const paths = new Set();
+  const strip = (p) => p.trim().replace(/^[abiwco]\//, "");
+  const header = /^diff --git (\S+) (\S+)$/.exec(blockLines[0] ?? "");
+  if (header) {
+    paths.add(strip(header[1]));
+    paths.add(strip(header[2]));
+  }
+  for (const line of blockLines.slice(1)) {
+    if (line.startsWith("@@")) break;
+    const renameOrCopy = /^(?:rename|copy) (?:from|to) (.+)$/.exec(line);
+    if (renameOrCopy) paths.add(renameOrCopy[1].trim());
+    else if ((line.startsWith("--- ") || line.startsWith("+++ ")) && !line.includes("/dev/null")) {
+      paths.add(strip(line.slice(4)));
+    }
+  }
+  return [...paths];
+}
+
+/**
  * Filter a unified diff (`git diff` output) down to the files that should be
  * INLINED into a reviewer prompt's shared per-head block:
  * lockfiles, generated/vendored trees, and any caller-configured
@@ -867,7 +896,11 @@ export function filterDiffForInline(diffText, { excludeGlobs = [] } = {}) {
     const end = b + 1 < blockStarts.length ? blockStarts[b + 1] : lines.length;
     const blockLines = lines.slice(start, end);
     const relPath = extractDiffBlockPath(blockLines);
-    const reason = relPath ? classifyDiffFileExclusion(relPath, { excludeGlobs }) : null;
+    let reason = relPath ? classifyDiffFileExclusion(relPath, { excludeGlobs }) : null;
+    if (reason === "configured"
+      && !extractDiffBlockTouchedPaths(blockLines).every((p) => classifyDiffFileExclusion(p, { excludeGlobs }) !== null)) {
+      reason = null;
+    }
     if (reason) {
       excludedFiles.push({ path: relPath, reason });
     } else {
