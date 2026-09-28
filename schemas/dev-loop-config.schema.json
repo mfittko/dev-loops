@@ -1051,6 +1051,22 @@
           },
           "additionalProperties": false,
           "description": "Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate)."
+        },
+        "reviewDiff": {
+          "type": "object",
+          "properties": {
+            "excludeGlobs": {
+              "default": [],
+              "description": "Globs whose file blocks are dropped from the required filtered reviewer diff on every gate, on top of the built-in defaults (lockfiles, vendored trees). The raw diff keeps them as the optional raw-diff read, and the evidence file lists each excluded path with its reason. Default empty.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "additionalProperties": false,
+          "description": "Reviewer-diff shaping (global, applies on every gate): excludeGlobs drops matching file blocks from the required filtered diff read."
         }
       },
       "additionalProperties": false,

@@ -41,6 +41,15 @@ gates:
   # sequential: false (ADR 0095).
   fanout:
     maxConcurrent: 5
+  # Drop the generated .claude mirror trees from the required reviewer diff.
+  # scripts/claude/generate-claude-assets.mjs owns every file in them, and
+  # test/contracts/claude-assets-reproducible.test.mjs proves byte parity with
+  # the canonical sources. The raw-diff read still carries them.
+  reviewDiff:
+    excludeGlobs:
+      - ".claude/skills/**"
+      - ".claude/agents/**"
+      - ".claude/commands/**"
   draft:
     dynamic:
       subtractive: true

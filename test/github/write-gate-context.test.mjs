@@ -7821,6 +7821,56 @@ test("writeGateContext: a large lockfile hunk never enters the required diff rea
   }
 });
 
+test("writeGateContext: gates.reviewDiff.excludeGlobs drops matching blocks from the filtered diff only, and the evidence lists every excluded path with its reason", async () => {
+  const diffOutput = [
+    "diff --git a/src/app.mjs b/src/app.mjs\n+SOURCE-MARKER\n",
+    "diff --git a/.claude/skills/x/SKILL.md b/.claude/skills/x/SKILL.md\n+MIRROR-MARKER\n",
+    "diff --git a/package-lock.json b/package-lock.json\n+LOCKFILE-MARKER\n",
+  ].join("");
+  const changedFiles = ["src/app.mjs", ".claude/skills/x/SKILL.md", "package-lock.json"];
+  const run = async (config) => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-review-diff-exclude-"));
+    try {
+      const diffPath = buildGateDiffPath({ repo: "o/r", pr: 3, gate: "draft_gate", headSha: "abc1234" });
+      const result = await writeGateContext({
+        ...parseWriteGateContextCliArgs(["--repo", "o/r", "--pr", "3", "--gate", "draft_gate", "--head-sha", "abc1234", "--angles", '["scope"]']),
+        config, diffOutput, diffPath, diffToWrite: { path: diffPath, text: diffOutput }, changedFiles,
+      }, { repoRoot });
+      const reads = Object.fromEntries(result.artifact.requiredReads.map((r) => [r.kind, r]));
+      return {
+        reads,
+        filtered: await readFile(path.resolve(repoRoot, reads.diff.path), "utf8"),
+        raw: await readFile(path.resolve(repoRoot, reads["raw-diff"].path), "utf8"),
+        evidence: await readFile(path.resolve(repoRoot, reads.evidence.path), "utf8"),
+      };
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  };
+
+  const configured = await run({ gates: { reviewDiff: { excludeGlobs: [".claude/skills/**"] } } });
+  assert.ok(configured.filtered.includes("+SOURCE-MARKER"));
+  assert.ok(!configured.filtered.includes("MIRROR-MARKER"), "the configured glob drops the mirror block");
+  assert.ok(!configured.filtered.includes("LOCKFILE-MARKER"), "the built-in default still drops the lockfile");
+  assert.ok(configured.raw.includes("MIRROR-MARKER"), "the raw diff keeps the mirror block");
+  assert.notEqual(configured.reads.diff.sha256, configured.reads["raw-diff"].sha256);
+  assert.ok(configured.evidence.includes(
+    "Excluded from the filtered diff (2):\n- .claude/skills/x/SKILL.md (configured)\n- package-lock.json (default)\n",
+  ), configured.evidence);
+
+  const empty = await run({ gates: { reviewDiff: { excludeGlobs: [] } } });
+  const defaultsOnly = await run(undefined);
+  assert.equal(empty.filtered, defaultsOnly.filtered, "empty config equals the defaults-only filtered diff");
+  assert.ok(empty.filtered.includes("MIRROR-MARKER") && !empty.filtered.includes("LOCKFILE-MARKER"));
+  assert.ok(empty.evidence.includes("Excluded from the filtered diff (1):\n- package-lock.json (default)\n"));
+});
+
+test("renderBriefingEvidence omits the excluded-files block when nothing was excluded", () => {
+  const base = { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc", diffOutput: "diff --git a/a b/a\n+x\n", changedFiles: ["a"] };
+  assert.equal(renderBriefingEvidence({ ...base, excludedFiles: [] }).text, renderBriefingEvidence(base).text);
+  assert.ok(!renderBriefingEvidence(base).text.includes("Excluded from the filtered diff"));
+});
+
 test("writeGateContext: a diffPath the call does not write binds the on-disk diff as an optional raw-diff read, and omits it when missing", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-pointer-ondisk-"));
   try {

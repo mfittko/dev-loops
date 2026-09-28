@@ -1353,6 +1353,8 @@ export function renderBriefingPrefix({
  * @param {string|null} [input.diffOutput] — full diff text, when captured
  * @param {string|null} [input.diffPath] — persisted filtered-diff pointer (pointer-mode fallback)
  * @param {string[]} [input.changedFiles]
+ * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
+ *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the changed-files list, only when non-empty.
  * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output
  * @param {string|null} [input.validationResultsPath] — absolute path to the
  *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-RESOLUTION).
@@ -1364,7 +1366,7 @@ export function renderBriefingPrefix({
 export function renderBriefingEvidence({
   repo, pr, gate, headSha,
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
-  diffOutput = null, diffPath = null, changedFiles = [], adjacentCode = null,
+  diffOutput = null, diffPath = null, changedFiles = [], excludedFiles = [], adjacentCode = null,
   validationResultsPath = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
@@ -1452,6 +1454,10 @@ export function renderBriefingEvidence({
   const files = Array.isArray(changedFiles) ? changedFiles : [];
   lines.push(`Changed files (${files.length}):`);
   for (const f of files) lines.push(`- ${f}`);
+  if (Array.isArray(excludedFiles) && excludedFiles.length > 0) {
+    lines.push(`Excluded from the filtered diff (${excludedFiles.length}):`);
+    for (const f of excludedFiles) lines.push(`- ${f.path} (${f.reason})`);
+  }
   const adjacentFiles = adjacentCode && Array.isArray(adjacentCode.files)
     ? adjacentCode.files.filter((f) => f.role !== "changed")
     : [];
@@ -2453,15 +2459,17 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     prefixMode = "file";
   } else {
     // The diff under review is FILTERED — lockfiles, generated/vendored
-    // trees, and any --diff-exclude-glob configured here are dropped
-    // whole-file. The evidence file inlines it (or points to it above the
-    // cap), and `<gate>-<headSha>.filtered.diff` persists it as the required
-    // `diff` read in both modes, so the required read never scales with
-    // lockfile churn. The unfiltered diff stays at options.diffPath
-    // (scope.diffPath) as the optional `raw-diff` widening read.
-    const inlineDiffOutput = typeof options.diffOutput === "string" && options.diffOutput.length > 0
-      ? filterDiffForInline(options.diffOutput, { excludeGlobs: options.diffExcludeGlobs ?? [] }).filteredDiff
-      : (options.diffOutput ?? null);
+    // trees, and any gates.reviewDiff.excludeGlobs from the loaded config are
+    // dropped whole-file. The evidence file inlines it (or points to it above
+    // the cap) and lists each excluded path with its reason, and
+    // `<gate>-<headSha>.filtered.diff` persists it as the required `diff`
+    // read in both modes, so the required read never scales with lockfile
+    // churn. The unfiltered diff stays at options.diffPath (scope.diffPath)
+    // as the optional `raw-diff` widening read.
+    const diffFilter = typeof options.diffOutput === "string" && options.diffOutput.length > 0
+      ? filterDiffForInline(options.diffOutput, { excludeGlobs: options.config?.gates?.reviewDiff?.excludeGlobs ?? [] })
+      : null;
+    const inlineDiffOutput = diffFilter ? diffFilter.filteredDiff : (options.diffOutput ?? null);
     pendingFilteredDiff = typeof inlineDiffOutput === "string" && inlineDiffOutput.length > 0
       ? {
         path: buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", suffix: ".filtered.diff" }),
@@ -2480,6 +2488,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       diffOutput: inlineDiffOutput,
       diffPath: pendingFilteredDiff?.path ?? null,
       changedFiles: options.changedFiles ?? [],
+      excludedFiles: diffFilter?.excludedFiles ?? [],
       adjacentCode: options.adjacentCode ?? null,
       validationResultsPath: options.validationResultsPath ?? null,
     });

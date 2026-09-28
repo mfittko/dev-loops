@@ -40,6 +40,7 @@ import {
   touchesRiskPath,
   RISK_PATH_DENYLIST_DEFAULT,
   SCOPE_COUNT_EXCLUDE_GLOBS,
+  GENERATED_MIRROR_GLOBS,
   isScopeCountExcluded,
   resolveFanoutGroups,
   resolveMaxAnglesPerGroup,
@@ -5447,6 +5448,39 @@ test("SCOPE_COUNT_EXCLUDE_GLOBS lists exactly the fragment and mirror globs and 
   assert.equal(isScopeCountExcluded("changes\\2527-x.md"), false);
   assert.equal(isScopeCountExcluded(".claude\\skills\\x.mjs"), false);
   assert.equal(isScopeCountExcluded("changes/sub/x.md"), false);
+});
+
+test("GENERATED_MIRROR_GLOBS lists the three generated mirror trees and is frozen", () => {
+  assert.deepEqual([...GENERATED_MIRROR_GLOBS], [".claude/skills/**", ".claude/agents/**", ".claude/commands/**"]);
+  assert.equal(Object.isFrozen(GENERATED_MIRROR_GLOBS), true);
+});
+
+describe("gates.reviewDiff.excludeGlobs", () => {
+  async function loadWith(gates) {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-review-diff-"));
+    try {
+      await writeFile(path.join(tmpDir, ".devloops"), JSON.stringify({ version: 1, gates }));
+      return await loadDevLoopConfig({ repoRoot: tmpDir });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  test("a valid array of globs loads", async () => {
+    const result = await loadWith({ reviewDiff: { excludeGlobs: [".claude/skills/**", "vendor/**"] } });
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.config.gates.reviewDiff.excludeGlobs, [".claude/skills/**", "vendor/**"]);
+  });
+
+  test("a non-array value yields a validation error", async () => {
+    const result = await loadWith({ reviewDiff: { excludeGlobs: ".claude/skills/**" } });
+    assert.ok(result.errors.length > 0, "non-array excludeGlobs should error");
+  });
+
+  test("an empty-string entry yields a validation error", async () => {
+    const result = await loadWith({ reviewDiff: { excludeGlobs: ["  "] } });
+    assert.ok(result.errors.length > 0, "empty-string entry should error");
+  });
 });
 
 test("parseGitNumstat skips excluded paths, counts binaries as 0 lines, and fails closed on renames", async () => {
