@@ -850,7 +850,7 @@ for (const role of ["judge", "review", "gate-coordinator", "dev-loops:judge", "d
 // stay enforced (the read-only exemption must not regress into a blanket agentType-based allow),
 // AND the block resolves without a denied-commit deadlock because the actionable escape is to
 // commit the role's OWN work — never a task-scoped no-commit instruction the session then denies.
-for (const role of ["developer", "fixer", "docs", "quality"]) {
+for (const role of ["developer", "fixer", "docs", "quality", "dev-loops:developer", "dev-loops:fixer", "dev-loops:docs", "dev-loops:quality"]) {
   test(`decideSubagentStopGuard blocks an editing "${role}" role with a dirty worktree and points it at self-commit (#1925 non-goal, #1936)`, () => {
     const d = decideSubagentStopGuard({ cwd: WT, porcelain: " M src/x.mjs", agentType: role });
     assert.equal(d.decision, "block");
