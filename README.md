@@ -84,6 +84,8 @@ Installed from npm, point at the bundled copy: `claude --plugin-dir node_modules
 
 The hooks provide the `gh pr ready` draft-gate guard, an opt-in read-only boundary for the main agent (`DEVLOOPS_MAIN_AGENT_READONLY=1`), and an opt-in coordinator→worker delegation boundary — a dispatched dev-loop coordinator delegates tracked-repo-file mutations and targeted code-verification/build checks to a worker subagent rather than running them inline (`DEVLOOPS_COORDINATOR_READONLY=1`). The hook blocks known inline verification commands; local full-repository validation (`bun run verify`) is requested only through `dev-loops gate resolve-validation` on a clean commit, not delegated as a direct worker command. Skill references to a consumer repo's own `PLAN.md` / `AGENTS.md` resolve against that repo, by design.
 
+The `dev-loop` coordinator agent sets `experimental.cacheTtl: 1h` in its frontmatter. The coordinator often waits more than 5 minutes for its child agents, and the 1-hour prompt cache keeps its context warm across those waits. No other agent sets the key, so short-lived roles keep the cheaper 5-minute default. The key needs Claude Code v2.1.248 or later. Claude Code ignores the key for subagents while a subscription draws on usage credits.
+
 **Auto-mode permission rules.** The gate verdict post is the sanctioned gate path. The Claude Code auto-mode classifier can still deny it (observed reason "[CI Bypass]"), and it can deny the ready flip `ready-for-review.mjs` (observed reason "[Auto-Mode Bypass]"). Add an allow rule to `permissions.allow` in the project `.claude/settings.json` for each form the agents use:
 
 - `Bash(dev-loops gate upsert-verdict:*)` for the CLI verdict post;

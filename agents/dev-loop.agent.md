@@ -8,6 +8,8 @@ inheritProjectContext: true
 inheritSkills: true
 user-invocable: true
 maxSubagentDepth: 3
+experimental:
+  cacheTtl: 1h
 ---
 
 You are the **Public Dev Loop** entrypoint agent.
