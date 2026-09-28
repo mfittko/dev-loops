@@ -240,3 +240,37 @@ test("h) a same-head retry's normal artifact supersedes the stale blocked artifa
     assert.notEqual(result.verdict, "blocked");
   });
 });
+
+test("i) --max-model-turns/--max-tool-calls set the enforced budget and land in each blocked artifact", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const run = (dir, turns, calls, extra = []) => main([
+      "--head-sha", HEAD_SHA, "--angles", "a,b", "--completed-angles", "a,b",
+      "--model-turns", turns, "--tool-calls", calls,
+      "--max-model-turns", "70", "--max-tool-calls", "75", ...extra,
+      "--findings-dir", path.join(tmpDir, dir),
+    ]);
+    // Within the passed budget and fully covered: refused, nothing written.
+    assert.equal(await run("within", "51", "53"), 1);
+    assert.deepEqual(await readArtifacts(path.join(tmpDir, "within")), []);
+    // Over the passed budget: blocked, each artifact records that budget.
+    assert.equal(await run("over", "51", "76"), 0);
+    const artifacts = await readArtifacts(path.join(tmpDir, "over"));
+    assert.equal(artifacts.length, 2);
+    for (const artifact of artifacts) {
+      assert.equal(artifact.reason, "reviewer_budget_exhausted");
+      assert.deepEqual(artifact.budget, { maxModelTurns: 70, maxToolCalls: 75 });
+    }
+  });
+});
+
+test("j) the floor budget applies without the flags; one flag alone or an out-of-range budget exits 2", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    const base = ["--head-sha", HEAD_SHA, "--angles", "a", "--completed-angles", "a", "--model-turns", "51", "--tool-calls", "53", "--findings-dir", findingsDir];
+    assert.equal(await main(base), 0);
+    assert.deepEqual((await readArtifacts(findingsDir))[0].budget, { maxModelTurns: 45, maxToolCalls: 50 });
+    assert.equal(await main([...base, "--max-model-turns", "70"]), 2);
+    assert.equal(await main([...base, "--max-model-turns", "40", "--max-tool-calls", "50"]), 2);
+    assert.equal(await main([...base, "--max-model-turns", "96", "--max-tool-calls", "100"]), 2);
+  });
+});

@@ -870,7 +870,7 @@ function decodeGitDiffPathToken(raw) {
  * @param {string} diffOutput
  * @returns {Array<{ path: string|null, header: string, hunks: string[] }>}
  */
-function parseDiffFileBlocks(diffOutput) {
+export function parseDiffFileBlocks(diffOutput) {
   if (typeof diffOutput !== "string" || diffOutput.length === 0) return [];
   const lines = diffOutput.split("\n");
   const blocks = [];

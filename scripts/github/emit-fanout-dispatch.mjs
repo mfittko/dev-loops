@@ -10,12 +10,13 @@ import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output
 import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE, dispatchPromptLayoutRecordPath } from "./record-dispatch-prompt-layout.mjs";
 import { buildDispatchPointer, materializationHash, workOrderDigest } from "./_work-order-protocol.mjs";
-import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, renderRequiredReadLine } from "./write-gate-context.mjs";
+import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, renderRequiredReadLine } from "./write-gate-context.mjs";
+import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
-import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, isPackedUnitName, normalizeUnitAngles, sanitizeScopeSegment, unitScopeSegment } from "./_dispatch-units.mjs";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
@@ -89,7 +90,8 @@ Optional:
                                must match the write-gate-context.mjs call).
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "pending": <true|false>, "roundId": "...", "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "...",
+    "pending": <true|false>, "roundId": "...", "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>,
+      "budget": { "maxToolCalls": <n>, "maxModelTurns": <n>, "maxAngles": <n> }, "budgetBasis": { "scope": "none|docs-only|full", "files": <n>, "changedLines": <n> }, "promptPath": "...",
       "workOrderRef", "workOrderDigest", "materializationHash", "executionIdentity", "dispatchPrompt",
       "promptBytes": <n>, "sectionBytes": { "prefix": <n>, "volatile": <n>, "suffix": <n> },
       "workOrder": { "role", "target", "operation", "roundIdentity", "headSha", "configSha256", "assignedAngles",
@@ -189,7 +191,7 @@ export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findi
  * angle(s), carries each angle's resolved persona and focus prompt
  * (`angleInstructions`, resolved by the emitter via resolveReviewerRole), any
  * unit-scoped required read (a scoped evidence variant), and the bounded
- * reviewer contract (REVIEWER_UNIT_BUDGET, assigned-angles-only scope,
+ * reviewer contract (the unit's computed budget, assigned-angles-only scope,
  * PROHIBITED_REVIEWER_OPERATIONS, and the escape hatch for BOTH ways a unit
  * can fail its bound — budget exhaustion or incomplete angle coverage,
  * mirroring enforceReviewerUnitBound's own two REVOKE conditions in
@@ -201,9 +203,10 @@ export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findi
  * described with PLACEHOLDERS the reviewer fills from values it already has
  * (self-reported coverage/consumption, and the head SHA / findings directory
  * named earlier in the briefing) — it never interpolates a concrete angle
- * name (or any other concrete value) into the shell-command text, since an
+ * name (or any other free-form value) into the shell-command text, since an
  * angle name is only required to be a non-empty string and could otherwise
- * carry shell metacharacters into a copy-pasted command. It also states the
+ * carry shell metacharacters into a copy-pasted command. The only literals it
+ * interpolates are the unit budget's integer limits. It also states the
  * unit's own emitted `scope` (from dispatchUnitScope) as the exact `--scope`
  * value for the mandatory verify-fresh-review-context.mjs sentinel named in
  * the invariant prefix, verbatim — the reviewer never derives it from the
@@ -221,9 +224,11 @@ export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findi
  * @param {{ angle: string, persona: string, prompt: string }[]} angleInstructions
  * @param {{ kind: string, path: string, sha256?: string, bytes?: number, required: boolean }[]} [unitReads]
  *   unit-scoped required reads, rendered worktree-absolute from the cwd
+ * @param {{ maxModelTurns: number, maxToolCalls: number }} [budget] this unit's
+ *   computed budget (computeReviewerUnitBudget); the floor when absent
  * @returns {string}
  */
-export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = []) {
+export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET) {
   if (typeof scope !== "string" || scope.length === 0) {
     throw new TypeError(`buildAngleNamingSuffix requires a non-empty scope string, got ${JSON.stringify(scope)}`);
   }
@@ -250,11 +255,11 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
     ? `${REVIEWER_VERIFIED_ITEMS_INSTRUCTION}.\n`
     : "";
   const contract = `## Bounded reviewer contract
-Budget: at most ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns and ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls for this unit.
+Budget: at most ${budget.maxModelTurns} model turns and ${budget.maxToolCalls} tool calls for this unit, computed from the size of the diff blocks in this unit's scope (doc and unparsed-path blocks for a docs-only unit, every block otherwise).
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
 Prohibited: ${prohibited}.
 Widening: ${REVIEWER_WIDENING_RULE}.
-${verifiedItemsLine}If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
+${verifiedItemsLine}If you exceed this budget (more than ${budget.maxModelTurns} model turns or ${budget.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --max-model-turns ${budget.maxModelTurns} --max-tool-calls ${budget.maxToolCalls} --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
   return `${header}\n\n${scopeLine}\n\n${reads}${body}\n\n${instructions}\n\n${contract}\n`;
 }
 
@@ -339,6 +344,31 @@ function resolveUnitScopedReads(artifact, angles) {
   if (scopes.size !== 1 || scope === "full" || !Array.isArray(artifact?.requiredReads)) return [];
   const entry = artifact.requiredReads.find((read) => read?.kind === "scoped-evidence" && read.scope === scope);
   return entry ? [{ ...entry, required: true }] : [];
+}
+
+/**
+ * The size basis of one unit's budget: the file blocks and added plus deleted
+ * lines of the filtered diff the unit reads. A unit whose angles all declare
+ * the `docs-only` scope counts only doc-file blocks, plus unparsed-path blocks,
+ * because the docs-only briefing tells the reviewer to check those too. No diff
+ * means the floor.
+ * @param {ReturnType<typeof parseDiffFileBlocks>|null} diffBlocks the parsed filtered diff, or null when none
+ * @returns {{ scope: "none"|"docs-only"|"full", files: number, changedLines: number }}
+ */
+export function unitBudgetBasis(artifact, angles, diffBlocks) {
+  if (diffBlocks === null) return { scope: "none", files: 0, changedLines: 0 };
+  const docsOnly = angles.every((angle) => artifact?.angleScopes?.[angle] === "docs-only");
+  const blocks = docsOnly ? diffBlocks.filter((block) => block.path === null || classifyFile(block.path) === "docs") : diffBlocks;
+  let changedLines = 0;
+  for (const block of blocks) {
+    for (const hunk of block.hunks) {
+      // The first hunk line is its `@@` header; body lines carry the +/- marker.
+      for (const line of hunk.split("\n").slice(1)) {
+        if (line.startsWith("+") || line.startsWith("-")) changedLines += 1;
+      }
+    }
+  }
+  return { scope: docsOnly ? "docs-only" : "full", files: blocks.length, changedLines };
 }
 
 function resolveFlagValue(argv, flag) {
@@ -636,6 +666,18 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // This emission's round identity. Its ms timestamp lets the pull tool tell a
   // round retired after it (GATE-EXEC-ROUND-RETIREMENT record) from a typo.
   const roundId = `r${Date.now()}-${randomBytes(4).toString("hex")}`;
+  // Each unit's budget scales with the filtered diff it reads. A thin briefing
+  // records no diff read, so every unit gets the floor.
+  const diffRead = artifact.scope?.diffSource === "none" ? undefined : sharedReads.find((read) => read?.kind === "diff");
+  let diffBlocks = null;
+  if (diffRead) {
+    try {
+      diffBlocks = parseDiffFileBlocks(await readFile(path.resolve(process.cwd(), diffRead.path), "utf8"));
+    } catch (err) {
+      process.stderr.write(`${formatCliError(err)}\n`);
+      return 2;
+    }
+  }
   let prefixSha256 = null;
   const emitted = [];
   const seenScopes = new Set();
@@ -661,10 +703,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       angleInstructions.push({ angle, persona: role.persona, prompt: role.prompt });
     }
     const unitReads = resolveUnitScopedReads(artifact, angles);
+    const budgetBasis = unitBudgetBasis(artifact, angles, diffBlocks);
+    const budget = computeReviewerUnitBudget(budgetBasis);
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget), "utf8");
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
@@ -706,7 +750,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       angleInstructions,
       requiredReads: unitReads.length > 0 ? [...sharedReads.filter((read) => read.kind !== "evidence"), ...unitReads] : sharedReads,
       outputRefs: angles.map((angle) => path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`)),
-      executionRules: { budget: REVIEWER_UNIT_BUDGET, prohibited: PROHIBITED_REVIEWER_OPERATIONS, widening: REVIEWER_WIDENING_RULE },
+      executionRules: { budget, prohibited: PROHIBITED_REVIEWER_OPERATIONS, widening: REVIEWER_WIDENING_RULE },
     };
     // Pull transport (ADR 0106): the coordinator relays only this compact
     // envelope; the reviewer pulls and verifies its work order itself.
@@ -722,7 +766,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const record = JSON.parse(await readFile(recordPath, "utf8"));
     await writeFile(recordPath, `${JSON.stringify({ ...record, compactReference: identity }, null, 2)}\n`, "utf8");
     emitted.push({
-      scope, angles, group: unit.group, promptPath: result.promptPath, promptBytes, sectionBytes: result.sectionBytes,
+      scope, angles, group: unit.group, budget, budgetBasis, promptPath: result.promptPath, promptBytes, sectionBytes: result.sectionBytes,
       ...identity, materializationHash: materializationHash(promptText), dispatchPrompt, workOrder,
     });
   }

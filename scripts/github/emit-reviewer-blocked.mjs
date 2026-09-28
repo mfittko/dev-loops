@@ -15,9 +15,14 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { HEAD_SHA_RE } from "./record-dispatch-prompt-layout.mjs";
 import { sanitizeScopeSegment } from "./_dispatch-units.mjs";
-import { HARNESS_VALUES, enforceReviewerUnitBound } from "@dev-loops/core/loop/reviewer-unit-bound";
+import {
+  HARNESS_VALUES,
+  REVIEWER_UNIT_BUDGET_CAP,
+  REVIEWER_UNIT_BUDGET_FLOOR,
+  enforceReviewerUnitBound,
+} from "@dev-loops/core/loop/reviewer-unit-bound";
 
-const USAGE = `Usage: emit-reviewer-blocked.mjs --head-sha <sha> --angles <csv> --model-turns <n> --tool-calls <n> --findings-dir <dir> [--run <id>] [--completed-angles <csv>] [--harness <pi|claude|codex>] [--help]
+const USAGE = `Usage: emit-reviewer-blocked.mjs --head-sha <sha> --angles <csv> --model-turns <n> --tool-calls <n> --findings-dir <dir> [--run <id>] [--completed-angles <csv>] [--max-model-turns <n> --max-tool-calls <n>] [--harness <pi|claude|codex>] [--help]
 Live reviewer-unit-bound enforcement: calls enforceReviewerUnitBound with the
 given consumption/coverage and, only when it reports blocked, writes one
 "blocked" per-angle findings artifact per unreviewed angle to --findings-dir —
@@ -32,6 +37,11 @@ Optional:
   --run <id>                    Round/run identifier (unit.run). Defaults to --head-sha
                                  when omitted — the round identity a reviewer always has.
   --completed-angles <csv>        Comma-separated angles actually covered before budget ran out.
+  --max-model-turns <n>          The unit's model-turn budget, as printed in its dispatch suffix
+                                 (${REVIEWER_UNIT_BUDGET_FLOOR.maxModelTurns}..${REVIEWER_UNIT_BUDGET_CAP.maxModelTurns}).
+  --max-tool-calls <n>           The unit's tool-call budget, as printed in its dispatch suffix
+                                 (${REVIEWER_UNIT_BUDGET_FLOOR.maxToolCalls}..${REVIEWER_UNIT_BUDGET_CAP.maxToolCalls}).
+                                 Pass both or neither; neither enforces the floor budget.
   --harness <pi|claude|codex>     Dispatch harness label (unit.gateContext.harness).
 Output (stdout, JSON):
   { "ok": true, "verdict": "blocked", "reason": "...", "unreviewedAngles": [...], "headSha": "...", "written": ["..."] }
@@ -40,8 +50,8 @@ Exit codes:
   0  Blocked artifact(s) written
   1  Refused: the unit is within budget and fully covered (nothing to emit —
      write normal per-angle artifacts instead), or --jq predicate false
-  2  Usage/argument error, or a malformed unit/consumed shape rejected by
-     enforceReviewerUnitBound itself`.trim();
+  2  Usage/argument error, an out-of-range budget, or a malformed
+     unit/consumed shape rejected by enforceReviewerUnitBound itself`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -98,6 +108,12 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
     process.stderr.write(`${formatCliError(parseError("--model-turns and --tool-calls are required non-negative integers."))}\n`);
     return 2;
   }
+  const maxModelTurnsArg = resolveFlagValue(argv, "--max-model-turns");
+  const maxToolCallsArg = resolveFlagValue(argv, "--max-tool-calls");
+  if (maxModelTurnsArg === "" || maxToolCallsArg === "" || (maxModelTurnsArg === null) !== (maxToolCallsArg === null)) {
+    process.stderr.write(`${formatCliError(parseError("--max-model-turns and --max-tool-calls must be passed together as non-negative integers."))}\n`);
+    return 2;
+  }
   const findingsDir = resolveFlagValue(argv, "--findings-dir");
   if (findingsDir === null || findingsDir === "") {
     process.stderr.write(`${formatCliError(parseError("--findings-dir is required and must be non-empty."))}\n`);
@@ -126,10 +142,15 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
   try {
     modelTurns = parseNonNegativeInt(modelTurnsArg, "--model-turns");
     toolCalls = parseNonNegativeInt(toolCallsArg, "--tool-calls");
+    const budget = maxModelTurnsArg === null ? undefined : {
+      maxModelTurns: parseNonNegativeInt(maxModelTurnsArg, "--max-model-turns"),
+      maxToolCalls: parseNonNegativeInt(maxToolCallsArg, "--max-tool-calls"),
+    };
     result = enforceReviewerUnitBound({
       unit: { run, gateContext: { headSha, ...(harness ? { harness } : {}) }, angles },
       consumed: { modelTurns, toolCalls },
       completedAngles,
+      budget,
     });
   } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
@@ -175,6 +196,7 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
       findings: [],
       unreviewedAngles: result.unreviewedAngles,
       reason: result.reason,
+      budget: { maxModelTurns: result.budget.maxModelTurns, maxToolCalls: result.budget.maxToolCalls },
     };
     try {
       await writeFileFn(filePath, `${JSON.stringify(body, null, 2)}\n`, "utf8");

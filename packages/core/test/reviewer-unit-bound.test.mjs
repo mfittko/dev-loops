@@ -7,6 +7,7 @@ import {
   REVIEWER_UNIT_BUDGET,
   REVIEWER_UNIT_MAX_ANGLES,
   assertReviewerOperationAllowed,
+  computeReviewerUnitBudget,
   enforceReviewerUnitBound,
   validateReviewerUnit,
 } from "../src/loop/reviewer-unit-bound.mjs";
@@ -431,5 +432,47 @@ describe("enforceReviewerUnitBound — head attribution", () => {
     assert.equal(result.headSha, "head-abc");
     assert.equal(result.unit.gateContext.headSha, "head-abc");
     assert.equal(Object.isFrozen(result.unit.gateContext), true);
+  });
+});
+
+describe("computeReviewerUnitBudget — diff-size scaling", () => {
+  const pair = (budget) => [budget.maxToolCalls, budget.maxModelTurns];
+
+  test("returns the floor for an empty diff, scales with size, and clamps at the cap", () => {
+    assert.deepEqual(pair(computeReviewerUnitBudget({ files: 0, changedLines: 0 })), [50, 45]);
+    assert.deepEqual(pair(computeReviewerUnitBudget({ files: 6, changedLines: 150 })), [52, 47]);
+    assert.deepEqual(pair(computeReviewerUnitBudget({ files: 57, changedLines: 5116 })), [75, 70]);
+    assert.deepEqual(pair(computeReviewerUnitBudget({ files: 105, changedLines: 9290 })), [95, 90]);
+    assert.deepEqual(pair(computeReviewerUnitBudget({ files: 1000, changedLines: 100000 })), [100, 95]);
+    assert.equal(computeReviewerUnitBudget({ files: 0, changedLines: 0 }).maxAngles, REVIEWER_UNIT_MAX_ANGLES);
+  });
+
+  test("rejects negative or non-integer inputs", () => {
+    assert.throws(() => computeReviewerUnitBudget({ files: -1, changedLines: 0 }), TypeError);
+    assert.throws(() => computeReviewerUnitBudget({ files: 0, changedLines: 1.5 }), TypeError);
+    assert.throws(() => computeReviewerUnitBudget({}), TypeError);
+  });
+});
+
+describe("enforceReviewerUnitBound — passed budget", () => {
+  const consumed = { modelTurns: 51, toolCalls: 53 };
+  const completedAngles = ["coverage", "security"];
+
+  test("enforces a passed budget, and the floor when none is passed", () => {
+    const budget = computeReviewerUnitBudget({ files: 57, changedLines: 5116 });
+    assert.equal(enforceReviewerUnitBound({ unit: baseUnit(), consumed, completedAngles, budget }).ok, true);
+    const floor = enforceReviewerUnitBound({ unit: baseUnit(), consumed, completedAngles });
+    assert.equal(floor.verdict, "blocked");
+    assert.equal(floor.reason, "reviewer_budget_exhausted");
+    assert.equal(floor.budget.maxToolCalls, REVIEWER_UNIT_BUDGET.maxToolCalls);
+    const over = enforceReviewerUnitBound({ unit: baseUnit(), consumed: { modelTurns: 71, toolCalls: 10 }, completedAngles, budget });
+    assert.equal(over.reason, "reviewer_budget_exhausted");
+    assert.deepEqual([over.budget.maxToolCalls, over.budget.maxModelTurns], [75, 70]);
+  });
+
+  test("rejects a budget below the floor or above the cap", () => {
+    for (const budget of [{ maxModelTurns: 44, maxToolCalls: 50 }, { maxModelTurns: 45, maxToolCalls: 101 }, { maxModelTurns: 45.5, maxToolCalls: 50 }, "big"]) {
+      assert.throws(() => enforceReviewerUnitBound({ unit: baseUnit(), consumed, completedAngles, budget }), TypeError);
+    }
   });
 });
