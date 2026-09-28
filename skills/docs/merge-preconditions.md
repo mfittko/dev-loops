@@ -424,6 +424,7 @@ After a confirmed merge, `merge-pr.mjs` runs three steps itself and reports them
   non-zero, which the `|| true` masks) — a failure here must never block merge completion. See
   [Projects Queue Contract](./projects-queue-contract.md#archiving-completed-items).
 - Clean up stale branches
+- <!-- rule: MERGE-POSTMERGE-FULL-SHA-REPORT --> `MERGE-POSTMERGE-FULL-SHA-REPORT`: the merge report MUST name the full 40-hex merge commit SHA, never an abbreviated SHA.
 
 ## Cross-references
 

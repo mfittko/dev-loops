@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { parsePrNumber } from "../_cli-primitives.mjs";
@@ -11,7 +11,7 @@ import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts } from "./run-gate-validation.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: dev-loops gate resolve-validation --profile <targeted|full-repository> --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA> [--suite <script>]...\nTargeted profile requires at least one explicit --suite.\n${JQ_OUTPUT_USAGE}`;
+const USAGE = `Usage: dev-loops gate resolve-validation --profile <targeted|full-repository> --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA> [--suite <script>]... [--tmp-root <dir>]\nTargeted profile requires at least one explicit --suite.\n${JQ_OUTPUT_USAGE}`;
 
 async function removeParseFailedArtifact(argv) {
   const identity = {};
@@ -58,20 +58,43 @@ export function parseResolveValidationArgs(argv) {
 
 export async function resolveValidation(options, { repoRoot = resolveRepoRoot(process.cwd()), env = process.env } = {}) {
   const artifactPath = path.resolve(repoRoot, buildValidationResultsPath(options));
-  const incomplete = async (reason) => {
+  // An incomplete outcome replaces any earlier same-head evidence with a typed
+  // incomplete record, so the verdict writer sees that the round resolved its
+  // validation and every reader sees `allPassed: false`. The old file goes
+  // first: a failed write leaves the artifact absent, never a stale pass.
+  // A tree whose HEAD is not the requested head gets no artifact at all: the
+  // run is in the wrong checkout, so the verdict writer must see it as absent.
+  const incomplete = async (reason, { writeArtifact = true } = {}) => {
     await rm(artifactPath, { force: true });
-    return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason };
+    if (!writeArtifact) {
+      return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason };
+    }
+    const artifact = {
+      ok: false, status: "incomplete", allPassed: false,
+      repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha,
+      profile: options.profile, reason, generatedAt: new Date().toISOString(), suites: [],
+    };
+    await mkdir(path.dirname(artifactPath), { recursive: true });
+    await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+    return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason, artifactPath: buildValidationResultsPath(options) };
   };
+  // An exception writes a typed artifact only when the head check confirmed
+  // the requested head and a re-check at the throw still confirms it: a suite
+  // may have moved HEAD before a later step threw.
+  const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+  const readHead = () => execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim().toLowerCase();
+  let headConfirmed = false;
   try {
-    const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
     const currentTreeProblem = () => {
-      const actualHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim().toLowerCase();
-      if (actualHead !== options.headSha) return `worktree HEAD ${actualHead} differs from requested head`;
+      headConfirmed = false;
+      const actualHead = readHead();
+      headConfirmed = actualHead === options.headSha;
+      if (!headConfirmed) return { reason: `worktree HEAD ${actualHead} differs from requested head`, writeArtifact: false };
       const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim();
-      return dirty ? "validation requires a clean worktree at the requested head" : null;
+      return dirty ? { reason: "validation requires a clean worktree at the requested head", writeArtifact: true } : null;
     };
     const beforeProblem = currentTreeProblem();
-    if (beforeProblem) return incomplete(beforeProblem);
+    if (beforeProblem) return incomplete(beforeProblem.reason, beforeProblem);
     const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
     const pinned = packageJson.packageManager;
     if (!/^bun@\d+\.\d+\.\d+$/.test(pinned ?? "")) return incomplete("packageManager does not pin an exact Bun version");
@@ -84,11 +107,16 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     if (options.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
     const artifact = { ...await buildValidationArtifact(options, { repoRoot }), profile: options.profile, toolchain: pinned };
     const afterProblem = currentTreeProblem();
-    if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem}`);
+    if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem.reason}`, afterProblem);
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+    // HEAD can move between the check above and the write: re-check after it.
+    const writtenProblem = currentTreeProblem();
+    if (writtenProblem) return incomplete(`worktree moved during the artifact write: ${writtenProblem.reason}`, writtenProblem);
     return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
   } catch (error) {
-    return incomplete(error instanceof Error ? error.message : String(error));
+    let stillConfirmed = false;
+    try { stillConfirmed = headConfirmed && readHead() === options.headSha; } catch { /* An unconfirmable head writes no artifact. */ }
+    return incomplete(error instanceof Error ? error.message : String(error), { writeArtifact: stillConfirmed });
   }
 }
 

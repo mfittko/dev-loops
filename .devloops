@@ -162,7 +162,7 @@ localImplementation:
   lightMode:
     enabled: true
     maxFiles: 2
-    maxLines: 20 # micro-PR ceiling (#1043)
+    maxLines: 40 # micro-PR ceiling (ADR 0108)
 
 # Pre-PR review model opt-in (issue #2305, skills/docs/pre-pr-review-contract.md).
 # The pre-PR review pass runs ONE fresh-context general-purpose reviewer before

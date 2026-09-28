@@ -15,6 +15,8 @@ import {
   extractRuleReferences,
   extractTermDefinitions,
   extractTermUses,
+  findEmbeddedRuleBodies,
+  FORWARD_RULE_REFERENCES,
   isImperativeSentence,
   isRefusalPathCitation,
   isRuntimeSourceFile,
@@ -76,6 +78,55 @@ test("validateRuleOwnership fails unresolved reference", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("FORWARD_RULE_REFERENCES allowlists exactly GATE-EXEC-HARNESS-JOIN", () => {
+  assert.deepEqual([...FORWARD_RULE_REFERENCES], ["GATE-EXEC-HARNESS-JOIN"]);
+});
+
+test("validateRuleOwnership accepts the allowlisted forward reference but still fails any other undefined cited ID", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "Cite <!-- rule-ref: GATE-EXEC-HARNESS-JOIN --> and [OTHER-UNDEFINED-RULE](x.md).",
+    "scripts/tool.mjs": 'throw new Error("refused under GATE-EXEC-HARNESS-JOIN");',
+  });
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.equal(result.ok, false);
+    assert.deepEqual(
+      result.errors.filter((e) => e.kind !== "dead_allowlist_entry").map((e) => `${e.kind}:${e.id}`),
+      ["unresolved_rule_reference:OTHER-UNDEFINED-RULE"],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("validateRuleOwnership flags a forward-reference entry once its rule is defined", async () => {
+  const dir = await fixture({
+    "skills/docs/a.md": "<!-- rule: GATE-EXEC-HARNESS-JOIN --> The coordinator joins children by the completion wake.",
+  }, ["GATE-EXEC-HARNESS-JOIN"]);
+  try {
+    const result = await validateRuleOwnership(dir);
+    assert.deepEqual(
+      result.errors.filter((e) => e.kind !== "dead_allowlist_entry").map((e) => `${e.kind}:${e.id}`),
+      ["resolved_forward_reference_entry:GATE-EXEC-HARNESS-JOIN"],
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("findEmbeddedRuleBodies finds a pasted rule body and ignores an ID-only citation", () => {
+  const sources = [{
+    file: "skills/docs/worktree-guidance.md",
+    content: "| <!-- rule: TEST-FILE-OPS --> `TEST-FILE-OPS` | Agents MUST copy, move and delete with non-interactive forced commands so aliased shells never hang. |",
+  }];
+  const citing = "Editing workers: see `TEST-FILE-OPS`.";
+  assert.deepEqual(findEmbeddedRuleBodies(citing, sources), []);
+  // Negative fixture: one pasted rule body, re-punctuated and with a softened modal.
+  const pasted = "Editing workers: agents should copy, move, and delete with non-interactive forced commands, so aliased shells never hang.";
+  const found = findEmbeddedRuleBodies(pasted, sources);
+  assert.deepEqual(found.map((d) => [d.id, d.file]), [["TEST-FILE-OPS", "skills/docs/worktree-guidance.md"]]);
 });
 
 test("validateRuleOwnership fails missing manifest rule", async () => {
@@ -330,7 +381,7 @@ test("repository rule ownership fixture is valid", async () => {
 // convention, so the baseline reflects honest enforcement only — the round-2
 // draft-gate findings (2502f95c contract-surface, 70dd2edd correctness) removed
 // the previous comment-only false credits.
-const UNENFORCED_RUNTIME_CEILING = 157;
+const UNENFORCED_RUNTIME_CEILING = 156;
 
 test("normalizeRuleEntry defaults a legacy flat-string entry to runtime", () => {
   const flat = normalizeRuleEntry("TEST-RULE-001");

@@ -182,9 +182,11 @@ function findAllSectionsByPatterns(sections, patterns) {
  * Flatten a section into a body string that extends past `###` sub-headings
  * by joining the section and every following DEEPER-level section up to the
  * next same-or-shallower heading, so nested checklist items stay visible to
- * consumers that must see ALL of a canonical section's boxes.
+ * consumers that must see ALL of a canonical section's boxes. The optional
+ * `skip(index)` predicate drops a matching deeper section and its deeper
+ * descendants; the walk then continues.
  */
-function flattenSectionDeep(sections, startIndex) {
+function flattenSectionDeep(sections, startIndex, skip = () => false) {
   const start = sections[startIndex];
   // Anti-spoof: the raw sub-heading NAME is NEVER re-injected into the text the
   // checklist parser re-parses. A fence-opening name (`### ``` `) would corrupt
@@ -193,8 +195,12 @@ function flattenSectionDeep(sections, startIndex) {
   // Only already-classified bodyLines are joined; real boxes under sub-headings
   // stay visible because their bodyLines still join normally.
   const parts = [start.bodyLines.join("\n")];
+  let skipLevel = Infinity;
   for (let i = startIndex + 1; i < sections.length; i += 1) {
-    if (sections[i].level <= start.level) break;
+    const { level } = sections[i];
+    if (level <= start.level) break;
+    if (level <= skipLevel) skipLevel = skip(i) ? level : Infinity;
+    if (skipLevel !== Infinity) continue;
     parts.push(sections[i].bodyLines.join("\n"));
   }
   return parts.join("\n");
@@ -1271,6 +1277,86 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
 export function validateTrackerBackedPrBodySpec({ body = "", closingIssues = [] } = {}) {
   const expectedIssue = Array.isArray(closingIssues) && closingIssues.length === 1 ? closingIssues[0] : null;
   return validatePrBodySpec({ body, expectedIssue, requireOpenQuestions: false });
+}
+
+// Spec extraction accepts only the canonical section names, each anchored to
+// the whole heading name. Array order is the name priority (`Definition of
+// done` before `DoD`). The broader PR-body families (`AC`, `Done`, decorated
+// `(v2)` forms) stay with validatePrBodySpec. Three intended differences from
+// the former H2-only reader: names pass through heading normalization (a
+// trailing colon, a closing `#` run and emphasis are stripped), so `##
+// Acceptance criteria:` and `## **Definition of done**` match; the section
+// parser is fence-aware, so a fenced `##` line no longer ends a section; and a
+// spec section nested under another selected spec section (for example `###
+// Non-goals` under `## Acceptance criteria`) is excluded from the parent's
+// items, where the H2 reader counted them in the parent. Each change can alter
+// the specDigest of a body that uses those forms.
+const SPEC_SECTION_NAME_PATTERNS = Object.freeze({
+  acceptanceCriteria: Object.freeze([/^acceptance criteria$/i]),
+  definitionOfDone: Object.freeze([/^definition of done$/i, /^dod$/i]),
+  nonGoals: Object.freeze([/^non-goals$/i, /^non goals$/i]),
+});
+
+// `##` ranks first, deeper levels follow in ascending order, and `#` ranks
+// last: an H1 is usually a document title or a quoted heading.
+function specHeadingLevelRank(level) {
+  return level === 1 ? Infinity : level;
+}
+
+/**
+ * Index of the section matching one spec name family: the best heading level
+ * rank wins (`##`, then `###` ... `######`, then `#`), then name priority,
+ * then document order. So a quoted `### Acceptance criteria` nested under
+ * `## Context` never outranks a real `## Acceptance criteria` later in the
+ * body. -1 when none matches.
+ */
+function findSpecSectionIndex(sections, patterns) {
+  let bestIndex = -1;
+  let bestLevelRank = Infinity;
+  let bestNameRank = Infinity;
+  for (let i = 0; i < sections.length; i += 1) {
+    const nameRank = patterns.findIndex((pattern) => pattern.test(sections[i].name));
+    if (nameRank === -1) continue;
+    const levelRank = specHeadingLevelRank(sections[i].level);
+    if (
+      bestIndex === -1 ||
+      levelRank < bestLevelRank ||
+      (levelRank === bestLevelRank && nameRank < bestNameRank)
+    ) {
+      bestIndex = i;
+      bestLevelRank = levelRank;
+      bestNameRank = nameRank;
+    }
+  }
+  return bestIndex;
+}
+
+/**
+ * Read the AC, DoD and Non-goals section bodies of a spec body at ANY heading
+ * level (`##`, `###`, ...). Each body is flattened past deeper sub-headings,
+ * so a `##` section keeps its nested `###` items. The flatten skips only a
+ * deeper sub-section that ANOTHER family selected (with its descendants), so
+ * a selected `### Definition of done` nested under `## Acceptance criteria`
+ * is never counted twice. A missing section is null. Pure.
+ *
+ * @param {string} body
+ * @returns {{ acceptanceCriteria: string|null, definitionOfDone: string|null, nonGoals: string|null }}
+ */
+export function readSpecSectionBodies(body) {
+  const sections = parseMarkdownSections(typeof body === "string" ? body : "");
+  const indices = {
+    acceptanceCriteria: findSpecSectionIndex(sections, SPEC_SECTION_NAME_PATTERNS.acceptanceCriteria),
+    definitionOfDone: findSpecSectionIndex(sections, SPEC_SECTION_NAME_PATTERNS.definitionOfDone),
+    nonGoals: findSpecSectionIndex(sections, SPEC_SECTION_NAME_PATTERNS.nonGoals),
+  };
+  const selected = new Set(Object.values(indices).filter((index) => index !== -1));
+  const read = (index) =>
+    index === -1 ? null : flattenSectionDeep(sections, index, (i) => selected.has(i));
+  return {
+    acceptanceCriteria: read(indices.acceptanceCriteria),
+    definitionOfDone: read(indices.definitionOfDone),
+    nonGoals: read(indices.nonGoals),
+  };
 }
 
 /**

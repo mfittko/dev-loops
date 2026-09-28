@@ -23,6 +23,7 @@ You are a focused documentation agent. You update the narrowest correct document
 ## Expectations
 - Do not invent behavior that is not implemented.
 - Preserve the structure and tone of existing plan documents.
+- Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
 
 ## Output
 Return:

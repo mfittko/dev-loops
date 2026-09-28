@@ -25,9 +25,9 @@ These edit classes leave `specDigest` unchanged, because they never touch the ha
 - adding, removing, or reformatting a list-form checklist alias (Acceptance criteria / Definition of done checkboxes) that projects an unchanged matrix;
 - canonical heading normalization and checklist marker/whitespace normalization of any such alias, or of the matrix heading/cell whitespace itself.
 
-Any change to the matrix content (a criterion's text, its completion-evidence cell, or the row set) changes `matrix.rows` and produces a new `specDigest`, which re-invalidates through `resolveCriterionInvalidation`. A changed Non-goal (read from the `## Non-goals` section) also changes the digest. This equivalence never exempts a genuine acceptance-criterion, completion-evidence, or Non-goal change from review.
+Any change to the matrix content (a criterion's text, its completion-evidence cell, or the row set) changes `matrix.rows` and produces a new `specDigest`, which re-invalidates through `resolveCriterionInvalidation`. A changed Non-goal (read from the Non-goals section at any heading level) also changes the digest. This equivalence never exempts a genuine acceptance-criterion, completion-evidence, or Non-goal change from review.
 
-Fail-closed default: when the body carries no matrix, or `detectAcDodMatrix` reports `found: false` or `valid: false` (empty, malformed or identifier-only), `extractSpecFromBody` hashes the extracted checklist text directly. An edit not positively proven equivalent is never narrowed into a weaker or empty digested surface.
+Fail-closed default: when the body carries no matrix, or `detectAcDodMatrix` reports `found: false` or `valid: false` (empty, malformed or identifier-only), `extractSpecFromBody` hashes the extracted checklist text directly. The fallback reads the AC, DoD and Non-goals sections at any heading level (`##` first, H1 last), and `requireSpecFromBody` refuses an empty AC or DoD with a message that names the expected shape (`EXPECTED_SPEC_SHAPE`). An edit not positively proven equivalent is never narrowed into a weaker or empty digested surface.
 
 ## Whole-spec disposition and the four named outcomes
 

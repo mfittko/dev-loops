@@ -182,13 +182,17 @@ contract at commit time instead of leaving it to agent discipline:
 - The subject must be conventional-commit form `type(scope): summary` (type
   one of `feat`/`fix`/`chore`/`docs`/`test`/`refactor`/`revert`/`perf`/
   `style`/`ci`/`build`).
-- A default, unedited merge message (`Merge branch '...'`, `Merge pull
-  request #...`, `Merge tag '...'`), a default `git revert` message
+- A default, unedited merge message (`Merge branch '...'`, `Merge
+  remote-tracking branch '...'`, `Merge pull request #...`, `Merge tag
+  '...'`), a default `git revert` message
   (`Revert "..."`), or a `git commit --fixup`/`--squash` autosquash subject
   (`fixup! ...` / `squash! ...`) is exempt — each is git/tooling-generated,
   not operator-authored prose.
+- A merge commit uses git's default subject. An agent never hand-writes a
+  merge subject.
 - A per-commit waiver line (`dev-loops:commit-msg-guard:allow`) skips every
-  check above for a deliberate exception.
+  check above for a deliberate exception. The waiver is operator-only: an
+  agent-authored commit never carries the waiver line.
 
 Same refusal/degraded-coverage shape as the default-branch guard (a
 pre-existing `commit-msg` hook is never clobbered; `core.hooksPath` pointing
@@ -265,6 +269,26 @@ on cwd: `git -C <absolute-worktree-path> ...` for git, and absolute paths for
 test/build commands. The [default-branch guard](#default-branch-guard) above
 is defense-in-depth for exactly this slip, not a substitute for it — the
 guard has documented no-op paths; addressing the tree explicitly does not.
+
+## Agent shell commands
+
+<!-- rule: WORKTREE-NONINTERACTIVE-FILE-OPS -->
+`WORKTREE-NONINTERACTIVE-FILE-OPS`: an agent MUST copy, move and delete files with `command cp -f`, `command mv -f` and `command rm -f`.
+
+An operator shell may alias `cp`, `mv` and `rm` to their interactive `-i`
+forms. An interactive prompt hangs an agent shell. The `command` prefix skips
+the alias, and `-f` skips the prompt. A dispatch to an editing worker cites
+this rule by ID.
+
+<!-- rule: WORKTREE-SCRIPT-LAUNCHER-CWD -->
+`WORKTREE-SCRIPT-LAUNCHER-CWD`: an agent MUST run a repo script as one compound command that enters the target checkout first: `cd <checkout> && dev-loops-run scripts/<path>`.
+
+Each Bash call may start in another checkout, and the working directory does
+not persist between calls. A standalone `cd <checkout>` call followed by a
+separate `dev-loops-run` call therefore runs the scripts of whichever checkout
+the second call starts in. `GATE-EXEC-NO-CWD-DEPENDENCE` in the
+[Gate Review Sub-Loop Contract](./gate-review-sub-loop-contract.md) stays the
+reviewer-specific rule and cites this one.
 
 ## Create or reuse flow
 
