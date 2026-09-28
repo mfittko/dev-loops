@@ -28,7 +28,7 @@ test("the generated Claude dev-loop agent carries experimental.cacheTtl: 1h", ()
   assert.equal(splitFrontmatter(generated, ".claude/agents/dev-loop.md").frontmatter.experimental?.cacheTtl, "1h");
 });
 
-test("the gate-coordinator agent keeps the default prompt-cache TTL in both copies (#2531)", () => {
+test("the gate-coordinator agent keeps the default prompt-cache TTL in both copies", () => {
   for (const rel of ["agents/gate-coordinator.agent.md", ".claude/agents/gate-coordinator.md"]) {
     const { frontmatter } = splitFrontmatter(fs.readFileSync(path.join(repoRoot, rel), "utf8"), rel);
     assert.equal(frontmatter.experimental, undefined, `${rel} must carry no experimental key`);

@@ -211,7 +211,7 @@ test("the Pi surface (package.json's pi manifest and the rendered agent) carries
   );
 });
 
-// #2531 / ADR 0112: the gate coordinator is a dedicated agent definition.
+// ADR 0112: the gate coordinator is a dedicated agent definition.
 const GATE_COORDINATOR_AGENT = "agents/gate-coordinator.agent.md";
 const TYPED_RESULT_FIELDS = [
   "verdict", "execution mode", "inline reason", "findings summary", "severity counts", "fan-in output path",

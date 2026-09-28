@@ -1447,7 +1447,7 @@ test("decideJudgeWriteGuard lets the judge write only its verdict files under an
 });
 
 // ---------------------------------------------------------------------------
-// decideAgentDispatch (#2531): only the gate coordinator dispatches the round's
+// decideAgentDispatch: only the gate coordinator dispatches the round's
 // review and judge agents, and only with the emitted dispatchPrompt verbatim.
 // ---------------------------------------------------------------------------
 
@@ -1480,6 +1480,8 @@ test("decideAgentDispatch denies a gate-coordinator relay that is not the emitte
     `Review PR 7 carefully.\n${p}`,
     `${p}\nAlso check the tests.`,
     `${p} `,
+    `${p}\n`,
+    `${p}\r\n`,
     `cd /tmp/worktrees/pr-7 && ${p}`,
     pointer("judge"),
     `${p} --same-head-retry`,

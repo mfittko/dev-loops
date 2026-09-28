@@ -835,7 +835,7 @@ test("SubagentStop hook still blocks when porcelain output exceeds the 1MB Node 
   assert.match(decision.reason, new RegExp(`… and ${expectedRemainder} more`));
 });
 
-test("the Agent|Task dispatch guard is registered in settings.json and hooks.json (#2531)", () => {
+test("the Agent|Task dispatch guard is registered in settings.json and hooks.json", () => {
   const settings = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude", "settings.json"), "utf8"));
   const project = settings.hooks.PreToolUse.find((h) => h.matcher === "Agent|Task");
   assert.ok(project, "Agent|Task PreToolUse matcher must be registered in settings.json");
@@ -845,7 +845,7 @@ test("the Agent|Task dispatch guard is registered in settings.json and hooks.jso
   assert.match(plugin.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-agent-guard\.mjs/);
 });
 
-test("agent-guard hook denies a dev-loop review dispatch and allows the main session (#2531, e2e)", () => {
+test("agent-guard hook denies a dev-loop review dispatch and allows the main session (e2e)", () => {
   const tool_input = { subagent_type: "dev-loops:review", description: "review", prompt: "Review PR 7." };
   const denied = runHook("pre-tool-use-agent-guard.mjs", { tool_name: "Agent", tool_input, cwd: repoRoot, agent_type: "dev-loops:dev-loop" });
   assert.equal(denied.code, 0);

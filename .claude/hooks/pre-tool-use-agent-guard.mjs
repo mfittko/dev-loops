@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PreToolUse Agent/Task dispatch guard (GATE-EXEC-GATE-COORDINATOR, ADR 0112, #2531).
+ * PreToolUse Agent/Task dispatch guard (GATE-EXEC-GATE-COORDINATOR, ADR 0112).
  *
  * Always on. Only callers whose `agent_type` is `dev-loop` or `gate-coordinator` are
  * constrained; the decision lives in the pure `decideAgentDispatch` decider.

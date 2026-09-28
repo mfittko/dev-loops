@@ -726,7 +726,9 @@ retirement affects only its gate+head, never carried angles' prior-head sentinel
 (deprecated alias: `--pr-body-fix-retry`). It overwrites only that scope+head sentinel
 and only when supplied `--prefix-hash`/`--prefix-file` EXACTLY matches the existing
 recorded hash. The reason never affects eligibility. Missing hash or mismatch fails
-closed; changed briefing bytes require retirement instead.
+closed; changed briefing bytes require retirement instead. On Claude Code the agent dispatch
+guard denies any reviewer relay other than the emitted `dispatchPrompt`, so an interrupted
+reviewer at the same head recovers through `GATE-EXEC-ROUND-RETIREMENT` and a fresh round.
 
 Re-brief with the UNCHANGED invariant prefix; do not rerun `write-gate-context.mjs`.
 Other angles' sentinels remain untouched and verify against the same prefix record;

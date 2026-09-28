@@ -904,6 +904,6 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
     decision: "deny",
     reason:
       `GATE_DISPATCH_NOT_VERBATIM: GATE-EXEC-GATE-COORDINATOR denied this \`${target}\` dispatch: the prompt is not an emitted \`${target}:\` dispatchPrompt. ` +
-      "Relay the emitter's dispatchPrompt byte for byte, with no added prose, no `cd` wrapper and no extra flags.",
+      "Relay the emitter's dispatchPrompt byte for byte, with no added prose, no `cd` wrapper and no extra flags. A same-head retry recovers through GATE-EXEC-ROUND-RETIREMENT and a fresh round.",
   };
 }
