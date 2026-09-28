@@ -1880,7 +1880,7 @@ function fileBlock(file, added, deleted = 0) {
   return [`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`, `@@ -1,${deleted} +1,${added} @@`, ...body].join("\n");
 }
 
-test("each unit's budget scales with the filtered diff it reads; a docs-only unit counts doc-file blocks only", async () => {
+test("each unit's budget scales with the filtered diff it reads; a docs-only unit counts doc-file blocks, not code blocks", async () => {
   await withTmpDir(async (tmpDir) => {
     // One doc block (2 lines) and five code blocks (4 lines each).
     const diff = [fileBlock("README.md", 2), ...[1, 2, 3, 4, 5].map((n) => fileBlock(`src/f${n}.js`, 3, 1))].join("\n");
