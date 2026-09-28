@@ -736,6 +736,8 @@ export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthoriza
 export const FIXER_AGENT_TYPE = "fixer";
 
 const isInsidePath = (p, root) => p === root || p.startsWith(`${root}/`);
+/** True when checkout-relative `rel` is under one of a grant's `allowedPaths` (segment prefix). */
+const inAllowedPaths = (rel, allowedPaths) => Array.isArray(allowedPaths) && allowedPaths.some((p) => p === "." || rel === p || rel.startsWith(`${p}/`));
 
 /**
  * Decide whether a PreToolUse Write/Edit by the `fixer` agent must be denied (ADR 0106,
@@ -781,8 +783,7 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
     return deny("the main checkout's tmp/ (work-order evidence and plans) is never fixer-writable beyond the outputRef");
   }
   const rel = targetPath === checkout.root ? "." : targetPath.slice(checkout.root.length + 1);
-  const granted = grants.some((g) => typeof g?.branch === "string" && g.branch === checkout.branch && Array.isArray(g.allowedPaths)
-    && g.allowedPaths.some((p) => p === "." || rel === p || rel.startsWith(`${p}/`)));
+  const granted = grants.some((g) => typeof g?.branch === "string" && g.branch === checkout.branch && inAllowedPaths(rel, g.allowedPaths));
   if (granted) return ALLOW;
   return deny(grants.length === 0
     ? "no current fixer work-order pull grants a mutation authority"
@@ -814,22 +815,31 @@ function pushBeyondGrant(args, branch) {
 /**
  * Decide whether a PreToolUse Bash command by the `fixer` agent must be denied (ADR 0106).
  * Each `git commit` / `git push` invocation (extractGitCommitPushInvocations) needs a CURRENT
- * fixer grant whose branch is the branch checked out in the invocation's cwd; a push whose
- * explicit refspec names another destination is denied. Every other command is allowed here.
+ * fixer grant whose branch is the branch checked out in the invocation's cwd. Denied as well:
+ * an `unresolvable` invocation (--git-dir/--work-tree, GIT_DIR/GIT_WORK_TREE, `cd` inside
+ * `sh -c`), a commit whose `paths` (the checkout-relative paths it could include, computed by
+ * the hook; null when git failed) are missing or leave the grant's allowedPaths, a push under
+ * a `commit_only` grant, and a push whose explicit refspec names another destination.
+ * Every other command is allowed here.
  *
  * @param {Object} params
  * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload.
- * @param {{ subcommand: string, args: string[], branch: string|null }[]} [params.invocations] - Resolved invocations.
- * @param {{ branch: string }[]} [params.grants] - Current pull grants.
+ * @param {{ subcommand: string, args: string[], branch: string|null, unresolvable?: boolean, paths?: string[]|null }[]} [params.invocations] - Resolved invocations.
+ * @param {{ branch: string, allowedPaths: string[], phase: string }[]} [params.grants] - Current pull grants.
  * @returns {HookDecision}
  */
 export function decideFixerBashGate({ agentType = null, invocations = [], grants = [] }) {
   if (normalizeAgentType(agentType) !== FIXER_AGENT_TYPE) return ALLOW;
-  for (const { subcommand, args = [], branch } of invocations) {
+  for (const { subcommand, args = [], branch, unresolvable = false, paths = null } of invocations) {
     const grant = grants.find((g) => typeof g?.branch === "string" && g.branch === branch);
-    const why = !branch ? "the branch checked out in its cwd could not be resolved"
-      : !grant ? `no current fixer work-order pull grants branch ${JSON.stringify(branch)}`
-        : subcommand === "push" ? pushBeyondGrant(args, grant.branch) : null;
+    const outside = subcommand === "commit" && Array.isArray(paths) ? paths.find((p) => !inAllowedPaths(p, grant?.allowedPaths)) : undefined;
+    const why = unresolvable ? "--git-dir, --work-tree, GIT_DIR, GIT_WORK_TREE or a `cd` inside `sh -c` hides the checkout it runs in"
+      : !branch ? "the branch checked out in its cwd could not be resolved"
+        : !grant ? `no current fixer work-order pull grants branch ${JSON.stringify(branch)}`
+          : subcommand === "commit" && !Array.isArray(paths) ? "the paths the commit would include could not be computed"
+            : outside !== undefined ? `the commit would include ${JSON.stringify(outside)}, outside the grant's allowedPaths`
+              : subcommand === "push" && grant.phase === "commit_only" ? "the pulled work order's phase is commit_only"
+                : subcommand === "push" ? pushBeyondGrant(args, grant.branch) : null;
     if (why) {
       return {
         decision: "deny",

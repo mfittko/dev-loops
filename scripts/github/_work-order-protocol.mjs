@@ -6,40 +6,20 @@
  * a role's emitted work orders live, when a round is stale, what a valid
  * payload is) lives in a registered role adapter, never here.
  *
- * `workOrderDigest` is the sha256 of the canonical SEMANTIC work order: object
- * keys sorted, machine-local material excluded (LOCAL_MATERIAL_KEYS and every
- * absolute-path string). Repository-relative paths stay semantic. Two checkouts
- * that emit the same unit get the same digest. `materializationHash` is the
+ * `workOrderDigest` / `canonicalizeWorkOrder` live in @dev-loops/core/loop/work-order-digest
+ * (vendored into the Claude hooks) and are re-exported here. `materializationHash` is the
  * sha256 of the exact local work-order bytes.
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { writeJson } from "@dev-loops/core/loop/phase-files";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { workOrderDigest } from "@dev-loops/core/loop/work-order-digest";
 
-// Local-only fields: the materialized file, absolute output refs, tmp roots,
-// and hashes/sizes of files that embed absolute paths (the briefing prefix, and
-// the required reads: the evidence file's validation pointer and validation.json).
-// Readers still verify each required read's sha256 from the materialized work order.
-const LOCAL_MATERIAL_KEYS = new Set(["promptPath", "outputRefs", "tmpRoot", "prefixSha256", "sha256", "bytes"]);
+export { canonicalizeWorkOrder, workOrderDigest } from "@dev-loops/core/loop/work-order-digest";
 
 /** Hard cap for the compact dispatch envelope every role sends (bytes). */
 export const DISPATCH_POINTER_MAX_BYTES = 499;
-
-const isLocal = (value) => typeof value === "string" && path.isAbsolute(value);
-
-export function canonicalizeWorkOrder(value) {
-  if (Array.isArray(value)) return value.filter((item) => !isLocal(item)).map(canonicalizeWorkOrder);
-  if (value === null || typeof value !== "object") return value;
-  const out = {};
-  for (const key of Object.keys(value).sort()) {
-    if (LOCAL_MATERIAL_KEYS.has(key) || value[key] === undefined || isLocal(value[key])) continue;
-    out[key] = canonicalizeWorkOrder(value[key]);
-  }
-  return out;
-}
-
-export const workOrderDigest = (workOrder) => sha256Hex(JSON.stringify(canonicalizeWorkOrder(workOrder)));
 
 export const materializationHash = sha256Hex;
 

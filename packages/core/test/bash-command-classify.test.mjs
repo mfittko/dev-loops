@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   TARGET_REPO_SLUG,
+  extractGitCommitPushInvocations,
   deriveInManagedRepo,
   explicitRepoProvenForeign,
   normalizeGitHubRepoSlug,
@@ -1142,4 +1143,21 @@ test("decideBashGate (hook-decisions.mjs) resolves inManagedRepo via the shared 
   for (const { expected, ...params } of table) {
     assert.equal(deriveInManagedRepo(params), expected);
   }
+});
+
+test("extractGitCommitPushInvocations skips value-taking global options and marks hidden checkouts unresolvable", () => {
+  const one = (command) => extractGitCommitPushInvocations(command).map(({ subcommand, dirs, unresolvable }) => ({ subcommand, dirs, unresolvable }));
+  for (const command of ["git --namespace ns commit -m x", "git --namespace=ns commit -m x", "git --exec-path /x commit -m x", "git --exec-path=/x commit -m x", "git -c a=b -C d commit"]) {
+    assert.equal(one(command)[0]?.subcommand, "commit", command);
+    assert.equal(one(command)[0].unresolvable, false, command);
+  }
+  for (const command of [
+    "git --git-dir /o/.git commit -m x", "git --git-dir=/o/.git commit -m x", "git --work-tree /o push", "git --work-tree=/o push",
+    "GIT_DIR=/o/.git git commit -m x", "env GIT_WORK_TREE=/o git push", "export GIT_DIR=/o/.git && git commit -m x",
+    "sh -c 'cd /o && git commit -m x'", "bash -lc \"cd /o; git push\"",
+  ]) {
+    assert.deepEqual(one(command).map((i) => i.unresolvable), [true], command);
+  }
+  assert.deepEqual(one("sh -c 'git push'").map((i) => i.unresolvable), [false]);
+  assert.deepEqual(one("cd /o && git commit -m x"), [{ subcommand: "commit", dirs: ["/o"], unresolvable: false }]);
 });

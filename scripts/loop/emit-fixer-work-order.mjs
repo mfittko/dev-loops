@@ -189,9 +189,10 @@ export async function emitFixerWorkOrder({
   return { ...plan, planPath };
 }
 
-// The checked dispatch seam per harness: the adapter payload carries the fixed pointer only.
+// The checked dispatch seam per harness: the adapter payload carries the fixed pointer only
+// (plus the fixed `description` the Claude Agent tool requires).
 const FIXER_DISPATCH_ADAPTERS = {
-  claude: (prompt) => ({ subagent_type: "fixer", prompt }),
+  claude: (prompt) => ({ subagent_type: "fixer", description: "fixer work order", prompt }),
   pi: (prompt) => ({ agent: "fixer", task: prompt }),
 };
 
@@ -202,12 +203,12 @@ export function buildFixerDispatchPayload({ harness, plan }) {
   return adapter(plan.dispatchPrompt);
 }
 
-/** Refuses a payload whose agent is not `fixer` or whose prompt/task is not exactly the plan's pointer. */
+/** Refuses a payload that is not exactly the harness adapter payload for the plan's pointer (same keys, same values). */
 export function assertFixerDispatchPayload({ harness, payload, plan }) {
   const expected = buildFixerDispatchPayload({ harness, plan: { dispatchPrompt: buildDispatchPointer(plan) } });
-  const [agentKey, textKey] = Object.keys(expected);
-  if (Object.keys(payload ?? {}).length !== 2 || payload[agentKey] !== "fixer" || payload[textKey] !== expected[textKey]) {
-    throw new WorkOrderRefusal("dispatch_payload_mismatch", `the ${harness} fixer dispatch must be { ${agentKey}: "fixer", ${textKey}: <the compact pointer> } unchanged`);
+  const keys = Object.keys(expected);
+  if (Object.keys(payload ?? {}).length !== keys.length || keys.some((key) => payload[key] !== expected[key])) {
+    throw new WorkOrderRefusal("dispatch_payload_mismatch", `the ${harness} fixer dispatch must be ${JSON.stringify({ ...expected, [keys.at(-1)]: "<the compact pointer>" })} unchanged`);
   }
 }
 

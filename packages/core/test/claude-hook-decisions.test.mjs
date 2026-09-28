@@ -1411,8 +1411,8 @@ test("decideFixerWriteGuard allows scratch outside every checkout and fails clos
 });
 
 test("decideFixerBashGate binds git commit/push to a grant for the checked-out branch", () => {
-  const gate = (command, branch = "issue-1", over = {}) => decideFixerBashGate({
-    agentType: "fixer", invocations: extractGitCommitPushInvocations(command).map((i) => ({ ...i, branch })), grants: [FX_GRANT], ...over,
+  const gate = (command, branch = "issue-1", over = {}, paths = ["src/x.mjs"]) => decideFixerBashGate({
+    agentType: "fixer", invocations: extractGitCommitPushInvocations(command).map((i) => ({ ...i, branch, paths })), grants: [{ ...FX_GRANT, phase: "full" }], ...over,
   }).decision;
   assert.deepEqual(extractGitCommitPushInvocations("cd a && git -C b -c x=y commit -m m; sh -c 'git push o'").map(({ subcommand, dirs }) => [subcommand, dirs]), [["commit", ["a", "b"]], ["push", ["a"]]]);
   for (const command of ["git commit -m x", "git push", "git push -u origin HEAD", "git push origin issue-1", "git push --force-with-lease origin +refs/heads/issue-1", "npm test"]) {
@@ -1425,6 +1425,24 @@ test("decideFixerBashGate binds git commit/push to a grant for the checked-out b
   assert.equal(gate("git commit -m x", null), "deny");
   assert.equal(gate("git commit -m x", "issue-1", { grants: [] }), "deny");
   assert.equal(gate("git push origin main", "issue-1", { agentType: "developer" }), "allow");
+});
+
+test("decideFixerBashGate denies hidden checkouts, out-of-authority commit paths and a commit_only push", () => {
+  const gate = (command, { paths = ["src/x.mjs"], phase = "full" } = {}) => decideFixerBashGate({
+    agentType: "fixer", invocations: extractGitCommitPushInvocations(command).map((i) => ({ ...i, branch: "issue-1", paths })), grants: [{ ...FX_GRANT, phase }],
+  });
+  for (const command of ["git --git-dir=/other/.git commit -m x", "git --work-tree /other push", "GIT_DIR=/other/.git git commit -m x", "export GIT_WORK_TREE=/o; git push", "bash -c 'cd /other && git commit -m x'"]) {
+    const d = gate(command);
+    assert.equal(d.decision, "deny", command);
+    assert.match(d.reason, /hides the checkout/, command);
+  }
+  assert.equal(gate("git commit -am x", { paths: ["src/x.mjs", "test/a.test.mjs"] }).decision, "allow");
+  assert.match(gate("git commit -am x", { paths: ["src/x.mjs", "README.md"] }).reason, /"README\.md", outside the grant's allowedPaths/);
+  assert.equal(gate("git commit -m x", { paths: ["srcx/y.mjs"] }).decision, "deny", "segment prefix, never string prefix");
+  assert.match(gate("git commit -m x", { paths: null }).reason, /could not be computed/);
+  assert.equal(gate("git push", { paths: null }).decision, "allow", "a push includes no new paths");
+  assert.match(gate("git push", { phase: "commit_only" }).reason, /phase is commit_only/);
+  assert.equal(gate("git commit -m x", { phase: "commit_only" }).decision, "allow");
 });
 
 test("decideFixerWriteGuard leaves every non-fixer agent to the other boundaries", () => {

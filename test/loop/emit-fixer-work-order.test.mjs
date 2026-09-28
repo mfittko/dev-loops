@@ -171,13 +171,14 @@ test("F2: Claude and Pi initial, resumed and replacement adapter payloads are th
       const replacementOut = JSON.parse(cli(harness).stdout);
       const replacement = { plan: JSON.parse(await readFile(replacementOut.planPath, "utf8")), payload: replacementOut.dispatchPayload };
       for (const [payload, unit] of [[initial.dispatchPayload, plan], [resumed, plan], [replacement.payload, replacement.plan]]) {
-        assert.deepEqual(Object.keys(payload).sort(), [harness === "claude" ? "subagent_type" : "agent", textKey].sort());
+        assert.deepEqual(Object.keys(payload).sort(), (harness === "claude" ? ["subagent_type", "description"] : ["agent"]).concat(textKey).sort());
+        if (harness === "claude") assert.equal(payload.description, "fixer work order");
         assert.equal(payload[textKey], buildDispatchPointer(unit));
         assert.ok(Buffer.byteLength(payload[textKey]) <= DISPATCH_POINTER_MAX_BYTES);
         assertFixerDispatchPayload({ harness, payload, plan: unit });
       }
       assert.deepEqual(initial.dispatchPayload, resumed);
-      for (const bad of [{ ...resumed, [textKey]: `${resumed[textKey]} Also refactor the parser.` }, { ...resumed, [textKey]: `Context: x. ${resumed[textKey]}` }, { ...resumed, extra: "prose" }]) {
+      for (const bad of [{ ...resumed, [textKey]: `${resumed[textKey]} Also refactor the parser.` }, { ...resumed, [textKey]: `Context: x. ${resumed[textKey]}` }, { ...resumed, extra: "prose" }, ...(harness === "claude" ? [{ ...resumed, description: "fix the parser" }] : [])]) {
         assert.throws(() => assertFixerDispatchPayload({ harness, payload: bad, plan }), (err) => err.refusal === "dispatch_payload_mismatch");
       }
       await new Promise((resolve) => setTimeout(resolve, 2));
@@ -354,6 +355,34 @@ test("F5: the Bash gate binds fixer git commit/push to the pulled branch and lea
     for (const command of ["git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", `cd ${root} && git commit -m x`, `git -C ${root} commit -m x`]) {
       assert.equal(bash(wt, command), "deny", command);
     }
+  });
+});
+
+test("F5: a narrowed grant denies committing an out-of-authority file, commit_only denies push, an edited plan grants nothing", async () => {
+  await withFixture(async ({ wt, emit }) => {
+    await mkdir(path.join(wt, "src"));
+    await writeFile(path.join(wt, "src", "a.mjs"), "a\n");
+    await writeFile(path.join(wt, "README.md"), "r\n");
+    git(wt, "add", ".");
+    git(wt, "commit", "-q", "-m", "files");
+    const head = git(wt, "rev-parse", "HEAD");
+    const narrowed = (phase) => emit({ phase, headSha: head, allowedPaths: ["src"], fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
+    const unit = await narrowed("commit_only");
+    assert.equal(pull(unit, wt).status, 0);
+    await writeFile(path.join(wt, "README.md"), "changed via Bash\n");
+    assert.equal(bash(wt, "git commit -am fix"), "deny", "README.md is outside --allowed-path src");
+    git(wt, "checkout", "--", "README.md");
+    await writeFile(path.join(wt, "src", "a.mjs"), "fixed\n");
+    assert.equal(bash(wt, "git commit -am fix"), "allow");
+    assert.equal(bash(wt, "git push"), "deny", "a commit_only pull never pushes");
+    const full = await narrowed("full");
+    assert.equal(pull(full, wt).status, 0);
+    assert.equal(hook(wt, path.join(wt, "src", "a.mjs")), "allow");
+    const plan = JSON.parse(await readFile(full.planPath, "utf8"));
+    plan.workOrder.mutationAuthority.allowedPaths = ["."];
+    await writeFile(full.planPath, JSON.stringify(plan));
+    assert.equal(hook(wt, path.join(wt, "src", "a.mjs")), "deny", "the edited plan no longer reproduces its workOrderDigest");
+    assert.equal(hook(wt, path.join(wt, "README.md")), "deny");
   });
 });
 

@@ -9,6 +9,7 @@ import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { realpathNearestExisting } from "./_worktree-guard.mjs";
+import { workOrderDigest } from "./_work-order-digest.mjs";
 
 const isInside = (p, root) => p === root || p.startsWith(`${root}/`);
 
@@ -35,9 +36,10 @@ export function listCheckouts(dir) {
 }
 
 /**
- * Current fixer grants `[{ branch, allowedPaths, outputRef }]` of the main checkout `mainRoot`:
- * a receipt with role "fixer" whose plan lives under `<mainRoot>/tmp/gate-fixer/` and still names
- * the same ref, digest and execution. Any other receipt grants nothing.
+ * Current fixer grants `[{ branch, allowedPaths, phase, outputRef }]` of the main checkout `mainRoot`:
+ * a receipt with role "fixer" whose plan lives under `<mainRoot>/tmp/gate-fixer/`, still names
+ * the same ref, digest and execution, and whose work order still reproduces that digest.
+ * Any other receipt grants nothing.
  */
 export function loadFixerGrants(mainRoot) {
   const receiptsDir = path.join(mainRoot, "tmp", "work-order-receipts");
@@ -57,8 +59,10 @@ export function loadFixerGrants(mainRoot) {
       if (!planPath.startsWith(`${planRoot}/`)) continue;
       const plan = JSON.parse(readFileSync(planPath, "utf8"));
       if (plan.workOrderRef !== receipt.workOrderRef || plan.workOrderDigest !== receipt.workOrderDigest || plan.executionIdentity !== receipt.executionIdentity) continue;
+      // An in-place edited plan no longer reproduces its digest and grants nothing.
+      if (workOrderDigest(plan.workOrder) !== plan.workOrderDigest) continue;
       const { branch, allowedPaths } = plan.workOrder.mutationAuthority;
-      grants.push({ branch, allowedPaths, outputRef: realpathNearestExisting(plan.workOrder.outputRefs[0]) });
+      grants.push({ branch, allowedPaths, phase: plan.workOrder.phase, outputRef: realpathNearestExisting(plan.workOrder.outputRefs[0]) });
     } catch { /* unreadable receipt or plan: no grant */ }
   }
   return grants;
