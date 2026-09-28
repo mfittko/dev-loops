@@ -10,6 +10,7 @@
  * this module never claims a verified cache hit it cannot prove.
  */
 import { createHash } from "node:crypto";
+import { isDevLoopConfigSourcePath } from "./gate-carry-forward.mjs";
 
 /* ------------------------------------------------------------------ *
  * 1. Harness capability model
@@ -776,11 +777,33 @@ export function matchesDiffExcludeGlob(relPath, pattern) {
   return compiled.test(relPath);
 }
 
+// Every file loadDevLoopConfig reads, plus each ancestor directory of those
+// files: a diff block for an ancestor directory is a symlink swap that
+// redirects the config read, so it must stay visible too.
+const EXTENSION_DEFAULTS_RE = /^packages\/core\/src\/config\/extension-defaults(\.(ya?ml|json))?$/;
+const CONFIG_SOURCE_DIRS = [".pi/dev-loop", "packages/core/src/config"];
+function isProtectedConfigPath(path) {
+  // Lowercase: loadDevLoopConfig reads through a filesystem that is
+  // case-insensitive on default macOS/Windows checkouts, so ".DevLoops" loads
+  // as config. Lowercasing only widens protection (fail closed).
+  const posix = path.toLowerCase();
+  return isDevLoopConfigSourcePath(posix)
+    || EXTENSION_DEFAULTS_RE.test(posix)
+    || posix.startsWith(".pi/dev-loop/")
+    || CONFIG_SOURCE_DIRS.some((dir) => dir === posix || dir.startsWith(`${posix}/`));
+}
+
 /**
  * Classify why a diff file is excluded from the filtered diff, or `null`
  * when it is kept. Checks {@link DEFAULT_DIFF_EXCLUDE_GLOBS} first, then
  * any caller-supplied `excludeGlobs` — the default set can never be
- * disabled by a caller's config.
+ * disabled by a caller's config. The dev-loop config sources
+ * ({@link isDevLoopConfigSourcePath}: `.devloops` and its `.yaml`/`.yml`/`.json`
+ * variants), `extension-defaults` with or without a `.yaml`/`.yml`/`.json`
+ * extension, `.pi/dev-loop/**`, and every ancestor directory of those files
+ * (a symlink swap) are never excluded as `configured`: the globs load from
+ * the reviewed head, so a PR that widens them keeps that config edit in the
+ * filtered diff (fail closed).
  * @param {string} relPath
  * @param {{ excludeGlobs?: string[] }} [opts]
  * @returns {"default"|"configured"|null}
@@ -790,6 +813,7 @@ export function classifyDiffFileExclusion(relPath, { excludeGlobs = [] } = {}) {
   for (const pattern of DEFAULT_DIFF_EXCLUDE_GLOBS) {
     if (matchesDiffExcludeGlob(posix, pattern)) return "default";
   }
+  if (isProtectedConfigPath(posix)) return null;
   for (const pattern of excludeGlobs) {
     if (matchesDiffExcludeGlob(posix, pattern)) return "configured";
   }
@@ -824,6 +848,36 @@ function extractDiffBlockPath(blockLines) {
   const header = blockLines[0] ?? "";
   const m = /^diff --git \S+ (\S+)$/.exec(header);
   return m ? m[1].replace(/^[abiwco]\//, "") : null;
+}
+
+/**
+ * Every path a diff file-block touches, read from its header lines only
+ * (before the first `@@` hunk): the `diff --git a/X b/Y` tokens,
+ * `rename from`/`rename to`, `copy from`/`copy to`, and `---`/`+++`. A
+ * configured exclusion drops a block only when every one of these paths
+ * matches a configured glob (a default-excluded or protected partner keeps
+ * the block), so a rename or copy across the boundary of a configured tree
+ * stays in the filtered diff (same rule as ADR 0108's scope count).
+ * @param {string[]} blockLines
+ * @returns {string[]}
+ */
+function extractDiffBlockTouchedPaths(blockLines) {
+  const paths = new Set();
+  const strip = (p) => p.trim().replace(/^[abiwco]\//, "");
+  const header = /^diff --git (\S+) (\S+)$/.exec(blockLines[0] ?? "");
+  if (header) {
+    paths.add(strip(header[1]));
+    paths.add(strip(header[2]));
+  }
+  for (const line of blockLines.slice(1)) {
+    if (line.startsWith("@@")) break;
+    const renameOrCopy = /^(?:rename|copy) (?:from|to) (.+)$/.exec(line);
+    if (renameOrCopy) paths.add(renameOrCopy[1].trim());
+    else if ((line.startsWith("--- ") || line.startsWith("+++ ")) && !line.includes("/dev/null")) {
+      paths.add(strip(line.slice(4)));
+    }
+  }
+  return [...paths];
 }
 
 /**
@@ -868,7 +922,11 @@ export function filterDiffForInline(diffText, { excludeGlobs = [] } = {}) {
     const end = b + 1 < blockStarts.length ? blockStarts[b + 1] : lines.length;
     const blockLines = lines.slice(start, end);
     const relPath = extractDiffBlockPath(blockLines);
-    const reason = relPath ? classifyDiffFileExclusion(relPath, { excludeGlobs }) : null;
+    let reason = relPath ? classifyDiffFileExclusion(relPath, { excludeGlobs }) : null;
+    if (reason === "configured"
+      && !extractDiffBlockTouchedPaths(blockLines).every((p) => classifyDiffFileExclusion(p, { excludeGlobs }) === "configured")) {
+      reason = null;
+    }
     if (reason) {
       excludedFiles.push({ path: relPath, reason });
     } else {

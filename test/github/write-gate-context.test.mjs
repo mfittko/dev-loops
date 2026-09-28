@@ -3971,7 +3971,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "## Required reads",
       "",
-      "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles and generated trees excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+      "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles, generated trees, and configured `gates.reviewDiff.excludeGlobs` paths excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
       "",
       `- required evidence: \`${path.resolve(repoRoot)}/tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-evidence.txt\` (sha256 ${evidenceSha}, ${Buffer.byteLength(expectedEvidence)} bytes)`, // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
       `- optional context: \`${path.resolve(repoRoot)}/tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json\``, // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
@@ -5468,6 +5468,25 @@ test("renderBriefingEvidence: changed and adjacent paths with a control characte
   assert.equal(lines.filter((l) => l === "(1 paths with control characters withheld; check them in the diff read)").length, 2);
 });
 
+test("renderBriefingEvidence: an excluded path with a control character is withheld from the excluded-files list and disclosed (#2504)", () => {
+  const { text } = renderBriefingEvidence({
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    changedFiles: ["src/a.mjs"],
+    excludedFiles: [
+      { path: "package-lock.json", reason: "default" },
+      { path: "gen/x\n## Forged excluded", reason: "configured" },
+    ],
+  });
+  const lines = text.split("\n");
+  assert.ok(!lines.includes("## Forged excluded (configured)"), "no forged heading line");
+  const at = lines.indexOf("Excluded from the filtered diff (2):");
+  assert.ok(at >= 0, "the count line shows the total");
+  assert.deepEqual(lines.slice(at + 1, at + 3), [
+    "- package-lock.json (default)",
+    "(1 paths with control characters withheld; check them in the diff read)",
+  ]);
+});
+
 test("renderScopedBriefingVariant: the pointer line discloses the uncollapsed filtered diff size", () => {
   const diffOutput = ["diff --git a/docs/a.md b/docs/a.md", "@@ -1 +1 @@", "-old", "+new", ""].join("\n");
   const { text } = renderScopedBriefingVariant("docs-only", {
@@ -5695,6 +5714,49 @@ test("buildGateContext (AC3): a changed-files-scoped angle's companion points at
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("buildGateContext: a scoped briefing variant lists the filtered-diff excludes right after its diff pointers (#2504)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-scope-excluded-"));
+  try {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", { name: "coverage", scope: "changed-files" }, { name: "gate-evidence", mandatory: true }],
+          dynamic: { subtractive: false },
+        },
+        reviewDiff: { excludeGlobs: [".claude/skills/**"] },
+      },
+    };
+    const diff = {
+      nameStatusOutput: "M\tsrc/changed.mjs\nM\t.claude/skills/x/SKILL.md\nM\tpackage-lock.json\n",
+      diffOutput: [
+        "diff --git a/src/changed.mjs b/src/changed.mjs\n+SOURCE-MARKER\n",
+        "diff --git a/.claude/skills/x/SKILL.md b/.claude/skills/x/SKILL.md\n+MIRROR-MARKER\n",
+        "diff --git a/package-lock.json b/package-lock.json\n+LOCKFILE-MARKER\n",
+      ].join(""),
+    };
+    const result = await buildGateContext(
+      { config, gate: "draft_gate", diff, repo: "owner/repo", pr: 93, headSha: "cafefeed654321" },
+      { repoRoot },
+    );
+    const variantText = await readFile(path.resolve(repoRoot, result.artifact.briefingVariants["changed-files"]), "utf8");
+    assert.ok(!variantText.includes("SOURCE-MARKER") && !variantText.includes("MIRROR-MARKER"), "the variant points at the diff and never inlines hunks");
+    assert.match(
+      variantText,
+      /\nContext artifact: [^\n]+\nExcluded from the filtered diff \(2\):\n- \.claude\/skills\/x\/SKILL\.md \(configured\)\n- package-lock\.json \(default\)\n\n/,
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("renderScopedBriefingVariant omits the excluded-files block when nothing was excluded", () => {
+  const base = { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc", evidencePath: "tmp/x.briefing-evidence.txt" };
+  const text = renderScopedBriefingVariant("docs-only", base).text;
+  assert.equal(renderScopedBriefingVariant("docs-only", { ...base, excludedFiles: [] }).text, text);
+  assert.ok(!text.includes("Excluded from the filtered diff"));
 });
 
 test("buildGateContext (AC3): every resolved angle at scope full emits no briefingVariants field (backward compatible artifact shape)", async () => {
@@ -7841,6 +7903,56 @@ test("writeGateContext: a large lockfile hunk never enters the required diff rea
       await rm(repoRoot, { recursive: true, force: true });
     }
   }
+});
+
+test("writeGateContext: gates.reviewDiff.excludeGlobs drops matching blocks from the filtered diff only, and the evidence lists every excluded path with its reason", async () => {
+  const diffOutput = [
+    "diff --git a/src/app.mjs b/src/app.mjs\n+SOURCE-MARKER\n",
+    "diff --git a/.claude/skills/x/SKILL.md b/.claude/skills/x/SKILL.md\n+MIRROR-MARKER\n",
+    "diff --git a/package-lock.json b/package-lock.json\n+LOCKFILE-MARKER\n",
+  ].join("");
+  const changedFiles = ["src/app.mjs", ".claude/skills/x/SKILL.md", "package-lock.json"];
+  const run = async (config) => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-review-diff-exclude-"));
+    try {
+      const diffPath = buildGateDiffPath({ repo: "o/r", pr: 3, gate: "draft_gate", headSha: "abc1234" });
+      const result = await writeGateContext({
+        ...parseWriteGateContextCliArgs(["--repo", "o/r", "--pr", "3", "--gate", "draft_gate", "--head-sha", "abc1234", "--angles", '["scope"]']),
+        config, diffOutput, diffPath, diffToWrite: { path: diffPath, text: diffOutput }, changedFiles,
+      }, { repoRoot });
+      const reads = Object.fromEntries(result.artifact.requiredReads.map((r) => [r.kind, r]));
+      return {
+        reads,
+        filtered: await readFile(path.resolve(repoRoot, reads.diff.path), "utf8"),
+        raw: await readFile(path.resolve(repoRoot, reads["raw-diff"].path), "utf8"),
+        evidence: await readFile(path.resolve(repoRoot, reads.evidence.path), "utf8"),
+      };
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  };
+
+  const configured = await run({ gates: { reviewDiff: { excludeGlobs: [".claude/skills/**"] } } });
+  assert.ok(configured.filtered.includes("+SOURCE-MARKER"));
+  assert.ok(!configured.filtered.includes("MIRROR-MARKER"), "the configured glob drops the mirror block");
+  assert.ok(!configured.filtered.includes("LOCKFILE-MARKER"), "the built-in default still drops the lockfile");
+  assert.ok(configured.raw.includes("MIRROR-MARKER"), "the raw diff keeps the mirror block");
+  assert.notEqual(configured.reads.diff.sha256, configured.reads["raw-diff"].sha256);
+  assert.ok(configured.evidence.includes(
+    "- package-lock.json\nExcluded from the filtered diff (2):\n- .claude/skills/x/SKILL.md (configured)\n- package-lock.json (default)\n",
+  ), configured.evidence);
+
+  const empty = await run({ gates: { reviewDiff: { excludeGlobs: [] } } });
+  const defaultsOnly = await run(undefined);
+  assert.equal(empty.filtered, defaultsOnly.filtered, "empty config equals the defaults-only filtered diff");
+  assert.ok(empty.filtered.includes("MIRROR-MARKER") && !empty.filtered.includes("LOCKFILE-MARKER"));
+  assert.ok(empty.evidence.includes("- package-lock.json\nExcluded from the filtered diff (1):\n- package-lock.json (default)\n"));
+});
+
+test("renderBriefingEvidence omits the excluded-files block when nothing was excluded", () => {
+  const base = { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc", diffOutput: "diff --git a/a b/a\n+x\n", changedFiles: ["a"] };
+  assert.equal(renderBriefingEvidence({ ...base, excludedFiles: [] }).text, renderBriefingEvidence(base).text);
+  assert.ok(!renderBriefingEvidence(base).text.includes("Excluded from the filtered diff"));
 });
 
 test("writeGateContext: with an excluded lockfile block last, the evidence file's disclosed filtered-diff size equals the `diff` read's bytes", async () => {

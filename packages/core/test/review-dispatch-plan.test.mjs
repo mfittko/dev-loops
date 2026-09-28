@@ -930,6 +930,85 @@ describe("filterDiffForInline — filtered diff for the shared per-head block (i
     assert.deepEqual(excludedFiles, [{ path: "vendor/generated.rb", reason: "configured" }]);
   });
 
+  test("a catch-all configured glob never hides the dev-loop config edit that set it", () => {
+    const block = (p) => [`diff --git a/${p} b/${p}`, `--- a/${p}`, `+++ b/${p}`, "@@ -1 +1 @@", "-a", "+b"].join("\n");
+    const kept = [
+      ".devloops", ".DevLoops", ".devloops.yaml", ".pi/dev-loop/defaults",
+      "packages/core/src/config/extension-defaults.yaml", "packages/core/src/config/extension-defaults",
+      ".pi/dev-loop", ".pi", "packages/core/src/config",
+    ];
+    const combined = `${SRC_HUNK}\n${kept.map(block).join("\n")}\n`;
+    const { filteredDiff, excludedFiles, includedFiles } = filterDiffForInline(combined, { excludeGlobs: ["**"] });
+    for (const p of kept) assert.ok(filteredDiff.includes(`+++ b/${p}`), p);
+    assert.ok(!filteredDiff.includes("src/foo.mjs"));
+    assert.deepEqual(excludedFiles, [{ path: "src/foo.mjs", reason: "configured" }]);
+    assert.deepEqual(includedFiles, kept);
+  });
+
+  describe("configured excludeGlobs and renames (issue #2504)", () => {
+    const renameBlock = (from, to) => [
+      `diff --git a/${from} b/${to}`,
+      "similarity index 90%",
+      `rename from ${from}`,
+      `rename to ${to}`,
+      "index 1111111..2222222 100644",
+      `--- a/${from}`,
+      `+++ b/${to}`,
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+    ].join("\n");
+    const opts = { excludeGlobs: [".claude/skills/**"] };
+
+    test("a rename into an excluded tree is kept, so the source deletion stays visible", () => {
+      const block = renameBlock("src/hand.mjs", ".claude/skills/x.mjs");
+      const { filteredDiff, excludedFiles, includedFiles } = filterDiffForInline(block, opts);
+      assert.equal(filteredDiff, block);
+      assert.deepEqual(excludedFiles, []);
+      assert.deepEqual(includedFiles, [".claude/skills/x.mjs"]);
+    });
+
+    test("a rename out of an excluded tree is kept", () => {
+      const block = renameBlock(".claude/skills/x.mjs", "src/hand.mjs");
+      const { filteredDiff, excludedFiles } = filterDiffForInline(block, opts);
+      assert.equal(filteredDiff, block);
+      assert.deepEqual(excludedFiles, []);
+    });
+
+    test("a rename from a default-excluded path into the configured tree is kept", () => {
+      const block = renameBlock("package-lock.json", ".claude/skills/x.mjs");
+      const { filteredDiff, excludedFiles } = filterDiffForInline(block, opts);
+      assert.equal(filteredDiff, block);
+      assert.deepEqual(excludedFiles, []);
+    });
+
+    test("a pure rename (no hunks) into an excluded tree is kept", () => {
+      const block = [
+        "diff --git a/src/hand.mjs b/.claude/skills/x.mjs",
+        "similarity index 100%",
+        "rename from src/hand.mjs",
+        "rename to .claude/skills/x.mjs",
+      ].join("\n");
+      const { filteredDiff, excludedFiles } = filterDiffForInline(block, opts);
+      assert.equal(filteredDiff, block);
+      assert.deepEqual(excludedFiles, []);
+    });
+
+    test("a rename within the excluded tree is excluded as configured", () => {
+      const { filteredDiff, excludedFiles } = filterDiffForInline(renameBlock(".claude/skills/a.mjs", ".claude/skills/b.mjs"), opts);
+      assert.equal(filteredDiff, "");
+      assert.deepEqual(excludedFiles, [{ path: ".claude/skills/b.mjs", reason: "configured" }]);
+    });
+
+    test("a plain modify under the excluded tree is still excluded as configured", () => {
+      const p = ".claude/skills/x.mjs";
+      const block = [`diff --git a/${p} b/${p}`, `--- a/${p}`, `+++ b/${p}`, "@@ -1 +1 @@", "-a", "+b"].join("\n");
+      const { filteredDiff, excludedFiles } = filterDiffForInline(block, opts);
+      assert.equal(filteredDiff, "");
+      assert.deepEqual(excludedFiles, [{ path: p, reason: "configured" }]);
+    });
+  });
+
   test("AC4: the filtered diff, once inlined into a shared prefix, is byte-identical across the round's reviewers regardless of angle suffix", () => {
     const { filteredDiff } = filterDiffForInline(DIFF_WITH_LOCKFILE);
     const prefixBytes = `## Invariant prefix\nrepo: o/r\nhead: abc\n\n## Diff at reviewed head (abc)\n\n${filteredDiff}\n`;

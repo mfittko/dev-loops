@@ -301,6 +301,13 @@ const FanoutConfig = z.strictObject({
   sequential: z.boolean().default(false).describe("Dispatch heavy reviewers one at a time (serial) instead of wave-by-wave parallel (issue #1726). When true, effective fan-out concurrency is one dispatch unit per wave regardless of maxConcurrent, so each heavy reviewer completes and writes its evidence artifact before the next starts. Distinct reviewers, real fan-in/ledger, and provenance are unchanged — this only bounds dispatch concurrency. Default false keeps shipped behaviour unchanged for other harnesses/repos (cross-harness non-regression #1086); a repo sets it in .devloops to bound concurrency for all its PRs."),
 });
 
+// Reviewer-diff shaping (global, applies on every gate). excludeGlobs drops
+// matching file blocks from the required filtered `diff` read on top of the
+// built-in defaults; the raw diff keeps them as the optional `raw-diff` read.
+const ReviewDiffConfig = z.strictObject({
+  excludeGlobs: z.array(z.string().trim().min(1)).default([]).describe("Globs whose file blocks are dropped from the required filtered reviewer diff on every gate, on top of the built-in defaults (lockfiles, vendored trees). The raw diff keeps them as the optional raw-diff read, and the evidence file lists each excluded path with its reason. Default empty."),
+});
+
 /**
  * The reserved synthetic packed-bin name shape. Every bin `packDispatchUnits`
  * generates (including a one-member bin) is named `packed:sha256:<64 lowercase
@@ -421,6 +428,7 @@ const GatesConfig = z.strictObject({
   // Grouped vs per-angle fan-out dispatch policy + static grouping table.
   // GLOBAL, not per-gate — see resolveFanoutGroups.
   fanout: FanoutConfig.superRefine(rejectInvalidFanoutGroupNames).optional(),
+  reviewDiff: ReviewDiffConfig.optional(),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -823,6 +831,7 @@ const FileGatesConfig = z.strictObject({
   anglePool: z.array(z.string().trim().min(1)).describe("Explicit global lens catalog for additive angle selection (global, not per-gate).").optional(),
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
   fanout: FanoutConfig.partial().superRefine(rejectInvalidFanoutGroupNames).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
+  reviewDiff: ReviewDiffConfig.partial().describe("Reviewer-diff shaping (global, applies on every gate): excludeGlobs drops matching file blocks from the required filtered diff read.").optional(),
 });
 
 // ============================================================================
@@ -2102,14 +2111,20 @@ export const RISK_PATH_DENYLIST_DEFAULT = Object.freeze([
   "**/package.json",
 ]);
 
+// The generated .claude mirror trees. scripts/claude/generate-claude-assets.mjs
+// owns every file under them.
+export const GENERATED_MIRROR_GLOBS = Object.freeze([
+  ".claude/skills/**",
+  ".claude/agents/**",
+  ".claude/commands/**",
+]);
+
 // Paths the light-mode file/line count skips: changeset fragments and the
 // generated .claude mirrors (proven byte-identical to their sources). Scope
 // count only; the risk-path floor still sees every changed file.
 export const SCOPE_COUNT_EXCLUDE_GLOBS = Object.freeze([
   "changes/*.md",
-  ".claude/skills/**",
-  ".claude/agents/**",
-  ".claude/commands/**",
+  ...GENERATED_MIRROR_GLOBS,
 ]);
 
 export function isScopeCountExcluded(path) {

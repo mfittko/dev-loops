@@ -1248,7 +1248,7 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
   return [
     "## Required reads",
     "",
-    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles and generated trees excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles, generated trees, and configured `gates.reviewDiff.excludeGlobs` paths excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
     "",
     ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
   ].join("\n");
@@ -1332,6 +1332,19 @@ function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBy
 }
 
 /**
+ * `Excluded from the filtered diff (n):` lines for filterDiffForInline's
+ * excludedFiles, or no lines when the list is empty. Paths go through
+ * pushPathListLines, so a control-character path is withheld, never rendered.
+ * @param {string[]} lines
+ * @param {{path: string, reason: "default"|"configured"}[]} excludedFiles
+ */
+function pushExcludedFilesLines(lines, excludedFiles) {
+  if (!Array.isArray(excludedFiles) || excludedFiles.length === 0) return;
+  lines.push(`Excluded from the filtered diff (${excludedFiles.length}):`);
+  pushPathListLines(lines, excludedFiles.map((f) => ({ path: f.path, label: `${f.path} (${f.reason})` })));
+}
+
+/**
  * Render the referenced evidence file: PR body, linked-issue body (when
  * present), a pointer to the filtered diff at the reviewed head (`diffPath`,
  * the required `diff` read; the diff bytes are never repeated here), a
@@ -1362,6 +1375,8 @@ function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBy
  * @param {string|null} [input.diffOutput] — filtered diff text, when captured; sizes the pointer (prefixMode, diffBytes), never inlined
  * @param {string|null} [input.diffPath] — persisted filtered diff, the required `diff` read this file points at
  * @param {string[]} [input.changedFiles]
+ * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
+ *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the changed-files list, only when non-empty.
  * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output
  * @param {string|null} [input.validationResultsPath] — absolute path to the
  *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-RESOLUTION).
@@ -1373,7 +1388,7 @@ function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBy
 export function renderBriefingEvidence({
   repo, pr, gate, headSha,
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
-  diffOutput = null, diffPath = null, changedFiles = [], adjacentCode = null,
+  diffOutput = null, diffPath = null, changedFiles = [], excludedFiles = [], adjacentCode = null,
   validationResultsPath = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
@@ -1449,6 +1464,7 @@ export function renderBriefingEvidence({
   const files = Array.isArray(changedFiles) ? changedFiles : [];
   lines.push(`Changed files (${files.length}):`);
   pushPathListLines(lines, files.map((f) => ({ path: f, label: f })));
+  pushExcludedFilesLines(lines, excludedFiles);
   const adjacentFiles = adjacentCode && Array.isArray(adjacentCode.files)
     ? adjacentCode.files.filter((f) => f.role !== "changed")
     : [];
@@ -1503,6 +1519,8 @@ export function renderBriefingEvidence({
  * @param {string|null} [input.diffOutput] — full diff text, when captured
  * @param {string|null} [input.diffPath] — persisted unfiltered `.diff`, linked unconditionally in the widen-back paragraph
  * @param {string|null} [input.filteredDiffPath] — persisted filtered diff (the pointer target; falls back to diffPath)
+ * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
+ *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the diff pointers, only when non-empty.
  * @param {string|null} [input.validationResultsPath]
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES; sizes the pointer's disclosure
  * @returns {{ text: string }}
@@ -1511,7 +1529,7 @@ export function renderScopedBriefingVariant(scope, {
   repo, pr, gate, headSha, evidencePath, contextPath = null, worktreeRoot = null,
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
-  filteredDiffPath = null,
+  filteredDiffPath = null, excludedFiles = [],
   validationResultsPath = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
@@ -1535,6 +1553,7 @@ export function renderScopedBriefingVariant(scope, {
   // widen straight to both without first reading the full prefix.
   lines.push(`Full diff (byte-exact): ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
   lines.push(`Context artifact: ${contextPath ?? "(context artifact path unavailable)"}`);
+  pushExcludedFilesLines(lines, excludedFiles);
   lines.push("");
   if (worktreeRoot) {
     lines.push(renderSourceReadInvariantSection(worktreeRoot));
@@ -2528,15 +2547,17 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     prefixMode = "file";
   } else {
     // The diff under review is FILTERED — lockfiles, generated/vendored
-    // trees, and any --diff-exclude-glob configured here are dropped
-    // whole-file. `<gate>-<headSha>.filtered.diff` persists it as the
+    // trees, and any gates.reviewDiff.excludeGlobs from the loaded config are
+    // dropped whole-file. `<gate>-<headSha>.filtered.diff` persists it as the
     // required `diff` read in both modes, and the evidence file only points
-    // at it (reviewers read the diff once), so the required read never scales with
-    // lockfile churn. The unfiltered diff stays at options.diffPath
-    // (scope.diffPath) as the optional `raw-diff` widening read.
-    const inlineDiffOutput = typeof options.diffOutput === "string" && options.diffOutput.length > 0
-      ? filterDiffForInline(options.diffOutput, { excludeGlobs: options.diffExcludeGlobs ?? [] }).filteredDiff
-      : (options.diffOutput ?? null);
+    // at it (reviewers read the diff once) and lists each excluded path with
+    // its reason, so the required read never scales with lockfile churn. The
+    // unfiltered diff stays at options.diffPath (scope.diffPath) as the
+    // optional `raw-diff` widening read.
+    const diffFilter = typeof options.diffOutput === "string" && options.diffOutput.length > 0
+      ? filterDiffForInline(options.diffOutput, { excludeGlobs: options.config?.gates?.reviewDiff?.excludeGlobs ?? [] })
+      : null;
+    const inlineDiffOutput = diffFilter ? diffFilter.filteredDiff : (options.diffOutput ?? null);
     pendingFilteredDiff = typeof inlineDiffOutput === "string" && inlineDiffOutput.length > 0
       ? {
         path: buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", suffix: ".filtered.diff" }),
@@ -2555,6 +2576,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       diffOutput: inlineDiffOutput,
       diffPath: pendingFilteredDiff?.path ?? null,
       changedFiles: options.changedFiles ?? [],
+      excludedFiles: diffFilter?.excludedFiles ?? [],
       adjacentCode: options.adjacentCode ?? null,
       validationResultsPath: options.validationResultsPath ?? null,
     });
@@ -2630,6 +2652,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           diffOutput: inlineDiffOutput,
           diffPath: options.diffPath ?? null,
           filteredDiffPath: pendingFilteredDiff?.path ?? null,
+          excludedFiles: diffFilter?.excludedFiles ?? [],
           validationResultsPath: options.validationResultsPath ?? null,
         });
         pendingVariants.set(scope, { path: scopePath, text: variant.text });
