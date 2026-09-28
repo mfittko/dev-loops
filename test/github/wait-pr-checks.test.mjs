@@ -208,3 +208,77 @@ test("wait-pr-checks --help prints usage and exits 0", async () => {
   assert(result.stdout.includes('1  Red (status "failure"), or an argument/gh/runtime error'));
   assert(result.stdout.includes('2  Not settled (status "timeout"/"changed"/"pending"/"stuck")'));
 });
+
+// In-process runChild fake: the first `pr view` hits the GraphQL rate limit,
+// later calls succeed; `api rate_limit` reports the graphql reset.
+function rateLimitedRunChild(resetEpochSeconds) {
+  const calls = [];
+  let prViews = 0;
+  const runChild = async (_command, args) => {
+    const argv = args.join(" ");
+    calls.push(argv);
+    if (argv === "api rate_limit") {
+      return { code: 0, stdout: JSON.stringify({ resources: { graphql: { reset: resetEpochSeconds } } }), stderr: "" };
+    }
+    if (argv.startsWith("pr view")) {
+      prViews += 1;
+      if (prViews === 1) return { code: 1, stdout: "", stderr: "GraphQL: API rate limit exceeded for user ID 1." };
+      return { code: 0, stdout: prView("sha-a", ["build"]), stderr: "" };
+    }
+    if (argv.includes("check-runs")) {
+      return { code: 0, stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }]), stderr: "" };
+    }
+    if (argv.includes("/status")) return { code: 0, stdout: statuses([]), stderr: "" };
+    return { code: 97, stdout: "", stderr: `unexpected gh args: ${argv}` };
+  };
+  return { runChild, calls };
+}
+
+test("wait-pr-checks waits for the GraphQL reset inside its --timeout budget, heartbeating, then settles success", async () => {
+  let clock = 1_000_000_000_000;
+  const delays = [];
+  const delayImpl = async (ms) => { delays.push(ms); clock += ms; };
+  const { runChild, calls } = rateLimitedRunChild(clock / 1000 + 100);
+  const heartbeats = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk) => { heartbeats.push(String(chunk)); return true; };
+  const stdout = makeStream();
+  let code;
+  try {
+    code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "300"], {
+      stdout, stderr: makeStream(), env: {}, runChild, delayImpl, now: () => clock,
+    });
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(stdout.text()).status, "success");
+  assert.equal(calls.filter((c) => c === "api rate_limit").length, 1);
+  assert.deepEqual(delays.slice(0, 3), [45_000, 45_000, 10_000]);
+  const watchHeartbeats = heartbeats.map((line) => JSON.parse(line)).filter((line) => line.type === "watch_heartbeat");
+  assert.equal(watchHeartbeats.length, 2);
+});
+
+test("wait-pr-checks returns RATE_LIMITED with resetAt, without sleeping, when the reset is past the remaining budget", async () => {
+  const clock = 1_000_000_000_000;
+  const delays = [];
+  const reset = clock / 1000 + 120;
+  const { runChild } = rateLimitedRunChild(reset);
+  const stdout = makeStream();
+  const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "60"], {
+    stdout, stderr: makeStream(), env: {}, runChild, delayImpl: async (ms) => { delays.push(ms); }, now: () => clock,
+  });
+  assert.equal(code, 1);
+  const result = JSON.parse(stdout.text());
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "RATE_LIMITED");
+  assert.equal(result.resetAt, new Date(reset * 1000).toISOString());
+  assert.deepEqual(delays, []);
+});
+
+test("wait-pr-checks --help names the RATE_LIMITED result and its resetAt field", async () => {
+  const stdout = makeStream();
+  assert.equal(await runCli(["--help"], { stdout }), 0);
+  assert(stdout.text().includes("RATE_LIMITED"));
+  assert(stdout.text().includes("resetAt"));
+});

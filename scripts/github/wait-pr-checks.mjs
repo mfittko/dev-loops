@@ -13,6 +13,9 @@ import {
 // re-implementing it. This wrapper only adds seconds-based flags and a direct
 // process-exit-code contract for shell/scripted callers.
 import { watchCiStatus } from "./probe-ci-status.mjs";
+import { setTimeout as delay } from "node:timers/promises";
+import { rateLimitedResult, withGraphqlRateLimitWait } from "@dev-loops/core/github/gh";
+import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
 
 const DEFAULT_TIMEOUT_SECONDS = Math.floor(COPILOT_REVIEW_WAIT_TIMEOUT_MS / 1000);
 const DEFAULT_POLL_SECONDS = Math.floor(DEFAULT_POLL_INTERVAL_MS / 1000);
@@ -47,6 +50,11 @@ budget.
 Diagnostic output (stderr):
   { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
   { "ok": false, "error": "...", "usage"?: "..." }
+GraphQL rate limit (stdout, JSON, exit 1):
+  { "ok": false, "code": "RATE_LIMITED", "error": "...", "resetAt": "<ISO 8601>"|null }
+On GraphQL rate-limit exhaustion the tool waits for the reset inside the
+remaining --timeout budget (heartbeats continue) and retries once; otherwise
+it returns RATE_LIMITED at once.
 ${JQ_OUTPUT_USAGE}
 Exit codes (default output, no --jq/--silent):
   0  Green (status "success")
@@ -126,6 +134,7 @@ export function parseWaitPrChecksCliArgs(argv) {
 // tool's reason to exist alongside `dev-loops loop watch-ci`, whose CLI always
 // exits 0 and expects callers to branch on the JSON `status` field instead.
 export function exitCodeForWaitResult(result) {
+  if (result.ok === false) return 1;
   if (result.status === "success") return 0;
   if (result.status === "failure") return 1;
   return 2;
@@ -138,8 +147,9 @@ export async function runCli(
     stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
-    delayImpl = undefined,
-    now = undefined,
+    delayImpl = delay,
+    now = Date.now,
+    runChild = undefined,
   } = {},
 ) {
   const options = parseWaitPrChecksCliArgs(argv);
@@ -147,15 +157,36 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return 0;
   }
-  const result = await watchCiStatus(
-    { repo: options.repo, pr: options.pr, timeoutMs: options.timeoutMs, pollIntervalMs: options.pollIntervalMs },
-    {
-      env,
-      ghCommand,
-      ...(delayImpl ? { delayImpl } : {}),
-      ...(now ? { now } : {}),
-    },
-  );
+  const startedAt = now();
+  const remainingMs = () => options.timeoutMs - (now() - startedAt);
+  let result;
+  let isRetry = false;
+  try {
+    result = await withGraphqlRateLimitWait(
+      () => {
+        // The retry after a rate-limit wait only gets the remaining budget.
+        const timeoutMs = isRetry ? Math.max(0, remainingMs()) : options.timeoutMs;
+        isRetry = true;
+        return watchCiStatus(
+          { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: options.pollIntervalMs },
+          { env, ghCommand, delayImpl, now, ...(runChild ? { runChild } : {}) },
+        );
+      },
+      {
+        maxWaitMs: remainingMs,
+        sleep: (ms) => waitWithHeartbeat(ms, {
+          attempt: 1, attemptBudget: 1, watchStartedAtMs: startedAt, timeoutMs: options.timeoutMs, now, delayImpl,
+        }),
+        now,
+        env,
+        ghCommand,
+        ...(runChild ? { runChild } : {}),
+      },
+    );
+  } catch (error) {
+    if (error?.code !== "RATE_LIMITED") throw error;
+    result = rateLimitedResult(error);
+  }
   if (options.jq !== undefined || options.silent) {
     return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.status === "success" });
   }

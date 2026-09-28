@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
 
-import { ghJson, ghGraphql, resolveOwner } from "../src/github/gh.mjs";
+import { ghJson, ghGraphql, isRateLimitError, resolveOwner, withGraphqlRateLimitWait } from "../src/github/gh.mjs";
 
 function stubRunChild(result) {
   return async () => result;
@@ -254,4 +254,112 @@ describe("gh.mjs (#1695 shared gh CLI helper extraction)", () => {
     assert.equal(typeof mod.ghGraphql, "function");
     assert.equal(typeof mod.resolveOwner, "function");
   });
+});
+
+describe("withGraphqlRateLimitWait", () => {
+  const NOW = 1_000_000_000_000;
+  const RATE_LIMIT_ERROR = () => Object.assign(new Error("gh command failed: GraphQL: API rate limit exceeded for user ID 1."), { code: "GH_API_ERROR" });
+
+  function harness({ reset, readResult, outcomes, maxWaitMs = 900_000 }) {
+    const calls = { reads: [], sleeps: [], ops: 0 };
+    const runChild = async (command, args) => {
+      calls.reads.push([command, ...args]);
+      return readResult ?? { code: 0, stdout: JSON.stringify({ resources: { graphql: { reset } } }), stderr: "" };
+    };
+    const operation = async () => {
+      const outcome = outcomes[calls.ops];
+      calls.ops += 1;
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    };
+    const run = () => withGraphqlRateLimitWait(operation, {
+      maxWaitMs,
+      sleep: async (ms) => { calls.sleeps.push(ms); },
+      now: () => NOW,
+      env: {},
+      runChild,
+    });
+    return { calls, run };
+  }
+
+  async function assertRateLimited(run, resetAt) {
+    await assert.rejects(run, (error) => {
+      assert.equal(error.code, "RATE_LIMITED");
+      assert.equal(error.resetAt, resetAt);
+      return true;
+    });
+  }
+
+  test("isRateLimitError matches gh rate-limit phrasings only", () => {
+    assert.equal(isRateLimitError(RATE_LIMIT_ERROR()), true);
+    assert.equal(isRateLimitError(new Error("gh command failed: not found")), false);
+  });
+
+  test("rate limit then success: one rate_limit read, one sleep of reset - now, one retry", async () => {
+    const reset = NOW / 1000 + 120;
+    const { calls, run } = harness({ reset, outcomes: [RATE_LIMIT_ERROR(), "ok-result"] });
+    assert.equal(await run(), "ok-result");
+    assert.deepEqual(calls.reads, [["gh", "api", "rate_limit"]]);
+    assert.deepEqual(calls.sleeps, [120_000]);
+    assert.equal(calls.ops, 2);
+  });
+
+  test("a second rate-limit error after the retry fails closed with one sleep", async () => {
+    const reset = NOW / 1000 + 60;
+    const { calls, run } = harness({ reset, outcomes: [RATE_LIMIT_ERROR(), RATE_LIMIT_ERROR(), "never"] });
+    await assertRateLimited(run, new Date(reset * 1000).toISOString());
+    assert.equal(calls.reads.length, 1);
+    assert.equal(calls.sleeps.length, 1);
+    assert.equal(calls.ops, 2);
+  });
+
+  test("a failed rate_limit read fails closed with resetAt null and no sleep", async () => {
+    const { calls, run } = harness({ readResult: { code: 1, stdout: "", stderr: "boom" }, outcomes: [RATE_LIMIT_ERROR()] });
+    await assertRateLimited(run, null);
+    assert.equal(calls.sleeps.length, 0);
+    assert.equal(calls.ops, 1);
+  });
+
+  test("a reset in the past fails closed without sleeping", async () => {
+    const reset = NOW / 1000 - 5;
+    const { calls, run } = harness({ reset, outcomes: [RATE_LIMIT_ERROR()] });
+    await assertRateLimited(run, new Date(reset * 1000).toISOString());
+    assert.equal(calls.sleeps.length, 0);
+    assert.equal(calls.ops, 1);
+  });
+
+  test("a reset more than 24 hours ahead fails closed without sleeping", async () => {
+    const reset = NOW / 1000 + 25 * 3600;
+    const { calls, run } = harness({ reset, outcomes: [RATE_LIMIT_ERROR()], maxWaitMs: Number.POSITIVE_INFINITY });
+    await assertRateLimited(run, new Date(reset * 1000).toISOString());
+    assert.equal(calls.sleeps.length, 0);
+    assert.equal(calls.ops, 1);
+  });
+
+  test("a reset beyond maxWaitMs fails closed without sleeping", async () => {
+    const reset = NOW / 1000 + 600;
+    const { calls, run } = harness({ reset, outcomes: [RATE_LIMIT_ERROR()], maxWaitMs: () => 60_000 });
+    await assertRateLimited(run, new Date(reset * 1000).toISOString());
+    assert.equal(calls.sleeps.length, 0);
+    assert.equal(calls.ops, 1);
+  });
+
+  for (const [label, error] of [
+    ["auth error", Object.assign(new Error("gh command failed: HTTP 401: Bad credentials"), { code: "GH_API_ERROR" })],
+    ["404", Object.assign(new Error("gh command failed: HTTP 404: Not Found"), { code: "GH_API_ERROR" })],
+    ["malformed JSON", new Error("Invalid JSON from gh: <html>")],
+  ]) {
+    test(`a non-rate-limit ${label} rethrows unchanged with no read and no sleep`, async () => {
+      const { calls, run } = harness({ reset: NOW / 1000 + 60, outcomes: [error] });
+      await assert.rejects(run, (thrown) => {
+        assert.equal(thrown, error);
+        assert.equal(thrown.message, error.message);
+        assert.equal(thrown.code, error.code);
+        return true;
+      });
+      assert.equal(calls.reads.length, 0);
+      assert.equal(calls.sleeps.length, 0);
+      assert.equal(calls.ops, 1);
+    });
+  }
 });

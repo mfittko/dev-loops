@@ -154,3 +154,66 @@ export async function resolveOwner(login, env, runChild) {
     { code: "NO_USER_ID", cause: orgError },
   );
 }
+
+// Anchored to gh's own phrasings ("API rate limit exceeded", "rate limit already
+// exceeded", "You have exceeded a secondary rate limit"). A bare `rate limit`
+// substring also matches an echoed PR title or proxy body, and classifying those
+// as rate limits shows the operator a retry time that will never come true.
+export function isRateLimitError(error) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /rate limit[^\n]{0,20}\bexceeded\b|\bexceeded\b[^\n]{0,20}rate limit/i.test(message);
+}
+
+// Sanity bound: a GraphQL reset further ahead than this is a bogus reading.
+const GRAPHQL_RATE_LIMIT_MAX_RESET_AHEAD_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Run `operation`; on a rate-limit error, read the GraphQL reset from
+ * `gh api rate_limit` (a REST read that spends no GraphQL points), sleep until
+ * that reset, and retry once. Fails closed with `code: "RATE_LIMITED"` and
+ * `resetAt` (ISO 8601, or null when unknown) when the reset is unknown, in the
+ * past, more than 24h ahead, or beyond `maxWaitMs`, or when the retry is rate
+ * limited again. Every other error is rethrown unchanged.
+ *
+ * @param {() => Promise<any>} operation
+ * @param {object} opts
+ * @param {number | (() => number)} opts.maxWaitMs - evaluated at failure time.
+ * @param {(ms: number) => Promise<void>} opts.sleep
+ */
+export async function withGraphqlRateLimitWait(
+  operation,
+  { maxWaitMs, sleep, now = Date.now, env, ghCommand = "gh", runChild = defaultRunChild },
+) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isRateLimitError(error)) throw error;
+  }
+  let reset = null;
+  try {
+    const value = (await ghJson(["api", "rate_limit"], { env, ghCommand, runChild }))?.resources?.graphql?.reset;
+    if (Number.isFinite(value) && value > 0) reset = value;
+  } catch {
+    // unreadable reset: fail closed below with resetAt null
+  }
+  const resetAt = reset === null ? null : new Date(reset * 1000).toISOString();
+  const rateLimited = () => Object.assign(
+    new Error(`GitHub GraphQL rate limit exhausted; retry after ${resetAt ?? "unknown reset"}`),
+    { code: "RATE_LIMITED", resetAt },
+  );
+  if (reset === null) throw rateLimited();
+  const waitMs = reset * 1000 - now();
+  const capMs = typeof maxWaitMs === "function" ? maxWaitMs() : maxWaitMs;
+  if (waitMs <= 0 || waitMs > GRAPHQL_RATE_LIMIT_MAX_RESET_AHEAD_MS || waitMs > capMs) throw rateLimited();
+  await sleep(waitMs);
+  try {
+    return await operation();
+  } catch (error) {
+    throw isRateLimitError(error) ? rateLimited() : error;
+  }
+}
+
+/** Map a RATE_LIMITED error onto the tools' `ok: false` result shape. */
+export function rateLimitedResult(error) {
+  return { ok: false, code: "RATE_LIMITED", error: error.message, resetAt: error.resetAt ?? null };
+}

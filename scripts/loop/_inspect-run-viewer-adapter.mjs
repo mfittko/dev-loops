@@ -24,14 +24,7 @@ const MAX_RESULT_LIMIT = 100;
 const DEFAULT_PR_STATE = "open";
 const DEFAULT_INBOX_MODE = "assignee";
 const DEFAULT_INBOX_SIGNAL = "waiting";
-// Anchored to gh's own phrasings ("API rate limit exceeded", "rate limit already
-// exceeded", "You have exceeded a secondary rate limit"). A bare `rate limit`
-// substring also matches an echoed PR title or proxy body, and classifying those
-// as rate limits shows the operator a retry time that will never come true.
-export function isRateLimitError(error) {
-  const message = error instanceof Error ? error.message : String(error ?? "");
-  return /rate limit[^\n]{0,20}\bexceeded\b|\bexceeded\b[^\n]{0,20}rate limit/i.test(message);
-}
+export { isRateLimitError } from "@dev-loops/core/github/gh";
 
 // The failing `gh search` call surfaces no headers, and `gh api rate_limit`
 // reports a DIFFERENT budget than the one search spends (observed: 5000
