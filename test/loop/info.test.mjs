@@ -384,6 +384,15 @@ test("summarizeBranchRules names a ruleset-required check absent from the rollup
   assert.deepEqual(summarizeBranchRules(MAIN_RULESET, withGateEvidence).missingRequiredChecks, []);
 });
 
+test("summarizeBranchRules fails closed on a reported required check that is neither success nor pending", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const cancelled = [...GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, { name: "gate-evidence", status: "COMPLETED", conclusion: "CANCELLED" }];
+  const summary = summarizeBranchRules(MAIN_RULESET, cancelled);
+  assert.deepEqual(summary.failedRequiredChecks, ["gate-evidence"]);
+  assert.deepEqual(summary.pendingRequiredChecks, []);
+  assert.deepEqual(summary.missingRequiredChecks, []);
+});
+
 test("summarizeBranchRules names the extra approval for unattributed changes only when required", async () => {
   const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
   const approvals = summarizeBranchRules(MAIN_RULESET, []).operatorApprovals;

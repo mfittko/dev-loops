@@ -884,10 +884,17 @@ describe("below the cap, the handoff, the detector, and merge agree on a post-co
 
 // The --watch-status readback (what `dev-loops loop info` runs): the loop
 // snapshot, then the carry facts fetch, and no requester call.
-async function runHandoffReadback(fixture, { root, factsFail = false }) {
+async function runHandoffReadback(fixture, { root, factsFail = false, factsThrow = false }) {
   const snapshotEntries = handoffEntries(fixture).slice(0, 5);
-  const facts = { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,reviews,files"], stdout: line({ headRefOid: HEAD, reviews: fixture.reviews, files: [] }), ...(factsFail ? { exitCode: 1, stdout: "" } : {}) };
-  const { runChild, unmatched, calls } = strictRunChild([...snapshotEntries, facts, ...fixture.shared]);
+  const factsArgs = ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,reviews,files"];
+  const facts = { matchByClaims: true, assertArgs: factsArgs, stdout: line({ headRefOid: HEAD, reviews: fixture.reviews, files: [] }), ...(factsFail ? { exitCode: 1, stdout: "" } : {}) };
+  const strict = strictRunChild([...snapshotEntries, ...(factsThrow ? [] : [facts]), ...fixture.shared]);
+  const { unmatched, calls } = strict;
+  // factsThrow: the facts spawn rejects (e.g. gh missing) instead of exiting non-zero.
+  const runChild = async (cmd, args, ...rest) => {
+    if (factsThrow && JSON.stringify(args) === JSON.stringify(factsArgs)) throw new Error("spawn gh ENOENT");
+    return strict.runChild(cmd, args, ...rest);
+  };
   const result = await runHandoff({ repo: REPO, pr: PR, watchStatus: "idle" }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "", GH_SEQUENCE_PATH: "1" }), ghCommand: "gh", runChild, repoRoot: root });
   assert.deepEqual(unmatched, [], "readback made an undeclared gh call");
   assert.ok(!calls.some((call) => JSON.stringify(call).includes("POST")), "readback must never call the requester");
@@ -914,6 +921,14 @@ describe("readback: the handoff's advice agrees with the request tool", () => {
 
   it("carry facts unavailable: the readback keeps the state and marks the advice unverified", async () => {
     const readback = await runHandoffReadback(scenario({ delta: CODE_DELTA }), { root: convergedOnceWideRoot, factsFail: true });
+
+    assert.equal(readback.state, "ready_to_rerequest_review");
+    assert.equal(readback.carriedConvergence, undefined);
+    assert.equal(readback.carryUnverified, "carry facts unavailable");
+  });
+
+  it("carry facts spawn failure: the readback keeps the state and marks the advice unverified", async () => {
+    const readback = await runHandoffReadback(scenario({ delta: CODE_DELTA }), { root: convergedOnceWideRoot, factsThrow: true });
 
     assert.equal(readback.state, "ready_to_rerequest_review");
     assert.equal(readback.carriedConvergence, undefined);

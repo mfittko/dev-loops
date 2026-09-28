@@ -116,8 +116,9 @@ function formatCiDisplay(ciStatus, ciConclusion) {
  * checks are not read.
  * `rules` that are not an array mean the lookup failed: resolved is false.
  * A required check is missing when no rollup entry carries its name (CheckRun
- * `name` or StatusContext `context`); a reported one is pending or failed by
- * its entry state.
+ * `name` or StatusContext `context`); a reported one is pending by its entry
+ * state, and any other non-success state (including CANCELLED or STALE) is
+ * failed.
  * A count-based approval requirement is omitted when `reviewDecision` is
  * APPROVED, so a satisfied count never reads as an outstanding blocker.
  */
@@ -151,8 +152,9 @@ export function summarizeBranchRules(rules, statusCheckRollup, reviewDecision = 
       continue;
     }
     const status = normalizeStatusCheckRollupStatus(entries);
-    if (status === "failure") failedRequiredChecks.push(context);
-    else if (status === "pending") pendingRequiredChecks.push(context);
+    if (status === "pending") pendingRequiredChecks.push(context);
+    // Fail closed: a reported check that is not success (e.g. CANCELLED, STALE) has not satisfied the requirement.
+    else if (status !== "success") failedRequiredChecks.push(context);
   }
   return { resolved: true, missingRequiredChecks, pendingRequiredChecks, failedRequiredChecks, operatorApprovals };
 }

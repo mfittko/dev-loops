@@ -357,11 +357,17 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
 // PR's changed files. Fetched only when the interpreter already resolved
 // ROUND_CAP_CLEAN_FALLBACK, so this extra call is off the hot path.
 async function fetchReopenCycleFacts({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
-  const result = await runChild(
-    ghCommand,
-    ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,reviews,files"],
-    env,
-  );
+  let result;
+  try {
+    result = await runChild(
+      ghCommand,
+      ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,reviews,files"],
+      env,
+    );
+  } catch {
+    // A spawn failure (e.g. gh missing) reads as unavailable facts, same as a non-zero exit.
+    return null;
+  }
   if (result.code !== 0) {
     return null;
   }
