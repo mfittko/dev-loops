@@ -1126,6 +1126,28 @@ export function collapsePureSubstitutionRuns(diffOutput) {
 }
 
 /**
+ * True when a path is a non-empty string with no control character, so it
+ * can be rendered on an unfenced line without forging markdown structure.
+ * @param {unknown} p
+ * @returns {boolean}
+ */
+function isRenderablePath(p) {
+  return typeof p === "string" && p.length > 0 && !/[\x00-\x1f\x7f]/.test(p);
+}
+
+/**
+ * Push `- <label>` list lines for each renderable path, then one disclosure
+ * line naming how many paths were withheld for a control character.
+ * @param {string[]} lines
+ * @param {Array<{ path: unknown, label: string }>} entries
+ */
+function pushPathListLines(lines, entries) {
+  const withheld = entries.filter((e) => !isRenderablePath(e.path)).length;
+  for (const e of entries) if (isRenderablePath(e.path)) lines.push(`- ${e.label}`);
+  if (withheld > 0) lines.push(`(${withheld} paths with control characters withheld; check them in the diff read)`);
+}
+
+/**
  * List the doc-file paths of a unified diff (AC3 `docs-only` scope): each
  * file block whose path classifies as `docs` (classifyFile), deduplicated,
  * in original order. The hunks themselves stay in the required `diff` read.
@@ -1134,9 +1156,11 @@ export function collapsePureSubstitutionRuns(diffOutput) {
  * @returns {{ docFiles: string[], unparsedCount: number }}
  */
 function listDocFilesInDiff(diffOutput) {
-  const paths = parseDiffFileBlocks(diffOutput).map((b) => b.path);
-  const unparsedCount = paths.filter((p) => typeof p !== "string" || p.length === 0).length;
-  const docFiles = paths.filter((p) => typeof p === "string" && p.length > 0 && classifyFile(p) === "docs");
+  // A decoded path with a control character counts as unparsed: rendered
+  // unfenced, an embedded newline could forge a heading.
+  const paths = parseDiffFileBlocks(diffOutput).map((b) => (isRenderablePath(b.path) ? b.path : null));
+  const unparsedCount = paths.filter((p) => p === null).length;
+  const docFiles = paths.filter((p) => p !== null && classifyFile(p) === "docs");
   return { docFiles: [...new Set(docFiles)], unparsedCount };
 }
 
@@ -1424,13 +1448,13 @@ export function renderBriefingEvidence({
   lines.push("");
   const files = Array.isArray(changedFiles) ? changedFiles : [];
   lines.push(`Changed files (${files.length}):`);
-  for (const f of files) lines.push(`- ${f}`);
+  pushPathListLines(lines, files.map((f) => ({ path: f, label: f })));
   const adjacentFiles = adjacentCode && Array.isArray(adjacentCode.files)
     ? adjacentCode.files.filter((f) => f.role !== "changed")
     : [];
   if (adjacentCode) {
     lines.push(`Adjacent files (${adjacentFiles.length}):`);
-    for (const f of adjacentFiles) lines.push(`- ${f.path} (${f.role})`);
+    pushPathListLines(lines, adjacentFiles.map((f) => ({ path: f.path, label: `${f.path} (${f.role})` })));
     lines.push(
       `Stripped: ${adjacentCode.stripped?.length ?? 0}, Truncated: ${adjacentCode.truncated?.length ?? 0}, Missing: ${adjacentCode.missing?.length ?? 0}`,
     );
