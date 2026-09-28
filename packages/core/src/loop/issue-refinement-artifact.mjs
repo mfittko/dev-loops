@@ -249,7 +249,7 @@ export function parseMarkdownSections(body) {
   let current = null;
   let fence = null;
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     const step = stepFence(fence, line);
     fence = step.fence;
     if (step.insideFence) {
@@ -267,6 +267,8 @@ export function parseMarkdownSections(body) {
         // (`## **Acceptance criteria**`) match the section patterns. The raw
         // form is never re-parsed as body text, so it is not retained.
         name: normalizeHeadingName(match[2]),
+        // 0-based heading line; the body is the next bodyLines.length lines.
+        line: index,
         bodyLines: [],
       };
       continue;
@@ -580,15 +582,15 @@ export function detectAcDodMatrix(body = "") {
 // ponytail: anchored keyword heuristic. The item is split on ";" and every
 // clause must be, as a whole, either "<named gate>[ and <named gate>] [both]
 // pass/is clean [on|at [the] [final|current|latest|pushed] head]" or "[the]
-// [PR] merge [happens] only on|after [a|the] [full|clean] gate pass|<named
-// gate> [pass]". A gate named inside a longer behavioral sentence, or a head
+// [PR] merge [happens]|is merged only on|after [a|the] [full|clean] gate
+// pass|<named gate> [pass]". A gate named inside a longer behavioral sentence, or a head
 // phrase followed by any further clause, never matches (fail closed: the item
 // stays a checkbox). It misses
 // paraphrases such as "approval succeeds", "the gates pass" (no named gate) or
-// "the PR is merged after a full gate pass". Upgrade path: an explicit
+// "the PR is merged after a full gate pass" (no "only"). Upgrade path: an explicit
 // gate-outcome marker in the issue matrix instead of text matching.
 const GATE_OUTCOME_RE = /^\s*(?:the\s+|both\s+)?`?(?:draft_gate|pre_approval_gate)`?(?:\s*(?:,|and|or)\s*`?(?:draft_gate|pre_approval_gate)`?)*\s+(?:both\s+)?(?:pass(?:es|ed)?|succeeds?|(?:is|are|stays?|closes?)\s+clean)(?:\s+(?:on|at)\s+(?:the\s+)?(?:(?:final|current|latest|pushed)\s+)?head)?\.?\s*$/i;
-const MERGE_OUTCOME_RE = /^\s*(?:the\s+)?(?:PR\s+)?merges?\s+(?:happens\s+)?only\s+(?:on|after)\s+(?:an?\s+|the\s+)?(?:(?:full|clean)\s+)?(?:gate\s+pass|`?(?:draft_gate|pre_approval_gate)`?(?:\s+pass)?)\.?\s*$/i;
+const MERGE_OUTCOME_RE = /^\s*(?:the\s+)?(?:PR\s+)?(?:merges?\s+(?:happens\s+)?|is\s+merged\s+)only\s+(?:on|after)\s+(?:an?\s+|the\s+)?(?:(?:full|clean)\s+)?(?:gate\s+pass|`?(?:draft_gate|pre_approval_gate)`?(?:\s+pass)?)\.?\s*$/i;
 
 /**
  * True when a matrix item's satisfaction depends on a gate or merge being
@@ -1320,6 +1322,30 @@ export function extractPrBodyUncheckedChecklistItems({ body = "" } = {}) {
     uncheckedAcItems: collect(ACCEPTANCE_SECTION_PATTERNS),
     uncheckedDodItems: collect(DOD_SECTION_PATTERNS),
   };
+}
+
+/**
+ * 0-based line indices (of `body.split("\n")`) inside the Acceptance criteria
+ * sections and, unless `acOnly`, the Definition of done sections. Uses the
+ * same section union and deep flattening as
+ * {@link extractPrBodyUncheckedChecklistItems}. Heading lines are excluded.
+ *
+ * @param {string} body
+ * @param {{ acOnly?: boolean }} [options]
+ * @returns {Set<number>}
+ */
+export function checklistSectionLineIndices(body, { acOnly = false } = {}) {
+  const sections = parseMarkdownSections(body);
+  const families = acOnly ? [ACCEPTANCE_SECTION_PATTERNS] : [ACCEPTANCE_SECTION_PATTERNS, DOD_SECTION_PATTERNS];
+  const matched = new Set(families.flatMap((patterns) => findAllSectionsByPatterns(sections, patterns)));
+  const indices = new Set();
+  for (let i = 0; i < sections.length; i += 1) {
+    if (!matched.has(sections[i])) continue;
+    for (let j = i; j < sections.length && (j === i || sections[j].level > sections[i].level); j += 1) {
+      for (let k = 1; k <= sections[j].bodyLines.length; k += 1) indices.add(sections[j].line + k);
+    }
+  }
+  return indices;
 }
 
 /**

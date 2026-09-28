@@ -10592,6 +10592,33 @@ test("tick: with --findings-json present, a ledger whose provenance fails angle 
   });
 });
 
+test("tick: a complete fanout_fanin ledger plus an incomplete --findings-json edits no body and posts nothing", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, provenance: FANOUT_TICK_PROVENANCE }, async ({ post, calls, ledgerPath }) => {
+    const findingsPath = path.join(path.dirname(ledgerPath), "findings.json");
+    await writeFile(findingsPath, JSON.stringify([{ angle: "acceptance-criteria", verdict: "clean", findings: [] }]), "utf8");
+    await assert.rejects(
+      () => post({ executionMode: "fanout_fanin", inlineReason: undefined, findingsJson: findingsPath, findingsSeverityCounts: CLEAN_COUNTS }),
+      /--findings-json for pre_approval_gate is missing mandatory angle\(s\)/,
+    );
+    assert.equal(bodyEdited(calls), false);
+    assert.equal(reviewPosted(calls), false);
+  });
+});
+
+test("tick: an AC label repeated under ## Validation flips only the AC line", async () => {
+  const prBody = `${TICK_PR_BODY}\n## Validation\n\n- [ ] criterion number 1\n`;
+  const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", "", "## Validation", "", "- [ ] criterion number 1", ""].join("\n");
+  await withCompositionRound({ overallVerdict: "clean", prBody, verifiedItems: TICK_ITEMS, issueBody }, async ({ post, editedBodies }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17", "issue 900"]);
+    for (const { body } of editedBodies) {
+      assert.match(body, /## Acceptance criteria\n\n- \[x\] criterion number 1\n/);
+      assert.match(body, /## Validation\n\n- \[ \] criterion number 1\n/);
+    }
+  });
+});
+
 test("tick: a permanently unfetchable linked issue does not block the post; the fetched issue is still ticked", async () => {
   const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", "- [ ] unverified issue criterion", ""].join("\n");
   await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody, closingIssues: [900, 901] }, async ({ post, postedBody, editedBodies }) => {

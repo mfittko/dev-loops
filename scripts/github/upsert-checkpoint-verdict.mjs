@@ -13,7 +13,7 @@ import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
 import { loadPrGateCoordinationContext, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
-import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { applyTick } from "./tick-verified-checkboxes.mjs";
 import { editPr } from "./edit-pr.mjs";
 import { editIssue } from "./edit-issue.mjs";
@@ -2107,13 +2107,18 @@ function ledgerVerifiesChecklist(ledger) {
 }
 
 // Non-throwing form of the ledger-provenance angle-coverage checks. A
-// fanout_fanin tick requires it: with --findings-json present the refusals
-// run only after the tick, so a ledger that fails them must tick nothing.
+// fanout_fanin tick requires it: with --findings-json present the ledger's
+// provenance refusals do not run, so a ledger that fails them must tick nothing.
 function ledgerPassesAngleCoverage(ledger, config, gate) {
   if (provenanceConsistencyError(ledger?.provenance ?? null)) return false;
-  const perAngle = ledger.provenance.perAngle ?? [];
-  if (perAngle.some((e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0)) return false;
-  const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(perAngle, resolveGateAngleContract(config, GATE_CONFIG_KEY[gate]));
+  return anglesPassCoverage(ledger.provenance.perAngle ?? [], config, gate);
+}
+
+// Non-throwing angle-less, mandatory-angle and foreign-angle checks over
+// per-angle entries (ledger provenance or --findings-json).
+function anglesPassCoverage(entries, config, gate) {
+  if (entries.some((e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0)) return false;
+  const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(entries, resolveGateAngleContract(config, GATE_CONFIG_KEY[gate]));
   return missingMandatory.length === 0 && (foreignAngles.length === 0 || !resolveRejectForeignAngles(config));
 }
 
@@ -2126,10 +2131,9 @@ function ledgerPassesAngleCoverage(ledger, config, gate) {
 // match, never unchecks, one edit per changed body. A failed fetch or edit of
 // a ticked body, or a PR body that is not a string, throws, so no verdict is
 // posted. Returns the refinement artifact reloaded from the ticked bodies;
-// labels no reviewer verified stay unchecked in it and still block.
-// ponytail: labels are filtered, not section-scoped; a label that also matches
-// a box outside AC/DoD flips that box too. Scope by section line range if that
-// collision shows up.
+// labels no reviewer verified stay unchecked in it and still block. Only lines
+// inside the AC/DoD sections (the AC section for an issue body) are flipped, so
+// the same label under another heading stays unchecked.
 async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordinationContext }, { env, ghCommand, runChild }) {
   const prData = coordinationContext.prData;
   if (typeof prData?.body !== "string") {
@@ -2140,9 +2144,13 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordination
     const allowed = new Set(Array.isArray(list) ? list : []);
     return verifiedItems.filter((label) => allowed.has(String(label).trim()));
   };
+  const inSections = (body, options) => {
+    const indices = checklistSectionLineIndices(body, options);
+    return (index) => indices.has(index);
+  };
   const prTick = await applyTick(prData.body, inList([...(artifact?.prBodyUncheckedAcItems ?? []), ...(artifact?.prBodyUncheckedDodItems ?? [])]), false, (bodyFile) =>
     editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
-  );
+  inSections(prData.body));
   const issueLabels = inList(artifact?.uncheckedAcItems);
   const tickedIssueBodies = [];
   if (Array.isArray(artifact?.uncheckedAcItems) && artifact.uncheckedAcItems.length > 0) {
@@ -2150,7 +2158,7 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordination
       const issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
       const issueTick = await applyTick(issueBody, issueLabels, false, (bodyFile) =>
         editIssue({ repo, issue, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
-      );
+      inSections(issueBody, { acOnly: true }));
       tickedIssueBodies.push(issueTick.body);
     }
   }
@@ -2538,8 +2546,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   }
   // Fan-out angle-coverage enforcement for a ledger-only round (no
   // --findings-json): runs BEFORE the tick below, so a ledger this post refuses
-  // never leaves ticked boxes behind. The --findings-json branch runs later,
-  // after the structured findings are parsed.
+  // never leaves ticked boxes behind. The --findings-json coverage refusal runs
+  // later; the tick below checks that coverage without throwing first.
   if ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin" && !options.findingsJson) {
     const gateKey = GATE_CONFIG_KEY[options.gate];
     const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
@@ -2598,14 +2606,65 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       }
     }
   }
+  // Structured per-angle findings (consolidated fan-in shape) take precedence
+  // over the free-text summary: when present, the verdict comment renders a
+  // multi-line per-angle breakdown and the `**Findings summary:**` line carries a
+  // single-line digest (so the marker/parse contract still round-trips).
+  // Parsed and validated BEFORE the tick below, so an input this post refuses
+  // never leaves ticked boxes behind.
+  let structuredFindings = null;
+  let rawFindingsInput = null;
+  if (options.findingsJson) {
+    let raw;
+    try {
+      raw = await readFile(options.findingsJson, "utf8");
+    } catch (err) {
+      throw new Error(`Cannot read --findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`--findings-json "${options.findingsJson}" is not valid JSON`);
+    }
+    // Accept either a bare array of per-angle entries or an object wrapping it
+    // under `angles` / `findings` (defensive against caller shape drift).
+    const candidate = Array.isArray(parsed)
+      ? parsed
+      : (Array.isArray(parsed?.angles) ? parsed.angles : (Array.isArray(parsed?.findings) ? parsed.findings : null));
+    rawFindingsInput = candidate;
+    try {
+      structuredFindings = normalizeStructuredFindings(candidate);
+    } catch (err) {
+      throw new Error(`--findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!structuredFindings) {
+      throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
+    }
+    // ADR 0089: without a ledger, the structured findings carry the judge act list.
+    // Read the RAW entries: normalization turns an unparseable finding into a bare marker and drops its judgeDisposition.
+    const flatFindings = preloadedFindingsLedger ? [] : candidate.flatMap((e) => (looksLikePerAngleEntry(e) ? e.findings : [e])).map((f) => ({
+      severity: f?.severity,
+      summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
+      judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
+    }));
+    const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
+    if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
+    const actItems = listOpenActItems(flatFindings);
+    if (options.verdict === "clean" && actItems.length > 0) {
+      throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
+    }
+  }
   // Tick the reviewer-verified AC/DoD labels BEFORE composing, then read the
   // reloaded artifact everywhere below (blocker collection and the clean guards).
   // Only a ledger whose provenance records a fresh acceptance-criteria or
   // pr-checklist review is trusted to tick. In fanout_fanin mode the ledger
-  // must also pass the angle-coverage checks, whether or not --findings-json
-  // is present.
+  // must also pass the angle-coverage checks, and so must --findings-json when
+  // present: its throwing coverage check runs later, so an input it refuses
+  // must tick nothing.
   const tickCoverageOk = (options.executionMode ?? DEFAULT_EXECUTION_MODE) !== "fanout_fanin"
-    || ledgerPassesAngleCoverage(preloadedFindingsLedger, config, options.gate);
+    || (ledgerPassesAngleCoverage(preloadedFindingsLedger, config, options.gate)
+      && (!structuredFindings || (anglesPassCoverage(rawFindingsInput, config, options.gate) && anglesPassCoverage(structuredFindings, config, options.gate))));
   if (options.gate === "pre_approval_gate" && preloadedFindingsLedger?.verifiedItems?.length > 0 && ledgerVerifiesChecklist(preloadedFindingsLedger) && tickCoverageOk) {
     coordinationContext.refinementArtifact = await tickReviewerVerifiedItems({
       repo: options.repo,
@@ -2749,53 +2808,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate);
   if (derivedNextAction !== null) {
     options.nextAction = derivedNextAction;
-  }
-  // Structured per-angle findings (consolidated fan-in shape) take precedence
-  // over the free-text summary: when present, the verdict comment renders a
-  // multi-line per-angle breakdown and the `**Findings summary:**` line carries a
-  // single-line digest (so the marker/parse contract still round-trips).
-  let structuredFindings = null;
-  let rawFindingsInput = null;
-  if (options.findingsJson) {
-    let raw;
-    try {
-      raw = await readFile(options.findingsJson, "utf8");
-    } catch (err) {
-      throw new Error(`Cannot read --findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error(`--findings-json "${options.findingsJson}" is not valid JSON`);
-    }
-    // Accept either a bare array of per-angle entries or an object wrapping it
-    // under `angles` / `findings` (defensive against caller shape drift).
-    const candidate = Array.isArray(parsed)
-      ? parsed
-      : (Array.isArray(parsed?.angles) ? parsed.angles : (Array.isArray(parsed?.findings) ? parsed.findings : null));
-    rawFindingsInput = candidate;
-    try {
-      structuredFindings = normalizeStructuredFindings(candidate);
-    } catch (err) {
-      throw new Error(`--findings-json "${options.findingsJson}": ${err instanceof Error ? err.message : String(err)}`);
-    }
-    if (!structuredFindings) {
-      throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
-    }
-    // ADR 0089: without a ledger, the structured findings carry the judge act list.
-    // Read the RAW entries: normalization turns an unparseable finding into a bare marker and drops its judgeDisposition.
-    const flatFindings = preloadedFindingsLedger ? [] : candidate.flatMap((e) => (looksLikePerAngleEntry(e) ? e.findings : [e])).map((f) => ({
-      severity: f?.severity,
-      summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
-      judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
-    }));
-    const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
-    if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
-    const actItems = listOpenActItems(flatFindings);
-    if (options.verdict === "clean" && actItems.length > 0) {
-      throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
-    }
   }
   // The clean-verdict guard above trusts --findings-severity-counts alone, so a
   // caller could hand-type an all-zero counts object even when --findings-json's

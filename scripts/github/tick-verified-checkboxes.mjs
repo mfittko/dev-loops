@@ -61,15 +61,17 @@ const CHECKBOX_RE = /^(\s*)((?:>\s*)*)([-*+]|\d+[.)])\s+\[([ xX])\]\s+(.*?)(\r?)
 // verified label. Never unchecks. Never touches non-checkbox text. Idempotent:
 // an already-`[x]` verified label is neither flipped nor reported as unmatched.
 // Returns { body, flipped, unmatched } where flipped = labels changed this call
-// and unmatched = verified labels absent from the body's checklist.
-export function tickVerifiedCheckboxes(body, verifiedLabels) {
+// and unmatched = verified labels absent from the body's checklist. An optional
+// `lineInScope(index)` limits the flip to the lines it accepts; the CLI omits it.
+export function tickVerifiedCheckboxes(body, verifiedLabels, lineInScope = () => true) {
   const verified = new Set(
     (verifiedLabels ?? []).map((l) => String(l).trim()).filter((l) => l.length > 0),
   );
   const flipped = [];
   const found = new Set();
   const lines = String(body).split("\n");
-  const nextLines = lines.map((line) => {
+  const nextLines = lines.map((line, index) => {
+    if (!lineInScope(index)) return line;
     const m = line.match(CHECKBOX_RE);
     if (!m) return line;
     const [, indent, quote, marker, mark, rest, cr] = m;
@@ -166,8 +168,8 @@ export function parseTickVerifiedCliArgs(argv) {
 // and issue targets here and by upsert-checkpoint-verdict's pre_approval_gate
 // tick, so the temp-file write/cleanup lives in one place. `body` is the ticked
 // body (equal to `currentBody` when nothing flipped).
-export async function applyTick(currentBody, verified, dryRun, writeEdited) {
-  const { body: nextBody, flipped, unmatched } = tickVerifiedCheckboxes(currentBody, verified);
+export async function applyTick(currentBody, verified, dryRun, writeEdited, lineInScope) {
+  const { body: nextBody, flipped, unmatched } = tickVerifiedCheckboxes(currentBody, verified, lineInScope);
   if (flipped.length === 0 || dryRun) {
     return { body: nextBody, flipped, unmatched, edited: false };
   }

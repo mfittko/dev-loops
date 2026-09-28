@@ -316,6 +316,7 @@ test("isGateOutcomeItem stays narrow: no row of a real tool-behavior matrix is a
     "merge only on a full gate pass",
     "the merge happens only on a full gate pass",
     "Merge happens only after a clean pre_approval_gate",
+    "the PR is merged only after a full gate pass",
     "draft_gate and pre_approval_gate both pass",
   ]) {
     assert.equal(isGateOutcomeItem(outcome), true, outcome);
