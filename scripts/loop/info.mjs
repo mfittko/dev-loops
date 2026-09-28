@@ -109,6 +109,27 @@ function formatCiDisplay(ciStatus, ciConclusion) {
   return `CI ${ciStatus}`;
 }
 
+function entryTime(entry) {
+  // GitHub reports an unset timestamp as 0001-01-01; treat it as missing.
+  for (const field of ["completedAt", "startedAt", "createdAt"]) {
+    const ms = Date.parse(entry[field] ?? "");
+    if (Number.isFinite(ms) && ms > 0) return ms;
+  }
+  return null;
+}
+
+/**
+ * Keep the latest of same-named rollup entries (CheckRun completedAt, else
+ * startedAt; StatusContext createdAt/startedAt). When any entry lacks a
+ * timestamp, keep all entries so the normalizer still fails closed.
+ */
+function latestEntries(entries) {
+  const times = entries.map(entryTime);
+  if (entries.length < 2 || times.includes(null)) return entries;
+  const max = Math.max(...times);
+  return entries.filter((_, i) => times[i] === max);
+}
+
 /**
  * Project the branch rules that apply to the PR base (GET
  * repos/{repo}/rules/branches/{branch}) onto the observed check rollup.
@@ -119,8 +140,11 @@ function formatCiDisplay(ciStatus, ciConclusion) {
  * `name` or StatusContext `context`); a reported one is pending by its entry
  * state, and any other non-success state (including CANCELLED or STALE) is
  * failed.
- * A count-based approval requirement is omitted when `reviewDecision` is
- * APPROVED, so a satisfied count never reads as an outstanding blocker.
+ * The rollup keeps superseded runs, so only the latest entry per required
+ * check counts (see latestEntries).
+ * Review-based approval requirements (approving review count, code owner
+ * review, last push approval) are omitted when `reviewDecision` is APPROVED,
+ * so a satisfied requirement never reads as an outstanding blocker.
  */
 export function summarizeBranchRules(rules, statusCheckRollup, reviewDecision = null) {
   if (!Array.isArray(rules)) {
@@ -135,8 +159,10 @@ export function summarizeBranchRules(rules, statusCheckRollup, reviewDecision = 
   const operatorApprovals = [];
   for (const rule of rules.filter((r) => r?.type === "pull_request")) {
     const count = rule.parameters?.required_approving_review_count ?? 0;
-    if (count > 0 && reviewDecision !== "APPROVED") {
-      operatorApprovals.push(`ruleset requires ${count} approving review(s)`);
+    if (reviewDecision !== "APPROVED") {
+      if (count > 0) operatorApprovals.push(`ruleset requires ${count} approving review(s)`);
+      if (rule.parameters?.require_code_owner_review === true) operatorApprovals.push("ruleset requires a code owner review");
+      if (rule.parameters?.require_last_push_approval === true) operatorApprovals.push("ruleset requires approval of the most recent push");
     }
     if (rule.parameters?.require_extra_approval_for_unattributed_changes === true) {
       operatorApprovals.push("ruleset requires an extra approval for unattributed changes");
@@ -146,7 +172,7 @@ export function summarizeBranchRules(rules, statusCheckRollup, reviewDecision = 
   const pendingRequiredChecks = [];
   const failedRequiredChecks = [];
   for (const context of new Set(required)) {
-    const entries = partitionEntriesByCheckName(rollup, context).matched;
+    const entries = latestEntries(partitionEntriesByCheckName(rollup, context).matched);
     if (entries.length === 0) {
       missingRequiredChecks.push(context);
       continue;

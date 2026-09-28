@@ -393,6 +393,35 @@ test("summarizeBranchRules fails closed on a reported required check that is nei
   assert.deepEqual(summary.missingRequiredChecks, []);
 });
 
+test("summarizeBranchRules judges a required check by its latest run only", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const cancelled = { name: "gate-evidence", status: "COMPLETED", conclusion: "CANCELLED", startedAt: "2026-09-01T10:00:00Z", completedAt: "2026-09-01T10:01:00Z" };
+  const rerunGreen = { name: "gate-evidence", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-01T10:02:00Z", completedAt: "2026-09-01T10:05:00Z" };
+  const green = summarizeBranchRules(MAIN_RULESET, [...GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, cancelled, rerunGreen]);
+  assert.deepEqual(green.failedRequiredChecks, []);
+  assert.deepEqual(green.missingRequiredChecks, []);
+  assert.deepEqual(green.pendingRequiredChecks, []);
+  // A latest CANCELLED run still fails closed.
+  const cancelledLast = { ...cancelled, startedAt: "2026-09-01T10:06:00Z", completedAt: "2026-09-01T10:07:00Z" };
+  assert.deepEqual(summarizeBranchRules(MAIN_RULESET, [rerunGreen, cancelledLast]).failedRequiredChecks, ["gate-evidence"]);
+  // A pending re-run (zero completedAt) falls back to startedAt.
+  const pendingRerun = { name: "gate-evidence", status: "IN_PROGRESS", conclusion: null, startedAt: "2026-09-01T10:08:00Z", completedAt: "0001-01-01T00:00:00Z" };
+  assert.deepEqual(summarizeBranchRules(MAIN_RULESET, [cancelled, pendingRerun]).pendingRequiredChecks, ["gate-evidence"]);
+  // Missing timestamps keep every entry, so the normalizer fails closed.
+  const untimed = [{ name: "gate-evidence", status: "COMPLETED", conclusion: "CANCELLED" }, { name: "gate-evidence", status: "COMPLETED", conclusion: "SUCCESS" }];
+  assert.deepEqual(summarizeBranchRules(MAIN_RULESET, untimed).failedRequiredChecks, ["gate-evidence"]);
+});
+
+test("summarizeBranchRules names code owner and last push approvals until the PR is approved", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const rules = [{ type: "pull_request", parameters: { required_approving_review_count: 1, require_code_owner_review: true, require_last_push_approval: true } }];
+  const pending = summarizeBranchRules(rules, [], "REVIEW_REQUIRED").operatorApprovals;
+  assert.equal(pending.length, 3);
+  assert.match(pending[1], /code owner review/);
+  assert.match(pending[2], /most recent push/);
+  assert.deepEqual(summarizeBranchRules(rules, [], "APPROVED").operatorApprovals, []);
+});
+
 test("summarizeBranchRules names the extra approval for unattributed changes only when required", async () => {
   const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
   const approvals = summarizeBranchRules(MAIN_RULESET, []).operatorApprovals;

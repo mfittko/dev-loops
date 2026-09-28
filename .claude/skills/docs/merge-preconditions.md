@@ -18,12 +18,17 @@ before requesting CI/Copilot, and again before merge.
   reads the repository rulesets for the base branch (classic branch protection
   required checks are not read). A required check with no entry at the head
   renders a `Required checks:` line, and green observed CI never reads as success
-  beside it. A `BLOCKED` merge state never renders as mergeable: it names the
-  missing, pending, or failed required checks and ruleset approvals it knows,
-  and each approval also renders as an `Operator blocker:` line. A failed rules
-  lookup renders `INCOMPLETE` instead of a mergeable claim. A count-based
-  approval requirement is omitted when the PR `reviewDecision` is `APPROVED`.
-  `loop info --pr --json` carries the same projection as a top-level
+  beside it. Only the latest run of each required check counts, so a superseded
+  run never reads as failed. A `BLOCKED` merge state never renders as
+  mergeable: it names the missing, pending, or failed required checks and
+  ruleset approvals it knows, and each approval also renders as an
+  `Operator blocker:` line. The covered `pull_request` approval parameters are
+  `required_approving_review_count`, `require_code_owner_review`,
+  `require_last_push_approval`, and
+  `require_extra_approval_for_unattributed_changes`; the first three are
+  omitted when the PR `reviewDecision` is `APPROVED`. A failed rules lookup
+  renders `INCOMPLETE` instead of a mergeable claim.
+  `loop info --pr <n> --json` carries the same projection as a top-level
   `branchRules` object with keys `resolved`, `missingRequiredChecks`,
   `pendingRequiredChecks`, `failedRequiredChecks`, and `operatorApprovals`; it
   is `null` for a PR that is not `OPEN`.
