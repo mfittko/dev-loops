@@ -248,4 +248,10 @@ test("transformAgent passes the nested experimental map through to Claude frontm
   assert.deepEqual(splitFrontmatter(out).frontmatter.experimental, { cacheTtl: "1h" });
   const plain = transformAgent({ source: "agents/developer.agent.md", raw: agentSrcFor("developer") });
   assert.equal(plain.includes("experimental:"), false, "agents without the map emit no experimental key");
+  const nestedRaw = `---\nname: "dev-loop"\ntools: read\nexperimental:\n  cacheTtl: 1h\n  nested:\n    a: 1\n---\n\nbody\n`;
+  const nested = transformAgent({ source: "agents/dev-loop.agent.md", raw: nestedRaw });
+  assert.deepEqual(splitFrontmatter(nested).frontmatter.experimental, { cacheTtl: "1h" }, "nested values are dropped");
+  const listRaw = `---\nname: "dev-loop"\ntools: read\nexperimental: [1]\n---\n\nbody\n`;
+  const list = transformAgent({ source: "agents/dev-loop.agent.md", raw: listRaw });
+  assert.equal(list.includes("experimental:"), false, "a non-map experimental value emits no experimental key");
 });
