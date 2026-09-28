@@ -78,11 +78,16 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
     return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason, artifactPath: buildValidationResultsPath(options) };
   };
+  // An exception before the tree check confirms the requested head writes no
+  // artifact either: nothing proves the run is in the right checkout.
+  let headConfirmed = false;
   try {
     const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
     const currentTreeProblem = () => {
+      headConfirmed = false;
       const actualHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim().toLowerCase();
-      if (actualHead !== options.headSha) return { reason: `worktree HEAD ${actualHead} differs from requested head`, writeArtifact: false };
+      headConfirmed = actualHead === options.headSha;
+      if (!headConfirmed) return { reason: `worktree HEAD ${actualHead} differs from requested head`, writeArtifact: false };
       const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim();
       return dirty ? { reason: "validation requires a clean worktree at the requested head", writeArtifact: true } : null;
     };
@@ -104,7 +109,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
     return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
   } catch (error) {
-    return incomplete(error instanceof Error ? error.message : String(error));
+    return incomplete(error instanceof Error ? error.message : String(error), { writeArtifact: headConfirmed });
   }
 }
 

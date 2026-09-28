@@ -192,6 +192,22 @@ test("a worktree HEAD that differs from the requested head leaves no artifact", 
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("a head check that cannot confirm the requested head leaves no artifact", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "resolve-validation-unborn-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+    const requestedHead = "a".repeat(40);
+    const artifactPath = path.join(repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: requestedHead, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(artifactPath), { recursive: true });
+    await writeFile(artifactPath, '{"allPassed":true}\n');
+    const result = await resolveValidation({ ...parseResolveValidationArgs(args(requestedHead)), headSha: requestedHead }, { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.ok, false);
+    assert.equal(result.artifactPath, undefined);
+    await assert.rejects(readFile(artifactPath), /ENOENT/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("targeted profile rejects a full suite and allows an exact targeted script", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
