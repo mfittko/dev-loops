@@ -165,7 +165,7 @@ test("both validation entrypoints reject a full alias with trailing arguments", 
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
-test("head and toolchain failures are typed incomplete, with no artifact", async () => {
+test("head and toolchain failures are typed incomplete", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
     const options = parseResolveValidationArgs(args(headSha));
@@ -309,5 +309,21 @@ test("suite changes to tracked files leave typed incomplete evidence and no comp
     assert.equal(result.status, "incomplete");
     assert.match(result.reason, /changed the worktree/);
     assert.equal(result.artifact, undefined);
+    await assertTypedIncompleteArtifact(repoRoot, headSha, "full-repository", /changed the worktree/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a suite that moves HEAD leaves no artifact", async () => {
+  const { repoRoot } = await fixture();
+  try {
+    await writeFile(path.join(repoRoot, "scripts", "verify.mjs"), "import { execFileSync } from 'node:child_process'; execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'x']);\n");
+    execFileSync("git", ["add", "scripts/verify.mjs"], { cwd: repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "head mover"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /changed the worktree: worktree HEAD .* differs from requested head/);
+    const artifactPath = path.join(repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    await assert.rejects(readFile(artifactPath), /ENOENT/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
