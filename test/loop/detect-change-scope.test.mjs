@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { detectScope } from "../../scripts/loop/detect-change-scope.mjs";
+import { detectMergeBaseScope, detectScope } from "../../scripts/loop/detect-change-scope.mjs";
 
 // GATE-EXEC-PROPORTIONALITY: detectScope feeds the gate coordinator's light-mode size
 // cap (resolve-gate-dispatch.mjs) and MUST diff the `cwd` repo regardless of
@@ -81,5 +81,27 @@ test("detectScope ignores an ambient GIT_DIR/GIT_WORK_TREE pointing at a DIFFERE
     if (savedGitWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = savedGitWorkTree;
     await rm(realRepo, { recursive: true, force: true });
     await rm(poisonRepo, { recursive: true, force: true });
+  }
+});
+
+test("detectScope and detectMergeBaseScope skip a changes/*.md fragment from both counts", async () => {
+  const dir = await makeRepo();
+  try {
+    await writeFile(path.join(dir, "a.md"), "base\n", "utf8");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "base");
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    for (const dirName of ["scripts", "test", "changes"]) await mkdir(path.join(dir, dirName), { recursive: true });
+    await writeFile(path.join(dir, "scripts", "fix.mjs"), "a\nb\nc\n", "utf8");
+    await writeFile(path.join(dir, "test", "fix.test.mjs"), "t\nu\n", "utf8");
+    await writeFile(path.join(dir, "changes", "1-fix.md"), "x\ny\nz\nw\n", "utf8");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "head");
+    for (const detect of [detectScope, detectMergeBaseScope]) {
+      assert.deepEqual(detect({ base, head: "HEAD", cwd: dir }), { ok: true, filesChanged: 2, linesChanged: 5 }, detect.name);
+      assert.equal(detect({ base, head: "does-not-exist", cwd: dir }).ok, false, detect.name);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

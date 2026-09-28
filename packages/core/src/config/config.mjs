@@ -2102,6 +2102,21 @@ export const RISK_PATH_DENYLIST_DEFAULT = Object.freeze([
   "**/package.json",
 ]);
 
+// Paths the light-mode file/line count skips: changeset fragments and the
+// generated .claude mirrors (proven byte-identical to their sources). Scope
+// count only; the risk-path floor still sees every changed file.
+export const SCOPE_COUNT_EXCLUDE_GLOBS = Object.freeze([
+  "changes/*.md",
+  ".claude/skills/**",
+  ".claude/agents/**",
+  ".claude/commands/**",
+]);
+
+export function isScopeCountExcluded(path) {
+  const posix = String(path).replace(/\\/g, "/");
+  return SCOPE_COUNT_EXCLUDE_GLOBS.some((pattern) => matchesDiffExcludeGlob(posix, pattern));
+}
+
 /**
  * Pure risk-path predicate: does ANY changed file match the shipped
  * {@link RISK_PATH_DENYLIST_DEFAULT} floor or a repo's additive

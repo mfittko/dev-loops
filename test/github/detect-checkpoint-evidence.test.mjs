@@ -2895,6 +2895,54 @@ test("buildFanoutEnforcement (#1984): a tiny diff whose size-budget outcome touc
   }
 });
 
+test("buildFanoutEnforcement accepts a light inline verdict for source + test + fragment and rejects it once the counted scope exceeds the cap", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-fragment-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(path.join(dir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 2\n    maxLines: 40\n", "utf8");
+    await writeFile(path.join(dir, "base.md"), "base\n", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "base");
+    const baseRef = g("rev-parse", "HEAD").trim();
+    const check = async (files) => {
+      for (const [rel, content] of Object.entries(files)) {
+        await mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+        await writeFile(path.join(dir, rel), content, "utf8");
+      }
+      g("add", "-A");
+      g("commit", "-qm", "head");
+      const headSha = g("rev-parse", "HEAD").trim();
+      const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-20");
+      await mkdir(ledgerDir, { recursive: true });
+      for (const gate of ["draft_gate", "pre_approval_gate"]) {
+        await writeFile(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
+      }
+      const { config } = await loadDevLoopConfig({ repoRoot: dir });
+      const marker = { visible: true, headSha, executionMode: "inline_single_agent", inlineReason: "under_threshold" };
+      const enforcement = await buildFanoutEnforcement({
+        repo: "owner/repo", pr: 20, currentHeadSha: headSha, draftGateMarker: marker, preApprovalGateMarker: marker,
+        config, cwd: dir, hasFullLabel: false, baseRef,
+      });
+      return buildPreMergeGateCheck({
+        currentHeadSha: headSha,
+        draftGate: { visible: true, verdict: "clean" },
+        preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
+      }, 0, null, enforcement);
+    };
+    const accepted = await check({ "src/util.mjs": "export const x = 1;\n", "test/util.test.mjs": "import './x';\n", "changes/1-util.md": "Fix.\n" });
+    assert.equal(accepted.ok, true, JSON.stringify(accepted.failures));
+    const rejected = await check({ "src/other.mjs": "export const y = 2;\n" });
+    assert.equal(rejected.ok, false);
+    assert.ok(rejected.failures.some((f) => f.includes("inline_single_agent")), JSON.stringify(rejected.failures));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Issue #1972: the angle-pool/fanout-groups/mandatory-angle layer must
 // resolve from the PR HEAD commit's committed config, not the invoking

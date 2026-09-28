@@ -198,3 +198,34 @@ test("over-cap still short-circuits to over_threshold before the new floors are 
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+// Changeset fragments are skipped from the light-mode scope count, never from
+// the risk-path floor.
+const MICRO_DEVLOOPS = "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 2\n    maxLines: 40\n";
+
+test("a source + test + changeset fragment diff resolves inline under maxFiles 2", async () => {
+  const { tmp, fixture } = await makeFixture({
+    devloops: MICRO_DEVLOOPS,
+    headFiles: { "src/util.mjs": "export const x = 1;\n", "test/util.test.mjs": "import './x';\n", "changes/1-util.md": "---\nbump: patch\n---\nFix.\n" },
+  });
+  try {
+    const result = runDispatch(fixture);
+    assert.deepEqual([result.scope.filesChanged, result.mode, result.reason], [2, "inline", "under_threshold"]);
+    assert.equal(result.floors.sizeOutcome, false);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("a risk-path file plus a changeset fragment still forces full_fanout", async () => {
+  const { tmp, fixture } = await makeFixture({
+    devloops: MICRO_DEVLOOPS,
+    headFiles: { "docs/decisions/x.md": "# x\n", "changes/1-x.md": "Fix.\n" },
+  });
+  try {
+    const result = runDispatch(fixture);
+    assert.deepEqual([result.scope.filesChanged, result.mode, result.reason], [1, "full_fanout", "risk_path_touch"]);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});

@@ -39,6 +39,8 @@ import {
   isSizeOutcomeT1Clean,
   touchesRiskPath,
   RISK_PATH_DENYLIST_DEFAULT,
+  SCOPE_COUNT_EXCLUDE_GLOBS,
+  isScopeCountExcluded,
   resolveFanoutGroups,
   resolveMaxAnglesPerGroup,
   resolveFanoutMaxConcurrent,
@@ -5437,68 +5439,24 @@ test("detectChangeScope eligible with custom threshold: 5 files ≤ 5/300", asyn
   );
 });
 
-// ── parseGitDiffStat ─────────────────────────────────────────────────────
+// ── parseGitNumstat / SCOPE_COUNT_EXCLUDE_GLOBS ──────────────────────────
 
-test("parseGitDiffStat: normal output", async () => {
-  const { parseGitDiffStat } = await import(
-    "../../../scripts/loop/detect-change-scope.mjs"
-  );
-  const output = ` file1.js | 10 +++++
- file2.js |  5 -----
- 2 files changed, 10 insertions(+), 5 deletions(-)`;
-  const result = parseGitDiffStat(output);
-  assert.equal(result.filesChanged, 2);
-  assert.equal(result.linesChanged, 15);
+test("SCOPE_COUNT_EXCLUDE_GLOBS lists exactly the fragment and mirror globs and is frozen", () => {
+  assert.deepEqual([...SCOPE_COUNT_EXCLUDE_GLOBS], ["changes/*.md", ".claude/skills/**", ".claude/agents/**", ".claude/commands/**"]);
+  assert.equal(Object.isFrozen(SCOPE_COUNT_EXCLUDE_GLOBS), true);
+  assert.equal(isScopeCountExcluded("changes\\2527-x.md"), true);
+  assert.equal(isScopeCountExcluded("changes/sub/x.md"), false);
 });
 
-test("parseGitDiffStat: single file", async () => {
-  const { parseGitDiffStat } = await import(
-    "../../../scripts/loop/detect-change-scope.mjs"
-  );
-  const output = ` file1.js | 3 +++
- 1 file changed, 3 insertions(+)`;
-  const result = parseGitDiffStat(output);
-  assert.equal(result.filesChanged, 1);
-  assert.equal(result.linesChanged, 3);
-});
-
-test("parseGitDiffStat: empty output", async () => {
-  const { parseGitDiffStat } = await import(
-    "../../../scripts/loop/detect-change-scope.mjs"
-  );
-  const result = parseGitDiffStat("");
-  assert.equal(result.filesChanged, 0);
-  assert.equal(result.linesChanged, 0);
-});
-
-test("parseGitDiffStat: only deletions", async () => {
-  const { parseGitDiffStat } = await import(
-    "../../../scripts/loop/detect-change-scope.mjs"
-  );
-  const output = ` file1.js | 10 ----------
- 1 file changed, 10 deletions(-)`;
-  const result = parseGitDiffStat(output);
-  assert.equal(result.filesChanged, 1);
-  assert.equal(result.linesChanged, 10);
-});
-
-test("parseGitDiffStat: no insertions/deletions summary (binary)", async () => {
-  const { parseGitDiffStat } = await import(
-    "../../../scripts/loop/detect-change-scope.mjs"
-  );
-  const output = ` img.png | Bin 0 -> 1024 bytes`;
-  const result = parseGitDiffStat(output);
-  assert.equal(result.filesChanged, 1);
-  assert.equal(result.linesChanged, 0);
-});
-
-test("parseGitDiffStat: whitespace-only output", async () => {
-  const { parseGitDiffStat } = await import(
-    "../../../scripts/loop/detect-change-scope.mjs"
-  );
-  const result = parseGitDiffStat("   \n  ");
-  assert.equal(result.filesChanged, 0);
-  assert.equal(result.linesChanged, 0);
+test("parseGitNumstat skips excluded paths, counts binaries as 0 lines, and fails closed on renames", async () => {
+  const { parseGitNumstat } = await import("../../../scripts/loop/detect-change-scope.mjs");
+  assert.deepEqual(parseGitNumstat(""), { filesChanged: 0, linesChanged: 0 });
+  const out = [
+    "3\t1\tsrc/a.mjs", "5\t0\tchanges/1-x.md", "-\t-\timg.png", "2\t0\t.claude/skills/s/SKILL.md",
+    "4\t0\t", "src/b.mjs", "changes/2-y.md", // counted: old path not excluded
+    "7\t0\t", "changes/3-z.md", "changes/4-z.md", // skipped: both excluded
+  ].join("\0") + "\0";
+  assert.deepEqual(parseGitNumstat(out), { filesChanged: 3, linesChanged: 8 });
 });
 
 // ============================================================================
