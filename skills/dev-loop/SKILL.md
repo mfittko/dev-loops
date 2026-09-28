@@ -247,8 +247,7 @@ approval chain has no prior-approvals record to pass yet); `--changed-paths`/`--
 supplied together only when a coverage map exists for the linked issue and this round is a
 fixer-push re-entry (`resolveAffectedCriteria`, ADR 0061 AC7) — otherwise judge-pass keeps its
 all-stale fallback. The fix pass consumes ONLY `--out`'s act list (the judge's `act` findings); a
-`judge-pass` fail-closed (stale verdict head, malformed verdict, out-of-range index, undisposed
-finding, mismatched spec-authority identity) means re-run the judge at the current head, never a
+`judge-pass` fail-closed (any case in the Gate Review Sub-Loop Contract Phase 3.5 list) means re-run the judge at the current head, never a
 silent severity-only fallback or a silent skip of spec authority. See Gate Review Sub-Loop Contract
 Phase 3.5 and `skills/docs/spec-authority-contract.md` for the enforcement rules these flags carry.
 

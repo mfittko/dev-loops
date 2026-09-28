@@ -11,6 +11,7 @@ import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
@@ -42,11 +43,6 @@ const PACKAGE_ROOT = new URL("../../", import.meta.url);
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const judgeDir = ({ repo, pr, gate, headSha, tmpRoot }) => buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, dir: "gate-judge" });
-const sortKeys = (value) => (Array.isArray(value) ? value.map(sortKeys)
-  : value !== null && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortKeys(value[key])]))
-    : value);
-/** Exact-content digest of parsed JSON (key order only is normalized); pins the ledger and prior verdicts. */
-export const jsonContentDigest = (value) => sha256(JSON.stringify(sortKeys(value)));
 
 class Refusal extends Error {}
 
@@ -126,8 +122,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
       specDigest,
       contentDigest: identity.contentDigest,
       checkedCriteria: identity.checkedCriteria,
-      findingsDigest: jsonContentDigest(parseSource(findings)),
-      priorVerdictDigests: priors.map((prior) => jsonContentDigest(parseSource(prior))),
+      findingsDigest: sha256Hex(parseSource(findings)),
+      priorVerdictDigests: priors.map((prior) => sha256Hex(parseSource(prior))),
     },
     contracts,
     requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read)],

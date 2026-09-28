@@ -31,7 +31,8 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
-import { jsonContentDigest, locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
+import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "./_repo-root-resolver.mjs";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -813,7 +814,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
     throw new Error(`--judge-plan ${options.judgePlan} does not reproduce the work order execution ${plan.executionIdentity} pulled; pass the plan emit-judge-work-order.mjs wrote`);
   }
   const ledger = await readJsonArtifact(resolve(options.findingsFile), "--findings-file", parseError);
-  if (jsonContentDigest(ledger) !== order.authority?.findingsDigest) {
+  if (sha256Hex(ledger) !== order.authority?.findingsDigest) {
     throw new Error(`--findings-file ${options.findingsFile} is not the ledger the judge work order pinned; re-emit the judge work order for this ledger and re-run the judge`);
   }
   // A copied plan of a superseded round never counts: the ref must still be the newest emission in every checkout.

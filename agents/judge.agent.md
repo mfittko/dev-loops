@@ -33,7 +33,7 @@ The work order gives you:
 1. **The consolidated ledger** — the flat per-finding array from `consolidate-fanin` (`{overallVerdict, findings}`), where each finding carries `severity`, `angle`, `summary`, `file`/`line` (when locatable), and the severity-derived `disposition` (accepted-for-fix / deferred / needs-answer).
 2. **The linked issue's acceptance criteria, definition of done, and non-goals** — the spec-of-record this PR closes.
 3. **The PR's declared scope** — the change summary and scope statement from the PR description, in the round's evidence read.
-4. **Prior-round judge ledgers** — the judge verdict artifacts from earlier rounds at this gate, so you can detect accretion, self-renewing churn, and drift across rounds.
+4. **Prior-round judge verdicts** — the judge verdict artifacts from earlier rounds at this gate, so you can detect accretion, self-renewing churn, and drift across rounds.
 
 ## Output: the verdict artifact
 

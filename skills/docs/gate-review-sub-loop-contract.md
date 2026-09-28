@@ -81,7 +81,9 @@ coordinator with the round's arguments, including the prior heads for this gate 
 run state, and awaits it with a blocking join (`END-TURN-AND-AWAIT-WAKE` in
 [Anti-patterns](./anti-patterns.md)). The gate coordinator reads the prior rounds' ledgers,
 judge verdicts, and prior-approvals record for this gate from their deterministic on-disk paths,
-keyed by the prior heads the dev-loop coordinator passes in the dispatch arguments, so
+keyed by the prior heads the dev-loop coordinator passes in the dispatch arguments (a prior
+judge verdict path comes from that head's `judge-emit-plan.json` `workOrder.outputRefs`, see
+Phase 3.5 Dispatch), so
 `GATE-EXEC-JUDGE-NOT-FRESH` inputs and `judge-pass`'s `--prior-approvals` survive the fresh
 context. The dev-loop coordinator never runs these steps in its own context. The gate
 coordinator returns only the round's typed result: the verdict, the execution mode
@@ -1033,6 +1035,12 @@ dev-loops-run scripts/loop/emit-judge-work-order.mjs --repo <owner/name> --pr <N
   --identity-file <identity-path> [--prior-verdict <prior-judge-verdict-path> ...] \
   [--tmp-root <checkout>/tmp]
 ```
+
+A prior head's verdict path is not derivable from the head alone, because each emission's
+`<roundId>` is random. The conductor reads it from the `workOrder.outputRefs` of
+`<tmp>/gate-judge/<repo-slug>/pr-<N>/<gate>-<priorHead>/judge-emit-plan.json`, searched across
+every listed checkout's `tmp` directory. It passes the relevance verdict (`outputRefs[0]`) as
+`--prior-verdict`.
 
 If the round's context bundle was relocated with `--tmp-root`, pass that same root here; it
 must be a listed checkout's tmp directory. It refuses a missing or inconsistent source, pins the ledger, spec, identity, evidence and
