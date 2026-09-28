@@ -269,6 +269,8 @@ export function classifyWorktreeIsolation({ cwd, mainWorktreePath, allWorktreePa
  * so a wrong-checkout new-file write could be misclassified. This resolves the
  * realpath of the target's NEAREST EXISTING ancestor and rejoins the nonexistent
  * tail, so the returned path shares the same symlink-resolved prefix the roots do.
+ * `realpathSync.native` returns the on-disk case, so on a case-insensitive
+ * filesystem a case-variant path still matches its checkout root.
  *
  * @param {string} p - Absolute or relative path (possibly not yet existing).
  * @returns {string} A realpath-normalized absolute path (forward-slash, no trailing slash).
@@ -280,7 +282,7 @@ export function realpathNearestExisting(p) {
   // Walk up to the nearest existing ancestor.
   for (;;) {
     try {
-      const real = realpathSync(dir);
+      const real = realpathSync.native(dir);
       const joined = tail.length ? path.join(real, ...tail) : real;
       return joined.replace(/\\/g, "/").replace(/\/+$/u, "");
     } catch {

@@ -133,6 +133,10 @@ const HOOK_BUNDLE = [
   // main-checkout fast-forward support shared by the Pi and Claude post-merge hooks.
   { source: "packages/core/src/loop/worktree-guard.mjs", target: ".claude/hooks/_worktree-guard.mjs", rewrites: [] },
   { source: "packages/core/src/loop/main-checkout-ff.mjs", target: ".claude/hooks/_main-checkout-ff.mjs", rewrites: [] },
+  // Fixer grant loader binds each plan to its workOrderDigest (ADR 0106).
+  { source: "packages/core/src/loop/work-order-digest.mjs", target: ".claude/hooks/_work-order-digest.mjs", rewrites: [] },
+  // One retirement predicate for the pull and the fixer hooks (ADR 0107).
+  { source: "packages/core/src/loop/gate-round-retirement.mjs", target: ".claude/hooks/_gate-round-retirement.mjs", rewrites: [] },
 ];
 
 /** Marker that identifies a generated hook-bundle module (a JS comment, distinct from the
@@ -210,7 +214,7 @@ function listExistingAssetFiles(repoRoot) {
     ...listFilesRecursive(repoRoot, ".claude/commands"),
     ...listFilesRecursive(repoRoot, ".claude/skills"),
   ];
-  // `.claude/hooks/` mixes hand-authored scripts (hooks.json, _hook-io.mjs, the three hook
+  // `.claude/hooks/` mixes hand-authored scripts (hooks.json, _hook-io.mjs, _fixer-grants.mjs, the three hook
   // scripts) with generated bundle modules. Only the generated ones — identified by the
   // generator banner — participate in orphan detection, so a dropped/renamed HOOK_BUNDLE entry
   // is caught without false-flagging the hand-authored files.

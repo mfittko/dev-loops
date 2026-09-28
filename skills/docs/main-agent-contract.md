@@ -145,7 +145,7 @@ resolver bakes the tier into each agent's `model:` frontmatter at asset-generati
 | `git status` | Allowed — read-only |
 | `git commit -m "..."` | **BREACH** — must delegate to `dev-loop` |
 | `subagent dev-loop` | Allowed — correct delegation |
-| `subagent fixer` | Allowed only when called from within `dev-loop`; describe the task as part of the message |
+| `subagent fixer` | Allowed only when called from within `dev-loop`. Emit its work order with `scripts/loop/emit-fixer-work-order.mjs` and dispatch the printed `dispatchPayload` unchanged; never a prose brief (ADR 0107) |
 | Claude Code: the `dev-loop` coordinator writes `packages/core/src/foo.mjs` directly | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — must delegate to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) |
 | Claude Code: the `dev-loop` coordinator writes `tmp/gate-findings/...` (gate evidence) | Allowed — ephemeral/gitignored, not a tracked-file mutation |
 | Claude Code: the `dev-loop` coordinator runs `bun run verify` inline | **BREACH** — request full validation through `dev-loops gate resolve-validation` |

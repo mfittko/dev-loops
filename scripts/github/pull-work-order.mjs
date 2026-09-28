@@ -5,13 +5,14 @@
  * its workOrderRef, workOrderDigest and executionIdentity, to fetch and verify
  * its own immutable work order. The only write is the pull receipt.
  */
-import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { WorkOrderRefusal, pullWorkOrder, registerWorkOrderRole } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
+import "../loop/emit-fixer-work-order.mjs"; // registers the fixer role adapter
 import "../loop/emit-judge-work-order.mjs"; // registers the judge role adapter
 
 const USAGE = `Usage: pull-work-order.mjs --ref <workOrderRef> --digest <workOrderDigest> --execution <executionIdentity> [--tmp-root <path>]
@@ -31,16 +32,8 @@ Exit codes: 0 pulled, 1 refused, 2 usage/IO error.`;
 const REVIEW_REF_RE = /^review:([^/\s#]+\/[^/\s#]+)#(\d+):([a-z_]+):([0-9a-f]{40}|[0-9a-f]{64}):([A-Za-z0-9-]+)$/;
 const EXECUTION_ROUND_RE = /^(r(\d+)-[0-9a-f]+)-u/;
 
-// A round is retired once a GATE-EXEC-ROUND-RETIREMENT record for its gate+head
-// (retire-gate-round.mjs) was written at or after the round's emission time.
-export async function findRetirementAfter(tmpRoot, gate, headSha, emittedAtMs) {
-  const retiredRoot = path.join(tmpRoot, "retired-gate-rounds", headSha);
-  for (const round of await readdir(retiredRoot).catch(() => [])) {
-    const record = await readJson(path.join(retiredRoot, round, "retirement.json"));
-    if (record?.gate === gate && Date.parse(record.retiredAt) >= emittedAtMs) return round;
-  }
-  return null;
-}
+// The retirement predicate, shared with the fixer hooks (their vendored copy).
+export { findRetirementAfter };
 
 // Digests are equal across checkouts, so the search prefers a digest match whose
 // plan round is this execution's (not stale), then any digest match, then the first unit.

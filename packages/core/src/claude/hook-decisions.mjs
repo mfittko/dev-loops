@@ -793,3 +793,61 @@ export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthoriza
       listed.join("\n"),
   };
 }
+
+/** The editing fixer agent: its repo mutations need a current pulled work order (ADR 0106, 0107). */
+export const FIXER_AGENT_TYPE = "fixer";
+
+const isInsidePath = (p, root) => p === root || p.startsWith(`${root}/`);
+/** True when checkout-relative `rel` is under one of a grant's `allowedPaths` (segment prefix). */
+const inAllowedPaths = (rel, allowedPaths) => Array.isArray(allowedPaths) && allowedPaths.some((p) => p === "." || rel === p || rel.startsWith(`${p}/`));
+
+/**
+ * Decide whether a PreToolUse Write/Edit by the `fixer` agent must be denied (ADR 0107,
+ * agents/fixer.agent.md). A fixer mutates only inside the mutation authority of a CURRENT
+ * work-order pull: its outputRef, or a file under one of the grant's `allowedPaths` in a
+ * checkout of the grant's branch. A target outside every listed checkout is scratch space,
+ * never a repo mutation. A valid pull never widens authority: another branch, another path
+ * and every path under the main checkout's tmp/ except the outputRef stay denied.
+ *
+ * `targetPath` is the hook's realpath-normalized absolute target. `checkouts` are the repo's
+ * listed checkouts `[{ root, branch }]` (realpath-normalized roots, bare branch names), main
+ * checkout first. `grants` are `[{ branch, allowedPaths, outputRef }]` for current fixer pulls.
+ * `symlinked` is true when the literal target crosses a dangling symlink or one that resolves
+ * into a checkout. A missing or relative target, a symlinked target or an empty checkout list
+ * denies fail-closed. Every non-fixer agent is allowed here (the other boundaries apply).
+ *
+ * @param {Object} params
+ * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload.
+ * @param {string|null} [params.targetPath] - Realpath-normalized absolute target path.
+ * @param {boolean} [params.symlinked] - The literal target crosses a guarded symlink.
+ * @param {{ root: string, branch: string|null }[]} [params.checkouts] - Listed checkouts, main first.
+ * @param {{ branch: string, allowedPaths: string[], outputRef: string }[]} [params.grants] - Current pull grants.
+ * @returns {HookDecision}
+ */
+export function decideFixerWriteGuard({ agentType = null, targetPath = null, symlinked = false, checkouts = [], grants = [] }) {
+  if (normalizeAgentType(agentType) !== FIXER_AGENT_TYPE) return ALLOW;
+  const deny = (why) => ({
+    decision: "deny",
+    reason:
+      `Fixer mutation boundary (agents/fixer.agent.md, ADR 0107): refusing to write ${JSON.stringify(targetPath)}: ${why}. ` +
+      "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs --ref <ref> --digest <digest> --execution <execution>` first. " +
+      "A fixer writes only its work order's outputRef and files under mutationAuthority.allowedPaths in a checkout of mutationAuthority.branch.",
+  });
+  if (typeof targetPath !== "string" || !targetPath.startsWith("/")) return deny("the target path is missing or relative");
+  if (symlinked) return deny("the target crosses a symlink");
+  const roots = checkouts.filter((c) => typeof c?.root === "string" && c.root.startsWith("/"));
+  if (roots.length === 0) return deny("no listed checkout could be resolved");
+  if (grants.some((g) => g?.outputRef === targetPath)) return ALLOW;
+  // The most specific checkout owns the target (linked worktrees nest under the main checkout).
+  const checkout = roots.filter((c) => isInsidePath(targetPath, c.root)).sort((a, b) => b.root.length - a.root.length)[0];
+  if (!checkout) return ALLOW;
+  if (checkout === roots[0] && isInsidePath(targetPath, `${roots[0].root}/tmp`)) {
+    return deny("the main checkout's tmp/ (work-order evidence and plans) is never fixer-writable beyond the outputRef");
+  }
+  const rel = targetPath === checkout.root ? "." : targetPath.slice(checkout.root.length + 1);
+  const granted = grants.some((g) => typeof g?.branch === "string" && g.branch === checkout.branch && inAllowedPaths(rel, g.allowedPaths));
+  if (granted) return ALLOW;
+  return deny(grants.length === 0
+    ? "no current fixer work-order pull grants a mutation authority"
+    : `no current pull grants path ${JSON.stringify(rel)} on branch ${JSON.stringify(checkout.branch)}`);
+}

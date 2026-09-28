@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -11,7 +11,8 @@ import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { captureParsedReviewThreads, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
-import { buildContainmentMap } from "./_commit-containment.mjs";
+import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containment.mjs";
+import { verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -19,7 +20,7 @@ import {
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 
-const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> [--dispositions <json> | --dispositions-file <path>] [--tmp-root <path>]
+const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> --fixer-plan <path> [--tmp-root <path>]
 Enforce GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: verify every review thread a fixer
 claims to have tackled since its last push is fully disposed (commit contained
 by the observed PR head, replied with that commit's evidence, resolved, and
@@ -28,21 +29,28 @@ gate round.
 Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
-  --head-sha <sha>      FULL observed PR head commit SHA (40 or 64 hex chars)
+  --head-sha <sha>      FULL observed PR head commit SHA (40 or 64 hex chars); must
+                        equal the live PR headRefOid
+  --fixer-plan <path>   The fixer-emit-plan.json the full-phase fixer was dispatched
+                        from (emit-fixer-work-order.mjs, ADR 0106). The disposition
+                        handoff { headSha, dispositions } is read from the plan's
+                        outputRef. Each dispositions entry is { threadId,
+                        fixingCommitSha, disposition: "tackled"|"deferred",
+                        fingerprint?, validation? }; threadId, fixingCommitSha
+                        and disposition are required on every entry.
+                        The handoff counts only with a matching fixer pull receipt,
+                        when written at or after that pull, and when its headSha is
+                        the observed --head-sha.
 Optional:
-  --dispositions <json>       JSON array of { threadId, fingerprint?, fixingCommitSha,
-                               disposition, validation? } entries. When supplied, this
-                               (over)writes the durable checkpoint for --head-sha before
-                               verifying. Mutually exclusive with --dispositions-file.
-  --dispositions-file <path>  Same shape, read from a file instead of an inline argument.
-  --tmp-root <path>            Root tmp directory (default: the main git
-                               worktree's tmp/, so a prune of a linked worktree
-                               never takes the checkpoint with it). A path
-                               inside a linked worktree is refused (exit 1).
-Idempotent: on re-entry (no --dispositions), the existing checkpoint is read and
-live GitHub state is re-verified; a thread already replied with its commit's
-evidence is never replied to twice, and a thread already resolved live is left
-alone.
+  --tmp-root <path>            Root tmp directory for the checkpoint and the pull
+                               receipts (default: the main git worktree's tmp/, so
+                               a prune of a linked worktree never takes the
+                               checkpoint with it). A path inside a linked
+                               worktree is refused (exit 1).
+Idempotent: re-entry re-verifies the receipt against the plan, rewrites the
+checkpoint for --head-sha and re-verifies live GitHub state; a thread already
+replied with its commit's evidence is never replied to twice, and a thread
+already resolved live is left alone.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": 17, "headSha": "...", "checkpointPath": "...",
     "complete": true|false, "incomplete": [{ threadId, expectedCommit, failedStep }],
@@ -68,8 +76,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       "head-sha": { type: "string" },
-      dispositions: { type: "string" },
-      "dispositions-file": { type: "string" },
+      "fixer-plan": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -82,8 +89,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
     repo: undefined,
     pr: undefined,
     headSha: undefined,
-    dispositions: undefined,
-    dispositionsFile: undefined,
+    fixerPlan: undefined,
     tmpRoot: undefined,
   };
   for (const token of tokens) {
@@ -111,16 +117,12 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
       options.headSha = sha;
       continue;
     }
-    if (token.name === "dispositions") {
-      options.dispositions = requireTokenValue(token, parseError);
-      continue;
-    }
-    if (token.name === "dispositions-file") {
-      const dispositionsFile = requireTokenValue(token, parseError).trim();
-      if (dispositionsFile.length === 0) {
-        throw parseError("--dispositions-file requires a non-empty path");
+    if (token.name === "fixer-plan") {
+      const fixerPlan = requireTokenValue(token, parseError).trim();
+      if (fixerPlan.length === 0) {
+        throw parseError("--fixer-plan requires a non-empty path");
       }
-      options.dispositionsFile = dispositionsFile;
+      options.fixerPlan = fixerPlan;
       continue;
     }
     if (token.name === "tmp-root") {
@@ -130,7 +132,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  const missing = ["repo", "pr", "headSha"].filter((k) => options[k] === undefined);
+  const missing = ["repo", "pr", "headSha", "fixerPlan"].filter((k) => options[k] === undefined);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
   }
@@ -139,33 +141,70 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
   } catch (error) {
     throw parseError(error instanceof Error ? error.message : String(error));
   }
-  if (options.dispositions !== undefined && options.dispositionsFile !== undefined) {
-    throw parseError("--dispositions and --dispositions-file are mutually exclusive; pass only one");
-  }
   return options;
 }
 
-async function resolveDispositionsInput(options) {
-  let raw;
-  if (options.dispositionsFile !== undefined) {
-    try {
-      raw = await readFile(options.dispositionsFile, "utf8");
-    } catch (error) {
-      throw new Error(`Cannot read --dispositions-file "${options.dispositionsFile}": ${error instanceof Error ? error.message : String(error)}`);
-    }
-  } else {
-    raw = options.dispositions;
-  }
-  let parsed;
+// ADR 0106 delivery evidence: the handoff counts only for the intended full-phase
+// fixer invocation, with a matching pull receipt, written at or after that pull,
+// and naming the observed head. Throws a clear error otherwise; nothing is written.
+async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime }) {
+  const planPath = path.resolve(repoRoot, options.fixerPlan);
+  let plan;
   try {
-    parsed = JSON.parse(raw);
+    plan = JSON.parse(await readFile(planPath, "utf8"));
+  } catch (error) {
+    throw new Error(`Cannot read --fixer-plan "${options.fixerPlan}": ${error instanceof Error ? error.message : String(error)}`);
+  }
+  // Bind the plan to its digest before trusting any field of it.
+  if (!plan?.workOrder || workOrderDigest(plan.workOrder) !== plan.workOrderDigest) {
+    throw new Error(`--fixer-plan "${options.fixerPlan}" does not match its workOrderDigest; the plan was edited after emission, re-emit it`);
+  }
+  const order = plan.workOrder;
+  if (order?.role !== "fixer" || order.phase !== "full" || order.target?.repo !== options.repo || order.target?.pr !== options.pr) {
+    throw new Error(`--fixer-plan "${options.fixerPlan}" is not a full-phase fixer work order for ${options.repo}#${options.pr}`);
+  }
+  // outputRefs is local material outside the digest, so an edited plan field is never trusted: the
+  // handoff path is derived from the plan location and execution, exactly as the emitter builds it.
+  const handoffPath = path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json");
+  const receipt = await verifyPulledResult({
+    resultPath: handoffPath, receiptTmpRoot, role: "fixer", workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity,
+  });
+  // A result_* failure still carries the verified receipt; it throws below, after the plan binding checks.
+  if (!receipt.ok && !receipt.receipt) throw new Error(`fixer pull receipt for ${plan.workOrderRef} failed verification: ${receipt.reason}; dispatch a fresh fixer execution`);
+  // The plan location is caller-supplied: bind it to the plan the pull read, so a copied plan never names its own handoff.
+  const receiptPlanPath = receipt.receipt?.subject?.planPath;
+  const real = (p) => realpath(p).catch(() => path.resolve(p));
+  if (typeof receiptPlanPath !== "string" || await real(planPath) !== await real(receiptPlanPath)) {
+    throw new Error(`--fixer-plan "${options.fixerPlan}" is not the plan the fixer pull read (${receiptPlanPath}); pass the emitted plan`);
+  }
+  const outputRef = String(order.outputRefs?.[0] ?? "");
+  const sameDir = async (a, b) => (await realpath(a).catch(() => a)) === (await realpath(b).catch(() => b));
+  if (path.relative(path.dirname(path.dirname(outputRef)), outputRef) !== path.relative(path.dirname(planPath), handoffPath)
+    || !(await sameDir(path.dirname(path.dirname(outputRef)), path.dirname(planPath)))) {
+    throw new Error(`--fixer-plan "${options.fixerPlan}" outputRef ${order.outputRefs?.[0]} is not the emitted handoff path ${handoffPath}; the plan was edited after emission, re-emit it`);
+  }
+  if (receipt.reason === "result_missing") throw new Error(`result_missing: no fixer disposition handoff at the work order's outputRef ${handoffPath}; a receipt alone is never completion`);
+  // verifyPulledResult compares the handoff mtime to the receipt file mtime: one filesystem clock.
+  if (receipt.reason === "result_predates_pull") {
+    throw new Error(`result_predates_pull: the disposition handoff ${handoffPath} was written before the pull at ${receipt.receipt.pulledAt}; a stale or replayed disposition never advances`);
+  }
+  let raw;
+  try {
+    raw = JSON.parse(await readFile(handoffPath, "utf8"));
   } catch {
-    throw new Error(`${options.dispositionsFile !== undefined ? "--dispositions-file" : "--dispositions"} must contain valid JSON`);
+    throw new Error(`Fixer disposition handoff ${handoffPath} is not valid JSON`);
   }
-  if (!Array.isArray(parsed)) {
-    throw new Error(`${options.dispositionsFile !== undefined ? "--dispositions-file" : "--dispositions"} must be a JSON array`);
+  if (raw?.headSha !== options.headSha) {
+    throw new Error(`Fixer disposition handoff claims head ${raw?.headSha}, not the observed head ${options.headSha}; refresh the PR state before verifying`);
   }
-  return parsed;
+  if (order.headSha !== options.headSha) {
+    const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: order.headSha, headSha: options.headSha }, runtime);
+    if (!contained.contained) throw new Error(`the work order head ${order.headSha} is not contained by the observed head ${options.headSha}: ${contained.reason}`);
+  }
+  return {
+    handoff: normalizeFixerDispositionHandoff(raw),
+    delivery: { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity },
+  };
 }
 
 // Builds the { threadId -> replyBodies[] } / isResolved liveThreads shape
@@ -178,43 +217,25 @@ function buildLiveThreads(parsed) {
   }));
 }
 
-async function loadOrWriteCheckpoint(options, fullPath, logPath) {
-  if (options.dispositions !== undefined || options.dispositionsFile !== undefined) {
-    const rawDispositions = await resolveDispositionsInput(options);
-    const handoff = normalizeFixerDispositionHandoff({ headSha: options.headSha, dispositions: rawDispositions });
-    await mkdir(path.dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, `${JSON.stringify(handoff, null, 2)}\n`, "utf8");
-    return handoff;
-  }
-  let raw;
-  try {
-    raw = await readFile(fullPath, "utf8");
-  } catch {
-    throw new Error(
-      `No fixer disposition handoff checkpoint found for head ${options.headSha} at ${logPath}; `
-      + "supply --dispositions (or --dispositions-file) to record one",
-    );
-  }
-  let parsedCheckpoint;
-  try {
-    parsedCheckpoint = JSON.parse(raw);
-  } catch {
-    throw new Error(`Fixer disposition checkpoint at ${logPath} is not valid JSON`);
-  }
-  return normalizeFixerDispositionHandoff(parsedCheckpoint);
-}
-
 export async function verifyFixerDisposition(
   options,
-  { env = process.env, ghCommand = "gh", runChild, repoRoot = process.cwd() } = {},
+  { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot = process.cwd() } = {},
 ) {
   if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
   const tmpRoot = options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot);
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
-  const handoff = await loadOrWriteCheckpoint(options, fullPath, logPath);
-
   const runtime = { env, ghCommand, runChild };
+  const { handoff, delivery } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  // The observed head must be the live PR head, never a caller claim.
+  const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
+  const liveHead = live.code === 0 ? (() => { try { return JSON.parse(live.stdout).headRefOid; } catch { return null; } })() : null;
+  if (liveHead !== options.headSha) {
+    throw new Error(`--head-sha ${options.headSha} is not the live PR head ${liveHead ?? `(unreadable: ${(live.stderr || "").trim()})`}; refresh the PR state before verifying`);
+  }
+  await mkdir(path.dirname(fullPath), { recursive: true });
+  await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery }, null, 2)}\n`, "utf8");
+
   const initialSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
 
   const tackledShas = [...new Set(

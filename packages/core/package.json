@@ -43,6 +43,7 @@
     "./loop/gate-carry-forward": "./src/loop/gate-carry-forward.mjs",
     "./loop/gate-evidence-reconcile": "./src/loop/gate-evidence-reconcile.mjs",
     "./loop/gate-fanin": "./src/loop/gate-fanin.mjs",
+    "./loop/gate-round-retirement": "./src/loop/gate-round-retirement.mjs",
     "./loop/handoff-envelope": "./src/loop/handoff-envelope.mjs",
     "./loop/lifecycle-state": "./src/loop/lifecycle-state.mjs",
     "./loop/markdown-sections": "./src/loop/markdown-sections.mjs",
@@ -102,7 +103,8 @@
     "./loop/worktree-guard": "./src/loop/worktree-guard.mjs",
     "./loop/main-checkout-ff": "./src/loop/main-checkout-ff.mjs",
     "./loop/normalize": "./src/loop/normalize.mjs",
-    "./loop/tracker-first-loop-state": "./src/loop/tracker-first-loop-state.mjs"
+    "./loop/tracker-first-loop-state": "./src/loop/tracker-first-loop-state.mjs",
+    "./loop/work-order-digest": "./src/loop/work-order-digest.mjs"
   },
   "bin": {
     "dev-loops-log-bash-exit-1": "./bin/log-bash-exit-1.mjs",
