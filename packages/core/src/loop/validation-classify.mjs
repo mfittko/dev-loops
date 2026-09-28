@@ -52,7 +52,7 @@ export function resolveTargetedValidation(paths) {
     if (typeof path !== "string" || !path || path.startsWith("/") || path.includes("..") || path.includes("\\")) return null;
     if (/^packages\/core\/test\/[^/]+\.test\.mjs$/.test(path)) return /^packages\/core\/test\/[A-Za-z0-9._-]+\.test\.mjs$/.test(path) ? ["core", `bun scripts/run-bun-test.mjs ${path}`] : null;
     if (path === "packages/core/package.json") return ["core", "bun run test:core", "bun run test:pack"];
-    if (path.startsWith("packages/core/")) return ["core", "bun run test:core"];
+    if (path.startsWith("packages/core/")) return ["core", "bun run assets:check", "bun run test:core"];
     if (/^test\/(?:loop|github|docs|projects|pages|security)\/[^/]+\.test\.mjs$/.test(path)) return /^test\/(?:loop|github|docs|projects|pages|security)\/[A-Za-z0-9._-]+\.test\.mjs$/.test(path) ? ["scripts", `bun scripts/run-bun-test.mjs ${path}`] : null;
     if (path === "scripts/claude/generate-claude-assets.mjs") return ["generated", "bun run assets:check", "bun run test:doc-guard"];
     if (REGISTERED_ARTIFACT_SUITES[path]) return ["ui", `bun run test:playwright:${REGISTERED_ARTIFACT_SUITES[path]}`];
@@ -66,7 +66,7 @@ export function resolveTargetedValidation(paths) {
     }
     if (path === "scripts/loop/inspect-run-viewer.mjs" || path.startsWith("scripts/loop/inspect-run-viewer/")) return ["ui", "bun run test:playwright:viewer"];
     if (path.startsWith("scripts/") || path.startsWith("cli/") || path.startsWith("lib/")) return ["scripts", "bun run test:scripts"];
-    if (path.startsWith("skills/docs/") || path.startsWith("docs/") || path === "AGENTS.md" || path === "README.md") return ["docs", "bun run test:docs", "bun run test:doc-guard"];
+    if (path.startsWith("skills/docs/") || /^skills\/[^/]+\/SKILL\.md$/.test(path) || path.startsWith("docs/") || path === "AGENTS.md" || path === "README.md") return ["docs", "bun run test:docs", "bun run test:doc-guard"];
     if (path.startsWith(".github/workflows/")) return ["workflow", "bun run test:workflows"];
     if (path.startsWith("extension/")) return ["extension", "bun run test:extension"];
     if (path.startsWith(".claude/") || path.startsWith("agents/") || path.startsWith("commands/") || path.startsWith("skills/dev-loop/templates/")) return ["generated", "bun run assets:check", "bun run test:assets"];
