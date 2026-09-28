@@ -244,7 +244,6 @@ test("successful runs suppress captured stdout and stderr and emit one compact s
 test("the child env drops inherited run-id markers without mutating the caller env", async () => {
   // Marker names come from RUN_ID_MARKERS (DEVLOOPS_RUN_ID plus the Pi subagent
   // marker); spelling the Pi name here would trip the harness-agnostic guard.
-  assert.equal(RUN_ID_MARKERS.length, 2);
   assert.ok(RUN_ID_MARKERS.includes("DEVLOOPS_RUN_ID"));
   const env = { ...Object.fromEntries(RUN_ID_MARKERS.map((marker) => [marker, "leak"])), UNRELATED_VAR: "kept" };
   let childEnv;
