@@ -916,7 +916,8 @@ describe("readback: the handoff's advice agrees with the request tool", () => {
     const readback = await runHandoffReadback(scenario({ delta: CODE_DELTA }), { root: convergedOnceWideRoot, factsFail: true });
 
     assert.equal(readback.state, "ready_to_rerequest_review");
-    assert.deepEqual(readback.carriedConvergence, { resolved: false, reason: "carry facts unavailable" });
+    assert.equal(readback.carriedConvergence, undefined);
+    assert.equal(readback.carryUnverified, "carry facts unavailable");
   });
 
   it("unconverged: the readback advises a re-request the request tool executes", async () => {
@@ -926,6 +927,7 @@ describe("readback: the handoff's advice agrees with the request tool", () => {
 
     assert.equal(readback.state, "ready_to_rerequest_review");
     assert.equal(readback.carriedConvergence, undefined);
+    assert.equal(readback.carryUnverified, undefined);
     assert.equal(request.status, "requested");
   });
 });

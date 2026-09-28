@@ -6,7 +6,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { runContextEnv } from "@dev-loops/core/loop/run-context";
-import { classifyBenignGateEvidenceUnstable } from "@dev-loops/core/loop/copilot-ci-status";
+import { classifyBenignGateEvidenceUnstable, normalizeStatusCheckRollupStatus } from "@dev-loops/core/loop/copilot-ci-status";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -144,22 +144,15 @@ export function summarizeBranchRules(rules, statusCheckRollup) {
   const failedRequiredChecks = [];
   for (const context of new Set(required)) {
     const entries = rollup.filter((entry) => entry.name === context || entry.context === context);
-    if (entries.length === 0) missingRequiredChecks.push(context);
-    else if (entries.some(isFailedCheck)) failedRequiredChecks.push(context);
-    else if (entries.some(isPendingCheck)) pendingRequiredChecks.push(context);
+    if (entries.length === 0) {
+      missingRequiredChecks.push(context);
+      continue;
+    }
+    const status = normalizeStatusCheckRollupStatus(entries);
+    if (status === "failure") failedRequiredChecks.push(context);
+    else if (status === "pending") pendingRequiredChecks.push(context);
   }
   return { resolved: true, missingRequiredChecks, pendingRequiredChecks, failedRequiredChecks, operatorApprovals };
-}
-
-// StatusContext entries carry `state`; CheckRun entries carry `status`/`conclusion`.
-const FAILED_CHECK_RUN_CONCLUSIONS = new Set(["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
-function isFailedCheck(entry) {
-  if (typeof entry.state === "string") return entry.state === "FAILURE" || entry.state === "ERROR";
-  return FAILED_CHECK_RUN_CONCLUSIONS.has(entry.conclusion);
-}
-function isPendingCheck(entry) {
-  if (typeof entry.state === "string") return entry.state === "PENDING" || entry.state === "EXPECTED";
-  return entry.status !== "COMPLETED";
 }
 
 function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup = null, branchRules = null, baseRefName = null) {
@@ -262,10 +255,10 @@ export function formatPrSummary(prData, handoffResult, branchRules = null) {
     lines.push(`  Loop state: ${handoffResult.state}`);
   }
   const carried = handoffResult?.carriedConvergence;
-  if (carried?.resolved === false) {
-    lines.push(`  Copilot: re-request advice unverified against the requester (${carried.reason})`);
-  } else if (carried) {
+  if (carried) {
     lines.push(`  Copilot: re-request suppressed by the requester (${carried.source}: ${carried.reason})`);
+  } else if (handoffResult?.carryUnverified) {
+    lines.push(`  Copilot: re-request advice unverified against the requester (${handoffResult.carryUnverified})`);
   }
 
   return lines.join("\n");

@@ -418,17 +418,29 @@ test("summarizeBranchRules tolerates malformed rules and rollup entries", async 
 
 test("summarizeBranchRules classifies reported required checks as pending or failed", async () => {
   const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
-  const rules = [{ type: "required_status_checks", parameters: { required_status_checks: ["a", "b", "c", "d", "e"].map((context) => ({ context })) } }];
+  const rules = [{ type: "required_status_checks", parameters: { required_status_checks: ["a", "b", "c", "d", "e", "f", "g"].map((context) => ({ context })) } }];
   const summary = summarizeBranchRules(rules, [
     { context: "a", state: "PENDING" },
     { context: "b", state: "ERROR" },
     { name: "c", status: "IN_PROGRESS", conclusion: null },
     { name: "d", status: "COMPLETED", conclusion: "TIMED_OUT" },
     { name: "e", status: "COMPLETED", conclusion: "SUCCESS" },
+    // The shared rollup normalizer is case-insensitive.
+    { context: "f", state: "pending" },
+    { name: "g", status: "completed", conclusion: "failure" },
   ]);
-  assert.deepEqual(summary.pendingRequiredChecks, ["a", "c"]);
-  assert.deepEqual(summary.failedRequiredChecks, ["b", "d"]);
+  assert.deepEqual(summary.pendingRequiredChecks, ["a", "c", "f"]);
+  assert.deepEqual(summary.failedRequiredChecks, ["b", "d", "g"]);
   assert.deepEqual(summary.missingRequiredChecks, []);
+});
+
+test("formatPrSummary renders a carried convergence and an unverified carry", async () => {
+  const { formatPrSummary } = await import("../../scripts/loop/info.mjs");
+  const pr = { number: 1, title: "t", state: "OPEN" };
+  const carried = formatPrSummary(pr, { carriedConvergence: { source: "converged_once", reason: "r" } });
+  assert.match(carried, /Copilot: re-request suppressed by the requester \(converged_once: r\)/);
+  const unverified = formatPrSummary(pr, { carryUnverified: "carry facts unavailable" });
+  assert.match(unverified, /Copilot: re-request advice unverified against the requester \(carry facts unavailable\)/);
 });
 
 test("formatPrSummary never renders a BLOCKED merge state as mergeable", async () => {
