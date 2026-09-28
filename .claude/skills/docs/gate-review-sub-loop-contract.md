@@ -121,7 +121,8 @@ A worker, reviewer, judge or fixer dispatches no children and receives no join r
 
 The standalone `review` gate is outside this rule's scope, with one exception. On the dev-loop
 `--review` route, a `gate-coordinator` agent runs the review round's Phases 1 to 3 through fan-in
-and the ledger write. It returns the typed result without a judge summary. The dev-loop
+and the ledger write. The route runs no judge phase, so the typed result omits the act-list path,
+the spec-authority identity path and the judge summary. The dev-loop
 coordinator then posts the verdict and makes the submit choice.
 
 ### Base refresh before a gate round

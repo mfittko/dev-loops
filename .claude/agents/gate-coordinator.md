@@ -22,8 +22,8 @@ Return only the typed round result that `GATE-EXEC-GATE-COORDINATOR` lists:
 - the severity counts
 - the fan-in output path
 - the durable findings-log path
-- the act-list path
-- the spec-authority identity path
+- the act-list path, omitted on a `review` round
+- the spec-authority identity path, omitted on a `review` round
 - the judge summary, omitted on a `review` round
 
 On a stop condition of the rule, return the typed observation instead. Reviewer and judge outputs stay in your context.
