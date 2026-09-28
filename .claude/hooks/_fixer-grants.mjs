@@ -43,9 +43,10 @@ const EXECUTION_RE = /^f(\d+)-[0-9a-f]{8}$/u;
 // carries `agent_id` (e.g. "abea5f653d974dbf2"), identical across all tool calls of that subagent;
 // the main agent's input carries no `agent_id`. The fixer's write guard denies writes under the main
 // checkout's tmp/, so a fixer cannot forge a marker.
-// Keyed by ref AND digest, so a pull line with a wrong digest never overwrites the pulling fixer's marker.
-const bindingPath = (mainRoot, workOrderRef, workOrderDigest) =>
-  path.join(mainRoot, "tmp", "work-order-receipts", "fixer-agents", `${sha256(`${workOrderRef}\n${workOrderDigest}`)}.json`);
+// Keyed by ref, digest AND execution, so a pull line with a wrong digest or execution never
+// overwrites the pulling fixer's marker.
+const bindingPath = (mainRoot, workOrderRef, workOrderDigest, executionIdentity) =>
+  path.join(mainRoot, "tmp", "work-order-receipts", "fixer-agents", `${sha256(`${workOrderRef}\n${workOrderDigest}\n${executionIdentity}`)}.json`);
 
 // The exact sanctioned pull line of buildDispatchPointer (scripts/github/_work-order-protocol.mjs),
 // with the same shell-inert value charset. Anything else records no binding.
@@ -59,7 +60,7 @@ export function parseFixerPullCommand(command) {
 }
 
 /**
- * Record that `agentId` pulls `workOrderRef`. Keyed by the ref and digest hash, so a replacement
+ * Record that `agentId` pulls `workOrderRef`. Keyed by the ref, digest and execution hash, so a replacement
  * fixer re-pulling the same unit takes the binding over. The marker is written before the pull runs,
  * so it also carries the pull's `--digest`: boundTo honors it only when that digest equals the
  * receipt's, and a pull that the digest check refuses never takes over or revokes a receipt's grant.
@@ -67,14 +68,14 @@ export function parseFixerPullCommand(command) {
  */
 export function recordFixerAgentBinding(mainRoot, { agentId, workOrderRef, workOrderDigest, executionIdentity }) {
   if (typeof agentId !== "string" || !agentId) return;
-  const file = bindingPath(mainRoot, workOrderRef, workOrderDigest);
+  const file = bindingPath(mainRoot, workOrderRef, workOrderDigest, executionIdentity);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify({ agentId, workOrderRef, workOrderDigest, executionIdentity, recordedAt: new Date().toISOString() })}\n`);
 }
 
 const boundTo = (mainRoot, receipt, agentId) => {
   try {
-    const marker = JSON.parse(readFileSync(bindingPath(mainRoot, receipt.workOrderRef, receipt.workOrderDigest), "utf8"));
+    const marker = JSON.parse(readFileSync(bindingPath(mainRoot, receipt.workOrderRef, receipt.workOrderDigest, receipt.executionIdentity), "utf8"));
     return marker.agentId === agentId && marker.workOrderRef === receipt.workOrderRef
       && marker.workOrderDigest === receipt.workOrderDigest && marker.executionIdentity === receipt.executionIdentity;
   } catch {

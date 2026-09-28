@@ -343,10 +343,11 @@ test("F5: a cwd in another repo cannot make an in-repo target look like scratch;
 
 test("F5: a symlink from scratch space into a checkout is denied at the hook", async () => {
   await withFixture(async ({ root, wt, emit }) => {
-    assert.equal(pull(await emit(), wt).status, 0);
+    assert.equal(pull(await emit({ allowedPaths: ["src"] }), wt).status, 0);
+    // The link resolves into the GRANTED worktree and allowedPaths, so only the symlink walk denies it.
     const link = path.join(path.dirname(root), "scratch-link");
-    await symlink(root, link);
-    assert.equal(hook(wt, path.join(link, "src", "x.mjs")), "deny", "resolves into the main checkout");
+    await symlink(wt, link);
+    assert.equal(hook(wt, path.join(link, "src", "x.mjs")), "deny", "crosses a symlink into a checkout");
     assert.equal(hook(wt, path.join(wt, "src", "x.mjs")), "allow");
   });
 });
@@ -401,6 +402,10 @@ test("F5: a grant binds to the agent_id that ran the pull; a replacement re-pull
     assert.equal(pull(unit, wt, { agentId: "agent-b", digest: `sha256:${"0".repeat(64)}` }).status, 1);
     assert.equal(hook(wt, target, "agent-b"), "deny", "a refused pull binds nothing");
     assert.equal(hook(wt, target), "allow", "a refused pull never revokes the pulling fixer's grant");
+    // The same with the right ref and digest but a wrong execution.
+    assert.equal(pull(unit, wt, { agentId: "agent-b", execution: "f1-0000dead" }).status, 1);
+    assert.equal(hook(wt, target, "agent-b"), "deny", "a refused pull binds nothing");
+    assert.equal(hook(wt, target), "allow", "a wrong-execution pull never revokes the pulling fixer's grant");
     assert.equal(pull(unit, wt, { agentId: "agent-b" }).status, 0);
     assert.equal(hook(wt, target, "agent-b"), "allow");
     assert.equal(bash(wt, "git add -A && git commit -m fix", "agent-b"), "allow");
@@ -417,7 +422,7 @@ test("F5: the Bash gate binds fixer git commit/push to the pulled branch and lea
     }
     assert.equal(bash(wt, "npm test && git log --oneline -1"), "allow");
     assert.equal(pull(unit, wt).status, 0);
-    for (const command of ["git commit -m fix", "git add -A && git commit -m fix && git push origin issue-1", "git push -u origin HEAD", "git push"]) {
+    for (const command of ["git commit -m fix", "git add -A && git commit -m fix && git push origin issue-1", "git push -u origin HEAD", "git push", "git commit -F msg.txt", "git push 2>&1"]) {
       assert.equal(bash(wt, command), "allow", command);
     }
     for (const command of ["git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", `cd ${root} && git commit -m x`, `git -C ${root} commit -m x`]) {

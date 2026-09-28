@@ -824,13 +824,13 @@ function pushBeyondGrant(args, branch) {
  *
  * @param {Object} params
  * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload.
- * @param {{ subcommand: string, args: string[], branch: string|null, unresolvable?: boolean, paths?: string[]|null }[]} [params.invocations] - Resolved invocations.
+ * @param {{ subcommand: string, args: string[], branch: string|null, unresolvable?: boolean, construct?: string|null, paths?: string[]|null }[]} [params.invocations] - Resolved invocations.
  * @param {{ branch: string, allowedPaths: string[], phase: string }[]} [params.grants] - Current pull grants.
  * @returns {HookDecision}
  */
 export function decideFixerBashGate({ agentType = null, invocations = [], grants = [] }) {
   if (normalizeAgentType(agentType) !== FIXER_AGENT_TYPE) return ALLOW;
-  for (const { subcommand, args = [], branch, unresolvable = false, paths = null } of invocations) {
+  for (const { subcommand, args = [], branch, unresolvable = false, construct = null, paths = null } of invocations) {
     // Why one grant does not permit this invocation, or null when it does.
     const refusedBy = (grant) => {
       const outside = subcommand === "commit" && Array.isArray(paths) ? paths.find((p) => !inAllowedPaths(p, grant.allowedPaths)) : undefined;
@@ -842,7 +842,9 @@ export function decideFixerBashGate({ agentType = null, invocations = [], grants
     // Every grant for the branch counts (the write guard's union), so grant order never decides.
     const matching = grants.filter((g) => typeof g?.branch === "string" && g.branch === branch);
     const reasons = matching.map(refusedBy);
-    const why = unresolvable ? "--git-dir, --work-tree, GIT_DIR, GIT_WORK_TREE, a `cd` inside `sh -c`, a subshell `cd`, `pushd`/`popd`, `cd -` or a shell-expanded dir hides the checkout it runs in"
+    const why = unresolvable ? `the command contains a ${construct ?? "construct"} that hides the checkout it runs in. ` +
+      "Accepted forms: a plain `&&`/`;` chain; write the commit message to a file and run `git commit -F <file>`; " +
+      "run `git push` without a pipe (redirecting to a file is fine); no trailing `# comment`"
       : !branch ? "the branch checked out in its cwd could not be resolved"
         : matching.length === 0 ? `no current fixer work-order pull grants branch ${JSON.stringify(branch)}`
           : reasons.includes(null) ? null : reasons[0];

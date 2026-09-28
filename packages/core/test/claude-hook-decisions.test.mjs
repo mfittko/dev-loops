@@ -1436,6 +1436,18 @@ test("decideFixerBashGate denies hidden checkouts, out-of-authority commit paths
     assert.equal(d.decision, "deny", command);
     assert.match(d.reason, /hides the checkout/, command);
   }
+  // The reason names the detected construct and the accepted forms.
+  for (const [command, construct] of [
+    ["git commit -m \"$(cat <<'EOF'\nfix: x\nEOF\n)\"", "command substitution"], ["git commit -F - <<EOF", "heredoc"],
+    ["git push 2>&1 | tail -5", "pipe"], ["git commit -m x # done", "comment"],
+  ]) {
+    const d = gate(command);
+    assert.equal(d.decision, "deny", command);
+    assert.ok(d.reason.includes(`contains a ${construct} that`), `${command}: ${d.reason}`);
+    assert.match(d.reason, /git commit -F <file>.*without a pipe.*# comment/, command);
+  }
+  assert.equal(gate("git commit -F msg.txt").decision, "allow");
+  assert.equal(gate("git push 2>&1").decision, "allow");
   assert.equal(gate("git commit -am x", { paths: ["src/x.mjs", "test/a.test.mjs"] }).decision, "allow");
   assert.match(gate("git commit -am x", { paths: ["src/x.mjs", "README.md"] }).reason, /"README\.md", outside the grant's allowedPaths/);
   assert.equal(gate("git commit -m x", { paths: ["srcx/y.mjs"] }).decision, "deny", "segment prefix, never string prefix");

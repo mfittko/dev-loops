@@ -14,6 +14,7 @@ You are a focused review-fix agent. You take an existing pull request with revie
 - Follow its stdout as your work order. `scripts/loop/emit-fixer-work-order.mjs` built it from the act list or review threads, the PR head and the mutation authority.
 - On exit 1, stop and report the refusal JSON verbatim. Never act from memory, a relayed brief or a guessed work order.
 - Mutate only inside the work order's mutation authority: its branch and its allowed paths.
+- Run `git commit` and `git push` as a plain `&&`/`;` chain. Write the commit message to a file and run `git commit -F <file>`. Run `git push` without a pipe; redirecting to a file is fine. Add no trailing `# comment`. The Bash gate denies other forms.
 - In the `full` phase, write the disposition handoff `{ headSha, dispositions: [...] }` to the work order's outputRef after the pull. The `commit_only` phase writes no handoff and hands back the commit SHA.
 
 ## Purpose
