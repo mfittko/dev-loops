@@ -782,7 +782,11 @@ export function matchesDiffExcludeGlob(relPath, pattern) {
 // redirects the config read, so it must stay visible too.
 const EXTENSION_DEFAULTS_RE = /^packages\/core\/src\/config\/extension-defaults(\.(ya?ml|json))?$/;
 const CONFIG_SOURCE_DIRS = [".pi/dev-loop", "packages/core/src/config"];
-function isProtectedConfigPath(posix) {
+function isProtectedConfigPath(path) {
+  // Lowercase: loadDevLoopConfig reads through a filesystem that is
+  // case-insensitive on default macOS/Windows checkouts, so ".DevLoops" loads
+  // as config. Lowercasing only widens protection (fail closed).
+  const posix = path.toLowerCase();
   return isDevLoopConfigSourcePath(posix)
     || EXTENSION_DEFAULTS_RE.test(posix)
     || posix.startsWith(".pi/dev-loop/")

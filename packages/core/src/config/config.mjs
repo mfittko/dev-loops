@@ -2111,9 +2111,6 @@ export const RISK_PATH_DENYLIST_DEFAULT = Object.freeze([
   "**/package.json",
 ]);
 
-// Paths the light-mode file/line count skips: changeset fragments and the
-// generated .claude mirrors (proven byte-identical to their sources). Scope
-// count only; the risk-path floor still sees every changed file.
 // The generated .claude mirror trees. scripts/claude/generate-claude-assets.mjs
 // owns every file under them.
 export const GENERATED_MIRROR_GLOBS = Object.freeze([
@@ -2122,6 +2119,9 @@ export const GENERATED_MIRROR_GLOBS = Object.freeze([
   ".claude/commands/**",
 ]);
 
+// Paths the light-mode file/line count skips: changeset fragments and the
+// generated .claude mirrors (proven byte-identical to their sources). Scope
+// count only; the risk-path floor still sees every changed file.
 export const SCOPE_COUNT_EXCLUDE_GLOBS = Object.freeze([
   "changes/*.md",
   ...GENERATED_MIRROR_GLOBS,
