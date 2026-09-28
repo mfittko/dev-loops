@@ -25,6 +25,9 @@ import {
   specCriterionIds,
 } from "@dev-loops/core/loop/spec-authority";
 import { resolveTrackerAdapter } from "@dev-loops/core/tracker";
+import { rateLimitedResult, withGraphqlRateLimitWait } from "@dev-loops/core/github/gh";
+import { GRAPHQL_RATE_LIMIT_MAX_WAIT_MS } from "@dev-loops/core/loop/policy-constants";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { parseIssueNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -68,6 +71,12 @@ Required (changed-paths mode):
 Optional (changed-paths mode):
   --repo-root <path>           Worktree root the delta is computed against
                                 (default: process.cwd())
+
+GraphQL rate limit (extract mode): on GraphQL exhaustion the tool waits up to
+${GRAPHQL_RATE_LIMIT_MAX_WAIT_MS / 60_000} minutes for the reset and retries once. Otherwise it returns at once with
+  { "ok": false, "code": "RATE_LIMITED", "error": "...", "resetAt": "<ISO 8601>"|null }
+The RATE_LIMITED envelope is written to stdout when output is unfiltered, and
+always to stderr.
 
 ${JQ_OUTPUT_USAGE}
 
@@ -181,16 +190,25 @@ function parseExtractCliArgs(argv) {
  */
 export async function specContextExtract(
   options,
-  { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), tracker } = {},
+  { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), tracker, sleep = delay, now = Date.now, runChild } = {},
 ) {
   const resolvedTracker = tracker ?? await (async () => {
     const { config, errors } = await loadDevLoopConfig({ repoRoot });
     return resolveTrackerAdapter(errors.length === 0 ? config : {}, { env, ghCommand });
   })();
-  const resolved = await resolveTrackerLocalSpec(
-    { repo: options.repo, issue: options.issue },
-    { env, ghCommand, tracker: resolvedTracker },
-  );
+  let resolved;
+  try {
+    resolved = await withGraphqlRateLimitWait(
+      () => resolveTrackerLocalSpec(
+        { repo: options.repo, issue: options.issue },
+        { env, ghCommand, tracker: resolvedTracker },
+      ),
+      { maxWaitMs: GRAPHQL_RATE_LIMIT_MAX_WAIT_MS, sleep, now, env, ghCommand, ...(runChild ? { runChild } : {}) },
+    );
+  } catch (error) {
+    if (error?.code !== "RATE_LIMITED") throw error;
+    return rateLimitedResult(error);
+  }
   const spec = requireSpecFromBody(resolved.body);
   let contentBytes;
   try {
@@ -312,30 +330,38 @@ export function parseSpecContextCliArgs(argv) {
   return parseExtractCliArgs(argv);
 }
 
-async function main() {
+/** CLI entry; returns the exit code. `extractDeps` feeds specContextExtract (test seam). */
+export async function runCli(
+  argv,
+  { stdout = process.stdout, stderr = process.stderr, extractDeps = undefined } = {},
+) {
   let options;
   try {
-    options = parseSpecContextCliArgs(process.argv.slice(2));
+    options = parseSpecContextCliArgs(argv);
   } catch (error) {
-    process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
-    process.exitCode = 1;
-    return;
+    stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
+    return 1;
   }
   if (options.help) {
-    process.stdout.write(`${USAGE}\n`);
-    return;
+    stdout.write(`${USAGE}\n`);
+    return 0;
   }
   try {
     const result = options.mode === "changed-paths"
       ? await specContextChangedPaths(options)
-      : await specContextExtract(options);
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+      : await specContextExtract(options, extractDeps);
+    // --jq/--silent would filter the RATE_LIMITED envelope away (a `.contentDigest`
+    // read prints null); always keep code/resetAt on the stderr error surface.
+    if (result?.ok === false) {
+      stderr.write(`${JSON.stringify({ ok: false, code: result.code, error: result.error, resetAt: result.resetAt ?? null })}\n`);
+    }
+    return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
   } catch (error) {
-    process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
-    process.exitCode = 1;
+    stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
+    return 1;
   }
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  await main();
+  process.exitCode = await runCli(process.argv.slice(2));
 }
