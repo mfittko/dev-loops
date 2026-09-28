@@ -3,9 +3,11 @@
  *
  * The dev-loop async path keys off the harness-neutral `DEVLOOPS_RUN_ID` env var to
  * identify an inspectable per-subagent run (runner ownership, async-start enforcement,
- * human-comment gating), and provides a mint-and-propagate path for harnesses (e.g. Claude
- * Code) that inject no native per-subagent run id. For those harnesses dev-loops itself mints
- * and sets `DEVLOOPS_RUN_ID` when dispatching an async subagent.
+ * human-comment gating), and provides a mint-and-propagate path only on the dispatch surfaces
+ * that can carry an env — e.g. the Claude Code harness, where dev-loops itself mints and sets
+ * `DEVLOOPS_RUN_ID` when it spawns the async subagent. The Pi `subagent` tool exposes no env
+ * parameter, so dev-loops cannot inject a run id into a Pi child; a Pi native child's id is
+ * synthesized from `PI_SESSION_ID` instead (see below).
  *
  * Other harnesses may already inject their own run-id var: pi-subagents <= 0.64 injected
  * `PI_SUBAGENT_RUN_ID` (not `DEVLOOPS_RUN_ID`) into each async subagent's child env, so that

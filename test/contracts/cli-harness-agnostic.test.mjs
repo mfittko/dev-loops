@@ -104,10 +104,12 @@ const RUN_CONTEXT_GENERATED = path.join(".claude", "hooks", "_run-context.mjs");
  * `PI_*` vars the Pi runtime injects, mapped to the files allowed to read them.
  * dev-loops does not own/define these; renaming them would break Pi integration
  * since the Pi runtime sets the `PI_*` names. Most are confined to the
- * harness-adapter boundary; the one exception is the run-id marker
- * `PI_SUBAGENT_RUN_ID`, honored as an externally-injected alias inside the core
- * run-context / async-start contract modules (see per-entry note below). A read
- * outside a var's listed files couples core to a specific harness and is rejected.
+ * harness-adapter boundary; the async-context / run-id markers are the exception
+ * — `PI_SUBAGENT_RUN_ID`, `PI_SUBAGENT_CHILD`, `PI_SUBAGENT_PARENT_SESSION`,
+ * `PI_ASYNC_NATIVE_RUNNER`, and Pi's per-child session id `PI_SESSION_ID` are all
+ * read inside the core run-context / async-start contract modules rather than the
+ * adapter boundary (see the per-entry notes below). A read outside a var's listed
+ * files couples core to a specific harness and is rejected.
  */
 const HARNESS_RUNTIME_ENV = new Map([
   // PI_SUBAGENT_RUN_ID is the legacy run-id marker pi-subagents <= 0.64 injected into
