@@ -2919,7 +2919,8 @@ test("renderBriefingPrefix + renderBriefingEvidence: under-cap — inline mode, 
 
   assert.ok(text.includes("Implement the thing."));
   assert.ok(text.includes("Acceptance criteria: the thing works."));
-  assert.ok(text.includes("+added line"));
+  assert.ok(!text.includes("+added line"), "the diff body lives only in the required diff read");
+  assert.ok(text.includes(`Read the filtered diff from:\n  ${renderInput().diffPath}`));
   assert.ok(text.includes("Changed files (1):"));
   assert.ok(text.includes("- x.mjs"));
   assert.ok(prefix.includes("verify-fresh-review-context.mjs"));
@@ -2957,8 +2958,7 @@ test("AC2 composer seam: the composed holistic dispatch prompt carries spec + di
     assert.ok(composed.includes(`/repo/worktree/tmp/e.txt\` (sha256 ${evidenceRead.sha256}`), "composed prompt must bind the evidence read");
     assert.ok(evidence.includes("Implement the thing."), "evidence must carry the PR body (spec)");
     assert.ok(evidence.includes("Acceptance criteria: the thing works."), "evidence must carry the linked-issue spec text");
-    assert.ok(evidence.includes("diff --git a/x.mjs b/x.mjs"), "evidence must carry the diff");
-    assert.ok(evidence.includes("+added line"), "evidence must carry the diff body");
+    assert.ok(evidence.includes(renderInput().diffPath), "evidence must point at the diff (the required diff read)");
     assert.doesNotMatch(evidence, /\bREVIEW BRIEF\b/i);
     // The holistic angle's own independence wording made it into the suffix.
     assert.match(composed, /un-briefed/i);
@@ -3175,8 +3175,9 @@ test("renderBriefingEvidence: a hostile issue body cannot forge a second Diff/Ch
   // content, and the attacker's forged content never leaks into them.
   const beforeFence = textLines.slice(0, closeFenceIdx).join("\n");
   const afterFence = textLines.slice(closeFenceIdx).join("\n");
-  assert.ok(!beforeFence.includes("+backdoor()"), "the real diff never leaks into the fenced issue body");
-  assert.ok(afterFence.includes("+backdoor()"), "real diff section carries the real diff");
+  const realDiffPointer = `Read the filtered diff from:\n  ${renderInput().diffPath}`;
+  assert.ok(!beforeFence.includes(realDiffPointer), "the real diff pointer never leaks into the fenced issue body");
+  assert.ok(afterFence.includes(realDiffPointer), "real diff section carries the real diff pointer");
   assert.ok(afterFence.includes("- evil.mjs"), "real changed-files section carries the real file list");
   assert.ok(!afterFence.includes("- safe.mjs"), "forged changed-file entry never reaches the real section");
 });
@@ -3255,7 +3256,7 @@ test("renderBriefingEvidence: an unbalanced code fence inside the PR/issue body 
   }));
 
   assert.ok(text.includes("## Diff at reviewed head"), "diff section heading survives");
-  assert.ok(text.includes("+added line"), "diff body still renders, not swallowed by an open fence");
+  assert.ok(text.includes(`Read the filtered diff from:\n  ${renderInput().diffPath}`), "diff pointer still renders, not swallowed by an open fence");
   assert.ok(text.includes("## Changed files + adjacent-code summary"), "changed-files section survives");
 });
 
@@ -3307,7 +3308,7 @@ test("buildGateContext writes an inline-mode briefing prefix under the cap; scop
     const evidence = await readFile(path.resolve(repoRoot, result.evidencePath), "utf8");
     assert.ok(evidence.includes("PR description"));
     assert.ok(evidence.includes("Issue description"));
-    assert.ok(evidence.includes("+line"));
+    assert.ok(!evidence.includes("+line"), "the diff body lives only in the required diff read");
     const { createHash } = await import("node:crypto");
     assert.equal(createHash("sha256").update(onDisk, "utf8").digest("hex"), result.prefixHash);
 
@@ -3399,10 +3400,11 @@ test("buildGateContext: a lockfile's hunk is filtered out of the inlined diff, b
     assert.equal(result.artifact.prefixMode, "inline");
     const onDisk = await readFile(path.resolve(repoRoot, result.evidencePath), "utf8");
 
-    // AC1: the lockfile hunk is dropped from the inlined diff.
-    assert.ok(onDisk.includes("new line in a.mjs"), "the review-relevant hunk still inlines");
-    assert.ok(!onDisk.includes('"version": "1.0.1"'), "the lockfile hunk body is filtered out");
-    assert.ok(!onDisk.includes("diff --git a/package-lock.json"), "the lockfile's diff header is filtered out");
+    // AC1: the lockfile hunk is dropped from the filtered diff read.
+    const filtered = await readFile(path.resolve(repoRoot, result.artifact.requiredReads.find((r) => r.kind === "diff").path), "utf8");
+    assert.ok(filtered.includes("new line in a.mjs"), "the review-relevant hunk stays in the filtered diff");
+    assert.ok(!filtered.includes('"version": "1.0.1"'), "the lockfile hunk body is filtered out");
+    assert.ok(!filtered.includes("diff --git a/package-lock.json"), "the lockfile's diff header is filtered out");
 
     // AC3: the file's CHANGE is still disclosed (changed-files summary), and
     // the FULL unfiltered diff (including the lockfile hunk) stays available
@@ -3440,13 +3442,13 @@ test("buildGateContext: AC2 — the static-only leading span (before the diff se
     const staticSpanB = onDiskB.slice(0, diffHeadingIdx);
     assert.equal(staticSpanA, staticSpanB, "the static-only leading span (header/PR-body/issue-body) is byte-identical across a diff content change");
 
-    // Ordering (AC2/AC4): the filtered diff sits strictly AFTER the static
-    // span and BEFORE the changed-files summary; the lockfile hunk in diffB
-    // never reaches the rendered prefix.
+    // Ordering (AC2/AC4): the filtered-diff pointer sits strictly AFTER the
+    // static span and BEFORE the changed-files summary; the diff body never
+    // reaches the evidence file.
     const summaryIdx = onDiskB.indexOf("## Changed files + adjacent-code summary");
-    const diffContentIdx = onDiskB.indexOf("SECOND, DIFFERENT version");
-    assert.ok(diffHeadingIdx < diffContentIdx && diffContentIdx < summaryIdx);
-    assert.ok(!onDiskB.includes("lockfile churn"));
+    const diffPointerIdx = onDiskB.indexOf("Read the filtered diff from:");
+    assert.ok(diffHeadingIdx < diffPointerIdx && diffPointerIdx < summaryIdx);
+    assert.ok(!onDiskB.includes("SECOND, DIFFERENT version") && !onDiskB.includes("lockfile churn"));
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -4820,14 +4822,6 @@ test("#1603: a briefing prefix for a PR rewriting a SKILL.md phrase carries the 
   // `git show HEAD:skills/copilot-pr-followup/SKILL.md`, find the FIXED
   // phrase (not the stale one), and NOT report a must-fix.
   assert.ok(text.includes("git show HEAD:<path>"));
-
-  // The diff the reviewer is seeded with carries the FIXED worktree phrase as
-  // the post-change line and the STALE phrase only as the removed `-` line —
-  // so even without the invariant, a reviewer reading the briefed diff sees
-  // the fix is already in the PR.
-  const { text: evidence } = renderBriefingEvidence(input);
-  assert.ok(evidence.includes(`+${fixedWorktreePhrase}`));
-  assert.ok(evidence.includes(`-${staleInstalledPhrase}`));
 });
 
 test("#1603: scoped briefing variants also carry the worktree-source invariant when worktreeRoot is threaded", () => {
@@ -5349,7 +5343,7 @@ test("renderBriefingEvidence (AC8): a diff over the inline cap raw that collapse
   assert.equal(result.diffBytes, collapsedBytes, "diffBytes is measured on the collapsed text, not the raw diff");
 });
 
-test("renderBriefingEvidence (AC8): a qualifying (length >= 2) pure substitution run over TRIVIAL headers collapses in the rendered diff section, absorbing those headers; twice-rendered bytes are identical (determinism)", () => {
+test("collapsePureSubstitutionRuns (AC8): a qualifying (length >= 2) pure substitution run over TRIVIAL headers collapses, absorbing those headers; twice-collapsed bytes are identical (determinism)", () => {
   const diffOutput = [
     "diff --git a/a.txt b/a.txt",
     "index 111..222 100644",
@@ -5367,17 +5361,12 @@ test("renderBriefingEvidence (AC8): a qualifying (length >= 2) pure substitution
     "+nice-to-have",
     "",
   ].join("\n");
-  const input = {
-    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
-    diffOutput, diffPath: "tmp/x.diff",
-  };
-  const r1 = renderBriefingEvidence(input);
-  const r2 = renderBriefingEvidence(input);
-  assert.equal(r1.text, r2.text, "deterministic across two renders");
-  assert.ok(r1.text.includes(
+  const r1 = collapsePureSubstitutionRuns(diffOutput);
+  assert.equal(r1, collapsePureSubstitutionRuns(diffOutput), "deterministic across two collapses");
+  assert.ok(r1.includes(
     '[collapsed: 2 hunks across 2 files (a.txt, b.txt) — pure substitution "defer" → "nice-to-have"; byte-exact diff at scope.diffPath]',
   ));
-  assert.ok(!r1.text.includes("diff --git a/a.txt"), "a TRIVIAL header (diff --git/index/---/+++ only) is absorbed into the collapsed run");
+  assert.ok(!r1.includes("diff --git a/a.txt"), "a TRIVIAL header (diff --git/index/---/+++ only) is absorbed into the collapsed run");
 });
 
 test("collapsePureSubstitutionRuns: a block whose header carries a mode change or a rename is excluded from collapse — its header and hunk render in full", () => {
@@ -5577,7 +5566,7 @@ test("buildGateContext (AC3): a docs-only-scoped angle emits a docs-only compani
   }
 });
 
-test("buildGateContext (AC3): a changed-files-scoped angle's companion carries the full diff but omits the adjacent-code bundle", async () => {
+test("buildGateContext (AC3): a changed-files-scoped angle's companion points at the filtered diff and omits the adjacent-code bundle", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-scope-changed-"));
   try {
     const config = {
@@ -5614,7 +5603,8 @@ test("buildGateContext (AC3): a changed-files-scoped angle's companion carries t
     assert.equal(result.artifact.angleScopes.coverage, "changed-files");
     const variantPath = result.artifact.briefingVariants["changed-files"];
     const variantText = await readFile(path.resolve(repoRoot, variantPath), "utf8");
-    assert.ok(variantText.includes("const x = 99;"), "the full diff is carried");
+    const diffRead = result.artifact.requiredReads.find((r) => r.kind === "diff");
+    assert.ok(!variantText.includes("const x = 99;") && variantText.includes(`Read the filtered diff from:\n  ${diffRead.path}`), "points at the required diff read, never repeats it");
     assert.ok(!variantText.includes("Adjacent files"), "no adjacent-code section in the changed-files variant");
     assert.ok(variantText.includes(result.evidencePath), "links back to the full evidence file");
     // #1603: pin the writeGateContext → scoped-variant wiring for the
@@ -6063,8 +6053,8 @@ test("#1635 parseWriteGateContextCliArgs rejects a malformed --carried-angles", 
   assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--carried-angles", '["a", 1]']), /JSON array of non-empty angle-name strings/);
 });
 
-test("parseWriteGateContextCliArgs rejects a short --prev-head that is not a FULL head commit SHA", () => {
-  assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--prev-head", "abc1234"]), /--prev-head must be the FULL head commit SHA/);
+test("parseWriteGateContextCliArgs rejects --prev-head as an unknown option (prior rounds are discovered, never named)", () => {
+  assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--prev-head", "a".repeat(40)]), /Unknown argument: --prev-head/);
 });
 
 test("#1635 resolveFanoutDispatch refuses a --carried-angles name that can never legitimately carry forward (mirrors consolidate-fanin.mjs's own mandatory-angle refusal)", () => {
@@ -7253,7 +7243,7 @@ test("renderBriefingVolatile: a prior-dispositions read renders only its entry c
   assert.ok(text.indexOf("validationPosture:") < text.indexOf("Prior-round dispositions"));
 });
 
-test("writeGateContext --prev-head (programmatic): an oversized prior findings-log is written in full to a hash-bound prior-dispositions read, never truncated", async () => {
+test("writeGateContext: an oversized prior findings-log is written in full to a hash-bound prior-dispositions read, never truncated", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-oversized-"));
   try {
     const prevHead = "3".repeat(40);
@@ -7275,7 +7265,6 @@ test("writeGateContext --prev-head (programmatic): an oversized prior findings-l
     const result = await writeGateContext(parseWriteGateContextCliArgs([
       "--repo", "owner/repo", "--pr", "67", "--gate", "draft_gate", "--head-sha", "abc1234567890",
       "--angles", '["correctness"]',
-      "--prev-head", prevHead,
     ]), { repoRoot });
     const read = result.artifact.requiredReads.find((r) => r.kind === "prior-dispositions");
     assert.equal(read.required, true);
@@ -7308,7 +7297,7 @@ test("writeGateContext: a same-head rebuild that changes only the prior disposit
     }), "utf8");
     const args = [
       "--repo", "owner/repo", "--pr", "67", "--gate", "draft_gate", "--head-sha", "abc1234567890",
-      "--angles", '["correctness"]', "--prev-head", prevHead,
+      "--angles", '["correctness"]',
     ];
     await writeLog("first-disposition");
     const first = await writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot });
@@ -7338,7 +7327,7 @@ test("writeGateContext REFUSES a same-head rebuild that would rewrite the prior 
     }), "utf8");
     const args = [
       "--repo", "owner/repo", "--pr", "67", "--gate", "draft_gate", "--head-sha", "abc1234567890",
-      "--angles", '["correctness"]', "--prev-head", prevHead,
+      "--angles", '["correctness"]',
     ];
     await writeLog("first-disposition");
     const first = await writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot });
@@ -7415,7 +7404,7 @@ test("resolvePriorDispositions: a reject-disposed finding on a re-running angle 
       { angle: "correctness", severity: "high", summary: "still open", judgeDisposition: "act" },
     ],
   };
-  const entries = resolvePriorDispositions({ log, rerunningAngles: ["correctness"] });
+  const entries = resolvePriorDispositions({ logs: [log],rerunningAngles: ["correctness"] });
   const summaries = entries.map((e) => e.summary).sort();
   assert.deepEqual(summaries, ["defer me", "reject me"]);
   const rejectEntry = entries.find((e) => e.summary === "reject me");
@@ -7433,15 +7422,25 @@ test("resolvePriorDispositions: a finding on a CARRIED (not re-running) angle is
   };
   // "docs" is not in rerunningAngles (it carried forward this round) — no
   // hint is surfaced for a reviewer that never re-runs.
-  assert.deepEqual(resolvePriorDispositions({ log, rerunningAngles: ["correctness"] }), []);
+  assert.deepEqual(resolvePriorDispositions({ logs: [log],rerunningAngles: ["correctness"] }), []);
 });
 
-test("resolvePriorDispositions: absent/malformed prior log fails open to an empty array, never throws", () => {
-  assert.deepEqual(resolvePriorDispositions({ log: null, rerunningAngles: ["correctness"] }), []);
-  assert.deepEqual(resolvePriorDispositions({ log: undefined, rerunningAngles: ["correctness"] }), []);
-  assert.deepEqual(resolvePriorDispositions({ log: "not an object", rerunningAngles: ["correctness"] }), []);
-  assert.deepEqual(resolvePriorDispositions({ log: { headSha: "a".repeat(40), verdict: "findings_present" }, rerunningAngles: ["correctness"] }), []);
-  assert.deepEqual(resolvePriorDispositions({ log: { findings: "not an array" }, rerunningAngles: ["correctness"] }), []);
+test("resolvePriorDispositions: absent/malformed prior logs fail open to an empty array, never throw", () => {
+  assert.deepEqual(resolvePriorDispositions({ logs: null, rerunningAngles: ["correctness"] }), []);
+  assert.deepEqual(resolvePriorDispositions({ logs: undefined, rerunningAngles: ["correctness"] }), []);
+  assert.deepEqual(resolvePriorDispositions({ logs: [null, "not an object", { headSha: "a".repeat(40), verdict: "findings_present" }, { findings: "not an array" }], rerunningAngles: ["correctness"] }), []);
+});
+
+test("resolvePriorDispositions: findings fold by identity across ordered logs; the latest disposition wins", () => {
+  const f = (summary, judgeDisposition, judgeRationale) => ({ angle: "correctness", severity: "low", summary, judgeDisposition, ...(judgeRationale ? { judgeRationale } : {}) });
+  const entries = resolvePriorDispositions({
+    logs: [
+      { findings: [f("kept reject", "reject"), f("later acted", "reject"), f("re-disposed", "defer", "old")] },
+      { findings: [f("later acted", "act"), f("re-disposed", "reject", "new"), f("undisposed", "")] },
+    ],
+    rerunningAngles: ["correctness"],
+  });
+  assert.deepEqual(entries.map((e) => [e.summary, e.judgeRationale]), [["kept reject", undefined], ["re-disposed", "new"]]);
 });
 
 test("resolvePriorDispositions: one malformed finding (embedded newline) is skipped individually — it never suppresses a sibling genuine entry", () => {
@@ -7453,7 +7452,7 @@ test("resolvePriorDispositions: one malformed finding (embedded newline) is skip
       { angle: "correctness", severity: "low", summary: "genuine entry", judgeDisposition: "reject" },
     ],
   };
-  const entries = resolvePriorDispositions({ log, rerunningAngles: ["correctness"] });
+  const entries = resolvePriorDispositions({ logs: [log],rerunningAngles: ["correctness"] });
   assert.deepEqual(entries.map((e) => e.summary), ["genuine entry"]);
 });
 
@@ -7463,12 +7462,12 @@ test("resolvePriorDispositions: a delta-suffixed re-review finding attributes to
     verdict: "findings_present",
     findings: [{ angle: "coverage-delta-at-deadbeef", severity: "nice-to-have", summary: "still rejected", judgeDisposition: "reject" }],
   };
-  const entries = resolvePriorDispositions({ log, rerunningAngles: ["coverage"] });
+  const entries = resolvePriorDispositions({ logs: [log],rerunningAngles: ["coverage"] });
   assert.equal(entries.length, 1);
   assert.equal(entries[0].angle, "coverage-delta-at-deadbeef");
 });
 
-test("writeGateContext --prev-head (programmatic): a prior reject-disposed finding for a RE-RUNNING angle is seeded into the volatile tail", async () => {
+test("writeGateContext: a prior reject-disposed finding for a RE-RUNNING angle is seeded into the volatile tail", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-"));
   try {
     const prevHead = "a".repeat(40);
@@ -7487,7 +7486,6 @@ test("writeGateContext --prev-head (programmatic): a prior reject-disposed findi
       "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate", "--head-sha", "abc1234567890",
       "--angles", '["correctness", "docs"]',
       "--carried-angles", '["docs"]',
-      "--prev-head", prevHead,
     ]);
     const result = await writeGateContext(options, { repoRoot });
     const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
@@ -7502,181 +7500,50 @@ test("writeGateContext --prev-head (programmatic): a prior reject-disposed findi
   }
 });
 
-test("writeGateContext --prev-head (programmatic): first round (no --prev-head) leaves the volatile tail byte-identical to omitting the flag entirely", async () => {
-  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-absent-"));
+test("writeGateContext: round-4 prior dispositions accumulate every closed prior round of the gate with no caller flag; latest disposition wins; foreign, unsettled, malformed, current-head and other-gate ledgers contribute nothing", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-cumulative-"));
   try {
-    const baseArgv = [
-      "--repo", "owner/repo", "--pr", "62", "--gate", "draft_gate", "--head-sha", "abc1234567890",
-      "--angles", '["correctness"]',
-    ];
-    // loggedAt is a genuine per-write timestamp (new Date().toISOString()),
-    // never itself claimed deterministic — normalize it out so this test pins
-    // ONLY what --prev-head's absence-handling is responsible for.
-    const stripLoggedAt = (text) => text.replace(/^loggedAt: .*$/m, "loggedAt: <normalized>");
-    const withoutFlag = await writeGateContext(parseWriteGateContextCliArgs(baseArgv), { repoRoot });
-    const bytesWithoutFlag = stripLoggedAt(await readFile(path.resolve(repoRoot, withoutFlag.volatilePath), "utf8"));
-
-    // A syntactically valid --prev-head with NO log on disk at that head
-    // (first round) must fail OPEN — same rendered bytes as omitting the flag.
-    const withAbsentPrevHead = await writeGateContext(
-      parseWriteGateContextCliArgs([...baseArgv, "--prev-head", "b".repeat(40)]),
-      { repoRoot },
-    );
-    const bytesWithAbsentPrevHead = stripLoggedAt(await readFile(path.resolve(repoRoot, withAbsentPrevHead.volatilePath), "utf8"));
-    assert.equal(bytesWithAbsentPrevHead, bytesWithoutFlag);
-    assert.doesNotMatch(bytesWithAbsentPrevHead, /Prior-round dispositions/);
-  } finally {
-    await rm(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test("writeGateContext --prev-head (programmatic): a malformed prior log (invalid JSON) never crashes the write — it just omits the hint block", async () => {
-  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-malformed-"));
-  try {
-    const prevHead = "c".repeat(40);
-    const logPath = buildLogPath({ repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
-    await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
-    await writeFile(path.resolve(repoRoot, logPath), "{ not valid json", "utf8");
+    const head = "abc1234567890";
+    const ledgerDir = path.resolve(repoRoot, path.dirname(buildLogPath({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: head, tmpRoot: "tmp" })));
+    await mkdir(ledgerDir, { recursive: true });
+    const f = (summary, judgeDisposition, extra = {}) => ({ angle: "correctness", severity: "low", summary, judgeDisposition, ...extra });
+    const writeLedger = (sha, ledger, gate = "draft_gate") => writeFile(path.join(ledgerDir, `${gate}-${sha}.json`), JSON.stringify({
+      repo: "owner/repo", pr: 61, gate, headSha: sha, verdict: "findings_present", ...ledger,
+    }), "utf8");
+    const longSummary = `long ${"x".repeat(3000)}`;
+    // SHA order differs from round order: the fold follows loggedAt.
+    await writeLedger("c".repeat(40), { loggedAt: "2026-01-01T00:00:00.000Z", findings: [
+      f("round one reject", "reject"), f("later acted", "reject"), f("re-disposed", "defer", { judgeRationale: "round one" }), f(longSummary, "reject"),
+    ] });
+    await writeLedger("a".repeat(40), { loggedAt: "2026-01-02T00:00:00.000Z", findings: [f("later acted", "act"), f("re-disposed", "reject", { judgeRationale: "round two" })] });
+    await writeLedger("b".repeat(40), { loggedAt: "2026-01-03T00:00:00.000Z", verdict: "clean", findings: [] });
+    await writeLedger("d".repeat(40), { repo: "other/repo", findings: [f("foreign identity", "reject")] });
+    await writeLedger("e".repeat(40), { headSha: "f".repeat(40), findings: [f("foreign head", "reject")] });
+    await writeLedger("1".repeat(40), { verdict: "blocked", findings: [f("unsettled verdict", "reject")] });
+    await writeLedger("2".repeat(40), { verdict: undefined, findings: [f("missing verdict", "reject")] });
+    await writeLedger(head.padEnd(40, "0"), { findings: [f("current head", "reject")] });
+    await writeLedger("3".repeat(40), { findings: [f("other gate", "reject")] }, "pre_approval_gate");
+    await writeFile(path.join(ledgerDir, `draft_gate-${"4".repeat(40)}.json`), "{ not valid json", "utf8");
 
     const result = await writeGateContext(parseWriteGateContextCliArgs([
-      "--repo", "owner/repo", "--pr", "63", "--gate", "draft_gate", "--head-sha", "abc1234567890",
-      "--angles", '["correctness"]',
-      "--prev-head", prevHead,
+      "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate", "--head-sha", head, "--angles", '["correctness"]',
     ]), { repoRoot });
+    const read = result.artifact.requiredReads.find((r) => r.kind === "prior-dispositions");
+    const bytes = await readFile(path.resolve(repoRoot, read.path));
+    assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
+    assert.equal(read.bytes, bytes.length);
     const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
-    assert.doesNotMatch(volatileBytes, /Prior-round dispositions/);
+    assert.ok(volatileBytes.includes(read.sha256), "the volatile tail names the read's sha256 the sentinel verifies");
+    const entries = JSON.parse(bytes.toString("utf8"));
+    assert.deepEqual(entries.map((e) => [e.summary, e.judgeRationale]), [
+      ["round one reject", undefined],
+      [longSummary, undefined],
+      ["re-disposed", "round two"],
+    ]);
+    assert.equal(read.entries, 3);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
-});
-
-test("writeGateContext --prev-head (programmatic): an act-disposed prior finding is NOT presented as already rejected", async () => {
-  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-act-"));
-  try {
-    const prevHead = "d".repeat(40);
-    const logPath = buildLogPath({ repo: "owner/repo", pr: 64, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
-    await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
-    await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
-      headSha: prevHead,
-      verdict: "findings_present",
-      findings: [{ angle: "correctness", severity: "high", summary: "still open, still act", judgeDisposition: "act" }],
-    }), "utf8");
-
-    const result = await writeGateContext(parseWriteGateContextCliArgs([
-      "--repo", "owner/repo", "--pr", "64", "--gate", "draft_gate", "--head-sha", "abc1234567890",
-      "--angles", '["correctness"]',
-      "--prev-head", prevHead,
-    ]), { repoRoot });
-    const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
-    assert.doesNotMatch(volatileBytes, /Prior-round dispositions/);
-    assert.doesNotMatch(volatileBytes, /still open, still act/);
-  } finally {
-    await rm(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test("writeGateContext --prev-head (programmatic): a prior log whose OWN headSha does not match --prev-head (identity mismatch) never crashes the write — it just omits the hint block", async () => {
-  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-mismatch-"));
-  try {
-    const prevHead = "e".repeat(40);
-    const logPath = buildLogPath({ repo: "owner/repo", pr: 65, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
-    await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
-    // A stale/misplaced ledger sitting at the --prev-head-keyed path but
-    // recording a DIFFERENT head's own identity — must not be trusted.
-    await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
-      headSha: "f".repeat(40),
-      verdict: "findings_present",
-      findings: [{ angle: "correctness", severity: "medium", summary: "foreign round finding", judgeDisposition: "reject" }],
-    }), "utf8");
-
-    const result = await writeGateContext(parseWriteGateContextCliArgs([
-      "--repo", "owner/repo", "--pr", "65", "--gate", "draft_gate", "--head-sha", "abc1234567890",
-      "--angles", '["correctness"]',
-      "--prev-head", prevHead,
-    ]), { repoRoot });
-    const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
-    assert.doesNotMatch(volatileBytes, /Prior-round dispositions/);
-    assert.doesNotMatch(volatileBytes, /foreign round finding/);
-  } finally {
-    await rm(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test("writeGateContext --prev-head (programmatic): a prior log with verdict \"blocked\" (or a missing verdict) is not carry-eligible — no disposition hint even though its findings carry reject/defer (Copilot round 2)", async () => {
-  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-ineligible-verdict-"));
-  try {
-    const blockedHead = "1".repeat(40);
-    const blockedLogPath = buildLogPath({ repo: "owner/repo", pr: 66, gate: "draft_gate", headSha: blockedHead, tmpRoot: "tmp" });
-    await mkdir(path.dirname(path.resolve(repoRoot, blockedLogPath)), { recursive: true });
-    await writeFile(path.resolve(repoRoot, blockedLogPath), JSON.stringify({
-      headSha: blockedHead,
-      verdict: "blocked",
-      findings: [{ angle: "correctness", severity: "medium", summary: "reject under a blocked round", judgeDisposition: "reject" }],
-    }), "utf8");
-    const blockedResult = await writeGateContext(parseWriteGateContextCliArgs([
-      "--repo", "owner/repo", "--pr", "66", "--gate", "draft_gate", "--head-sha", "abc1234567890",
-      "--angles", '["correctness"]',
-      "--prev-head", blockedHead,
-    ]), { repoRoot });
-    const blockedBytes = await readFile(path.resolve(repoRoot, blockedResult.volatilePath), "utf8");
-    assert.doesNotMatch(blockedBytes, /Prior-round dispositions/);
-    assert.doesNotMatch(blockedBytes, /reject under a blocked round/);
-
-    const noVerdictHead = "2".repeat(40);
-    const noVerdictLogPath = buildLogPath({ repo: "owner/repo", pr: 66, gate: "draft_gate", headSha: noVerdictHead, tmpRoot: "tmp" });
-    await mkdir(path.dirname(path.resolve(repoRoot, noVerdictLogPath)), { recursive: true });
-    // No `verdict` field at all — a truncated/hand-edited/malformed-but-
-    // syntactically-valid ledger.
-    await writeFile(path.resolve(repoRoot, noVerdictLogPath), JSON.stringify({
-      headSha: noVerdictHead,
-      findings: [{ angle: "correctness", severity: "medium", summary: "reject under a missing verdict", judgeDisposition: "reject" }],
-    }), "utf8");
-    const noVerdictResult = await writeGateContext(parseWriteGateContextCliArgs([
-      "--repo", "owner/repo", "--pr", "66", "--gate", "draft_gate", "--head-sha", "abc1234567890",
-      "--angles", '["correctness"]',
-      "--prev-head", noVerdictHead,
-    ]), { repoRoot });
-    const noVerdictBytes = await readFile(path.resolve(repoRoot, noVerdictResult.volatilePath), "utf8");
-    assert.doesNotMatch(noVerdictBytes, /Prior-round dispositions/);
-    assert.doesNotMatch(noVerdictBytes, /reject under a missing verdict/);
-  } finally {
-    await rm(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test("parseWriteGateContextCliArgs rejects --prev-head equal to --head-sha (same-head), including a --head-sha prefix of the full --prev-head SHA", () => {
-  const fullSha = "a".repeat(40);
-  assert.throws(
-    () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", fullSha, "--prev-head", fullSha]),
-    /--prev-head equals --head-sha/,
-  );
-  // --head-sha accepts an abbreviated spelling of the same commit.
-  assert.throws(
-    () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", fullSha.slice(0, 7), "--prev-head", fullSha]),
-    /--prev-head equals --head-sha/,
-  );
-});
-
-test("parseWriteGateContextCliArgs rejects same-head in BOTH prefix directions, including a mixed-length 64/40-char full SHA pair (Copilot round 2)", () => {
-  const fullSha64 = "a".repeat(64);
-  const prefix40 = fullSha64.slice(0, 40);
-  // Direction already covered above: --head-sha (short) is a prefix of the
-  // full --prev-head. This pins the OTHER direction the one-way startsWith
-  // check missed: --head-sha is the LONGER (full 64-char) string and
-  // --prev-head is a full-length (40-char) string that happens to be a
-  // literal prefix of it — normalizeFullHeadSha accepts both 40- and
-  // 64-char OIDs, so this is a legitimate --prev-head spelling, and the
-  // guard must still catch it as same-head.
-  assert.throws(
-    () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", fullSha64, "--prev-head", prefix40]),
-    /--prev-head equals --head-sha/,
-  );
-  // A genuinely different 40-char --prev-head that is NOT a prefix of the
-  // 64-char --head-sha must still be accepted (no over-rejection).
-  const differentPrevHead = "b".repeat(40);
-  assert.doesNotThrow(
-    () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", fullSha64, "--prev-head", differentPrevHead]),
-  );
 });
 
 test("#1866 review-gate wiring: an issue-less PR body with a real AC checklist but NO Non-goals keeps the acceptance-criteria angle (real buildGateContext wiring)", async () => {
@@ -7717,7 +7584,7 @@ test("#1866 review-gate wiring: an issue-less PR body with a real AC checklist b
   }
 });
 
-test("renderBriefingEvidence carries the PR body, linked issue, diff, changed-files summary, and validation pointer", () => {
+test("renderBriefingEvidence carries the PR body, linked issue, diff pointer, changed-files summary, and validation pointer", () => {
   const { text, prefixMode, diffBytes } = renderBriefingEvidence({
     repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234",
     prBody: "PR BODY TEXT", issueRef: "#2", issueBody: "ISSUE BODY TEXT",
@@ -7727,7 +7594,7 @@ test("renderBriefingEvidence carries the PR body, linked issue, diff, changed-fi
   });
   assert.equal(prefixMode, "inline");
   assert.ok(diffBytes > 0);
-  for (const needle of ["prefixMode: inline", "## PR body", "PR BODY TEXT", "## Linked issue #2", "ISSUE BODY TEXT", "## Diff at reviewed head (abc1234)", "diff --git a/x.mjs", "## Changed files + adjacent-code summary", "- y.mjs (importer)", "## Validation results at this head", "/w/tmp/v.json"]) {
+  for (const needle of ["prefixMode: inline", "## PR body", "PR BODY TEXT", "## Linked issue #2", "ISSUE BODY TEXT", "## Diff at reviewed head (abc1234)", "Read the filtered diff from:\n  tmp/x.diff", "## Changed files + adjacent-code summary", "- y.mjs (importer)", "## Validation results at this head", "/w/tmp/v.json"]) {
     assert.ok(text.includes(needle), needle);
   }
 });
@@ -7818,6 +7685,31 @@ test("writeGateContext: a large lockfile hunk never enters the required diff rea
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }
+  }
+});
+
+test("writeGateContext: inline mode carries the filtered diff bytes in exactly one required read, the prefix-hash-bound `diff` read", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-diff-once-"));
+  try {
+    const diffOutput = "diff --git a/src/app.mjs b/src/app.mjs\n+DIFF-ONCE-MARKER\n";
+    const result = await writeGateContext({
+      ...parseWriteGateContextCliArgs(["--repo", "o/r", "--pr", "3", "--gate", "draft_gate", "--head-sha", "abc1234", "--angles", '["scope"]']),
+      diffOutput, changedFiles: ["src/app.mjs"], angleScopes: { scope: "changed-files" },
+    }, { repoRoot });
+    assert.equal(result.prefixMode, "inline");
+    const carriers = [];
+    for (const read of result.artifact.requiredReads.filter((r) => r.kind !== "context" && r.kind !== "raw-diff")) {
+      if ((await readFile(path.resolve(repoRoot, read.path), "utf8")).includes("+DIFF-ONCE-MARKER")) carriers.push(read.kind);
+    }
+    assert.deepEqual(carriers, ["diff"], "neither the evidence file nor the changed-files variant repeats the diff");
+    const diffRead = result.artifact.requiredReads.find((r) => r.kind === "diff");
+    assert.equal(diffRead.required, true);
+    const prefix = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+    assert.ok(prefix.includes(diffRead.sha256), "the sentinel-verified prefix hash-binds the diff read");
+    const evidence = await readFile(path.resolve(repoRoot, result.evidencePath), "utf8");
+    assert.ok(evidence.includes(`Read the filtered diff from:\n  ${diffRead.path}`));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });
 

@@ -96,7 +96,9 @@ test("work order: the emitted prompt carries no PR/issue body, diff body, or adj
     const kinds = written.artifact.requiredReads.map((r) => r.kind);
     assert.ok(kinds.includes("evidence") && kinds.includes("diff") && kinds.includes("context"), JSON.stringify(kinds));
     const evidence = await readFile(path.join(repoRoot, written.artifact.requiredReads.find((r) => r.kind === "evidence").path), "utf8");
-    assert.ok(evidence.includes(PR_BODY_MARKER) && evidence.includes(ISSUE_BODY_MARKER) && evidence.includes("diff --git a/src/a.mjs"));
+    assert.ok(evidence.includes(PR_BODY_MARKER) && evidence.includes(ISSUE_BODY_MARKER));
+    const filteredDiff = await readFile(path.join(repoRoot, written.artifact.requiredReads.find((r) => r.kind === "diff").path), "utf8");
+    assert.ok(filteredDiff.includes("diff --git a/src/a.mjs"));
     for (const unit of payload.units) {
       const prompt = await readFile(unit.promptPath, "utf8");
       assert.ok(!prompt.includes(PR_BODY_MARKER), "PR body is referenced, never inlined");
