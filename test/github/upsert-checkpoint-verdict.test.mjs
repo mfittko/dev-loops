@@ -8923,7 +8923,7 @@ test("normalizeStructuredFindings aliases the legacy severity so no posted body 
 
 const VERDICT_LEDGER_HEAD = "abc1234000000000000000000000000000000000";
 
-async function writeVerdictLedger(tempDir, { overallVerdict, verdict, findings = [], gate = "draft_gate", verifiedItems }) {
+async function writeVerdictLedger(tempDir, { overallVerdict, verdict, findings = [], gate = "draft_gate", verifiedItems, provenance }) {
   const ledgerPath = path.join(tempDir, "verdict-ledger.json");
   const log = {
     repo: "owner/repo",
@@ -8939,6 +8939,9 @@ async function writeVerdictLedger(tempDir, { overallVerdict, verdict, findings =
   }
   if (verifiedItems !== undefined) {
     log.verifiedItems = verifiedItems;
+  }
+  if (provenance) {
+    log.provenance = provenance;
   }
   await writeFile(ledgerPath, JSON.stringify(log), "utf8");
   return ledgerPath;
@@ -8995,9 +8998,13 @@ async function runVerdictEnforcement(args, { repoRoot, headSha }) {
   }
 }
 
+// Valid draft_gate provenance, so the ledger-coverage refusal (which runs
+// before verdict enforcement) passes and the contradiction refusal is reached.
+const DRAFT_GATE_PROVENANCE = { distinctReviewers: 2, perAngle: [{ angle: "pr-description", reviewer: "reviewer-a" }, { angle: "holistic", reviewer: "reviewer-b" }] };
+
 test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVerdict (findings_present posted for a clean round)", async () => {
   await withTempDir(async (tempDir) => {
-    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "clean" });
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "clean", provenance: DRAFT_GATE_PROVENANCE });
     const env = await writeGhStub(tempDir, verdictEnforcementEntries());
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
@@ -9016,7 +9023,7 @@ test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVer
 
 test("#1616: upsert refuses a --verdict that contradicts the ledger's overallVerdict (clean posted for a findings round)", async () => {
   await withTempDir(async (tempDir) => {
-    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "findings_present" });
+    const ledgerPath = await writeVerdictLedger(tempDir, { overallVerdict: "findings_present", provenance: DRAFT_GATE_PROVENANCE });
     const env = await writeGhStub(tempDir, verdictEnforcementEntries());
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", VERDICT_LEDGER_HEAD,
@@ -10057,10 +10064,11 @@ const COMPOSITION_UNCHECKED_AC_PR_BODY = [
   "- none", "",
 ].join("\n");
 
-function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKED_AC_ISSUE_BODY, failBodyEdit = false, failIssueViewAfter = null } = {}) {
+function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKED_AC_ISSUE_BODY, failBodyEdit = false, failIssueViewAfter = null, closingIssues = [900] } = {}) {
   return makeAcRunChild({
     isDraft: false,
-    closingIssues: [{ number: 900 }],
+    // Only issue 900 has a body; any other linked issue fails every fetch.
+    closingIssues: closingIssues.map((number) => ({ number })),
     issueBodyByNumber: { 900: issueBody },
     prBody,
     failBodyEdit,
@@ -10082,14 +10090,18 @@ function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKE
   });
 }
 
-async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, issueBody, failBodyEdit, failIssueViewAfter }, fn) {
+// A ledger's verifiedItems are trusted only with valid provenance recording a
+// fresh acceptance-criteria (or pr-checklist) review.
+const TICK_PROVENANCE = { distinctReviewers: 1, perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-ac" }] };
+
+async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, provenance = verifiedItems === undefined ? undefined : TICK_PROVENANCE, issueBody, failBodyEdit, failIssueViewAfter, closingIssues }, fn) {
   const repoRoot = await stageConfigRepoRoot(requireFanoutEvidence);
   try {
-    const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate, verifiedItems });
+    const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate, verifiedItems, provenance });
     const ledgerBefore = await readFile(ledgerPath, "utf8");
     const { runChild, calls, editedBodies, control } = gate === "draft_gate"
       ? makeAcRunChild({ isDraft: true, prBody })
-      : makeCompositionRunChild(prBody, extraComments, { issueBody, failBodyEdit, failIssueViewAfter });
+      : makeCompositionRunChild(prBody, extraComments, { issueBody, failBodyEdit, failIssueViewAfter, closingIssues });
     const post = (overrides = {}) => upsertCheckpointVerdict({
       repo: "owner/repo", pr: 17, gate, headSha: GATE_FULL_HEAD,
       findingsSummary: "review round summary",
@@ -10477,11 +10489,12 @@ test("tick: a failed post-tick issue re-fetch cannot drop the unverified issue A
   });
 });
 
-test("clean guards point at reviewer verifiedItems and a gate rerun, with the tick CLI only as a manual correction", async () => {
+test("clean guards give the ledger path (rerun the gate for verifiedItems) and the ledger-less path (tick with the CLI before posting)", async () => {
   const guidance = (message) => {
     assert.match(message, /verifiedItems of the acceptance-criteria and pr-checklist review angles/);
-    assert.match(message, /rerun the gate/);
-    assert.match(message, /tick-verified-checkboxes\.mjs is a manual correction tool only/);
+    assert.match(message, /With a --findings-ledger, have those reviewers verify the satisfied items, or finish the remaining work, then rerun the gate/);
+    assert.match(message, /Without a --findings-ledger, tick the verified items with scripts\/github\/tick-verified-checkboxes\.mjs before posting/);
+    assert.match(message, /skills\/docs\/acceptance-criteria-verification\.md/);
     assert.doesNotMatch(message, /Tick the satisfied ACs in the tracker issue|Tick the verified boxes via/);
     return true;
   };
@@ -10514,6 +10527,62 @@ test("tick: a failed issue edit after a successful PR edit posts no verdict; the
     assert.equal(result.action, "created");
     assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17", "issue 900"]);
     assert.match(editedBodies[1].body, /^- \[x\] criterion number 1$/m);
+  });
+});
+
+const bodyEdited = (calls) => calls.some((c) => c.args[1] === "edit" && c.args.includes("--body-file"));
+
+for (const [name, provenance] of [
+  ["no provenance", null],
+  ["inconsistent provenance", { distinctReviewers: 3, perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-ac" }] }],
+  ["only a carried acceptance-criteria angle", { distinctReviewers: 1, perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-ac", carriedFromHead: "1".repeat(40) }] }],
+  ["no acceptance-criteria or pr-checklist angle", { distinctReviewers: 1, perAngle: [{ angle: "yagni", reviewer: "reviewer-y" }] }],
+]) {
+  test(`tick: a ledger with ${name} ticks nothing and still posts its composed verdict`, async () => {
+    await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, provenance }, async ({ post, postedBody, calls }) => {
+      const result = await post();
+      assert.equal(result.action, "created");
+      assert.equal(bodyEdited(calls), false);
+      assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
+    });
+  });
+}
+
+test("tick: a fanout_fanin ledger whose provenance misses a mandatory angle is refused before any body edit", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls }) => {
+    await assert.rejects(
+      () => post({ executionMode: "fanout_fanin", inlineReason: undefined, findingsSeverityCounts: CLEAN_COUNTS }),
+      /provenance is missing mandatory angle\(s\)/,
+    );
+    assert.equal(bodyEdited(calls), false);
+    assert.equal(reviewPosted(calls), false);
+  });
+});
+
+test("tick: a permanently unfetchable linked issue does not block the post; the fetched issue is still ticked", async () => {
+  const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", "- [ ] unverified issue criterion", ""].join("\n");
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody, closingIssues: [900, 901] }, async ({ post, postedBody, editedBodies }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17", "issue 900"]);
+    assert.match(editedBodies[1].body, /^- \[x\] criterion number 1$/m);
+    assert.match(editedBodies[1].body, /^- \[ \] unverified issue criterion$/m);
+    assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
+    assert.deepEqual(result.gateBlockers, [{ kind: "unticked spec-of-record Acceptance criteria", item: "unverified issue criterion" }]);
+  });
+});
+
+test("tick: a verified label that matches only a box outside AC/DoD is never ticked", async () => {
+  const prBody = `${TICK_PR_BODY}\n## Validation\n\n- [ ] run the smoke suite\n`;
+  const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", "", "## Dependencies", "", "- [ ] upstream release cut", ""].join("\n");
+  const verifiedItems = [...TICK_ITEMS, "run the smoke suite", "upstream release cut"];
+  await withCompositionRound({ overallVerdict: "clean", prBody, verifiedItems, issueBody }, async ({ post, editedBodies }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.deepEqual(editedBodies.map((e) => `${e.kind} ${e.number}`), ["pr 17", "issue 900"]);
+    assert.match(editedBodies[0].body, /^- \[ \] run the smoke suite$/m);
+    assert.match(editedBodies[1].body, /^- \[x\] criterion number 1$/m);
+    assert.match(editedBodies[1].body, /^- \[ \] upstream release cut$/m);
   });
 });
 
