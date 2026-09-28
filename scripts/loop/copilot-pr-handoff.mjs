@@ -2,7 +2,7 @@
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, isGateMachineArtifactBody, normalizeTimestamp, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
-import { resolveCarriedConvergence } from "./_copilot-convergence-carry.mjs";
+import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
 import { resolvePrConflicts } from "./resolve-pr-conflicts.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
@@ -40,7 +40,8 @@ Optional:
   --repo <owner/name>   Repository slug (e.g. owner/repo). Auto-detected from git remote when omitted.
   --watch-status <status>   Refresh deterministic loop state after a prior
                            watcher result (changed|timeout|idle). This mode
-                           never requests review; it only re-detects state.
+                           never requests review; it only re-detects state,
+                           including the requester's converged-once carry.
   --lightweight         This PR is light-dispatched (#1210): compose the
                         Copilot round cap with localImplementation.lightMode.
                         maxCopilotRounds (default 1) via
@@ -53,6 +54,7 @@ Output (stdout, JSON):
     "allowedTransitions": [...], "nextAction": "...", "snapshot": {...},
     "reviewRequestStatus"?: "...", "watchStatus"?: "...",
     "suppressedPostConvergence"?: true, "suppressedPostConvergenceDocsOnly"?: true,
+    "carriedConvergence"?: { "source", "sourceReviewId", "sourceHeadSha", "reason", "bodyDisposition" },
     "autoRerequestEligible": true|false, "sameHeadCleanConverged": true|false,
     "roundCapCleanEligible": true|false, "loopDisposition": "...", "terminal": true|false,
     "requestWatchContract": {
@@ -85,6 +87,11 @@ suppressedPostConvergence:
   fresh Copilot round was placed. In that mode a post-convergence change never
   reopens a cycle at the round cap. Route to the pre-approval gate, never to a
   Copilot wait. requestWatchContract.requestStatus is "none" for this case.
+carriedConvergence:
+  Present only on a --watch-status readback that would otherwise read
+  ready_to_rerequest_review while the request tool would suppress the request
+  (converged-once carry or operator marker). The state then maps to the
+  suppressed disposition above; "reason" is the requester's machine reason.
 Watch refresh rule:
   watcher timeout/idle is observational only. Re-run this helper with
   --watch-status and stop only when terminal=true. Pending or unresolved
@@ -103,6 +110,17 @@ Exit codes:
   1  Argument error or gh failure
   2  Invalid --jq filter`.trim();
 const POST_CONVERGENCE_SUPPRESSED_NEXT_ACTION = "The converged Copilot review stands for this head, so no Copilot round was placed; continue to pre_approval_gate instead of re-requesting Copilot review";
+// The converged review stands for this head: route to the same stop/terminal,
+// pre_approval_gate-bound disposition as the clean round-cap fallback.
+function toPostConvergenceSuppressed(interpretation) {
+  return {
+    ...interpretation,
+    state: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    nextAction: POST_CONVERGENCE_SUPPRESSED_NEXT_ACTION,
+    allowedTransitions: [...(TRANSITIONS[STATE.ROUND_CAP_CLEAN_FALLBACK] || [])],
+    autoRerequestEligible: false,
+  };
+}
 const WATCH_STATES = new Set([
   STATE.WAITING_FOR_COPILOT_REVIEW,
 ]);
@@ -734,6 +752,33 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     }
   }
 
+  // Readback (--watch-status) never calls the requester, so resolve the same
+  // carry decision it would make; otherwise the readback advises a re-request
+  // the requester refuses as suppressed_post_convergence.
+  let carriedConvergence;
+  if (!internalOnlySkipCopilot
+      && options.watchStatus !== undefined
+      && interpretation.state === STATE.READY_TO_REREQUEST_REVIEW) {
+    const facts = await fetchReopenCycleFacts(options, { env, ghCommand, runChild });
+    const carryFacts = {
+      repo: options.repo,
+      pr: options.pr,
+      currentHeadSha: typeof facts?.headRefOid === "string" ? facts.headRefOid.trim() : null,
+      prData: { reviews: facts?.reviews },
+      copilotReviewRequestStatus: snapshot.copilotReviewRequestStatus ?? "none",
+      unresolvedThreadCount: snapshot.unresolvedThreadCount,
+      requireCopilotConvergenceAtLatestHead,
+    };
+    const runtime = { env, ghCommand, runChild };
+    const markerCarry = await resolvePostConvergenceReviewSuppressed(carryFacts, runtime);
+    const carried = markerCarry.carried ? markerCarry : await resolveCarriedConvergence(carryFacts, runtime);
+    if (carried.carried) {
+      const { source, sourceReviewId, sourceHeadSha, reason, bodyDisposition } = carried;
+      carriedConvergence = { source, sourceReviewId, sourceHeadSha, reason, bodyDisposition };
+      interpretation = toPostConvergenceSuppressed(interpretation);
+    }
+  }
+
   let reviewRequestStatus;
   const shouldRequestReview = !internalOnlySkipCopilot && options.watchStatus === undefined
     && (interpretation.state === STATE.PR_READY_NO_FEEDBACK
@@ -785,13 +830,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     if ((reviewRequestStatus === "suppressed_post_convergence"
         || reviewRequestStatus === "suppressed_post_convergence_docs_only")
         && interpretation.state === STATE.READY_TO_REREQUEST_REVIEW) {
-      interpretation = {
-        ...interpretation,
-        state: STATE.ROUND_CAP_CLEAN_FALLBACK,
-        nextAction: POST_CONVERGENCE_SUPPRESSED_NEXT_ACTION,
-        allowedTransitions: [...(TRANSITIONS[STATE.ROUND_CAP_CLEAN_FALLBACK] || [])],
-        autoRerequestEligible: false,
-      };
+      interpretation = toPostConvergenceSuppressed(interpretation);
     }
   }
   let interpretationSummary = summarizeLoopInterpretation(interpretation, refinementConfig);
@@ -886,6 +925,9 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   }
   if (reviewRequestStatus === "suppressed_post_convergence") {
     result.suppressedPostConvergence = true;
+  }
+  if (carriedConvergence) {
+    result.carriedConvergence = carriedConvergence;
   }
   result.requestWatchContract = summarizeRequestWatchContract({
     interpretation,

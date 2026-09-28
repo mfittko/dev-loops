@@ -14,7 +14,10 @@ before requesting CI/Copilot, and again before merge.
 - A freshly-pushed head briefly reads `UNKNOWN`. The detect layer **re-polls a bounded
   number of times**; if it never settles, the gate **fails closed to a recheck**
   (`nextAction: wait_for_ci`). An unsettled merge state is never treated as clean.
-- `loop info` surfaces a **Mergeable:** line (mergeStateStatus included).
+- `loop info` surfaces a **Mergeable:** line (mergeStateStatus included). It also
+  reads the base branch rules: a required check with no entry at the head replaces
+  the CI line, a ruleset approval renders as an `Operator blocker:` line, and a
+  failed rules lookup renders `INCOMPLETE` instead of a mergeable claim.
 
 ### Deterministic auto-resolve (additive CHANGELOG only)
 

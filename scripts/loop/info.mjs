@@ -109,7 +109,42 @@ function formatCiDisplay(ciStatus, ciConclusion) {
   return `CI ${ciStatus}`;
 }
 
-function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup = null) {
+/**
+ * Project the branch rules that apply to the PR base (GET
+ * repos/{repo}/rules/branches/{branch}) onto the observed check rollup.
+ * `rules` that are not an array mean the lookup failed: resolved is false.
+ * A required check has reported when any rollup entry carries its name
+ * (CheckRun `name` or StatusContext `context`), whatever its state.
+ */
+export function summarizeBranchRules(rules, statusCheckRollup) {
+  if (!Array.isArray(rules)) {
+    return { resolved: false, missingRequiredChecks: [], operatorApprovals: [] };
+  }
+  const reported = new Set((Array.isArray(statusCheckRollup) ? statusCheckRollup : [])
+    .flatMap((entry) => [entry?.name, entry?.context]));
+  const required = rules
+    .filter((rule) => rule?.type === "required_status_checks")
+    .flatMap((rule) => rule.parameters?.required_status_checks ?? [])
+    .map((check) => check?.context)
+    .filter((context) => typeof context === "string");
+  const operatorApprovals = [];
+  for (const rule of rules.filter((r) => r?.type === "pull_request")) {
+    const count = rule.parameters?.required_approving_review_count ?? 0;
+    if (count > 0) {
+      operatorApprovals.push(`ruleset requires ${count} approving review(s)`);
+    }
+    if (rule.parameters?.require_extra_approval_for_unattributed_changes === true) {
+      operatorApprovals.push("ruleset requires an extra approval for unattributed changes");
+    }
+  }
+  return {
+    resolved: true,
+    missingRequiredChecks: [...new Set(required)].filter((context) => !reported.has(context)),
+    operatorApprovals,
+  };
+}
+
+function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup = null, branchRules = null, baseRefName = null) {
   const m = typeof mergeable === "string" ? mergeable.toUpperCase() : null;
   const s = typeof mergeStateStatus === "string" ? mergeStateStatus.toUpperCase() : null;
   if (m === "CONFLICTING" || s === "DIRTY" || s === "CONFLICTING") {
@@ -120,6 +155,13 @@ function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup =
   }
   if (m === "UNKNOWN") {
     return "⏳ UNKNOWN — GitHub still computing; recheck before proceeding";
+  }
+  // Fail closed: without the base ruleset, a required check may be absent.
+  if (branchRules && !branchRules.resolved) {
+    return `⚠️ INCOMPLETE — ruleset for ${baseRefName ?? "base"} unresolved; mergeability unknown`;
+  }
+  if (branchRules?.missingRequiredChecks.length > 0) {
+    return `⏳ BLOCKED${s ? ` (${s})` : ""} — ruleset-required check(s) not reported: ${branchRules.missingRequiredChecks.join(", ")}`;
   }
   // A benign UNSTABLE is the cosmetic rollup noise from superseded Gate-evidence
   // job cancellations (runner or reporter) while the required gate-evidence
@@ -137,17 +179,25 @@ function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup =
   return s || m || "unknown";
 }
 
-function formatPrSummary(prData, handoffResult) {
+function formatPrSummary(prData, handoffResult, branchRules = null) {
   const lines = [];
   lines.push(`PR #${prData.number}: ${prData.title}`);
   lines.push(`  Branch: ${formatBranchDisplay(prData.headRefName, prData.baseRefName)}`);
   lines.push(`  State: ${prData.state}${prData.isDraft ? " (draft)" : ""}`);
   lines.push(`  Author: ${prData.author?.login || "unknown"}`);
-  lines.push(`  Mergeable: ${formatMergeableDisplay(prData.mergeable, prData.mergeStateStatus, prData.statusCheckRollup)}`);
+  lines.push(`  Mergeable: ${formatMergeableDisplay(prData.mergeable, prData.mergeStateStatus, prData.statusCheckRollup, branchRules, prData.baseRefName)}`);
+  for (const approval of branchRules?.operatorApprovals ?? []) {
+    lines.push(`  Operator blocker: ${approval}`);
+  }
+  // A ruleset-required check that never reported overrides the observed CI.
+  const missingChecks = branchRules?.missingRequiredChecks ?? [];
+  if (missingChecks.length > 0) {
+    lines.push(`  CI: ⏳ ruleset-required check(s) not reported at head: ${missingChecks.join(", ")}`);
+  }
 
   if (handoffResult?.snapshot) {
     const s = handoffResult.snapshot;
-    if (s.ciStatus !== undefined) {
+    if (s.ciStatus !== undefined && missingChecks.length === 0) {
       lines.push(`  CI: ${formatCiDisplay(s.ciStatus, s.ciConclusion)}`);
     }
     if (s.unresolvedThreadCount !== undefined) {
@@ -175,7 +225,11 @@ function formatPrSummary(prData, handoffResult) {
   if (handoffResult?.state) {
     lines.push(`  Loop state: ${handoffResult.state}`);
   }
-  
+  const carried = handoffResult?.carriedConvergence;
+  if (carried) {
+    lines.push(`  Copilot: re-request suppressed by the requester (${carried.source}: ${carried.reason})`);
+  }
+
   return lines.join("\n");
 }
 
@@ -236,8 +290,19 @@ function buildPrInfo(prNumber, repo, cwd) {
   } catch (err) {
     handoffResult = { error: err instanceof Error ? err.message : String(err) };
   }
-  
-  return { prData, handoffResult };
+
+  // ponytail: one page of 100 rules; paginate if a base ever carries more.
+  let rules = null;
+  try {
+    if (prData.baseRefName) {
+      rules = ghJson(["api", `repos/${repo}/rules/branches/${prData.baseRefName}?per_page=100`], cwd);
+    }
+  } catch {
+    rules = null;
+  }
+  const branchRules = summarizeBranchRules(rules, prData.statusCheckRollup);
+
+  return { prData, handoffResult, branchRules };
 }
 
 function buildIssueInfo(issueNumber, repo, cwd) {
@@ -310,12 +375,12 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       stdout.write(formatIssueSummary(issueData, startupBundle, linkedPrInfo) + "\n");
     }
   } else {
-    const { prData, handoffResult } = buildPrInfo(opts.pr, repo, cwd);
+    const { prData, handoffResult, branchRules } = buildPrInfo(opts.pr, repo, cwd);
 
     if (opts.json) {
-      process.exitCode = emitResult({ ok: true, kind: "pr", pr: prData, handoff: handoffResult }, { jq: opts.jq, silent: opts.silent, stdout, stderr });
+      process.exitCode = emitResult({ ok: true, kind: "pr", pr: prData, handoff: handoffResult, branchRules }, { jq: opts.jq, silent: opts.silent, stdout, stderr });
     } else {
-      stdout.write(formatPrSummary(prData, handoffResult) + "\n");
+      stdout.write(formatPrSummary(prData, handoffResult, branchRules) + "\n");
     }
   }
 }
