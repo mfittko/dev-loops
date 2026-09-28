@@ -11,7 +11,7 @@ import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
-import { computeSpecDigest } from "@dev-loops/core/loop/spec-authority";
+import { computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -99,6 +99,10 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   const specDigest = computeSpecDigest(parseSource(spec));
   if (identity?.specDigest !== specDigest) throw new Refusal(`spec identity ${identityFile} pins specDigest ${identity?.specDigest}, but the spec file digests to ${specDigest}; re-run spec-context.mjs`);
   if (String(identity.headSha ?? "").toLowerCase() !== headSha.toLowerCase()) throw new Refusal(`spec identity ${identityFile} is for head ${identity.headSha}, not ${headSha}; re-run spec-context.mjs at the current head`);
+  // The full stamp shape (content digest, whole-spec checkedCriteria) per the shared validator.
+  let stamp;
+  try { stamp = stampSpecAuthorityIdentity({}, identity).specAuthority; } catch (err) { throw new Refusal(`spec identity ${identityFile} is malformed (${err.message}); re-run spec-context.mjs`); }
+  if (JSON.stringify(stamp.checkedCriteria) !== JSON.stringify(specCriterionIds(parseSource(spec)).sort())) throw new Refusal(`spec identity ${identityFile} checkedCriteria is not the spec's complete criterion set; re-run spec-context.mjs`);
   // The PR declared scope and the diff reach the judge through the round's evidence read.
   const context = await readJson(abs(buildGateContextPath({ repo, pr, gate, headSha, tmpRoot })));
   const evidenceRead = context?.requiredReads?.find((read) => read?.kind === "evidence");
@@ -165,6 +169,9 @@ const isNewer = (a, b) => {
   return aMs !== bMs ? aMs > bMs : aId > bId;
 };
 
+// A malformed work order has no rendering; validate() then refuses it by name.
+const renderedHash = (workOrder) => { try { return materializationHash(renderWorkOrder(workOrder)); } catch { return null; } };
+
 export async function locateJudgeUnit({ ref, tmpRoots }) {
   const match = JUDGE_REF_RE.exec(ref);
   if (!match) return null;
@@ -186,7 +193,13 @@ export async function locateJudgeUnit({ ref, tmpRoots }) {
       });
       if (!plan) continue;
       if (!newest || isNewer(plan, newest)) newest = plan;
-      if (plan.workOrderRef === ref) own ??= { plan, tmpRoot };
+      if (plan.workOrderRef === ref) {
+        // Two checkouts holding different plans under one ref is ambiguous; never pick one by scan order.
+        if (own && (own.plan.workOrderDigest !== plan.workOrderDigest || own.plan.materializationHash !== plan.materializationHash)) {
+          throw new WorkOrderRefusal("local_materialization_integrity_failure", `judge ref ${ref} has conflicting emit plans in ${own.tmpRoot} and ${tmpRoot}; re-emit the judge work order`);
+        }
+        own ??= { plan, tmpRoot };
+      }
     }
   }
   if (!newest) return null;
@@ -204,6 +217,8 @@ export async function locateJudgeUnit({ ref, tmpRoots }) {
     || (changed.length > 0 && `required judge source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`);
   return {
     ...plan,
+    // The pull must serve exactly the rendering of plan.workOrder, whatever hash the plan declares.
+    materializationHash: renderedHash(plan.workOrder),
     materializationPath: plan.promptPath,
     subject: { repo, pr: Number(pr), gate, headSha, roundId },
     stale: stale || undefined,
