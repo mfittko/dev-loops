@@ -13,6 +13,11 @@ import {
 // re-implementing it. This wrapper only adds seconds-based flags and a direct
 // process-exit-code contract for shell/scripted callers.
 import { watchCiStatus } from "./probe-ci-status.mjs";
+import { setTimeout as delay } from "node:timers/promises";
+import { rateLimitedResult, withGraphqlRateLimitWait } from "@dev-loops/core/github/gh";
+import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
+import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
+import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 
 const DEFAULT_TIMEOUT_SECONDS = Math.floor(COPILOT_REVIEW_WAIT_TIMEOUT_MS / 1000);
 const DEFAULT_POLL_SECONDS = Math.floor(DEFAULT_POLL_INTERVAL_MS / 1000);
@@ -47,6 +52,13 @@ budget.
 Diagnostic output (stderr):
   { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
   { "ok": false, "error": "...", "usage"?: "..." }
+GraphQL rate limit (JSON, exit 1):
+  { "ok": false, "code": "RATE_LIMITED", "error": "...", "resetAt": "<ISO 8601>"|null }
+The RATE_LIMITED envelope is written to stdout when output is unfiltered, and
+always to stderr.
+On GraphQL rate-limit exhaustion the tool waits for the reset inside the
+remaining --timeout budget (heartbeats continue) and retries once; otherwise
+it returns RATE_LIMITED at once.
 ${JQ_OUTPUT_USAGE}
 Exit codes (default output, no --jq/--silent):
   0  Green (status "success")
@@ -126,6 +138,7 @@ export function parseWaitPrChecksCliArgs(argv) {
 // tool's reason to exist alongside `dev-loops loop watch-ci`, whose CLI always
 // exits 0 and expects callers to branch on the JSON `status` field instead.
 export function exitCodeForWaitResult(result) {
+  if (result.ok === false) return 1;
   if (result.status === "success") return 0;
   if (result.status === "failure") return 1;
   return 2;
@@ -138,8 +151,10 @@ export async function runCli(
     stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
-    delayImpl = undefined,
-    now = undefined,
+    delayImpl = delay,
+    now = Date.now,
+    runChild = undefined,
+    ensureOwnershipImpl = ensureAsyncRunnerOwnership,
   } = {},
 ) {
   const options = parseWaitPrChecksCliArgs(argv);
@@ -147,15 +162,50 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return 0;
   }
-  const result = await watchCiStatus(
-    { repo: options.repo, pr: options.pr, timeoutMs: options.timeoutMs, pollIntervalMs: options.pollIntervalMs },
-    {
-      env,
-      ghCommand,
-      ...(delayImpl ? { delayImpl } : {}),
-      ...(now ? { now } : {}),
-    },
-  );
+  const startedAt = now();
+  const remainingMs = () => options.timeoutMs - (now() - startedAt);
+  let result;
+  let isRetry = false;
+  // The first watch's baseline head. The retry reuses it, so a push during the
+  // reset wait returns "changed" instead of settling an un-baselined head.
+  let baselineSha;
+  try {
+    result = await withGraphqlRateLimitWait(
+      () => {
+        // The retry after a rate-limit wait only gets the remaining budget. The
+        // floor of 1 keeps it a real watch: timeoutMs 0 would switch to
+        // single-check semantics and settle a no-checks head green at once.
+        const timeoutMs = isRetry ? Math.max(1, remainingMs()) : options.timeoutMs;
+        isRetry = true;
+        return watchCiStatus(
+          { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: options.pollIntervalMs, baselineSha },
+          {
+            env, ghCommand, delayImpl, now, ensureOwnershipImpl, ...(runChild ? { runChild } : {}),
+            onBaseline: (sha) => { baselineSha = sha; },
+          },
+        );
+      },
+      {
+        maxWaitMs: remainingMs,
+        // Refresh the runner lease during the reset wait, as the watch loop does between polls.
+        sleep: (ms) => waitWithHeartbeat(ms, {
+          attempt: 1, attemptBudget: 1, watchStartedAtMs: startedAt, timeoutMs: options.timeoutMs, now, delayImpl,
+          onHeartbeat: () => ensureOwnershipImpl({
+            repo: options.repo, pr: options.pr, env, cwd: resolveRepoRoot(process.cwd()), claimIfMissing: true, requireExisting: false,
+          }),
+        }),
+        now,
+        env,
+        ghCommand,
+        ...(runChild ? { runChild } : {}),
+      },
+    );
+  } catch (error) {
+    if (error?.code !== "RATE_LIMITED") throw error;
+    result = rateLimitedResult(error);
+    // --jq/--silent would filter the envelope away; always keep code/resetAt on stderr.
+    stderr.write(`${JSON.stringify(result)}\n`);
+  }
   if (options.jq !== undefined || options.silent) {
     return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.status === "success" });
   }

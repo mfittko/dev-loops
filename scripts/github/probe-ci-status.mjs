@@ -362,13 +362,17 @@ export async function watchCiStatus(
     now = Date.now,
     ensureOwnershipImpl = ensureAsyncRunnerOwnership,
     runChild = defaultRunChild,
+    onBaseline = undefined,
   } = {},
 ) {
   const leaseCwd = resolveRepoRoot(process.cwd());
-  const { headSha: baselineSha, prVisibleCheckNames } = await fetchPrHeadSha(
+  // options.baselineSha lets a retried watch keep the first watch's baseline, so a
+  // push between the two still short-circuits to "changed".
+  const baselineSha = options.baselineSha ?? (await fetchPrHeadSha(
     { repo: options.repo, pr: options.pr },
     { env, ghCommand, runChild },
-  );
+  )).headSha;
+  onBaseline?.(baselineSha);
   const attemptBudget = buildAttemptBudget(options.timeoutMs, options.pollIntervalMs);
   const watchStartedAtMs = now();
   // timeout-ms 0 is a single live check with no waiting budget: there is no

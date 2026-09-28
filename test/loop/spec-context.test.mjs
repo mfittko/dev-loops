@@ -7,11 +7,13 @@ import test from "node:test";
 
 import {
   parseSpecContextCliArgs,
+  runCli,
   specContextChangedPaths,
   specContextExtract,
 } from "../../scripts/loop/spec-context.mjs";
 import { computeContentDigest, computeSpecDigest, specCriterionIds } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../../scripts/lib/spec-authority-stamp.mjs";
+import { GRAPHQL_RATE_LIMIT_MAX_WAIT_MS } from "@dev-loops/core/loop/policy-constants";
 
 const BODY = [
   "## Acceptance criteria",
@@ -300,4 +302,133 @@ test("parseSpecContextCliArgs fails closed on --identity-out without --head-sha"
 
 test("parseSpecContextCliArgs fails closed on an unknown extract-mode flag", () => {
   assert.throws(() => parseSpecContextCliArgs(["--repo", "o/n", "--issue", "1", "--content-file", "c.txt", "--bogus"]), /Unknown argument/);
+});
+
+// --- GraphQL rate-limit reset wait ---
+
+function rateLimitedTracker() {
+  let reads = 0;
+  const inner = stubTracker();
+  return {
+    getIssue: async (args) => {
+      reads += 1;
+      if (reads === 1) throw new Error("gh command failed: GraphQL: API rate limit exceeded for user ID 1.");
+      return inner.getIssue(args);
+    },
+  };
+}
+
+function rateLimitRunChild(reset, calls) {
+  return async (_command, args) => {
+    calls.push(args.join(" "));
+    return { code: 0, stdout: JSON.stringify({ resources: { graphql: { remaining: 0, reset } } }), stderr: "" };
+  };
+}
+
+test("specContextExtract rethrows a non-rate-limit HTTP 404 unchanged without a rate_limit read or sleep", async () => {
+  const message = "gh command failed: HTTP 404: Not Found";
+  const sleeps = [];
+  const reads = [];
+  await assert.rejects(
+    specContextExtract(
+      { repo: "mfittko/dev-loops", issue: 7, contentFile: "./content.txt" },
+      {
+        repoRoot: os.tmpdir(), env: {},
+        tracker: { getIssue: async () => { throw new Error(message); } },
+        runChild: rateLimitRunChild(1, reads),
+        sleep: async (ms) => { sleeps.push(ms); },
+        now: () => 1_000_000_000_000,
+      },
+    ),
+    (error) => error.message === message,
+  );
+  assert.deepEqual(sleeps, []);
+  assert.deepEqual(reads, []);
+});
+
+test("specContextExtract waits for the GraphQL reset inside GRAPHQL_RATE_LIMIT_MAX_WAIT_MS and retries once", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-ratelimit-"));
+  try {
+    await writeFile(path.join(tmpDir, "content.txt"), "impl", "utf8");
+    const nowMs = 1_000_000_000_000;
+    const sleeps = [];
+    const reads = [];
+    const result = await specContextExtract(
+      { repo: "mfittko/dev-loops", issue: 7, contentFile: "./content.txt" },
+      {
+        repoRoot: tmpDir, tracker: rateLimitedTracker(), env: {},
+        runChild: rateLimitRunChild(nowMs / 1000 + 300, reads),
+        sleep: async (ms) => { sleeps.push(ms); },
+        now: () => nowMs,
+      },
+    );
+    assert.equal(result.ok, true);
+    assert.deepEqual(sleeps, [300_000]);
+    assert.deepEqual(reads, ["api rate_limit"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("specContextExtract returns RATE_LIMITED with resetAt, without sleeping, when the reset is beyond the cap", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-ratelimit-cap-"));
+  try {
+    await writeFile(path.join(tmpDir, "content.txt"), "impl", "utf8");
+    const nowMs = 1_000_000_000_000;
+    const reset = nowMs / 1000 + GRAPHQL_RATE_LIMIT_MAX_WAIT_MS / 1000 + 60;
+    const sleeps = [];
+    const result = await specContextExtract(
+      { repo: "mfittko/dev-loops", issue: 7, contentFile: "./content.txt" },
+      {
+        repoRoot: tmpDir, tracker: rateLimitedTracker(), env: {},
+        runChild: rateLimitRunChild(reset, []),
+        sleep: async (ms) => { sleeps.push(ms); },
+        now: () => nowMs,
+      },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "RATE_LIMITED");
+    assert.equal(result.resetAt, new Date(reset * 1000).toISOString());
+    assert.deepEqual(sleeps, []);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("spec-context --jq '.contentDigest' still writes RATE_LIMITED with resetAt to stderr and exits 1", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-ratelimit-jq-"));
+  try {
+    await writeFile(path.join(tmpDir, "content.txt"), "impl", "utf8");
+    const nowMs = 1_000_000_000_000;
+    const reset = nowMs / 1000 + GRAPHQL_RATE_LIMIT_MAX_WAIT_MS / 1000 + 60;
+    let out = "";
+    let err = "";
+    const code = await runCli(
+      ["--repo", "mfittko/dev-loops", "--issue", "7", "--content-file", "./content.txt", "--jq", ".contentDigest"],
+      {
+        stdout: { write: (chunk) => { out += chunk; return true; } },
+        stderr: { write: (chunk) => { err += chunk; return true; } },
+        extractDeps: {
+          repoRoot: tmpDir, tracker: rateLimitedTracker(), env: {},
+          runChild: rateLimitRunChild(reset, []),
+          sleep: async () => {},
+          now: () => nowMs,
+        },
+      },
+    );
+    assert.equal(code, 1);
+    assert.equal(out.trim(), "null");
+    const envelope = JSON.parse(err.trim().split("\n")[0]);
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.code, "RATE_LIMITED");
+    assert.equal(envelope.resetAt, new Date(reset * 1000).toISOString());
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("spec-context --help names the RATE_LIMITED result and its resetAt field", () => {
+  const stdout = execFileSync(process.execPath, [path.resolve("scripts/loop/spec-context.mjs"), "--help"], { encoding: "utf8" });
+  assert(stdout.includes("RATE_LIMITED"));
+  assert(stdout.includes("resetAt"));
 });
