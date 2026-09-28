@@ -58,8 +58,11 @@ const PHASE_1_2_ROUTING = [
 // prose meaning is reviewed in the linked owner, not inferred from keywords.
 const PHASE_2_ROUTING = [
   /`[^`]*emit-fanout-dispatch\.mjs[^`]*--pending[^`]*`/,
-  /`[^`]*--carried-angles[^`]*--prev-head[^`]*`/,
+  /`--carried-angles <json>`/,
 ];
+// The context rebuild discovers prior rounds itself; write-gate-context.mjs
+// has no --prev-head (issue 2528, ADR 0109).
+const PHASE_2_REBUILD_NO_PREV_HEAD = /`[^`]*--carried-angles[^`]*--prev-head[^`]*`/;
 
 // Phase 3 (Fan-in): --provenance belongs to the LEDGER WRITE, not the comment
 // post — pinned on this line specifically so a reworded sentence that reattaches
@@ -110,6 +113,7 @@ test("copilot-pr-followup Phase 2 routes to the owned fan-out procedure and pend
   assertRuleOwned("GATE-EXEC-ANGLE-CARRY-FORWARD", SUB_LOOP_CONTRACT);
   assertRuleOwned("GATE-EXEC-FANOUT-DISPATCH-EMIT", SUB_LOOP_CONTRACT);
   assertMatchesAll(line, PHASE_2_ROUTING, `${SKILL} Phase 2 step`);
+  assert.doesNotMatch(line, PHASE_2_REBUILD_NO_PREV_HEAD);
 });
 
 test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledger write, not the comment post", async () => {

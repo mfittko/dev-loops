@@ -36,7 +36,7 @@ gates:
         prompt: "Check whether tests cover the changed behavior adequately. Look for missing edge cases, untested error paths, and acceptance-criteria gaps. Also flag test-name quality issues: test names that misrepresent what is actually asserted, overly broad names that hide gaps, and names that don't match the behavior under test. Flag missing negative-case coverage: malformed-argument tests, error-contract tests, and edge-case coverage for boundary conditions, empty inputs, and unexpected states. Do not accept happy-path-only test suites."
       - name: correctness
         persona: review
-        prompt: Check whether the implementation matches the acceptance criteria and PR description. Flag logic errors, contract violations, and behavior mismatches.
+        prompt: "Check whether the implementation matches the acceptance criteria and PR description. Flag logic errors, contract violations, and behavior mismatches. When the diff moves or re-hosts code, list what the old code path guaranteed (bounds, timeouts, injected dependencies, error handling) and flag each guarantee that the new path drops."
       - name: ci-guard
         persona: review
         prompt: |-
