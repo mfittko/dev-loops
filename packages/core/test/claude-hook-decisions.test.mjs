@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { decideBashGate, decideJudgeWriteGuard, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType, decideFixerWriteGuard } from "../src/claude/hook-decisions.mjs";
+import { decideBashGate, decideJudgeWriteGuard, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType, decideFixerWriteGuard, decideAgentDispatch } from "../src/claude/hook-decisions.mjs";
+import { buildDispatchPointer } from "../../../scripts/github/_work-order-protocol.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -1443,4 +1444,79 @@ test("decideJudgeWriteGuard lets the judge write only its verdict files under an
   assert.equal(decideJudgeWriteGuard({ agentType: "judge", targetPath: `${dir}/judge-verdict.json`, gateJudgeRoots, symlinked: true }).decision, "deny", "symlink denies");
   assert.equal(decideJudgeWriteGuard({ agentType: "developer", targetPath: "/r/package.json" }).decision, "allow");
   assert.equal(decideJudgeWriteGuard({ agentType: null, targetPath: null }).decision, "allow");
+});
+
+// ---------------------------------------------------------------------------
+// decideAgentDispatch (#2531): only the gate coordinator dispatches the round's
+// review and judge agents, and only with the emitted dispatchPrompt verbatim.
+// ---------------------------------------------------------------------------
+
+const pointer = (role) => buildDispatchPointer({ workOrderRef: `${role}:o/r#7:draft_gate:abc123:u1`, workOrderDigest: "ab12cd", executionIdentity: "x1-aa" });
+const dispatch = (callerAgentType, targetAgentType, prompt = "anything") => decideAgentDispatch({ callerAgentType, targetAgentType, prompt });
+
+test("decideAgentDispatch denies review and judge dispatches from the dev-loop coordinator", () => {
+  for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
+    for (const target of ["review", "judge", "dev-loops:review"]) {
+      const d = dispatch(caller, target, pointer("review"));
+      assert.equal(d.decision, "deny", `${caller} -> ${target}`);
+      assert.match(d.reason, /^GATE_COORDINATOR_REQUIRED/);
+      assert.match(d.reason, /GATE-EXEC-GATE-COORDINATOR/);
+      assert.match(d.reason, /`gate-coordinator` agent/);
+    }
+  }
+});
+
+test("decideAgentDispatch allows the gate coordinator to relay an emitted pointer of the same role", () => {
+  for (const caller of ["gate-coordinator", "dev-loops:gate-coordinator"]) {
+    assert.equal(dispatch(caller, "review", pointer("review")).decision, "allow");
+    assert.equal(dispatch(caller, "judge", pointer("judge")).decision, "allow");
+    assert.equal(dispatch(caller, "dev-loops:judge", pointer("judge")).decision, "allow");
+  }
+});
+
+test("decideAgentDispatch denies a gate-coordinator relay that is not the emitted pointer verbatim", () => {
+  const p = pointer("review");
+  for (const prompt of [
+    `Review PR 7 carefully.\n${p}`,
+    `${p}\nAlso check the tests.`,
+    `${p} `,
+    `cd /tmp/worktrees/pr-7 && ${p}`,
+    pointer("judge"),
+    `${p} --same-head-retry`,
+    "",
+    null,
+  ]) {
+    const d = dispatch("gate-coordinator", "review", prompt);
+    assert.equal(d.decision, "deny", JSON.stringify(prompt));
+    assert.match(d.reason, /^GATE_DISPATCH_NOT_VERBATIM/);
+  }
+  assert.equal(dispatch("gate-coordinator", "judge", pointer("review")).decision, "deny");
+});
+
+test("decideAgentDispatch denies every other target from the gate coordinator", () => {
+  for (const target of ["fixer", "developer", "dev-loop", "general-purpose", "gate-coordinator", null]) {
+    const d = dispatch("gate-coordinator", target, pointer("review"));
+    assert.equal(d.decision, "deny", String(target));
+    assert.match(d.reason, /^GATE_COORDINATOR_DISPATCH_SCOPE/);
+  }
+});
+
+test("decideAgentDispatch does not block other dispatches", () => {
+  for (const target of ["developer", "fixer", "docs", "quality", "general-purpose", "gate-coordinator"]) {
+    assert.equal(dispatch("dev-loop", target).decision, "allow", target);
+  }
+  for (const target of ["review", "judge"]) {
+    assert.equal(dispatch(null, target, "Review PR 7 with the correctness angle.").decision, "allow", `main session -> ${target}`);
+    assert.equal(dispatch(undefined, target).decision, "allow");
+  }
+  assert.equal(dispatch("developer", "review").decision, "allow");
+});
+
+test("the gate coordinator keeps the dev-loop coordinator boundaries under strict mode", () => {
+  for (const agentType of ["gate-coordinator", "dev-loops:gate-coordinator"]) {
+    assert.equal(decideCoordinatorWriteGuard({ filePath: "packages/core/src/x.mjs", isRepoMutation: true, enforce: true, agentType }).decision, "deny");
+    const d = decideBashGate({ command: "bun run verify", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType, enforceCoordinator: true });
+    assert.equal(d.decision, "deny");
+    assert.match(d.reason, /COORDINATOR-VERIFY-BOUNDARY/);
+  }
 });

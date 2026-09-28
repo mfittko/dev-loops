@@ -27,6 +27,15 @@
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/pre-tool-use-write-guard.mjs"
           }
         ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/pre-tool-use-agent-guard.mjs"
+          }
+        ]
       }
     ],
     "PostToolUse": [

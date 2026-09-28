@@ -834,3 +834,24 @@ test("SubagentStop hook still blocks when porcelain output exceeds the 1MB Node 
   const expectedRemainder = dirtyLineCount - MAX_LISTED_DIRTY_PATHS;
   assert.match(decision.reason, new RegExp(`… and ${expectedRemainder} more`));
 });
+
+test("the Agent|Task dispatch guard is registered in settings.json and hooks.json (#2531)", () => {
+  const settings = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude", "settings.json"), "utf8"));
+  const project = settings.hooks.PreToolUse.find((h) => h.matcher === "Agent|Task");
+  assert.ok(project, "Agent|Task PreToolUse matcher must be registered in settings.json");
+  assert.match(project.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/pre-tool-use-agent-guard\.mjs/);
+  const plugin = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude", "hooks", "hooks.json"), "utf8")).hooks.PreToolUse.find((h) => h.matcher === "Agent|Task");
+  assert.ok(plugin, "Agent|Task PreToolUse matcher must be registered in hooks.json");
+  assert.match(plugin.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-agent-guard\.mjs/);
+});
+
+test("agent-guard hook denies a dev-loop review dispatch and allows the main session (#2531, e2e)", () => {
+  const tool_input = { subagent_type: "dev-loops:review", description: "review", prompt: "Review PR 7." };
+  const denied = runHook("pre-tool-use-agent-guard.mjs", { tool_name: "Agent", tool_input, cwd: repoRoot, agent_type: "dev-loops:dev-loop" });
+  assert.equal(denied.code, 0);
+  assert.equal(denied.json?.hookSpecificOutput?.permissionDecision, "deny");
+  assert.match(denied.json.hookSpecificOutput.permissionDecisionReason, /GATE_COORDINATOR_REQUIRED/);
+  const allowed = runHook("pre-tool-use-agent-guard.mjs", { tool_name: "Agent", tool_input, cwd: repoRoot });
+  assert.equal(allowed.code, 0);
+  assert.equal(allowed.json, null, "no deny output for a main-session dispatch");
+});

@@ -63,6 +63,11 @@ function commandContainsEvidenceWrite(command) {
  */
 export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 
+/** The gate-round capsule agent (GATE-EXEC-GATE-COORDINATOR, ADR 0112). */
+export const GATE_COORDINATOR_AGENT_TYPE = "gate-coordinator";
+/** Callers that hold the coordinator write and verify boundaries: the gate coordinator never loosens them. */
+const COORDINATOR_AGENT_TYPES = new Set([DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE]);
+
 /**
  * Normalize a Claude `agent_type` hook-payload value that may be PLUGIN-NAMESPACED
  * (`<plugin-name>:<agent-name>`, e.g. `dev-loops:dev-loop`) to the bare agent name the coordinator
@@ -163,7 +168,7 @@ export function decideBashGate({
   // agent_type discriminator. Opt-in via the same `DEVLOOPS_COORDINATOR_READONLY=1` flag as the
   // write-guard boundary; default fail-open. Not scoped to `inManagedRepo` — this is a local
   // command-invocation boundary (which binary ran), not a GitHub-repo-targeting one.
-  if (enforceCoordinator && normalizeAgentType(agentType) === DEV_LOOP_AGENT_TYPE && commandContainsCodeVerificationEntrypoint(command)) {
+  if (enforceCoordinator && COORDINATOR_AGENT_TYPES.has(normalizeAgentType(agentType)) && commandContainsCodeVerificationEntrypoint(command)) {
     return {
       decision: "deny",
       reason:
@@ -523,7 +528,7 @@ export function decideCoordinatorWriteGuard({ filePath, isRepoMutation, enforce 
   if (!isRepoMutation) {
     return ALLOW; // non-repo or gitignored path (tmp/, the scratchpad, sanctioned ledger paths)
   }
-  if (normalizeAgentType(agentType) !== DEV_LOOP_AGENT_TYPE) {
+  if (!COORDINATOR_AGENT_TYPES.has(normalizeAgentType(agentType))) {
     return ALLOW; // not the coordinator — a worker subagent, or the main agent (the other boundary)
   }
   return {
@@ -851,4 +856,54 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
   return deny(grants.length === 0
     ? "no current fixer work-order pull grants a mutation authority"
     : `no current pull grants path ${JSON.stringify(rel)} on branch ${JSON.stringify(checkout.branch)}`);
+}
+
+const GATE_ROUND_CHILD_ROLES = new Set(["review", "judge"]);
+// The exact `buildDispatchPointer` text (scripts/github/_work-order-protocol.mjs) for a ref of `role`.
+const dispatchPointerRe = (role) => new RegExp(
+  `^Run \`dev-loops-run scripts/github/pull-work-order\\.mjs --ref ${role}:[\\w.:/#-]+ --digest ${PULL_VALUE} --execution ${PULL_VALUE}\`; ` +
+  "follow its printed work order exactly\\. Exit 1: report its JSON verbatim, stop\\.$",
+);
+
+/**
+ * Decide whether a PreToolUse Agent/Task dispatch must be denied (GATE-EXEC-GATE-COORDINATOR,
+ * ADR 0112). The dev-loop coordinator never dispatches a `review` or `judge` agent; the
+ * `gate-coordinator` agent dispatches only those two roles, each with the emitted
+ * `dispatchPrompt` byte for byte. Every other caller, including the main session (no
+ * `agent_type`), is allowed.
+ *
+ * @param {Object} params
+ * @param {string|null} [params.callerAgentType] - Hook payload `agent_type` of the caller.
+ * @param {string|null} [params.targetAgentType] - `tool_input.subagent_type` of the dispatch.
+ * @param {string|null} [params.prompt] - `tool_input.prompt` of the dispatch.
+ * @returns {HookDecision}
+ */
+export function decideAgentDispatch({ callerAgentType = null, targetAgentType = null, prompt = null }) {
+  const caller = normalizeAgentType(callerAgentType);
+  const target = normalizeAgentType(targetAgentType);
+  const gateChild = GATE_ROUND_CHILD_ROLES.has(target);
+  if (caller === DEV_LOOP_AGENT_TYPE && gateChild) {
+    return {
+      decision: "deny",
+      reason:
+        `GATE_COORDINATOR_REQUIRED: GATE-EXEC-GATE-COORDINATOR denied this \`${target}\` dispatch from the dev-loop coordinator. ` +
+        "Dispatch one `gate-coordinator` agent for the gate round; it dispatches the round's review and judge agents and returns the typed round result.",
+    };
+  }
+  if (caller !== GATE_COORDINATOR_AGENT_TYPE) return ALLOW;
+  if (!gateChild) {
+    return {
+      decision: "deny",
+      reason:
+        `GATE_COORDINATOR_DISPATCH_SCOPE: GATE-EXEC-GATE-COORDINATOR denied this ${JSON.stringify(targetAgentType ?? null)} dispatch from the gate coordinator. ` +
+        "The gate coordinator dispatches only the round's `review` and `judge` agents; the dev-loop coordinator dispatches fixers and repeat rounds.",
+    };
+  }
+  if (typeof prompt === "string" && dispatchPointerRe(target).test(prompt)) return ALLOW;
+  return {
+    decision: "deny",
+    reason:
+      `GATE_DISPATCH_NOT_VERBATIM: GATE-EXEC-GATE-COORDINATOR denied this \`${target}\` dispatch: the prompt is not an emitted \`${target}:\` dispatchPrompt. ` +
+      "Relay the emitter's dispatchPrompt byte for byte, with no added prose, no `cd` wrapper and no extra flags.",
+  };
 }
