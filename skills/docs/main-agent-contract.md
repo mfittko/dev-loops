@@ -190,7 +190,7 @@ the full run.
   `COORDINATOR-VERIFY-BOUNDARY`: the dev-loop coordinator MUST NOT run a known
   code-verification/build entrypoint (`bun run verify`/`bun test`/`vitest`/`npm test`/
   `npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/`pnpm`) inline; it
-  MUST delegate targeted runs to a fresh worker subagent (`developer`/`fixer`/`quality`/`review`) and request any local full-repository run through `dev-loops gate resolve-validation` instead. Enforced by the
+  MUST delegate targeted runs to a fresh worker subagent (`developer`/`fixer`/`quality`) and request any local full-repository run through `dev-loops gate resolve-validation` instead. Enforced by the
   `PreToolUse` Bash gate hook (`.claude/hooks/pre-tool-use-bash-gate.mjs`), which denies the
   command when the caller's `agent_type` is a coordinator's own (`dev-loop` or `gate-coordinator`).
   For a `gate-coordinator` caller, the deny reason names `dev-loops gate resolve-validation` for the

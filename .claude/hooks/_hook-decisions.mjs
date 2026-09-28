@@ -177,7 +177,7 @@ export function decideBashGate({
         "(GATE-EXEC-GATE-COORDINATOR). See skills/docs/main-agent-contract.md."
       : "COORDINATOR-VERIFY-BOUNDARY: the dev-loop coordinator must not run code-verification/build " +
         "commands inline. Delegate targeted checks to a fresh worker subagent (developer/fixer/" +
-        "quality/review), which reports back a compact pass/fail plus any failing-test names. " +
+        "quality), which reports back a compact pass/fail plus any failing-test names. " +
         "Request local full-repository validation through `dev-loops gate resolve-validation` on a clean commit; when " +
         "checking a pushed commit, prefer CI's structured conclusion (`gh pr checks` / " +
         "scripts/github/detect-checkpoint-evidence.mjs) over a local run. See skills/docs/main-agent-contract.md.";
