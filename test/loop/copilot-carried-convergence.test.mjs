@@ -882,6 +882,71 @@ describe("below the cap, the handoff, the detector, and merge agree on a post-co
   }
 });
 
+// The --watch-status readback (what `dev-loops loop info` runs): the loop
+// snapshot, then the carry facts fetch, and no requester call.
+async function runHandoffReadback(fixture, { root, factsFail = false, factsThrow = false }) {
+  const snapshotEntries = handoffEntries(fixture).slice(0, 5);
+  const factsArgs = ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,reviews,files"];
+  const facts = { matchByClaims: true, assertArgs: factsArgs, stdout: line({ headRefOid: HEAD, reviews: fixture.reviews, files: [] }), ...(factsFail ? { exitCode: 1, stdout: "" } : {}) };
+  const strict = strictRunChild([...snapshotEntries, ...(factsThrow ? [] : [facts]), ...fixture.shared]);
+  const { unmatched, calls } = strict;
+  // factsThrow: the facts spawn rejects (e.g. gh missing) instead of exiting non-zero.
+  const runChild = async (cmd, args, ...rest) => {
+    if (factsThrow && JSON.stringify(args) === JSON.stringify(factsArgs)) throw new Error("spawn gh ENOENT");
+    return strict.runChild(cmd, args, ...rest);
+  };
+  const result = await runHandoff({ repo: REPO, pr: PR, watchStatus: "idle" }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "", GH_SEQUENCE_PATH: "1" }), ghCommand: "gh", runChild, repoRoot: root });
+  assert.deepEqual(unmatched, [], "readback made an undeclared gh call");
+  assert.ok(!calls.some((call) => JSON.stringify(call).includes("POST")), "readback must never call the requester");
+  return result;
+}
+
+// #2478: the readback's advised next step must be one the requester executes,
+// or be reported as refused with the requester's machine reason.
+describe("readback: the handoff's advice agrees with the request tool", () => {
+  it("converged once: the readback reports the suppression the request tool returns", async () => {
+    const fixture = { delta: CODE_DELTA };
+    const readback = await runHandoffReadback(scenario(fixture), { root: convergedOnceWideRoot });
+    const request = await runRequestTool(scenario(fixture), { root: convergedOnceWideRoot });
+
+    assert.notEqual(readback.state, "ready_to_rerequest_review");
+    assert.doesNotMatch(readback.nextAction, /Re-request/);
+    assert.equal(readback.carriedConvergence.source, "converged_once");
+    assert.equal(request.status, "suppressed_post_convergence");
+    // The request tool embeds the carry's machine reason in `detail`; both
+    // sides must name the same carry.
+    assert.ok(readback.carriedConvergence.reason.length > 0);
+    assert.ok(request.detail.includes(readback.carriedConvergence.reason), `${request.detail} vs ${readback.carriedConvergence.reason}`);
+  });
+
+  it("carry facts unavailable: the readback keeps the state and marks the advice unverified", async () => {
+    const readback = await runHandoffReadback(scenario({ delta: CODE_DELTA }), { root: convergedOnceWideRoot, factsFail: true });
+
+    assert.equal(readback.state, "ready_to_rerequest_review");
+    assert.equal(readback.carriedConvergence, undefined);
+    assert.equal(readback.carryUnverified, "carry facts unavailable");
+  });
+
+  it("carry facts spawn failure: the readback keeps the state and marks the advice unverified", async () => {
+    const readback = await runHandoffReadback(scenario({ delta: CODE_DELTA }), { root: convergedOnceWideRoot, factsThrow: true });
+
+    assert.equal(readback.state, "ready_to_rerequest_review");
+    assert.equal(readback.carriedConvergence, undefined);
+    assert.equal(readback.carryUnverified, "carry facts unavailable");
+  });
+
+  it("unconverged: the readback advises a re-request the request tool executes", async () => {
+    const fixture = { priorBody: YELLOW, delta: CODE_DELTA };
+    const readback = await runHandoffReadback(scenario(fixture), { root: convergedOnceWideRoot });
+    const request = await runRequestTool(scenario(fixture), { root: convergedOnceWideRoot });
+
+    assert.equal(readback.state, "ready_to_rerequest_review");
+    assert.equal(readback.carriedConvergence, undefined);
+    assert.equal(readback.carryUnverified, undefined);
+    assert.equal(request.status, "requested");
+  });
+});
+
 describe("converged-once: the detector routes a post-convergence change to pre_approval_gate below and at the cap", () => {
   const NEVER = [PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW];
   const clean = (id, submittedAt) => ({ id, author: { login: COPILOT }, state: "COMMENTED", body: "", commit: { oid: PRIOR }, submittedAt });
