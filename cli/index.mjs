@@ -314,6 +314,7 @@ export const SUBCOMMAND_ROUTES = {
     "visual-grill-capture": "scripts/loop/visual-grill-capture.mjs",
     "audit-session":        "scripts/loop/audit-pi-session.mjs",
     "pre-push-delta":       "scripts/loop/check-pre-push-delta.mjs",
+    "spec-lint":            "scripts/loop/spec-lint.mjs",
   },
   pr: {
     create:             "scripts/github/create-pr.mjs",
@@ -426,6 +427,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "visual-grill-capture": "Drive a headless browser to a described screen and capture it for loop-grill",
     "audit-session": "Audit Pi or Claude Code session transcripts to measure token efficiency and context snowballing",
     "pre-push-delta": "Build the delta-mode pre-push review input or check its result before an act-list fix push",
+    "spec-lint": "Lint an issue body offline against required-rules.json and docs/decisions",
   },
   pr: {
     create: "Create PR (always draft, self-assigned by default)",

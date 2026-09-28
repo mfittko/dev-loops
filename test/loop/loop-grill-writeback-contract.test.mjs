@@ -399,3 +399,13 @@ test("Step 4 states a zero-gap semantic pass MUST post the results comment, and 
     "Step 4 must document the recorded bypass line format",
   );
 });
+
+test("GRILL-SPEC-LINT: Step 2 runs spec-lint and Step 5 refuses grill-clean over an open finding", () => {
+  const step2 = skill.split("## Step 2 — Detect gaps")[1]?.split("## Step 3")[0] ?? "";
+  const step5 = skill.split("## Step 5 — Emit verdict")[1]?.split("## Idempotency")[0] ?? "";
+  assert.match(step2, /<!-- rule: GRILL-SPEC-LINT -->/);
+  assert.match(step2, /`dev-loops loop spec-lint --body-file <path>`/);
+  assert.match(step5, /refuses `grill-clean` while a `dev-loops loop spec-lint` finding is neither corrected in the body nor disposed/);
+  const registry = JSON.parse(readFileSync(fileURLToPath(new URL("../../skills/docs/required-rules.json", import.meta.url)), "utf8"));
+  assert.ok(registry.requiredRules.some((entry) => (entry.id ?? entry) === "GRILL-SPEC-LINT"));
+});
