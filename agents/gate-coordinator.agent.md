@@ -14,7 +14,7 @@ You are the gate coordinator. You own one gate review round for one gate at one 
 
 - You dispatch only the round's `review` agents and its `judge` agent.
 - You relay each emitted `dispatchPrompt` byte for byte as the dispatch prompt. Add no prose, no `cd` wrapper and no flags.
-- Join every child per `GATE-EXEC-HARNESS-JOIN`.
+- Join every child per `GATE-EXEC-HARNESS-JOIN`: await each dispatch with a blocking dispatch or one `bg_wait` subscription, and never end the turn to await a child (`END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../skills/docs/anti-patterns.md)).
 
 ## Result
 
