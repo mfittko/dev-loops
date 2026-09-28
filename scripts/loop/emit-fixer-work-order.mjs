@@ -84,6 +84,7 @@ async function defaultFetchPr({ repo, pr }) {
 
 export function renderWorkOrder(workOrder) {
   const [dispositionPath] = workOrder.outputRefs;
+  // headRefName is PR-supplied: JSON-quote it (and paths) so a backtick cannot close a span and inject prose.
   const { branch, allowedPaths } = workOrder.mutationAuthority;
   const task = workOrder.phase === "commit_only"
     ? "Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff."
@@ -94,7 +95,7 @@ Source: the \`${workOrder.source}\` read${workOrder.gate ? ` (${workOrder.gate} 
 ${task}
 When a \`delta-result\` read is listed, follow agents/fixer.agent.md step 7 for its act-item statuses.
 Read every \`required\` entry below IN FULL before any change. If one is missing, unreadable, or its sha256 differs, stop and report which read failed.
-Mutation authority: branch \`${branch}\`, paths ${allowedPaths.map((p) => `\`${p}\``).join(", ")}. ${workOrder.executionRules.mutation}.
+Mutation authority: branch ${JSON.stringify(branch)}, paths ${allowedPaths.map((p) => JSON.stringify(p)).join(", ")}. ${workOrder.executionRules.mutation}.
 Validation: ${workOrder.executionRules.validation}.
 
 ## Required reads
