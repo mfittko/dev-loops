@@ -10559,6 +10559,26 @@ test("tick: a fanout_fanin ledger whose provenance misses a mandatory angle is r
   });
 });
 
+// pre_approval_gate's mandatory angles (gates.preApproval.mandatoryAngles), each fresh.
+const FANOUT_TICK_PROVENANCE = {
+  distinctReviewers: 5,
+  perAngle: ["pr-checklist", "acceptance-criteria", "yagni", "contradiction-lens", "holistic"]
+    .map((angle) => ({ angle, reviewer: `reviewer-${angle}` })),
+};
+
+test("tick: a fanout_fanin ledger whose provenance passes angle coverage ticks all 22 items in one PR-body edit and posts clean", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, provenance: FANOUT_TICK_PROVENANCE }, async ({ post, postedBody, editedBodies }) => {
+    const result = await post({ executionMode: "fanout_fanin", inlineReason: undefined, findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(result.action, "created");
+    assert.equal(editedBodies.length, 1);
+    assert.equal(editedBodies[0].kind, "pr");
+    for (const item of TICK_ITEMS) assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+    assert.doesNotMatch(editedBodies[0].body, /- \[ \]/);
+    assert.match(postedBody(), /\*\*Verdict:\*\* clean/);
+    assert.equal(result.gateBlockers, undefined);
+  });
+});
+
 test("tick: with --findings-json present, a ledger whose provenance fails angle coverage ticks nothing", async () => {
   await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls, ledgerPath }) => {
     const findingsPath = path.join(path.dirname(ledgerPath), "findings.json");
