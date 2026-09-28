@@ -10,6 +10,7 @@
  * this module never claims a verified cache hit it cannot prove.
  */
 import { createHash } from "node:crypto";
+import { isDevLoopConfigSourcePath } from "./gate-carry-forward.mjs";
 
 /* ------------------------------------------------------------------ *
  * 1. Harness capability model
@@ -780,8 +781,10 @@ export function matchesDiffExcludeGlob(relPath, pattern) {
  * Classify why a diff file is excluded from the filtered diff, or `null`
  * when it is kept. Checks {@link DEFAULT_DIFF_EXCLUDE_GLOBS} first, then
  * any caller-supplied `excludeGlobs` — the default set can never be
- * disabled by a caller's config. The dev-loop config files (`.devloops`,
- * `.pi/dev-loop/**`) are never excluded as `configured`: the globs load from
+ * disabled by a caller's config. The dev-loop config sources
+ * ({@link isDevLoopConfigSourcePath}: `.devloops` and its `.yaml`/`.yml`/`.json`
+ * variants, `extension-defaults.yaml`) and `.pi/dev-loop/**` are never
+ * excluded as `configured`: the globs load from
  * the reviewed head, so a PR that widens them keeps that config edit in the
  * filtered diff (fail closed).
  * @param {string} relPath
@@ -793,7 +796,7 @@ export function classifyDiffFileExclusion(relPath, { excludeGlobs = [] } = {}) {
   for (const pattern of DEFAULT_DIFF_EXCLUDE_GLOBS) {
     if (matchesDiffExcludeGlob(posix, pattern)) return "default";
   }
-  if (posix === ".devloops" || posix.startsWith(".pi/dev-loop/")) return null;
+  if (isDevLoopConfigSourcePath(posix) || posix.startsWith(".pi/dev-loop/")) return null;
   for (const pattern of excludeGlobs) {
     if (matchesDiffExcludeGlob(posix, pattern)) return "configured";
   }

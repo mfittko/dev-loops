@@ -932,13 +932,13 @@ describe("filterDiffForInline — filtered diff for the shared per-head block (i
 
   test("a catch-all configured glob never hides the dev-loop config edit that set it", () => {
     const block = (p) => [`diff --git a/${p} b/${p}`, `--- a/${p}`, `+++ b/${p}`, "@@ -1 +1 @@", "-a", "+b"].join("\n");
-    const combined = `${SRC_HUNK}\n${block(".devloops")}\n${block(".pi/dev-loop/defaults")}\n`;
+    const kept = [".devloops", ".devloops.yaml", ".pi/dev-loop/defaults", "packages/core/src/config/extension-defaults.yaml"];
+    const combined = `${SRC_HUNK}\n${kept.map(block).join("\n")}\n`;
     const { filteredDiff, excludedFiles, includedFiles } = filterDiffForInline(combined, { excludeGlobs: ["**"] });
-    assert.ok(filteredDiff.includes("+++ b/.devloops"));
-    assert.ok(filteredDiff.includes("+++ b/.pi/dev-loop/defaults"));
+    for (const p of kept) assert.ok(filteredDiff.includes(`+++ b/${p}`), p);
     assert.ok(!filteredDiff.includes("src/foo.mjs"));
     assert.deepEqual(excludedFiles, [{ path: "src/foo.mjs", reason: "configured" }]);
-    assert.deepEqual(includedFiles, [".devloops", ".pi/dev-loop/defaults"]);
+    assert.deepEqual(includedFiles, kept);
   });
 
   describe("configured excludeGlobs and renames (issue #2504)", () => {
