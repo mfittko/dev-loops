@@ -162,7 +162,7 @@ export function decideBashGate({
 
   // COORDINATOR-VERIFY-BOUNDARY: a known code-verification/build entrypoint (bun run
   // verify/test, vitest, npm test/run test/run build, ...) run inline by the dev-loop COORDINATOR
-  // itself (agent_type "dev-loop"). The hook allows WORKER subagents to run targeted checks;
+  // itself (agent_type "dev-loop" or "gate-coordinator"). The hook allows WORKER subagents to run targeted checks;
   // full-repository runs still belong to gate resolve-validation. Only the coordinator is scoped
   // out here, mirroring `decideCoordinatorWriteGuard`'s
   // agent_type discriminator. Opt-in via the same `DEVLOOPS_COORDINATOR_READONLY=1` flag as the
@@ -498,7 +498,7 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
 /**
  * Decide whether a PreToolUse Write/Edit must be blocked by the coordinator→worker delegation
  * boundary — the INVERSE of `decideWriteGuard`, one level down. Under the Claude Code
- * harness the dev-loop agent itself (Claude `agent_type === "dev-loop"`) acts as a delegating
+ * harness a coordinator agent (Claude `agent_type` "dev-loop" or "gate-coordinator") acts as a delegating
  * COORDINATOR: it MUST NOT mutate TRACKED repo files directly — that work is delegated to a fresh
  * WORKER subagent (`developer`/`fixer`/`quality`/`docs`). `agent_type` is the only discriminator:
  * `DEVLOOPS_RUN_ID` does not distinguish coordinator from worker (the coordinator mints it and

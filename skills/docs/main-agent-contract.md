@@ -13,7 +13,7 @@ The coordinator MAY still write EPHEMERAL gitignored/non-repo artifacts directly
 scratchpad, and sanctioned ledger paths (the PR body markdown, comment bodies, dispatch prompts,
 gate evidence/ledgers under `tmp/gate-findings/`). The `PreToolUse` Write/Edit guard hook enforces
 this boundary: opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once
-enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop`; a worker
+enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop` or `gate-coordinator`; a worker
 subagent's `agent_type` is unaffected. It is a targeted denylist, not an airtight sandbox:
 Bash-driven tracked mutations (`git commit`, `sed -i`, `> file`) stay convention-enforced, and
 the top-level/inline agent (`agent_type: null`) falls under the main-agent boundary below. On Pi, see
