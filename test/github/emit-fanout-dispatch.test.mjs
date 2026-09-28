@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, listPriorFindingsLogHeads, main } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, listPriorFindingsLogHeads, main, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
@@ -1916,6 +1916,25 @@ test("a thin briefing (scope.diffSource none) gives every unit the floor budget"
       assert.equal(unit.budgetBasis.scope, "none");
     }
   });
+});
+
+test("an unreadable listed diff read exits 2 and leaves no emit plan", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const contextDir = await seedBundle(tmpDir, {
+      artifactExtra: { requiredReads: [{ kind: "diff", path: "missing.diff", sha256: "0".repeat(64), bytes: 1, required: true }] },
+    });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 2, result.stderr || result.stdout);
+    await assert.rejects(() => readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"), { code: "ENOENT" });
+  });
+});
+
+test("unitBudgetBasis counts an unparsed-path block in a docs-only unit", () => {
+  const basis = unitBudgetBasis({ angleScopes: { a: "docs-only" } }, ["a"], [
+    { path: null, header: "", hunks: ["@@ -0,0 +1,1 @@\n+x"] },
+    { path: "src/x.js", header: "", hunks: ["@@ -0,0 +1,1 @@\n+y"] },
+  ]);
+  assert.deepEqual(basis, { scope: "docs-only", files: 1, changedLines: 1 });
 });
 
 test("buildAngleNamingSuffix prints a scaled unit's computed budget, never the floor constants", () => {

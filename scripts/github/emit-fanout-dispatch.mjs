@@ -349,14 +349,16 @@ function resolveUnitScopedReads(artifact, angles) {
 /**
  * The size basis of one unit's budget: the file blocks and added plus deleted
  * lines of the filtered diff the unit reads. A unit whose angles all declare
- * the `docs-only` scope counts only doc-file blocks. No diff means the floor.
+ * the `docs-only` scope counts only doc-file blocks, plus unparsed-path blocks,
+ * because the docs-only briefing tells the reviewer to check those too. No diff
+ * means the floor.
  * @param {ReturnType<typeof parseDiffFileBlocks>|null} diffBlocks the parsed filtered diff, or null when none
  * @returns {{ scope: "none"|"docs-only"|"full", files: number, changedLines: number }}
  */
 export function unitBudgetBasis(artifact, angles, diffBlocks) {
   if (diffBlocks === null) return { scope: "none", files: 0, changedLines: 0 };
   const docsOnly = angles.every((angle) => artifact?.angleScopes?.[angle] === "docs-only");
-  const blocks = docsOnly ? diffBlocks.filter((block) => block.path !== null && classifyFile(block.path) === "docs") : diffBlocks;
+  const blocks = docsOnly ? diffBlocks.filter((block) => block.path === null || classifyFile(block.path) === "docs") : diffBlocks;
   let changedLines = 0;
   for (const block of blocks) {
     for (const hunk of block.hunks) {
