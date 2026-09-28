@@ -1,8 +1,8 @@
 /**
- * Fixer grant loading shared by the Bash gate and the Write/Edit guard (ADR 0107).
+ * Fixer grant loading for the Write/Edit guard, plus the pull binding the Bash gate records (ADR 0107).
  *
- * Edge I/O only: list the repo's checkouts and the CURRENT fixer grants. The pure deciders
- * (decideFixerBashGate / decideFixerWriteGuard in `./_hook-decisions.mjs`) own the decision.
+ * Edge I/O only: list the repo's checkouts and the CURRENT fixer grants. The pure
+ * decider (decideFixerWriteGuard in `./_hook-decisions.mjs`) owns the decision.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -13,10 +13,8 @@ import { findRetirementAfter } from "./_gate-round-retirement.mjs";
 import { realpathNearestExisting } from "./_worktree-guard.mjs";
 import { workOrderDigest } from "./_work-order-digest.mjs";
 
-const isInside = (p, root) => p === root || p.startsWith(`${root}/`);
-
 /**
- * Env for every hook git call: an inherited GIT_DIR/GIT_WORK_TREE overrides `-C`, so a pointer at
+ * Env for every git call in this module: an inherited GIT_DIR/GIT_WORK_TREE overrides `-C`, so a pointer at
  * another repo would list that repo's checkouts and fail the fixer boundary open. Same shape as
  * scripts/loop/_repo-root-resolver.mjs gitEnvNoDirOverrides (the hook bundle cannot import scripts/).
  */
@@ -50,7 +48,7 @@ const EXECUTION_RE = /^f(\d+)-[0-9a-f]{8}$/u;
 // Grant-to-agent binding. Verified by a headless PreToolUse stdin probe: a subagent's hook input
 // carries `agent_id` (e.g. "abea5f653d974dbf2"), identical across all tool calls of that subagent;
 // the main agent's input carries no `agent_id`. The fixer's write guard denies Write/Edit under the
-// main checkout's tmp/, but the hooks do not stop a non-git Bash write (a redirect, cp, an
+// main checkout's tmp/, but the hooks do not stop a Bash write (a redirect, cp, an
 // interpreter) to a marker: ADR 0107 records that ceiling, closed by process-owned worker I/O (#2343).
 // Keyed by ref, digest AND execution, so a pull line with a wrong digest or execution never
 // overwrites the pulling fixer's marker.
@@ -116,7 +114,7 @@ function isStale(mainRoot, checkoutRoots, order, executionIdentity) {
 }
 
 /**
- * Current fixer grants `[{ branch, allowedPaths, phase, outputRef }]` of the main checkout `mainRoot`:
+ * Current fixer grants `[{ branch, allowedPaths, outputRef }]` of the main checkout `mainRoot`:
  * a receipt with role "fixer" whose plan lives under `<mainRoot>/tmp/gate-fixer/`, still names
  * the same ref, digest and execution, still reproduces that digest and is not stale by the pull's
  * own predicate, and whose binding marker names `agentId` (the pulling fixer). The outputRef is
@@ -148,7 +146,7 @@ export function loadFixerGrants(mainRoot, agentId, checkoutRoots) {
       if (!EXECUTION_RE.test(plan.executionIdentity) || isStale(mainRoot, checkoutRoots, plan.workOrder, plan.executionIdentity)) continue;
       const { branch, allowedPaths } = plan.workOrder.mutationAuthority;
       const outputRef = realpathNearestExisting(path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json"));
-      grants.push({ branch, allowedPaths, phase: plan.workOrder.phase, outputRef });
+      grants.push({ branch, allowedPaths, outputRef });
     } catch { /* unreadable receipt or plan: no grant */ }
   }
   return grants;
@@ -164,10 +162,4 @@ export function loadFixerContext(dirs, agentId) {
     for (const checkout of listCheckouts(dir)) if (!checkouts.some((c) => c.root === checkout.root)) checkouts.push(checkout);
   }
   return { checkouts, grants: checkouts[0] ? loadFixerGrants(checkouts[0].root, agentId, checkouts.map((c) => c.root)) : [] };
-}
-
-/** Branch checked out in the most specific listed checkout containing `dir`, or null. */
-export function branchCheckedOutAt(dir, checkouts) {
-  const real = realpathNearestExisting(dir);
-  return checkouts.filter((c) => isInside(real, c.root)).sort((a, b) => b.root.length - a.root.length)[0]?.branch ?? null;
 }

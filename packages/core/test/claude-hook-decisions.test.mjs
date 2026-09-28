@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { decideBashGate, decideJudgeWriteGuard, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType, decideFixerWriteGuard, decideFixerBashGate } from "../src/claude/hook-decisions.mjs";
-import { extractFixerGitInvocations } from "../src/loop/bash-command-classify.mjs";
+import { decideBashGate, decideJudgeWriteGuard, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType, decideFixerWriteGuard } from "../src/claude/hook-decisions.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -1408,66 +1407,6 @@ test("decideFixerWriteGuard allows scratch outside every checkout and fails clos
   assert.equal(fixer("src/x.mjs").decision, "deny");
   assert.equal(fixer(`${FX_WT}/src/x.mjs`, { symlinked: true }).decision, "deny");
   assert.equal(fixer("/private/tmp/scratch.txt", { checkouts: [] }).decision, "deny");
-});
-
-test("decideFixerBashGate binds git commit/push to a grant for the checked-out branch", () => {
-  const gate = (command, branch = "issue-1", over = {}, paths = ["src/x.mjs"]) => decideFixerBashGate({
-    agentType: "fixer", invocations: extractFixerGitInvocations(command).map((i) => ({ ...i, branch, paths })), grants: [{ ...FX_GRANT, phase: "full" }], ...over,
-  }).decision;
-  for (const command of ["git commit -m x", "git push -u origin HEAD", "git push origin issue-1", "git push --force-with-lease origin +refs/heads/issue-1", "git push -o ci.skip origin issue-1", "git push origin HEAD:issue-1", "git push origin +issue-1:issue-1", "git push origin refs/heads/issue-1:refs/heads/issue-1", "npm test"]) {
-    assert.equal(gate(command), "allow", command);
-  }
-  // A bare or remote-only push takes its destination from config (remote.*.push, push.default), so it is denied.
-  for (const command of ["git push", "git push origin", "git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", "git push --follow-tags origin issue-1", "git push -d origin issue-1", "git push -o ci.skip origin main",
-    // git parse-options accepts unique long prefixes and short clusters.
-    "git push --tag origin issue-1", "git push --del origin issue-1", "git push --follow origin issue-1", "git push -fd origin issue-1", "git push --mir origin issue-1", "git push --pru origin issue-1",
-    // A destination HEAD creates refs/heads/HEAD on the remote; a foreign source rewrites the grant branch.
-    "git push origin issue-1:HEAD", "git push origin main:refs/heads/HEAD", "git push origin +main:issue-1", "git push origin abc123:issue-1", "git push origin HEAD:HEAD"]) {
-    assert.equal(gate(command), "deny", command);
-  }
-  assert.equal(gate("git commit -m x", "main"), "deny");
-  assert.equal(gate("git commit -m x", null), "deny");
-  assert.equal(gate("git commit -m x", "issue-1", { grants: [] }), "deny");
-  assert.equal(gate("git push origin main", "issue-1", { agentType: "developer" }), "allow");
-});
-
-test("decideFixerBashGate denies forms outside the git allowlist, out-of-authority commit paths and a commit_only push", () => {
-  const gate = (command, { paths = ["src/x.mjs"], phase = "full" } = {}) => decideFixerBashGate({
-    agentType: "fixer", invocations: extractFixerGitInvocations(command).map((i) => ({ ...i, branch: "issue-1", paths })), grants: [{ ...FX_GRANT, phase }],
-  });
-  // The reason names the detected construct and the accepted forms (the full deny table is in bash-command-classify.test.mjs).
-  for (const [command, construct] of [
-    ["git commit -m \"$(cat <<'EOF'\nfix: x\nEOF\n)\"", "command substitution"], ["git push origin issue-1 2>&1 | tail -5", "pipe"],
-    ["git -C /main cherry-pick abc", "`git cherry-pick`"], ["env -C /o git push origin issue-1", "git word that is not the plain first word of its command"],
-    ["git diff --output=/main/tmp/gate-fixer/x.json", "`git diff --output=/main/tmp/gate-fixer/x.json` (writes a file or runs a pager command)"],
-    // A forced add stages an ignored path that the commit's path list never sees.
-    ["git add -f node_modules/x.js && git commit -m x", "`git add -f` (stages an ignored path)"],
-  ]) {
-    const d = gate(command);
-    assert.equal(d.decision, "deny", command);
-    assert.ok(d.reason.includes(`uses ${construct}, outside`), `${command}: ${d.reason}`);
-    assert.match(d.reason, /Accepted: a plain.*`commit -F <file>`.*`push <remote> <refspec>`/, command);
-  }
-  assert.equal(gate("git commit -F msg.txt").decision, "allow");
-  assert.equal(gate("git push origin issue-1 2>&1").decision, "allow");
-  assert.equal(gate("git commit -am x", { paths: ["src/x.mjs", "test/a.test.mjs"] }).decision, "allow");
-  assert.match(gate("git commit -am x", { paths: ["src/x.mjs", "README.md"] }).reason, /"README\.md", outside the grant's allowedPaths/);
-  assert.equal(gate("git commit -m x", { paths: ["srcx/y.mjs"] }).decision, "deny", "segment prefix, never string prefix");
-  assert.match(gate("git commit -m x", { paths: null }).reason, /could not be computed/);
-  assert.equal(gate("git push origin issue-1", { paths: null }).decision, "allow", "a push includes no new paths");
-  assert.match(gate("git push origin issue-1", { phase: "commit_only" }).reason, /phase is commit_only/);
-  assert.equal(gate("git commit -m x", { phase: "commit_only" }).decision, "allow");
-});
-
-test("decideFixerBashGate evaluates every grant for the branch, so grant order never decides", () => {
-  const commitOnly = { ...FX_GRANT, phase: "commit_only" };
-  const full = { ...FX_GRANT, phase: "full" };
-  for (const grants of [[commitOnly, full], [full, commitOnly]]) {
-    const d = decideFixerBashGate({ agentType: "fixer", invocations: extractFixerGitInvocations("git push origin issue-1").map((i) => ({ ...i, branch: "issue-1" })), grants });
-    assert.equal(d.decision, "allow");
-  }
-  const d = decideFixerBashGate({ agentType: "fixer", invocations: extractFixerGitInvocations("git push origin issue-1").map((i) => ({ ...i, branch: "issue-1" })), grants: [commitOnly, commitOnly] });
-  assert.match(d.reason, /phase is commit_only/);
 });
 
 test("decideFixerWriteGuard leaves every non-fixer agent to the other boundaries", () => {

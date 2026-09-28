@@ -33,7 +33,6 @@ import {
   commandContainsDetachedWaitTool,
   commandContainsInlineInterpreter,
   commandContainsCodeVerificationEntrypoint,
-  matchesGitOption,
 } from "../loop/bash-command-classify.mjs";
 
 /**
@@ -851,84 +850,4 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
   return deny(grants.length === 0
     ? "no current fixer work-order pull grants a mutation authority"
     : `no current pull grants path ${JSON.stringify(rel)} on branch ${JSON.stringify(checkout.branch)}`);
-}
-
-// Matched through matchesGitOption, so `--tag`, `--del`, `--follow` and clusters such as `-fd` deny too.
-const PUSH_BEYOND_BRANCH = ["all", "mirror", "tags", "follow-tags", "delete", "prune"];
-const PUSH_VALUE_OPTIONS = new Set(["-o", "--push-option", "--repo", "--receive-pack", "--exec"]);
-
-// Why a `git push` leaves the grant branch, or null. A refspec (leading `+` allowed) is only `<branch>`,
-// `HEAD` or `refs/heads/<branch>`, or `<src>:<dst>` with src one of those and dst `<branch>` or
-// `refs/heads/<branch>`. Any other source rewrites the branch to foreign history, and a destination
-// `HEAD` names refs/heads/HEAD on the remote, never the checked-out branch.
-function pushBeyondGrant(args, branch) {
-  const positional = [];
-  for (let i = 0; i < args.length; i += 1) {
-    if (matchesGitOption(args[i], PUSH_BEYOND_BRANCH, "d")) return `\`${args[i]}\` pushes beyond the grant branch`;
-    if (args[i].startsWith("-")) {
-      if (PUSH_VALUE_OPTIONS.has(args[i])) i += 1;
-      continue;
-    }
-    positional.push(args[i]);
-  }
-  // A config-derived destination (remote.*.push, push.default) is never checked, so require it explicit.
-  if (positional.length < 2) return "a push must name an explicit remote and refspec (`git push origin <branch>`)";
-  const own = new Set([branch, `refs/heads/${branch}`]);
-  const src = new Set([...own, "HEAD"]);
-  for (const spec of positional.slice(1)) {
-    const parts = spec.replace(/^\+/u, "").split(":");
-    const allowed = parts.length === 1 ? src.has(parts[0]) : parts.length === 2 && src.has(parts[0]) && own.has(parts[1]);
-    if (!allowed) return `refspec ${JSON.stringify(spec)} is not \`${branch}\`, \`HEAD\` or \`HEAD:${branch}\`; the source and destination must both be the grant branch`;
-  }
-  return null;
-}
-
-/**
- * Decide whether a PreToolUse Bash command by the `fixer` agent must be denied (ADR 0107).
- * `invocations` come from extractFixerGitInvocations (default-deny): an `unresolvable` entry,
- * any git form outside its allowlist, is denied. Each `git commit` / `git push` needs a CURRENT
- * fixer grant whose branch is the branch checked out in the invocation's cwd; when several
- * grants name that branch, any one that permits the invocation allows it. Denied as well:
- * a commit whose `paths` (the checkout-relative paths it could include, computed by
- * the hook; null when git failed) are missing or leave the grant's allowedPaths, a push under
- * a `commit_only` grant, a push without an explicit remote and refspec, and a push whose
- * refspec names another source or destination. Every other command is allowed here.
- *
- * @param {Object} params
- * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload.
- * @param {{ subcommand: string|null, args: string[], branch: string|null, unresolvable?: boolean, construct?: string|null, paths?: string[]|null }[]} [params.invocations] - Resolved invocations.
- * @param {{ branch: string, allowedPaths: string[], phase: string }[]} [params.grants] - Current pull grants.
- * @returns {HookDecision}
- */
-export function decideFixerBashGate({ agentType = null, invocations = [], grants = [] }) {
-  if (normalizeAgentType(agentType) !== FIXER_AGENT_TYPE) return ALLOW;
-  for (const { subcommand, args = [], branch, unresolvable = false, construct = null, paths = null } of invocations) {
-    // Why one grant does not permit this invocation, or null when it does.
-    const refusedBy = (grant) => {
-      const outside = subcommand === "commit" && Array.isArray(paths) ? paths.find((p) => !inAllowedPaths(p, grant.allowedPaths)) : undefined;
-      return subcommand === "commit" && !Array.isArray(paths) ? "the paths the commit would include could not be computed"
-        : outside !== undefined ? `the commit would include ${JSON.stringify(outside)}, outside the grant's allowedPaths`
-          : subcommand === "push" && grant.phase === "commit_only" ? "the pulled work order's phase is commit_only"
-            : subcommand === "push" ? pushBeyondGrant(args, grant.branch) : null;
-    };
-    // Every grant for the branch counts (the write guard's union), so grant order never decides.
-    const matching = grants.filter((g) => typeof g?.branch === "string" && g.branch === branch);
-    const reasons = matching.map(refusedBy);
-    const why = unresolvable ? `the command uses ${construct ?? "a construct"}, outside the fixer's accepted git forms. ` +
-      "Accepted: a plain `&&`/`;` chain (no pipe, substitution, heredoc or `# comment`) where each git command starts with `git`, " +
-      "has at most one `-C <dir>` global option and runs status, diff, log, show, rev-parse, ls-files, merge-base, grep, blame, " +
-      "`branch [--show-current]`, add, `commit -F <file>` or `push <remote> <refspec>`"
-      : !branch ? "the branch checked out in its cwd could not be resolved"
-        : matching.length === 0 ? `no current fixer work-order pull grants branch ${JSON.stringify(branch)}`
-          : reasons.includes(null) ? null : reasons[0];
-    if (why) {
-      return {
-        decision: "deny",
-        reason: `Fixer mutation boundary (agents/fixer.agent.md, ADR 0107): refusing ${subcommand ? `\`git ${subcommand}\`` : "the git command"}: ${why}. ` +
-          "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs --ref <ref> --digest <digest> --execution <execution>` first; " +
-          "a fixer commits and pushes only mutationAuthority.branch from its checkout.",
-      };
-    }
-  }
-  return ALLOW;
 }

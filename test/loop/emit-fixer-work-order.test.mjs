@@ -355,7 +355,6 @@ test("F5: a cwd in another repo cannot make an in-repo target look like scratch;
     const unit = await emit({ allowedPaths: ["src"] });
     assert.equal(pull(unit, wt).status, 0);
     assert.equal(hook(wt, path.join(wt, "src", "x.mjs"), AGENT, foreign), "allow", "the grant resolves in the real repo");
-    assert.equal(bash(wt, `git -C ${root} commit -m x`, AGENT, foreign), "deny", "the main checkout's branch is still resolved");
     assert.equal(hook(other, path.join(wt, "src", "x.mjs")), "allow");
     assert.equal(hook(other, path.join(wt, "README.md")), "deny");
     const receiptPath = pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef);
@@ -389,12 +388,10 @@ test("F5: a pulled grant goes stale with the pull's own predicate; an edited out
     const actList = await readFile(files.actList);
     await writeFile(files.actList, JSON.stringify([{ ...ACT[0], line: 9 }]));
     assert.equal(hook(wt, target), "deny", "a changed required read grants nothing");
-    assert.equal(bash(wt, "git commit -m x"), "deny", "a changed required read grants no commit");
     await rm(files.actList);
     assert.equal(hook(wt, target), "deny", "a vanished required read grants nothing");
     await writeFile(files.actList, actList);
     assert.equal(hook(wt, target), "allow");
-    assert.equal(bash(wt, "git commit -m x"), "allow");
 
     const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
     const forged = path.join(root, "tmp", "gate-findings", "forged.json");
@@ -414,7 +411,6 @@ test("F5: a pulled grant goes stale with the pull's own predicate; an edited out
     await mkdir(wtRetired, { recursive: true });
     await writeFile(path.join(wtRetired, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date(clock).toISOString() }));
     assert.equal(hook(wt, target), "deny", "a retirement under the linked worktree's tmp/ grants nothing");
-    assert.equal(bash(wt, "git commit -m x"), "deny", "a retirement under the linked worktree's tmp/ grants no commit");
     await rm(path.join(wt, "tmp", "retired-gate-rounds"), { recursive: true });
     assert.equal(hook(wt, target), "allow");
 
@@ -438,10 +434,8 @@ test("F5: a grant binds to the agent_id that ran the pull; a replacement re-pull
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, "x\n");
     assert.equal(hook(wt, target), "allow");
-    assert.equal(bash(wt, "git add -A && git commit -m fix"), "allow");
     for (const agentId of ["agent-b", null]) {
       assert.equal(hook(wt, target, agentId), "deny", `${agentId} never pulled`);
-      assert.equal(bash(wt, "git add -A && git commit -m fix", agentId), "deny", `${agentId} never pulled`);
     }
     // A pull line with the right ref and execution but a wrong digest is refused and takes nothing over.
     assert.equal(pull(unit, wt, { agentId: "agent-b", digest: `sha256:${"0".repeat(64)}` }).status, 1);
@@ -453,70 +447,18 @@ test("F5: a grant binds to the agent_id that ran the pull; a replacement re-pull
     assert.equal(hook(wt, target), "allow", "a wrong-execution pull never revokes the pulling fixer's grant");
     assert.equal(pull(unit, wt, { agentId: "agent-b" }).status, 0);
     assert.equal(hook(wt, target, "agent-b"), "allow");
-    assert.equal(bash(wt, "git add -A && git commit -m fix", "agent-b"), "allow");
     assert.equal(hook(wt, target), "deny", "the replaced agent lost the grant");
-    assert.equal(bash(wt, "git add -A && git commit -m fix"), "deny", "the replaced agent lost the grant");
   });
 });
 
-test("F5: the Bash gate binds fixer git commit/push to the pulled branch and leaves other commands alone", async () => {
-  await withFixture(async ({ root, wt, emit }) => {
-    const unit = await emit();
-    for (const command of ["git commit -m fix", "git status && git push origin issue-1", "sh -c 'git -C . push'"]) {
-      assert.equal(bash(wt, command), "deny", `${command} without a pull`);
-    }
-    assert.equal(bash(wt, "npm test && git log --oneline -1"), "allow");
-    assert.equal(pull(unit, wt).status, 0);
-    for (const command of ["git commit -m fix", "git add -A && git commit -m fix && git push origin issue-1", "git push -u origin HEAD", "git commit -F msg.txt", "git push origin issue-1 2>&1"]) {
-      assert.equal(bash(wt, command), "allow", command);
-    }
-    for (const command of [
-      "git push", "git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", "git push --follow-tags origin issue-1", `cd ${root} && git commit -m x`, `git -C ${root} commit -m x`,
-      `git -C ${root} cherry-pick HEAD`, `env -C ${root} git commit -m x`, "git -c push.default=matching push", "\\git commit -m x",
-    ]) {
-      assert.equal(bash(wt, command), "deny", command);
-    }
-    // A chained invocation in another repository on the same branch name never borrows this grant.
-    const clone = path.join(path.dirname(root), "clone");
-    git(path.dirname(root), "clone", "-q", root, clone);
-    git(clone, "checkout", "-q", "-b", "issue-1", "origin/issue-1");
-    for (const command of [`git commit -m x && git -C ${clone} commit -m y`, `git push origin issue-1 && git -C ${clone} push origin issue-1`]) {
-      assert.equal(bash(wt, command), "deny", command);
-    }
-  });
-});
-
-test("F5: a narrowed grant denies committing an out-of-authority file, commit_only denies push, an edited plan grants nothing", async () => {
+test("F5: a plan edited in place grants nothing", async () => {
   await withFixture(async ({ wt, emit }) => {
-    await mkdir(path.join(wt, "src"));
-    await writeFile(path.join(wt, "src", "a.mjs"), "a\n");
-    await writeFile(path.join(wt, "README.md"), "r\n");
-    git(wt, "add", ".");
-    git(wt, "commit", "-q", "-m", "files");
-    const head = git(wt, "rev-parse", "HEAD");
-    const narrowed = (phase) => emit({ phase, headSha: head, allowedPaths: ["src"], fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
-    const unit = await narrowed("commit_only");
+    const unit = await emit({ allowedPaths: ["src"] });
     assert.equal(pull(unit, wt).status, 0);
-    await writeFile(path.join(wt, "README.md"), "changed via Bash\n");
-    assert.equal(bash(wt, "git commit -am fix"), "deny", "README.md is outside --allowed-path src");
-    git(wt, "checkout", "--", "README.md");
-    // A staged rename lists its out-of-authority source even under the default diff.renames.
-    git(wt, "mv", "README.md", "src/readme.md");
-    assert.equal(bash(wt, "git commit -m mv"), "deny", "the rename deletes README.md outside --allowed-path src");
-    git(wt, "mv", "src/readme.md", "README.md");
-    // A write earlier in the same command would escape the commit's path listing.
-    for (const command of ["echo x > README.md && git commit -am fix", "cp /tmp/a docs/b && git add -A && git commit -F m"]) {
-      assert.equal(bash(wt, command), "deny", command);
-    }
-    await writeFile(path.join(wt, "src", "a.mjs"), "fixed\n");
-    assert.equal(bash(wt, "git commit -am fix"), "allow");
-    assert.equal(bash(wt, "git push origin issue-1"), "deny", "a commit_only pull never pushes");
-    const full = await narrowed("full");
-    assert.equal(pull(full, wt).status, 0);
     assert.equal(hook(wt, path.join(wt, "src", "a.mjs")), "allow");
-    const plan = JSON.parse(await readFile(full.planPath, "utf8"));
+    const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
     plan.workOrder.mutationAuthority.allowedPaths = ["."];
-    await writeFile(full.planPath, JSON.stringify(plan));
+    await writeFile(unit.planPath, JSON.stringify(plan));
     assert.equal(hook(wt, path.join(wt, "src", "a.mjs")), "deny", "the edited plan no longer reproduces its workOrderDigest");
     assert.equal(hook(wt, path.join(wt, "README.md")), "deny");
   });
