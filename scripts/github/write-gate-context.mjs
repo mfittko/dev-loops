@@ -51,7 +51,6 @@ import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, norm
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
@@ -235,12 +234,12 @@ Optional:
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
-  --prev-head <sha>              FULL head commit SHA (40 or 64 hex chars) of the prior round's durable gate findings-log (mirrors resolve-angle-carry-forward.mjs's own --prev-head vocabulary). When supplied, every prior reject/defer-disposed finding attributed to an angle re-running THIS round (an angle in --angles not named in --carried-angles) is written to the round-bound <gate>-<headSha>.prior-dispositions.json and hash-bound as a required \`prior-dispositions\` read (a "do not re-raise" hint, skills/docs/gate-review-sub-loop-contract.md); the volatile tail carries only its entry count and read line. Fails OPEN, never crashes the briefing: an absent, unreadable, or malformed prior log simply omits the read (byte-identical volatile tail to omitting this flag) — it never blocks the write, suppresses a finding, or converts a reject into an approval. Omit for today's behavior (no hint block).
   --known-findings <path>        Default \`capture-review-threads.mjs --repo --pr\` output (every open or resolved thread, full bodies). Rendered to the round-bound <gate>-<headSha>.known-findings.json and hash-bound as a required \`known-findings\` read (volatile tail and every work order; never the prefix) when at least one thread exists. Fails closed (exit 1) if unreadable or not that shape.
   --tmp-root <path>              Root tmp directory. Omitted, the worktree-local gate-context
-                                 bundle is written under the worktree's tmp/ while the prior-head
-                                 findings-log ledger is read from the MAIN worktree's tmp/ (the stable
+                                 bundle is written under the worktree's tmp/ while the prior-round
+                                 findings-log ledgers are read from the MAIN worktree's tmp/ (the stable
                                  per-repo ledger location); an explicit path pins both.
+Prior dispositions (no flag): every closed prior round of this gate on this PR (a findings-log ledger at any other head) contributes its reject/defer-disposed findings; the latest disposition of a finding wins. The cumulative list, scoped to angles re-running this round (not in --carried-angles), is written in full to <gate>-<headSha>.prior-dispositions.json and hash-bound as a required \`prior-dispositions\` read (a "do not re-raise" hint, skills/docs/gate-review-sub-loop-contract.md). A ledger that is unreadable, malformed, of a foreign identity, or not clean/findings_present contributes nothing; no usable ledger omits the read.
 
 ${JQ_OUTPUT_USAGE}
 `.trim();
@@ -370,7 +369,6 @@ export function parseWriteGateContextCliArgs(argv) {
       "full-label": { type: "boolean" },
       "available-reviewers": { type: "string" },
       "carried-angles": { type: "string" },
-      "prev-head": { type: "string" },
       "known-findings": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -399,7 +397,6 @@ export function parseWriteGateContextCliArgs(argv) {
     fullLabel: false,
     availableReviewers: null,
     carriedAngles: null,
-    prevHead: null,
     knownFindingsPath: null,
     // Default undefined (not "tmp") so an OMITTED --tmp-root reaches the
     // main-worktree ledger anchor at the prior-disposition read; every
@@ -554,17 +551,6 @@ export function parseWriteGateContextCliArgs(argv) {
       options.carriedAngles = parseCarriedAnglesJsonArray(raw, parseError);
       continue;
     }
-    if (token.name === "prev-head") {
-      // FULL SHA only — mirrors resolve-angle-carry-forward.mjs's own
-      // --prev-head vocabulary: the prior findings-log path is keyed by the
-      // full SHA, so a prefix would resolve a path that can never exist.
-      const sha = normalizeFullHeadSha(requireTokenValue(token, parseError));
-      if (!sha) {
-        throw parseError("--prev-head must be the FULL head commit SHA (40 or 64 hex chars), not a short prefix — the prior findings-log path is keyed by the full SHA");
-      }
-      options.prevHead = sha;
-      continue;
-    }
     if (token.name === "known-findings") {
       const trimmed = requireTokenValue(token, parseError).trim();
       if (trimmed.length === 0) {
@@ -584,23 +570,6 @@ export function parseWriteGateContextCliArgs(argv) {
     .filter((k) => options[k] === undefined);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
-  }
-  // FAIL-CLOSED (mirrors resolve-angle-carry-forward.mjs's own same-head
-  // rejection): a same-head "prior" would read THIS round's own findings-log
-  // and seed it back as prior-round disposition memory. --head-sha accepts an
-  // abbreviated 7-64 hex spelling of the same commit, so a plain === would
-  // miss an abbreviated --head-sha; startsWith the SHORTER string against the
-  // LONGER one catches that direction. --prev-head is always the FULL SHA
-  // (enforced above) but may be spelled with either the 40-hex (SHA-1) or
-  // 64-hex (SHA-256) full digest — normalizeFullHeadSha accepts both — so a
-  // 64-char --head-sha and a 40-char --prev-head that is a literal prefix of
-  // it (or the reverse) is ALSO same-head and must be caught: check both
-  // prefix directions, not just prevHead.startsWith(headSha).
-  if (
-    typeof options.prevHead === "string"
-    && (options.prevHead.startsWith(options.headSha) || options.headSha.startsWith(options.prevHead))
-  ) {
-    throw parseError("--prev-head equals --head-sha — a same-head prior read would seed this round's own findings-log as prior-round disposition memory; omit --prev-head instead");
   }
   return options;
 }
@@ -684,7 +653,7 @@ export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot =
 }
 
 // Deterministic path for the referenced evidence file: the PR/issue bodies,
-// the diff (inline up to the cap, else a pointer), the changed-files summary
+// a pointer to the filtered diff (never its bytes), the changed-files summary
 // and the validation pointer. The briefing prefix binds it by sha256 in its
 // `## Required reads` manifest; reviewers read it in full.
 export function buildGateBriefingEvidencePath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
@@ -768,10 +737,10 @@ export function buildGateRequestPlanPath({ repo, pr, gate, headSha, tmpRoot = "t
 }
 
 /**
- * Size cap (bytes) above which the rendered briefing prefix falls back to
- * pointer mode for the diff section (a scope.diffPath reference when present,
- * else an explicit unavailable-pointer disclosure) instead of inlining the
- * diff text in a fenced block. No `gates.*` config knob exists for this
+ * Size cap (bytes) above which the briefing evidence reports pointer mode for
+ * the diff section. The diff text is never inlined in either mode (the
+ * filtered diff is the required `diff` read); the cap only selects
+ * prefixMode and the size disclosure. No `gates.*` config knob exists for this
  * yet — a named constant is the right size for a single fixed threshold;
  * promote to config only if a real need for tuning it emerges.
  */
@@ -824,9 +793,10 @@ function pickFence(text) {
 // run replaces the SAME old token with the SAME new token, nothing else)
 // collapses to one summary line. Fail-closed: any hunk not provably pure — an
 // unequal add/remove count, a change that touches more than one token, or a
-// second distinct substitution — renders in full. Operates ONLY on the
-// rendered-prefix text; the persisted `.diff` file (scope.diffPath) is never
-// touched, so a reviewer can always read the byte-exact original.
+// second distinct substitution — renders in full. The collapsed text is only
+// measured to select the inline/pointer mode and is never written to a
+// briefing file; the persisted diff files are never touched, so a reviewer
+// always reads the byte-exact filtered diff.
 // ---------------------------------------------------------------------------
 
 /**
@@ -1156,25 +1126,42 @@ export function collapsePureSubstitutionRuns(diffOutput) {
 }
 
 /**
- * Extract only the doc-file hunks from a unified diff (AC3 `docs-only`
- * scope): each file block whose path classifies as `docs` (classifyFile),
- * header + hunks, reassembled in original order. Returns `""` when the diff
- * carries no doc-file changes. AC8 collapsing is NOT re-applied here —
- * callers collapse the assembled slice themselves so a substitution run
- * spanning doc AND non-doc files still collapses within this narrower text.
- * A block whose path could not be resolved (`path` null/empty — a parse
- * failure, not a real non-doc file) is INCLUDED rather than dropped: a
- * `docs-only` reviewer can tolerate an over-included non-doc block, but a
- * silently omitted doc block would be a false "no doc-file hunks" verdict.
- * @param {string} diffOutput
- * @returns {string}
+ * True when a path is a non-empty string with no control character, so it
+ * can be rendered on an unfenced line without forging markdown structure.
+ * @param {unknown} p
+ * @returns {boolean}
  */
-function extractDocsOnlyDiff(diffOutput) {
-  const blocks = parseDiffFileBlocks(diffOutput).filter(
-    (b) => !(typeof b.path === "string" && b.path.length > 0) || classifyFile(b.path) === "docs",
-  );
-  if (blocks.length === 0) return "";
-  return blocks.map((b) => [b.header, ...b.hunks].join("\n")).join("\n");
+function isRenderablePath(p) {
+  return typeof p === "string" && p.length > 0 && !/[\x00-\x1f\x7f]/.test(p);
+}
+
+/**
+ * Push `- <label>` list lines for each renderable path, then one disclosure
+ * line naming how many paths were withheld for a control character.
+ * @param {string[]} lines
+ * @param {Array<{ path: unknown, label: string }>} entries
+ */
+function pushPathListLines(lines, entries) {
+  const withheld = entries.filter((e) => !isRenderablePath(e.path)).length;
+  for (const e of entries) if (isRenderablePath(e.path)) lines.push(`- ${e.label}`);
+  if (withheld > 0) lines.push(`(${withheld} paths with control characters withheld; check them in the diff read)`);
+}
+
+/**
+ * List the doc-file paths of a unified diff (AC3 `docs-only` scope): each
+ * file block whose path classifies as `docs` (classifyFile), deduplicated,
+ * in original order. The hunks themselves stay in the required `diff` read.
+ * Blocks whose path failed to parse are counted, never dropped silently.
+ * @param {string} diffOutput
+ * @returns {{ docFiles: string[], unparsedCount: number }}
+ */
+function listDocFilesInDiff(diffOutput) {
+  // A decoded path with a control character counts as unparsed: rendered
+  // unfenced, an embedded newline could forge a heading.
+  const paths = parseDiffFileBlocks(diffOutput).map((b) => (isRenderablePath(b.path) ? b.path : null));
+  const unparsedCount = paths.filter((p) => p === null).length;
+  const docFiles = paths.filter((p) => p !== null && classifyFile(p) === "docs");
+  return { docFiles: [...new Set(docFiles)], unparsedCount };
 }
 
 /**
@@ -1272,8 +1259,8 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
  * header (repo/PR/head/gate/worktree + the mandatory verify-fresh-review-context.mjs
  * instruction), the cwd and findings write-path invariants, the source-read
  * invariant, reviewer token discipline, and the `## Required reads` manifest
- * LAST, in that fixed order. Bulk evidence (PR/issue bodies, diff, changed
- * files, validation pointer) lives in the referenced evidence file
+ * LAST, in that fixed order. Bulk evidence (PR/issue bodies, diff pointer,
+ * changed files, validation pointer) lives in the referenced evidence file
  * ({@link renderBriefingEvidence}); this prefix binds it by sha256 and byte
  * count. Pure and deterministic: identical input always renders identical
  * bytes. The CLI resolves live PR/issue bodies from GitHub before rendering the
@@ -1322,29 +1309,50 @@ export function renderBriefingPrefix({
   return { text: lines.join("\n") + "\n" };
 }
 
-/**
- * `Excluded from the filtered diff (n):` lines for filterDiffForInline's
- * excludedFiles, or no lines when the list is empty.
- * @param {{path: string, reason: "default"|"configured"}[]} excludedFiles
- * @returns {string[]}
- */
-function renderExcludedFilesLines(excludedFiles) {
-  if (!Array.isArray(excludedFiles) || excludedFiles.length === 0) return [];
+// The diff section body shared by the evidence file and the changed-files
+// variant: the filtered diff is the hash-bound required `diff` read, so these
+// files only point at it and disclose its size, never repeat its bytes.
+// `filteredBytes` is the size of the pointed-at file; `collapsedBytes` only
+// explains the inline/pointer mode choice (AC8).
+// writeGateContext persists the filtered diff newline-terminated, so the
+// disclosed size counts that newline and equals the `diff` read's `bytes`.
+function persistedDiffBytes(text) {
+  return Buffer.byteLength(text, "utf8") + (text.endsWith("\n") ? 0 : 1);
+}
+
+function renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes, filteredBytes, diffPath }) {
+  if (!hasDiffText) return ["(no diff text captured for this bundle)"];
+  const sizeNote = prefixMode === "pointer"
+    ? `Filtered diff: ${filteredBytes} bytes. Its collapsed size (${collapsedBytes} bytes) exceeds the ${capBytes}-byte inline cap — pointer mode.`
+    : `Filtered diff: ${filteredBytes} bytes.`;
   return [
-    `Excluded from the filtered diff (${excludedFiles.length}):`,
-    ...excludedFiles.map((f) => `- ${f.path} (${f.reason})`),
+    `${sizeNote} It is the required \`diff\` read; this file does not repeat it. Read the filtered diff from:`,
+    `  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`,
   ];
 }
 
 /**
+ * `Excluded from the filtered diff (n):` lines for filterDiffForInline's
+ * excludedFiles, or no lines when the list is empty. Paths go through
+ * pushPathListLines, so a control-character path is withheld, never rendered.
+ * @param {string[]} lines
+ * @param {{path: string, reason: "default"|"configured"}[]} excludedFiles
+ */
+function pushExcludedFilesLines(lines, excludedFiles) {
+  if (!Array.isArray(excludedFiles) || excludedFiles.length === 0) return;
+  lines.push(`Excluded from the filtered diff (${excludedFiles.length}):`);
+  pushPathListLines(lines, excludedFiles.map((f) => ({ path: f.path, label: `${f.path} (${f.reason})` })));
+}
+
+/**
  * Render the referenced evidence file: PR body, linked-issue body (when
- * present), the diff at the reviewed head (inlined up to `capBytes`, else a
- * pointer to `diffPath`), a changed-files/adjacent-code summary, and the
- * validation pointer, in that fixed order. The briefing prefix binds this
- * file by sha256 in its `## Required reads`; reviewers read it in full.
- * Pure and deterministic.
+ * present), a pointer to the filtered diff at the reviewed head (`diffPath`,
+ * the required `diff` read; the diff bytes are never repeated here), a
+ * changed-files/adjacent-code summary, and the validation pointer, in that
+ * fixed order. The briefing prefix binds this file by sha256 in its
+ * `## Required reads`; reviewers read it in full. Pure and deterministic.
  *
- * prBody/issueBody/issueSections/diffOutput are untrusted GitHub text (PR
+ * prBody/issueBody/issueSections are untrusted GitHub text (PR
  * author or linked-issue author controlled) and are each wrapped in their own
  * fenced code block, sized per pickFence(). A fenced block renders as inert
  * literal text, so a hostile body cannot forge a `##` heading (e.g. a second
@@ -1364,8 +1372,8 @@ function renderExcludedFilesLines(excludedFiles) {
  * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. a single issue-reference label, or a comma-joined multi-issue list)
  * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
  * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
- * @param {string|null} [input.diffOutput] — full diff text, when captured
- * @param {string|null} [input.diffPath] — persisted filtered-diff pointer (pointer-mode fallback)
+ * @param {string|null} [input.diffOutput] — filtered diff text, when captured; sizes the pointer (prefixMode, diffBytes), never inlined
+ * @param {string|null} [input.diffPath] — persisted filtered diff, the required `diff` read this file points at
  * @param {string[]} [input.changedFiles]
  * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
  *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the changed-files list, only when non-empty.
@@ -1385,11 +1393,10 @@ export function renderBriefingEvidence({
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
   const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
-  // AC8: collapse provably-pure hunk runs BEFORE the inline/pointer cap
-  // decision — the collapsed bytes are what actually get inlined, so the cap
-  // and the disclosed byte count must agree with them, not the raw diff.
-  const renderedDiff = hasDiffText ? collapsePureSubstitutionRuns(diffOutput) : null;
-  const diffBytes = hasDiffText ? Buffer.byteLength(renderedDiff, "utf8") : 0;
+  // AC8: the inline/pointer mode is measured on the collapsed diff
+  // (provably-pure hunk runs folded); the disclosed "Filtered diff" size is
+  // the persisted filtered file's bytes (persistedDiffBytes).
+  const diffBytes = hasDiffText ? Buffer.byteLength(collapsePureSubstitutionRuns(diffOutput), "utf8") : 0;
   const prefixMode = hasDiffText && diffBytes > capBytes ? "pointer" : "inline";
 
   const lines = [];
@@ -1449,32 +1456,21 @@ export function renderBriefingEvidence({
   }
   lines.push(`## Diff at reviewed head (${headSha})`);
   lines.push("");
-  if (!hasDiffText) {
-    lines.push("(no diff text captured for this bundle)");
-  } else if (prefixMode === "inline") {
-    const diffFence = pickFence(renderedDiff);
-    lines.push(`${diffFence}diff`);
-    lines.push(renderedDiff.endsWith("\n") ? renderedDiff.slice(0, -1) : renderedDiff);
-    lines.push(diffFence);
-  } else {
-    lines.push(
-      `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the filtered diff from:`,
-    );
-    lines.push(`  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
-  }
+  const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
+  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPath })) lines.push(line);
   lines.push("");
   lines.push("## Changed files + adjacent-code summary");
   lines.push("");
   const files = Array.isArray(changedFiles) ? changedFiles : [];
   lines.push(`Changed files (${files.length}):`);
-  for (const f of files) lines.push(`- ${f}`);
-  lines.push(...renderExcludedFilesLines(excludedFiles));
+  pushPathListLines(lines, files.map((f) => ({ path: f, label: f })));
+  pushExcludedFilesLines(lines, excludedFiles);
   const adjacentFiles = adjacentCode && Array.isArray(adjacentCode.files)
     ? adjacentCode.files.filter((f) => f.role !== "changed")
     : [];
   if (adjacentCode) {
     lines.push(`Adjacent files (${adjacentFiles.length}):`);
-    for (const f of adjacentFiles) lines.push(`- ${f.path} (${f.role})`);
+    pushPathListLines(lines, adjacentFiles.map((f) => ({ path: f.path, label: `${f.path} (${f.role})` })));
     lines.push(
       `Stripped: ${adjacentCode.stripped?.length ?? 0}, Truncated: ${adjacentCode.truncated?.length ?? 0}, Missing: ${adjacentCode.missing?.length ?? 0}`,
     );
@@ -1499,13 +1495,15 @@ export function renderBriefingEvidence({
  * GATE_ANGLE_SCOPES). Always carries the PR body, linked-issue body/sections,
  * and the validation-results pointer (a narrow angle still needs its
  * mandatory inputs — AC1) plus a pointer BACK to the full referenced
- * evidence file so a reviewer can always widen. The diff itself differs by scope:
- * - "changed-files": the full diff (AC8-collapsed), same cap/pointer
- *   behavior as the full evidence file, but WITHOUT the adjacent-code bundle or the
- *   full evidence file's "Changed files + adjacent-code summary" section (the diff
- *   text itself still names every changed file).
- * - "docs-only": only doc-file hunks (classifyFile === "docs"), AC8-collapsed,
- *   always inlined (doc-only slices are bounded by definition).
+ * evidence file so a reviewer can always widen. Every variant carries the same
+ * pointer to the filtered diff (the required `diff` read) as the full evidence
+ * file and never the diff bytes, and none carries the adjacent-code bundle or
+ * the full evidence file's "Changed files + adjacent-code summary" section.
+ * By scope:
+ * - "changed-files": the pointer only (the diff itself names every changed
+ *   file).
+ * - "docs-only": the pointer plus the doc-file paths in the diff
+ *   (classifyFile === "docs"), so the scope stays visible.
  * Pure and deterministic, mirroring renderBriefingEvidence's guarantee: same
  * input renders the same bytes.
  *
@@ -1520,11 +1518,11 @@ export function renderBriefingEvidence({
  * @param {{label: string, body: string}[]|null} [input.issueSections]
  * @param {string|null} [input.diffOutput] — full diff text, when captured
  * @param {string|null} [input.diffPath] — persisted unfiltered `.diff`, linked unconditionally in the widen-back paragraph
- * @param {string|null} [input.filteredDiffPath] — persisted filtered diff (changed-files pointer-mode target; falls back to diffPath)
+ * @param {string|null} [input.filteredDiffPath] — persisted filtered diff (the pointer target; falls back to diffPath)
  * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
  *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the diff pointers, only when non-empty.
  * @param {string|null} [input.validationResultsPath]
- * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES; only consulted for "changed-files"
+ * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES; sizes the pointer's disclosure
  * @returns {{ text: string }}
  */
 export function renderScopedBriefingVariant(scope, {
@@ -1550,13 +1548,12 @@ export function renderScopedBriefingVariant(scope, {
   lines.push(
     `This is a narrowed companion to the full referenced evidence file, which always stays available at ${evidencePath} — read it directly to widen scope any time (AC1: a scoped briefing never loses access to the full bundle).`,
   );
-  // GATE-EXEC-BRIEFING-PREFIX: a scoped variant must ALSO link scope.diffPath
-  // and the context artifact, unconditionally — not only in the changed-files
-  // pointer-mode branch below — so a docs-only reviewer can widen straight to
-  // both without first reading the full prefix.
+  // GATE-EXEC-BRIEFING-PREFIX: a scoped variant also links the unfiltered
+  // diff and the context artifact unconditionally, so a scoped reviewer can
+  // widen straight to both without first reading the full prefix.
   lines.push(`Full diff (byte-exact): ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
   lines.push(`Context artifact: ${contextPath ?? "(context artifact path unavailable)"}`);
-  lines.push(...renderExcludedFilesLines(excludedFiles));
+  pushExcludedFilesLines(lines, excludedFiles);
   lines.push("");
   if (worktreeRoot) {
     lines.push(renderSourceReadInvariantSection(worktreeRoot));
@@ -1605,40 +1602,26 @@ export function renderScopedBriefingVariant(scope, {
     lines.push("");
   }
 
+  // The filtered diff is the unit's required `diff` read, so every variant
+  // points at it like the full evidence file does.
   const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
+  lines.push(`## Diff at reviewed head (${headSha})`);
+  lines.push("");
+  const diffBytes = hasDiffText ? Buffer.byteLength(collapsePureSubstitutionRuns(diffOutput), "utf8") : 0;
+  const prefixMode = diffBytes > capBytes ? "pointer" : "inline";
+  const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
+  for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPath: filteredDiffPath ?? diffPath })) lines.push(line);
   if (scope === "docs-only") {
-    lines.push("## Diff (doc-file hunks only)");
+    const { docFiles, unparsedCount } = hasDiffText ? listDocFilesInDiff(diffOutput) : { docFiles: [], unparsedCount: 0 };
     lines.push("");
-    const docsOnlyDiff = hasDiffText ? collapsePureSubstitutionRuns(extractDocsOnlyDiff(diffOutput)) : "";
-    if (docsOnlyDiff.length === 0) {
-      lines.push("(no doc-file hunks in this diff)");
-    } else {
-      const diffFence = pickFence(docsOnlyDiff);
-      lines.push(`${diffFence}diff`);
-      lines.push(docsOnlyDiff.endsWith("\n") ? docsOnlyDiff.slice(0, -1) : docsOnlyDiff);
-      lines.push(diffFence);
+    if (docFiles.length > 0) {
+      lines.push(`Doc files in this diff (${docFiles.length}); review their hunks in the \`diff\` read:`);
+      for (const f of docFiles) lines.push(`- ${f}`);
+    } else if (unparsedCount === 0) {
+      lines.push("(no doc files in this diff)");
     }
-  } else {
-    // "changed-files": the full diff, AC8-collapsed, same cap/pointer
-    // behavior as the full prefix — this variant's whole point is dropping
-    // the adjacent-code bundle, not the diff itself.
-    lines.push(`## Diff at reviewed head (${headSha})`);
-    lines.push("");
-    const renderedDiff = hasDiffText ? collapsePureSubstitutionRuns(diffOutput) : null;
-    const diffBytes = hasDiffText ? Buffer.byteLength(renderedDiff, "utf8") : 0;
-    if (!hasDiffText) {
-      lines.push("(no diff text captured for this bundle)");
-    } else if (diffBytes <= capBytes) {
-      const diffFence = pickFence(renderedDiff);
-      lines.push(`${diffFence}diff`);
-      lines.push(renderedDiff.endsWith("\n") ? renderedDiff.slice(0, -1) : renderedDiff);
-      lines.push(diffFence);
-    } else {
-      lines.push(
-        `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the filtered diff from:`,
-      );
-      lines.push(`  ${filteredDiffPath ?? diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
-    }
+    // An unparsed block may be a doc file, so absence is never claimed then.
+    if (unparsedCount > 0) lines.push(`(${unparsedCount} file blocks with unparsed paths; check them in the diff read)`);
   }
 
   const trimmedValidationResultsPath = typeof validationResultsPath === "string"
@@ -1740,63 +1723,153 @@ export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPost
 }
 
 /**
- * AC3 (issue 2175): pure extraction of the "do not re-raise" hint entries
- * from a prior gate findings-log — the `reject`/`defer`-disposed findings
+ * Pure extraction of the "do not re-raise" hint entries from the closed prior
+ * rounds of one gate: the `reject`/`defer`-disposed findings
  * (`applyJudgeDispositions`'s `judgeDisposition`, @dev-loops/core/loop/gate-fanin)
- * attributed to an angle re-running THIS round. An `act` (still-open)
- * disposition is deliberately excluded: it is not "already rejected" memory,
- * it is still live and belongs in the fresh findings a reviewer files, not in
- * a do-not-re-raise hint.
+ * attributed to an angle re-running THIS round. `logs` is ordered oldest
+ * round first. Findings fold by `fingerprintFinding` identity plus a
+ * non-empty disposition only, and the latest disposition wins, so any later
+ * `act` removes an earlier reject (whatever its other fields hold) and a
+ * later reject replaces an earlier defer. An `act` (still-open) disposition
+ * is never surfaced: it is still live and belongs in the fresh findings a
+ * reviewer files, not in a do-not-re-raise hint. Lossless: no entry cap and
+ * no field truncation.
  *
- * FAIL-OPEN, never throws: `log` may be `null`/malformed (absent or
- * unreadable prior findings-log, e.g. first round) — returns `[]`. A
- * malformed INDIVIDUAL finding (non-string angle/severity/summary, an
- * embedded newline that would forge a line in the volatile tail's
- * line-structured file, or a fingerprintFinding failure) is skipped
- * individually rather than aborting the whole extraction — one bad entry
- * must never suppress every other genuine hint.
+ * FAIL-OPEN, never throws: a `null`/malformed log contributes nothing. The
+ * field validity checks run only when an entry is emitted: a latest finding
+ * with a non-string or empty angle/severity/summary, or an embedded newline
+ * that would forge a line in the volatile tail's line-structured file, is
+ * skipped individually. A fingerprintFinding failure skips that finding from
+ * the fold. One bad entry never suppresses every other genuine hint.
  *
  * Attribution mirrors {@link buildCarryForwardPlan}'s own base-angle match
  * (`baseAngleName` + case-insensitive): a finding recorded under a
  * `<angle>-delta-at-...` re-review entry still attributes to its base angle.
+ * The fingerprint excludes the angle, so an entry is emitted when ANY angle
+ * that folded into the finding's latest disposition chain (consecutive folds
+ * with the same disposition) re-runs this round.
  *
  * @param {object} input
- * @param {object|null} input.log — the prior findings-log JSON (or null/absent)
+ * @param {Array<object|null>} input.logs — closed prior findings-log JSONs, oldest round first
  * @param {string[]} input.rerunningAngles — this round's angle names that are
  *   actually re-running (NOT carried forward) — only findings attributed to one
  *   of these are surfaced; a carried angle's reviewer never re-runs, so it has
  *   no context to seed.
  * @returns {Array<{fingerprint: string, angle: string, severity: string, summary: string, judgeRationale?: string}>}
  */
-export function resolvePriorDispositions({ log, rerunningAngles }) {
-  if (!log || typeof log !== "object" || !Array.isArray(log.findings)) return [];
+export function resolvePriorDispositions({ logs, rerunningAngles }) {
   const rerunningBase = new Set(
     (Array.isArray(rerunningAngles) ? rerunningAngles : [])
       .filter((a) => typeof a === "string" && a.trim().length > 0)
       .map((a) => baseAngleName(a.trim()).toLowerCase()),
   );
   if (rerunningBase.size === 0) return [];
-  const entries = [];
-  for (const finding of log.findings) {
-    if (!finding || typeof finding !== "object") continue;
-    const disposition = typeof finding.judgeDisposition === "string" ? finding.judgeDisposition.trim() : "";
-    if (disposition !== "reject" && disposition !== "defer") continue;
-    const angle = typeof finding.angle === "string" ? finding.angle.trim() : "";
-    const severity = typeof finding.severity === "string" ? finding.severity.trim() : "";
-    const summary = typeof finding.summary === "string" ? finding.summary.trim() : "";
-    if (angle.length === 0 || severity.length === 0 || summary.length === 0) continue;
-    if (!rerunningBase.has(baseAngleName(angle).toLowerCase())) continue;
-    const judgeRationale = typeof finding.judgeRationale === "string" ? finding.judgeRationale.trim() : "";
-    if ([angle, severity, summary, judgeRationale].some((v) => /[\r\n]/.test(v))) continue;
-    let fingerprint;
-    try {
-      fingerprint = fingerprintFinding(finding);
-    } catch {
-      continue;
+  const text = (v) => (typeof v === "string" ? v.trim() : "");
+  const latest = new Map();
+  for (const log of Array.isArray(logs) ? logs : []) {
+    if (!log || typeof log !== "object" || !Array.isArray(log.findings)) continue;
+    for (const finding of log.findings) {
+      if (!finding || typeof finding !== "object") continue;
+      const disposition = text(finding.judgeDisposition);
+      if (disposition.length === 0) continue;
+      let fingerprint;
+      try {
+        fingerprint = fingerprintFinding(finding);
+      } catch {
+        continue;
+      }
+      // The fingerprint excludes the angle, so every angle that disposed the
+      // finding the same way in a row shares the latest disposition.
+      const prior = latest.get(fingerprint);
+      const angles = prior && prior.disposition === disposition ? prior.angles : new Set();
+      const angle = text(finding.angle);
+      if (angle.length > 0) angles.add(baseAngleName(angle).toLowerCase());
+      // Delete first so the output order follows each finding's latest round.
+      latest.delete(fingerprint);
+      latest.set(fingerprint, { disposition, angles, finding, fingerprint });
     }
+  }
+  const entries = [];
+  for (const { disposition, angles, finding, fingerprint } of latest.values()) {
+    if (disposition !== "reject" && disposition !== "defer") continue;
+    if (![...angles].some((a) => rerunningBase.has(a))) continue;
+    const angle = text(finding.angle);
+    const severity = text(finding.severity);
+    const summary = text(finding.summary);
+    const judgeRationale = text(finding.judgeRationale);
+    if ([angle, severity, summary].some((v) => v.length === 0)) continue;
+    if ([angle, severity, summary, judgeRationale].some((v) => /[\r\n]/.test(v))) continue;
     entries.push({ fingerprint, angle, severity, summary, ...(judgeRationale.length > 0 ? { judgeRationale } : {}) });
   }
   return entries;
+}
+
+/**
+ * Discover the closed prior rounds of this gate on this PR: every
+ * `<gate>-<fullSha>.json` findings-log ledger in the gate-findings directory
+ * at a head other than `options.headSha` (either prefix direction, since
+ * --head-sha may be abbreviated). The ledgers live under the MAIN worktree
+ * tmp/, so a re-gate inside a linked worktree still finds them; --tmp-root
+ * still wins. Ordered oldest round first by the ledger's `loggedAt` (ties
+ * by SHA) for {@link resolvePriorDispositions}'s latest-wins fold.
+ *
+ * Filename SHAs match case-insensitively. FAIL OPEN on a path-resolution
+ * error (no prior rounds). Per ledger: FAIL OPEN on an unreadable or
+ * malformed file (it contributes nothing). FAIL CLOSED on identity: a ledger whose recorded headSha differs
+ * from its filename SHA, or whose recorded repo/pr/gate is absent or differs
+ * from this invocation, is dropped (mirrors resolve-angle-carry-forward.mjs's own
+ * recordedHead guard). FAIL CLOSED on verdict eligibility: only a `clean` or
+ * `findings_present` verdict is a CLOSED round whose reject/defer
+ * dispositions are settled memory; a `blocked`/other/missing verdict (a
+ * truncated write, an aborted round, a hand-edited ledger) is dropped. A
+ * missing directory (first round) yields `[]`.
+ *
+ * @returns {Promise<object[]>}
+ */
+async function readClosedPriorRoundLogs(options, { repoRoot }) {
+  let ledgerDir;
+  try {
+    const sampleLogPath = buildLogPath({
+      repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha,
+      tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot),
+    });
+    ledgerDir = path.resolve(repoRoot, path.dirname(sampleLogPath));
+  } catch {
+    return [];
+  }
+  const names = await readdir(ledgerDir).catch(() => []);
+  const head = String(options.headSha).trim().toLowerCase();
+  const namePrefix = `${options.gate}-`;
+  const repo = options.repo.trim().toLowerCase();
+  const gate = options.gate.trim().toLowerCase();
+  const rounds = [];
+  for (const name of names) {
+    if (!name.startsWith(namePrefix) || !name.endsWith(".json")) continue;
+    const sha = name.slice(namePrefix.length, -".json".length).toLowerCase();
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) || sha.startsWith(head) || head.startsWith(sha)) continue;
+    let log;
+    try {
+      log = JSON.parse(await readFile(path.join(ledgerDir, name), "utf8"));
+    } catch {
+      continue;
+    }
+    if (!log || typeof log !== "object") continue;
+    const recordedHead = typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
+    const recordedRepo = typeof log.repo === "string" ? log.repo.trim().toLowerCase() : null;
+    const recordedGate = typeof log.gate === "string" ? log.gate.trim().toLowerCase() : null;
+    // An absent field fails closed: the repo slug in the ledger path is not injective.
+    const identityMismatch =
+      recordedHead !== sha
+      || recordedRepo !== repo
+      || recordedGate !== gate
+      || log.pr === undefined || log.pr === null || Number(log.pr) !== Number(options.pr);
+    if (identityMismatch) continue;
+    const verdict = typeof log.verdict === "string" ? log.verdict.trim() : "";
+    if (verdict !== "clean" && verdict !== "findings_present") continue;
+    rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", log });
+  }
+  rounds.sort((a, b) => (a.loggedAt < b.loggedAt ? -1 : a.loggedAt > b.loggedAt ? 1 : a.sha < b.sha ? -1 : 1));
+  return rounds.map((round) => round.log);
 }
 
 /**
@@ -2140,8 +2213,9 @@ export function buildGateContextArtifact(options) {
   if (options.adjacentCode && typeof options.adjacentCode === "object") {
     artifact.adjacentCode = options.adjacentCode;
   }
-  // Whether the rendered briefing evidence file inlined the reviewed-head diff (in a
-  // fenced block), fell back to the diffPath pointer (size cap), or (CLI-only,
+  // Whether the reviewed-head filtered diff fits the inline cap ("inline"),
+  // exceeds it ("pointer"; the evidence file discloses the size either way and
+  // only points at the required `diff` read), or (CLI-only,
   // `--prefix-file`) recorded an orchestrator-authored prefix verbatim
   // ("file" — see writeGateContextWithPrefix below). Only set when a caller
   // actually produced/recorded a prefix (writeGateContext does, always).
@@ -2474,12 +2548,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   } else {
     // The diff under review is FILTERED — lockfiles, generated/vendored
     // trees, and any gates.reviewDiff.excludeGlobs from the loaded config are
-    // dropped whole-file. The evidence file inlines it (or points to it above
-    // the cap) and lists each excluded path with its reason, and
-    // `<gate>-<headSha>.filtered.diff` persists it as the required `diff`
-    // read in both modes, so the required read never scales with lockfile
-    // churn. The unfiltered diff stays at options.diffPath (scope.diffPath)
-    // as the optional `raw-diff` widening read.
+    // dropped whole-file. `<gate>-<headSha>.filtered.diff` persists it as the
+    // required `diff` read in both modes, and the evidence file only points
+    // at it (reviewers read the diff once) and lists each excluded path with
+    // its reason, so the required read never scales with lockfile churn. The
+    // unfiltered diff stays at options.diffPath (scope.diffPath) as the
+    // optional `raw-diff` widening read.
     const diffFilter = typeof options.diffOutput === "string" && options.diffOutput.length > 0
       ? filterDiffForInline(options.diffOutput, { excludeGlobs: options.config?.gates?.reviewDiff?.excludeGlobs ?? [] })
       : null;
@@ -2745,75 +2819,22 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     capabilities,
   });
 
-  // AC3 (issue 2175, head-bump re-gate disposition memory): when --prev-head
-  // is supplied, seed the angles re-running THIS round (options.angles minus
-  // options.carriedAngles) with the prior head's reject/defer-disposed
-  // findings. FAIL OPEN: an absent (first round), unreadable, malformed, or
-  // identity-mismatched (wrong headSha/repo/pr/gate) prior log never blocks
-  // this write — it only omits the "do not re-raise" hint, byte-identical to
-  // omitting --prev-head. Never suppresses a finding, never converts a reject
-  // into an approval — see {@link resolvePriorDispositions}.
-  let priorDispositions = [];
-  if (typeof options.prevHead === "string" && options.prevHead.length > 0) {
-    try {
-      // The prior findings-log ledger lives under the MAIN worktree tmp
-      //; read it there so a re-gate inside a linked worktree still
-      // recovers the prior head's reject/defer disposition memory instead of
-      // silently re-raising already-disposed findings. --tmp-root still wins.
-      const priorLogPath = buildLogPath({
-        repo: options.repo,
-        pr: options.pr,
-        gate: options.gate,
-        headSha: options.prevHead,
-        tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot),
-      });
-      const priorLog = JSON.parse(await readFile(path.resolve(repoRoot, priorLogPath), "utf8"));
-      // FAIL-CLOSED identity check (mirrors resolve-angle-carry-forward.mjs's
-      // own recordedHead guard): the log PATH is keyed by --prev-head, but a
-      // stale or misplaced ledger sitting at that path could carry a
-      // different round's own repo/pr/gate/headSha. Thrown here, not
-      // reconciled — the surrounding try/catch below already treats any
-      // reader error as "no usable prior round" (omit the hint, byte-
-      // identical to absent --prev-head), so this never crashes the write.
-      const recordedHead = typeof priorLog?.headSha === "string" ? priorLog.headSha.trim().toLowerCase() : null;
-      const recordedRepo = typeof priorLog?.repo === "string" ? priorLog.repo.trim().toLowerCase() : null;
-      const recordedGate = typeof priorLog?.gate === "string" ? priorLog.gate.trim().toLowerCase() : null;
-      const recordedPr = priorLog?.pr;
-      const identityMismatch =
-        recordedHead !== options.prevHead
-        || (recordedRepo !== null && recordedRepo !== options.repo.trim().toLowerCase())
-        || (recordedGate !== null && recordedGate !== options.gate.trim().toLowerCase())
-        || (recordedPr !== undefined && recordedPr !== null && Number(recordedPr) !== Number(options.pr));
-      if (identityMismatch) {
-        throw new Error(`prior gate findings-log at ${priorLogPath} does not match this invocation's identity — refusing to carry its dispositions (fail-closed)`);
-      }
-      // FAIL-CLOSED verdict-eligibility check (mirrors resolve-angle-carry-
-      // forward.mjs's own carry-forward-eligible guard): only a `clean` or
-      // `findings_present` prior verdict is a genuinely CLOSED round whose
-      // reject/defer dispositions are trustworthy "already litigated"
-      // memory. A `blocked`/other/missing verdict is not a settled round —
-      // e.g. a truncated write, an aborted round, or a hand-edited ledger —
-      // and its findings' judgeDisposition fields carry no such guarantee.
-      // Thrown here, caught by the surrounding try/catch as "no usable prior
-      // round" (omit the hint), never fabricates disposition memory from an
-      // ineligible log.
-      const recordedVerdict = typeof priorLog?.verdict === "string" ? priorLog.verdict.trim() : "";
-      if (recordedVerdict !== "clean" && recordedVerdict !== "findings_present") {
-        throw new Error(`prior gate findings-log at ${priorLogPath} has verdict ${JSON.stringify(priorLog?.verdict ?? null)}, not carry-eligible (clean or findings_present) — refusing to carry its dispositions (fail-closed)`);
-      }
-      const carriedSet = new Set(
-        (Array.isArray(options.carriedAngles) ? options.carriedAngles : [])
-          .filter((a) => typeof a === "string")
-          .map((a) => a.trim().toLowerCase()),
-      );
-      const rerunningAngles = (Array.isArray(options.angles) ? options.angles : [])
-        .filter((a) => typeof a === "string" && !carriedSet.has(a.trim().toLowerCase()));
-      priorDispositions = resolvePriorDispositions({ log: priorLog, rerunningAngles });
-    } catch {
-      // Absent/unreadable/malformed-JSON prior log — fail open (see doc above).
-      priorDispositions = [];
-    }
-  }
+  // Head-bump re-gate disposition memory: seed the angles re-running THIS
+  // round (options.angles minus options.carriedAngles) with the cumulative
+  // reject/defer dispositions of every closed prior round of this gate.
+  // Never suppresses a finding, never converts a reject into an approval —
+  // see {@link resolvePriorDispositions}.
+  const carriedSet = new Set(
+    (Array.isArray(options.carriedAngles) ? options.carriedAngles : [])
+      .filter((a) => typeof a === "string")
+      .map((a) => a.trim().toLowerCase()),
+  );
+  const rerunningAngles = (Array.isArray(options.angles) ? options.angles : [])
+    .filter((a) => typeof a === "string" && !carriedSet.has(a.trim().toLowerCase()));
+  const priorDispositions = resolvePriorDispositions({
+    logs: await readClosedPriorRoundLogs(options, { repoRoot }),
+    rerunningAngles,
+  });
   // Reference seeding, lossless: the full list goes to a round-bound file,
   // hash-bound as a required read. The shared prefix never lists it (it is
   // round-level, after the cache boundary); the volatile tail and every work

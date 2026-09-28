@@ -309,8 +309,7 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
     // ledger must not count as a prior round for THIS invocation (its head could
     // otherwise satisfy a marker's prevHead membership check). A field that is
     // present must match; an absent field is tolerated (older ledger shape), and
-    // the directory itself already segregates by repo/pr. Mirrors
-    // write-gate-context.mjs's own prior-log identity check.
+    // the directory itself already segregates by repo/pr.
     if (!log || typeof log !== "object") continue;
     const recordedHead = typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
     const recordedGate = typeof log.gate === "string" ? log.gate.trim() : null;

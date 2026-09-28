@@ -698,16 +698,17 @@ export function verifyPromptLeadingAlignment({ promptLeading, prefixBytes, prefi
  * ------------------------------------------------------------------ */
 
 /**
- * Default excluded path patterns for the diff INLINED into a reviewer
- * prompt's shared per-head block: lockfiles (high-churn, not
- * review-relevant — the file's CHANGE is still listed in the changed-files
- * summary, only its hunk text is dropped from the inlined diff) and common
+ * Default excluded path patterns for the filtered diff that
+ * write-gate-context.mjs persists as the reviewer's required `diff` read:
+ * lockfiles (high-churn, not review-relevant — the file's CHANGE is still
+ * listed in the changed-files summary, only its hunk text is dropped from
+ * the filtered diff) and common
  * generated/vendored trees. ALWAYS applied on top of any caller-supplied
  * `excludeGlobs` in {@link filterDiffForInline} — never replaced by it, so a
  * project-specific config gap can't silently un-exclude a lockfile. A file
  * excluded here is not deleted from the repo or the diff on disk; it stays
  * readable on demand (`git diff -- <path>` in the reviewed worktree, or the
- * full unfiltered `.diff` pointer file), only not inlined by default.
+ * full unfiltered `.diff` file), only left out of the filtered diff.
  *
  * Glob subset: `**\/` matches zero-or-more whole path segments, a lone `**`
  * matches any suffix, a single `*` matches within one path segment only —
@@ -776,8 +777,8 @@ export function matchesDiffExcludeGlob(relPath, pattern) {
 }
 
 /**
- * Classify why a diff file is excluded from inlining, or `null` when it
- * should be inlined. Checks {@link DEFAULT_DIFF_EXCLUDE_GLOBS} first, then
+ * Classify why a diff file is excluded from the filtered diff, or `null`
+ * when it is kept. Checks {@link DEFAULT_DIFF_EXCLUDE_GLOBS} first, then
  * any caller-supplied `excludeGlobs` — the default set can never be
  * disabled by a caller's config.
  * @param {string} relPath
@@ -801,7 +802,7 @@ export function classifyDiffFileExclusion(relPath, { excludeGlobs = [] } = {}) {
  * (deletions), then to the `diff --git a/X b/Y` header's second token. This
  * is a best-effort extraction for FILTERING purposes only (unlike a
  * content-fidelity transform, a path this misses just fails open to
- * "inlined" — never mis-drops a file), so it does not attempt full
+ * "kept" — never mis-drops a file), so it does not attempt full
  * git-quoted-path decoding (rare: a path containing a quote/control
  * byte/non-ASCII byte under core.quotePath) — see
  * `scripts/github/write-gate-context.mjs`'s `decodeGitDiffPathToken` for
@@ -831,7 +832,7 @@ function extractDiffBlockPath(blockLines) {
  * `rename from`/`rename to`, `copy from`/`copy to`, and `---`/`+++`. A
  * configured exclusion drops a block only when every one of these paths is
  * excluded, so a rename or copy across the boundary of a configured tree
- * stays inlined (same rule as ADR 0108's scope count).
+ * stays in the filtered diff (same rule as ADR 0108's scope count).
  * @param {string[]} blockLines
  * @returns {string[]}
  */
@@ -855,8 +856,8 @@ function extractDiffBlockTouchedPaths(blockLines) {
 }
 
 /**
- * Filter a unified diff (`git diff` output) down to the files that should be
- * INLINED into a reviewer prompt's shared per-head block:
+ * Filter a unified diff (`git diff` output) down to the files the filtered
+ * diff keeps (the reviewer's required `diff` read):
  * lockfiles, generated/vendored trees, and any caller-configured
  * `excludeGlobs` are dropped whole-file (header + all hunks), every other
  * file's block passes through byte-for-byte unchanged. Excluding a file here

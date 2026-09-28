@@ -3574,6 +3574,14 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     });
   }
 
+  // The moved-code guarantee check lives in the existing correctness angle;
+  // the angle sets above stay unchanged (no new angle).
+  test("the correctness angle prompt carries the moved-code guarantee check", async () => {
+    const { loadDevLoopConfig, resolveReviewerRole } = await import("../src/config/config.mjs");
+    const { config } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.match(resolveReviewerRole(config, "correctness").prompt, /moves or re-hosts code, list what the old code path guaranteed \(bounds, timeouts, injected dependencies, error handling\) and flag each guarantee that the new path drops/);
+  });
+
   // Every angle that had a real config.personas[angle] entry pre-#1404 (a
   // persona + a written prompt, not just a BUILTIN_PERSONAS fallback) must
   // still resolve to the SAME persona and a prompt with the same recognizable
