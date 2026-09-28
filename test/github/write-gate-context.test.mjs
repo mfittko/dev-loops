@@ -7310,7 +7310,7 @@ test("writeGateContext: an oversized prior findings-log is written in full to a 
     const totalFindings = 35;
     const longSummary = "x".repeat(2000);
     await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
-      headSha: prevHead,
+      repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead,
       verdict: "findings_present",
       findings: Array.from({ length: totalFindings }, (_, i) => ({
         angle: "correctness",
@@ -7350,7 +7350,7 @@ test("writeGateContext: a same-head rebuild that changes only the prior disposit
     const logPath = path.resolve(repoRoot, buildLogPath({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
     await mkdir(path.dirname(logPath), { recursive: true });
     const writeLog = (summary) => writeFile(logPath, JSON.stringify({
-      headSha: prevHead, verdict: "findings_present",
+      repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, verdict: "findings_present",
       findings: [{ angle: "correctness", severity: "medium", summary, judgeDisposition: "reject" }],
     }), "utf8");
     const args = [
@@ -7380,7 +7380,7 @@ test("writeGateContext REFUSES a same-head rebuild that would rewrite the prior 
     const logPath = path.resolve(repoRoot, buildLogPath({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
     await mkdir(path.dirname(logPath), { recursive: true });
     const writeLog = (summary) => writeFile(logPath, JSON.stringify({
-      headSha: prevHead, verdict: "findings_present",
+      repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, verdict: "findings_present",
       findings: [{ angle: "correctness", severity: "medium", summary, judgeDisposition: "reject" }],
     }), "utf8");
     const args = [
@@ -7553,7 +7553,7 @@ test("writeGateContext: a prior reject-disposed finding for a RE-RUNNING angle i
     const logPath = buildLogPath({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
     await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
     await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
-      headSha: prevHead,
+      repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: prevHead,
       verdict: "findings_present",
       findings: [
         { angle: "correctness", severity: "medium", summary: "prior rejected nit", judgeDisposition: "reject", judgeRationale: "already covered" },
@@ -7598,6 +7598,9 @@ test("writeGateContext: round-4 prior dispositions accumulate every closed prior
     await writeLedger("b".repeat(40), { loggedAt: "2026-01-03T00:00:00.000Z", verdict: "clean", findings: [] });
     await writeLedger("d".repeat(40), { repo: "other/repo", findings: [f("foreign identity", "reject")] });
     await writeLedger("e".repeat(40), { headSha: "f".repeat(40), findings: [f("foreign head", "reject")] });
+    await writeLedger("5".repeat(40), { repo: undefined, findings: [f("missing repo", "reject")] });
+    await writeLedger("6".repeat(40), { pr: undefined, findings: [f("missing pr", "reject")] });
+    await writeLedger("7".repeat(40), { gate: undefined, findings: [f("missing gate", "reject")] });
     await writeLedger("1".repeat(40), { verdict: "blocked", findings: [f("unsettled verdict", "reject")] });
     await writeLedger("2".repeat(40), { verdict: undefined, findings: [f("missing verdict", "reject")] });
     await writeLedger(head.padEnd(40, "0"), { findings: [f("current head", "reject")] });

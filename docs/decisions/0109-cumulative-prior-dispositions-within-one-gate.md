@@ -14,7 +14,7 @@ ADR 0070 seeded a re-running reviewer with the dispositions of the one prior hea
 
 `write-gate-context.mjs` has no `--prev-head` option and no alias; the parser rejects it as an unknown option. `resolve-angle-carry-forward.mjs` keeps its own `--prev-head`. On every run the context builder reads every `<gate>-<sha>.json` findings-log ledger of the same gate on the PR at a head other than the current head, from the main-anchored ledger directory. It orders the ledgers oldest round first and folds findings by `fingerprintFinding` identity. The latest disposition of a finding wins, so a later `act` removes an earlier reject.
 
-The read fails open per ledger: an unreadable or malformed ledger contributes nothing. The identity and verdict-eligibility checks fail closed per ledger: a foreign repo, PR, gate or head, or a verdict other than `clean` or `findings_present`, drops that ledger. The cumulative list stays lossless per [ADR 0086](./0086-gate-fanout-reference-seeded-work-orders.md), with no entry cap, per-field truncation or overflow line.
+The read fails open per ledger: an unreadable or malformed ledger contributes nothing. The identity and verdict-eligibility checks fail closed per ledger: an absent or foreign repo, PR, gate or head, or a verdict other than `clean` or `findings_present`, drops that ledger. The cumulative list stays lossless per [ADR 0086](./0086-gate-fanout-reference-seeded-work-orders.md), with no entry cap, per-field truncation or overflow line.
 
 We rejected carrying dispositions across gates, because an earlier gate judged a different scope. We rejected carrying `act` dispositions, because they are live findings.
 

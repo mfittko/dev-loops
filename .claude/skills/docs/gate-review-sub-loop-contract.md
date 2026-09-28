@@ -1183,7 +1183,7 @@ count and that read line, so a large prior log never grows the reviewer prompt. 
 deliberately excluded — it is live findings territory, not do-not-re-raise memory. Each
 ledger is checked on its own. The read FAILS OPEN per ledger: an unreadable or malformed
 ledger contributes nothing. The identity and verdict checks FAIL CLOSED per ledger: a ledger
-whose recorded `headSha` differs from its filename SHA, whose recorded repo/PR/gate differs
+whose recorded `headSha` differs from its filename SHA, whose recorded repo/PR/gate is absent or differs
 from this run, or whose verdict is not `clean`/`findings_present` contributes nothing. With no
 usable ledger (first round included), the builder omits the read and renders the same volatile
 tail as a round with no prior dispositions; it never blocks the write,

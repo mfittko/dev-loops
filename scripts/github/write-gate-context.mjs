@@ -1771,8 +1771,8 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  * Filename SHAs match case-insensitively. FAIL OPEN on a path-resolution
  * error (no prior rounds). Per ledger: FAIL OPEN on an unreadable or
  * malformed file (it contributes nothing). FAIL CLOSED on identity: a ledger whose recorded headSha differs
- * from its filename SHA, or whose recorded repo/pr/gate differs from this
- * invocation, is dropped (mirrors resolve-angle-carry-forward.mjs's own
+ * from its filename SHA, or whose recorded repo/pr/gate is absent or differs
+ * from this invocation, is dropped (mirrors resolve-angle-carry-forward.mjs's own
  * recordedHead guard). FAIL CLOSED on verdict eligibility: only a `clean` or
  * `findings_present` verdict is a CLOSED round whose reject/defer
  * dispositions are settled memory; a `blocked`/other/missing verdict (a
@@ -1812,11 +1812,12 @@ async function readClosedPriorRoundLogs(options, { repoRoot }) {
     const recordedHead = typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
     const recordedRepo = typeof log.repo === "string" ? log.repo.trim().toLowerCase() : null;
     const recordedGate = typeof log.gate === "string" ? log.gate.trim().toLowerCase() : null;
+    // An absent field fails closed: the repo slug in the ledger path is not injective.
     const identityMismatch =
       recordedHead !== sha
-      || (recordedRepo !== null && recordedRepo !== repo)
-      || (recordedGate !== null && recordedGate !== gate)
-      || (log.pr !== undefined && log.pr !== null && Number(log.pr) !== Number(options.pr));
+      || recordedRepo !== repo
+      || recordedGate !== gate
+      || log.pr === undefined || log.pr === null || Number(log.pr) !== Number(options.pr);
     if (identityMismatch) continue;
     const verdict = typeof log.verdict === "string" ? log.verdict.trim() : "";
     if (verdict !== "clean" && verdict !== "findings_present") continue;
