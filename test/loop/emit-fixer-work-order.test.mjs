@@ -2,7 +2,7 @@
 // emission -> compact dispatch -> sanctioned pull -> guarded mutation -> checked disposition.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync } from "node:fs";
+import { chmodSync, existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
@@ -363,6 +363,14 @@ test("F5: a cwd in another repo cannot make an in-repo target look like scratch;
     await writeFile(movedPlan, await readFile(unit.planPath));
     await writeFile(receiptPath, JSON.stringify({ ...receipt, subject: { ...receipt.subject, planPath: movedPlan } }));
     assert.equal(hook(wt, path.join(wt, "src", "x.mjs")), "deny");
+  });
+});
+
+test("F5: a case-variant path to an in-repo file denies without a pull on a case-insensitive filesystem", async () => {
+  await withFixture(async ({ root, wt }) => {
+    const variant = path.join(path.dirname(root), "REPO", path.relative(root, wt), "README.md");
+    if (!existsSync(path.dirname(variant))) return; // case-sensitive filesystem: no variant path exists
+    assert.equal(hook(wt, variant), "deny", "a case-variant in-repo path is not scratch");
   });
 });
 
