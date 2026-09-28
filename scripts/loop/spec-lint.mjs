@@ -34,7 +34,7 @@ Output (stdout, JSON):
                 "adrs":  { "status": "ran" } | { "status": "skipped", "reason" } } }
 
 Finding kinds: unknown_rule_id, unknown_adr, adr_not_accepted, adr_superseded, adr_amended.
-ADR citation forms: "ADR NNNN", "ADR-NNNN" and docs/decisions/NNNN-*.md links.
+ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
 
