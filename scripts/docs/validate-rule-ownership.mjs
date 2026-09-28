@@ -122,12 +122,6 @@ export function isRefusalPathCitation(line, tokenIndex) {
   return indexInsideStringLiteral(line, tokenIndex) && REFUSAL_SIGNAL_RE.test(line);
 }
 
-// Registry-ID-shaped tokens that appear in runtime source but are ordinary
-// English/technical/placeholder tokens, not rule citations. Mirrors the
-// KNOWN_INTENTIONAL_DUPLICATE_SENTENCES allowlist pattern: without this, a raw
-// shape scan would flag FAIL-CLOSED / BEST-EFFORT / PROJ-123 as phantom rule
-// citations. A NEW unknown token in runtime source that is not a real registry
-// ID and not on this list is treated as a phantom citation (gating).
 // Cited rule IDs whose definition lands in a later, drain-ordered change. A
 // listed ID may be cited before it is defined (no unresolved_rule_reference or
 // phantom_rule_citation); once it is defined the entry is stale and gates
@@ -135,6 +129,12 @@ export function isRefusalPathCitation(line, tokenIndex) {
 // cited ID still fails.
 export const FORWARD_RULE_REFERENCES = Object.freeze(new Set(["GATE-EXEC-HARNESS-JOIN"]));
 
+// Registry-ID-shaped tokens that appear in runtime source but are ordinary
+// English/technical/placeholder tokens, not rule citations. Mirrors the
+// KNOWN_INTENTIONAL_DUPLICATE_SENTENCES allowlist pattern: without this, a raw
+// shape scan would flag FAIL-CLOSED / BEST-EFFORT / PROJ-123 as phantom rule
+// citations. A NEW unknown token in runtime source that is not a real registry
+// ID and not on this list is treated as a phantom citation (gating).
 const NON_RULE_TOKENS = new Set([
   "ACCEPT-CRITERIA-VERIFY-AND",
   "AGENT-LEVEL",

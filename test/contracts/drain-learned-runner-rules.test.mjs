@@ -107,6 +107,7 @@ test("GATE-EXEC-VALIDATION-RESOLUTION names the verdict writer as its enforcemen
   assert.match(flat, /A typed incomplete artifact satisfies this check\./);
   assert.match(flat, /The verdict writer checks only the artifact's presence, readability and head stamp\./);
   assert.match(flat, /The reviewer gate-evidence finding path, not the verdict writer, prevents a `clean` verdict over an incomplete artifact\./);
+  assert.match(flat, /pass that same path as `upsert-checkpoint-verdict\.mjs --context-tmp-root <path>`/);
 });
 
 test("GATE-EXEC-NO-CWD-DEPENDENCE cites WORKTREE-SCRIPT-LAUNCHER-CWD by ID", async () => {

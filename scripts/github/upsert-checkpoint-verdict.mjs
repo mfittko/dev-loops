@@ -410,6 +410,12 @@ Optional:
                                             helper. Never changes the rendered comment
                                             body. Pure no-op (result carries no
                                             specAuthority field) when absent.
+  --context-tmp-root <path>                 Root tmp directory holding this round's
+                                            gate-context bundle, including the
+                                            <gate>-<head>.validation.json artifact a
+                                            fanout_fanin verdict requires. Default:
+                                            tmp. When resolve-validation.mjs used an
+                                            explicit --tmp-root, pass that same path.
 Output (stdout, JSON):
   {
     "ok": true,
@@ -643,6 +649,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       auto: { type: "boolean" },
       "interactive-confirm": { type: "boolean" },
       "spec-authority": { type: "string" },
+      "context-tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -672,6 +679,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     auto: false,
     interactiveConfirm: false,
     specAuthority: undefined,
+    contextTmpRoot: undefined,
     jq: undefined,
     silent: false,
   };
@@ -833,6 +841,11 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     }
     if (token.name === "spec-authority") {
       options.specAuthority = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "context-tmp-root") {
+      options.contextTmpRoot = requireTokenValue(token, parseError).trim();
+      if (options.contextTmpRoot.length === 0) throw parseError("--context-tmp-root requires a non-empty path");
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -2309,8 +2322,8 @@ async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = def
  * check: it proves the round resolved its validation, and reviewers already
  * report it as incomplete evidence.
  */
-export async function assertGateValidationArtifact({ repo, pr, gate, headSha, repoRoot }) {
-  const relPath = buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot: "tmp" });
+export async function assertGateValidationArtifact({ repo, pr, gate, headSha, repoRoot, contextTmpRoot }) {
+  const relPath = buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot: contextTmpRoot || "tmp" });
   const expectedHead = String(headSha).toLowerCase();
   let problem = "is absent";
   for (const root of resolveLedgerCheckouts(repoRoot)) {
@@ -3063,7 +3076,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // GATE-EXEC-VALIDATION-RESOLUTION enforcement: the round must have run
     // run-gate-validation.mjs once for the reviewed head. Same opt-out and
     // placement as the ledger refusal above, so its message wins when both fire.
-    await assertGateValidationArtifact({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, repoRoot });
+    await assertGateValidationArtifact({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, repoRoot, contextTmpRoot: options.contextTmpRoot });
   }
   // FINDINGS-SOURCE FOOTGUN WARNING: a fanout_fanin round posted with
   // --findings-json but no --findings-ledger silently files ZERO inline

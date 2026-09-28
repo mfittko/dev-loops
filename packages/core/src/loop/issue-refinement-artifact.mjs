@@ -1282,12 +1282,15 @@ export function validateTrackerBackedPrBodySpec({ body = "", closingIssues = [] 
 // Spec extraction accepts only the canonical section names, each anchored to
 // the whole heading name. Array order is the name priority (`Definition of
 // done` before `DoD`). The broader PR-body families (`AC`, `Done`, decorated
-// `(v2)` forms) stay with validatePrBodySpec. Two intended differences from the
-// former H2-only reader: names pass through heading normalization (a trailing
-// colon, a closing `#` run and emphasis are stripped), so `## Acceptance
-// criteria:` and `## **Definition of done**` match; and the section parser is
-// fence-aware, so a fenced `##` line no longer ends a section. Either change
-// can alter the specDigest of a body that uses those forms.
+// `(v2)` forms) stay with validatePrBodySpec. Three intended differences from
+// the former H2-only reader: names pass through heading normalization (a
+// trailing colon, a closing `#` run and emphasis are stripped), so `##
+// Acceptance criteria:` and `## **Definition of done**` match; the section
+// parser is fence-aware, so a fenced `##` line no longer ends a section; and a
+// spec section nested under another selected spec section (for example `###
+// Non-goals` under `## Acceptance criteria`) is excluded from the parent's
+// items, where the H2 reader counted them in the parent. Each change can alter
+// the specDigest of a body that uses those forms.
 const SPEC_SECTION_NAME_PATTERNS = Object.freeze({
   acceptanceCriteria: Object.freeze([/^acceptance criteria$/i]),
   definitionOfDone: Object.freeze([/^definition of done$/i, /^dod$/i]),

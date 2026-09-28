@@ -303,7 +303,7 @@ the head's `<gate>-<headSha>.validation.json` is absent, unreadable, or stamped 
 head SHA. A typed incomplete artifact satisfies this check. The verdict writer checks only the
 artifact's presence, readability and head stamp. The reviewer gate-evidence finding path, not the verdict
 writer, prevents a `clean` verdict over an incomplete artifact. The refusal names the artifact and `run-gate-validation.mjs`. It applies under the
-same `gates.requireFanoutEvidence` condition as the durable-ledger refusal.
+same `gates.requireFanoutEvidence` condition as the durable-ledger refusal. When the round resolved its validation under an explicit `--tmp-root`, pass that same path as `upsert-checkpoint-verdict.mjs --context-tmp-root <path>` (default `tmp`).
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 

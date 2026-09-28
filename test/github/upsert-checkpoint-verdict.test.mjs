@@ -6987,6 +6987,23 @@ async function stageValidationArtifact(repoRoot, { repo = "owner/repo", pr = 17,
       await assertGateValidationArtifact(args(tempDir));
     });
   });
+
+  test("assertGateValidationArtifact reads a non-default --context-tmp-root and refuses it without the option", async () => {
+    await withTempDir(async (tempDir) => {
+      await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");
+      const artifactPath = path.resolve(tempDir, buildValidationResultsPath({ repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: VALIDATION_HEAD, tmpRoot: "alt-tmp" }));
+      await mkdir(path.dirname(artifactPath), { recursive: true });
+      await writeFile(artifactPath, JSON.stringify({ ok: true, headSha: VALIDATION_HEAD, allPassed: true, suites: [] }), "utf8");
+      await assertGateValidationArtifact({ ...args(tempDir), contextTmpRoot: "alt-tmp" });
+      await assert.rejects(assertGateValidationArtifact(args(tempDir)), (error) => refusal.test(error.message) && /is absent/.test(error.message));
+    });
+  });
+
+  test("parseUpsertCheckpointVerdictCliArgs reads --context-tmp-root and rejects an empty value", () => {
+    const required = ["--repo", "owner/repo", "--pr", "17", "--head-sha", VALIDATION_HEAD, "--verdict", "clean", "--findings-summary", "none", "--next-action", "merge", "--execution-mode", "fanout_fanin"];
+    assert.equal(parseUpsertCheckpointVerdictCliArgs([...required, "--context-tmp-root", "alt-tmp"]).contextTmpRoot, "alt-tmp");
+    assert.throws(() => parseUpsertCheckpointVerdictCliArgs(["--context-tmp-root", " "]), /--context-tmp-root requires a non-empty path/);
+  });
 }
 
 // Two-arm guard: a requireFanoutEvidence fanout_fanin verdict-post is REFUSED
