@@ -320,9 +320,30 @@ function rateLimitedTracker() {
 function rateLimitRunChild(reset, calls) {
   return async (_command, args) => {
     calls.push(args.join(" "));
-    return { code: 0, stdout: JSON.stringify({ resources: { graphql: { reset } } }), stderr: "" };
+    return { code: 0, stdout: JSON.stringify({ resources: { graphql: { remaining: 0, reset } } }), stderr: "" };
   };
 }
+
+test("specContextExtract rethrows a non-rate-limit HTTP 404 unchanged without a rate_limit read or sleep", async () => {
+  const message = "gh command failed: HTTP 404: Not Found";
+  const sleeps = [];
+  const reads = [];
+  await assert.rejects(
+    specContextExtract(
+      { repo: "mfittko/dev-loops", issue: 7, contentFile: "./content.txt" },
+      {
+        repoRoot: os.tmpdir(), env: {},
+        tracker: { getIssue: async () => { throw new Error(message); } },
+        runChild: rateLimitRunChild(1, reads),
+        sleep: async (ms) => { sleeps.push(ms); },
+        now: () => 1_000_000_000_000,
+      },
+    ),
+    (error) => error.message === message,
+  );
+  assert.deepEqual(sleeps, []);
+  assert.deepEqual(reads, []);
+});
 
 test("specContextExtract waits for the GraphQL reset inside GRAPHQL_RATE_LIMIT_MAX_WAIT_MS and retries once", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-ratelimit-"));

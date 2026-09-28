@@ -211,22 +211,22 @@ test("wait-pr-checks --help prints usage and exits 0", async () => {
 
 // In-process runChild fake: the first `pr view` hits the GraphQL rate limit,
 // later calls succeed; `api rate_limit` reports the graphql reset.
-function rateLimitedRunChild(resetEpochSeconds) {
+function rateLimitedRunChild(resetEpochSeconds, { noChecks = false } = {}) {
   const calls = [];
   let prViews = 0;
   const runChild = async (_command, args) => {
     const argv = args.join(" ");
     calls.push(argv);
     if (argv === "api rate_limit") {
-      return { code: 0, stdout: JSON.stringify({ resources: { graphql: { reset: resetEpochSeconds } } }), stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ resources: { graphql: { remaining: 0, reset: resetEpochSeconds } } }), stderr: "" };
     }
     if (argv.startsWith("pr view")) {
       prViews += 1;
       if (prViews === 1) return { code: 1, stdout: "", stderr: "GraphQL: API rate limit exceeded for user ID 1." };
-      return { code: 0, stdout: prView("sha-a", ["build"]), stderr: "" };
+      return { code: 0, stdout: prView("sha-a", noChecks ? [] : ["build"]), stderr: "" };
     }
     if (argv.includes("check-runs")) {
-      return { code: 0, stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }]), stderr: "" };
+      return { code: 0, stdout: checkRuns(noChecks ? [] : [{ status: "completed", conclusion: "success", name: "build" }]), stderr: "" };
     }
     if (argv.includes("/status")) return { code: 0, stdout: statuses([]), stderr: "" };
     return { code: 97, stdout: "", stderr: `unexpected gh args: ${argv}` };
@@ -274,6 +274,55 @@ test("wait-pr-checks returns RATE_LIMITED with resetAt, without sleeping, when t
   assert.equal(result.code, "RATE_LIMITED");
   assert.equal(result.resetAt, new Date(reset * 1000).toISOString());
   assert.deepEqual(delays, []);
+});
+
+test("wait-pr-checks refreshes the runner lease while it waits for the GraphQL reset", async () => {
+  let clock = 1_000_000_000_000;
+  const { runChild } = rateLimitedRunChild(clock / 1000 + 100);
+  const leaseCalls = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = () => true;
+  let code;
+  try {
+    code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "300"], {
+      stdout: makeStream(), stderr: makeStream(), env: {}, runChild,
+      delayImpl: async (ms) => { clock += ms; },
+      now: () => clock,
+      ensureOwnershipImpl: async (args) => { leaseCalls.push(args); return { ok: true, status: "owner_confirmed" }; },
+    });
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  assert.equal(code, 0);
+  // Two heartbeats fall inside the 100s reset wait; the retry settles on its first poll.
+  assert.equal(leaseCalls.length, 2);
+  assert.equal(leaseCalls[0].repo, "owner/repo");
+  assert.equal(leaseCalls[0].pr, 7);
+  assert.equal(leaseCalls[0].claimIfMissing, true);
+  assert.equal(leaseCalls[0].requireExisting, false);
+});
+
+test("wait-pr-checks keeps the no-checks grace floor when the reset consumes the whole budget", async () => {
+  let clock = 1_000_000_000_000;
+  const { runChild } = rateLimitedRunChild(clock / 1000 + 300, { noChecks: true });
+  const originalWrite = process.stderr.write;
+  process.stderr.write = () => true;
+  const stdout = makeStream();
+  let code;
+  try {
+    code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "300"], {
+      stdout, stderr: makeStream(), env: {}, runChild,
+      delayImpl: async (ms) => { clock += ms; },
+      now: () => clock,
+      ensureOwnershipImpl: async () => ({ ok: true }),
+    });
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  const result = JSON.parse(stdout.text());
+  assert.notEqual(result.status, "success");
+  assert.equal(result.settled, false);
+  assert.equal(code, 2);
 });
 
 test("wait-pr-checks --help names the RATE_LIMITED result and its resetAt field", async () => {

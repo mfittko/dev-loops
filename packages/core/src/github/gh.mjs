@@ -171,9 +171,10 @@ const GRAPHQL_RATE_LIMIT_MAX_RESET_AHEAD_MS = 24 * 60 * 60 * 1000;
  * Run `operation`; on a rate-limit error, read the GraphQL reset from
  * `gh api rate_limit` (a REST read that spends no GraphQL points), sleep until
  * that reset, and retry once. Fails closed with `code: "RATE_LIMITED"` and
- * `resetAt` (ISO 8601, or null when unknown) when the reset is unknown, in the
- * past, more than 24h ahead, or beyond `maxWaitMs`, or when the retry is rate
- * limited again. Every other error is rethrown unchanged.
+ * `resetAt` (ISO 8601, or null when unknown) when GraphQL budget remains
+ * (`remaining` is not 0), when the reset is unknown, in the past, more than 24h
+ * ahead, or beyond `maxWaitMs`, or when the retry is rate limited again. Every
+ * other error is rethrown unchanged.
  *
  * @param {() => Promise<any>} operation
  * @param {object} opts
@@ -189,22 +190,26 @@ export async function withGraphqlRateLimitWait(
   } catch (error) {
     if (!isRateLimitError(error)) throw error;
   }
-  let reset = null;
+  let graphql = null;
   try {
-    const value = (await ghJson(["api", "rate_limit"], { env, ghCommand, runChild }))?.resources?.graphql?.reset;
-    if (Number.isFinite(value) && value > 0) reset = value;
+    graphql = (await ghJson(["api", "rate_limit"], { env, ghCommand, runChild }))?.resources?.graphql ?? null;
   } catch {
     // unreadable reset: fail closed below with resetAt null
   }
-  const resetAt = reset === null ? null : new Date(reset * 1000).toISOString();
+  // A rate-limit error while GraphQL budget remains came from a REST core,
+  // search, or secondary limit; waiting for the GraphQL reset cannot help.
+  const reset = graphql?.remaining === 0 ? graphql.reset : null;
+  const waitMs = Number.isFinite(reset) ? reset * 1000 - now() : Number.NaN;
+  const capMs = typeof maxWaitMs === "function" ? maxWaitMs() : maxWaitMs;
+  const usable = waitMs > 0 && waitMs <= GRAPHQL_RATE_LIMIT_MAX_RESET_AHEAD_MS && waitMs <= capMs;
+  // An absurd finite reset is an invalid Date; report it as unknown instead of letting toISOString throw.
+  const resetDate = new Date(Number.isFinite(reset) ? reset * 1000 : Number.NaN);
+  const resetAt = Number.isNaN(resetDate.getTime()) ? null : resetDate.toISOString();
   const rateLimited = () => Object.assign(
     new Error(`GitHub GraphQL rate limit exhausted; retry after ${resetAt ?? "unknown reset"}`),
     { code: "RATE_LIMITED", resetAt },
   );
-  if (reset === null) throw rateLimited();
-  const waitMs = reset * 1000 - now();
-  const capMs = typeof maxWaitMs === "function" ? maxWaitMs() : maxWaitMs;
-  if (waitMs <= 0 || waitMs > GRAPHQL_RATE_LIMIT_MAX_RESET_AHEAD_MS || waitMs > capMs) throw rateLimited();
+  if (!usable) throw rateLimited();
   await sleep(waitMs);
   try {
     return await operation();

@@ -260,11 +260,11 @@ describe("withGraphqlRateLimitWait", () => {
   const NOW = 1_000_000_000_000;
   const RATE_LIMIT_ERROR = () => Object.assign(new Error("gh command failed: GraphQL: API rate limit exceeded for user ID 1."), { code: "GH_API_ERROR" });
 
-  function harness({ reset, readResult, outcomes, maxWaitMs = 900_000 }) {
+  function harness({ reset, remaining = 0, readResult, outcomes, maxWaitMs = 900_000 }) {
     const calls = { reads: [], sleeps: [], ops: 0 };
     const runChild = async (command, args) => {
       calls.reads.push([command, ...args]);
-      return readResult ?? { code: 0, stdout: JSON.stringify({ resources: { graphql: { reset } } }), stderr: "" };
+      return readResult ?? { code: 0, stdout: JSON.stringify({ resources: { graphql: { remaining, reset } } }), stderr: "" };
     };
     const operation = async () => {
       const outcome = outcomes[calls.ops];
@@ -340,6 +340,21 @@ describe("withGraphqlRateLimitWait", () => {
     const reset = NOW / 1000 + 600;
     const { calls, run } = harness({ reset, outcomes: [RATE_LIMIT_ERROR()], maxWaitMs: () => 60_000 });
     await assertRateLimited(run, new Date(reset * 1000).toISOString());
+    assert.equal(calls.sleeps.length, 0);
+    assert.equal(calls.ops, 1);
+  });
+
+  test("a rate-limit error while GraphQL budget remains fails closed with resetAt null and no sleep", async () => {
+    const { calls, run } = harness({ reset: NOW / 1000 + 60, remaining: 4321, outcomes: [RATE_LIMIT_ERROR(), "never"] });
+    await assertRateLimited(run, null);
+    assert.equal(calls.reads.length, 1);
+    assert.equal(calls.sleeps.length, 0);
+    assert.equal(calls.ops, 1);
+  });
+
+  test("an absurd finite reset fails closed with RATE_LIMITED instead of a RangeError", async () => {
+    const { calls, run } = harness({ reset: 1e13, outcomes: [RATE_LIMIT_ERROR()], maxWaitMs: Number.POSITIVE_INFINITY });
+    await assertRateLimited(run, null);
     assert.equal(calls.sleeps.length, 0);
     assert.equal(calls.ops, 1);
   });

@@ -16,6 +16,8 @@ import { watchCiStatus } from "./probe-ci-status.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 import { rateLimitedResult, withGraphqlRateLimitWait } from "@dev-loops/core/github/gh";
 import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
+import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
+import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 
 const DEFAULT_TIMEOUT_SECONDS = Math.floor(COPILOT_REVIEW_WAIT_TIMEOUT_MS / 1000);
 const DEFAULT_POLL_SECONDS = Math.floor(DEFAULT_POLL_INTERVAL_MS / 1000);
@@ -150,6 +152,7 @@ export async function runCli(
     delayImpl = delay,
     now = Date.now,
     runChild = undefined,
+    ensureOwnershipImpl = ensureAsyncRunnerOwnership,
   } = {},
 ) {
   const options = parseWaitPrChecksCliArgs(argv);
@@ -164,18 +167,24 @@ export async function runCli(
   try {
     result = await withGraphqlRateLimitWait(
       () => {
-        // The retry after a rate-limit wait only gets the remaining budget.
-        const timeoutMs = isRetry ? Math.max(0, remainingMs()) : options.timeoutMs;
+        // The retry after a rate-limit wait only gets the remaining budget. The
+        // floor of 1 keeps it a real watch: timeoutMs 0 would switch to
+        // single-check semantics and settle a no-checks head green at once.
+        const timeoutMs = isRetry ? Math.max(1, remainingMs()) : options.timeoutMs;
         isRetry = true;
         return watchCiStatus(
           { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: options.pollIntervalMs },
-          { env, ghCommand, delayImpl, now, ...(runChild ? { runChild } : {}) },
+          { env, ghCommand, delayImpl, now, ensureOwnershipImpl, ...(runChild ? { runChild } : {}) },
         );
       },
       {
         maxWaitMs: remainingMs,
+        // Refresh the runner lease during the reset wait, as the watch loop does between polls.
         sleep: (ms) => waitWithHeartbeat(ms, {
           attempt: 1, attemptBudget: 1, watchStartedAtMs: startedAt, timeoutMs: options.timeoutMs, now, delayImpl,
+          onHeartbeat: () => ensureOwnershipImpl({
+            repo: options.repo, pr: options.pr, env, cwd: resolveRepoRoot(process.cwd()), claimIfMissing: true, requireExisting: false,
+          }),
         }),
         now,
         env,
