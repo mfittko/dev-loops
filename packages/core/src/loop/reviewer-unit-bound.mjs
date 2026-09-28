@@ -22,12 +22,72 @@ export const HARNESS_VALUES = Object.freeze(["pi", "claude", "codex"]);
 /** A reviewer unit is bounded to at most this many assigned angles. */
 export const REVIEWER_UNIT_MAX_ANGLES = 5;
 
-/** The fixed execution budget for one scoped-reviewer dispatch unit. */
+/**
+ * The floor execution budget for one scoped-reviewer dispatch unit: the
+ * budget of a unit with no reviewed diff, and the lowest budget
+ * enforceReviewerUnitBound accepts.
+ */
 export const REVIEWER_UNIT_BUDGET = Object.freeze({
   maxModelTurns: 45,
   maxToolCalls: 50,
   maxAngles: REVIEWER_UNIT_MAX_ANGLES,
 });
+
+/** REVIEWER_UNIT_BUDGET under its role in the scaling formula. */
+export const REVIEWER_UNIT_BUDGET_FLOOR = REVIEWER_UNIT_BUDGET;
+
+/** The highest budget a scaled reviewer unit can reach. */
+export const REVIEWER_UNIT_BUDGET_CAP = Object.freeze({
+  maxModelTurns: 95,
+  maxToolCalls: 100,
+  maxAngles: REVIEWER_UNIT_MAX_ANGLES,
+});
+
+/** Extra model turns and tool calls per file block of the scoped diff. */
+export const REVIEWER_UNIT_BUDGET_PER_FILE = 0.25;
+
+/** Extra model turns and tool calls per added or deleted line of the scoped diff. */
+export const REVIEWER_UNIT_BUDGET_PER_CHANGED_LINE = 0.002;
+
+/**
+ * The execution budget of a reviewer unit whose scoped diff has `files` file
+ * blocks and `changedLines` added plus deleted lines: the floor plus
+ * ceil(PER_FILE * files + PER_CHANGED_LINE * changedLines), clamped to the cap.
+ * @param {{ files: number, changedLines: number }} size
+ * @returns {{ maxToolCalls: number, maxModelTurns: number, maxAngles: number }}
+ */
+export function computeReviewerUnitBudget({ files, changedLines } = {}) {
+  if (!isNonNegativeInteger(files) || !isNonNegativeInteger(changedLines)) {
+    throw new TypeError(`computeReviewerUnitBudget requires non-negative integer files and changedLines, got ${JSON.stringify({ files, changedLines })}`);
+  }
+  // ponytail: toFixed drops float noise (e.g. 1.0000000000000002) before ceil.
+  const extra = Math.ceil(Number((REVIEWER_UNIT_BUDGET_PER_FILE * files + REVIEWER_UNIT_BUDGET_PER_CHANGED_LINE * changedLines).toFixed(9)));
+  return Object.freeze({
+    maxToolCalls: Math.min(REVIEWER_UNIT_BUDGET_CAP.maxToolCalls, REVIEWER_UNIT_BUDGET_FLOOR.maxToolCalls + extra),
+    maxModelTurns: Math.min(REVIEWER_UNIT_BUDGET_CAP.maxModelTurns, REVIEWER_UNIT_BUDGET_FLOOR.maxModelTurns + extra),
+    maxAngles: REVIEWER_UNIT_MAX_ANGLES,
+  });
+}
+
+/**
+ * Validate a caller-passed unit budget: integer turns and calls between the
+ * floor and the cap. Absent means the floor.
+ * @param {unknown} budget
+ * @returns {{ maxToolCalls: number, maxModelTurns: number, maxAngles: number }}
+ */
+function validateBudget(budget) {
+  if (budget == null) return REVIEWER_UNIT_BUDGET_FLOOR;
+  if (typeof budget !== "object") {
+    throw new TypeError("enforceReviewerUnitBound requires budget to be an object with maxModelTurns and maxToolCalls");
+  }
+  for (const key of ["maxModelTurns", "maxToolCalls"]) {
+    const value = budget[key];
+    if (!Number.isInteger(value) || value < REVIEWER_UNIT_BUDGET_FLOOR[key] || value > REVIEWER_UNIT_BUDGET_CAP[key]) {
+      throw new TypeError(`budget.${key} must be an integer between ${REVIEWER_UNIT_BUDGET_FLOOR[key]} and ${REVIEWER_UNIT_BUDGET_CAP[key]}, got ${JSON.stringify(value)}`);
+    }
+  }
+  return Object.freeze({ maxModelTurns: budget.maxModelTurns, maxToolCalls: budget.maxToolCalls, maxAngles: REVIEWER_UNIT_MAX_ANGLES });
+}
 
 /**
  * Operation kinds a reviewer unit is never allowed to perform, verbatim from
@@ -249,7 +309,7 @@ function normalizeCompletedAngles(completedAngles) {
 
 /**
  * Enforce the bounded scoped-reviewer-unit protocol. Validates the unit,
- * measures consumption against the fixed REVIEWER_UNIT_BUDGET, and computes
+ * measures consumption against the passed budget (the floor when absent), and computes
  * angle coverage. Two independent fail-closed REVOKE conditions can block
  * the unit; budget exhaustion always wins over "completion" — an over-budget
  * run's reported completion is untrustworthy and can never be clean.
@@ -258,11 +318,14 @@ function normalizeCompletedAngles(completedAngles) {
  * @param {{run:string, gateContext:object, angles:string[]}} options.unit
  * @param {{modelTurns:number, toolCalls:number}} options.consumed
  * @param {Iterable<string>} [options.completedAngles]
+ * @param {{maxModelTurns:number, maxToolCalls:number}} [options.budget] the unit budget,
+ *   between REVIEWER_UNIT_BUDGET_FLOOR and REVIEWER_UNIT_BUDGET_CAP.
  * @returns {object} `{ ok: true, unit, consumed, reviewedAngles }` on
  *   success, or the durable blocker `{ ok: false, verdict: "blocked",
  *   reason, unreviewedAngles, headSha, unit, consumed, budget }` on failure.
  */
-export function enforceReviewerUnitBound({ unit, consumed, completedAngles } = {}) {
+export function enforceReviewerUnitBound({ unit, consumed, completedAngles, budget } = {}) {
+  const normalizedBudget = validateBudget(budget);
   const normalizedUnit = validateReviewerUnit(unit);
   const normalizedConsumed = validateConsumed(consumed);
   const completedSet = normalizeCompletedAngles(completedAngles);
@@ -279,11 +342,11 @@ export function enforceReviewerUnitBound({ unit, consumed, completedAngles } = {
     headSha: normalizedUnit.gateContext.headSha,
     unit: normalizedUnit,
     consumed: normalizedConsumed,
-    budget: REVIEWER_UNIT_BUDGET,
+    budget: normalizedBudget,
   });
 
-  const budgetExceeded = normalizedConsumed.modelTurns > REVIEWER_UNIT_BUDGET.maxModelTurns
-    || normalizedConsumed.toolCalls > REVIEWER_UNIT_BUDGET.maxToolCalls;
+  const budgetExceeded = normalizedConsumed.modelTurns > normalizedBudget.maxModelTurns
+    || normalizedConsumed.toolCalls > normalizedBudget.maxToolCalls;
 
   if (budgetExceeded) {
     // Fail-closed revoke: even a nominally "complete" run cannot be reported

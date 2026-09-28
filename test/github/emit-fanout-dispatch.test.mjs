@@ -68,12 +68,12 @@ async function writeAnglePrompts(tmpDir, angles) {
   await writeFile(path.join(tmpDir, ".devloops"), `version: 1\ngates:\n  preApproval:\n    angles:\n${entries.join("\n")}\n`, "utf8");
 }
 
-async function seedBundle(tmpDir, { fanout = FANOUT, withPrefix = true, gate = GATE } = {}) {
+async function seedBundle(tmpDir, { fanout = FANOUT, withPrefix = true, gate = GATE, artifactExtra = {} } = {}) {
   const dir = path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7");
   await mkdir(dir, { recursive: true });
   if (withPrefix) await writeFile(path.join(dir, `${gate}-${HEAD_SHA}.briefing-prefix.txt`), PREFIX_BYTES, "utf8");
   await writeFile(path.join(dir, `${gate}-${HEAD_SHA}.briefing-volatile.txt`), VOLATILE_BYTES, "utf8");
-  const artifact = fanout === null ? {} : { fanout };
+  const artifact = fanout === null ? { ...artifactExtra } : { fanout, ...artifactExtra };
   await writeFile(path.join(dir, `${gate}-${HEAD_SHA}.json`), JSON.stringify(artifact), "utf8");
   return dir;
 }
@@ -919,7 +919,11 @@ test("a successful run persists the keyed emit-plan artifact with the full resul
     assert.equal(persisted.maxConcurrent, stdoutPayload.maxConcurrent);
     assert.deepEqual(persisted.units, stdoutPayload.units);
     for (const unit of persisted.units) {
-      assert.deepEqual(Object.keys(unit).sort(), ["angles", "dispatchPrompt", "executionIdentity", "group", "materializationHash", "promptBytes", "promptPath", "scope", "sectionBytes", "workOrder", "workOrderDigest", "workOrderRef"].sort());
+      assert.deepEqual(Object.keys(unit).sort(), ["angles", "budget", "budgetBasis", "dispatchPrompt", "executionIdentity", "group", "materializationHash", "promptBytes", "promptPath", "scope", "sectionBytes", "workOrder", "workOrderDigest", "workOrderRef"].sort());
+      // The seeded bundle records no diff read, so every unit gets the floor.
+      assert.deepEqual(unit.budgetBasis, { scope: "none", files: 0, changedLines: 0 });
+      assert.deepEqual(unit.budget, { ...REVIEWER_UNIT_BUDGET });
+      assert.deepEqual(unit.workOrder.executionRules.budget, unit.budget);
     }
   });
 });
@@ -1869,4 +1873,55 @@ test("emitter: an oversized consumer-configured angle prompt refuses (exit 1) na
     assert.match(error, /angles dry, kiss/);
     assert.match(error, /is \d+ bytes \(prefix \d+, volatile \d+, suffix \d+\), over the REVIEWER_WORK_ORDER_MAX_BYTES ceiling/);
   });
+});
+
+function fileBlock(file, added, deleted = 0) {
+  const body = [...Array.from({ length: added }, (_, i) => `+add ${i}`), ...Array.from({ length: deleted }, (_, i) => `-del ${i}`)];
+  return [`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`, `@@ -1,${deleted} +1,${added} @@`, ...body].join("\n");
+}
+
+test("each unit's budget scales with the filtered diff it reads; a docs-only unit counts doc-file blocks only", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // One doc block (2 lines) and five code blocks (4 lines each).
+    const diff = [fileBlock("README.md", 2), ...[1, 2, 3, 4, 5].map((n) => fileBlock(`src/f${n}.js`, 3, 1))].join("\n");
+    await writeFile(path.join(tmpDir, "filtered.diff"), `${diff}\n`, "utf8");
+    await seedBundle(tmpDir, {
+      artifactExtra: {
+        requiredReads: [{ kind: "diff", path: "filtered.diff", sha256: createHash("sha256").update(`${diff}\n`).digest("hex"), bytes: Buffer.byteLength(`${diff}\n`), required: true }],
+        angleScopes: { "contradiction-lens": "docs-only" },
+      },
+    });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const units = JSON.parse(result.stdout).units;
+    const docsUnit = units.find((unit) => unit.angles.includes("contradiction-lens"));
+    const fullUnit = units.find((unit) => unit.angles.includes("dry"));
+    assert.deepEqual(docsUnit.budgetBasis, { scope: "docs-only", files: 1, changedLines: 2 });
+    assert.deepEqual([docsUnit.budget.maxToolCalls, docsUnit.budget.maxModelTurns], [51, 46]);
+    assert.deepEqual(fullUnit.budgetBasis, { scope: "full", files: 6, changedLines: 22 });
+    assert.deepEqual([fullUnit.budget.maxToolCalls, fullUnit.budget.maxModelTurns], [52, 47]);
+    assert.deepEqual(fullUnit.workOrder.executionRules.budget, fullUnit.budget);
+    const suffix = await readFile(path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.angle-suffix-${fullUnit.scope}.txt`), "utf8");
+    assert.match(suffix, /--max-model-turns 47 --max-tool-calls 52/);
+  });
+});
+
+test("a thin briefing (scope.diffSource none) gives every unit the floor budget", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { artifactExtra: { scope: { diffSource: "none" } } });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    for (const unit of JSON.parse(result.stdout).units) {
+      assert.deepEqual([unit.budget.maxToolCalls, unit.budget.maxModelTurns], [50, 45]);
+      assert.equal(unit.budgetBasis.scope, "none");
+    }
+  });
+});
+
+test("buildAngleNamingSuffix prints a scaled unit's computed budget, never the floor constants", () => {
+  const suffix = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] }, "pre-approval-gate-coverage", [], [], { maxModelTurns: 70, maxToolCalls: 75, maxAngles: 5 });
+  assert.match(suffix, /Budget: at most 70 model turns and 75 tool calls for this unit/);
+  assert.match(suffix, /more than 70 model turns or 75 tool calls/);
+  assert.match(suffix, /--max-model-turns 70 --max-tool-calls 75 /);
+  assert.doesNotMatch(suffix, /\b45 model turns|\b50 tool calls/);
 });
