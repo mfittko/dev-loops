@@ -1121,7 +1121,8 @@ export function commandContainsCodeVerificationEntrypoint(command) {
 
 /**
  * The fixer Bash gate's default-deny git classifier (ADR 0107). A command with no git word
- * (`git` as a word or path segment, quoted or not) returns []. Otherwise every git invocation
+ * (isGitWord over the de-quoted words, or GIT_WORD_RE over the raw or de-quoted string as an
+ * extra fail-closed trigger) returns []. Otherwise every git invocation
  * must be a plain allowlisted form, or one `unresolvable` entry names the first `construct`
  * that breaks the rule. The allowed form, read with chainWords' quote-aware words:
  * - the whole command is a plain top-level chain of simple commands joined by `&&`, `;` or a
@@ -1139,10 +1140,14 @@ export function commandContainsCodeVerificationEntrypoint(command) {
  * @returns {{ subcommand: "commit"|"push"|null, dirs: string[], args: string[], unresolvable: boolean, construct: string|null }[]}
  */
 export function extractFixerGitInvocations(command) {
-  if (typeof command !== "string" || !GIT_WORD_RE.test(command)) return [];
+  if (typeof command !== "string") return [];
   const deny = (construct) => [{ subcommand: null, dirs: [], args: [], unresolvable: true, construct }];
+  // Extra fail-closed trigger on the raw string and on the string with quotes and backslashes
+  // removed; the detector is isGitWord over chainWords' de-quoted words.
+  const rawTrigger = GIT_WORD_RE.test(command) || GIT_WORD_RE.test(command.replace(/['"\\]/g, ""));
   const { blocker, segments: withRedirects } = chainWords(command);
-  if (blocker) return deny(blocker);
+  if (blocker) return rawTrigger ? deny(blocker) : [];
+  if (!rawTrigger && !withRedirects.flat().some(isGitWord)) return [];
   // Drop redirections (`2>&1`, `> out.txt`, `>out.txt`): they never change the git invocation.
   const segments = withRedirects.map((words) => words.filter((w, k) => !REDIRECT_RE.test(w.text) && !(k > 0 && REDIRECT_OP_RE.test(words[k - 1].text)))).filter((s) => s.length > 0);
   if (segments.flat().some((w) => w.text.includes("GIT_"))) return deny("`GIT_*` environment variable");
@@ -1156,10 +1161,10 @@ export function extractFixerGitInvocations(command) {
       cdDirs.push(segment[1].text);
       continue;
     }
-    const gitAt = segment.findIndex((w) => GIT_WORD_RE.test(w.text));
+    const gitAt = segment.findIndex(isGitWord);
     if (gitAt === -1) continue;
     if (gitAt !== 0 || segment[0].quoted || segment[0].text !== "git") return deny("git word that is not the plain first word of its command");
-    if (segment.slice(1).some((w) => GIT_WORD_RE.test(w.text))) return deny("second git word in one command");
+    if (segment.slice(1).some(isGitWord)) return deny("second git word in one command");
     const dirs = [...cdDirs];
     let i = 1;
     if (segment[1]?.text === "-C") {
@@ -1184,6 +1189,9 @@ export function extractFixerGitInvocations(command) {
 // `git` as a whole word or path segment (`/usr/bin/git`), never `.git`, `github` or `git-lfs`.
 // Case-insensitive: a case-insensitive filesystem (macOS APFS) runs `GIT`/`Git` as git.
 const GIT_WORD_RE = /(?:^|[^\w.-])git(?![\w.-])/i;
+// A chainWords word bash runs as git: its de-quoted, de-escaped text, or that text's path
+// basename, lowercases to `git` (`gi''t`, `G\it`, `/usr/bin/git`). Only an unquoted `git` is allowed.
+const isGitWord = (w) => w.text.split("/").at(-1).toLowerCase() === "git";
 const FIXER_GIT_READ_ONLY = new Set(["status", "diff", "log", "show", "rev-parse", "ls-files", "merge-base", "grep", "blame"]);
 const DIR_MOVE_WORDS = new Set(["cd", "pushd", "popd"]);
 const REDIRECT_RE = /^\d*(?:[<>]|&>)/;
@@ -1220,7 +1228,10 @@ function chainWords(command) {
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
     const prev = command[i - 1];
-    if (c === "'") {
+    if (c === "$" && (command[i + 1] === "'" || command[i + 1] === '"')) {
+      // `$'...'` / `$"..."` quoting: drop the `$` so `$'git'` reads as the quoted word `git`.
+      add("", true);
+    } else if (c === "'") {
       const j = command.indexOf("'", i + 1);
       if (j === -1) return blocked("unterminated quote");
       add(command.slice(i + 1, j), true);

@@ -1156,7 +1156,8 @@ test("extractFixerGitInvocations allows only the plain git allowlist and denies 
       { subcommand: "commit", dirs: [], args: ["-F", "msg.txt"], unresolvable: false },
       { subcommand: "push", dirs: [], args: ["origin", "issue-1"], unresolvable: false },
     ]],
-    ["cd /o && git -C b commit -m x", [{ subcommand: "commit", dirs: ["/o", "b"], args: ["-m", "x"], unresolvable: false }]],
+    ["git add src/git/x.mjs && git -C /home/u/git/repo commit -F m", [{ subcommand: "commit", dirs: ["/home/u/git/repo"], args: ["-F", "m"], unresolvable: false }]],
+    ["cd /o && git -C b commit -m x",[{ subcommand: "commit", dirs: ["/o", "b"], args: ["-m", "x"], unresolvable: false }]],
     ["git -C \"/a b\" commit -m \"fix(gate): a | b & c\"", [{ subcommand: "commit", dirs: ["/a b"], args: ["-m", "fix(gate): a | b & c"], unresolvable: false }]],
     ["git add . && git commit -m 'then (x); $(y)'\ngit push origin HEAD", [
       { subcommand: "commit", dirs: [], args: ["-m", "then (x); $(y)"], unresolvable: false },
@@ -1180,6 +1181,9 @@ test("extractFixerGitInvocations allows only the plain git allowlist and denies 
     "GIT_DIR=/o/.git git commit -m x", "export GIT_WORK_TREE=/o; git push origin x", "nice git push origin x", "command git push origin x",
     "find . -execdir git commit -m x ;", "git commit -m git",
     "GIT -C /main cherry-pick abc", "Git push origin main", "/usr/bin/GIT push origin x",
+    // A quoted or escaped git word: detection runs on the de-quoted words, not the raw string.
+    "gi''t push origin main", "g\"i\"t push origin main", "gi\\t push origin main", "G\\it push origin x",
+    "gi''t -C /main cherry-pick abc", "$'git' push origin x", "gi''t push origin x | tail -5",
     // Anything outside a plain `&&`/`;` chain with head-only literal `cd`.
     "git push origin x 2>&1 | tail -5", "git commit -m \"$(cat <<'EOF'\nx\nEOF\n)\"", "git commit -F - <<EOF", "git push origin x # note",
     "git commit -m 'unterminated", "git commit -m `pwd`", "git commit -m x <(cd /o)", "sh -c 'git push'", "'sh' -c 'git push'",
