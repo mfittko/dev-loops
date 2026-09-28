@@ -297,7 +297,8 @@ test("info.mjs --pr produces human-readable output with gh stubs", async () => {
 // The Mergeable line forwards prData.statusCheckRollup into
 // classifyBenignGateEvidenceUnstable; these integration cases exercise both the
 // wiring (statusCheckRollup requested + forwarded) and the UNSTABLE branch.
-async function runPrInfoWithRollup(mergeStateStatus, statusCheckRollup) {
+// `rules` answers GET repos/<repo>/rules/branches/main; null makes the call fail.
+async function runPrInfoWithRollup(mergeStateStatus, statusCheckRollup, rules = [], extraArgs = []) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "info-test-unstable-"));
   const repoSlug = "test-owner/test-repo";
   const prNumber = 42;
@@ -305,6 +306,11 @@ async function runPrInfoWithRollup(mergeStateStatus, statusCheckRollup) {
   const ghScript = [
     "#!/usr/bin/env node",
     "const args = process.argv.slice(2);",
+    `const rules = ${JSON.stringify(rules)};`,
+    `if (args[0] === "api" && args[1] === "repos/${repoSlug}/rules/branches/main?per_page=100" && rules !== null) {`,
+    `  process.stdout.write(JSON.stringify(rules) + "\\n");`,
+    `  process.exit(0);`,
+    `}`,
     `if (args[0] === "pr" && args[1] === "view" && parseInt(args[2]) === ${prNumber}) {`,
     // Guard the REQUEST half of the wiring: fail closed unless buildPrInfo asked
     // for statusCheckRollup, so the test breaks if that field is dropped from
@@ -329,7 +335,7 @@ async function runPrInfoWithRollup(mergeStateStatus, statusCheckRollup) {
   await writeFile(ghPath, ghScript);
   await import("fs").then(fs => fs.promises.chmod(ghPath, 0o755));
   try {
-    const { code, stdout, stderr } = await runNode(["--pr", String(prNumber), "--repo", repoSlug], {
+    const { code, stdout, stderr } = await runNode(["--pr", String(prNumber), "--repo", repoSlug, ...extraArgs], {
       env: { ...process.env, PATH: `${tmpDir}:${process.env.PATH}` },
       cwd: tmpDir,
     });
@@ -357,6 +363,211 @@ test("info.mjs --pr labels a non-benign UNSTABLE (a real failing check) for inve
   ]);
   assert.equal(code, 0);
   assert.match(stdout, /Mergeable: .*UNSTABLE — .*investigate before merge/);
+});
+
+// ── Ruleset projection (#2478) ───────────────────────────────────────
+
+// Ruleset 16690242 on main, as observed on PR #2450.
+const MAIN_RULESET = [
+  { type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, do_not_enforce_on_create: false, required_status_checks: [{ context: "gate-evidence" }] } },
+  { type: "pull_request", parameters: { required_approving_review_count: 0, require_extra_approval_for_unattributed_changes: true } },
+];
+const GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE = [
+  { name: "changes", status: "COMPLETED", conclusion: "SUCCESS" },
+  { name: "verify", status: "COMPLETED", conclusion: "SUCCESS" },
+];
+
+test("summarizeBranchRules names a ruleset-required check absent from the rollup", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  assert.deepEqual(summarizeBranchRules(MAIN_RULESET, GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE).missingRequiredChecks, ["gate-evidence"]);
+  const withGateEvidence = [...GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, { context: "gate-evidence", state: "SUCCESS" }];
+  assert.deepEqual(summarizeBranchRules(MAIN_RULESET, withGateEvidence).missingRequiredChecks, []);
+});
+
+test("summarizeBranchRules fails closed on a reported required check that is neither success nor pending", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const cancelled = [...GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, { name: "gate-evidence", status: "COMPLETED", conclusion: "CANCELLED" }];
+  const summary = summarizeBranchRules(MAIN_RULESET, cancelled);
+  assert.deepEqual(summary.failedRequiredChecks, ["gate-evidence"]);
+  assert.deepEqual(summary.pendingRequiredChecks, []);
+  assert.deepEqual(summary.missingRequiredChecks, []);
+});
+
+test("summarizeBranchRules judges a required check by its latest run only", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const cancelled = { name: "gate-evidence", status: "COMPLETED", conclusion: "CANCELLED", startedAt: "2026-09-01T10:00:00Z", completedAt: "2026-09-01T10:01:00Z" };
+  const rerunGreen = { name: "gate-evidence", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-01T10:02:00Z", completedAt: "2026-09-01T10:05:00Z" };
+  const green = summarizeBranchRules(MAIN_RULESET, [...GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, cancelled, rerunGreen]);
+  assert.deepEqual(green.failedRequiredChecks, []);
+  assert.deepEqual(green.missingRequiredChecks, []);
+  assert.deepEqual(green.pendingRequiredChecks, []);
+  // A latest CANCELLED run still fails closed.
+  const cancelledLast = { ...cancelled, startedAt: "2026-09-01T10:06:00Z", completedAt: "2026-09-01T10:07:00Z" };
+  assert.deepEqual(summarizeBranchRules(MAIN_RULESET, [rerunGreen, cancelledLast]).failedRequiredChecks, ["gate-evidence"]);
+  // A pending re-run (zero completedAt) orders by its startedAt.
+  const pendingRerun = { name: "gate-evidence", status: "IN_PROGRESS", conclusion: null, startedAt: "2026-09-01T10:08:00Z", completedAt: "0001-01-01T00:00:00Z" };
+  assert.deepEqual(summarizeBranchRules(MAIN_RULESET, [cancelled, pendingRerun]).pendingRequiredChecks, ["gate-evidence"]);
+  // Overlapping runs: an older run that finishes later never masks a newer
+  // failed or pending run.
+  const olderSlowGreen = { name: "gate-evidence", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-01T10:00:00Z", completedAt: "2026-09-01T10:10:00Z" };
+  const newerFastFail = { name: "gate-evidence", status: "COMPLETED", conclusion: "FAILURE", startedAt: "2026-09-01T10:01:00Z", completedAt: "2026-09-01T10:02:00Z" };
+  const overlapFail = summarizeBranchRules(MAIN_RULESET, [olderSlowGreen, newerFastFail]);
+  assert.deepEqual(overlapFail.failedRequiredChecks, ["gate-evidence"]);
+  const newerPending = { name: "gate-evidence", status: "IN_PROGRESS", conclusion: null, startedAt: "2026-09-01T10:01:00Z", completedAt: "0001-01-01T00:00:00Z" };
+  const overlapPending = summarizeBranchRules(MAIN_RULESET, [olderSlowGreen, newerPending]);
+  assert.deepEqual(overlapPending.pendingRequiredChecks, ["gate-evidence"]);
+  assert.deepEqual(overlapPending.failedRequiredChecks, []);
+  // Missing timestamps keep every entry, so the normalizer fails closed.
+  const untimed = [{ name: "gate-evidence", status: "COMPLETED", conclusion: "CANCELLED" }, { name: "gate-evidence", status: "COMPLETED", conclusion: "SUCCESS" }];
+  assert.deepEqual(summarizeBranchRules(MAIN_RULESET, untimed).failedRequiredChecks, ["gate-evidence"]);
+});
+
+test("summarizeBranchRules names code owner and last push approvals until the PR is approved", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const rules = [{ type: "pull_request", parameters: { required_approving_review_count: 1, require_code_owner_review: true, require_last_push_approval: true } }];
+  const pending = summarizeBranchRules(rules, [], "REVIEW_REQUIRED").operatorApprovals;
+  assert.equal(pending.length, 3);
+  assert.match(pending[1], /code owner review/);
+  assert.match(pending[2], /most recent push/);
+  assert.deepEqual(summarizeBranchRules(rules, [], "APPROVED").operatorApprovals, []);
+});
+
+test("summarizeBranchRules names the extra approval for unattributed changes only when required", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const approvals = summarizeBranchRules(MAIN_RULESET, []).operatorApprovals;
+  assert.equal(approvals.length, 1);
+  assert.match(approvals[0], /extra approval for unattributed changes/);
+  const withoutExtra = [{ type: "pull_request", parameters: { required_approving_review_count: 0 } }];
+  assert.deepEqual(summarizeBranchRules(withoutExtra, []).operatorApprovals, []);
+});
+
+test("summarizeBranchRules omits a count-based approval the PR already satisfies", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const rules = [{ type: "pull_request", parameters: { required_approving_review_count: 2, require_extra_approval_for_unattributed_changes: true } }];
+  const pending = summarizeBranchRules(rules, [], "REVIEW_REQUIRED").operatorApprovals;
+  assert.equal(pending.length, 2);
+  assert.match(pending[0], /requires 2 approving review\(s\)/);
+  const approved = summarizeBranchRules(rules, [], "APPROVED").operatorApprovals;
+  assert.equal(approved.length, 1);
+  assert.match(approved[0], /extra approval for unattributed changes/);
+});
+
+test("summarizeBranchRules reports an unresolved ruleset lookup", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  assert.equal(summarizeBranchRules(null, []).resolved, false);
+  assert.equal(summarizeBranchRules([], []).resolved, true);
+});
+
+test("summarizeBranchRules tolerates malformed rules and rollup entries", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const cases = [
+    { name: "Not Found object", rules: { message: "Not Found" }, rollup: [], resolved: false, missing: [] },
+    { name: "rule without parameters", rules: [{ type: "required_status_checks" }, { type: "pull_request" }], rollup: [], resolved: true, missing: [] },
+    { name: "non-array required_status_checks", rules: [{ type: "required_status_checks", parameters: { required_status_checks: { context: "gate-evidence" } } }], rollup: [], resolved: true, missing: [] },
+    { name: "non-string context", rules: [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: 7 }, { context: "gate-evidence" }] } }], rollup: [], resolved: true, missing: ["gate-evidence"] },
+    { name: "null rollup entries", rules: MAIN_RULESET, rollup: [null, { context: "gate-evidence", state: "SUCCESS" }], resolved: true, missing: [] },
+    { name: "empty rules array", rules: [], rollup: [null], resolved: true, missing: [] },
+  ];
+  for (const { name, rules, rollup, resolved, missing } of cases) {
+    const summary = summarizeBranchRules(rules, rollup);
+    assert.equal(summary.resolved, resolved, name);
+    assert.deepEqual(summary.missingRequiredChecks, missing, name);
+  }
+});
+
+test("summarizeBranchRules classifies reported required checks as pending or failed", async () => {
+  const { summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const rules = [{ type: "required_status_checks", parameters: { required_status_checks: ["a", "b", "c", "d", "e", "f", "g"].map((context) => ({ context })) } }];
+  const summary = summarizeBranchRules(rules, [
+    { context: "a", state: "PENDING" },
+    { context: "b", state: "ERROR" },
+    { name: "c", status: "IN_PROGRESS", conclusion: null },
+    { name: "d", status: "COMPLETED", conclusion: "TIMED_OUT" },
+    { name: "e", status: "COMPLETED", conclusion: "SUCCESS" },
+    // The shared rollup normalizer is case-insensitive.
+    { context: "f", state: "pending" },
+    { name: "g", status: "completed", conclusion: "failure" },
+  ]);
+  assert.deepEqual(summary.pendingRequiredChecks, ["a", "c", "f"]);
+  assert.deepEqual(summary.failedRequiredChecks, ["b", "d", "g"]);
+  assert.deepEqual(summary.missingRequiredChecks, []);
+});
+
+test("formatPrSummary renders a carried convergence and an unverified carry", async () => {
+  const { formatPrSummary } = await import("../../scripts/loop/info.mjs");
+  const pr = { number: 1, title: "t", state: "OPEN" };
+  const carried = formatPrSummary(pr, { carriedConvergence: { source: "converged_once", reason: "r" } });
+  assert.match(carried, /Copilot: re-request suppressed by the requester \(converged_once: r\)/);
+  const unverified = formatPrSummary(pr, { carryUnverified: "carry facts unavailable" });
+  assert.match(unverified, /Copilot: re-request advice unverified against the requester \(carry facts unavailable\)/);
+});
+
+test("formatPrSummary never renders a BLOCKED merge state as mergeable", async () => {
+  const { formatPrSummary, summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const pr = { number: 1, title: "t", state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED", statusCheckRollup: [] };
+  const unknown = formatPrSummary(pr, null, summarizeBranchRules([], []));
+  assert.match(unknown, /Mergeable: ⏳ BLOCKED — reason not projected/);
+  assert.doesNotMatch(unknown, /✅/);
+  const rules = [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "a" }, { context: "b" }] } }];
+  const known = formatPrSummary({ ...pr, statusCheckRollup: [{ context: "a", state: "PENDING" }, { context: "b", state: "FAILURE" }] }, null, summarizeBranchRules(rules, [{ context: "a", state: "PENDING" }, { context: "b", state: "FAILURE" }]));
+  assert.match(known, /Mergeable: ⏳ BLOCKED — required check\(s\) pending: a; required check\(s\) failed: b/);
+});
+
+test("formatPrSummary keeps the observed CI state beside a missing required check", async () => {
+  const { formatPrSummary, summarizeBranchRules } = await import("../../scripts/loop/info.mjs");
+  const pr = { number: 1, title: "t", state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED", statusCheckRollup: GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE };
+  const rules = summarizeBranchRules(MAIN_RULESET, GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE);
+  const green = formatPrSummary(pr, { snapshot: { ciStatus: "success" } }, rules);
+  assert.match(green, /CI: observed checks green; ruleset-required check\(s\) not reported: gate-evidence/);
+  assert.doesNotMatch(green, /CI success/);
+  const red = formatPrSummary(pr, { snapshot: { ciStatus: "failure", ciConclusion: "verify" } }, rules);
+  assert.match(red, /CI: CI ❌ \(verify\)/);
+  assert.match(red, /Required checks: not reported at head: gate-evidence/);
+});
+
+test("info.mjs --pr names a missing ruleset-required check and the operator approval instead of CI success", async () => {
+  const { code, stdout } = await runPrInfoWithRollup("BLOCKED", GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, MAIN_RULESET);
+  assert.equal(code, 0);
+  // The handoff subprocess fails under the gh stub, so no snapshot CI line renders.
+  assert.match(stdout, /Required checks: not reported at head: gate-evidence/);
+  assert.doesNotMatch(stdout, /CI success/);
+  assert.doesNotMatch(stdout, /✅ MERGEABLE/);
+  assert.match(stdout, /Operator blocker: .*extra approval for unattributed changes/);
+});
+
+test("info.mjs --pr --json emits the branchRules projection", async () => {
+  const resolved = await runPrInfoWithRollup("BLOCKED", GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, MAIN_RULESET, ["--json"]);
+  assert.equal(resolved.code, 0);
+  const { branchRules } = JSON.parse(resolved.stdout);
+  assert.equal(branchRules.resolved, true);
+  assert.deepEqual(branchRules.missingRequiredChecks, ["gate-evidence"]);
+  const failed = await runPrInfoWithRollup("CLEAN", GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, null, ["--json"]);
+  assert.equal(failed.code, 0);
+  assert.equal(JSON.parse(failed.stdout).branchRules.resolved, false);
+});
+
+test("info.mjs --pr renders no Operator blocker line when the merge state is not BLOCKED", async () => {
+  const withGateEvidence = [...GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, { context: "gate-evidence", state: "SUCCESS" }];
+  const { code, stdout } = await runPrInfoWithRollup("CLEAN", withGateEvidence, MAIN_RULESET);
+  assert.equal(code, 0);
+  assert.doesNotMatch(stdout, /Operator blocker/);
+});
+
+test("info.mjs --pr keeps a real failure visible beside a missing ruleset-required check", async () => {
+  const { code, stdout } = await runPrInfoWithRollup("UNSTABLE", [
+    { name: "verify", status: "COMPLETED", conclusion: "FAILURE" },
+  ], MAIN_RULESET);
+  assert.equal(code, 0);
+  // Only the Mergeable line carries the failure here: the handoff subprocess
+  // fails under the gh stub, so no snapshot CI line renders.
+  assert.match(stdout, /Mergeable: ⏳ BLOCKED \(UNSTABLE\) — ruleset-required check\(s\) not reported: gate-evidence; .*investigate before merge/);
+});
+
+test("info.mjs --pr reports an incomplete projection when the ruleset lookup fails", async () => {
+  const { code, stdout } = await runPrInfoWithRollup("CLEAN", GREEN_ROLLUP_WITHOUT_GATE_EVIDENCE, null);
+  assert.equal(code, 0);
+  assert.match(stdout, /Mergeable: .*INCOMPLETE/);
+  assert.doesNotMatch(stdout, /✅ MERGEABLE/);
 });
 
 test("info.mjs --pr auto-detects repo slug and passes owner/repo to gh", async () => {

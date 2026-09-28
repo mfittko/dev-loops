@@ -6,7 +6,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { runContextEnv } from "@dev-loops/core/loop/run-context";
-import { classifyBenignGateEvidenceUnstable } from "@dev-loops/core/loop/copilot-ci-status";
+import { classifyBenignGateEvidenceUnstable, normalizeStatusCheckRollupStatus, partitionEntriesByCheckName } from "@dev-loops/core/loop/copilot-ci-status";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -109,7 +109,85 @@ function formatCiDisplay(ciStatus, ciConclusion) {
   return `CI ${ciStatus}`;
 }
 
-function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup = null) {
+function entryTime(entry) {
+  // Order by start time: an older run that finishes later must not mask a
+  // newer failed or pending run. GitHub reports an unset timestamp as
+  // 0001-01-01; treat it as missing.
+  for (const field of ["startedAt", "createdAt", "completedAt"]) {
+    const ms = Date.parse(entry[field] ?? "");
+    if (Number.isFinite(ms) && ms > 0) return ms;
+  }
+  return null;
+}
+
+/**
+ * Keep the latest-started of same-named rollup entries (startedAt, else
+ * createdAt, else completedAt). When any entry lacks a
+ * timestamp, keep all entries so the normalizer still fails closed.
+ */
+function latestEntries(entries) {
+  const times = entries.map(entryTime);
+  if (entries.length < 2 || times.includes(null)) return entries;
+  const max = Math.max(...times);
+  return entries.filter((_, i) => times[i] === max);
+}
+
+/**
+ * Project the branch rules that apply to the PR base (GET
+ * repos/{repo}/rules/branches/{branch}) onto the observed check rollup.
+ * Only repository rulesets are covered; classic branch protection required
+ * checks are not read.
+ * `rules` that are not an array mean the lookup failed: resolved is false.
+ * A required check is missing when no rollup entry carries its name (CheckRun
+ * `name` or StatusContext `context`); a reported one is pending by its entry
+ * state, and any other non-success state (including CANCELLED or STALE) is
+ * failed.
+ * The rollup keeps superseded runs, so only the latest entry per required
+ * check counts (see latestEntries).
+ * Review-based approval requirements (approving review count, code owner
+ * review, last push approval) are omitted when `reviewDecision` is APPROVED,
+ * so a satisfied requirement never reads as an outstanding blocker.
+ */
+export function summarizeBranchRules(rules, statusCheckRollup, reviewDecision = null) {
+  if (!Array.isArray(rules)) {
+    return { resolved: false, missingRequiredChecks: [], pendingRequiredChecks: [], failedRequiredChecks: [], operatorApprovals: [] };
+  }
+  const rollup = (Array.isArray(statusCheckRollup) ? statusCheckRollup : []).filter((entry) => entry && typeof entry === "object");
+  const required = rules
+    .filter((rule) => rule?.type === "required_status_checks")
+    .flatMap((rule) => Array.isArray(rule.parameters?.required_status_checks) ? rule.parameters.required_status_checks : [])
+    .map((check) => check?.context)
+    .filter((context) => typeof context === "string");
+  const operatorApprovals = [];
+  for (const rule of rules.filter((r) => r?.type === "pull_request")) {
+    const count = rule.parameters?.required_approving_review_count ?? 0;
+    if (reviewDecision !== "APPROVED") {
+      if (count > 0) operatorApprovals.push(`ruleset requires ${count} approving review(s)`);
+      if (rule.parameters?.require_code_owner_review === true) operatorApprovals.push("ruleset requires a code owner review");
+      if (rule.parameters?.require_last_push_approval === true) operatorApprovals.push("ruleset requires approval of the most recent push");
+    }
+    if (rule.parameters?.require_extra_approval_for_unattributed_changes === true) {
+      operatorApprovals.push("ruleset requires an extra approval for unattributed changes");
+    }
+  }
+  const missingRequiredChecks = [];
+  const pendingRequiredChecks = [];
+  const failedRequiredChecks = [];
+  for (const context of new Set(required)) {
+    const entries = latestEntries(partitionEntriesByCheckName(rollup, context).matched);
+    if (entries.length === 0) {
+      missingRequiredChecks.push(context);
+      continue;
+    }
+    const status = normalizeStatusCheckRollupStatus(entries);
+    if (status === "pending") pendingRequiredChecks.push(context);
+    // Fail closed: a reported check that is not success (e.g. CANCELLED, STALE) has not satisfied the requirement.
+    else if (status !== "success") failedRequiredChecks.push(context);
+  }
+  return { resolved: true, missingRequiredChecks, pendingRequiredChecks, failedRequiredChecks, operatorApprovals };
+}
+
+function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup = null, branchRules = null, baseRefName = null) {
   const m = typeof mergeable === "string" ? mergeable.toUpperCase() : null;
   const s = typeof mergeStateStatus === "string" ? mergeStateStatus.toUpperCase() : null;
   if (m === "CONFLICTING" || s === "DIRTY" || s === "CONFLICTING") {
@@ -120,6 +198,26 @@ function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup =
   }
   if (m === "UNKNOWN") {
     return "⏳ UNKNOWN — GitHub still computing; recheck before proceeding";
+  }
+  // Fail closed: without the base ruleset, a required check may be absent.
+  if (branchRules && !branchRules.resolved) {
+    return `⚠️ INCOMPLETE — ruleset for ${baseRefName ?? "base"} unresolved; mergeability unknown`;
+  }
+  // BLOCKED is never mergeable: name what the ruleset projection knows.
+  if (s === "BLOCKED") {
+    const reasons = [];
+    if (branchRules?.missingRequiredChecks.length > 0) reasons.push(`ruleset-required check(s) not reported: ${branchRules.missingRequiredChecks.join(", ")}`);
+    if (branchRules?.pendingRequiredChecks.length > 0) reasons.push(`required check(s) pending: ${branchRules.pendingRequiredChecks.join(", ")}`);
+    if (branchRules?.failedRequiredChecks.length > 0) reasons.push(`required check(s) failed: ${branchRules.failedRequiredChecks.join(", ")}`);
+    reasons.push(...(branchRules?.operatorApprovals ?? []));
+    return `⏳ BLOCKED — ${reasons.length > 0 ? reasons.join("; ") : "reason not projected"}`;
+  }
+  if (branchRules?.missingRequiredChecks.length > 0) {
+    const missing = `⏳ BLOCKED${s ? ` (${s})` : ""} — ruleset-required check(s) not reported: ${branchRules.missingRequiredChecks.join(", ")}`;
+    if (s !== "UNSTABLE") return missing;
+    // A real failure beside the missing check must stay visible.
+    const { benign, reason } = classifyBenignGateEvidenceUnstable(statusCheckRollup, mergeStateStatus);
+    return benign ? missing : `${missing}; ${reason}; investigate before merge`;
   }
   // A benign UNSTABLE is the cosmetic rollup noise from superseded Gate-evidence
   // job cancellations (runner or reporter) while the required gate-evidence
@@ -137,18 +235,31 @@ function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup =
   return s || m || "unknown";
 }
 
-function formatPrSummary(prData, handoffResult) {
+export function formatPrSummary(prData, handoffResult, branchRules = null) {
   const lines = [];
   lines.push(`PR #${prData.number}: ${prData.title}`);
   lines.push(`  Branch: ${formatBranchDisplay(prData.headRefName, prData.baseRefName)}`);
   lines.push(`  State: ${prData.state}${prData.isDraft ? " (draft)" : ""}`);
   lines.push(`  Author: ${prData.author?.login || "unknown"}`);
-  lines.push(`  Mergeable: ${formatMergeableDisplay(prData.mergeable, prData.mergeStateStatus, prData.statusCheckRollup)}`);
+  lines.push(`  Mergeable: ${formatMergeableDisplay(prData.mergeable, prData.mergeStateStatus, prData.statusCheckRollup, branchRules, prData.baseRefName)}`);
+  if (String(prData.mergeStateStatus).toUpperCase() === "BLOCKED") {
+    for (const approval of branchRules?.operatorApprovals ?? []) {
+      lines.push(`  Operator blocker: ${approval}`);
+    }
+  }
+  const missingChecks = branchRules?.missingRequiredChecks ?? [];
+  if (missingChecks.length > 0) {
+    lines.push(`  Required checks: not reported at head: ${missingChecks.join(", ")}`);
+  }
 
   if (handoffResult?.snapshot) {
     const s = handoffResult.snapshot;
     if (s.ciStatus !== undefined) {
-      lines.push(`  CI: ${formatCiDisplay(s.ciStatus, s.ciConclusion)}`);
+      // Green observed checks never read as success while a required check is absent.
+      const green = s.ciStatus === "success" || s.ciStatus === "crediblyGreen";
+      lines.push(missingChecks.length > 0 && green
+        ? `  CI: observed checks green; ruleset-required check(s) not reported: ${missingChecks.join(", ")}`
+        : `  CI: ${formatCiDisplay(s.ciStatus, s.ciConclusion)}`);
     }
     if (s.unresolvedThreadCount !== undefined) {
       lines.push(`  Unresolved threads: ${s.unresolvedThreadCount}`);
@@ -175,7 +286,13 @@ function formatPrSummary(prData, handoffResult) {
   if (handoffResult?.state) {
     lines.push(`  Loop state: ${handoffResult.state}`);
   }
-  
+  const carried = handoffResult?.carriedConvergence;
+  if (carried) {
+    lines.push(`  Copilot: re-request suppressed by the requester (${carried.source}: ${carried.reason})`);
+  } else if (handoffResult?.carryUnverified) {
+    lines.push(`  Copilot: re-request advice unverified against the requester (${handoffResult.carryUnverified})`);
+  }
+
   return lines.join("\n");
 }
 
@@ -227,8 +344,8 @@ function formatIssueSummary(issueData, startupBundle, linkedPrData) {
 }
 
 function buildPrInfo(prNumber, repo, cwd) {
-  const prData = ghJson(["pr", "view", String(prNumber), "--repo", repo, "--json", "number,title,body,state,isDraft,headRefName,headRefOid,baseRefName,author,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,url,reviewRequests"], cwd);
-  
+  const prData = ghJson(["pr", "view", String(prNumber), "--repo", repo, "--json", "number,title,body,state,isDraft,headRefName,headRefOid,baseRefName,author,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,url,reviewRequests,reviewDecision"], cwd);
+
   let handoffResult = null;
   try {
     const handoffScript = path.join(REPO_ROOT, "scripts/loop/copilot-pr-handoff.mjs");
@@ -236,8 +353,24 @@ function buildPrInfo(prNumber, repo, cwd) {
   } catch (err) {
     handoffResult = { error: err instanceof Error ? err.message : String(err) };
   }
-  
-  return { prData, handoffResult };
+
+  // ponytail: one page of 100 rules; paginate if a base ever carries more.
+  // A closed or merged PR has no mergeability to project.
+  let branchRules = null;
+  if (prData.state === "OPEN") {
+    let rules = null;
+    try {
+      if (prData.baseRefName) {
+        const branch = prData.baseRefName.split("/").map(encodeURIComponent).join("/");
+        rules = ghJson(["api", `repos/${repo}/rules/branches/${branch}?per_page=100`], cwd);
+      }
+    } catch {
+      rules = null;
+    }
+    branchRules = summarizeBranchRules(rules, prData.statusCheckRollup, prData.reviewDecision);
+  }
+
+  return { prData, handoffResult, branchRules };
 }
 
 function buildIssueInfo(issueNumber, repo, cwd) {
@@ -310,12 +443,12 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       stdout.write(formatIssueSummary(issueData, startupBundle, linkedPrInfo) + "\n");
     }
   } else {
-    const { prData, handoffResult } = buildPrInfo(opts.pr, repo, cwd);
+    const { prData, handoffResult, branchRules } = buildPrInfo(opts.pr, repo, cwd);
 
     if (opts.json) {
-      process.exitCode = emitResult({ ok: true, kind: "pr", pr: prData, handoff: handoffResult }, { jq: opts.jq, silent: opts.silent, stdout, stderr });
+      process.exitCode = emitResult({ ok: true, kind: "pr", pr: prData, handoff: handoffResult, branchRules }, { jq: opts.jq, silent: opts.silent, stdout, stderr });
     } else {
-      stdout.write(formatPrSummary(prData, handoffResult) + "\n");
+      stdout.write(formatPrSummary(prData, handoffResult, branchRules) + "\n");
     }
   }
 }
