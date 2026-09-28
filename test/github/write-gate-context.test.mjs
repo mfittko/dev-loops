@@ -4102,9 +4102,10 @@ test("renderBriefingEvidence: validationResultsPath present appends the section 
     "Read a field directly (never `cat`/`head` the whole file): `jq '.allPassed' \"/abs/tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.validation.json\"`.",
     "",
     "Read that record for suite status, exit codes, and output tails. Executing a suite it",
-    "already records is outside a read-only angle review's scope. If the record is absent,",
-    "unreadable, or stamped with a head SHA other than abc1234, say so as a gate-evidence",
-    "finding instead of substituting your own run.",
+    "already records is outside a read-only angle review's scope. A record with",
+    "`status: \"incomplete\"` ran no suite; it is incomplete evidence, never a pass. If the record",
+    "is absent, unreadable, incomplete, or stamped with a head SHA other than abc1234, say so",
+    "as a gate-evidence finding instead of substituting your own run.",
   ].join("\n");
   assert.ok(r1.text.endsWith(expectedSection + "\n"), "section is the LAST content, exact wording");
   // Appears exactly once, and after the "## Changed files" section that
@@ -4134,7 +4135,7 @@ test("writeGateContext: --validation-results records the absolute path at scope.
 
     const onDisk = await readFile(path.resolve(repoRoot, result.evidencePath), "utf8");
     assert.match(onDisk, /## Validation results at this head/);
-    assert.ok(onDisk.trim().endsWith("finding instead of substituting your own run."));
+    assert.ok(onDisk.trim().endsWith("as a gate-evidence finding instead of substituting your own run."));
     assert.ok(onDisk.includes(`  ${validationResultsFile}`));
 
     const reread = await readGateContext({

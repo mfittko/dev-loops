@@ -2102,6 +2102,22 @@ export const RISK_PATH_DENYLIST_DEFAULT = Object.freeze([
   "**/package.json",
 ]);
 
+// Paths the light-mode file/line count skips: changeset fragments and the
+// generated .claude mirrors (proven byte-identical to their sources). Scope
+// count only; the risk-path floor still sees every changed file.
+export const SCOPE_COUNT_EXCLUDE_GLOBS = Object.freeze([
+  "changes/*.md",
+  ".claude/skills/**",
+  ".claude/agents/**",
+  ".claude/commands/**",
+]);
+
+export function isScopeCountExcluded(path) {
+  // No backslash rewrite: git emits "/" separators, so a literal backslash is a
+  // filename character and must not widen the exclusion (fail closed).
+  return SCOPE_COUNT_EXCLUDE_GLOBS.some((pattern) => matchesDiffExcludeGlob(String(path), pattern));
+}
+
 /**
  * Pure risk-path predicate: does ANY changed file match the shipped
  * {@link RISK_PATH_DENYLIST_DEFAULT} floor or a repo's additive
@@ -2619,7 +2635,9 @@ function selectFloorPlusJustifiedAngles(config, gate, changedFiles) {
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
  * @param {object} facts
- * @param {{ filesChanged?: number, linesChanged?: number }} [facts.scope]
+ * @param {{ filesChanged?: number, linesChanged?: number, rawFilesChanged?: number, rawLinesChanged?: number }} [facts.scope]
+ *   `filesChanged`/`linesChanged` feed the light-mode cap. Tier matching reads
+ *   the unfiltered `raw*` counts when present, matching resolveGateAnglesDynamic.
  * @param {string[]} [facts.changedFiles]
  * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome]
  * @param {boolean} [facts.hasFullLabel]
@@ -2636,8 +2654,8 @@ export function resolveReviewProportionality(config, gate, {
   const dispatch = resolveGateDispatchMode(config, gate, { scope, changedFiles, sizeOutcome, hasFullLabel, inlineFindingSeverities });
   const tier = resolveGateTier(config, gate, {
     changedFiles,
-    filesChanged: scope?.filesChanged,
-    linesChanged: scope?.linesChanged,
+    filesChanged: scope?.rawFilesChanged ?? scope?.filesChanged,
+    linesChanged: scope?.rawLinesChanged ?? scope?.linesChanged,
     hasFullLabel,
   });
   const floors = Object.freeze({

@@ -172,7 +172,7 @@ test("specContextExtract fails closed on a spec with no acceptance criteria (emp
         { repo: "mfittko/dev-loops", issue: 1, contentFile: "./content.txt" },
         { repoRoot: tmpDir, tracker: stubTracker("no structured sections here") },
       ),
-      /no acceptance criteria/,
+      /no acceptance criteria and no definition of done; expected .*any heading level.*`- \[ \]` checkbox items/,
     );
   } finally {
     await rm(tmpDir, { recursive: true, force: true });

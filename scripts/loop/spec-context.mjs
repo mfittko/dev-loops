@@ -21,7 +21,7 @@ import {
   buildRevisionIdentity,
   computeContentDigest,
   computeSpecDigest,
-  extractSpecFromBody,
+  requireSpecFromBody,
   specCriterionIds,
 } from "@dev-loops/core/loop/spec-authority";
 import { resolveTrackerAdapter } from "@dev-loops/core/tracker";
@@ -207,7 +207,7 @@ export async function specContextExtract(
     if (error?.code !== "RATE_LIMITED") throw error;
     return rateLimitedResult(error);
   }
-  const spec = extractSpecFromBody(resolved.body);
+  const spec = requireSpecFromBody(resolved.body);
   let contentBytes;
   try {
     contentBytes = await readFile(path.resolve(repoRoot, options.contentFile), "utf8");

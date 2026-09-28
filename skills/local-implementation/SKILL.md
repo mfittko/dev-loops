@@ -130,7 +130,7 @@ Apply [Structural Quality](../docs/structural-quality.md) from the `deep` review
 ## Light mode (small changes)
 
 <!-- rule: LOCAL-LIGHT-MODE-CONFIG-SURFACE -->
-`localImplementation.lightMode` (`.devloops` field; this repo sets `maxLines: 20`, `maxFiles: 2`) is this skill's config surface for light-mode gate dispatch. Gate-collapse mechanics, escalation, and dispatch resolution (`resolveGateDispatchMode`, `scripts/loop/resolve-gate-dispatch.mjs`) are owned by [Light-mode inline acceptance](../docs/gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs); this skill MUST NOT redefine them.
+`localImplementation.lightMode` (`.devloops` field; this repo sets `maxLines: 40`, `maxFiles: 2`) is this skill's config surface for light-mode gate dispatch. Gate-collapse mechanics, escalation, and dispatch resolution (`resolveGateDispatchMode`, `scripts/loop/resolve-gate-dispatch.mjs`) are owned by [Light-mode inline acceptance](../docs/gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs); this skill MUST NOT redefine them.
 
 Use `scripts/loop/detect-change-scope.mjs` to determine scope:
 ```sh

@@ -18,8 +18,11 @@ import {
   resolveAffectedCriteria,
   stampSpecAuthorityIdentity,
   extractSpecFromBody,
+  requireSpecFromBody,
+  EXPECTED_SPEC_SHAPE,
 } from "@dev-loops/core/loop/spec-authority";
-import { detectAcDodMatrix } from "../src/loop/issue-refinement-artifact.mjs";
+import { detectAcDodMatrix, validatePrBodySpec, extractChecklistItems } from "../src/loop/issue-refinement-artifact.mjs";
+import { extractSection } from "../src/loop/markdown-sections.mjs";
 
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
@@ -409,6 +412,198 @@ describe("spec extraction from a tracker body", () => {
     ]);
     // A non-empty authoritative spec so spec-context no longer fails closed.
     assert.ok(computeSpecDigest(spec).length > 0);
+  });
+
+  function checklistBody(level) {
+    return [
+      "# Title",
+      `${level} Acceptance criteria`,
+      "- [ ] Remove repetitive A/B contrast scaffolding",
+      "- [ ] Ship a working demo",
+      `${level} Definition of done`,
+      "- [ ] npm run verify passes",
+      `${level} Non-goals`,
+      "- Do not flatten the decks' voice or product identity",
+    ].join("\n");
+  }
+
+  test("a ### AC/DoD/Non-goals body yields the same spec and specDigest as the ## form", () => {
+    const h2 = extractSpecFromBody(checklistBody("##"));
+    const h3 = extractSpecFromBody(checklistBody("###"));
+    assert.deepEqual(h3, h2);
+    assert.equal(computeSpecDigest(h3), computeSpecDigest(h2));
+    assert.equal(computeSpecDigest(h3), computeSpecDigest(SPEC));
+  });
+
+  test("a ## section keeps checklist items nested under a deeper sub-heading", () => {
+    const body = [
+      "## Acceptance criteria",
+      "- [ ] Remove repetitive A/B contrast scaffolding",
+      "### Demo",
+      "- [ ] Ship a working demo",
+      "## Definition of done",
+      "- [ ] npm run verify passes",
+      "## Non-goals",
+      "- Do not flatten the decks' voice or product identity",
+    ].join("\n");
+    assert.equal(computeSpecDigest(extractSpecFromBody(body)), computeSpecDigest(SPEC));
+  });
+
+  // A frozen copy of the former H2-only fallback reader, so the level-agnostic
+  // reader is pinned to its result on canonical `##` bodies without a matrix.
+  function h2OnlySpecFromBody(body) {
+    const nonGoalsSection = extractSection(body, "Non-goals") ?? extractSection(body, "Non goals");
+    const acSection = extractSection(body, "Acceptance criteria");
+    const dodSection = extractSection(body, "Definition of done") ?? extractSection(body, "DoD");
+    return {
+      acceptanceCriteria: acSection ? extractChecklistItems(acSection) : [],
+      definitionOfDone: dodSection ? extractChecklistItems(dodSection) : [],
+      nonGoals: nonGoalsSection ? extractChecklistItems(nonGoalsSection) : [],
+    };
+  }
+
+  test("a matrix-less canonical ## body yields exactly the H2-only reader's spec and specDigest", () => {
+    const bodies = [
+      checklistBody("##"),
+      [
+        "## Summary", "Text.",
+        "## DoD", "- [ ] alias dod item",
+        "## Acceptance criteria", "- [ ] first", "### Detail", "- [ ] nested second",
+        "## Definition of done", "- [ ] canonical dod item",
+        "## Non goals", "- none",
+      ].join("\n"),
+      [
+        "## Acceptance criteria", "- [ ] only ac",
+        "## DoD", "- [ ] only dod",
+        "## Non-goals", "- a", "- b",
+      ].join("\n"),
+    ];
+    for (const body of bodies) {
+      const expected = h2OnlySpecFromBody(body);
+      assert.deepEqual(extractSpecFromBody(body), expected);
+      assert.equal(computeSpecDigest(extractSpecFromBody(body)), computeSpecDigest(expected));
+    }
+  });
+
+  test("a quoted ### Acceptance criteria nested before the real ## section does not win", () => {
+    const body = [
+      "## Context",
+      "An earlier issue said:",
+      "### Acceptance criteria",
+      "- [ ] quoted criterion from another issue",
+      "## Acceptance criteria",
+      "- [ ] Remove repetitive A/B contrast scaffolding",
+      "- [ ] Ship a working demo",
+      "## Definition of done",
+      "- [ ] npm run verify passes",
+      "## Non-goals",
+      "- Do not flatten the decks' voice or product identity",
+    ].join("\n");
+    assert.equal(computeSpecDigest(extractSpecFromBody(body)), computeSpecDigest(SPEC));
+  });
+
+  test("`## Done so far` is not a Definition of done section", () => {
+    const body = [
+      "## Acceptance criteria", "- [ ] Ship a working demo",
+      "## Done so far", "- [ ] drafted the outline",
+    ].join("\n");
+    assert.deepEqual(extractSpecFromBody(body).definitionOfDone, []);
+    assert.throws(() => requireSpecFromBody(body), /no definition of done/);
+  });
+
+  test("decorated or alias headings keep the H2-only reader's result", () => {
+    const body = [
+      "## Acceptance criteria (v2)", "- [ ] decorated ac",
+      "## AC", "- [ ] alias ac",
+      "## Definition of done (v2)", "- [ ] decorated dod",
+      "## Non-goals (draft)", "- decorated non-goal",
+    ].join("\n");
+    const expected = h2OnlySpecFromBody(body);
+    assert.deepEqual(expected, { acceptanceCriteria: [], definitionOfDone: [], nonGoals: [] });
+    assert.deepEqual(extractSpecFromBody(body), expected);
+  });
+
+  test("a ### Definition of done nested under ## Acceptance criteria is not double-counted", () => {
+    const body = [
+      "## Acceptance criteria",
+      "- [ ] Remove repetitive A/B contrast scaffolding",
+      "- [ ] Ship a working demo",
+      "### Definition of done",
+      "- [ ] npm run verify passes",
+      "## Non-goals",
+      "- Do not flatten the decks' voice or product identity",
+    ].join("\n");
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, SPEC.acceptanceCriteria);
+    assert.deepEqual(spec.definitionOfDone, SPEC.definitionOfDone);
+    assert.equal(computeSpecDigest(spec), computeSpecDigest(SPEC));
+  });
+
+  test("a quoted # H1 Acceptance criteria ranks below the real ## section", () => {
+    const body = "# Acceptance criteria\n- [ ] quoted\n## Acceptance criteria\n- [ ] real\n## Definition of done\n- [ ] d";
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, ["real"]);
+    assert.deepEqual(spec.definitionOfDone, ["d"]);
+    assert.deepEqual(spec, h2OnlySpecFromBody(body));
+  });
+
+  test("an unselected nested spec-named heading and its siblings stay in the AC", () => {
+    const body = "## Acceptance criteria\n- [ ] a\n### DoD\n- [ ] b\n### More\n- [ ] c\n## Definition of done\n- [ ] d";
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, ["a", "b", "c"]);
+    assert.deepEqual(spec.definitionOfDone, ["d"]);
+    assert.deepEqual(spec, h2OnlySpecFromBody(body));
+  });
+
+  test("a normalized-decorated heading matches where the H2-only reader did not", () => {
+    const body = "## Acceptance criteria:\n- [ ] a\n## **Definition of done**\n- [ ] d";
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, ["a"]);
+    assert.deepEqual(spec.definitionOfDone, ["d"]);
+    assert.notDeepEqual(spec, h2OnlySpecFromBody(body));
+  });
+
+  test("a skipped nested section keeps its descendants and returns later siblings to the AC", () => {
+    const body = "## Acceptance criteria\n- [ ] a\n### Definition of done\n- [ ] d\n#### Detail\n- [ ] d2\n### More\n- [ ] c";
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, ["a", "c"]);
+    assert.deepEqual(spec.definitionOfDone, ["d", "d2"]);
+  });
+
+  test("a nested heading of the same family stays in the AC", () => {
+    const body = "## Acceptance criteria\n- [ ] a\n#### Acceptance criteria\n- [ ] b\n## Definition of done\n- [ ] d";
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, ["a", "b"]);
+    assert.deepEqual(spec.definitionOfDone, ["d"]);
+  });
+
+  test("requireSpecFromBody names the expected shape when AC or DoD is missing", () => {
+    assert.throws(
+      () => requireSpecFromBody("## Summary\nNo spec sections here."),
+      (error) => /no acceptance criteria and no definition of done/.test(error.message)
+        && error.message.includes(EXPECTED_SPEC_SHAPE),
+    );
+    assert.doesNotMatch(EXPECTED_SPEC_SHAPE, /## or ###/);
+    const noDod = "### Acceptance criteria\n- [ ] Ship a working demo\n";
+    assert.throws(
+      () => requireSpecFromBody(noDod),
+      /no definition of done; expected .*any heading level.*each with `- \[ \]` checkbox items or top-level `- ` bullets.*a PR-body spec must use `- \[ \]` checkbox items/,
+    );
+    assert.deepEqual(requireSpecFromBody(checklistBody("###")), extractSpecFromBody(checklistBody("##")));
+  });
+
+  test("a plain-bullet ### AC/DoD PR-body spec stays rejected", () => {
+    const body = [
+      "### Objective", "Ship it.",
+      "### In scope", "The demo.",
+      "### Acceptance criteria", "- Ship a working demo",
+      "### Definition of done", "- npm run verify passes",
+      "### Non-goals", "- None",
+      "Closes #1",
+    ].join("\n");
+    const codes = validatePrBodySpec({ body, requireOpenQuestions: false }).errors.map((e) => e.code);
+    assert.ok(codes.includes("acceptance_criteria_not_checkboxes"));
+    assert.ok(codes.includes("definition_of_done_not_checkboxes"));
   });
 });
 
