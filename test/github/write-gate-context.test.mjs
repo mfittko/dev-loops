@@ -5430,7 +5430,7 @@ test("renderScopedBriefingVariant: docs-only scope with no doc-file hunks in the
       "",
     ].join("\n"),
   });
-  assert.ok(text.includes("(no doc-file hunks in this diff)"));
+  assert.ok(text.includes("(no doc files in this diff)"));
   assert.ok(text.includes("tmp/x.briefing-evidence.txt"), "links back to the full referenced evidence (AC1)");
   assert.ok(!text.includes("src/a.mjs"), "non-doc hunks are excluded from the docs-only variant");
 });
@@ -5493,6 +5493,44 @@ test("renderScopedBriefingVariant is deterministic: same input renders the same 
   assert.equal(r1.text, r2.text);
 });
 
+test("renderScopedBriefingVariant: neither the docs-only nor the changed-files variant carries diff hunk bytes; both point at the filtered-diff read and docs-only lists the doc files", () => {
+  const input = {
+    repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+    evidencePath: "tmp/x.briefing-evidence.txt",
+    diffPath: "tmp/x.diff",
+    filteredDiffPath: "tmp/x.filtered.diff",
+    diffOutput: [
+      "diff --git a/docs/a.md b/docs/a.md",
+      "index 111..222 100644",
+      "--- a/docs/a.md",
+      "+++ b/docs/a.md",
+      "@@ -1 +1,2 @@",
+      "-old doc line",
+      "+new doc line",
+      "+second doc line",
+      "diff --git a/src/a.mjs b/src/a.mjs",
+      "index 333..444 100644",
+      "--- a/src/a.mjs",
+      "+++ b/src/a.mjs",
+      "@@ -1 +1 @@",
+      "-const x = 1;",
+      "+const x = 2;",
+      "",
+    ].join("\n"),
+  };
+  for (const scope of ["docs-only", "changed-files"]) {
+    const { text } = renderScopedBriefingVariant(scope, input);
+    for (const hunkBytes of ["@@ -1", "old doc line", "new doc line", "const x = 2;", "diff --git"]) {
+      assert.ok(!text.includes(hunkBytes), `${scope}: no diff hunk bytes (${hunkBytes})`);
+    }
+    assert.ok(text.includes("It is the required `diff` read"), `${scope}: points at the diff read`);
+    assert.ok(text.includes("tmp/x.filtered.diff"), `${scope}: names the filtered diff path`);
+  }
+  const docsOnly = renderScopedBriefingVariant("docs-only", input).text;
+  assert.ok(docsOnly.includes("- docs/a.md"), "docs-only lists the doc file paths");
+  assert.ok(!docsOnly.includes("src/a.mjs"), "docs-only lists no non-doc path");
+});
+
 test("buildGateContext (AC3): a docs-only-scoped angle emits a docs-only companion file, excludes non-doc hunks, and records angleScopes + briefingVariants", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-scope-docs-"));
   try {
@@ -5545,8 +5583,8 @@ test("buildGateContext (AC3): a docs-only-scoped angle emits a docs-only compani
     );
     const variantText = await readFile(path.resolve(repoRoot, variantPath), "utf8");
     assert.ok(variantText.includes("docs/foo.md"));
-    assert.ok(variantText.includes("# New heading"));
-    assert.ok(!variantText.includes("src/a.mjs"), "docs-only variant excludes non-doc hunks");
+    assert.ok(!variantText.includes("# New heading"), "docs-only variant points at the diff read, never inlines hunks");
+    assert.ok(!variantText.includes("src/a.mjs"), "docs-only variant excludes non-doc paths");
     assert.ok(!variantText.includes("const x = 2;"));
     assert.ok(variantText.includes(result.evidencePath), "links back to the full evidence file so the angle can always widen (AC1)");
     // #1603: the writeGateContext → renderScopedBriefingVariant wiring threads
@@ -7467,6 +7505,27 @@ test("resolvePriorDispositions: a delta-suffixed re-review finding attributes to
   assert.equal(entries[0].angle, "coverage-delta-at-deadbeef");
 });
 
+test("resolvePriorDispositions: a later act with a multi-line rationale still replaces an earlier reject (validity checks apply only at emission)", () => {
+  const f = (judgeDisposition, extra = {}) => ({ angle: "correctness", severity: "low", summary: "same finding", judgeDisposition, ...extra });
+  assert.deepEqual(resolvePriorDispositions({
+    logs: [{ findings: [f("reject")] }, { findings: [f("act", { judgeRationale: "line1\nline2" })] }],
+    rerunningAngles: ["correctness"],
+  }), []);
+  assert.deepEqual(resolvePriorDispositions({
+    logs: [{ findings: [f("reject")] }, { findings: [f("act", { severity: "" })] }],
+    rerunningAngles: ["correctness"],
+  }), [], "an act with an empty severity still replaces the reject");
+});
+
+test("resolvePriorDispositions: a finding disposed by several angles is emitted when any of those angles re-runs", () => {
+  const f = (angle) => ({ angle, severity: "low", summary: "shared finding", judgeDisposition: "reject" });
+  const entries = resolvePriorDispositions({
+    logs: [{ findings: [f("correctness")] }, { findings: [f("security")] }],
+    rerunningAngles: ["correctness"],
+  });
+  assert.deepEqual(entries.map((e) => e.summary), ["shared finding"]);
+});
+
 test("writeGateContext: a prior reject-disposed finding for a RE-RUNNING angle is seeded into the volatile tail", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-"));
   try {
@@ -7541,6 +7600,30 @@ test("writeGateContext: round-4 prior dispositions accumulate every closed prior
       ["re-disposed", "round two"],
     ]);
     assert.equal(read.entries, 3);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext: prior-round ledger SHA filenames match case-insensitively for identity and same-head checks", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-case-"));
+  try {
+    const head = "abc1234567890";
+    const ledgerDir = path.resolve(repoRoot, path.dirname(buildLogPath({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: head, tmpRoot: "tmp" })));
+    await mkdir(ledgerDir, { recursive: true });
+    const writeLedger = (fileSha, recordedSha, summary) => writeFile(path.join(ledgerDir, `draft_gate-${fileSha}.json`), JSON.stringify({
+      repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: recordedSha, verdict: "findings_present",
+      findings: [{ angle: "correctness", severity: "low", summary, judgeDisposition: "reject" }],
+    }), "utf8");
+    await writeLedger("A".repeat(40), "a".repeat(40), "upper-case filename");
+    await writeLedger(head.toUpperCase().padEnd(40, "0"), head.padEnd(40, "0"), "upper-case current head");
+
+    const result = await writeGateContext(parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate", "--head-sha", head, "--angles", '["correctness"]',
+    ]), { repoRoot });
+    const read = result.artifact.requiredReads.find((r) => r.kind === "prior-dispositions");
+    const entries = JSON.parse(await readFile(path.resolve(repoRoot, read.path), "utf8"));
+    assert.deepEqual(entries.map((e) => e.summary), ["upper-case filename"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
