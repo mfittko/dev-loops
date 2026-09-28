@@ -710,7 +710,7 @@ export const READONLY_SUBAGENT_ROLES = Object.freeze(["judge", "review", "gate-c
 
 /** Whether `agentType` (Claude `agent_type` from the SubagentStop payload) is a read-only role. */
 export function isReadOnlySubagentRole(agentType) {
-  return typeof agentType === "string" && READONLY_SUBAGENT_ROLES.includes(agentType);
+  return typeof agentType === "string" && READONLY_SUBAGENT_ROLES.includes(normalizeAgentType(agentType));
 }
 
 /**
