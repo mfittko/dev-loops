@@ -296,6 +296,34 @@ describe("consolidateFanin — verdict", () => {
     }
   });
 
+  test("verifiedItems: rejects a non-array, a non-string or empty entry, and the field on another angle", () => {
+    const cases = [
+      { angle: "acceptance-criteria", verdict: "clean", findings: [], verifiedItems: "item" },
+      { angle: "acceptance-criteria", verdict: "clean", findings: [], verifiedItems: ["ok", ""] },
+      { angle: "pr-checklist", verdict: "clean", findings: [], verifiedItems: ["   "] },
+      { angle: "pr-checklist", verdict: "clean", findings: [], verifiedItems: [42] },
+      { angle: "correctness", verdict: "clean", findings: [], verifiedItems: ["item"] },
+      { angle: "correctness", verdict: "clean", findings: [], verifiedItems: [] },
+    ];
+    for (const entry of cases) {
+      const result = consolidateFanin({ angleResults: [entry] });
+      assert.equal(result.verdict, "blocked", JSON.stringify(entry));
+      assert.match(result.malformed[0].reason, /verifiedItems/);
+    }
+  });
+
+  test("verifiedItems: accepted on acceptance-criteria, pr-checklist and a delta-suffixed base", () => {
+    const result = consolidateFanin({
+      angleResults: [
+        { angle: "acceptance-criteria", verdict: "clean", findings: [], verifiedItems: ["a"] },
+        { angle: "pr-checklist", verdict: "clean", findings: [], verifiedItems: [] },
+        { angle: "acceptance-criteria-delta-at-abc1234", verdict: "clean", findings: [], verifiedItems: ["b"] },
+      ],
+    });
+    assert.equal(result.verdict, "clean");
+    assert.deepEqual(result.malformed, []);
+  });
+
   // Boundary fixture for MAX_ANGLE_NAME_LENGTH (200): pins the accept side so
   // the 201-char reject fixture above cannot be satisfied by silently
   // tightening the guard from `>` to `>=` (which would also reject a

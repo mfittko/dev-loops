@@ -4,6 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
+import { VERIFIED_ITEMS_ANGLES, baseAngleName } from "@dev-loops/core/loop/gate-fanin";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
@@ -176,6 +177,14 @@ export const REVIEWER_WORK_ORDER_MAX_BYTES = 30 * 1024;
 export const REVIEWER_WIDENING_RULE = "requiredReads are the default context, not a ceiling. You MAY read further code, spec, contracts or prior findings when a concrete dependency or ambiguity requires it, and record in the `contextWidened` result field only the widened reads that moved your judgment";
 
 /**
+ * The fixed `verifiedItems` instruction appended to the suffix of any unit that
+ * carries the acceptance-criteria or pr-checklist angle (keyed on angle
+ * membership, never on the unit name or shape). Independent of the configured
+ * focus prompt. upsert-checkpoint-verdict ticks exactly these labels.
+ */
+export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findings artifact of each `acceptance-criteria` or `pr-checklist` angle you review, list in the optional `verifiedItems` string array the exact trimmed label of every PR-body Acceptance criteria or Definition of done checklist item, and every item of the linked issue's Acceptance criteria checklist when one exists, that you verified at this head. Copy each label verbatim from its checklist line. Omit every item you did not verify: the pre_approval_gate ticks only the listed labels, and an unlisted item stays unchecked and blocks. Never put `verifiedItems` on any other angle's artifact";
+
+/**
  * The deterministic angle-suffix for a dispatch unit: it NAMES the unit's
  * angle(s), carries each angle's resolved persona and focus prompt
  * (`angleInstructions`, resolved by the emitter via resolveReviewerRole), any
@@ -237,12 +246,15 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
   const prohibited = PROHIBITED_REVIEWER_OPERATIONS
     .map((kind) => PROHIBITED_OPERATION_INSTRUCTIONS[kind] ?? `do not perform ${kind}`)
     .join("; ");
+  const verifiedItemsLine = angles.some((angle) => VERIFIED_ITEMS_ANGLES.has(baseAngleName(String(angle).trim())))
+    ? `${REVIEWER_VERIFIED_ITEMS_INSTRUCTION}.\n`
+    : "";
   const contract = `## Bounded reviewer contract
 Budget: at most ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns and ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls for this unit.
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
 Prohibited: ${prohibited}.
 Widening: ${REVIEWER_WIDENING_RULE}.
-If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
+${verifiedItemsLine}If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
   return `${header}\n\n${scopeLine}\n\n${reads}${body}\n\n${instructions}\n\n${contract}\n`;
 }
 

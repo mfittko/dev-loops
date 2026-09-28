@@ -836,7 +836,7 @@ verdict; omitting it falls back to the shipped `["high"]` default. This ONE
 invocation reads the per-angle artifacts directory and emits `findingsJson`
 (written to `--out <path>`) — the nested per-angle shape
 `upsert-checkpoint-verdict.mjs --findings-json` accepts directly, clean angles
-included — plus the `{ overallVerdict, findings }` wrapper (written to
+included — plus the `{ overallVerdict, findings, verifiedItems? }` wrapper (written to
 `--ledger-out <path>`) — the exact `--findings-file` input
 `write-gate-findings-log.mjs` and `post-gate-findings.mjs` accept (the former
 threads `overallVerdict` into the durable ledger for verdict-consistency
@@ -1383,7 +1383,7 @@ Each gate chain exits when one of these conditions is met:
 | Condition | Result |
 |---|---|
 | Consolidated verdict is `clean` (no findings at any blocking severity) | Gate passes; proceed to next boundary |
-| `pre_approval_gate` checkpoint `blocked` composed from a deterministic AC/DoD blocker over a completed review ledger (the comment records a **Review verdict** and **Gate blockers**) | Tick verified items or finish the open work, then rerun the gate (the writer's next action is "rerun gate") |
+| `pre_approval_gate` checkpoint `blocked` composed from a deterministic AC/DoD blocker over a completed review ledger (the comment records a **Review verdict** and **Gate blockers**) | Resolve each remaining blocker per [acceptance-criteria-verification.md step 5](acceptance-criteria-verification.md), which says when the writer ticks automatically and when the operator ticks with the CLI; then rerun the gate (the writer's next action is "rerun gate") |
 | `blocked` verdict from the review/fan-in itself (gate could not complete) | Stop; escalate to operator |
 | Maximum retry cycles exhausted without reaching `clean` | Stop; escalate to operator |
 | Fix cycle produces no net progress (same findings after fix attempt) | Stop; escalate to operator |
@@ -1480,8 +1480,12 @@ The conductor's fan-out round passes `--execution-mode fanout_fanin` on this cal
 `--findings-file` reads the same JSON from a file (identical validation) —
 use it for any non-trivial ledger so the array never rides a shell string;
 `post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
-`--ledger-out <path>` writes a `{ overallVerdict, findings }` wrapper — pass
+`--ledger-out <path>` writes a `{ overallVerdict, findings, verifiedItems? }` wrapper — pass
 that path straight to `--findings-file` on both tools, no hand extraction.
+`verifiedItems` is present only when non-empty. It holds the head-bound union of
+the `acceptance-criteria` and `pr-checklist` artifacts' `verifiedItems`, and
+the ledger carries it to the tick in step 5 of
+[Acceptance Criteria Verification](acceptance-criteria-verification.md).
 The sanctioned fan-out path also passes the emitter's keyed plan to this write
 via `--emit-plan`; the option remains additive for legacy/inline callers, but
 when present it requires `--provenance` and applies the correspondence guard

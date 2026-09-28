@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
+import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
 import { evaluateSubagentStop } from "../../.claude/hooks/subagent-stop-uncommitted-guard.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
@@ -15,12 +15,15 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)))
 const hooksDir = path.join(repoRoot, ".claude", "hooks");
 
 function runHook(script, payload, env = {}) {
-  // Build a clean env with the run-id markers explicitly removed (not set to `undefined`, whose
-  // spawnSync handling is version-dependent and could coerce to the string "undefined").
+  // Build a clean env with the async-context markers explicitly removed (not set to `undefined`,
+  // whose spawnSync handling is version-dependent and could coerce to the string "undefined").
   // Marker names come from the adapter (run-context) so this file names no harness env vars —
-  // the cli-harness-agnostic contract confines those literals to the adapter boundary.
+  // the cli-harness-agnostic contract confines those literals to the adapter boundary. Strip the
+  // whole async-context set (run-id carriers AND the native pi-subagents >= 0.65 markers), not
+  // just the carriers: the native markers also resolve to a run id, so leaving them ambient
+  // would silently exempt the non-exempt cases under a Pi async-subagent session.
   const childEnv = { ...process.env };
-  for (const marker of RUN_ID_MARKERS) delete childEnv[marker];
+  for (const marker of ASYNC_CONTEXT_ENV_MARKERS) delete childEnv[marker];
   // Strip the one SubagentStop exemption signal the hook still reads so non-exempt tests are
   // deterministic regardless of host env (a leaked DEVLOOPS_COMMIT_AUTH_PENDING=1 would silently
   // exempt the dirty case). The exempt test explicitly sets it to "1" below, which overrides this.

@@ -2,6 +2,14 @@ import { jest, onTestFinished, test } from "bun:test";
 import assert from "node:assert/strict";
 
 import { runWatchCycle } from "../../scripts/loop/run-watch-cycle.mjs";
+import { runIdFreeEnv } from "../_helpers.mjs";
+
+// These cycles run in-process, so an omitted `env` defaults to `process.env`. Under a Pi
+// async-subagent session that env carries the native pi-subagents >= 0.65 markers, which
+// resolve to a synthesized run id and would engage the watcher-exclusivity lease gate — a
+// different path than the single-runner harness these cases model. Pass a marker-free env
+// explicitly instead of depending on the ambient one.
+const SINGLE_RUNNER_ENV = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
 
 // The CI and Copilot waits are heartbeated inside their shared engines
 // (probe-ci-status / probe-copilot-review), so run-watch-cycle no longer wraps
@@ -58,6 +66,7 @@ test("runWatchCycle heartbeats the runner-coordination lease around the workflow
   const result = await runWatchCycle(
     { repo: "owner/repo", pr: 17 },
     sessionActiveDeps({
+      env: SINGLE_RUNNER_ENV,
       watchWorkflowRunImpl: async () =>
         new Promise((resolve) => {
           setTimeout(() => resolve({ status: "completed" }), 0);
@@ -86,7 +95,7 @@ test(
     onTestFinished(() => jest.useRealTimers());
 
     // Shrink the stale window so the interval is floor(20/2) = 10ms.
-    const env = { ...process.env, DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: "20" };
+    const env = runIdFreeEnv({ DEVLOOPS_RUN_ID: "", DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: "20" });
 
     let ownershipCalls = 0;
     let resolveWatch;
@@ -152,6 +161,7 @@ test("runWatchCycle treats a workflow-watch heartbeat failure as non-fatal", asy
   const result = await runWatchCycle(
     { repo: "owner/repo", pr: 17 },
     sessionActiveDeps({
+      env: SINGLE_RUNNER_ENV,
       watchWorkflowRunImpl: async () =>
         new Promise((resolve) => {
           setTimeout(() => resolve({ status: "completed" }), 0);

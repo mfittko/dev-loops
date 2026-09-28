@@ -96,26 +96,42 @@ const RUN_CONTEXT = path.join("packages", "core", "src", "loop", "run-context.mj
 const RUN_CONTEXT_TEST = path.join("packages", "core", "test", "run-context.test.mjs");
 const ASYNC_START = path.join("packages", "core", "src", "loop", "async-start-contract.mjs");
 const ASYNC_START_TEST = path.join("packages", "core", "test", "async-start-contract.test.mjs");
+// CLI integration test injects native markers into a child to verify the public startup boundary.
+const STARTUP_CLI_TEST = path.join("test", "loop", "resolve-dev-loop-startup-cli-contract.test.mjs");
 const RUN_CONTEXT_GENERATED = path.join(".claude", "hooks", "_run-context.mjs");
 
 /**
  * `PI_*` vars the Pi runtime injects, mapped to the files allowed to read them.
  * dev-loops does not own/define these; renaming them would break Pi integration
  * since the Pi runtime sets the `PI_*` names. Most are confined to the
- * harness-adapter boundary; the one exception is the run-id marker
- * `PI_SUBAGENT_RUN_ID`, honored as an externally-injected alias inside the core
- * run-context / async-start contract modules (see per-entry note below). A read
- * outside a var's listed files couples core to a specific harness and is rejected.
+ * harness-adapter boundary; the async-context / run-id markers are the exception
+ * — `PI_SUBAGENT_RUN_ID`, `PI_SUBAGENT_CHILD`, `PI_SUBAGENT_PARENT_SESSION`,
+ * `PI_ASYNC_NATIVE_RUNNER`, and Pi's per-child session id `PI_SESSION_ID` are all
+ * read inside the core run-context / async-start contract modules rather than the
+ * adapter boundary (see the per-entry notes below). A read outside a var's listed
+ * files couples core to a specific harness and is rejected.
  */
 const HARNESS_RUNTIME_ENV = new Map([
-  // PI_SUBAGENT_RUN_ID is the run-id marker the Pi runtime injects into async-subagent
-  // child envs (#1008): the only async-context marker present under Pi. dev-loops reads it
-  // as an externally-injected alias of the neutral DEVLOOPS_RUN_ID (it does not own/mint it),
-  // so it is honored in the run-context/async-start contract modules + their tests.
+  // PI_SUBAGENT_RUN_ID is the legacy run-id marker pi-subagents <= 0.64 injected into
+  // async-subagent child envs (#1008): honored as an externally-injected alias of the neutral
+  // DEVLOOPS_RUN_ID (it does not own/mint it). pi-subagents >= 0.65 dropped it; the native
+  // in-process async runner marks children with PI_SUBAGENT_CHILD + PI_SUBAGENT_PARENT_SESSION
+  // (and PI_ASYNC_NATIVE_RUNNER on the detached runner) instead, so all four names are read
+  // only in the run-context/async-start contract modules + their tests.
   [
     "PI_SUBAGENT_RUN_ID",
-    [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED],
+    [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST],
   ],
+  ["PI_SUBAGENT_CHILD", [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST]],
+  [
+    "PI_SUBAGENT_PARENT_SESSION",
+    [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST],
+  ],
+  ["PI_ASYNC_NATIVE_RUNNER", [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED]],
+  // PI_SESSION_ID is Pi's per-child session id, injected into every Pi shell (the main agent's
+  // included), so it is not async-start evidence — the run-context module reads it only as the
+  // per-child identity that keeps sibling native children from sharing one synthesized run id.
+  ["PI_SESSION_ID", [RUN_CONTEXT, RUN_CONTEXT_TEST, RUN_CONTEXT_GENERATED]],
   ["PI_SESSION", [PI_ADAPTER, PI_ADAPTER_TEST]], // inside-Pi detection
   ["PI_INTERACTIVE", [PI_ADAPTER, PI_ADAPTER_TEST]], // interactivity override
   ["PI_AGENT_SESSIONS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi session dir

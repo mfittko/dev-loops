@@ -78,16 +78,23 @@ full boundary contract.
 dev-loops reads a small set of `PI_*` variables that the **Pi runtime injects** (it does
 not own or define them) purely to integrate with the Pi harness. These keep their `PI_*`
 names because the Pi runtime sets them. Most are read only at the harness-adapter
-boundary; the run-id marker `PI_SUBAGENT_RUN_ID` is the one exception (see below):
+boundary; the async-context markers are the exception (see below):
 
-`PI_SESSION`, `PI_INTERACTIVE`, `PI_AGENT_SESSIONS_DIR`, `PI_SUBAGENT_SESSIONS_DIR`,
-`PI_SUBAGENT_ASYNC_RUNS_DIR`, `PI_SUBAGENT_ASYNC_RESULTS_DIR`, `PI_SUBAGENT_RUN_ID`.
+`PI_SESSION`, `PI_SESSION_ID`, `PI_INTERACTIVE`, `PI_AGENT_SESSIONS_DIR`,
+`PI_SUBAGENT_SESSIONS_DIR`, `PI_SUBAGENT_ASYNC_RUNS_DIR`, `PI_SUBAGENT_ASYNC_RESULTS_DIR`,
+`PI_SUBAGENT_CHILD`, `PI_SUBAGENT_PARENT_SESSION`, `PI_ASYNC_NATIVE_RUNNER`, and the legacy
+run-id alias `PI_SUBAGENT_RUN_ID`.
 
 The neutral `DEVLOOPS_RUN_ID` is the primary run-id marker and the only one dev-loops
-mints/propagates. Under Pi, `PI_SUBAGENT_RUN_ID` is the run-id the Pi runtime injects into
-async-subagent child envs, so dev-loops honors it as a recognized externally-injected
-alias (precedence after the neutral primary). You do not need to rename it — but if you
-set a run-id yourself, prefer `DEVLOOPS_RUN_ID`.
+mints/propagates. Under Pi, async-start evidence is the native marker pair the async runner
+sets on each child — `PI_SUBAGENT_CHILD=1` plus a non-empty `PI_SUBAGENT_PARENT_SESSION` —
+which carry no run id. `PI_SUBAGENT_RUN_ID` is a legacy alias: pi-subagents <= 0.64 injected
+it into async-subagent child envs, pi-subagents >= 0.65 no longer does, and dev-loops still
+honors it as a recognized externally-injected alias (precedence after the neutral primary).
+With no run-id carrier present, dev-loops synthesizes a stable id from the child's own
+`PI_SESSION_ID`, falling back to `PI_SUBAGENT_PARENT_SESSION` (same parent session -> same
+id). You do not need to rename anything — but if you set a run-id yourself, prefer
+`DEVLOOPS_RUN_ID`.
 
 ## 4. Config file location
 

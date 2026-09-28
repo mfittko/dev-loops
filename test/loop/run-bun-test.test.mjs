@@ -5,6 +5,7 @@ import { access, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
+import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 import { buildBunTestArgs, childResult, createOutputCapture, createTestProgress, discoverRepositoryTests, parseBunSummary, PER_TEST_TIMEOUT_BASE_MS, resolveBunTestFiles, resolveBunTestParallelism, resolveBunTestTimeoutMs, runBunTest } from "../../scripts/run-bun-test.mjs";
 
 test("a nested worktree's test copies are never discovered as this checkout's own", () => {
@@ -238,6 +239,31 @@ test("successful runs suppress captured stdout and stderr and emit one compact s
   assert.equal(stderr, "");
   assert.doesNotMatch(stdout, /npm notice|heartbeat/);
   assert.deepEqual(events, ["finish", "read-tail", "cleanup"]);
+});
+
+test("the child env drops inherited run-id markers without mutating the caller env", async () => {
+  // Marker names come from RUN_ID_MARKERS (DEVLOOPS_RUN_ID plus the Pi subagent
+  // marker); spelling the Pi name here would trip the harness-agnostic guard.
+  assert.ok(RUN_ID_MARKERS.includes("DEVLOOPS_RUN_ID"));
+  const env = { ...Object.fromEntries(RUN_ID_MARKERS.map((marker) => [marker, "leak"])), UNRELATED_VAR: "kept" };
+  let childEnv;
+  const code = await runBunTest(["example.test.mjs"], {
+    env,
+    command: "bun",
+    captureFactory: async () => memoryCapture(" 1 pass\n 0 fail\nRan 1 test across 1 file. [1.00ms]\n", []),
+    spawnImpl: (command, args, options) => {
+      childEnv = options.env;
+      return fakeChild(() => {})(command, args, options);
+    },
+    stdout: { write() {} },
+    stderr: { write() {} },
+  });
+  assert.equal(code, 0);
+  for (const marker of RUN_ID_MARKERS) {
+    assert.ok(!(marker in childEnv), `${marker} must not reach the child`);
+    assert.equal(env[marker], "leak", `${marker} must stay on the caller env`);
+  }
+  assert.equal(childEnv.UNRELATED_VAR, "kept");
 });
 
 test("successful wrapper runs remove their real diagnostic spool", async () => {

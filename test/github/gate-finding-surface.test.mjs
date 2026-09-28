@@ -707,6 +707,15 @@ test("readGateFindingsLedger rejects a malformed finding entry, naming its index
   await rejects(withFinding({ severity: "low", angle: "coverage", summary: "x", judgeDisposition: "fix" }), /findings\[1\]\.judgeDisposition must be one of: act, defer, reject/);
 });
 
+test("readGateFindingsLedger fails closed on a malformed verifiedItems and trims a valid one", async () => {
+  for (const verifiedItems of ["x", { item: "x" }, ["ok", ""], ["ok", "   "], ["ok", 7]]) {
+    await rejects({ ...VALID_LEDGER, verifiedItems }, /"verifiedItems" must be an array of non-empty strings/);
+  }
+  await withLedgerFile({ ...VALID_LEDGER, verifiedItems: [" item one "] }, async (ledgerPath) => {
+    assert.deepEqual((await readGateFindingsLedger(ledgerPath)).verifiedItems, ["item one"]);
+  });
+});
+
 // #1846: a "low" finding's own operatorVisible signal survives the ledger
 // read unchanged — this is the field close-gate-findings.mjs's disposition
 // pass reads (via the rendered marker's ov=1 field) to decide the filing bar.

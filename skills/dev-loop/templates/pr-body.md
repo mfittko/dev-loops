@@ -13,6 +13,11 @@ Required sections (each must be present and non-empty):
   - Non-goals (or Out of scope)
   - A closing reference: `Closes #N` (or Fixes/Resolves #N) matching the issue
 
+State gate and merge outcomes (for example "draft_gate and pre_approval_gate
+pass on the final head; merge only on a full gate pass") as prose, never as an
+AC/DoD checkbox. The gates and merge-pr enforce them, and an unchecked box
+blocks the pre_approval_gate that would satisfy it.
+
 The PR body is the portable, tracker-agnostic spec-of-record: keep it
 self-contained. Do not embed private consumer repo names or PR numbers. An
 issue-less `--lightweight` PR omits the closing reference and additionally
