@@ -205,8 +205,11 @@ export async function withGraphqlRateLimitWait(
   // An absurd finite reset is an invalid Date; report it as unknown instead of letting toISOString throw.
   const resetDate = new Date(Number.isFinite(reset) ? reset * 1000 : Number.NaN);
   const resetAt = Number.isNaN(resetDate.getTime()) ? null : resetDate.toISOString();
+  const graphqlBudgetLeft = Number.isFinite(graphql?.remaining) && graphql.remaining > 0;
   const rateLimited = () => Object.assign(
-    new Error(`GitHub GraphQL rate limit exhausted; retry after ${resetAt ?? "unknown reset"}`),
+    new Error(graphqlBudgetLeft
+      ? "GitHub rate limit hit on a non-GraphQL budget; no reset wait"
+      : `GitHub GraphQL rate limit exhausted; retry after ${resetAt ?? "unknown reset"}`),
     { code: "RATE_LIMITED", resetAt },
   );
   if (!usable) throw rateLimited();

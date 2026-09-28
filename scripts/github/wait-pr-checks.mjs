@@ -164,6 +164,9 @@ export async function runCli(
   const remainingMs = () => options.timeoutMs - (now() - startedAt);
   let result;
   let isRetry = false;
+  // The first watch's baseline head. The retry reuses it, so a push during the
+  // reset wait returns "changed" instead of settling an un-baselined head.
+  let baselineSha;
   try {
     result = await withGraphqlRateLimitWait(
       () => {
@@ -173,8 +176,11 @@ export async function runCli(
         const timeoutMs = isRetry ? Math.max(1, remainingMs()) : options.timeoutMs;
         isRetry = true;
         return watchCiStatus(
-          { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: options.pollIntervalMs },
-          { env, ghCommand, delayImpl, now, ensureOwnershipImpl, ...(runChild ? { runChild } : {}) },
+          { repo: options.repo, pr: options.pr, timeoutMs, pollIntervalMs: options.pollIntervalMs, baselineSha },
+          {
+            env, ghCommand, delayImpl, now, ensureOwnershipImpl, ...(runChild ? { runChild } : {}),
+            onBaseline: (sha) => { baselineSha = sha; },
+          },
         );
       },
       {

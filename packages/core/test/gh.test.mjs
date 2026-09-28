@@ -313,6 +313,20 @@ describe("withGraphqlRateLimitWait", () => {
     assert.equal(calls.ops, 2);
   });
 
+  test("a non-rate-limit error on the retry rethrows unchanged after one sleep", async () => {
+    const notFound = Object.assign(new Error("gh command failed: HTTP 404: Not Found"), { code: "GH_API_ERROR" });
+    const { calls, run } = harness({ reset: NOW / 1000 + 60, outcomes: [RATE_LIMIT_ERROR(), notFound] });
+    await assert.rejects(run, (thrown) => {
+      assert.equal(thrown, notFound);
+      assert.equal(thrown.message, "gh command failed: HTTP 404: Not Found");
+      assert.equal(thrown.code, "GH_API_ERROR");
+      return true;
+    });
+    assert.equal(calls.reads.length, 1);
+    assert.equal(calls.sleeps.length, 1);
+    assert.equal(calls.ops, 2);
+  });
+
   test("a failed rate_limit read fails closed with resetAt null and no sleep", async () => {
     const { calls, run } = harness({ readResult: { code: 1, stdout: "", stderr: "boom" }, outcomes: [RATE_LIMIT_ERROR()] });
     await assertRateLimited(run, null);
@@ -346,7 +360,13 @@ describe("withGraphqlRateLimitWait", () => {
 
   test("a rate-limit error while GraphQL budget remains fails closed with resetAt null and no sleep", async () => {
     const { calls, run } = harness({ reset: NOW / 1000 + 60, remaining: 4321, outcomes: [RATE_LIMIT_ERROR(), "never"] });
-    await assertRateLimited(run, null);
+    await assert.rejects(run, (error) => {
+      assert.equal(error.code, "RATE_LIMITED");
+      assert.equal(error.resetAt, null);
+      assert.doesNotMatch(error.message, /GraphQL rate limit exhausted/);
+      assert.match(error.message, /non-GraphQL budget/);
+      return true;
+    });
     assert.equal(calls.reads.length, 1);
     assert.equal(calls.sleeps.length, 0);
     assert.equal(calls.ops, 1);

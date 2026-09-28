@@ -325,6 +325,47 @@ test("wait-pr-checks keeps the no-checks grace floor when the reset consumes the
   assert.equal(code, 2);
 });
 
+test("wait-pr-checks returns changed (exit 2) when the head advances during the rate-limit wait", async () => {
+  let clock = 1_000_000_000_000;
+  let prViews = 0;
+  const runChild = async (_command, args) => {
+    const argv = args.join(" ");
+    if (argv === "api rate_limit") {
+      return { code: 0, stdout: JSON.stringify({ resources: { graphql: { remaining: 0, reset: clock / 1000 + 100 } } }), stderr: "" };
+    }
+    if (argv.startsWith("pr view")) {
+      prViews += 1;
+      // View 1 baselines sha-a; view 2 (first poll) hits the limit; a push lands during the wait.
+      if (prViews === 2) return { code: 1, stdout: "", stderr: "GraphQL: API rate limit exceeded for user ID 1." };
+      return { code: 0, stdout: prView(prViews === 1 ? "sha-a" : "sha-b", ["build"]), stderr: "" };
+    }
+    if (argv.includes("check-runs")) {
+      return { code: 0, stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }]), stderr: "" };
+    }
+    if (argv.includes("/status")) return { code: 0, stdout: statuses([]), stderr: "" };
+    return { code: 97, stdout: "", stderr: `unexpected gh args: ${argv}` };
+  };
+  const originalWrite = process.stderr.write;
+  process.stderr.write = () => true;
+  const stdout = makeStream();
+  let code;
+  try {
+    code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "300"], {
+      stdout, stderr: makeStream(), env: {}, runChild,
+      delayImpl: async (ms) => { clock += ms; },
+      now: () => clock,
+      ensureOwnershipImpl: async () => ({ ok: true }),
+    });
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  const result = JSON.parse(stdout.text());
+  assert.equal(result.status, "changed");
+  assert.equal(result.settled, false);
+  assert.equal(result.headSha, "sha-b");
+  assert.equal(code, 2);
+});
+
 test("wait-pr-checks --help names the RATE_LIMITED result and its resetAt field", async () => {
   const stdout = makeStream();
   assert.equal(await runCli(["--help"], { stdout }), 0);

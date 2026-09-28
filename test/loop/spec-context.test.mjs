@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   parseSpecContextCliArgs,
+  runCli,
   specContextChangedPaths,
   specContextExtract,
 } from "../../scripts/loop/spec-context.mjs";
@@ -389,6 +390,38 @@ test("specContextExtract returns RATE_LIMITED with resetAt, without sleeping, wh
     assert.equal(result.code, "RATE_LIMITED");
     assert.equal(result.resetAt, new Date(reset * 1000).toISOString());
     assert.deepEqual(sleeps, []);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("spec-context --jq '.contentDigest' still writes RATE_LIMITED with resetAt to stderr and exits 1", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-ratelimit-jq-"));
+  try {
+    await writeFile(path.join(tmpDir, "content.txt"), "impl", "utf8");
+    const nowMs = 1_000_000_000_000;
+    const reset = nowMs / 1000 + GRAPHQL_RATE_LIMIT_MAX_WAIT_MS / 1000 + 60;
+    let out = "";
+    let err = "";
+    const code = await runCli(
+      ["--repo", "mfittko/dev-loops", "--issue", "7", "--content-file", "./content.txt", "--jq", ".contentDigest"],
+      {
+        stdout: { write: (chunk) => { out += chunk; return true; } },
+        stderr: { write: (chunk) => { err += chunk; return true; } },
+        extractDeps: {
+          repoRoot: tmpDir, tracker: rateLimitedTracker(), env: {},
+          runChild: rateLimitRunChild(reset, []),
+          sleep: async () => {},
+          now: () => nowMs,
+        },
+      },
+    );
+    assert.equal(code, 1);
+    assert.equal(out.trim(), "null");
+    const envelope = JSON.parse(err.trim().split("\n")[0]);
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.code, "RATE_LIMITED");
+    assert.equal(envelope.resetAt, new Date(reset * 1000).toISOString());
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

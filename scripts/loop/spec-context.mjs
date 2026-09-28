@@ -328,30 +328,38 @@ export function parseSpecContextCliArgs(argv) {
   return parseExtractCliArgs(argv);
 }
 
-async function main() {
+/** CLI entry; returns the exit code. `extractDeps` feeds specContextExtract (test seam). */
+export async function runCli(
+  argv,
+  { stdout = process.stdout, stderr = process.stderr, extractDeps = undefined } = {},
+) {
   let options;
   try {
-    options = parseSpecContextCliArgs(process.argv.slice(2));
+    options = parseSpecContextCliArgs(argv);
   } catch (error) {
-    process.stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
-    process.exitCode = 1;
-    return;
+    stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
+    return 1;
   }
   if (options.help) {
-    process.stdout.write(`${USAGE}\n`);
-    return;
+    stdout.write(`${USAGE}\n`);
+    return 0;
   }
   try {
     const result = options.mode === "changed-paths"
       ? await specContextChangedPaths(options)
-      : await specContextExtract(options);
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+      : await specContextExtract(options, extractDeps);
+    // --jq/--silent would filter the RATE_LIMITED envelope away (a `.contentDigest`
+    // read prints null); always keep code/resetAt on the stderr error surface.
+    if (result?.ok === false) {
+      stderr.write(`${JSON.stringify({ ok: false, code: result.code, error: result.error, resetAt: result.resetAt ?? null })}\n`);
+    }
+    return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
   } catch (error) {
-    process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
-    process.exitCode = 1;
+    stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
+    return 1;
   }
 }
 
 if (isDirectCliRun(import.meta.url)) {
-  await main();
+  process.exitCode = await runCli(process.argv.slice(2));
 }
