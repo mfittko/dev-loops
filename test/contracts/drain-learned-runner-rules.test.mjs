@@ -100,8 +100,9 @@ test("GATE-EXEC-VALIDATION-RESOLUTION names the verdict writer as its enforcemen
   assert.match(section, /`upsert-checkpoint-verdict\.mjs` refuses a `fanout_fanin` verdict post/);
   assert.match(section, /`run-gate-validation\.mjs`/);
   const flat = collapse(section);
-  assert.match(flat, /An `incomplete` resolution writes a typed incomplete artifact at the same path, stamped with the requested head/);
+  assert.match(flat, /An `incomplete` resolution of a request whose arguments parsed writes a typed incomplete artifact at the same path, stamped with the requested head/);
   assert.match(flat, /It is incomplete evidence, never a pass\./);
+  assert.match(flat, /A request that fails argument parsing removes the artifact and writes none, so the verdict writer refuses the post as absent\./);
   assert.match(flat, /absent, unreadable, incomplete, or stamped with a different head SHA MUST report a gate-evidence finding/);
   assert.match(flat, /A typed incomplete artifact satisfies this check\./);
   assert.match(flat, /The verdict writer checks only the artifact's presence, readability and head stamp\./);
@@ -189,6 +190,8 @@ test("DEV-LOOP-PROBE-TIMEOUT-CEILING pins the 600000 ms ceiling in the bounded w
   assert.ok(watch !== -1 && marker > watch && skill.indexOf("\n**", watch + 1) > marker, "expected the rule inside the bounded watch rule");
   const rule = collapse(passageWith(skill, "<!-- rule: DEV-LOOP-PROBE-TIMEOUT-CEILING -->"));
   assert.match(rule, /`--timeout-ms` .*MUST stay below 600000 ms, the harness tool-call limit/);
+  assert.match(rule, /`wait-pr-checks\.mjs --timeout <seconds>` MUST stay below 600 seconds/);
+  assert.match(rule, /its 1800 s default exceeds the limit/);
   assert.match(rule, /a longer wait loops in separate foreground calls/);
   // Every `timeout <seconds>` wrapper in the watch rule stays below the 600 s limit.
   const watchLine = skill.slice(watch, skill.indexOf("\n", watch));

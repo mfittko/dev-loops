@@ -555,6 +555,21 @@ describe("spec extraction from a tracker body", () => {
     assert.deepEqual(spec, h2OnlySpecFromBody(body));
   });
 
+  test("a normalized-decorated heading matches where the H2-only reader did not", () => {
+    const body = "## Acceptance criteria:\n- [ ] a\n## **Definition of done**\n- [ ] d";
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, ["a"]);
+    assert.deepEqual(spec.definitionOfDone, ["d"]);
+    assert.notDeepEqual(spec, h2OnlySpecFromBody(body));
+  });
+
+  test("a skipped nested section keeps its descendants and returns later siblings to the AC", () => {
+    const body = "## Acceptance criteria\n- [ ] a\n### Definition of done\n- [ ] d\n#### Detail\n- [ ] d2\n### More\n- [ ] c";
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, ["a", "c"]);
+    assert.deepEqual(spec.definitionOfDone, ["d", "d2"]);
+  });
+
   test("a nested heading of the same family stays in the AC", () => {
     const body = "## Acceptance criteria\n- [ ] a\n#### Acceptance criteria\n- [ ] b\n## Definition of done\n- [ ] d";
     const spec = extractSpecFromBody(body);
@@ -568,6 +583,7 @@ describe("spec extraction from a tracker body", () => {
       (error) => /no acceptance criteria and no definition of done/.test(error.message)
         && error.message.includes(EXPECTED_SPEC_SHAPE),
     );
+    assert.doesNotMatch(EXPECTED_SPEC_SHAPE, /## or ###/);
     const noDod = "### Acceptance criteria\n- [ ] Ship a working demo\n";
     assert.throws(
       () => requireSpecFromBody(noDod),

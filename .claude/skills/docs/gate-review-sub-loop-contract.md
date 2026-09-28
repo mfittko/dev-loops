@@ -291,10 +291,11 @@ profile when targeting is unsafe), and MUST persist
 the result as `<gate>-<headSha>.validation.json` beside the gate-context artifact. When
 that artifact exists, the briefing prefix MUST point every reviewer at it
 (`write-gate-context.mjs --validation-results <path>`), and a reviewer MUST consume it
-rather than executing any suite it records. A missing full result remains typed incomplete; it does not authorize a reviewer or worker to run the full suite directly. An `incomplete` resolution
+rather than executing any suite it records. A missing full result remains typed incomplete; it does not authorize a reviewer or worker to run the full suite directly. An `incomplete` resolution of a request whose arguments parsed
 writes a typed incomplete artifact at the same path, stamped with the requested head, with
 `status: "incomplete"`, `allPassed: false`, the `reason`, and no suites. It is incomplete
-evidence, never a pass. A reviewer that finds the artifact absent, unreadable, incomplete,
+evidence, never a pass. A request that fails argument parsing removes the artifact and
+writes none, so the verdict writer refuses the post as absent. A reviewer that finds the artifact absent, unreadable, incomplete,
 or stamped with a different head SHA MUST report a gate-evidence finding; it
 MUST NOT silently run the suite itself and MUST NOT treat the gap as clean. The verdict writer
 enforces this rule: `upsert-checkpoint-verdict.mjs` refuses a `fanout_fanin` verdict post when
