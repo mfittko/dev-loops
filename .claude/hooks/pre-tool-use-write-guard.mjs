@@ -4,6 +4,9 @@
  *
  * Independent boundaries on a Write/Edit:
  *
+ * 0. FIXER mutation boundary (always on, ADR 0107): the `fixer` agent writes only
+ *    inside the mutation authority of a current work-order pull (see the block below).
+ *
  * 0. JUDGE write boundary (always on, ADR 0106): the read-only `judge` agent may
  *    write only judge-verdict.json / spec-authority-verdict.json under a listed
  *    checkout's tmp/gate-judge/ (realpath-resolved, no symlink on the way); every
@@ -29,17 +32,53 @@
  *    agentType facts computed for boundary 2.
  */
 import { execFileSync } from "node:child_process";
-import { lstatSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 
-import { decideJudgeWriteGuard, JUDGE_AGENT_TYPE, normalizeAgentType, decideWriteGuard, decideCoordinatorWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
+import { decideFixerWriteGuard, FIXER_AGENT_TYPE, decideJudgeWriteGuard, JUDGE_AGENT_TYPE, normalizeAgentType, decideWriteGuard, decideCoordinatorWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
 import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
+import { loadFixerContext, nearestExistingDir } from "./_fixer-grants.mjs";
 
 const input = readHookInput();
 const filePath = input?.tool_input?.file_path ?? input?.tool_input?.notebook_path;
 const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+
+// --- Fixer mutation boundary (ADR 0107, always on) ---------------------------
+// A `fixer` writes only inside the mutation authority of a CURRENT work-order pull:
+// a main-checkout receipt with role "fixer" whose plan still names the same ref,
+// digest and execution, pulled by this agent_id. No pull, a superseded or foreign receipt,
+// another agent's pull, another branch or
+// a path outside allowedPaths denies before the write; so does an unresolvable target.
+if (typeof input?.agent_type === "string" && normalizeAgentType(input.agent_type) === FIXER_AGENT_TYPE) {
+  const fixerAbs = typeof filePath === "string" && filePath ? path.resolve(cwd, filePath) : null;
+  // The target's repo first, so a cwd outside the repo cannot make an in-repo target look like scratch.
+  const { checkouts, grants } = loadFixerContext([...(fixerAbs ? [nearestExistingDir(fixerAbs)] : []), cwd], input?.agent_id);
+  const roots = checkouts.map((c) => c.root);
+  // A dangling symlink, or one that resolves into a checkout, on the literal path.
+  const crossesSymlink = (p) => {
+    for (;;) {
+      if (lstatSync(p, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        let real;
+        try { real = realpathNearestExisting(realpathSync(p)); } catch { return true; }
+        if (roots.some((r) => real === r || real.startsWith(`${r}/`))) return true;
+      }
+      if (path.dirname(p) === p) return false;
+      p = path.dirname(p);
+    }
+  };
+  const fixerDecision = decideFixerWriteGuard({
+    agentType: input.agent_type,
+    targetPath: fixerAbs ? realpathNearestExisting(fixerAbs) : null,
+    symlinked: fixerAbs ? crossesSymlink(fixerAbs) : false,
+    checkouts,
+    grants,
+  });
+  if (fixerDecision.decision === "deny") {
+    emitDeny(fixerDecision.reason);
+  }
+}
 
 // --- Boundary 0: judge write boundary (ADR 0106) ------------------------------
 // The read-only judge writes only its two verdict files under a listed checkout's

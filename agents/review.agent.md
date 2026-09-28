@@ -119,4 +119,4 @@ Return:
 - Brief merge-readiness summary
 
 After returning the verdict, ask the user:
-> **Next step**: Should I submit this verdict as a comment on the PR, or spawn the fixer to address the findings? (If there are no findings, state that no fixer run is needed and ask only about submitting the comment.)
+> **Next step**: Should I submit this verdict as a comment on the PR, or spawn the fixer to address the findings? (A fixer spawn emits its work order with `scripts/loop/emit-fixer-work-order.mjs` and dispatches the printed `dispatchPayload` unchanged, per ADR 0107. If there are no findings, state that no fixer run is needed and ask only about submitting the comment.)

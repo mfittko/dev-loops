@@ -1304,6 +1304,13 @@ widening rule.
 
 If findings with a severity in the gate's `blockCleanOnFindingSeverities` list are present:
 
+- The coordinator emits the fixer work order with `scripts/loop/emit-fixer-work-order.mjs
+  --repo <owner/name> --pr <n> --head-sha <headRefOid> --phase commit_only
+  --act-list-file <judge-pass --out> --gate <gate> --harness <claude|pi>` and dispatches the
+  printed `dispatchPayload` unchanged, on initial, resumed and replacement dispatches alike
+  (ADR 0106, 0107). The act-list fix pass is `commit_only`: the later `full` emission that
+  pushes and replies follows [delta mode](pre-pr-review-contract.md#delta-mode).
+  A changed act list, delta result, head or phase requires a new emission.
 - When a judge verdict is present (Phase 3.5), the fix pass executes **only the `act` list**
   — findings the judge marked `act`. The fixer retains reproduction-based rejection (a finding
   that does not reproduce is dead regardless of the judge's verdict) but stops deciding
@@ -1857,7 +1864,9 @@ failed step and sole next action `complete_fixer_disposition`. Untackled, deferr
 foreign-authored and newly arrived threads keep their existing judgment path; this boundary
 never auto-resolves outside the tackled set.
 
-`scripts/github/verify-fixer-disposition.mjs` loads/records
+`scripts/github/verify-fixer-disposition.mjs --fixer-plan <fixer-emit-plan.json>` reads the
+handoff from the work order's outputRef. It refuses without a matching fixer pull receipt, when
+the handoff predates the pull, or when the handoff head is not the observed head. It then records
 `tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`, captures live state,
 checks containment and evaluates. Only after containment passes may it post the evidenced
 reply and resolve; if a matching reply already exists, it resolves without reposting. Live

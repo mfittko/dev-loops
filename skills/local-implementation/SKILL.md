@@ -406,6 +406,7 @@ Implementation tasks MUST be dispatched to dedicated specialist agents per this 
 | Review-comment follow-up, PR fix commits | `fixer` |
 
 For each delegated task:
+- a `fixer` dispatch is never a prose brief: emit its work order with `scripts/loop/emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <headRefOid> --phase <commit_only|full> (--threads-file <list-review-threads.mjs --unresolved-only output> | --act-list-file <judge-pass --out> --gate <gate>) --harness <claude|pi>` and dispatch the printed `dispatchPayload` unchanged (ADR 0106, 0107); the rules below apply to the other roles
 - give the subagent one focused task with exact success criteria
 - include only the minimum relevant files, plans, and repo context
 - tell the subagent whether it should implement, verify, or review

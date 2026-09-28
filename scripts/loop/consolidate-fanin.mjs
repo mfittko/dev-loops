@@ -51,7 +51,7 @@ import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guar
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
-import { verifyPullReceipt } from "../github/_work-order-protocol.mjs";
+import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-protocol.mjs";
 import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
@@ -515,8 +515,9 @@ async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot) {
     if (!check.ok) {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: incomplete delivery evidence for unit ${unit.scope}: ${check.reason} (expected a pull receipt for execution ${unit.executionIdentity}, digest ${unit.workOrderDigest}) under ${receiptTmpRoot}; re-dispatch the unit with its compact reference (fail-closed)`);
     }
-    // A result older than this execution's pull (or an unparseable pulledAt) is a stale prior-round file.
-    const missing = (await Promise.all((unit.angles ?? []).map(async (angle) => (resultAngles.has(angle) && (await stat(resultAngles.get(angle)[0])).mtimeMs >= Date.parse(check.receipt.pulledAt) ? null : angle)))).filter(Boolean);
+    // A result older than this execution's pull is a stale prior-round file (verifyPulledResult).
+    const missing = (await Promise.all((unit.angles ?? []).map(async (angle) => (resultAngles.has(angle)
+      && (await verifyPulledResult({ resultPath: resultAngles.get(angle)[0], receiptTmpRoot, role: "review", ...unit })).ok ? null : angle)))).filter(Boolean);
     if (missing.length > 0) throw new Error(`interrupted reviewer: unit ${unit.scope} (execution ${unit.executionIdentity}) pulled its work order but wrote no post-pull result for angle(s) ${missing.join(", ")}; the unit is not complete, retry it per the existing execution rules (fail-closed)`);
   }
 }
