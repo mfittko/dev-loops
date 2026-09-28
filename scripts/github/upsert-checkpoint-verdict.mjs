@@ -227,10 +227,16 @@ Optional:
                                             findings[], verifiedItems? }). For
                                             pre_approval_gate (never draft_gate),
                                             the poster first ticks those exact
-                                            verifiedItems labels in the PR body
-                                            and in linked issue bodies with
-                                            unticked AC items, then composes; a
-                                            failed body fetch or edit posts no
+                                            verifiedItems labels, then composes.
+                                            The tick runs only when the ledger
+                                            provenance is consistent and records
+                                            a fresh acceptance-criteria or
+                                            pr-checklist angle (and, for
+                                            fanout_fanin, passes angle
+                                            coverage). It ticks only labels that
+                                            are unchecked PR-body AC/DoD items
+                                            or unchecked linked-issue AC items;
+                                            a failed body fetch or edit posts no
                                             verdict. Turns the posted review
                                             into the round's single finding
                                             surface: an in-diff file:line finding
@@ -2100,6 +2106,17 @@ function ledgerVerifiesChecklist(ledger) {
     .some((angle) => ["acceptance-criteria", "pr-checklist"].includes(baseAngleName(angle)));
 }
 
+// Non-throwing form of the ledger-provenance angle-coverage checks. A
+// fanout_fanin tick requires it: with --findings-json present the refusals
+// run only after the tick, so a ledger that fails them must tick nothing.
+function ledgerPassesAngleCoverage(ledger, config, gate) {
+  if (provenanceConsistencyError(ledger?.provenance ?? null)) return false;
+  const perAngle = ledger.provenance.perAngle ?? [];
+  if (perAngle.some((e) => !e || typeof e !== "object" || typeof e.angle !== "string" || e.angle.trim().length === 0)) return false;
+  const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(perAngle, resolveGateAngleContract(config, GATE_CONFIG_KEY[gate]));
+  return missingMandatory.length === 0 && (foreignAngles.length === 0 || !resolveRejectForeignAngles(config));
+}
+
 // ACCEPT-CRITERIA-VERIFY-AND-REFLECT automatic tick (pre_approval_gate with a
 // trusted --findings-ledger only): tick the ledger's reviewer-verified labels
 // in the PR body's AC/DoD boxes and, for each linked issue whose unticked AC
@@ -2584,8 +2601,12 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // Tick the reviewer-verified AC/DoD labels BEFORE composing, then read the
   // reloaded artifact everywhere below (blocker collection and the clean guards).
   // Only a ledger whose provenance records a fresh acceptance-criteria or
-  // pr-checklist review is trusted to tick.
-  if (options.gate === "pre_approval_gate" && preloadedFindingsLedger?.verifiedItems?.length > 0 && ledgerVerifiesChecklist(preloadedFindingsLedger)) {
+  // pr-checklist review is trusted to tick. In fanout_fanin mode the ledger
+  // must also pass the angle-coverage checks, whether or not --findings-json
+  // is present.
+  const tickCoverageOk = (options.executionMode ?? DEFAULT_EXECUTION_MODE) !== "fanout_fanin"
+    || ledgerPassesAngleCoverage(preloadedFindingsLedger, config, options.gate);
+  if (options.gate === "pre_approval_gate" && preloadedFindingsLedger?.verifiedItems?.length > 0 && ledgerVerifiesChecklist(preloadedFindingsLedger) && tickCoverageOk) {
     coordinationContext.refinementArtifact = await tickReviewerVerifiedItems({
       repo: options.repo,
       pr: options.pr,

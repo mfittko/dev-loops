@@ -10559,6 +10559,19 @@ test("tick: a fanout_fanin ledger whose provenance misses a mandatory angle is r
   });
 });
 
+test("tick: with --findings-json present, a ledger whose provenance fails angle coverage ticks nothing", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls, ledgerPath }) => {
+    const findingsPath = path.join(path.dirname(ledgerPath), "findings.json");
+    await writeFile(findingsPath, JSON.stringify([{ angle: "acceptance-criteria", verdict: "clean", findings: [] }]), "utf8");
+    await assert.rejects(
+      () => post({ executionMode: "fanout_fanin", inlineReason: undefined, findingsJson: findingsPath, findingsSeverityCounts: CLEAN_COUNTS }),
+      /--findings-json for pre_approval_gate is missing mandatory angle\(s\)/,
+    );
+    assert.equal(bodyEdited(calls), false);
+    assert.equal(reviewPosted(calls), false);
+  });
+});
+
 test("tick: a permanently unfetchable linked issue does not block the post; the fetched issue is still ticked", async () => {
   const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", "- [ ] unverified issue criterion", ""].join("\n");
   await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody, closingIssues: [900, 901] }, async ({ post, postedBody, editedBodies }) => {
