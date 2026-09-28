@@ -20,14 +20,15 @@
  *     subagents (developer/fixer/quality/review) may run these freely.
  *   - `git commit` / `git push` from the `fixer` agent — blocked (any repo) unless a current
  *     fixer work-order pull grants the checked-out branch, every path the commit could include
- *     and (for a push) a `full` phase (ADR 0107, decideFixerBashGate).
+ *     and (for a push) a `full` phase (ADR 0107, decideFixerBashGate). The grant must come from a
+ *     pull this fixer ran: the sanctioned pull line records its agent_id as the binding.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 import { decideBashGate, decideFixerBashGate, FIXER_AGENT_TYPE, normalizeAgentType } from "./_hook-decisions.mjs";
-import { branchCheckedOutAt, loadFixerContext } from "./_fixer-grants.mjs";
+import { branchCheckedOutAt, listCheckouts, loadFixerContext, parseFixerPullCommand, recordFixerAgentBinding } from "./_fixer-grants.mjs";
 import {
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
@@ -74,12 +75,19 @@ const commitPaths = (dir) => {
     return null;
   }
 };
-const fixerInvocations = normalizeAgentType(agentType) === FIXER_AGENT_TYPE ? extractGitCommitPushInvocations(command) : [];
+const isFixer = normalizeAgentType(agentType) === FIXER_AGENT_TYPE;
+// The sanctioned pull line binds the pull's grant to this fixer's agent_id (see _fixer-grants.mjs).
+const fixerPull = isFixer ? parseFixerPullCommand(command) : null;
+if (fixerPull) {
+  const mainRoot = listCheckouts(cwd)[0]?.root;
+  if (mainRoot) recordFixerAgentBinding(mainRoot, { agentId: input?.agent_id, ...fixerPull });
+}
+const fixerInvocations = isFixer ? extractGitCommitPushInvocations(command) : [];
 if (fixerInvocations.length > 0) {
   let grants = [];
   const invocations = fixerInvocations.map((invocation) => {
     const dir = path.resolve(cwd, ...invocation.dirs);
-    const context = loadFixerContext([dir]);
+    const context = loadFixerContext([dir], input?.agent_id);
     grants = [...grants, ...context.grants];
     return { ...invocation, branch: branchCheckedOutAt(dir, context.checkouts), paths: invocation.subcommand === "commit" ? commitPaths(dir) : null };
   });

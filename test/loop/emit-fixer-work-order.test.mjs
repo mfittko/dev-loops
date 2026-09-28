@@ -22,7 +22,14 @@ const THREADS = { ok: true, repo: REPO, pr: PR, threads: [{ threadId: "T1", comm
 
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...runIdFreeEnv(), GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout).refusal);
-const pull = (unit, cwd, over = {}) => spawnSync("node", [PULL, "--ref", over.ref ?? unit.workOrderRef, "--digest", over.digest ?? unit.workOrderDigest, "--execution", over.execution ?? unit.executionIdentity], { cwd, encoding: "utf8", env: runIdFreeEnv() });
+// The fixer runs the dispatch pointer's exact pull line; the Bash gate binds the grant to its agent_id.
+const AGENT = "agent-a";
+const pullLine = (identity) => /`([^`]+)`/.exec(buildDispatchPointer(identity))[1];
+const pull = (unit, cwd, over = {}) => {
+  const identity = { workOrderRef: over.ref ?? unit.workOrderRef, workOrderDigest: over.digest ?? unit.workOrderDigest, executionIdentity: over.execution ?? unit.executionIdentity };
+  assert.equal(bash(cwd, pullLine(identity), over.agentId ?? AGENT), "allow");
+  return spawnSync("node", [PULL, "--ref", identity.workOrderRef, "--digest", identity.workOrderDigest, "--execution", identity.executionIdentity], { cwd, encoding: "utf8", env: runIdFreeEnv() });
+};
 let clock = 1_790_000_000_000;
 const nextExecution = () => `f${clock++}-0000abcd`;
 
@@ -289,8 +296,8 @@ test("F4: a conflicting rewrite under the same reference is refused", async () =
 // F5 — the write hook binds fixer mutation to a current pull's authority
 // ---------------------------------------------------------------------------
 
-const hook = (cwd, file) => {
-  const result = spawnSync("node", [HOOK], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: file }, cwd, agent_type: "fixer" }), encoding: "utf8", env: runIdFreeEnv() });
+const hook = (cwd, file, agentId = AGENT) => {
+  const result = spawnSync("node", [HOOK], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: file }, cwd, agent_type: "fixer", ...(agentId ? { agent_id: agentId } : {}) }), encoding: "utf8", env: runIdFreeEnv() });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput.permissionDecision : "allow";
 };
@@ -371,11 +378,32 @@ test("F5: a pulled grant goes stale with the pull's own predicate; an edited out
 });
 
 const BASH_HOOK = path.resolve(".claude/hooks/pre-tool-use-bash-gate.mjs");
-const bash = (cwd, command) => {
-  const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd, agent_type: "fixer" }), encoding: "utf8", env: runIdFreeEnv() });
+const bash = (cwd, command, agentId = AGENT) => {
+  const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd, agent_type: "fixer", ...(agentId ? { agent_id: agentId } : {}) }), encoding: "utf8", env: runIdFreeEnv() });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput.permissionDecision : "allow";
 };
+
+test("F5: a grant binds to the agent_id that ran the pull; a replacement re-pull takes it over; no agent_id gets nothing", async () => {
+  await withFixture(async ({ wt, emit }) => {
+    const unit = await emit();
+    const target = path.join(wt, "src", "x.mjs");
+    assert.equal(pull(unit, wt).status, 0);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, "x\n");
+    assert.equal(hook(wt, target), "allow");
+    assert.equal(bash(wt, "git add -A && git commit -m fix"), "allow");
+    for (const agentId of ["agent-b", null]) {
+      assert.equal(hook(wt, target, agentId), "deny", `${agentId} never pulled`);
+      assert.equal(bash(wt, "git add -A && git commit -m fix", agentId), "deny", `${agentId} never pulled`);
+    }
+    assert.equal(pull(unit, wt, { agentId: "agent-b" }).status, 0);
+    assert.equal(hook(wt, target, "agent-b"), "allow");
+    assert.equal(bash(wt, "git add -A && git commit -m fix", "agent-b"), "allow");
+    assert.equal(hook(wt, target), "deny", "the replaced agent lost the grant");
+    assert.equal(bash(wt, "git add -A && git commit -m fix"), "deny", "the replaced agent lost the grant");
+  });
+});
 
 test("F5: the Bash gate binds fixer git commit/push to the pulled branch and leaves other commands alone", async () => {
   await withFixture(async ({ root, wt, emit }) => {

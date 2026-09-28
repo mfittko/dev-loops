@@ -6,7 +6,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { realpathNearestExisting } from "./_worktree-guard.mjs";
@@ -38,6 +38,43 @@ export function listCheckouts(dir) {
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const EXECUTION_RE = /^f(\d+)-[0-9a-f]{8}$/u;
+
+// Grant-to-agent binding. Verified by a headless PreToolUse stdin probe: a subagent's hook input
+// carries `agent_id` (e.g. "abea5f653d974dbf2"), identical across all tool calls of that subagent;
+// the main agent's input carries no `agent_id`. The fixer's write guard denies writes under the main
+// checkout's tmp/, so a fixer cannot forge a marker.
+const bindingPath = (mainRoot, workOrderRef) => path.join(mainRoot, "tmp", "work-order-receipts", "fixer-agents", `${sha256(workOrderRef)}.json`);
+
+// The exact sanctioned pull line of buildDispatchPointer (scripts/github/_work-order-protocol.mjs),
+// with the same shell-inert value charset. Anything else records no binding.
+const PULL_VALUE = "[A-Za-z0-9][\\w.:/#-]*";
+const PULL_LINE_RE = new RegExp(`^dev-loops-run scripts/github/pull-work-order\\.mjs --ref (fixer:${PULL_VALUE}) --digest (${PULL_VALUE}) --execution (${PULL_VALUE})$`, "u");
+
+/** `{ workOrderRef, executionIdentity }` of an exact sanctioned fixer pull line, or null. */
+export function parseFixerPullCommand(command) {
+  const match = typeof command === "string" ? PULL_LINE_RE.exec(command.trim()) : null;
+  return match ? { workOrderRef: match[1], executionIdentity: match[3] } : null;
+}
+
+/**
+ * Record that `agentId` pulls `workOrderRef`. Keyed by the ref hash, so a replacement fixer
+ * re-pulling the same ref takes the binding over. A non-string or empty agentId records nothing.
+ */
+export function recordFixerAgentBinding(mainRoot, { agentId, workOrderRef, executionIdentity }) {
+  if (typeof agentId !== "string" || !agentId) return;
+  const file = bindingPath(mainRoot, workOrderRef);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify({ agentId, workOrderRef, executionIdentity, recordedAt: new Date().toISOString() })}\n`);
+}
+
+const boundTo = (mainRoot, receipt, agentId) => {
+  try {
+    const marker = JSON.parse(readFileSync(bindingPath(mainRoot, receipt.workOrderRef), "utf8"));
+    return marker.agentId === agentId && marker.workOrderRef === receipt.workOrderRef && marker.executionIdentity === receipt.executionIdentity;
+  } catch {
+    return false;
+  }
+};
 
 // The pull's staleness predicate (locateFixerUnit), re-checked on every hook call: a required read
 // changed or vanished, the gate round was retired after emission, or the authority branch no longer
@@ -72,10 +109,12 @@ function isStale(mainRoot, order, executionIdentity) {
  * Current fixer grants `[{ branch, allowedPaths, phase, outputRef }]` of the main checkout `mainRoot`:
  * a receipt with role "fixer" whose plan lives under `<mainRoot>/tmp/gate-fixer/`, still names
  * the same ref, digest and execution, still reproduces that digest and is not stale by the pull's
- * own predicate. The outputRef is derived from the plan location and execution, never read from
- * the plan's unbound outputRefs field. Any other receipt grants nothing.
+ * own predicate, and whose binding marker names `agentId` (the pulling fixer). The outputRef is
+ * derived from the plan location and execution, never read from the plan's unbound outputRefs
+ * field. Any other receipt grants nothing; a missing agentId grants nothing.
  */
-export function loadFixerGrants(mainRoot) {
+export function loadFixerGrants(mainRoot, agentId) {
+  if (typeof agentId !== "string" || !agentId) return [];
   const receiptsDir = path.join(mainRoot, "tmp", "work-order-receipts");
   let planRoot;
   let names = [];
@@ -88,7 +127,7 @@ export function loadFixerGrants(mainRoot) {
   for (const name of names) {
     try {
       const receipt = JSON.parse(readFileSync(path.join(receiptsDir, name), "utf8"));
-      if (receipt?.role !== "fixer") continue;
+      if (receipt?.role !== "fixer" || !boundTo(mainRoot, receipt, agentId)) continue;
       const planPath = realpathSync(receipt.subject.planPath);
       if (!planPath.startsWith(`${planRoot}/`)) continue;
       const plan = JSON.parse(readFileSync(planPath, "utf8"));
@@ -106,14 +145,14 @@ export function loadFixerGrants(mainRoot) {
 
 /**
  * Checkouts listed from every dir in `dirs` (merged, de-duplicated, the first repo's main first)
- * and the current fixer grants of that main checkout.
+ * and the current fixer grants of that main checkout bound to `agentId`.
  */
-export function loadFixerContext(dirs) {
+export function loadFixerContext(dirs, agentId) {
   const checkouts = [];
   for (const dir of dirs) {
     for (const checkout of listCheckouts(dir)) if (!checkouts.some((c) => c.root === checkout.root)) checkouts.push(checkout);
   }
-  return { checkouts, grants: checkouts[0] ? loadFixerGrants(checkouts[0].root) : [] };
+  return { checkouts, grants: checkouts[0] ? loadFixerGrants(checkouts[0].root, agentId) : [] };
 }
 
 /** Branch checked out in the most specific listed checkout containing `dir`, or null. */

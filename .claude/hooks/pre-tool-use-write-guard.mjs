@@ -42,13 +42,14 @@ const filePath = input?.tool_input?.file_path;
 // --- Fixer mutation boundary (ADR 0107, always on) ---------------------------
 // A `fixer` writes only inside the mutation authority of a CURRENT work-order pull:
 // a main-checkout receipt with role "fixer" whose plan still names the same ref,
-// digest and execution. No pull, a superseded or foreign receipt, another branch or
+// digest and execution, pulled by this agent_id. No pull, a superseded or foreign receipt,
+// another agent's pull, another branch or
 // a path outside allowedPaths denies before the write; so does an unresolvable target.
 if (typeof input?.agent_type === "string" && normalizeAgentType(input.agent_type) === FIXER_AGENT_TYPE) {
   const fixerCwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   const fixerAbs = typeof filePath === "string" && filePath ? path.resolve(fixerCwd, filePath) : null;
   // The target's repo first, so a cwd outside the repo cannot make an in-repo target look like scratch.
-  const { checkouts, grants } = loadFixerContext([...(fixerAbs ? [nearestExistingDir(fixerAbs)] : []), fixerCwd]);
+  const { checkouts, grants } = loadFixerContext([...(fixerAbs ? [nearestExistingDir(fixerAbs)] : []), fixerCwd], input?.agent_id);
   const roots = checkouts.map((c) => c.root);
   // A dangling symlink, or one that resolves into a checkout, on the literal path.
   const crossesSymlink = (p) => {
