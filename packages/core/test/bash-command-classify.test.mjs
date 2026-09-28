@@ -1158,9 +1158,23 @@ test("extractGitCommitPushInvocations skips value-taking global options and mark
     // Dir moves the literal dirs cannot follow (subshell cd, pushd, cd -, shell-expanded operands).
     "(cd /o); git commit -m x", "( cd /o && git commit -m x )", "pushd /o && git commit -am x", "cd - && git push",
     "cd && git push", "cd $X && git push", "cd ~/r && git commit -m x", "git -C \"$R\" push", "git -C ~/r commit -m x",
+    // Allowlist: anything outside a plain `&&`/`;` chain with head-only literal `cd` is unresolvable.
+    "cd /wt | git commit -m x", "cd /wt & git commit -m x", "if true; then cd /o; fi; git commit -m x",
+    "cd /o || git push", "{ cd /o; }; git push", "git commit -m \"$(cd /o)\"", "git commit -m `pwd`", "git commit -m x <(cd /o)",
+    "while false; do cd /o; done; git push", "for d in /o; do cd $d; done; git push", "case x in x) cd /o;; esac; git push",
+    "until true; do :; done; git push", "select d in /o; do break; done; git push", "function f { cd /o; }; git push",
+    "popd; git push", "eval 'cd /o'; git push", "exec git push", "source ./x.sh; git push", ". ./x.sh; git push",
+    "echo /o | xargs git -C /o commit -m x", "sh -c 'git push'", "bash -c 'git commit -m x'", "command cd /o; git push",
+    "cd -P /o && git push", "git commit -F - <<EOF", "git push # (note)", "git commit -m 'unterminated",
   ]) {
     assert.deepEqual(one(command).map((i) => i.unresolvable), [true], command);
   }
-  assert.deepEqual(one("sh -c 'git push'").map((i) => i.unresolvable), [false]);
   assert.deepEqual(one("cd /o && git commit -m x"), [{ subcommand: "commit", dirs: ["/o"], unresolvable: false }]);
+  for (const command of [
+    "git commit -m x", "git push", "cd /o; git add -A && git push 2>&1", "git commit -m \"fix(gate): a | b & c\"",
+    "git commit -m 'then (x); $(y)'", "git add . && git commit -m x\ngit push", "GIT_TRACE=1 git push",
+  ]) {
+    const invocations = one(command);
+    assert.ok(invocations.length > 0 && invocations.every((i) => !i.unresolvable), command);
+  }
 });

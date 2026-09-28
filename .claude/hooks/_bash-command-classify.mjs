@@ -1127,11 +1127,14 @@ export function commandContainsCodeVerificationEntrypoint(command) {
  * Git global options (`-C <dir>`, `-c <k=v>`, `--git-dir`, `--work-tree`, `--namespace`,
  * `--exec-path`, as `--opt value` or `--opt=value`) are skipped; each `-C` dir and every
  * preceding `cd <dir>` segment is returned in `dirs` (in order) so the caller can resolve the
- * checkout the invocation runs in. `args` are the tokens after the subcommand. `unresolvable`
- * is true when the checkout cannot be resolved from `dirs`: a `--git-dir`/`--work-tree` option,
- * a `GIT_DIR=`/`GIT_WORK_TREE=` assignment earlier in the command, a commit/push inside a
- * quoted `sh -c`/`bash -c` body that also runs `cd`, an earlier subshell `cd`, `pushd`/`popd`,
- * `cd -` or bare `cd`, or a `cd`/`-C` operand the shell expands (`$`, `~`, backtick).
+ * checkout the invocation runs in. `args` are the tokens after the subcommand.
+ *
+ * `unresolvable` is an allowlist: `dirs` is trusted only when the whole command is a plain
+ * top-level chain of simple commands joined by `&&`, `;` or a newline, and every `cd` is a
+ * top-level segment head with exactly one literal operand (see isPlainCommandChain). Any other
+ * construct marks every invocation unresolvable, as does a `--git-dir`/`--work-tree` option, a
+ * `GIT_DIR=`/`GIT_WORK_TREE=` assignment earlier in the command, `cd -`, a bare `cd`, or a
+ * `cd`/`-C` operand the shell expands (`$`, `~`, backtick).
  * ponytail: whitespace tokens with stripped quotes/brackets; git aliases are a known ceiling.
  * @param {string} command
  * @returns {{ subcommand: "commit"|"push", dirs: string[], args: string[], unresolvable: boolean }[]}
@@ -1141,16 +1144,14 @@ export function extractGitCommitPushInvocations(command) {
   const found = [];
   const cdDirs = [];
   let gitEnvSet = false;
-  // A dir move the literal `dirs` cannot follow: a subshell `(cd x)` (its cd never reaches later
-  // segments), `pushd`/`popd`, `cd -`, a bare `cd`, or a shell-expanded operand ($, ~, backtick).
-  let dirUnknown = false;
+  // A dir move the literal `dirs` cannot follow, or any construct outside the plain chain.
+  let dirUnknown = !isPlainCommandChain(command);
   const expands = (raw) => /[$~`]/.test(raw);
   for (const segment of shellSegments(command)) {
     const pairs = segment.split(/\s+/).map((raw) => ({ raw, t: raw.replace(/^[\s'"`({$]+|[\s'"`)};]+$/g, "") })).filter((p) => p.t);
     const tokens = pairs.map((p) => p.t);
-    if (tokens[0] === "pushd" || tokens[0] === "popd") dirUnknown = true;
     if (tokens[0] === "cd") {
-      if (!tokens[1] || tokens[1] === "-" || expands(pairs[1].raw) || /^\$?\(/.test(segment)) dirUnknown = true;
+      if (tokens.length !== 2 || tokens[1] === "-" || expands(pairs[1].raw)) dirUnknown = true;
       else cdDirs.push(tokens[1]);
     }
     const at = tokens.findIndex((t) => t === "git" || t.endsWith("/git"));
@@ -1169,10 +1170,76 @@ export function extractGitCommitPushInvocations(command) {
     }
     if (tokens[i] === "commit" || tokens[i] === "push") found.push({ subcommand: tokens[i], dirs, args: tokens.slice(i + 1), unresolvable });
   }
-  // A quoted `sh -c '... cd x && git commit'` body splits into segments whose `cd` is not leading.
-  const cdBody = [...command.matchAll(/\b(?:ba|z|da|k)?sh\s+(?:-[A-Za-z]+\s+)*?-[A-Za-z]*c[A-Za-z]*\s+(['"])([\s\S]*?)\1/g)]
-    .some(([, , body]) => /(?:^|[\s;&|(])cd(?:\s|$)/.test(body) && extractGitCommitPushInvocations(body).length > 0);
-  return cdBody ? found.map((invocation) => ({ ...invocation, unresolvable: true })) : found;
+  return found;
+}
+
+// Segment heads that open a compound command or move/replace the shell's directory or command.
+const CHAIN_BLOCKED_HEADS = new Set([
+  "if", "then", "else", "elif", "fi", "while", "until", "for", "do", "done", "case", "esac", "select", "function", "coproc",
+  "pushd", "popd", "eval", "exec", "source", ".",
+]);
+// Unquoted words that run another command line or a shell anywhere in a segment.
+const CHAIN_BLOCKED_WORD_RE = /^(?:.*\/)?(?:(?:ba|z|da|k|c|tc|fi|mk)?sh|xargs|eval|exec|source|pushd|popd)$/;
+
+/**
+ * Whether `command` is a plain top-level chain of simple commands joined by `&&`, `;` or a
+ * newline, with every `cd` as a segment head (quote-aware scan). False on a pipe `|`, a background
+ * `&`, `||`, a subshell or group (`(`, `)`, `{`, `}`), command or process substitution (`$(`,
+ * backtick, including inside double quotes), a heredoc `<<`, a comment, an unterminated quote, a
+ * compound keyword or pushd/popd/eval/exec/source/`.` head, or an unquoted shell binary, `xargs`,
+ * `eval`, `exec`, `source`, `pushd`, `popd` or non-head `cd` word. Redirections (`2>&1`, `>|`) stay plain.
+ * @param {string} command @returns {boolean}
+ */
+function isPlainCommandChain(command) {
+  const segments = [[]];
+  let word = null;
+  const endWord = () => { if (word !== null) segments.at(-1).push(word); word = null; };
+  const add = (text, quoted = false) => { word ??= { text: "", quoted: false }; word.text += text; word.quoted ||= quoted; };
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    const prev = command[i - 1];
+    if (c === "'") {
+      const j = command.indexOf("'", i + 1);
+      if (j === -1) return false;
+      add(command.slice(i + 1, j), true);
+      i = j;
+    } else if (c === '"') {
+      let j = i + 1;
+      for (; j < command.length && command[j] !== '"'; j++) {
+        if (command[j] === "\\") j++;
+        else if (command[j] === "`" || (command[j] === "$" && command[j + 1] === "(")) return false;
+      }
+      if (j >= command.length) return false;
+      add(command.slice(i + 1, j), true);
+      i = j;
+    } else if (c === "\\") {
+      if (command[i + 1] !== "\n") add(command[i + 1] ?? "", true);
+      i++;
+    } else if (c === " " || c === "\t") {
+      endWord();
+    } else if (c === ";" || c === "\n" || c === "\r") {
+      endWord();
+      segments.push([]);
+    } else if (c === "&" && command[i + 1] === "&") {
+      endWord();
+      segments.push([]);
+      i++;
+    } else if (c === "&" && (prev === ">" || prev === "<" || command[i + 1] === ">")) {
+      add(c);
+    } else if (c === "|" && prev === ">") {
+      add(c);
+    } else if ("&|(){}`".includes(c) || (c === "$" && command[i + 1] === "(") || (c === "<" && command[i + 1] === "<") || (c === "#" && word === null)) {
+      return false;
+    } else {
+      add(c);
+    }
+  }
+  endWord();
+  return segments.every((words) => {
+    const head = words.findIndex((w) => w.quoted || !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w.text));
+    if (head !== -1 && !words[head].quoted && CHAIN_BLOCKED_HEADS.has(words[head].text)) return false;
+    return words.every((w, k) => w.quoted || !(CHAIN_BLOCKED_WORD_RE.test(w.text) || (w.text === "cd" && k !== 0)));
+  });
 }
 
 const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);

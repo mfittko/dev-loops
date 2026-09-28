@@ -43,34 +43,40 @@ const EXECUTION_RE = /^f(\d+)-[0-9a-f]{8}$/u;
 // carries `agent_id` (e.g. "abea5f653d974dbf2"), identical across all tool calls of that subagent;
 // the main agent's input carries no `agent_id`. The fixer's write guard denies writes under the main
 // checkout's tmp/, so a fixer cannot forge a marker.
-const bindingPath = (mainRoot, workOrderRef) => path.join(mainRoot, "tmp", "work-order-receipts", "fixer-agents", `${sha256(workOrderRef)}.json`);
+// Keyed by ref AND digest, so a pull line with a wrong digest never overwrites the pulling fixer's marker.
+const bindingPath = (mainRoot, workOrderRef, workOrderDigest) =>
+  path.join(mainRoot, "tmp", "work-order-receipts", "fixer-agents", `${sha256(`${workOrderRef}\n${workOrderDigest}`)}.json`);
 
 // The exact sanctioned pull line of buildDispatchPointer (scripts/github/_work-order-protocol.mjs),
 // with the same shell-inert value charset. Anything else records no binding.
 const PULL_VALUE = "[A-Za-z0-9][\\w.:/#-]*";
 const PULL_LINE_RE = new RegExp(`^dev-loops-run scripts/github/pull-work-order\\.mjs --ref (fixer:${PULL_VALUE}) --digest (${PULL_VALUE}) --execution (${PULL_VALUE})$`, "u");
 
-/** `{ workOrderRef, executionIdentity }` of an exact sanctioned fixer pull line, or null. */
+/** `{ workOrderRef, workOrderDigest, executionIdentity }` of an exact sanctioned fixer pull line, or null. */
 export function parseFixerPullCommand(command) {
   const match = typeof command === "string" ? PULL_LINE_RE.exec(command.trim()) : null;
-  return match ? { workOrderRef: match[1], executionIdentity: match[3] } : null;
+  return match ? { workOrderRef: match[1], workOrderDigest: match[2], executionIdentity: match[3] } : null;
 }
 
 /**
- * Record that `agentId` pulls `workOrderRef`. Keyed by the ref hash, so a replacement fixer
- * re-pulling the same ref takes the binding over. A non-string or empty agentId records nothing.
+ * Record that `agentId` pulls `workOrderRef`. Keyed by the ref and digest hash, so a replacement
+ * fixer re-pulling the same unit takes the binding over. The marker is written before the pull runs,
+ * so it also carries the pull's `--digest`: boundTo honors it only when that digest equals the
+ * receipt's, and a pull that the digest check refuses never takes over or revokes a receipt's grant.
+ * A non-string or empty agentId records nothing.
  */
-export function recordFixerAgentBinding(mainRoot, { agentId, workOrderRef, executionIdentity }) {
+export function recordFixerAgentBinding(mainRoot, { agentId, workOrderRef, workOrderDigest, executionIdentity }) {
   if (typeof agentId !== "string" || !agentId) return;
-  const file = bindingPath(mainRoot, workOrderRef);
+  const file = bindingPath(mainRoot, workOrderRef, workOrderDigest);
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify({ agentId, workOrderRef, executionIdentity, recordedAt: new Date().toISOString() })}\n`);
+  writeFileSync(file, `${JSON.stringify({ agentId, workOrderRef, workOrderDigest, executionIdentity, recordedAt: new Date().toISOString() })}\n`);
 }
 
 const boundTo = (mainRoot, receipt, agentId) => {
   try {
-    const marker = JSON.parse(readFileSync(bindingPath(mainRoot, receipt.workOrderRef), "utf8"));
-    return marker.agentId === agentId && marker.workOrderRef === receipt.workOrderRef && marker.executionIdentity === receipt.executionIdentity;
+    const marker = JSON.parse(readFileSync(bindingPath(mainRoot, receipt.workOrderRef, receipt.workOrderDigest), "utf8"));
+    return marker.agentId === agentId && marker.workOrderRef === receipt.workOrderRef
+      && marker.workOrderDigest === receipt.workOrderDigest && marker.executionIdentity === receipt.executionIdentity;
   } catch {
     return false;
   }
