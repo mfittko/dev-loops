@@ -42,16 +42,25 @@ function buffer() {
 }
 
 test("only an unregistered rule ID gets unknown_rule_id", async () => {
-  const root = await fixtureRepo();
+  const root = await fixtureRepo({ rules: { requiredRules: [{ id: "KNOWN-RULE-ID" }], optOutRules: [{ id: "OPTOUT-RULE-ID" }] } });
   const body = [
-    "Cites `KNOWN-RULE-ID`, a FAIL-CLOSED path and ADR-0012.",
+    "Cites `KNOWN-RULE-ID`, OPTOUT-RULE-ID, a FAIL-CLOSED path and ADR-0012.",
     "Also cites MISSING-RULE-ID.",
     "```",
     "FENCED-RULE-ID",
     "```",
+    "~~~~",
+    "```",
+    "IN-FENCE-RULE",
+    "~~~~",
+    "AFTER-FENCE-RULE",
   ].join("\n");
   const result = await lintSpec({ body, repoRoot: root });
-  assert.deepEqual(result.findings.map(({ kind, id }) => ({ kind, id })), [{ kind: "unknown_rule_id", id: "MISSING-RULE-ID" }]);
+  assert.deepEqual(result.findings.map(({ kind, id }) => ({ kind, id })), [
+    { kind: "unknown_rule_id", id: "MISSING-RULE-ID" },
+    { kind: "unknown_rule_id", id: "AFTER-FENCE-RULE" },
+    { kind: "unknown_adr", id: "0012" },
+  ]);
   assert.deepEqual(result.checks.rules, { status: "ran" });
 });
 
@@ -78,6 +87,7 @@ test("adr_amended names each amender and whether the body cites it", async () =>
       "0010-base.md": "Accepted — 2026-01-01",
       "0011-first.md": "Accepted — 2026-01-02\n\nAmends [0010](./0010-base.md): narrows it.",
       "0012-second.md": "Accepted — 2026-01-03\n\nIt partially amends ADR 0010.",
+      "0013-draft.md": "Proposed\n\nAmends ADR 0010.",
     },
   });
   const { findings } = await lintSpec({ body: "Follows ADR 0010 and ADR 0011.", repoRoot: root });
@@ -89,6 +99,17 @@ test("adr_amended names each amender and whether the body cites it", async () =>
       { id: "0012", file: "0012-second.md", amenderCited: false },
     ] },
   }]);
+});
+
+test("an (Amended by M) annotation in the target Status creates the edge", async () => {
+  const root = await fixtureRepo({
+    decisions: {
+      "0001-base.md": "Accepted (amended by ADR 0002)",
+      "0002-amender.md": "Accepted — 2026-01-02",
+    },
+  });
+  const { findings } = await lintSpec({ body: "Follows ADR 0001.", repoRoot: root });
+  assert.deepEqual(findings.map(({ kind, id }) => `${kind}:${id}`), ["adr_amended:0001"]);
 });
 
 test("the amendment parser matches this repo's decision records", async () => {

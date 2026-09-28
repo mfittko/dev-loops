@@ -34,6 +34,7 @@ Output (stdout, JSON):
                 "adrs":  { "status": "ran" } | { "status": "skipped", "reason" } } }
 
 Finding kinds: unknown_rule_id, unknown_adr, adr_not_accepted, adr_superseded, adr_amended.
+ADR citation forms: "ADR NNNN", "ADR-NNNN" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
 
@@ -41,7 +42,7 @@ Exit codes: 0 lint completed (with or without findings); 1 usage error;
 2 malformed required-rules.json, another runtime error, or an invalid --jq filter.`;
 
 const RECORD_FILE_RE = /^(\d{4})-[a-z0-9-]+\.md$/;
-const BODY_ADR_RE = /\bADR\s+(\d{4})\b|docs\/decisions\/(\d{4})-[\w-]*\.md/g;
+const BODY_ADR_RE = /\bADR[\s-]+(\d{4})\b|docs\/decisions\/(\d{4})-[\w-]*\.md/g;
 // ponytail: ADR numbers below 1000 carry a leading zero, so dates and issue numbers never match.
 // Once records pass 0999, match \d{4,} and keep only numbers present in the record index.
 const STATUS_ADR_RE = /\b(0\d{3})\b/g;
@@ -51,10 +52,16 @@ function isMissing(error) {
 }
 
 function stripFencedCode(body) {
-  let inFence = false;
+  // A fence closes only on a bare run of its own character at least as long as the opener.
+  let fence = null;
   return body.split(/\r?\n/).filter((line) => {
-    if (/^\s*(```|~~~)/.test(line)) { inFence = !inFence; return false; }
-    return !inFence;
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (!fence) {
+      if (marker) fence = marker;
+      return !marker;
+    }
+    if (marker && marker[0] === fence[0] && marker.length >= fence.length && /^\s*[`~]+\s*$/.test(line)) fence = null;
+    return false;
   }).join("\n");
 }
 
@@ -97,7 +104,8 @@ function statusSentences(statusText) {
     .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/`[^`]*`/g, " ")
     .replace(/\]\([^)]*\)/g, "]")
-    .replace(/\([^()]*\bamended\b[^()]*\)/gi, " ")
+    // Drop only "(which itself amended ...)" asides; an "(Amended by M)" annotation still creates an edge.
+    .replace(/\((?:which|that)\s+(?:itself\s+)?amended\b[^()]*\)/gi, " ")
     .replace(/\s+/g, " ");
   return flat.split(/(?<=[.!?])\s+/);
 }
