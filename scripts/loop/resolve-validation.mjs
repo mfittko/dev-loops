@@ -78,14 +78,16 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
     return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason, artifactPath: buildValidationResultsPath(options) };
   };
-  // An exception before the tree check confirms the requested head writes no
-  // artifact either: nothing proves the run is in the right checkout.
+  // An exception writes a typed artifact only when the head check confirmed
+  // the requested head and a re-check at the throw still confirms it: a suite
+  // may have moved HEAD before a later step threw.
+  const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+  const readHead = () => execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim().toLowerCase();
   let headConfirmed = false;
   try {
-    const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
     const currentTreeProblem = () => {
       headConfirmed = false;
-      const actualHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim().toLowerCase();
+      const actualHead = readHead();
       headConfirmed = actualHead === options.headSha;
       if (!headConfirmed) return { reason: `worktree HEAD ${actualHead} differs from requested head`, writeArtifact: false };
       const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim();
@@ -109,7 +111,9 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
     return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
   } catch (error) {
-    return incomplete(error instanceof Error ? error.message : String(error), { writeArtifact: headConfirmed });
+    let stillConfirmed = false;
+    try { stillConfirmed = headConfirmed && readHead() === options.headSha; } catch { /* An unconfirmable head writes no artifact. */ }
+    return incomplete(error instanceof Error ? error.message : String(error), { writeArtifact: stillConfirmed });
   }
 }
 

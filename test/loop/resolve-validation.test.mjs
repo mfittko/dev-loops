@@ -208,6 +208,35 @@ test("a head check that cannot confirm the requested head leaves no artifact", a
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("an exception after the head check confirms a clean requested head writes a typed incomplete artifact", async () => {
+  const { repoRoot } = await fixture();
+  try {
+    await writeFile(path.join(repoRoot, "package.json"), "{ not json");
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "invalid package.json"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation({ ...parseResolveValidationArgs(args(headSha)), headSha }, { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.ok, false);
+    await assertTypedIncompleteArtifact(repoRoot, headSha, "full-repository", /JSON/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a suite that moves HEAD before a later step throws leaves no artifact", async () => {
+  const { repoRoot } = await fixture();
+  try {
+    await writeFile(path.join(repoRoot, "scripts", "verify.mjs"), "import { execFileSync } from 'node:child_process'; import { rmSync } from 'node:fs'; execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'x']); rmSync('tmp', { recursive: true, force: true });\n");
+    execFileSync("git", ["add", "scripts/verify.mjs"], { cwd: repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "head mover that removes the log dir"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /ENOENT/);
+    assert.equal(result.artifactPath, undefined);
+    const artifactPath = path.join(repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    await assert.rejects(readFile(artifactPath), /ENOENT/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("targeted profile rejects a full suite and allows an exact targeted script", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
