@@ -5444,7 +5444,8 @@ test("detectChangeScope eligible with custom threshold: 5 files ≤ 5/300", asyn
 test("SCOPE_COUNT_EXCLUDE_GLOBS lists exactly the fragment and mirror globs and is frozen", () => {
   assert.deepEqual([...SCOPE_COUNT_EXCLUDE_GLOBS], ["changes/*.md", ".claude/skills/**", ".claude/agents/**", ".claude/commands/**"]);
   assert.equal(Object.isFrozen(SCOPE_COUNT_EXCLUDE_GLOBS), true);
-  assert.equal(isScopeCountExcluded("changes\\2527-x.md"), true);
+  assert.equal(isScopeCountExcluded("changes\\2527-x.md"), false);
+  assert.equal(isScopeCountExcluded(".claude\\skills\\x.mjs"), false);
   assert.equal(isScopeCountExcluded("changes/sub/x.md"), false);
 });
 

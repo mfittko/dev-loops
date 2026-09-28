@@ -8,6 +8,8 @@ import { isScopeCountExcluded } from "@dev-loops/core/config";
 
 const USAGE = `Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
 Detect change scope from git diff for light-mode eligibility.
+filesChanged/linesChanged skip SCOPE_COUNT_EXCLUDE_GLOBS paths (changes/*.md,
+.claude/{skills,agents,commands}/**); see ADR 0108.
 Options:
   --base <ref>   Override base ref (default: HEAD~1)
   --head <ref>   Override head ref; ignored unless --base is also set

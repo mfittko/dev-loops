@@ -2113,8 +2113,9 @@ export const SCOPE_COUNT_EXCLUDE_GLOBS = Object.freeze([
 ]);
 
 export function isScopeCountExcluded(path) {
-  const posix = String(path).replace(/\\/g, "/");
-  return SCOPE_COUNT_EXCLUDE_GLOBS.some((pattern) => matchesDiffExcludeGlob(posix, pattern));
+  // No backslash rewrite: git emits "/" separators, so a literal backslash is a
+  // filename character and must not widen the exclusion (fail closed).
+  return SCOPE_COUNT_EXCLUDE_GLOBS.some((pattern) => matchesDiffExcludeGlob(String(path), pattern));
 }
 
 /**

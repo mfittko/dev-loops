@@ -1911,7 +1911,9 @@ byte-identical:
 Both `detectScope` and `detectMergeBaseScope` count scope without the frozen
 `SCOPE_COUNT_EXCLUDE_GLOBS` (`packages/core/src/config/config.mjs`): `changes/*.md`,
 `.claude/skills/**`, `.claude/agents/**` and `.claude/commands/**`. The risk-path floor
-still sees every changed file. See ADR 0108
+still sees every changed file. The set ships to consumer repos, where no mirror-parity
+proof may guard these `.claude` paths. They still pass the risk-path and size-budget floors,
+and a consumer that hand-edits them can force full review with the `gate:full` label. See ADR 0108
 (`docs/decisions/0108-light-mode-scope-count-excludes-fragments-and-mirrors.md`).
 
 <!-- rule: GATE-EXEC-LIGHT-ESCALATION -->

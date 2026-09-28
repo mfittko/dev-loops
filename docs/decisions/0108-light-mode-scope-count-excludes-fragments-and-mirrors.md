@@ -22,6 +22,8 @@ This repo's `.devloops` moves to `maxFiles: 2`, `maxLines: 40`. The basis is the
 
 The ADR 0071 floors stay unchanged: risk-path, size-budget, T1 and unavailable-evidence. They still see the full, unfiltered changed-file list. A risk-path file plus a fragment still resolves to `full_fanout`. The `gate:full` override and `GATE-EXEC-LIGHT-ESCALATION` are unchanged. Validation stays as [0105](./0105-targeted-validation-and-full-run-authority.md) decides. Light mode saves reviewer and judge cost only. This ADR satisfies the `devloops-proportionality` tripwire from [0071](./0071-review-proportionality-non-overridable-floors.md).
 
+The set is hard-coded and ships to consumer repos. A consumer repo may have no mirror-parity proof for `.claude/{skills,agents,commands}/**`, so hand-edited files there are uncounted. They still pass the risk-path floor and the size-budget floor, and a consumer can force full review with the `gate:full` label.
+
 Rejected alternatives:
 
 - Filter inside `resolveGateDispatchMode`. It receives only counts, and the merge-gate re-verify would count a different diff.
