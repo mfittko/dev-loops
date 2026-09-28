@@ -112,6 +112,35 @@ test("an (Amended by M) annotation in the target Status creates the edge", async
   assert.deepEqual(findings.map(({ kind, id }) => `${kind}:${id}`), ["adr_amended:0001"]);
 });
 
+test("records numbered 1000 or higher create amendment edges", async () => {
+  const root = await fixtureRepo({
+    decisions: {
+      "0999-base.md": "Accepted — 2026-01-01",
+      "1000-mid.md": "Accepted — 2026-01-02\n\nAmends ADR 0999.",
+      "1001-late.md": "Accepted — 2026-01-03\n\nAmends [1000](./1000-mid.md).",
+    },
+  });
+  const records = await indexDecisionRecords(path.join(root, "docs", "decisions"));
+  assert.deepEqual([...records.get("1000").amends], ["0999"]);
+  assert.deepEqual([...records.get("1000").amendedBy], ["1001"]);
+  const { findings } = await lintSpec({ body: "Follows ADR 0999 and docs/decisions/1000-mid.md.", repoRoot: root });
+  assert.deepEqual(findings.map(({ kind, id, detail }) => `${kind}:${id}:${detail.amenders.map((a) => a.id).join(",")}`), [
+    "adr_amended:0999:1000",
+    "adr_amended:1000:1001",
+  ]);
+});
+
+test("a year in a Status section creates no edge without a matching record", async () => {
+  const root = await fixtureRepo({
+    decisions: {
+      "0001-base.md": "Accepted — 2026-01-01",
+      "0002-other.md": "Accepted — 2026-01-02\n\nAmends 2026 guidance; amended by 2026 review.",
+    },
+  });
+  const records = await indexDecisionRecords(path.join(root, "docs", "decisions"));
+  assert.deepEqual([...records.values()].map((r) => [r.id, [...r.amends], [...r.amendedBy]]), [["0001", [], []], ["0002", [], []]]);
+});
+
 test("the amendment parser matches this repo's decision records", async () => {
   const records = await indexDecisionRecords(path.join(repoRoot, "docs", "decisions"));
   const amends = (id) => records.get(id).amends;

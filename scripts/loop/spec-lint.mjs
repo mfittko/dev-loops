@@ -41,11 +41,10 @@ ${JQ_OUTPUT_USAGE}
 Exit codes: 0 lint completed (with or without findings); 1 usage error;
 2 malformed required-rules.json, another runtime error, or an invalid --jq filter.`;
 
-const RECORD_FILE_RE = /^(\d{4})-[a-z0-9-]+\.md$/;
-const BODY_ADR_RE = /\bADR[\s-]+(\d{4})\b|docs\/decisions\/(\d{4})-[\w-]*\.md/g;
-// ponytail: ADR numbers below 1000 carry a leading zero, so dates and issue numbers never match.
-// Once records pass 0999, match \d{4,} and keep only numbers present in the record index.
-const STATUS_ADR_RE = /\b(0\d{3})\b/g;
+const RECORD_FILE_RE = /^(\d{4,})-[a-z0-9-]+\.md$/;
+const BODY_ADR_RE = /\bADR[\s-]+(\d{4,})\b|docs\/decisions\/(\d{4,})-[\w-]*\.md/g;
+// Status sections also hold dates and issue numbers, so adrNumbersIn keeps only indexed record numbers.
+const STATUS_ADR_RE = /\b(\d{4,})\b/g;
 
 function isMissing(error) {
   return error?.code === "ENOENT" || error?.code === "ENOTDIR";
@@ -115,12 +114,12 @@ function clauseAfter(sentence, index) {
   return sentence.slice(index).split(/[:;]|\bdoes not amend\b/i)[0];
 }
 
-function adrNumbersIn(text) {
-  return [...text.matchAll(STATUS_ADR_RE)].map((match) => match[1]);
+function adrNumbersIn(text, records) {
+  return [...text.matchAll(STATUS_ADR_RE)].map((match) => match[1]).filter((id) => records.has(id));
 }
 
 /**
- * Index docs/decisions/*.md by four-digit number. Amendment edges come from
+ * Index docs/decisions/*.md by record number (four or more digits). Amendment edges come from
  * Status sections only: "M amends N" in M, or "Amended by M" in N.
  * Returns null when the directory is missing.
  */
@@ -146,8 +145,7 @@ export async function indexDecisionRecords(decisionsDir) {
     const { status } = splitStatus(text);
     const root = firstMeaningfulLine(status);
     const state = /^Proposed\b/.test(root) ? "proposed" : /^Superseded by\b/.test(root) ? "superseded" : isAcceptedOrSuperseded(status) ? "accepted" : "unknown";
-    const supersededBy = state === "superseded" ? adrNumbersIn(statusSentences(root).join(" "))[0] ?? null : null;
-    records.set(match[1], { id: match[1], file: name, state, statusLine: root, supersededBy, amends: new Set(), amendedBy: new Set(), status });
+    records.set(match[1], { id: match[1], file: name, state, statusLine: root, supersededBy: null, amends: new Set(), amendedBy: new Set(), status });
   }
   const addEdge = (amender, target) => {
     if (amender === target || !records.has(amender) || !records.has(target)) return;
@@ -155,18 +153,19 @@ export async function indexDecisionRecords(decisionsDir) {
     records.get(target).amendedBy.add(amender);
   };
   for (const record of records.values()) {
+    if (record.state === "superseded") record.supersededBy = adrNumbersIn(statusSentences(record.statusLine).join(" "), records)[0] ?? null;
     for (const sentence of statusSentences(record.status)) {
       if (/\bamends no\b/i.test(sentence)) continue;
       const amends = /\b(?:partially\s+)?amends\b/i.exec(sentence);
       if (amends) {
-        let targets = adrNumbersIn(clauseAfter(sentence, amends.index));
+        let targets = adrNumbersIn(clauseAfter(sentence, amends.index), records);
         // "ADR N (amends its ...)" names the target before the verb.
-        if (targets.length === 0 && /^amends\s+(?:its|their)\b/i.test(sentence.slice(amends.index))) targets = adrNumbersIn(sentence.slice(0, amends.index));
+        if (targets.length === 0 && /^amends\s+(?:its|their)\b/i.test(sentence.slice(amends.index))) targets = adrNumbersIn(sentence.slice(0, amends.index), records);
         for (const target of targets) addEdge(record.id, target);
       }
       const amendedBy = /\bamended by\b/i.exec(sentence);
       if (amendedBy) {
-        for (const amender of adrNumbersIn(clauseAfter(sentence, amendedBy.index))) addEdge(amender, record.id);
+        for (const amender of adrNumbersIn(clauseAfter(sentence, amendedBy.index), records)) addEdge(amender, record.id);
       }
     }
     delete record.status;
@@ -190,8 +189,8 @@ export function lintAdrCitations(body, records) {
       findings.push({ kind: "adr_superseded", id, detail: { supersededBy: record.supersededBy, status: record.statusLine } });
     }
     const amenders = [...record.amendedBy]
-      .filter((amender) => amender > id && records.get(amender).state === "accepted")
-      .sort()
+      .filter((amender) => Number(amender) > Number(id) && records.get(amender).state === "accepted")
+      .sort((a, b) => Number(a) - Number(b))
       .map((amender) => ({ id: amender, file: records.get(amender).file, amenderCited: cited.has(amender) }));
     if (amenders.length > 0) findings.push({ kind: "adr_amended", id, detail: { amenders } });
   }
