@@ -105,7 +105,7 @@ If a harness cannot fan out at the gate coordinator's depth, the round fails clo
 and never degrades to inline review.
 
 Dispatch guidance. A reviewer or judge dispatch is exactly the emitted `dispatchPrompt`. Its pulled
-work order carries the spec pointer and the rule citations. A worker or fixer dispatch names the
+work order carries the spec pointer, and its agent definition cites the rules it needs. A worker or fixer dispatch names the
 linked issue and states "The issue body is the spec; read it." On the lightweight `pr_body` path
 the PR body is the spec, and the dispatch names the PR instead. The dispatch never restates issue-specific spec.
 It cites rules by rule ID, never by copied text, and it cites each rule only to the roles that
@@ -114,7 +114,7 @@ need it:
 - agents that dispatch children, such as the gate coordinator: `GATE-EXEC-HARNESS-JOIN`;
 - editing workers (developer, fixer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and
   `OPS-NO-INLINE-INTERPRETER`;
-- script runners (any role that runs repo scripts; a reviewer gets it through its work order):
+- script runners (any role that runs repo scripts; a reviewer or judge gets it through its agent definition):
   `WORKTREE-SCRIPT-LAUNCHER-CWD`.
 
 A worker, reviewer, judge or fixer dispatches no children and receives no join rule.

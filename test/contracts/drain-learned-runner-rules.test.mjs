@@ -298,6 +298,12 @@ test("README Claude Code plugin section names the permission rule for both verdi
 
 const DEV_LOOP_AGENT_SURFACES = ["agents/dev-loop.agent.md", ".claude/agents/dev-loop.md"];
 
+test("reviewer and judge agent definitions deliver WORKTREE-SCRIPT-LAUNCHER-CWD", async () => {
+  for (const agent of ["agents/review.agent.md", "agents/judge.agent.md"]) {
+    assert.match(await readRepo(agent), /`WORKTREE-SCRIPT-LAUNCHER-CWD`/, agent);
+  }
+});
+
 function subagentDelegation(content) {
   return sectionFrom(content, "## Subagent delegation", "\n## ");
 }
@@ -305,7 +311,7 @@ function subagentDelegation(content) {
 for (const surface of DEV_LOOP_AGENT_SURFACES) {
   test(`${surface} Subagent delegation points to the issue body and cites rules by role`, async () => {
     const section = subagentDelegation(await readRepo(surface));
-    assert.match(section, /a reviewer or judge dispatch is exactly the emitted `dispatchPrompt`\. Its pulled work order carries the spec pointer and the rule citations\./);
+    assert.match(section, /a reviewer or judge dispatch is exactly the emitted `dispatchPrompt`\. Its pulled work order carries the spec pointer, and its agent definition cites the rules it needs\./);
     assert.match(section, /A worker or fixer dispatch names the linked issue and states "The issue body is the spec; read it\."/);
     assert.match(section, /`pr_body` path the PR body is the spec/);
     assert.match(section, /never restates issue-specific spec/);
@@ -317,7 +323,7 @@ for (const surface of DEV_LOOP_AGENT_SURFACES) {
     assert.doesNotMatch(editing, /HARNESS-JOIN/);
     const runners = bullet("script runners");
     assert.match(runners, /`WORKTREE-SCRIPT-LAUNCHER-CWD`/);
-    assert.match(runners, /a reviewer gets it through its work order/);
+    assert.match(runners, /a reviewer or judge gets it through its agent definition/);
     assert.doesNotMatch(runners, /HARNESS-JOIN/);
     assert.match(section, /A worker, reviewer, judge or fixer dispatches no children and receives no join rule\./);
     assert.match(bullet("Awaiting any wait the run depends on"), /Join rule: `GATE-EXEC-HARNESS-JOIN`\./);

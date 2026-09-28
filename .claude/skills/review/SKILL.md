@@ -41,7 +41,7 @@ Read [Gate-review sub-loop contract](../docs/gate-review-sub-loop-contract.md) b
 
 When the `review` route runs inside a `dev-loop` agent (`loop startup --pr <n> --review`), that
 agent dispatches one `gate-coordinator` agent for the round. The `gate-coordinator` agent runs
-steps 1 to 4 through fan-in and the ledger write, dispatches the `review` agents, and returns the
+steps 1 to 3 and step 4 up to the ledger write, dispatches the `review` agents, and returns the
 typed round result without a judge summary (`GATE-EXEC-GATE-COORDINATOR`). The `dev-loop` agent
 then runs the `upsert-checkpoint-verdict.mjs` post and the submit choice. In the main session
 this skill dispatches the `review` agents directly.
