@@ -1961,6 +1961,15 @@ byte-identical:
   scope is not even measured);
 - the verdict records a non-empty `--inline-reason`.
 
+Both `detectScope` and `detectMergeBaseScope` count scope without the frozen
+`SCOPE_COUNT_EXCLUDE_GLOBS` (`packages/core/src/config/config.mjs`): `changes/*.md`,
+`.claude/skills/**`, `.claude/agents/**` and `.claude/commands/**`. The risk-path floor
+still sees every changed file. Diff-class tier matching (`resolveGateTier`) still uses the
+unfiltered diff; the exclusion applies only to the light-mode cap. The set ships to consumer repos, where no mirror-parity
+proof may guard these `.claude` paths. They still pass the risk-path and size-budget floors,
+and a consumer that hand-edits them can force full review with the `gate:full` label. See ADR 0108
+(`docs/decisions/0108-light-mode-scope-count-excludes-fragments-and-mirrors.md`).
+
 <!-- rule: GATE-EXEC-LIGHT-ESCALATION -->
 `GATE-EXEC-LIGHT-ESCALATION`: An inline pass surfacing a finding at a blocking severity MUST escalate to the full fan-out — escalation is two-trigger: the `gate:full` label override, and any finding at a severity in the gate's `blockCleanOnFindingSeverities`. The escalation goes to the full fan-out (`resolveGateDispatchMode` returns `mode: "full_fanout"` with `reason: "escalated"`) — the
 inline verdict never absorbs a blocking finding. When `lightMode` is enabled without

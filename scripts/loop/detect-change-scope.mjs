@@ -4,9 +4,12 @@ import process from "node:process";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { DIFF_ISOLATION_FLAGS, gitEnvWithoutDirOverrides } from "../github/write-gate-context.mjs";
+import { isScopeCountExcluded } from "@dev-loops/core/config";
 
 const USAGE = `Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
 Detect change scope from git diff for light-mode eligibility.
+filesChanged/linesChanged skip SCOPE_COUNT_EXCLUDE_GLOBS paths (changes/*.md,
+.claude/{skills,agents,commands}/**); see ADR 0108.
 Options:
   --base <ref>   Override base ref (default: HEAD~1)
   --head <ref>   Override head ref; ignored unless --base is also set
@@ -57,24 +60,29 @@ function parseCliArgs(argv) {
   }
   return opts;
 }
-export function parseGitDiffStat(output) {
-  const trimmed = output.trim();
-  if (trimmed.length === 0) {
-    return { filesChanged: 0, linesChanged: 0 };
+// Parses `git diff --numstat -z`, skipping SCOPE_COUNT_EXCLUDE_GLOBS paths. A
+// rename record is `a\td\t\0old\0new\0` and is skipped only when both paths are
+// excluded (fail closed). Binary `-\t-` counts as one file with zero lines.
+// rawFilesChanged/rawLinesChanged count every path; diff-class tier matching
+// reads them so the exclusion stays scoped to the light-mode cap.
+export function parseGitNumstat(output) {
+  const tokens = output.split("\0");
+  let filesChanged = 0;
+  let linesChanged = 0;
+  let rawFilesChanged = 0;
+  let rawLinesChanged = 0;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const match = /^(\d+|-)\t(\d+|-)\t(.*)$/s.exec(tokens[i]);
+    if (!match) continue;
+    const paths = match[3] === "" ? [tokens[++i], tokens[++i]] : [match[3]];
+    const lines = (Number(match[1]) || 0) + (Number(match[2]) || 0);
+    rawFilesChanged += 1;
+    rawLinesChanged += lines;
+    if (paths.every(isScopeCountExcluded)) continue;
+    filesChanged += 1;
+    linesChanged += lines;
   }
-  const lines = trimmed.split("\n");
-  const lastLine = lines[lines.length - 1];
-  const isSummary = /\d+\s+files?\s+changed/.test(lastLine) || /\d+\s+insertion/.test(lastLine) || /\d+\s+deletion/.test(lastLine);
-  const fileCount = isSummary ? lines.length - 1 : lines.length;
-  let insertions = 0;
-  let deletions = 0;
-  if (isSummary) {
-    const insMatch = lastLine.match(/(\d+)\s+insertion/);
-    const delMatch = lastLine.match(/(\d+)\s+deletion/);
-    if (insMatch) insertions = parseInt(insMatch[1], 10);
-    if (delMatch) deletions = parseInt(delMatch[1], 10);
-  }
-  return { filesChanged: fileCount, linesChanged: insertions + deletions };
+  return { filesChanged, linesChanged, rawFilesChanged, rawLinesChanged };
 }
 // Isolated from ambient GIT_DIR/GIT_WORK_TREE (gitEnvWithoutDirOverrides) and
 // diff-config drift (DIFF_ISOLATION_FLAGS), matching detectMergeBaseChangedFiles:
@@ -82,7 +90,7 @@ export function parseGitDiffStat(output) {
 // DIFFERENT repo than `cwd`, letting a poisoned env under-report scope and
 // fail-OPEN the light-mode size cap this function feeds.
 function detectScope({ base, head, cwd } = {}) {
-  let diffArgs = [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--stat"];
+  let diffArgs = [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--numstat", "-z"];
   if (base && head) {
     diffArgs.push(`${base}..${head}`);
   } else if (base) {
@@ -96,8 +104,7 @@ function detectScope({ base, head, cwd } = {}) {
   } catch (err) {
     return { ok: false, filesChanged: 0, linesChanged: 0, error: err instanceof Error ? err.message : String(err) };
   }
-  const parsed = parseGitDiffStat(output);
-  return { ok: true, ...parsed };
+  return { ok: true, ...parseGitNumstat(output) };
 }
 function isEligibleForLightMode(scope, threshold) {
   return scope.filesChanged <= threshold.maxFiles && scope.linesChanged <= threshold.maxLines;
@@ -109,7 +116,7 @@ function isEligibleForLightMode(scope, threshold) {
  * Fails CLOSED: a missing base/head, or any git failure, returns `{ ok: false }`
  * so callers that gate on scope (e.g. the light-mode pre-merge acceptance) reject
  * rather than silently treating an unmeasurable diff as under threshold. Reuses
- * the same `parseGitDiffStat` scope resolution as `detectScope`.
+ * the same `parseGitNumstat` scope resolution as `detectScope`.
  *
  * Isolated from ambient `GIT_DIR`/`GIT_WORK_TREE` and diff-config drift the
  * same way `detectMergeBaseChangedFiles` is (see its doc comment) — this feeds
@@ -124,13 +131,13 @@ function detectMergeBaseScope({ base, head, cwd } = {}) {
   try {
     output = execFileSync(
       "git",
-      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--stat", `${base}...${head}`],
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--numstat", "-z", `${base}...${head}`],
       { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
     );
   } catch (err) {
     return { ok: false, filesChanged: 0, linesChanged: 0, error: err instanceof Error ? err.message : String(err) };
   }
-  return { ok: true, ...parseGitDiffStat(output) };
+  return { ok: true, ...parseGitNumstat(output) };
 }
 /**
  * List changed files for the SAME merge-base (three-dot `base...head`) diff
