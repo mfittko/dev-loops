@@ -653,7 +653,7 @@ export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot =
 }
 
 // Deterministic path for the referenced evidence file: the PR/issue bodies,
-// the diff (inline up to the cap, else a pointer), the changed-files summary
+// a pointer to the filtered diff (never its bytes), the changed-files summary
 // and the validation pointer. The briefing prefix binds it by sha256 in its
 // `## Required reads` manifest; reviewers read it in full.
 export function buildGateBriefingEvidencePath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
@@ -793,9 +793,10 @@ function pickFence(text) {
 // run replaces the SAME old token with the SAME new token, nothing else)
 // collapses to one summary line. Fail-closed: any hunk not provably pure — an
 // unequal add/remove count, a change that touches more than one token, or a
-// second distinct substitution — renders in full. Operates ONLY on the
-// rendered-prefix text; the persisted `.diff` file (scope.diffPath) is never
-// touched, so a reviewer can always read the byte-exact original.
+// second distinct substitution — renders in full. The collapsed text is only
+// measured to select the inline/pointer mode and is never written to a
+// briefing file; the persisted diff files are never touched, so a reviewer
+// always reads the byte-exact filtered diff.
 // ---------------------------------------------------------------------------
 
 /**
@@ -1353,8 +1354,9 @@ export function renderBriefingEvidence({
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
   const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
-  // AC8: the disclosed size and the inline/pointer mode are measured on the
-  // collapsed diff (provably-pure hunk runs folded), not the raw diff.
+  // AC8: the inline/pointer mode is measured on the collapsed diff
+  // (provably-pure hunk runs folded); the disclosed "Filtered diff" size is
+  // the persisted filtered file's bytes (persistedDiffBytes).
   const diffBytes = hasDiffText ? Buffer.byteLength(collapsePureSubstitutionRuns(diffOutput), "utf8") : 0;
   const prefixMode = hasDiffText && diffBytes > capBytes ? "pointer" : "inline";
 
