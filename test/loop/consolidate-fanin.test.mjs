@@ -1050,10 +1050,13 @@ function matchingEmitPlan() {
 
 // The pull receipt the reviewer's pull-work-order.mjs run leaves for a plan
 // unit (#2416); `receipt` overrides the identity written at that unit's path.
-// pulledAt is a minute back so the fixture's result files count as post-pull.
+// The receipt is a minute back (pulledAt and file mtime, the pull clock) so the fixture's result files count as post-pull.
 async function writeEmitPlanReceipt(receiptTmpRoot, unit = matchingEmitPlan().units[0], receipt = unit) {
   const { workOrderRef, workOrderDigest, executionIdentity } = receipt;
-  await writeJson(pullReceiptPath(receiptTmpRoot, unit.workOrderRef), { role: "review", workOrderRef, workOrderDigest, executionIdentity, pulledAt: new Date(Date.now() - 60_000).toISOString() });
+  const pulledAt = new Date(Date.now() - 60_000);
+  const receiptPath = pullReceiptPath(receiptTmpRoot, unit.workOrderRef);
+  await writeJson(receiptPath, { role: "review", workOrderRef, workOrderDigest, executionIdentity, pulledAt: pulledAt.toISOString() });
+  await utimes(receiptPath, pulledAt, pulledAt);
 }
 
 test("parseConsolidateFaninCliArgs: no --emit-plan flag leaves emitPlan undefined", () => {

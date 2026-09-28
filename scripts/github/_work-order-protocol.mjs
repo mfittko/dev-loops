@@ -97,15 +97,16 @@ export async function verifyPullReceipt({ receiptTmpRoot, workOrderRef, workOrde
 
 /**
  * verifyPullReceipt plus result binding: the result at `resultPath` counts only
- * when it was written at or after the matching pull. A missing result, or one
+ * when its mtime is at or after the matching receipt file's mtime. A missing result, or one
  * older than the pull (a replayed or prior-execution result), is reason
- * result_missing / result_predates_pull.
+ * result_missing / result_predates_pull; those two failures still carry the verified receipt.
  */
 export async function verifyPulledResult({ resultPath, ...receiptQuery }) {
   const check = await verifyPullReceipt(receiptQuery);
   if (!check.ok) return check;
   const writtenMs = await stat(resultPath).then((stats) => stats.mtimeMs, () => null);
-  if (writtenMs === null) return { ok: false, reason: "result_missing" };
-  // An unparseable pulledAt compares false, so it fails closed.
-  return writtenMs >= Date.parse(check.receipt.pulledAt) ? check : { ok: false, reason: "result_predates_pull" };
+  if (writtenMs === null) return { ok: false, reason: "result_missing", receipt: check.receipt };
+  // Both mtimes come from the same filesystem clock, so a coarse mtime never refuses a post-pull result.
+  const pulledMs = await stat(pullReceiptPath(receiptQuery.receiptTmpRoot, receiptQuery.workOrderRef)).then((stats) => stats.mtimeMs, () => null);
+  return pulledMs !== null && writtenMs >= pulledMs ? check : { ok: false, reason: "result_predates_pull", receipt: check.receipt };
 }

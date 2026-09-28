@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -12,7 +12,7 @@ import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "
 import { captureParsedReviewThreads, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containment.mjs";
-import { pullReceiptPath, verifyPullReceipt, workOrderDigest } from "./_work-order-protocol.mjs";
+import { verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -159,30 +159,29 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   if (order?.role !== "fixer" || order.phase !== "full" || order.target?.repo !== options.repo || order.target?.pr !== options.pr) {
     throw new Error(`--fixer-plan "${options.fixerPlan}" is not a full-phase fixer work order for ${options.repo}#${options.pr}`);
   }
-  const receipt = await verifyPullReceipt({
-    receiptTmpRoot, role: "fixer", workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity,
+  // outputRefs is local material outside the digest, so an edited plan field is never trusted: the
+  // handoff path is derived from the plan location and execution, exactly as the emitter builds it.
+  const handoffPath = path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json");
+  const receipt = await verifyPulledResult({
+    resultPath: handoffPath, receiptTmpRoot, role: "fixer", workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity,
   });
-  if (!receipt.ok) throw new Error(`fixer pull receipt for ${plan.workOrderRef} failed verification: ${receipt.reason}; dispatch a fresh fixer execution`);
+  // A result_* failure still carries the verified receipt; it throws below, after the plan binding checks.
+  if (!receipt.ok && !receipt.receipt) throw new Error(`fixer pull receipt for ${plan.workOrderRef} failed verification: ${receipt.reason}; dispatch a fresh fixer execution`);
   // The plan location is caller-supplied: bind it to the plan the pull read, so a copied plan never names its own handoff.
   const receiptPlanPath = receipt.receipt?.subject?.planPath;
   const real = (p) => realpath(p).catch(() => path.resolve(p));
   if (typeof receiptPlanPath !== "string" || await real(planPath) !== await real(receiptPlanPath)) {
     throw new Error(`--fixer-plan "${options.fixerPlan}" is not the plan the fixer pull read (${receiptPlanPath}); pass the emitted plan`);
   }
-  // outputRefs is local material outside the digest, so an edited plan field is never trusted: the
-  // handoff path is derived from the plan location and execution, exactly as the emitter builds it.
-  const handoffPath = path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json");
   const outputRef = String(order.outputRefs?.[0] ?? "");
   const sameDir = async (a, b) => (await realpath(a).catch(() => a)) === (await realpath(b).catch(() => b));
   if (path.relative(path.dirname(path.dirname(outputRef)), outputRef) !== path.relative(path.dirname(planPath), handoffPath)
     || !(await sameDir(path.dirname(path.dirname(outputRef)), path.dirname(planPath)))) {
     throw new Error(`--fixer-plan "${options.fixerPlan}" outputRef ${order.outputRefs?.[0]} is not the emitted handoff path ${handoffPath}; the plan was edited after emission, re-emit it`);
   }
-  const written = await stat(handoffPath).catch(() => null);
-  if (!written) throw new Error(`result_missing: no fixer disposition handoff at the work order's outputRef ${handoffPath}; a receipt alone is never completion`);
-  // Both mtimes come from the same filesystem clock, so a coarse mtime never refuses a post-pull handoff.
-  const receiptWritten = await stat(pullReceiptPath(receiptTmpRoot, plan.workOrderRef));
-  if (!(written.mtimeMs >= receiptWritten.mtimeMs)) {
+  if (receipt.reason === "result_missing") throw new Error(`result_missing: no fixer disposition handoff at the work order's outputRef ${handoffPath}; a receipt alone is never completion`);
+  // verifyPulledResult compares the handoff mtime to the receipt file mtime: one filesystem clock.
+  if (receipt.reason === "result_predates_pull") {
     throw new Error(`result_predates_pull: the disposition handoff ${handoffPath} was written before the pull at ${receipt.receipt.pulledAt}; a stale or replayed disposition never advances`);
   }
   let raw;
