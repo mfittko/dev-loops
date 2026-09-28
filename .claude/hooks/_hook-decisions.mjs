@@ -34,6 +34,7 @@ import {
   commandContainsDetachedWaitTool,
   commandContainsInlineInterpreter,
   commandContainsCodeVerificationEntrypoint,
+  matchesGitOption,
 } from "./_bash-command-classify.mjs";
 
 /**
@@ -853,7 +854,8 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
     : `no current pull grants path ${JSON.stringify(rel)} on branch ${JSON.stringify(checkout.branch)}`);
 }
 
-const PUSH_BEYOND_BRANCH = new Set(["--all", "--mirror", "--tags", "--follow-tags", "--delete", "-d", "--prune"]);
+// Matched through matchesGitOption, so `--tag`, `--del`, `--follow` and clusters such as `-fd` deny too.
+const PUSH_BEYOND_BRANCH = ["all", "mirror", "tags", "follow-tags", "delete", "prune"];
 const PUSH_VALUE_OPTIONS = new Set(["-o", "--push-option", "--repo", "--receive-pack", "--exec"]);
 
 // Why a `git push` leaves the grant branch, or null. A refspec (leading `+` allowed) is only `<branch>`,
@@ -863,7 +865,7 @@ const PUSH_VALUE_OPTIONS = new Set(["-o", "--push-option", "--repo", "--receive-
 function pushBeyondGrant(args, branch) {
   const positional = [];
   for (let i = 0; i < args.length; i += 1) {
-    if (PUSH_BEYOND_BRANCH.has(args[i])) return `\`${args[i]}\` pushes beyond the grant branch`;
+    if (matchesGitOption(args[i], PUSH_BEYOND_BRANCH, "d")) return `\`${args[i]}\` pushes beyond the grant branch`;
     if (args[i].startsWith("-")) {
       if (PUSH_VALUE_OPTIONS.has(args[i])) i += 1;
       continue;

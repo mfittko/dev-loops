@@ -1419,6 +1419,8 @@ test("decideFixerBashGate binds git commit/push to a grant for the checked-out b
   }
   // A bare or remote-only push takes its destination from config (remote.*.push, push.default), so it is denied.
   for (const command of ["git push", "git push origin", "git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", "git push --follow-tags origin issue-1", "git push -d origin issue-1", "git push -o ci.skip origin main",
+    // git parse-options accepts unique long prefixes and short clusters.
+    "git push --tag origin issue-1", "git push --del origin issue-1", "git push --follow origin issue-1", "git push -fd origin issue-1", "git push --mir origin issue-1", "git push --pru origin issue-1",
     // A destination HEAD creates refs/heads/HEAD on the remote; a foreign source rewrites the grant branch.
     "git push origin issue-1:HEAD", "git push origin main:refs/heads/HEAD", "git push origin +main:issue-1", "git push origin abc123:issue-1", "git push origin HEAD:HEAD"]) {
     assert.equal(gate(command), "deny", command);
@@ -1438,6 +1440,8 @@ test("decideFixerBashGate denies forms outside the git allowlist, out-of-authori
     ["git commit -m \"$(cat <<'EOF'\nfix: x\nEOF\n)\"", "command substitution"], ["git push origin issue-1 2>&1 | tail -5", "pipe"],
     ["git -C /main cherry-pick abc", "`git cherry-pick`"], ["env -C /o git push origin issue-1", "git word that is not the plain first word of its command"],
     ["git diff --output=/main/tmp/gate-fixer/x.json", "`git diff --output=/main/tmp/gate-fixer/x.json` (writes a file or runs a pager command)"],
+    // A forced add stages an ignored path that the commit's path list never sees.
+    ["git add -f node_modules/x.js && git commit -m x", "`git add -f` (stages an ignored path)"],
   ]) {
     const d = gate(command);
     assert.equal(d.decision, "deny", command);

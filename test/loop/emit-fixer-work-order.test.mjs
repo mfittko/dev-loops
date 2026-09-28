@@ -256,6 +256,20 @@ test("F3: a superseded ref, a changed act list, a retired gate round and a rewri
   });
 });
 
+test("F3: a threads-sourced work order pulls, and a rewritten threads file is stale for the pull and the write hook", async () => {
+  await withFixture(async ({ root, wt, files, emit }) => {
+    const unit = await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads });
+    assert.equal(pull(unit, wt).status, 0);
+    const receipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
+    assert.equal(receipt.role, "fixer");
+    const target = path.join(wt, "src", "x.mjs");
+    assert.equal(hook(wt, target), "allow");
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [] }));
+    assert.equal(refusal(pull(unit, wt)), "stale_dispatch");
+    assert.equal(hook(wt, target), "deny", "a changed threads file grants nothing");
+  });
+});
+
 test("F3: delta mode emits at the PR head; after a local fix commit a second commit_only emission there is not stale", async () => {
   await withFixture(async ({ wt, emit }) => {
     assert.equal(pull(await emit({ phase: "commit_only" }), wt).status, 0);

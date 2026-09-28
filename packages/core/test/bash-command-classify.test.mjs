@@ -1198,6 +1198,8 @@ test("extractFixerGitInvocations allows only the plain git allowlist and denies 
     // A read-only subcommand option that writes a file or runs a pager command.
     "git diff --output=/main/tmp/gate-fixer/x.json", "git diff --output /o/x", "git log --outp=/o/x", "git show -o /o/x",
     "git grep -O x", "git grep -nO x", "git grep --open-files-in-pager=vi x", "git grep --open x",
+    // A forced add (long prefix or short cluster) stages an ignored path.
+    "git add -f x && git commit -m x", "git add --force x", "git add --f x", "git add --forc x", "git add -Af x",
   ]) {
     assert.deepEqual(one(command).map((i) => i.unresolvable), [true], command);
   }

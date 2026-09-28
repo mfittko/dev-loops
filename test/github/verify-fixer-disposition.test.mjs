@@ -11,7 +11,7 @@ import {
   parseVerifyFixerDispositionCliArgs,
   verifyFixerDisposition,
 } from "../../scripts/github/verify-fixer-disposition.mjs";
-import { pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { pullReceiptPath, verifyPulledResult, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
 
 const REPO = "owner/repo";
 const PR = 1975;
@@ -140,6 +140,21 @@ for (const [name, setup, expected] of [
     });
   });
 }
+
+test("F6: a handoff written in the same clock tick as the pull (equal mtimes) passes verifyPulledResult", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, TACKLED);
+    const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+    const receiptTmpRoot = path.join(repoRoot, "tmp");
+    const tick = new Date(Date.now() - 5000);
+    await utimes(pullReceiptPath(receiptTmpRoot, REF), tick, tick);
+    await utimes(plan.workOrder.outputRefs[0], tick, tick);
+    const check = await verifyPulledResult({
+      resultPath: plan.workOrder.outputRefs[0], receiptTmpRoot, role: "fixer", workOrderRef: REF, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity,
+    });
+    assert.equal(check.ok, true, check.reason);
+  });
+});
 
 test("F6: a plan for another target, or a missing plan, refuses", async () => {
   await withRepoRoot(async (repoRoot) => {

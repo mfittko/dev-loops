@@ -1182,7 +1182,10 @@ export function extractFixerGitInvocations(command) {
     } else if (!FIXER_GIT_READ_ONLY.has(subcommand) && subcommand !== "add"
       && !(subcommand === "branch" && (args.length === 0 || (args.length === 1 && args[0] === "--show-current")))) {
       return deny(`\`git ${subcommand}\``);
-    } else if (subcommand !== "add") {
+    } else if (subcommand === "add") {
+      const force = args.find(forcesAdd);
+      if (force !== undefined) return deny(`\`git add ${force}\` (stages an ignored path)`);
+    } else {
       const writer = args.find(writesOrRunsFile);
       if (writer !== undefined) return deny(`\`git ${subcommand} ${writer}\` (writes a file or runs a pager command)`);
     }
@@ -1190,15 +1193,24 @@ export function extractFixerGitInvocations(command) {
   return found;
 }
 
-// A read-only subcommand's option that writes a file or runs a command: `--output` (diff/log/show)
-// and `-O`/`--open-files-in-pager` (grep), with git's unique-prefix abbreviations (`--outp=`) and
-// short clusters (`-nO`). Any short cluster carrying `o`/`O` denies (fail-closed; use `--others`).
-const FILE_WRITING_LONG_OPTIONS = ["output", "open-files-in-pager"];
-const writesOrRunsFile = (arg) => {
-  if (/^-[^-][^=]*[oO]|^-[oO]/.test(arg)) return true;
+/**
+ * Whether `arg` selects one of the denied git options, read the way git parse-options reads it
+ * (fail-closed): a long option `--x[=v]` matches when `x` is a prefix of any `longNames` entry
+ * (git accepts unique-prefix abbreviations such as `--tag` or `--forc`), and a short cluster
+ * `-abc[=v]` matches when any letter before `=` is in `shortLetters` (`-fd`, `-nO`, `-Af`).
+ * @param {string} arg @param {string[]} longNames @param {string} shortLetters @returns {boolean}
+ */
+export function matchesGitOption(arg, longNames, shortLetters) {
+  if (/^-[^-]/.test(arg)) return [...arg.slice(1).split("=")[0]].some((c) => shortLetters.includes(c));
   const name = /^--([^=]+)/.exec(arg)?.[1];
-  return name !== undefined && FILE_WRITING_LONG_OPTIONS.some((option) => option.startsWith(name));
-};
+  return name !== undefined && longNames.some((option) => option.startsWith(name));
+}
+
+// A read-only subcommand's option that writes a file or runs a command: `--output` (diff/log/show)
+// and `-O`/`--open-files-in-pager` (grep). Any short cluster carrying `o`/`O` denies (fail-closed; use `--others`).
+const writesOrRunsFile = (arg) => matchesGitOption(arg, ["output", "open-files-in-pager"], "oO");
+// `git add --force`/`-f` stages a gitignored path the commit gate's path list never sees.
+const forcesAdd = (arg) => matchesGitOption(arg, ["force"], "f");
 
 // `git` as a whole word or path segment (`/usr/bin/git`), never `.git`, `github` or `git-lfs`.
 // Case-insensitive: a case-insensitive filesystem (macOS APFS) runs `GIT`/`Git` as git.
