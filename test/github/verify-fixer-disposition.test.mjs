@@ -64,7 +64,7 @@ const REF = `fixer:${REPO}#${PR}:${HEAD_SHA}:f1-0000abcd`;
 // receipt under <repoRoot>/tmp, and the disposition handoff at the plan's outputRef.
 async function deliver(repoRoot, dispositions, {
   handoffHead = HEAD_SHA, orderHead = HEAD_SHA, phase = "full", receipt = {}, writeReceipt = true, writeHandoff = true, pulledAt = new Date(Date.now() - 1000).toISOString(),
-  receiptMtime = null,
+  receiptMtime = null, handoffText = null,
 } = {}) {
   const dir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
   const outputRef = path.join(dir, "f1-0000abcd", "fixer-disposition.json");
@@ -81,7 +81,7 @@ async function deliver(repoRoot, dispositions, {
     }));
     if (receiptMtime) await utimes(receiptPath, receiptMtime, receiptMtime);
   }
-  if (writeHandoff) await writeFile(outputRef, JSON.stringify({ headSha: handoffHead, dispositions }));
+  if (writeHandoff) await writeFile(outputRef, handoffText ?? JSON.stringify({ headSha: handoffHead, dispositions }));
   return planPath;
 }
 
@@ -126,6 +126,8 @@ for (const [name, setup, expected] of [
   ["a receipt for another execution", { receipt: { executionIdentity: "f2-0000abcd" } }, /execution_mismatch/],
   ["a receipt for another digest", { receipt: { workOrderDigest: "e".repeat(64) } }, /digest_mismatch/],
   ["a receipt without a handoff (receipt-only)", { writeHandoff: false }, /result_missing/],
+  ["a prose-only handoff", { handoffText: "Fixed all threads." }, /is not valid JSON/],
+  ["a handoff with a malformed dispositions list", { handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: "x" }) }, /dispositions must be an array/],
   ["a handoff written before the pull (stale or replayed)", { receiptMtime: new Date(Date.now() + 60_000) }, /result_predates_pull/],
   ["a handoff whose head is not the observed head", { handoffHead: FIX_SHA }, /not the observed head/],
   ["a commit_only plan", { phase: "commit_only" }, /not a full-phase fixer work order/],

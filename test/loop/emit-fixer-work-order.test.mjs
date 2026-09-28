@@ -476,6 +476,13 @@ test("F5: the Bash gate binds fixer git commit/push to the pulled branch and lea
     ]) {
       assert.equal(bash(wt, command), "deny", command);
     }
+    // A chained invocation in another repository on the same branch name never borrows this grant.
+    const clone = path.join(path.dirname(root), "clone");
+    git(path.dirname(root), "clone", "-q", root, clone);
+    git(clone, "checkout", "-q", "-b", "issue-1", "origin/issue-1");
+    for (const command of [`git commit -m x && git -C ${clone} commit -m y`, `git push origin issue-1 && git -C ${clone} push origin issue-1`]) {
+      assert.equal(bash(wt, command), "deny", command);
+    }
   });
 });
 
@@ -497,6 +504,10 @@ test("F5: a narrowed grant denies committing an out-of-authority file, commit_on
     git(wt, "mv", "README.md", "src/readme.md");
     assert.equal(bash(wt, "git commit -m mv"), "deny", "the rename deletes README.md outside --allowed-path src");
     git(wt, "mv", "src/readme.md", "README.md");
+    // A write earlier in the same command would escape the commit's path listing.
+    for (const command of ["echo x > README.md && git commit -am fix", "cp /tmp/a docs/b && git add -A && git commit -F m"]) {
+      assert.equal(bash(wt, command), "deny", command);
+    }
     await writeFile(path.join(wt, "src", "a.mjs"), "fixed\n");
     assert.equal(bash(wt, "git commit -am fix"), "allow");
     assert.equal(bash(wt, "git push origin issue-1"), "deny", "a commit_only pull never pushes");

@@ -1159,6 +1159,8 @@ test("extractFixerGitInvocations allows only the plain git allowlist and denies 
     ]],
     ["git add src/git/x.mjs && git -C /home/u/git/repo commit -F m", [{ subcommand: "commit", dirs: ["/home/u/git/repo"], args: ["-F", "m"], unresolvable: false }]],
     ["cd /o && git -C b commit -m x",[{ subcommand: "commit", dirs: ["/o", "b"], args: ["-m", "x"], unresolvable: false }]],
+    ["cd ./src && git commit -m x 2>/dev/null >&2", [{ subcommand: "commit", dirs: ["./src"], args: ["-m", "x"], unresolvable: false }]],
+    ["cd .. && git push origin x > out.txt", [{ subcommand: "push", dirs: [".."], args: ["origin", "x"], unresolvable: false }]],
     ["git -C \"/a b\" commit -m \"fix(gate): a | b & c\"", [{ subcommand: "commit", dirs: ["/a b"], args: ["-m", "fix(gate): a | b & c"], unresolvable: false }]],
     ["git add . && git commit -m 'then (x); $(y)'\ngit push origin HEAD", [
       { subcommand: "commit", dirs: [], args: ["-m", "then (x); $(y)"], unresolvable: false },
@@ -1193,6 +1195,11 @@ test("extractFixerGitInvocations allows only the plain git allowlist and denies 
     "pushd /o && git commit -am x", "popd; git push origin x", "eval 'cd /o'; git push", "exec git push", "source ./x.sh; git push origin x",
     "'source' ./x.sh; git push origin x", ". ./x.sh; git push origin x", "command cd /o; git push origin x", "builtin 'cd' /o; git push origin x",
     "cd - && git push origin x", "cd && git push origin x", "cd -P /o && git push origin x", "cd $X && git push origin x", "cd ~/r && git commit -m x",
+    // A bare relative `cd` operand resolves through CDPATH, assigned or inherited.
+    "CDPATH=/o && cd src && git commit -m x", "cd src && git push origin x",
+    // A command with a commit holds only git and `cd` segments and writes no file.
+    "echo x > README.md && git commit -am fix", "cp /tmp/a docs/b && git add -A && git commit -F m", "git diff > a.txt && git commit -am x",
+    "git commit -m x >> log.txt", "git commit -m x 2>err.txt", "X=1; git commit -m x",
     // An escaped or quoted `>`/`<` is a literal, so the `|`/`&` after it is a real pipe or background operator.
     "echo \\>|git commit -m x", "echo \\>&git push origin main", "echo '>'|git commit -m x", "echo \\<&git push origin main",
     // A read-only subcommand option that writes a file or runs a pager command.

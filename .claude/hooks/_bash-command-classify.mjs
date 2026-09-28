@@ -1135,7 +1135,10 @@ export function commandContainsCodeVerificationEntrypoint(command) {
  *   `--show-current`), `add`, `commit` or `push`.
  * Each `commit`/`push` is returned with its `dirs` (every earlier `cd <dir>` segment, then the
  * `-C` dir, in order) and `args` (the words after the subcommand). A `cd` segment needs exactly
- * one operand that is neither `-` nor shell-expanded (`$`, `~`, backtick).
+ * one operand that is neither `-` nor shell-expanded (`$`, `~`, backtick), and is absolute or
+ * starts with `.`/`..` as its first component (CDPATH never applies). A command that holds a
+ * `git commit` holds only git and `cd` segments, and no redirection except an fd duplicate or
+ * `/dev/null`: the hook lists the commit's paths before the command runs.
  * ponytail: indirect git (a script, an interpreter, an expansion that builds the word) is a ceiling.
  * @param {string} command
  * @returns {{ subcommand: "commit"|"push"|null, dirs: string[], args: string[], unresolvable: boolean, construct: string|null }[]}
@@ -1159,6 +1162,8 @@ export function extractFixerGitInvocations(command) {
   for (const segment of segments) {
     if (segment[0].text === "cd") {
       if (segment.length !== 2 || segment[1].text === "-" || expands(segment[1].text)) return deny("`cd` without exactly one literal operand");
+      // A bare relative operand resolves through CDPATH (inherited or assigned), which the hook cannot see.
+      if (!CD_OPERAND_RE.test(segment[1].text)) return deny("`cd` operand that is neither absolute nor `./` or `../` relative (resolved through CDPATH)");
       cdDirs.push(segment[1].text);
       continue;
     }
@@ -1189,6 +1194,15 @@ export function extractFixerGitInvocations(command) {
       const writer = args.find(writesOrRunsFile);
       if (writer !== undefined) return deny(`\`git ${subcommand} ${writer}\` (writes a file or runs a pager command)`);
     }
+  }
+  // The hook lists a commit's paths before the command runs, so a same-command write would escape
+  // that check: a command with a `git commit` holds only git and `cd` segments and writes no file.
+  if (found.some((f) => f.subcommand === "commit")) {
+    const other = segments.find((s) => s[0].text !== "cd" && !(s[0].text === "git" && !s[0].quoted));
+    if (other) return deny(`\`${other[0].text}\` beside \`git commit\` (a command with a commit holds only git and \`cd\` segments)`);
+    const writes = withRedirects.flat().map((w, k, all) => (REDIRECT_OP_RE.test(w.text) ? w.text + (all[k + 1]?.text ?? "") : w.text))
+      .find((text) => text.includes(">") && !SAFE_REDIRECT_RE.test(text));
+    if (writes !== undefined) return deny(`\`${writes}\` beside \`git commit\` (a command with a commit writes no file)`);
   }
   return found;
 }
@@ -1223,6 +1237,10 @@ const DIR_MOVE_WORDS = new Set(["cd", "pushd", "popd"]);
 const REDIRECT_RE = /^\d*(?:[<>]|&>)/;
 // A bare redirection operator whose target is the next word.
 const REDIRECT_OP_RE = /^\d*(?:>>?|<|&>>?|>\||>&|<&)$/;
+// A redirection that writes no file: an fd duplicate or close (`2>&1`, `>&-`) or `/dev/null`.
+const SAFE_REDIRECT_RE = /^\d*(?:>&(?:\d+|-)|&?>>?\/dev\/null)$/;
+// A `cd` operand bash and zsh resolve without CDPATH: absolute, or `.`/`..` as its first component.
+const CD_OPERAND_RE = /^(?:\/|\.\.?(?:\/|$))/;
 
 // Segment heads that open a compound command or move/replace the shell's directory or command.
 const CHAIN_BLOCKED_HEADS = new Set([

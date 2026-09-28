@@ -89,16 +89,14 @@ if (fixerPull) {
 }
 const fixerInvocations = isFixer ? extractFixerGitInvocations(command) : [];
 if (fixerInvocations.length > 0) {
-  let grants = [];
-  const invocations = fixerInvocations.map((invocation) => {
-    if (invocation.unresolvable) return invocation;
-    const dir = path.resolve(cwd, ...invocation.dirs);
-    const context = loadFixerContext([dir], input?.agent_id);
-    grants = [...grants, ...context.grants];
-    return { ...invocation, branch: branchCheckedOutAt(dir, context.checkouts), paths: invocation.subcommand === "commit" ? commitPaths(dir) : null };
-  });
-  const fixerDecision = decideFixerBashGate({ agentType, invocations, grants });
-  if (fixerDecision.decision === "deny") emitDeny(fixerDecision.reason);
+  // Each invocation is decided against the grants of its own repository only, never a chain-wide union.
+  for (const invocation of fixerInvocations) {
+    const dir = invocation.unresolvable ? null : path.resolve(cwd, ...invocation.dirs);
+    const context = dir ? loadFixerContext([dir], input?.agent_id) : { grants: [], checkouts: [] };
+    const resolved = dir ? { ...invocation, branch: branchCheckedOutAt(dir, context.checkouts), paths: invocation.subcommand === "commit" ? commitPaths(dir) : null } : invocation;
+    const fixerDecision = decideFixerBashGate({ agentType, invocations: [resolved], grants: context.grants });
+    if (fixerDecision.decision === "deny") emitDeny(fixerDecision.reason);
+  }
 }
 
 let repoRoot = null;
