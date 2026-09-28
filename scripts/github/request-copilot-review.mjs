@@ -823,17 +823,29 @@ export async function performCopilotReviewRequest(
   // reset applied. A clean draft_gate re-pass on an earlier head resets the count, so
   // a post-reset PR that detect reports as under-cap must NOT be refused here as
   // cap-reached. Only query checkpoint evidence on this (at/over-cap) path.
+  // A requested_reviewers entry can linger after Copilot answered with an error
+  // review (ADR 0114). Settle it before the cap checks so the same-head retry
+  // stays inside the round cap.
+  const requestSettledByErrorReview = before.requested
+    && !before.hasPendingReviewOnCurrentHead
+    && !before.hasSubmittedReviewOnCurrentHead
+    && (before.reviewSummary?.errorReviewCountOnCurrentHead ?? 0) > 0
+    && await resolveCopilotReviewRequestStatus(
+      { repo: options.repo, pr: options.pr, reviewSummary: before.reviewSummary, copilotRequested: true },
+      runtime,
+    ) === "none";
+  const requestOutstanding = before.requested && !requestSettledByErrorReview;
   let completedRounds = before.completedCopilotReviewRounds ?? 0;
   // Tracks whether the cap path already evaluated the convergence-carry decision
   // below, so the below-cap consumption site does not double-compare.
   let convergenceCarryEvaluated = false;
   if (completedRounds >= maxRounds
-      && !before.requested
+      && !requestOutstanding
       && !before.hasPendingReviewOnCurrentHead) {
     completedRounds = await resolveDraftGateAdjustedRounds(options, runtime, before);
   }
   if (completedRounds >= maxRounds
-      && !before.requested
+      && !requestOutstanding
       && !before.hasPendingReviewOnCurrentHead) {
     // Converged-once mode: a converged latest review stands for the current
     // head, so neither the automatic re-request nor --force-rerequest-review
@@ -936,18 +948,7 @@ export async function performCopilotReviewRequest(
       detail: "Current head already has a clean submitted Copilot review; same-head clean-convergence suppression is always enforced.",
     });
   }
-  // A requested_reviewers entry can linger after Copilot answered with an error
-  // review (ADR 0114). When the reconciled status settles it, fall through and
-  // make the same-head re-request instead of reporting already-requested.
-  const requestSettledByErrorReview = before.requested
-    && !before.hasPendingReviewOnCurrentHead
-    && !before.hasSubmittedReviewOnCurrentHead
-    && (before.reviewSummary?.errorReviewCountOnCurrentHead ?? 0) > 0
-    && await resolveCopilotReviewRequestStatus(
-      { repo: options.repo, pr: options.pr, reviewSummary: before.reviewSummary, copilotRequested: true },
-      runtime,
-    ) === "none";
-  if ((before.requested && !requestSettledByErrorReview) || before.hasPendingReviewOnCurrentHead) {
+  if (requestOutstanding || before.hasPendingReviewOnCurrentHead) {
     return withConfigWarning({
       ok: true,
       status: "already-requested",

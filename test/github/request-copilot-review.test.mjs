@@ -376,6 +376,31 @@ test("request-copilot-review keeps already-requested when the request is newer t
   assert.ok(!calls.some((c) => c.args.includes("DELETE")));
 });
 
+test("request-copilot-review keeps the error-review re-request inside the round cap", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-lingering-cap-zero-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\n\nrefinement:\n  maxCopilotRounds: 0\n", "utf8");
+    const [usersEntry, prViewEntry, timelineEntry] = lingeringRequestEntries("2026-09-27T20:00:00Z");
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      usersEntry,
+      prViewEntry,
+      timelineEntry,
+      // At the cap: the draft-gate round reset reads the gate-evidence comments,
+      // then the auto-rerequest eligibility check reads the review threads.
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
+      { assertArgs: GRAPHQL_ARGS, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      timelineEntry,
+    ], { repoRoot: tempDir });
+
+    assert.equal(result.status, "round_cap_reached");
+    assert.equal(calls.length, 7);
+    assert.ok(!calls.some((c) => c.args.includes("DELETE") || c.args.includes("POST")));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 
 test("request-copilot-review treats pending review as already-requested even when a submitted current-head review exists", async () => {
   const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
