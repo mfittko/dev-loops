@@ -40,7 +40,12 @@ export const COPILOT_DISPOSITION = Object.freeze({
   NEEDS_CLOSER_LOOK: "needs_closer_look",
   UNRECOGNIZED: "unrecognized",
   NONE: "none",
+  // Copilot posted its error text instead of a review (ADR 0114). Not a
+  // submitted Copilot review for convergence, round counts or current-head facts.
+  REVIEW_ERROR: "review_error",
 });
+
+const COPILOT_REVIEW_ERROR_PREFIX_RE = /^copilot encountered an error/i;
 
 /**
  * Classify a Copilot review's current-head body disposition. Text-matched (not
@@ -58,7 +63,10 @@ export function classifyCopilotReviewBodyDisposition(state, body) {
   const headerMatch = body.match(COPILOT_DISPOSITION_HEADER_RE);
   // No disposition header at all (empty body, generic footer, legacy format):
   // no body signal, so this is not a finding.
-  if (!headerMatch) return COPILOT_DISPOSITION.NONE;
+  // The header check runs first, so a header body never reads as an error review.
+  if (!headerMatch) {
+    return COPILOT_REVIEW_ERROR_PREFIX_RE.test(body.trim()) ? COPILOT_DISPOSITION.REVIEW_ERROR : COPILOT_DISPOSITION.NONE;
+  }
 
   const disposition = headerMatch[1]
     .replace(COPILOT_DISPOSITION_LEADING_GLYPHS_RE, "")
@@ -69,6 +77,12 @@ export function classifyCopilotReviewBodyDisposition(state, body) {
   if (disposition === COPILOT_NEEDS_CLOSER_LOOK_DISPOSITION) return COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK;
   // Fail closed on an unrecognized disposition header on the current head.
   return COPILOT_DISPOSITION.UNRECOGNIZED;
+}
+
+// Whether a review (GraphQL or REST shape) is a Copilot error review. Callers
+// filter by Copilot login first.
+export function isCopilotErrorReview(review) {
+  return classifyCopilotReviewBodyDisposition(review?.state, review?.body) === COPILOT_DISPOSITION.REVIEW_ERROR;
 }
 
 export function copilotReviewBodySignalsChanges(state, body) {
@@ -777,6 +791,9 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
   let completedCopilotReviewRounds = 0;
 
   for (const review of effectiveReviews) {
+    // An error review is no review (ADR 0114): it stays in copilotReviews so a
+    // watcher sees it arrive, but it sets no round and no current-head fact.
+    if (isCopilotErrorReview(review)) continue;
     const state = typeof review?.state === "string" ? review.state.toUpperCase() : "";
     const reviewCommitSha = extractReviewCommitSha(review);
     const reviewOnCurrentHead = headSha !== null && reviewCommitSha === headSha;

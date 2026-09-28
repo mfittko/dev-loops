@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "bun:test";
+import { summarizeCopilotReviews } from "../src/github/copilot-helpers.mjs";
 
 import {
   DISPOSITION,
@@ -47,6 +49,7 @@ test("normalizeSnapshot returns safe defaults for an empty object", () => {
     excludedFailureDetails: [],
     copilotBodyFeedbackUnresolved: false,
     copilotPriorHeadBodyFeedbackUnresolved: false,
+    copilotErrorReviewCountOnCurrentHead: 0,
   });
 });
 
@@ -1583,4 +1586,45 @@ test("buildSnapshotFromPrFacts yields currentHeadSha null when headRefOid is mis
 
   const blank = buildSnapshotFromPrFacts({ prData: { headRefOid: "   ", number: 17, state: "OPEN" }, prNumber: 17 });
   assert.equal(blank.currentHeadSha, null);
+});
+
+// ---------------------------------------------------------------------------
+// Copilot error review on the current head (ADR 0114)
+// ---------------------------------------------------------------------------
+
+const ERROR_HEAD = "e".repeat(40);
+const errorReviewSnapshot = (errorCount) => {
+  const body = readFileSync(new URL("./fixtures/copilot-overview/review-error.md", import.meta.url), "utf8");
+  const reviews = Array.from({ length: errorCount }, (_, i) => ({
+    id: `R_err${i}`,
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    body,
+    commit: { oid: ERROR_HEAD },
+    submittedAt: `2026-09-27T20:2${i}:00Z`,
+  }));
+  const summary = summarizeCopilotReviews(reviews, { headSha: ERROR_HEAD });
+  return buildSnapshotFromPrFacts({
+    prData: { number: 17, state: "OPEN", headRefOid: ERROR_HEAD, reviews },
+    prNumber: 17,
+    copilotReviewPresent: summary.copilotReviewPresent,
+    copilotReviewOnCurrentHead: summary.hasSubmittedReviewOnCurrentHead,
+    copilotReviewRoundCount: summary.completedCopilotReviewRounds,
+    ciStatus: "success",
+  });
+};
+
+test("one current-head Copilot error review allows one same-head re-request", () => {
+  const snapshot = errorReviewSnapshot(1);
+  assert.equal(snapshot.copilotErrorReviewCountOnCurrentHead, 1);
+  const result = interpretLoopState(snapshot, { maxCopilotRounds: 3 });
+  assert.equal(result.state, STATE.READY_TO_REREQUEST_REVIEW);
+  assert.equal(result.sameHeadCleanConverged, false);
+  assert.equal(result.autoRerequestEligible, true);
+});
+
+test("two current-head Copilot error reviews block for an operator decision", () => {
+  const result = interpretLoopState(errorReviewSnapshot(2), { maxCopilotRounds: 3 });
+  assert.equal(result.state, STATE.BLOCKED_NEEDS_USER_DECISION);
+  assert.equal(result.sameHeadCleanConverged, false);
 });

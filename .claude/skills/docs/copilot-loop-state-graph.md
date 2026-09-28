@@ -81,6 +81,7 @@ Terminal states with no outgoing transitions: `no_pr`, `review_request_unavailab
 | `actionableThreadCount` | `number` | Unresolved threads with non-bot actionable comments |
 | `copilotBodyFeedbackUnresolved` | `boolean` | Whether the latest current-head Copilot review carries an unresolved BODY-level finding (a `CHANGES_REQUESTED` review, or a `COMMENTED` review whose body signals "Changes recommended"), independent of inline threads. Unioned with `unresolvedThreadCount` so a body-only finding with zero inline threads still routes to unresolved feedback. A trusted disposition record for the current head clears it (`COPILOT-STATE-BODY-DISPOSITION-RECORD`) |
 | `copilotPriorHeadBodyFeedbackUnresolved` | `boolean` | Whether the latest Copilot review sits on an earlier head and is a body-only changes-recommended or unrecognized review (no thread of its own) that no trusted disposition record names (`COPILOT-STATE-BODY-DISPOSITION-RECORD`). At the round cap it blocks `round_cap_clean_fallback`. Below the cap, with a submitted current-head review, it routes to `blocked_needs_user_decision` (rule 9) |
+| `copilotErrorReviewCountOnCurrentHead` | `number` | Copilot error reviews on the current head (`review_error`, ADR 0114). `buildSnapshotFromPrFacts` derives it from `prData.reviews` |
 | `ciStatus` | `"success" \| "failure" \| "pending" \| "none"` | Current CI check rollup; `none` means no usable CI readiness signal yet and is not treated as green |
 | `agentFixStatus` | `"applied" \| null` | Agent-provided: `"applied"` when code has been fixed |
 
@@ -127,6 +128,8 @@ The interpreter applies rules in priority order. The first matching rule wins.
 12. `ciStatus === "failure"` → `blocked_needs_user_decision`
 13. `ciStatus === "pending" || ciStatus === "none"` → `waiting_for_ci`
 14. Default → `pr_ready_no_feedback`
+
+Copilot error review (ADR 0114). A `COMMENTED` Copilot review whose body has no `### ` disposition header and starts with `Copilot encountered an error` classifies as `review_error`. It is not a submitted Copilot review for the latest-review rule, the converged predicate (`COPILOT-STATE-CARRIED-CONVERGENCE`), the round count or the current-head facts. It still counts for `copilotReviewPresent`. Between rules 8 and 9, `!copilotReviewOnCurrentHead && copilotErrorReviewCountOnCurrentHead >= 2` routes to `blocked_needs_user_decision`. With one error review the normal routing applies, `sameHeadCleanConverged` stays false, and the request tool makes one same-head re-request.
 
 > **Pre-approval CI opt-out (#1337).** Rules 9/10/12/13 above are gated by `refinementConfig.preApprovalRequireCi` (default `true`). When a repo sets `gates.preApproval.requireCi: false`, a non-draft PR (already past the draft gate) treats a `failure`/`pending`/`none` CI verdict as non-blocking. The opt-out skips only the CI clauses of these four rules, so routing falls through to `ready_to_rerequest_review` (rule 11) / `pr_ready_no_feedback` (rule 14). Rule 9's prior-head body-feedback clause is not a CI clause. It still applies under the opt-out and still routes to `blocked_needs_user_decision`. The draft-gate CI path is unaffected (a draft PR short-circuits to `pr_draft` before these rules).
 

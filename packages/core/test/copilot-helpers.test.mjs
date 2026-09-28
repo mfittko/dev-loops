@@ -1332,3 +1332,39 @@ test("round-trip: sanitizing a verdict body before posting keeps the anti-summon
   assert.equal(sanitized, "Finding: this comment violates the `/copilot` prohibition rule.");
   assert.equal(containsBareCopilotSummon(sanitized), false, "sanitized text must not arm the anti-summon guard");
 });
+
+// ADR 0114: the literal PR 2547 Copilot error body is no review.
+test("classifyCopilotReviewBodyDisposition: the captured Copilot error body classifies review_error", () => {
+  assert.equal(
+    classifyCopilotReviewBodyDisposition("COMMENTED", readOverviewFixture("review-error.md")),
+    COPILOT_DISPOSITION.REVIEW_ERROR,
+  );
+});
+
+test("classifyCopilotReviewBodyDisposition: a disposition header wins over a quoted error sentence", () => {
+  const body = `### 🟢 Approval recommended\n\n${readOverviewFixture("review-error.md")}`;
+  assert.equal(classifyCopilotReviewBodyDisposition("COMMENTED", body), COPILOT_DISPOSITION.CLEAN);
+});
+
+test("classifyCopilotReviewBodyDisposition: other headerless bodies keep none", () => {
+  assert.equal(classifyCopilotReviewBodyDisposition("COMMENTED", ""), COPILOT_DISPOSITION.NONE);
+  assert.equal(classifyCopilotReviewBodyDisposition("COMMENTED", "Copilot reviewed 3 files."), COPILOT_DISPOSITION.NONE);
+});
+
+test("summarizeCopilotReviews: a current-head error review is present but is no submitted review or round", () => {
+  const reviews = [{
+    id: "R_err",
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    body: readOverviewFixture("review-error.md"),
+    commit: { oid: "abc1234" },
+    submittedAt: "2024-01-10T00:00:00Z",
+  }];
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.copilotReviewPresent, true);
+  assert.deepEqual(result.copilotReviewIds, ["R_err"]);
+  assert.equal(result.hasSubmittedReviewOnCurrentHead, false);
+  assert.equal(result.latestSubmittedReviewOnCurrentHeadAt, null);
+  assert.equal(result.hasBodyFindingOnCurrentHead, false);
+  assert.equal(result.completedCopilotReviewRounds, 0);
+});

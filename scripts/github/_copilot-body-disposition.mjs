@@ -19,6 +19,7 @@ import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   classifyCopilotReviewBodyDisposition,
   COPILOT_DISPOSITION,
+  isCopilotErrorReview,
   isCopilotLogin,
   stripMarkdownCodeForScan,
 } from "@dev-loops/core/github/copilot-helpers";
@@ -157,7 +158,8 @@ function reviewSubmittedAt(review) {
  */
 export function resolveLatestCopilotReview(prData) {
   const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
-  const candidates = reviews.filter((r) => r?.state !== "PENDING" && isCopilotLogin(r?.author?.login));
+  // An error review is no review (ADR 0114), so it is never carried.
+  const candidates = reviews.filter((r) => r?.state !== "PENDING" && isCopilotLogin(r?.author?.login) && !isCopilotErrorReview(r));
   if (candidates.length === 0) return { review: null, ambiguousBlockingTie: false };
   let latestAt = null;
   for (const review of candidates) {
