@@ -131,7 +131,8 @@ The dev-loop coordinator owns delta mode, because it dispatches the Phase 4
 fixer and owns the push. The sequence is:
 
 1. The dev-loop coordinator emits a `commit_only` fixer work order from the act
-   list with `scripts/loop/emit-fixer-work-order.mjs --harness <claude|pi>` and
+   list with the invocation in
+   [gate contract Phase 4](gate-review-sub-loop-contract.md#phase-4--fix) and
    dispatches the printed `dispatchPayload` unchanged (ADR 0106). The fixer
    commits the fix and hands back the commit SHA unpushed. Every fixer emission
    in delta mode uses the PR head (`headRefOid`), never the local candidate

@@ -1121,79 +1121,98 @@ export function commandContainsCodeVerificationEntrypoint(command) {
 }
 
 /**
- * Every `git commit` / `git push` invocation in `command`, for the fixer Bash gate (ADR 0106).
- * Conservative token scan per shell segment: a token `git` (or `.../git`) anywhere in the
- * segment counts, so `sh -c 'git push'`, `(git commit)` and env/wrapper prefixes are caught.
- * Git global options (`-C <dir>`, `-c <k=v>`, `--git-dir`, `--work-tree`, `--namespace`,
- * `--exec-path`, as `--opt value` or `--opt=value`) are skipped; each `-C` dir and every
- * preceding `cd <dir>` segment is returned in `dirs` (in order) so the caller can resolve the
- * checkout the invocation runs in. `args` are the tokens after the subcommand.
- *
- * `unresolvable` is an allowlist: `dirs` is trusted only when the whole command is a plain
- * top-level chain of simple commands joined by `&&`, `;` or a newline, and every `cd` is a
- * top-level segment head with exactly one literal operand (see chainBlocker). Any other
- * construct marks every invocation unresolvable, as does a `--git-dir`/`--work-tree` option, a
- * `GIT_DIR=`/`GIT_WORK_TREE=` assignment earlier in the command, `cd -`, a bare `cd`, or a
- * `cd`/`-C` operand the shell expands (`$`, `~`, backtick). `construct` names the first such
- * cause (for example "pipe", "command substitution", "heredoc", "comment"), null when resolvable.
- * ponytail: whitespace tokens with stripped quotes/brackets; git aliases are a known ceiling.
+ * The fixer Bash gate's default-deny git classifier (ADR 0107). A command with no git word
+ * (`git` as a word or path segment, quoted or not) returns []. Otherwise every git invocation
+ * must be a plain allowlisted form, or one `unresolvable` entry names the first `construct`
+ * that breaks the rule. The allowed form, read with chainWords' quote-aware words:
+ * - the whole command is a plain top-level chain of simple commands joined by `&&`, `;` or a
+ *   newline (chainWords), with no `GIT_*` word and no non-head `cd`/`pushd`/`popd` word;
+ * - `git` is the unquoted, unescaped first word of its segment (no env, assignment or wrapper
+ *   prefix), and no other word of the segment is a git word;
+ * - the only global option is one literal `-C <dir>`;
+ * - the subcommand is read-only (FIXER_GIT_READ_ONLY, or `branch` with no arguments or
+ *   `--show-current`), `add`, `commit` or `push`.
+ * Each `commit`/`push` is returned with its `dirs` (every earlier `cd <dir>` segment, then the
+ * `-C` dir, in order) and `args` (the words after the subcommand). A `cd` segment needs exactly
+ * one operand that is neither `-` nor shell-expanded (`$`, `~`, backtick).
+ * ponytail: indirect git (a script, an interpreter, an expansion that builds the word) is a ceiling.
  * @param {string} command
- * @returns {{ subcommand: "commit"|"push", dirs: string[], args: string[], unresolvable: boolean, construct: string|null }[]}
+ * @returns {{ subcommand: "commit"|"push"|null, dirs: string[], args: string[], unresolvable: boolean, construct: string|null }[]}
  */
-export function extractGitCommitPushInvocations(command) {
-  if (typeof command !== "string") return [];
+export function extractFixerGitInvocations(command) {
+  if (typeof command !== "string" || !GIT_WORD_RE.test(command)) return [];
+  const deny = (construct) => [{ subcommand: null, dirs: [], args: [], unresolvable: true, construct }];
+  const { blocker, segments: withRedirects } = chainWords(command);
+  if (blocker) return deny(blocker);
+  // Drop redirections (`2>&1`, `> out.txt`, `>out.txt`): they never change the git invocation.
+  const segments = withRedirects.map((words) => words.filter((w, k) => !REDIRECT_RE.test(w.text) && !(k > 0 && REDIRECT_OP_RE.test(words[k - 1].text)))).filter((s) => s.length > 0);
+  if (segments.flat().some((w) => w.text.includes("GIT_"))) return deny("`GIT_*` environment variable");
+  if (segments.some((s) => s.slice(1).some((w) => DIR_MOVE_WORDS.has(w.text)))) return deny("non-head `cd`, `pushd` or `popd`");
+  const expands = (text) => /[$~`]/.test(text);
   const found = [];
   const cdDirs = [];
-  let gitEnvSet = null;
-  // A dir move the literal `dirs` cannot follow, or any construct outside the plain chain.
-  let dirUnknown = chainBlocker(command);
-  const expands = (raw) => /[$~`]/.test(raw);
-  for (const segment of shellSegments(command)) {
-    const pairs = segment.split(/\s+/).map((raw) => ({ raw, t: raw.replace(/^[\s'"`({$]+|[\s'"`)};]+$/g, "") })).filter((p) => p.t);
-    const tokens = pairs.map((p) => p.t);
-    if (tokens[0] === "cd") {
-      if (tokens.length !== 2 || tokens[1] === "-") dirUnknown ??= "`cd -` or a `cd` without exactly one operand";
-      else if (expands(pairs[1].raw)) dirUnknown ??= "shell-expanded `cd` dir";
-      else cdDirs.push(tokens[1]);
+  for (const segment of segments) {
+    if (segment[0].text === "cd") {
+      if (segment.length !== 2 || segment[1].text === "-" || expands(segment[1].text)) return deny("`cd` without exactly one literal operand");
+      cdDirs.push(segment[1].text);
+      continue;
     }
-    const at = tokens.findIndex((t) => t === "git" || t.endsWith("/git"));
-    if (tokens.slice(0, at === -1 ? tokens.length : at).some((t) => /^GIT_(?:DIR|WORK_TREE)=/.test(t))) gitEnvSet ??= "GIT_DIR/GIT_WORK_TREE assignment";
-    if (at === -1) continue;
+    const gitAt = segment.findIndex((w) => GIT_WORD_RE.test(w.text));
+    if (gitAt === -1) continue;
+    if (gitAt !== 0 || segment[0].quoted || segment[0].text !== "git") return deny("git word that is not the plain first word of its command");
+    if (segment.slice(1).some((w) => GIT_WORD_RE.test(w.text))) return deny("second git word in one command");
     const dirs = [...cdDirs];
-    let construct = gitEnvSet ?? dirUnknown;
-    let i = at + 1;
-    while (i < tokens.length && tokens[i].startsWith("-")) {
-      if (tokens[i] === "-C") {
-        dirs.push(tokens[i + 1] ?? "");
-        if (!pairs[i + 1] || expands(pairs[i + 1].raw)) construct ??= "missing or shell-expanded `-C` dir";
-      }
-      if (/^--(?:git-dir|work-tree)(?:=|$)/.test(tokens[i])) construct ??= "`--git-dir`/`--work-tree`";
-      i += GIT_VALUE_OPTIONS.has(tokens[i]) ? 2 : 1;
+    let i = 1;
+    if (segment[1]?.text === "-C") {
+      if (!segment[2] || expands(segment[2].text)) return deny("missing or shell-expanded `-C` dir");
+      dirs.push(segment[2].text);
+      i = 3;
     }
-    if (tokens[i] === "commit" || tokens[i] === "push") found.push({ subcommand: tokens[i], dirs, args: tokens.slice(i + 1), unresolvable: construct !== null, construct });
+    const subcommand = segment[i]?.text;
+    const args = segment.slice(i + 1).map((w) => w.text);
+    if (subcommand === undefined) return deny("git without a subcommand");
+    if (subcommand.startsWith("-")) return deny(`git global option \`${subcommand}\``);
+    if (subcommand === "commit" || subcommand === "push") {
+      found.push({ subcommand, dirs, args, unresolvable: false, construct: null });
+    } else if (!FIXER_GIT_READ_ONLY.has(subcommand) && subcommand !== "add"
+      && !(subcommand === "branch" && (args.length === 0 || (args.length === 1 && args[0] === "--show-current")))) {
+      return deny(`\`git ${subcommand}\``);
+    }
   }
   return found;
 }
+
+// `git` as a whole word or path segment (`/usr/bin/git`), never `.git`, `github` or `git-lfs`.
+const GIT_WORD_RE = /(?:^|[^\w.-])git(?![\w.-])/;
+const FIXER_GIT_READ_ONLY = new Set(["status", "diff", "log", "show", "rev-parse", "ls-files", "merge-base", "grep", "blame"]);
+const DIR_MOVE_WORDS = new Set(["cd", "pushd", "popd"]);
+const REDIRECT_RE = /^\d*(?:[<>]|&>)/;
+// A bare redirection operator whose target is the next word.
+const REDIRECT_OP_RE = /^\d*(?:>>?|<|&>>?|>\||>&|<&)$/;
 
 // Segment heads that open a compound command or move/replace the shell's directory or command.
 const CHAIN_BLOCKED_HEADS = new Set([
   "if", "then", "else", "elif", "fi", "while", "until", "for", "do", "done", "case", "esac", "select", "function", "coproc",
   "pushd", "popd", "eval", "exec", "source", ".",
 ]);
-// Unquoted words that run another command line or a shell anywhere in a segment.
+// Words (quoted or not) that run another command line or a shell anywhere in a segment.
 const CHAIN_BLOCKED_WORD_RE = /^(?:.*\/)?(?:(?:ba|z|da|k|c|tc|fi|mk)?sh|xargs|eval|exec|source|pushd|popd)$/;
 
 /**
- * The first construct that keeps `command` from being a plain top-level chain of simple commands
- * joined by `&&`, `;` or a newline, with every `cd` as a segment head (quote-aware scan), or null
- * when it is one. Blocked: a pipe `|`, a background
- * `&`, `||`, a subshell or group (`(`, `)`, `{`, `}`), command or process substitution (`$(`,
- * backtick, including inside double quotes), a heredoc `<<`, a comment, an unterminated quote, a
- * compound keyword or pushd/popd/eval/exec/source/`.` head, or an unquoted shell binary, `xargs`,
- * `eval`, `exec`, `source`, `pushd`, `popd` or non-head `cd` word. Redirections (`2>&1`, `>|`) stay plain.
- * @param {string} command @returns {string|null}
+ * Split `command` into the quote-aware words of a plain top-level chain of simple commands
+ * joined by `&&`, `;` or a newline, with every `cd` as a segment head. Returns
+ * `{ blocker, segments }`: `segments` are the non-empty word lists `[{ text, quoted }]`
+ * (`quoted` is true when any part of the word was quoted or backslash-escaped), and `blocker`
+ * is null, or names the first construct outside the plain chain (then `segments` is []).
+ * Blocked: a pipe `|`, a background `&`, `||`, a subshell or group (`(`, `)`, `{`, `}`), command
+ * or process substitution (`$(`, backtick, including inside double quotes), a heredoc `<<`, a
+ * comment, an unterminated quote, a compound keyword or pushd/popd/eval/exec/source/`.` head,
+ * or a shell binary, `xargs`, `eval`, `exec`, `source`, `pushd`, `popd` or non-head `cd` word,
+ * quoted or not. Redirections (`2>&1`, `>|`) stay plain.
+ * @param {string} command @returns {{ blocker: string|null, segments: { text: string, quoted: boolean }[][] }}
  */
-function chainBlocker(command) {
+function chainWords(command) {
+  const blocked = (blocker) => ({ blocker, segments: [] });
   const segments = [[]];
   let word = null;
   const endWord = () => { if (word !== null) segments.at(-1).push(word); word = null; };
@@ -1203,16 +1222,16 @@ function chainBlocker(command) {
     const prev = command[i - 1];
     if (c === "'") {
       const j = command.indexOf("'", i + 1);
-      if (j === -1) return "unterminated quote";
+      if (j === -1) return blocked("unterminated quote");
       add(command.slice(i + 1, j), true);
       i = j;
     } else if (c === '"') {
       let j = i + 1;
       for (; j < command.length && command[j] !== '"'; j++) {
         if (command[j] === "\\") j++;
-        else if (command[j] === "`" || (command[j] === "$" && command[j + 1] === "(")) return "command substitution";
+        else if (command[j] === "`" || (command[j] === "$" && command[j + 1] === "(")) return blocked("command substitution");
       }
-      if (j >= command.length) return "unterminated quote";
+      if (j >= command.length) return blocked("unterminated quote");
       add(command.slice(i + 1, j), true);
       i = j;
     } else if (c === "\\") {
@@ -1232,17 +1251,17 @@ function chainBlocker(command) {
     } else if (c === "|" && prev === ">") {
       add(c);
     } else if (c === "`" || (c === "$" && command[i + 1] === "(")) {
-      return "command substitution";
+      return blocked("command substitution");
     } else if (c === "<" && command[i + 1] === "<") {
-      return "heredoc";
+      return blocked("heredoc");
     } else if (c === "#" && word === null) {
-      return "comment";
+      return blocked("comment");
     } else if (c === "|") {
-      return command[i + 1] === "|" ? "`||`" : "pipe";
+      return blocked(command[i + 1] === "|" ? "`||`" : "pipe");
     } else if (c === "&") {
-      return "background `&`";
+      return blocked("background `&`");
     } else if ("(){}".includes(c)) {
-      return "subshell or group";
+      return blocked("subshell or group");
     } else {
       add(c);
     }
@@ -1250,11 +1269,9 @@ function chainBlocker(command) {
   endWord();
   for (const words of segments) {
     const head = words.findIndex((w) => w.quoted || !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w.text));
-    if (head !== -1 && !words[head].quoted && CHAIN_BLOCKED_HEADS.has(words[head].text)) return `compound command or \`${words[head].text}\``;
-    const blocked = words.find((w, k) => !w.quoted && (CHAIN_BLOCKED_WORD_RE.test(w.text) || (w.text === "cd" && k !== 0)));
-    if (blocked) return blocked.text === "cd" ? "non-head `cd`" : `\`${blocked.text}\``;
+    if (head !== -1 && CHAIN_BLOCKED_HEADS.has(words[head].text)) return blocked(`compound command or \`${words[head].text}\``);
+    const word = words.find((w, k) => CHAIN_BLOCKED_WORD_RE.test(w.text) || (w.text === "cd" && k !== 0));
+    if (word) return blocked(word.text === "cd" ? "non-head `cd`" : `\`${word.text}\``);
   }
-  return null;
+  return { blocker: null, segments: segments.filter((s) => s.length > 0) };
 }
-
-const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);

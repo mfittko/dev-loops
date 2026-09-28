@@ -20,7 +20,9 @@ const PR = 7;
 const ACT = [{ severity: "high", angle: "correctness", summary: "null deref", file: "src/a.mjs", line: 3, judgeDisposition: "act" }];
 const THREADS = { ok: true, repo: REPO, pr: PR, threads: [{ threadId: "T1", commentId: 1, body: "fix", isResolved: false, isOutdated: false, path: "src/a.mjs", line: 3 }] };
 
-const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...runIdFreeEnv(), GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+// An inherited GIT_DIR/GIT_WORK_TREE (a git hook of another repo) must not change a decision.
+const gitFreeEnv = () => ({ ...runIdFreeEnv(), GIT_DIR: undefined, GIT_WORK_TREE: undefined });
+const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitFreeEnv() }).trim();
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout).refusal);
 // The fixer runs the dispatch pointer's exact pull line; the Bash gate binds the grant to its agent_id.
 const AGENT = "agent-a";
@@ -28,7 +30,7 @@ const pullLine = (identity) => /`([^`]+)`/.exec(buildDispatchPointer(identity))[
 const pull = (unit, cwd, over = {}) => {
   const identity = { workOrderRef: over.ref ?? unit.workOrderRef, workOrderDigest: over.digest ?? unit.workOrderDigest, executionIdentity: over.execution ?? unit.executionIdentity };
   assert.equal(bash(cwd, pullLine(identity), over.agentId ?? AGENT), "allow");
-  return spawnSync("node", [PULL, "--ref", identity.workOrderRef, "--digest", identity.workOrderDigest, "--execution", identity.executionIdentity], { cwd, encoding: "utf8", env: runIdFreeEnv() });
+  return spawnSync("node", [PULL, "--ref", identity.workOrderRef, "--digest", identity.workOrderDigest, "--execution", identity.executionIdentity], { cwd, encoding: "utf8", env: gitFreeEnv() });
 };
 let clock = 1_790_000_000_000;
 const nextExecution = () => `f${clock++}-0000abcd`;
@@ -296,8 +298,8 @@ test("F4: a conflicting rewrite under the same reference is refused", async () =
 // F5 — the write hook binds fixer mutation to a current pull's authority
 // ---------------------------------------------------------------------------
 
-const hook = (cwd, file, agentId = AGENT) => {
-  const result = spawnSync("node", [HOOK], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: file }, cwd, agent_type: "fixer", ...(agentId ? { agent_id: agentId } : {}) }), encoding: "utf8", env: runIdFreeEnv() });
+const hook = (cwd, file, agentId = AGENT, env = gitFreeEnv()) => {
+  const result = spawnSync("node", [HOOK], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: file }, cwd, agent_type: "fixer", ...(agentId ? { agent_id: agentId } : {}) }), encoding: "utf8", env });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput.permissionDecision : "allow";
 };
@@ -328,8 +330,14 @@ test("F5: a cwd in another repo cannot make an in-repo target look like scratch;
     const other = path.join(path.dirname(root), "other");
     await mkdir(other);
     git(other, "init", "-q", "-b", "main");
+    // An inherited GIT_DIR of another repo must not list that repo's checkouts (the target would look like scratch).
+    const foreign = { ...gitFreeEnv(), GIT_DIR: path.join(other, ".git") };
+    const denied = spawnSync("node", [HOOK], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: path.join(wt, "src", "x.mjs") }, cwd: wt, agent_type: "fixer", agent_id: AGENT }), encoding: "utf8", env: foreign });
+    assert.match(denied.stdout, /Fixer mutation boundary.*no current fixer work-order pull/, "a foreign GIT_DIR never turns an unpulled write into scratch");
     const unit = await emit({ allowedPaths: ["src"] });
     assert.equal(pull(unit, wt).status, 0);
+    assert.equal(hook(wt, path.join(wt, "src", "x.mjs"), AGENT, foreign), "allow", "the grant resolves in the real repo");
+    assert.equal(bash(wt, `git -C ${root} commit -m x`, AGENT, foreign), "deny", "the main checkout's branch is still resolved");
     assert.equal(hook(other, path.join(wt, "src", "x.mjs")), "allow");
     assert.equal(hook(other, path.join(wt, "README.md")), "deny");
     const receiptPath = pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef);
@@ -353,11 +361,22 @@ test("F5: a symlink from scratch space into a checkout is denied at the hook", a
 });
 
 test("F5: a pulled grant goes stale with the pull's own predicate; an edited outputRef never becomes a write grant", async () => {
-  await withFixture(async ({ root, wt, head, emit }) => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
     const unit = await emit();
     assert.equal(pull(unit, wt).status, 0);
     const target = path.join(wt, "src", "x.mjs");
     assert.equal(hook(wt, target), "allow");
+
+    // The hook's own required-read check (not locateFixerUnit): an act list rewritten after the pull revokes the grant.
+    const actList = await readFile(files.actList);
+    await writeFile(files.actList, JSON.stringify([{ ...ACT[0], line: 9 }]));
+    assert.equal(hook(wt, target), "deny", "a changed required read grants nothing");
+    assert.equal(bash(wt, "git commit -m x"), "deny", "a changed required read grants no commit");
+    await rm(files.actList);
+    assert.equal(hook(wt, target), "deny", "a vanished required read grants nothing");
+    await writeFile(files.actList, actList);
+    assert.equal(hook(wt, target), "allow");
+    assert.equal(bash(wt, "git commit -m x"), "allow");
 
     const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
     const forged = path.join(root, "tmp", "gate-findings", "forged.json");
@@ -379,8 +398,8 @@ test("F5: a pulled grant goes stale with the pull's own predicate; an edited out
 });
 
 const BASH_HOOK = path.resolve(".claude/hooks/pre-tool-use-bash-gate.mjs");
-const bash = (cwd, command, agentId = AGENT) => {
-  const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd, agent_type: "fixer", ...(agentId ? { agent_id: agentId } : {}) }), encoding: "utf8", env: runIdFreeEnv() });
+const bash = (cwd, command, agentId = AGENT, env = gitFreeEnv()) => {
+  const result = spawnSync("node", [BASH_HOOK], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd, agent_type: "fixer", ...(agentId ? { agent_id: agentId } : {}) }), encoding: "utf8", env });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput.permissionDecision : "allow";
 };
@@ -422,10 +441,13 @@ test("F5: the Bash gate binds fixer git commit/push to the pulled branch and lea
     }
     assert.equal(bash(wt, "npm test && git log --oneline -1"), "allow");
     assert.equal(pull(unit, wt).status, 0);
-    for (const command of ["git commit -m fix", "git add -A && git commit -m fix && git push origin issue-1", "git push -u origin HEAD", "git push", "git commit -F msg.txt", "git push 2>&1"]) {
+    for (const command of ["git commit -m fix", "git add -A && git commit -m fix && git push origin issue-1", "git push -u origin HEAD", "git commit -F msg.txt", "git push origin issue-1 2>&1"]) {
       assert.equal(bash(wt, command), "allow", command);
     }
-    for (const command of ["git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", `cd ${root} && git commit -m x`, `git -C ${root} commit -m x`]) {
+    for (const command of [
+      "git push", "git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", `cd ${root} && git commit -m x`, `git -C ${root} commit -m x`,
+      `git -C ${root} cherry-pick HEAD`, `env -C ${root} git commit -m x`, "git -c push.default=matching push", "\\git commit -m x",
+    ]) {
       assert.equal(bash(wt, command), "deny", command);
     }
   });
@@ -447,7 +469,7 @@ test("F5: a narrowed grant denies committing an out-of-authority file, commit_on
     git(wt, "checkout", "--", "README.md");
     await writeFile(path.join(wt, "src", "a.mjs"), "fixed\n");
     assert.equal(bash(wt, "git commit -am fix"), "allow");
-    assert.equal(bash(wt, "git push"), "deny", "a commit_only pull never pushes");
+    assert.equal(bash(wt, "git push origin issue-1"), "deny", "a commit_only pull never pushes");
     const full = await narrowed("full");
     assert.equal(pull(full, wt).status, 0);
     assert.equal(hook(wt, path.join(wt, "src", "a.mjs")), "allow");

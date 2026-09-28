@@ -22,6 +22,18 @@ On Claude, PreToolUse hooks bound fixer mutation to a current pull. The Edit/Wri
 
 The hooks deny writes and commits outside the grant branch and `allowedPaths`. They deny pushes to another destination and every push in the `commit_only` phase. They deny writes to the main checkout's `tmp/` except the work order's outputRef.
 
+### Fixer git allowlist
+
+The Bash gate is default-deny for fixer git. A fixer command that contains a git word runs only when every git invocation has an allowed form. The gate reads the command with quote-aware words (`extractFixerGitInvocations`). The grant, branch, path and phase checks then apply to each allowed `commit` and `push`. The hooks run their own git calls with `GIT_DIR` and `GIT_WORK_TREE` removed from the environment.
+
+| Rule | Allowed | Denied |
+| --- | --- | --- |
+| Command shape | a plain chain joined by `&&`, `;` or a newline; redirections such as `2>&1` | a pipe, `\|\|`, `&`, a subshell or group, command or process substitution, a heredoc, a comment, `sh -c`, `xargs`, `eval`, `exec`, `source`, `pushd`, `popd`, a non-head `cd`, a `GIT_*` variable |
+| Git word | `git` as the unquoted first word of its command | `\git`, `'git'`, `/usr/bin/git`, an `env`/`env -C`/`env --chdir` prefix, an assignment prefix, `nice`/`command`/`find -execdir` wrappers, a second git word |
+| Global options | one literal `-C <dir>`, and `cd <dir>` segments before it | `-c` (including quoted values), `--git-dir`, `--work-tree`, any other global option, a second `-C`, an expanded (`$`, `~`, backtick) dir |
+| Subcommand | status, diff, log, show, rev-parse, ls-files, merge-base, grep, blame, `branch` with no argument or `--show-current`, add, commit, push | cherry-pick, revert, merge, am, rebase, pull, update-ref, commit-tree, reset, checkout, switch, stash, config, `branch` with other arguments, every alias |
+| Push | an explicit remote and a refspec whose destination is the grant branch or `HEAD` | a bare `git push`, `git push <remote>` without a refspec, another destination, `--all`, `--mirror`, `--tags`, `--delete`, `--prune` |
+
 Pi has no tool-gating surface. On Pi, the boundary is the pull contract plus the consumer checks.
 
 `verify-fixer-disposition.mjs` requires `--fixer-plan`. The `--dispositions` and `--dispositions-file` inputs are removed. The consumer re-digests the plan and verifies a matching fixer pull receipt. It reads the handoff only from the outputRef derived from the plan location, refuses a plan whose outputRef differs, and reads it only when its mtime is not older than the receipt file's mtime. The handoff must name the observed live PR head.
@@ -34,6 +46,6 @@ We rejected keeping prose fixer briefs, because they bless model-authored work o
 
 On Claude, a fixer dispatched without a work order can no longer mutate the repository. The consumer no longer trusts a disposition list that the caller supplies.
 
-The boundary has known ceilings. The Bash gate does not parse git aliases. A `git commit --amend` is checked only against the working-tree and index paths, never against the amended commit's earlier content. OutputRefs stay local material outside the digest, so the hooks and the consumer derive the outputRef instead of trusting the field.
+The boundary has known ceilings. The Bash gate does not see indirect git: a script or interpreter that runs git, or a shell expansion that builds the git word. The gate also does not inspect the remote a push names. A `git commit --amend` is checked only against the working-tree and index paths, never against the amended commit's earlier content. OutputRefs stay local material outside the digest, so the hooks and the consumer derive the outputRef instead of trusting the field.
 
 `test/loop/emit-fixer-work-order.test.mjs`, `test/github/verify-fixer-disposition.test.mjs`, `packages/core/test/claude-hook-decisions.test.mjs` and `packages/core/test/bash-command-classify.test.mjs` pin this behavior.

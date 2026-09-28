@@ -14,6 +14,13 @@ import { workOrderDigest } from "./_work-order-digest.mjs";
 
 const isInside = (p, root) => p === root || p.startsWith(`${root}/`);
 
+/**
+ * Env for every hook git call: an inherited GIT_DIR/GIT_WORK_TREE overrides `-C`, so a pointer at
+ * another repo would list that repo's checkouts and fail the fixer boundary open. Same shape as
+ * scripts/loop/_repo-root-resolver.mjs gitEnvNoDirOverrides (the hook bundle cannot import scripts/).
+ */
+export const gitEnv = () => ({ ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined });
+
 /** Nearest existing directory at or above `p` (absolute). */
 export function nearestExistingDir(p) {
   let dir = path.resolve(p);
@@ -24,7 +31,7 @@ export function nearestExistingDir(p) {
 /** `git worktree list` from `dir` as `[{ root, branch }]` (realpath roots, main first); [] outside git. */
 export function listCheckouts(dir) {
   try {
-    const porcelain = execFileSync("git", ["-C", dir, "worktree", "list", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const porcelain = execFileSync("git", ["-C", dir, "worktree", "list", "--porcelain"], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] });
     return porcelain.split(/\n\s*\n/u).map((block) => {
       const lines = block.split("\n");
       const field = (key) => lines.find((l) => l.startsWith(`${key} `))?.slice(key.length + 1);
@@ -105,7 +112,7 @@ function isStale(mainRoot, order, executionIdentity) {
     }
   }
   try {
-    execFileSync("git", ["-C", mainRoot, "merge-base", "--is-ancestor", order.headSha, `refs/heads/${order.mutationAuthority.branch}`], { stdio: "ignore" });
+    execFileSync("git", ["-C", mainRoot, "merge-base", "--is-ancestor", order.headSha, `refs/heads/${order.mutationAuthority.branch}`], { env: gitEnv(), stdio: "ignore" });
     return false;
   } catch {
     return true;

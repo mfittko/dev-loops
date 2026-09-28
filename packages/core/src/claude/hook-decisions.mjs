@@ -804,6 +804,8 @@ function pushBeyondGrant(args, branch) {
     }
     positional.push(args[i]);
   }
+  // A config-derived destination (remote.*.push, push.default) is never checked, so require it explicit.
+  if (positional.length < 2) return "a push must name an explicit remote and refspec (`git push origin <branch>`)";
   for (const spec of positional.slice(1)) {
     const bare = spec.replace(/^\+/u, "");
     const dst = bare.split(":").pop().replace(/^refs\/heads\//u, "");
@@ -814,17 +816,18 @@ function pushBeyondGrant(args, branch) {
 
 /**
  * Decide whether a PreToolUse Bash command by the `fixer` agent must be denied (ADR 0107).
- * Each `git commit` / `git push` invocation (extractGitCommitPushInvocations) needs a CURRENT
+ * `invocations` come from extractFixerGitInvocations (default-deny): an `unresolvable` entry,
+ * any git form outside its allowlist, is denied. Each `git commit` / `git push` needs a CURRENT
  * fixer grant whose branch is the branch checked out in the invocation's cwd; when several
  * grants name that branch, any one that permits the invocation allows it. Denied as well:
- * an `unresolvable` invocation (see extractGitCommitPushInvocations), a commit whose `paths` (the checkout-relative paths it could include, computed by
+ * a commit whose `paths` (the checkout-relative paths it could include, computed by
  * the hook; null when git failed) are missing or leave the grant's allowedPaths, a push under
- * a `commit_only` grant, and a push whose explicit refspec names another destination.
- * Every other command is allowed here.
+ * a `commit_only` grant, a push without an explicit remote and refspec, and a push whose
+ * refspec names another destination. Every other command is allowed here.
  *
  * @param {Object} params
  * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload.
- * @param {{ subcommand: string, args: string[], branch: string|null, unresolvable?: boolean, construct?: string|null, paths?: string[]|null }[]} [params.invocations] - Resolved invocations.
+ * @param {{ subcommand: string|null, args: string[], branch: string|null, unresolvable?: boolean, construct?: string|null, paths?: string[]|null }[]} [params.invocations] - Resolved invocations.
  * @param {{ branch: string, allowedPaths: string[], phase: string }[]} [params.grants] - Current pull grants.
  * @returns {HookDecision}
  */
@@ -842,16 +845,17 @@ export function decideFixerBashGate({ agentType = null, invocations = [], grants
     // Every grant for the branch counts (the write guard's union), so grant order never decides.
     const matching = grants.filter((g) => typeof g?.branch === "string" && g.branch === branch);
     const reasons = matching.map(refusedBy);
-    const why = unresolvable ? `the command contains a ${construct ?? "construct"} that hides the checkout it runs in. ` +
-      "Accepted forms: a plain `&&`/`;` chain; write the commit message to a file and run `git commit -F <file>`; " +
-      "run `git push` without a pipe (redirecting to a file is fine); no trailing `# comment`"
+    const why = unresolvable ? `the command uses ${construct ?? "a construct"}, outside the fixer's accepted git forms. ` +
+      "Accepted: a plain `&&`/`;` chain (no pipe, substitution, heredoc or `# comment`) where each git command starts with `git`, " +
+      "has at most one `-C <dir>` global option and runs status, diff, log, show, rev-parse, ls-files, merge-base, grep, blame, " +
+      "`branch [--show-current]`, add, `commit -F <file>` or `push <remote> <refspec>`"
       : !branch ? "the branch checked out in its cwd could not be resolved"
         : matching.length === 0 ? `no current fixer work-order pull grants branch ${JSON.stringify(branch)}`
           : reasons.includes(null) ? null : reasons[0];
     if (why) {
       return {
         decision: "deny",
-        reason: `Fixer mutation boundary (agents/fixer.agent.md, ADR 0107): refusing \`git ${subcommand}\`: ${why}. ` +
+        reason: `Fixer mutation boundary (agents/fixer.agent.md, ADR 0107): refusing ${subcommand ? `\`git ${subcommand}\`` : "the git command"}: ${why}. ` +
           "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs --ref <ref> --digest <digest> --execution <execution>` first; " +
           "a fixer commits and pushes only mutationAuthority.branch from its checkout.",
       };

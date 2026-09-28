@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   TARGET_REPO_SLUG,
-  extractGitCommitPushInvocations,
+  extractFixerGitInvocations,
   deriveInManagedRepo,
   explicitRepoProvenForeign,
   normalizeGitHubRepoSlug,
@@ -1145,36 +1145,49 @@ test("decideBashGate (hook-decisions.mjs) resolves inManagedRepo via the shared 
   }
 });
 
-test("extractGitCommitPushInvocations skips value-taking global options and marks hidden checkouts unresolvable", () => {
-  const one = (command) => extractGitCommitPushInvocations(command).map(({ subcommand, dirs, unresolvable }) => ({ subcommand, dirs, unresolvable }));
-  for (const command of ["git --namespace ns commit -m x", "git --namespace=ns commit -m x", "git --exec-path /x commit -m x", "git --exec-path=/x commit -m x", "git -c a=b -C d commit"]) {
-    assert.equal(one(command)[0]?.subcommand, "commit", command);
-    assert.equal(one(command)[0].unresolvable, false, command);
+test("extractFixerGitInvocations allows only the plain git allowlist and denies every other git form", () => {
+  const one = (command) => extractFixerGitInvocations(command).map(({ subcommand, dirs, args, unresolvable }) => ({ subcommand, dirs, args, unresolvable }));
+  // Allow table: [command, the commit/push invocations it resolves to].
+  for (const [command, expected] of [
+    ["npm test && ls .github && cat .gitignore", []],
+    ["git status && git diff --stat && git log --oneline -1 && git show HEAD && git rev-parse HEAD", []],
+    ["git ls-files && git branch && git branch --show-current && git merge-base HEAD main && git grep x && git blame a.mjs", []],
+    ["git add -A && git commit -F msg.txt && git push origin issue-1 2>&1", [
+      { subcommand: "commit", dirs: [], args: ["-F", "msg.txt"], unresolvable: false },
+      { subcommand: "push", dirs: [], args: ["origin", "issue-1"], unresolvable: false },
+    ]],
+    ["cd /o && git -C b commit -m x", [{ subcommand: "commit", dirs: ["/o", "b"], args: ["-m", "x"], unresolvable: false }]],
+    ["git -C \"/a b\" commit -m \"fix(gate): a | b & c\"", [{ subcommand: "commit", dirs: ["/a b"], args: ["-m", "fix(gate): a | b & c"], unresolvable: false }]],
+    ["git add . && git commit -m 'then (x); $(y)'\ngit push origin HEAD", [
+      { subcommand: "commit", dirs: [], args: ["-m", "then (x); $(y)"], unresolvable: false },
+      { subcommand: "push", dirs: [], args: ["origin", "HEAD"], unresolvable: false },
+    ]],
+  ]) {
+    assert.deepEqual(one(command), expected, command);
   }
+  // Deny table: every command yields exactly one unresolvable entry.
   for (const command of [
-    "git --git-dir /o/.git commit -m x", "git --git-dir=/o/.git commit -m x", "git --work-tree /o push", "git --work-tree=/o push",
-    "GIT_DIR=/o/.git git commit -m x", "env GIT_WORK_TREE=/o git push", "export GIT_DIR=/o/.git && git commit -m x",
-    "sh -c 'cd /o && git commit -m x'", "bash -lc \"cd /o; git push\"",
-    // Dir moves the literal dirs cannot follow (subshell cd, pushd, cd -, shell-expanded operands).
-    "(cd /o); git commit -m x", "( cd /o && git commit -m x )", "pushd /o && git commit -am x", "cd - && git push",
-    "cd && git push", "cd $X && git push", "cd ~/r && git commit -m x", "git -C \"$R\" push", "git -C ~/r commit -m x",
-    // Allowlist: anything outside a plain `&&`/`;` chain with head-only literal `cd` is unresolvable.
-    "cd /wt | git commit -m x", "cd /wt & git commit -m x", "if true; then cd /o; fi; git commit -m x",
-    "cd /o || git push", "{ cd /o; }; git push", "git commit -m \"$(cd /o)\"", "git commit -m `pwd`", "git commit -m x <(cd /o)",
-    "while false; do cd /o; done; git push", "for d in /o; do cd $d; done; git push", "case x in x) cd /o;; esac; git push",
-    "until true; do :; done; git push", "select d in /o; do break; done; git push", "function f { cd /o; }; git push",
-    "popd; git push", "eval 'cd /o'; git push", "exec git push", "source ./x.sh; git push", ". ./x.sh; git push",
-    "echo /o | xargs git -C /o commit -m x", "sh -c 'git push'", "bash -c 'git commit -m x'", "command cd /o; git push",
-    "cd -P /o && git push", "git commit -F - <<EOF", "git push # (note)", "git commit -m 'unterminated",
+    // Commit-creating or ref-moving subcommands, config writes and aliases.
+    "git -C /main cherry-pick abc", "git revert abc", "git merge x", "git am p.patch", "git rebase main", "git pull",
+    "git update-ref refs/heads/main abc", "git commit-tree abc", "git reset --hard x", "git checkout main", "git switch main",
+    "git stash", "git branch -f main x", "git ci -m x", "git config remote.origin.push HEAD:main && git push origin issue-1",
+    // Every global option except one literal `-C <dir>`, quoted `-c` values included.
+    "git -c user.name=\"A B\" push origin main", "git -c \"user.name=A B\" commit -m x", "git -c remote.origin.push=HEAD:refs/heads/main push origin",
+    "git -c push.default=matching push", "git --git-dir=/o/.git commit -m x", "git --work-tree /o push", "git -C a -C b commit -m x",
+    "git --namespace ns commit -m x", "git -C", "git -C ~/r commit -m x", "git -C \"$R\" push origin x", "git",
+    // git that is not the plain first word: escapes, quotes, env, assignments and wrappers.
+    "\\git commit -m x", "'git' push origin x", "/usr/bin/git push origin x", "env -C /o git push origin x", "env --chdir=/o git commit -m x",
+    "GIT_DIR=/o/.git git commit -m x", "export GIT_WORK_TREE=/o; git push origin x", "nice git push origin x", "command git push origin x",
+    "find . -execdir git commit -m x ;", "git commit -m git",
+    // Anything outside a plain `&&`/`;` chain with head-only literal `cd`.
+    "git push origin x 2>&1 | tail -5", "git commit -m \"$(cat <<'EOF'\nx\nEOF\n)\"", "git commit -F - <<EOF", "git push origin x # note",
+    "git commit -m 'unterminated", "git commit -m `pwd`", "git commit -m x <(cd /o)", "sh -c 'git push'", "'sh' -c 'git push'",
+    "bash -lc \"cd /o; git push\"", "echo /o | xargs git -C /o commit -m x", "(cd /o); git commit -m x", "{ cd /o; }; git push origin x",
+    "cd /o || git push origin x", "cd /o & git commit -m x", "if true; then cd /o; fi; git commit -m x", "for d in /o; do cd $d; done; git push",
+    "pushd /o && git commit -am x", "popd; git push origin x", "eval 'cd /o'; git push", "exec git push", "source ./x.sh; git push origin x",
+    "'source' ./x.sh; git push origin x", ". ./x.sh; git push origin x", "command cd /o; git push origin x", "builtin 'cd' /o; git push origin x",
+    "cd - && git push origin x", "cd && git push origin x", "cd -P /o && git push origin x", "cd $X && git push origin x", "cd ~/r && git commit -m x",
   ]) {
     assert.deepEqual(one(command).map((i) => i.unresolvable), [true], command);
-  }
-  assert.deepEqual(one("cd /o && git commit -m x"), [{ subcommand: "commit", dirs: ["/o"], unresolvable: false }]);
-  for (const command of [
-    "git commit -m x", "git push", "cd /o; git add -A && git push 2>&1", "git commit -m \"fix(gate): a | b & c\"",
-    "git commit -m 'then (x); $(y)'", "git add . && git commit -m x\ngit push", "GIT_TRACE=1 git push",
-  ]) {
-    const invocations = one(command);
-    assert.ok(invocations.length > 0 && invocations.every((i) => !i.unresolvable), command);
   }
 });

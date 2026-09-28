@@ -18,8 +18,9 @@
  *     `npm run build` (and yarn/pnpm equivalents) — blocked ONLY from the dev-loop COORDINATOR
  *     (agent_type "dev-loop"), opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (#2082). Worker
  *     subagents (developer/fixer/quality/review) may run these freely.
- *   - `git commit` / `git push` from the `fixer` agent — blocked (any repo) unless a current
- *     fixer work-order pull grants the checked-out branch, every path the commit could include
+ *   - git from the `fixer` agent — default-deny (any repo): only the allowlisted plain forms of
+ *     extractFixerGitInvocations run, and a `git commit` / `git push` also needs a current fixer
+ *     work-order pull that grants the checked-out branch, every path the commit could include
  *     and (for a push) a `full` phase (ADR 0107, decideFixerBashGate). The grant must come from a
  *     pull this fixer ran: the sanctioned pull line records its agent_id as the binding.
  */
@@ -28,7 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { decideBashGate, decideFixerBashGate, FIXER_AGENT_TYPE, normalizeAgentType } from "./_hook-decisions.mjs";
-import { branchCheckedOutAt, listCheckouts, loadFixerContext, parseFixerPullCommand, recordFixerAgentBinding } from "./_fixer-grants.mjs";
+import { branchCheckedOutAt, gitEnv, listCheckouts, loadFixerContext, parseFixerPullCommand, recordFixerAgentBinding } from "./_fixer-grants.mjs";
 import {
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
@@ -45,7 +46,7 @@ import {
   commandContainsCodeVerificationEntrypoint,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
-  extractGitCommitPushInvocations,
+  extractFixerGitInvocations,
   normalizeGitHubRepoSlug,
 } from "./_bash-command-classify.mjs";
 
@@ -60,12 +61,13 @@ const agentType = typeof input?.agent_type === "string" ? input.agent_type : nul
 const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 
 // Fixer mutation boundary (ADR 0107, always on): a fixer `git commit` / `git push` needs a CURRENT
-// pull grant for the branch checked out in the invocation's cwd; other commands are unchanged.
+// pull grant for the branch checked out in the invocation's cwd; a git form outside the allowlist is
+// denied; commands without a git word are unchanged.
 // Paths a commit could include in `dir`: staged, plus unstaged tracked and untracked (a same-command
 // `git add`/`-a`/pathspec may stage them before the commit runs). null on a git failure (deny).
 const commitPaths = (dir) => {
   try {
-    const list = (...args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).split("\0").filter(Boolean);
+    const list = (...args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] }).split("\0").filter(Boolean);
     return [...new Set([
       ...list("diff", "-z", "--no-relative", "--cached", "--name-only"),
       ...list("diff", "-z", "--no-relative", "--name-only"),
@@ -82,10 +84,11 @@ if (fixerPull) {
   const mainRoot = listCheckouts(cwd)[0]?.root;
   if (mainRoot) recordFixerAgentBinding(mainRoot, { agentId: input?.agent_id, ...fixerPull });
 }
-const fixerInvocations = isFixer ? extractGitCommitPushInvocations(command) : [];
+const fixerInvocations = isFixer ? extractFixerGitInvocations(command) : [];
 if (fixerInvocations.length > 0) {
   let grants = [];
   const invocations = fixerInvocations.map((invocation) => {
+    if (invocation.unresolvable) return invocation;
     const dir = path.resolve(cwd, ...invocation.dirs);
     const context = loadFixerContext([dir], input?.agent_id);
     grants = [...grants, ...context.grants];
@@ -98,10 +101,11 @@ if (fixerInvocations.length > 0) {
 let repoRoot = null;
 let repoSlug = null;
 try {
-  repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim();
+  repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", env: gitEnv() }).trim();
   const remote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
     cwd: repoRoot,
     encoding: "utf8",
+    env: gitEnv(),
   }).trim();
   repoSlug = normalizeGitHubRepoSlug(remote);
 } catch {
