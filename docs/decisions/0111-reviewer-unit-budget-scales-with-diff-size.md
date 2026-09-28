@@ -14,7 +14,7 @@ Every scoped reviewer unit had the same budget of 45 model turns and 50 tool cal
 
 The emitter `scripts/github/emit-fanout-dispatch.mjs` derives each unit's budget from the size of the diff that unit reviews, at emit time.
 
-The scoped diff is the filtered diff, the required `diff` read of the gate context. For a unit whose angles all declare the `docs-only` scope, only the doc-file blocks (`classifyFile === "docs"`) count. For every other unit, all file blocks count. `files` is the number of file blocks. `changedLines` is the number of added plus deleted lines in those blocks.
+The scoped diff is the filtered diff, the required `diff` read of the gate context. For a unit whose angles all declare the `docs-only` scope, only the doc-file blocks (`classifyFile === "docs"`) and the blocks with an unparsed path count. For every other unit, all file blocks count. `files` is the number of file blocks. `changedLines` is the number of added plus deleted lines in those blocks.
 
 `computeReviewerUnitBudget({ files, changedLines })` in `packages/core/src/loop/reviewer-unit-bound.mjs` computes:
 
@@ -44,6 +44,8 @@ PR 2495 without the exclusion (105 files, 9290 lines) gives 95 and 90.
 A large diff no longer forces a clean reviewer into a `blocked` result and a full round re-run. A small diff keeps a budget close to the old fixed value. The cap bounds the cost of one unit.
 
 The budget follows whatever the filtered diff drops, including the `gates.reviewDiff.excludeGlobs` paths of ADR 0110.
+
+A docs-only unit is sized on its doc blocks, but its required `diff` read is still the full filtered diff. On a large code-heavy diff with few doc files, that unit keeps a budget near the floor while it reads the whole diff, so it can still end in `reviewer_budget_exhausted`. Scoping the docs-only diff read to doc blocks, or sizing every unit on the full diff, is left to a follow-up.
 
 Rejected alternatives:
 
