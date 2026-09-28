@@ -349,6 +349,18 @@ test("the follow-up capture passages defer standalone filing to MAIN-AGENT-FILIN
   }
 });
 
+// Item 10: the spec-authority owner doc matches the any-level section reader.
+test("spec-authority-contract describes the any-level spec section reading and the missing-spec refusal", async () => {
+  const raw = await readRepo("skills/docs/spec-authority-contract.md");
+  const doc = collapse(raw);
+  assert.ok(!doc.includes("read from the `## Non-goals` section"), "stale `## Non-goals`-only phrase");
+  assert.ok(doc.includes("read from the Non-goals section at any heading level"));
+  const fallback = collapse(passageWith(raw, "Fail-closed default:"));
+  assert.ok(fallback.includes("at any heading level (`##` first, H1 last)"));
+  assert.ok(fallback.includes("`requireSpecFromBody` refuses an empty AC or DoD"));
+  assert.ok(fallback.includes("`EXPECTED_SPEC_SHAPE`"));
+});
+
 test("negative fixture: restoring the old standalone-issue permission fails the follow-up check", () => {
   const restored = "| A follow-up is discovered while working a PR/loop | Note it on the originating issue (or the PR body); file a standalone issue only if the follow-up is genuinely independent of the PR **and** outlives it (a real separate bug/feature that would be lost as a note on a soon-closed issue) |";
   assert.ok(followUpFilingViolations(restored).includes("standalone-issue permission present"));
