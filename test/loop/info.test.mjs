@@ -404,9 +404,19 @@ test("summarizeBranchRules judges a required check by its latest run only", asyn
   // A latest CANCELLED run still fails closed.
   const cancelledLast = { ...cancelled, startedAt: "2026-09-01T10:06:00Z", completedAt: "2026-09-01T10:07:00Z" };
   assert.deepEqual(summarizeBranchRules(MAIN_RULESET, [rerunGreen, cancelledLast]).failedRequiredChecks, ["gate-evidence"]);
-  // A pending re-run (zero completedAt) falls back to startedAt.
+  // A pending re-run (zero completedAt) orders by its startedAt.
   const pendingRerun = { name: "gate-evidence", status: "IN_PROGRESS", conclusion: null, startedAt: "2026-09-01T10:08:00Z", completedAt: "0001-01-01T00:00:00Z" };
   assert.deepEqual(summarizeBranchRules(MAIN_RULESET, [cancelled, pendingRerun]).pendingRequiredChecks, ["gate-evidence"]);
+  // Overlapping runs: an older run that finishes later never masks a newer
+  // failed or pending run.
+  const olderSlowGreen = { name: "gate-evidence", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-01T10:00:00Z", completedAt: "2026-09-01T10:10:00Z" };
+  const newerFastFail = { name: "gate-evidence", status: "COMPLETED", conclusion: "FAILURE", startedAt: "2026-09-01T10:01:00Z", completedAt: "2026-09-01T10:02:00Z" };
+  const overlapFail = summarizeBranchRules(MAIN_RULESET, [olderSlowGreen, newerFastFail]);
+  assert.deepEqual(overlapFail.failedRequiredChecks, ["gate-evidence"]);
+  const newerPending = { name: "gate-evidence", status: "IN_PROGRESS", conclusion: null, startedAt: "2026-09-01T10:01:00Z", completedAt: "0001-01-01T00:00:00Z" };
+  const overlapPending = summarizeBranchRules(MAIN_RULESET, [olderSlowGreen, newerPending]);
+  assert.deepEqual(overlapPending.pendingRequiredChecks, ["gate-evidence"]);
+  assert.deepEqual(overlapPending.failedRequiredChecks, []);
   // Missing timestamps keep every entry, so the normalizer fails closed.
   const untimed = [{ name: "gate-evidence", status: "COMPLETED", conclusion: "CANCELLED" }, { name: "gate-evidence", status: "COMPLETED", conclusion: "SUCCESS" }];
   assert.deepEqual(summarizeBranchRules(MAIN_RULESET, untimed).failedRequiredChecks, ["gate-evidence"]);

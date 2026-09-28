@@ -110,8 +110,10 @@ function formatCiDisplay(ciStatus, ciConclusion) {
 }
 
 function entryTime(entry) {
-  // GitHub reports an unset timestamp as 0001-01-01; treat it as missing.
-  for (const field of ["completedAt", "startedAt", "createdAt"]) {
+  // Order by start time: an older run that finishes later must not mask a
+  // newer failed or pending run. GitHub reports an unset timestamp as
+  // 0001-01-01; treat it as missing.
+  for (const field of ["startedAt", "createdAt", "completedAt"]) {
     const ms = Date.parse(entry[field] ?? "");
     if (Number.isFinite(ms) && ms > 0) return ms;
   }
@@ -119,8 +121,8 @@ function entryTime(entry) {
 }
 
 /**
- * Keep the latest of same-named rollup entries (CheckRun completedAt, else
- * startedAt; StatusContext createdAt/startedAt). When any entry lacks a
+ * Keep the latest-started of same-named rollup entries (startedAt, else
+ * createdAt, else completedAt). When any entry lacks a
  * timestamp, keep all entries so the normalizer still fails closed.
  */
 function latestEntries(entries) {
