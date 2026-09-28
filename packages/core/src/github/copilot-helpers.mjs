@@ -782,6 +782,7 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
   let hasPendingReviewOnCurrentHead = false;
   let hasSubmittedReviewOnCurrentHead = false;
   let latestSubmittedReviewOnCurrentHeadAt = null;
+  let latestErrorReviewOnCurrentHeadAt = null;
   let hasBodyFindingOnCurrentHead = false;
   // The id of the review whose body set hasBodyFindingOnCurrentHead: the
   // review a copilot-body-disposition record must name to clear the finding.
@@ -793,7 +794,16 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
   for (const review of effectiveReviews) {
     // An error review is no review (ADR 0114): it stays in copilotReviews so a
     // watcher sees it arrive, but it sets no round and no current-head fact.
-    if (isCopilotErrorReview(review)) continue;
+    // Its timestamp still feeds latestCopilotReviewOnCurrentHeadAt, which only
+    // the request-settle reconciliation reads.
+    if (isCopilotErrorReview(review)) {
+      const errorAt = review?.submittedAt ?? review?.submitted_at;
+      if (headSha !== null && extractReviewCommitSha(review) === headSha && typeof errorAt === "string"
+        && (latestErrorReviewOnCurrentHeadAt === null || errorAt > latestErrorReviewOnCurrentHeadAt)) {
+        latestErrorReviewOnCurrentHeadAt = errorAt;
+      }
+      continue;
+    }
     const state = typeof review?.state === "string" ? review.state.toUpperCase() : "";
     const reviewCommitSha = extractReviewCommitSha(review);
     const reviewOnCurrentHead = headSha !== null && reviewCommitSha === headSha;
@@ -847,6 +857,9 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
     hasPendingReviewOnCurrentHead,
     hasSubmittedReviewOnCurrentHead,
     latestSubmittedReviewOnCurrentHeadAt,
+    // Latest current-head Copilot review timestamp including error reviews.
+    latestCopilotReviewOnCurrentHeadAt: [latestSubmittedReviewOnCurrentHeadAt, latestErrorReviewOnCurrentHeadAt]
+      .filter((at) => at !== null).sort().at(-1) ?? null,
     hasBodyFindingOnCurrentHead,
     bodyFindingReviewId,
   };

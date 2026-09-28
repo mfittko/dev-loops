@@ -1593,7 +1593,7 @@ test("buildSnapshotFromPrFacts yields currentHeadSha null when headRefOid is mis
 // ---------------------------------------------------------------------------
 
 const ERROR_HEAD = "e".repeat(40);
-const errorReviewSnapshot = (errorCount) => {
+const errorReviewSnapshot = (errorCount, extraReviews = []) => {
   const body = readFileSync(new URL("./fixtures/copilot-overview/review-error.md", import.meta.url), "utf8");
   const reviews = Array.from({ length: errorCount }, (_, i) => ({
     id: `R_err${i}`,
@@ -1602,7 +1602,7 @@ const errorReviewSnapshot = (errorCount) => {
     body,
     commit: { oid: ERROR_HEAD },
     submittedAt: `2026-09-27T20:2${i}:00Z`,
-  }));
+  })).concat(extraReviews);
   const summary = summarizeCopilotReviews(reviews, { headSha: ERROR_HEAD });
   return buildSnapshotFromPrFacts({
     prData: { number: 17, state: "OPEN", headRefOid: ERROR_HEAD, reviews },
@@ -1627,4 +1627,20 @@ test("two current-head Copilot error reviews block for an operator decision", ()
   const result = interpretLoopState(errorReviewSnapshot(2), { maxCopilotRounds: 3 });
   assert.equal(result.state, STATE.BLOCKED_NEEDS_USER_DECISION);
   assert.equal(result.sameHeadCleanConverged, false);
+});
+
+test("two current-head error reviews plus one real clean current-head review converge", () => {
+  const cleanReview = {
+    id: "R_clean",
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    body: "### 🟢 Approval recommended\n\nNo issues found.",
+    commit: { oid: ERROR_HEAD },
+    submittedAt: "2026-09-27T20:30:00Z",
+  };
+  const snapshot = { ...errorReviewSnapshot(2, [cleanReview]), copilotReviewRequestStatus: "none" };
+  assert.equal(snapshot.copilotErrorReviewCountOnCurrentHead, 2);
+  const result = interpretLoopState(snapshot, { maxCopilotRounds: 3 });
+  assert.notEqual(result.state, STATE.BLOCKED_NEEDS_USER_DECISION);
+  assert.equal(result.sameHeadCleanConverged, true);
 });

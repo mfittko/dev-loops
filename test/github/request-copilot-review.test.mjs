@@ -317,6 +317,21 @@ test("request-copilot-review does NOT suppress when Copilot's current-head body 
   assert.ok(calls.some((c) => c.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]")));
 });
 
+test("request-copilot-review re-requests after one current-head Copilot error review (ADR 0114)", async () => {
+  const errorReview = '{"id":"r-err","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"newsha"},"submittedAt":"2026-09-27T20:23:16Z","body":"Copilot encountered an error and was unable to review this pull request."}';
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      { stdout: '{"users":[],"teams":[]}\n' },
+      { stdout: `{"isDraft":false,"state":"OPEN","number":17,"headRefOid":"newsha","reviews":[${errorReview}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n` },
+      { stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n' },
+      { stdout: `{"headRefOid":"newsha","reviews":[${errorReview}]}\n` },
+    ]);
+
+  assert.equal(result.status, "requested");
+  assert.notEqual(result.status, "suppressed_same_head_clean");
+  assert.ok(calls.some((c) => c.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]")));
+});
+
 
 test("request-copilot-review treats pending review as already-requested even when a submitted current-head review exists", async () => {
   const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [

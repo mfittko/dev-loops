@@ -9,7 +9,7 @@ import { test } from "bun:test";
 
 import { runNode, writeAutoDetectGhStub } from "./detect-copilot-loop-state-test-helpers.mjs";
 
-const ERROR_BODY = readFileSync(path.resolve("packages/core/test/fixtures/copilot-overview/review-error.md"), "utf8");
+const ERROR_BODY = readFileSync(new URL("../../packages/core/test/fixtures/copilot-overview/review-error.md", import.meta.url), "utf8");
 
 test("detect-copilot-loop-state: a current-head Copilot error review is not clean converged", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-review-error-"));

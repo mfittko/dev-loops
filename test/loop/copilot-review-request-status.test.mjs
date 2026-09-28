@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 
 import { resolveCopilotReviewRequestStatus } from "../../scripts/loop/_copilot-review-request-status.mjs";
+import { summarizeCopilotReviews } from "../../packages/core/src/github/copilot-helpers.mjs";
 
 // Build a fake runChild that serves canned { code, stdout, stderr } based on
 // which `gh api` endpoint the module requested. The module's two callers are:
@@ -136,4 +137,22 @@ test("fail-closed: submitted review present but review timestamp missing -> requ
     { runChild: makeRunChild({ requestedReviewersPayload: reviewers(COPILOT_LOGIN), timelineLines: [timelineEvent(COPILOT_LOGIN, NEWER_REQ_TS)] }) },
   );
   assert.equal(status, "requested");
+});
+
+test("lingering request after a current-head Copilot error review settles -> none (ADR 0114)", async () => {
+  const reviewSummary = summarizeCopilotReviews([{
+    id: "R_err",
+    author: { login: "copilot-pull-request-reviewer[bot]" },
+    state: "COMMENTED",
+    body: "Copilot encountered an error and was unable to review this pull request.",
+    commit: { oid: "head" },
+    submittedAt: REVIEW_TS,
+  }], { headSha: "head" });
+  assert.equal(reviewSummary.hasSubmittedReviewOnCurrentHead, false);
+  assert.equal(reviewSummary.latestCopilotReviewOnCurrentHeadAt, REVIEW_TS);
+  const status = await resolveCopilotReviewRequestStatus(
+    { ...CTX, reviewSummary, copilotRequested: true },
+    { runChild: makeRunChild({ timelineLines: [timelineEvent(COPILOT_LOGIN, OLDER_REQ_TS)] }) },
+  );
+  assert.equal(status, "none");
 });

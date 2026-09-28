@@ -1368,3 +1368,17 @@ test("summarizeCopilotReviews: a current-head error review is present but is no 
   assert.equal(result.hasBodyFindingOnCurrentHead, false);
   assert.equal(result.completedCopilotReviewRounds, 0);
 });
+
+test("classifyCopilotReviewBodyDisposition: error-body edge cases", () => {
+  const error = "Copilot encountered an error and was unable to review this pull request.";
+  const cases = [
+    ["COMMENTED", `${error}\r\nYou can try again by re-requesting a review.\r\n`, COPILOT_DISPOSITION.REVIEW_ERROR],
+    ["COMMENTED", `\n\n  ${error}`, COPILOT_DISPOSITION.REVIEW_ERROR],
+    ["COMMENTED", null, COPILOT_DISPOSITION.NONE],
+    ["APPROVED", error, COPILOT_DISPOSITION.NONE],
+    ["CHANGES_REQUESTED", error, COPILOT_DISPOSITION.CHANGES_RECOMMENDED],
+  ];
+  for (const [state, body, expected] of cases) {
+    assert.equal(classifyCopilotReviewBodyDisposition(state, body), expected, `${state} ${JSON.stringify(body)}`);
+  }
+});

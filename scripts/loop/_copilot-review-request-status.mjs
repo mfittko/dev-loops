@@ -104,7 +104,11 @@ export async function resolveCopilotReviewRequestStatus(
   }
   // Copilot is formally requested but has not submitted a review on the current
   // head — the request is genuinely outstanding.
-  if (!reviewSummary?.hasSubmittedReviewOnCurrentHead) {
+  // An error review (ADR 0114) is no submitted review, but it still answers the
+  // request, so latestCopilotReviewOnCurrentHeadAt (which includes it) settles it.
+  const latestReviewAt = reviewSummary?.latestCopilotReviewOnCurrentHeadAt
+    ?? reviewSummary?.latestSubmittedReviewOnCurrentHeadAt ?? null;
+  if (!reviewSummary?.hasSubmittedReviewOnCurrentHead && latestReviewAt === null) {
     return "requested";
   }
   // Convergence reconciliation: a submitted clean review on the
@@ -113,7 +117,6 @@ export async function resolveCopilotReviewRequestStatus(
   // latest review is genuinely outstanding (re-requested after convergence).
   // An unknown request OR review timestamp fails closed to "requested".
   const latestRequestAt = await fetchLatestCopilotReviewRequestAt({ repo, pr }, { env, ghCommand, runChild });
-  const latestReviewAt = reviewSummary?.latestSubmittedReviewOnCurrentHeadAt ?? null;
   if (latestRequestAt === null || latestReviewAt === null) {
     return "requested";
   }
