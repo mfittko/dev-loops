@@ -297,9 +297,11 @@ rather than executing any suite it records. A missing full result remains typed 
 writes a typed incomplete artifact at the same path, stamped with the requested head, with
 `status: "incomplete"`, `allPassed: false`, the `reason`, and no suites. It is incomplete
 evidence, never a pass. A request that fails argument parsing, runs in a worktree
-whose HEAD is not the requested head before or after the suites, or cannot confirm the
-worktree HEAD, removes the artifact and writes none, so the verdict writer refuses the
-post as absent. An exception writes the typed incomplete artifact only when a head
+whose HEAD is not the requested head before or after the suites or after the artifact
+write, or cannot confirm the worktree HEAD, removes the artifact and writes none, so the
+verdict writer refuses the post as absent. The argument-parsing cleanup deletes only an
+artifact inside the checkout: a parse failure under a `--tmp-root` that resolves outside
+the checkout leaves that root's prior artifact in place. An exception writes the typed incomplete artifact only when a head
 check at that point confirms the requested head. A reviewer that finds the artifact absent, unreadable, incomplete,
 or stamped with a different head SHA MUST report a gate-evidence finding; it
 MUST NOT silently run the suite itself and MUST NOT treat the gap as clean. The verdict writer

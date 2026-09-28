@@ -102,7 +102,8 @@ test("GATE-EXEC-VALIDATION-RESOLUTION names the verdict writer as its enforcemen
   const flat = collapse(section);
   assert.match(flat, /An `incomplete` resolution of a request whose arguments parsed writes a typed incomplete artifact at the same path, stamped with the requested head/);
   assert.match(flat, /It is incomplete evidence, never a pass\./);
-  assert.match(flat, /A request that fails argument parsing, runs in a worktree whose HEAD is not the requested head before or after the suites, or cannot confirm the worktree HEAD, removes the artifact and writes none, so the verdict writer refuses the post as absent\./);
+  assert.match(flat, /A request that fails argument parsing, runs in a worktree whose HEAD is not the requested head before or after the suites or after the artifact write, or cannot confirm the worktree HEAD, removes the artifact and writes none, so the verdict writer refuses the post as absent\./);
+  assert.match(flat, /The argument-parsing cleanup deletes only an artifact inside the checkout: a parse failure under a `--tmp-root` that resolves outside the checkout leaves that root's prior artifact in place\./);
   assert.match(flat, /An exception writes the typed incomplete artifact only when a head check at that point confirms the requested head\./);
   assert.match(flat, /absent, unreadable, incomplete, or stamped with a different head SHA MUST report a gate-evidence finding/);
   assert.match(flat, /A typed incomplete artifact satisfies this check\./);

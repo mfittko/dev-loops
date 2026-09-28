@@ -237,6 +237,35 @@ test("a suite that moves HEAD before a later step throws leaves no artifact", as
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("a HEAD move during the complete artifact write removes the artifact", async () => {
+  const { repoRoot, headSha } = await fixture();
+  const shimDir = await mkdtemp(path.join(os.tmpdir(), "resolve-validation-git-shim-"));
+  try {
+    // The third `git rev-parse HEAD` is the post-write check: report a moved HEAD there.
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const counter = path.join(shimDir, "count");
+    await writeFile(path.join(shimDir, "git"), [
+      "#!/bin/sh",
+      `if [ "$1" = rev-parse ] && [ "$2" = HEAD ]; then`,
+      `  n=$(( $(cat '${counter}' 2>/dev/null || echo 0) + 1 )); echo $n > '${counter}'`,
+      `  if [ $n -ge 3 ]; then echo ${"b".repeat(40)}; exit 0; fi`,
+      "fi",
+      `exec '${realGit}' "$@"`,
+      "",
+    ].join("\n"), { mode: 0o755 });
+    const env = { ...process.env, PATH: `${shimDir}${path.delimiter}${process.env.PATH}` };
+    const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot, env });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /moved during the artifact write/);
+    assert.equal(result.artifactPath, undefined);
+    const artifactPath = path.join(repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    await assert.rejects(readFile(artifactPath), /ENOENT/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(shimDir, { recursive: true, force: true });
+  }
+});
+
 test("targeted profile rejects a full suite and allows an exact targeted script", async () => {
   const { repoRoot, headSha } = await fixture();
   try {
@@ -299,16 +328,18 @@ test("parse failure cannot remove a validation artifact outside the repo", async
   const { repoRoot, headSha } = await fixture();
   const externalRoot = await mkdtemp(path.join(os.tmpdir(), "external-validation-"));
   try {
-    const tmpRoot = path.relative(repoRoot, externalRoot);
-    const artifactPath = path.resolve(repoRoot, buildValidationResultsPath({
-      repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot,
-    }));
-    await mkdir(path.dirname(artifactPath), { recursive: true });
-    await writeFile(artifactPath, '{"allPassed":true}\n');
-    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha, "targeted"), "--tmp-root", tmpRoot], { cwd: repoRoot });
-    assert.equal(out.code, 1);
-    assert.equal(JSON.parse(out.stdout).status, "incomplete");
-    assert.equal(JSON.parse(await readFile(artifactPath, "utf8")).allPassed, true);
+    // Relative escape and absolute relocated root: both resolve outside the checkout.
+    for (const tmpRoot of [path.relative(repoRoot, externalRoot), externalRoot]) {
+      const artifactPath = path.resolve(repoRoot, buildValidationResultsPath({
+        repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot,
+      }));
+      await mkdir(path.dirname(artifactPath), { recursive: true });
+      await writeFile(artifactPath, '{"allPassed":true}\n');
+      const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha, "targeted"), "--tmp-root", tmpRoot], { cwd: repoRoot });
+      assert.equal(out.code, 1);
+      assert.equal(JSON.parse(out.stdout).status, "incomplete");
+      assert.equal(JSON.parse(await readFile(artifactPath, "utf8")).allPassed, true);
+    }
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
     await rm(externalRoot, { recursive: true, force: true });

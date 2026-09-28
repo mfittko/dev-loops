@@ -109,6 +109,9 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     const afterProblem = currentTreeProblem();
     if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem.reason}`, afterProblem);
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+    // HEAD can move between the check above and the write: re-check after it.
+    const writtenProblem = currentTreeProblem();
+    if (writtenProblem) return incomplete(`worktree moved during the artifact write: ${writtenProblem.reason}`, writtenProblem);
     return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
   } catch (error) {
     let stillConfirmed = false;
