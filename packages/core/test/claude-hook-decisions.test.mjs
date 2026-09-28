@@ -1414,11 +1414,13 @@ test("decideFixerBashGate binds git commit/push to a grant for the checked-out b
   const gate = (command, branch = "issue-1", over = {}, paths = ["src/x.mjs"]) => decideFixerBashGate({
     agentType: "fixer", invocations: extractFixerGitInvocations(command).map((i) => ({ ...i, branch, paths })), grants: [{ ...FX_GRANT, phase: "full" }], ...over,
   }).decision;
-  for (const command of ["git commit -m x", "git push -u origin HEAD", "git push origin issue-1", "git push --force-with-lease origin +refs/heads/issue-1", "git push -o ci.skip origin issue-1", "npm test"]) {
+  for (const command of ["git commit -m x", "git push -u origin HEAD", "git push origin issue-1", "git push --force-with-lease origin +refs/heads/issue-1", "git push -o ci.skip origin issue-1", "git push origin HEAD:issue-1", "git push origin +issue-1:issue-1", "git push origin refs/heads/issue-1:refs/heads/issue-1", "npm test"]) {
     assert.equal(gate(command), "allow", command);
   }
   // A bare or remote-only push takes its destination from config (remote.*.push, push.default), so it is denied.
-  for (const command of ["git push", "git push origin", "git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", "git push --follow-tags origin issue-1", "git push -d origin issue-1", "git push -o ci.skip origin main"]) {
+  for (const command of ["git push", "git push origin", "git push origin main", "git push origin HEAD:main", "git push origin :issue-1", "git push --all", "git push --follow-tags origin issue-1", "git push -d origin issue-1", "git push -o ci.skip origin main",
+    // A destination HEAD creates refs/heads/HEAD on the remote; a foreign source rewrites the grant branch.
+    "git push origin issue-1:HEAD", "git push origin main:refs/heads/HEAD", "git push origin +main:issue-1", "git push origin abc123:issue-1", "git push origin HEAD:HEAD"]) {
     assert.equal(gate(command), "deny", command);
   }
   assert.equal(gate("git commit -m x", "main"), "deny");

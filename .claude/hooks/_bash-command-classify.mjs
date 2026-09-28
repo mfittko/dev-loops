@@ -1237,6 +1237,9 @@ function chainWords(command) {
   const blocked = (blocker) => ({ blocker, segments: [] });
   const segments = [[]];
   let word = null;
+  // Index of the last unquoted, unescaped `>`/`<`: only that one makes a following `|`/`&` a redirection
+  // (`>|`, `>&`, `<&`); an escaped `\>` is a literal, so `echo \>|git` stays a pipe.
+  let plainRedirectAt = -1;
   const endWord = () => { if (word !== null) segments.at(-1).push(word); word = null; };
   const add = (text, quoted = false) => { word ??= { text: "", quoted: false }; word.text += text; word.quoted ||= quoted; };
   for (let i = 0; i < command.length; i++) {
@@ -1271,9 +1274,9 @@ function chainWords(command) {
       endWord();
       segments.push([]);
       i++;
-    } else if (c === "&" && (prev === ">" || prev === "<" || command[i + 1] === ">")) {
+    } else if (c === "&" && ((plainRedirectAt === i - 1 && (prev === ">" || prev === "<")) || command[i + 1] === ">")) {
       add(c);
-    } else if (c === "|" && prev === ">") {
+    } else if (c === "|" && plainRedirectAt === i - 1 && prev === ">") {
       add(c);
     } else if (c === "`" || (c === "$" && command[i + 1] === "(")) {
       return blocked("command substitution");
@@ -1288,6 +1291,7 @@ function chainWords(command) {
     } else if ("(){}".includes(c)) {
       return blocked("subshell or group");
     } else {
+      if (c === ">" || c === "<") plainRedirectAt = i;
       add(c);
     }
   }

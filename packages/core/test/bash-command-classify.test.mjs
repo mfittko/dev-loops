@@ -1193,6 +1193,8 @@ test("extractFixerGitInvocations allows only the plain git allowlist and denies 
     "pushd /o && git commit -am x", "popd; git push origin x", "eval 'cd /o'; git push", "exec git push", "source ./x.sh; git push origin x",
     "'source' ./x.sh; git push origin x", ". ./x.sh; git push origin x", "command cd /o; git push origin x", "builtin 'cd' /o; git push origin x",
     "cd - && git push origin x", "cd && git push origin x", "cd -P /o && git push origin x", "cd $X && git push origin x", "cd ~/r && git commit -m x",
+    // An escaped or quoted `>`/`<` is a literal, so the `|`/`&` after it is a real pipe or background operator.
+    "echo \\>|git commit -m x", "echo \\>&git push origin main", "echo '>'|git commit -m x", "echo \\<&git push origin main",
     // A read-only subcommand option that writes a file or runs a pager command.
     "git diff --output=/main/tmp/gate-fixer/x.json", "git diff --output /o/x", "git log --outp=/o/x", "git show -o /o/x",
     "git grep -O x", "git grep -nO x", "git grep --open-files-in-pager=vi x", "git grep --open x",

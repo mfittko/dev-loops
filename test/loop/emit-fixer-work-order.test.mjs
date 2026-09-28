@@ -151,7 +151,7 @@ test("F2: dispatchPrompt is the shared envelope, fits the cap for a worst-case r
     assert.equal(unit.dispatchPrompt, buildDispatchPointer(unit));
     assert.throws(() => buildDispatchPointer({ ...unit, executionIdentity: `${unit.executionIdentity} and also refactor the parser` }), /not shell-safe/);
   });
-  const worst = { workOrderRef: `fixer:${"o".repeat(39)}/${"r".repeat(100)}#99999:${"f".repeat(64)}:f1790000000000-abcdef12`, workOrderDigest: "f".repeat(64), executionIdentity: "f1790000000000-abcdef12" };
+  const worst = { workOrderRef: `fixer:${"o".repeat(39)}/${"r".repeat(100)}#99999:${"f".repeat(64)}:f1790000000000-abcdef12`, workOrderDigest: `sha256:${"f".repeat(64)}`, executionIdentity: "f1790000000000-abcdef12" };
   assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
 });
 
@@ -394,6 +394,14 @@ test("F5: a pulled grant goes stale with the pull's own predicate; an edited out
     await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date(clock).toISOString() }));
     assert.equal(hook(wt, target), "deny", "a retired gate round grants nothing");
     await rm(path.join(root, "tmp", "retired-gate-rounds"), { recursive: true });
+    assert.equal(hook(wt, target), "allow");
+    // retire-gate-round.mjs defaults to the cwd-relative tmp/, so a retirement run from the worktree lands there.
+    const wtRetired = path.join(wt, "tmp", "retired-gate-rounds", head, "r1");
+    await mkdir(wtRetired, { recursive: true });
+    await writeFile(path.join(wtRetired, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date(clock).toISOString() }));
+    assert.equal(hook(wt, target), "deny", "a retirement under the linked worktree's tmp/ grants nothing");
+    assert.equal(bash(wt, "git commit -m x"), "deny", "a retirement under the linked worktree's tmp/ grants no commit");
+    await rm(path.join(wt, "tmp", "retired-gate-rounds"), { recursive: true });
     assert.equal(hook(wt, target), "allow");
 
     git(wt, "reset", "-q", "--hard", "HEAD~1");

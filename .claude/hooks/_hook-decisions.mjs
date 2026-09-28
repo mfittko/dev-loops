@@ -856,7 +856,10 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
 const PUSH_BEYOND_BRANCH = new Set(["--all", "--mirror", "--tags", "--follow-tags", "--delete", "-d", "--prune"]);
 const PUSH_VALUE_OPTIONS = new Set(["-o", "--push-option", "--repo", "--receive-pack", "--exec"]);
 
-// A `git push` destination other than the grant branch, or null. `HEAD` pushes the checked-out branch.
+// Why a `git push` leaves the grant branch, or null. A refspec (leading `+` allowed) is only `<branch>`,
+// `HEAD` or `refs/heads/<branch>`, or `<src>:<dst>` with src one of those and dst `<branch>` or
+// `refs/heads/<branch>`. Any other source rewrites the branch to foreign history, and a destination
+// `HEAD` names refs/heads/HEAD on the remote, never the checked-out branch.
 function pushBeyondGrant(args, branch) {
   const positional = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -869,10 +872,12 @@ function pushBeyondGrant(args, branch) {
   }
   // A config-derived destination (remote.*.push, push.default) is never checked, so require it explicit.
   if (positional.length < 2) return "a push must name an explicit remote and refspec (`git push origin <branch>`)";
+  const own = new Set([branch, `refs/heads/${branch}`]);
+  const src = new Set([...own, "HEAD"]);
   for (const spec of positional.slice(1)) {
-    const bare = spec.replace(/^\+/u, "");
-    const dst = bare.split(":").pop().replace(/^refs\/heads\//u, "");
-    if (bare.startsWith(":") || (dst !== branch && dst !== "HEAD")) return `refspec ${JSON.stringify(spec)} names a destination other than ${JSON.stringify(branch)}`;
+    const parts = spec.replace(/^\+/u, "").split(":");
+    const allowed = parts.length === 1 ? src.has(parts[0]) : parts.length === 2 && src.has(parts[0]) && own.has(parts[1]);
+    if (!allowed) return `refspec ${JSON.stringify(spec)} is not \`${branch}\`, \`HEAD\` or \`HEAD:${branch}\`; the source and destination must both be the grant branch`;
   }
   return null;
 }
@@ -886,7 +891,7 @@ function pushBeyondGrant(args, branch) {
  * a commit whose `paths` (the checkout-relative paths it could include, computed by
  * the hook; null when git failed) are missing or leave the grant's allowedPaths, a push under
  * a `commit_only` grant, a push without an explicit remote and refspec, and a push whose
- * refspec names another destination. Every other command is allowed here.
+ * refspec names another source or destination. Every other command is allowed here.
  *
  * @param {Object} params
  * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload.

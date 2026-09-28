@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+import { findRetirementAfter } from "./_gate-round-retirement.mjs";
 import { realpathNearestExisting } from "./_worktree-guard.mjs";
 import { workOrderDigest } from "./_work-order-digest.mjs";
 
@@ -92,9 +93,11 @@ const boundTo = (mainRoot, receipt, agentId) => {
 };
 
 // The pull's staleness predicate (locateFixerUnit), re-checked on every hook call: a required read
-// changed or vanished, the gate round was retired after emission, or the authority branch no longer
+// changed or vanished, the gate round was retired after emission (the pull's own retirement
+// predicate over every checkout's tmp/, as the pull scans), or the authority branch no longer
 // contains the work order head. A stale unit grants nothing even though its receipt still exists.
-function isStale(mainRoot, order, executionIdentity) {
+// A malformed retirement record throws, and the caller grants nothing.
+function isStale(mainRoot, checkoutRoots, order, executionIdentity) {
   for (const read of order.requiredReads ?? []) {
     let bytes = null;
     try { bytes = readFileSync(read.path); } catch { /* vanished */ }
@@ -102,15 +105,7 @@ function isStale(mainRoot, order, executionIdentity) {
   }
   if (order.source === "act-list") {
     const emittedAtMs = Number(EXECUTION_RE.exec(executionIdentity)[1]);
-    const retiredRoot = path.join(mainRoot, "tmp", "retired-gate-rounds", order.headSha);
-    let rounds = [];
-    try { rounds = readdirSync(retiredRoot); } catch { /* none retired */ }
-    for (const round of rounds) {
-      try {
-        const record = JSON.parse(readFileSync(path.join(retiredRoot, round, "retirement.json"), "utf8"));
-        if (record?.gate === order.gate && Date.parse(record.retiredAt) >= emittedAtMs) return true;
-      } catch { /* unreadable record: not a retirement */ }
-    }
+    if (checkoutRoots.some((root) => findRetirementAfter(path.join(root, "tmp"), order.gate, order.headSha, emittedAtMs) !== null)) return true;
   }
   try {
     execFileSync("git", ["-C", mainRoot, "merge-base", "--is-ancestor", order.headSha, `refs/heads/${order.mutationAuthority.branch}`], { env: gitEnv(), stdio: "ignore" });
@@ -126,9 +121,10 @@ function isStale(mainRoot, order, executionIdentity) {
  * the same ref, digest and execution, still reproduces that digest and is not stale by the pull's
  * own predicate, and whose binding marker names `agentId` (the pulling fixer). The outputRef is
  * derived from the plan location and execution, never read from the plan's unbound outputRefs
- * field. Any other receipt grants nothing; a missing agentId grants nothing.
+ * field. Any other receipt grants nothing; a missing agentId grants nothing. `checkoutRoots` are
+ * every listed checkout root; the retirement check scans each root's tmp/, as the pull does.
  */
-export function loadFixerGrants(mainRoot, agentId) {
+export function loadFixerGrants(mainRoot, agentId, checkoutRoots) {
   if (typeof agentId !== "string" || !agentId) return [];
   const receiptsDir = path.join(mainRoot, "tmp", "work-order-receipts");
   let planRoot;
@@ -149,7 +145,7 @@ export function loadFixerGrants(mainRoot, agentId) {
       if (plan.workOrderRef !== receipt.workOrderRef || plan.workOrderDigest !== receipt.workOrderDigest || plan.executionIdentity !== receipt.executionIdentity) continue;
       // An in-place edited plan no longer reproduces its digest and grants nothing.
       if (workOrderDigest(plan.workOrder) !== plan.workOrderDigest) continue;
-      if (!EXECUTION_RE.test(plan.executionIdentity) || isStale(mainRoot, plan.workOrder, plan.executionIdentity)) continue;
+      if (!EXECUTION_RE.test(plan.executionIdentity) || isStale(mainRoot, checkoutRoots, plan.workOrder, plan.executionIdentity)) continue;
       const { branch, allowedPaths } = plan.workOrder.mutationAuthority;
       const outputRef = realpathNearestExisting(path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json"));
       grants.push({ branch, allowedPaths, phase: plan.workOrder.phase, outputRef });
@@ -167,7 +163,7 @@ export function loadFixerContext(dirs, agentId) {
   for (const dir of dirs) {
     for (const checkout of listCheckouts(dir)) if (!checkouts.some((c) => c.root === checkout.root)) checkouts.push(checkout);
   }
-  return { checkouts, grants: checkouts[0] ? loadFixerGrants(checkouts[0].root, agentId) : [] };
+  return { checkouts, grants: checkouts[0] ? loadFixerGrants(checkouts[0].root, agentId, checkouts.map((c) => c.root)) : [] };
 }
 
 /** Branch checked out in the most specific listed checkout containing `dir`, or null. */
