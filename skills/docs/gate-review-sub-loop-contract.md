@@ -70,8 +70,8 @@ Both gates run the identical phases with their own review angles.
 
 <!-- rule: GATE-EXEC-GATE-COORDINATOR -->
 `GATE-EXEC-GATE-COORDINATOR`: Every `draft_gate` and `pre_approval_gate` review round MUST run
-in a dedicated, fresh-context **gate coordinator** agent. This is the only sanctioned round
-shape. The gate coordinator is the "gate-round capsule" of ADR 0081. It owns exactly one round
+in a dedicated, fresh-context **gate coordinator**, dispatched as the `gate-coordinator` agent
+(ADR 0112). This is the only sanctioned round shape. The gate coordinator is the "gate-round capsule" of ADR 0081. It owns exactly one round
 for one gate at one head and runs every in-round step: gate validation, the Phase 1 context,
 Phase 1.2 carry-forward, the Phase 2 wave dispatch of `review` agents, the
 Phase 3 fan-in and durable ledger write, the Phase 3.5 judge, and `judge-pass`. A light-mode

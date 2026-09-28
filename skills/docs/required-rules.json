@@ -345,7 +345,7 @@
     },
     {
       "id": "GATE-EXEC-GATE-COORDINATOR",
-      "enforcement": "doc"
+      "enforcement": "runtime"
     },
     {
       "id": "GATE-EXEC-JUDGE-AUTHORITY-SPLIT"

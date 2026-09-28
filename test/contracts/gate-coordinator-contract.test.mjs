@@ -210,3 +210,58 @@ test("the Pi surface (package.json's pi manifest and the rendered agent) carries
     "expected the contract doc under the pi.skills manifest root to carry the rule id",
   );
 });
+
+// #2531 / ADR 0112: the gate coordinator is a dedicated agent definition.
+const GATE_COORDINATOR_AGENT = "agents/gate-coordinator.agent.md";
+const TYPED_RESULT_FIELDS = [
+  "verdict", "execution mode", "inline reason", "findings summary", "severity counts", "fan-in output path",
+  "durable findings-log path", "act-list path", "spec-authority identity path", "judge summary",
+];
+
+test("the gate-coordinator agent names the rule, the verbatim relay and every typed round result field", async () => {
+  const body = await readRepo(GATE_COORDINATOR_AGENT);
+  assert.match(body, /^name: "gate-coordinator"$/m);
+  assert.match(body, /GATE-EXEC-GATE-COORDINATOR/);
+  assert.match(body, /relays? each emitted `dispatchPrompt` byte for byte/);
+  for (const field of TYPED_RESULT_FIELDS) {
+    assert.match(body, new RegExp(field.replace(/\s+/g, "\\s+")), `expected the typed result field "${field}"`);
+  }
+  for (const boundary of ["tracked-file edits", "verdict comment", "ready flip", "push", "merge", "fixer dispatch"]) {
+    assert.ok(body.includes(boundary), `expected the boundary "${boundary}"`);
+  }
+});
+
+test("renderPiAgent maps the gate-coordinator subagent tool to the Pi subagent tool", async () => {
+  const rendered = renderPiAgent(await readRepo(GATE_COORDINATOR_AGENT));
+  const toolsLine = rendered.split("\n").find((line) => line.startsWith("tools:"));
+  assert.deepEqual(toolsLine.slice("tools:".length).split(",").map((t) => t.trim()), ["read", "bash", "write", "subagent"]);
+});
+
+test("every gate-coordinator dispatch site names the gate-coordinator agent", async () => {
+  for (const file of ["agents/dev-loop.agent.md", ".claude/agents/dev-loop.md"]) {
+    const lines = (await readRepo(file)).split("\n");
+    const subLoop = lines.find((line) => line.trimStart().startsWith("- Every sub-loop"));
+    const childSpawn = lines.find((line) => line.trimStart().startsWith("- No child subagent spawning"));
+    assert.match(subLoop, /`gate-coordinator` agent/, `${file}: sub-loop bullet`);
+    assert.match(childSpawn, /`gate-coordinator` agent/, `${file}: child-spawning bullet`);
+  }
+  for (const file of [CONTRACT_DOC, ".claude/skills/docs/gate-review-sub-loop-contract.md"]) {
+    assert.match(ruleSection(await readRepo(file)), /`gate-coordinator` agent/, `${file}: rule section`);
+  }
+  for (const file of ["skills/copilot-pr-followup/SKILL.md", ".claude/skills/copilot-pr-followup/SKILL.md"]) {
+    assert.match(await readRepo(file), /dedicated `gate-coordinator` agent \(`GATE-EXEC-GATE-COORDINATOR`\) drives the fan-out/, file);
+  }
+});
+
+test("the review skill's dev-loop route dispatches a gate-coordinator agent for the round", async () => {
+  const content = (await readRepo("skills/review/SKILL.md")).replace(/\s+/g, " ");
+  assert.ok(content.includes(
+    "When the `review` route runs inside a `dev-loop` agent (`loop startup --pr <n> --review`), that agent dispatches one `gate-coordinator` agent for the round.",
+  ));
+  assert.ok(content.includes("In the main session this skill dispatches the `review` agents directly."));
+});
+
+test("the dev-loop agent reads only the gate coordinator's typed round result", async () => {
+  const content = await readRepo("agents/dev-loop.agent.md");
+  assert.match(content, /The coordinator reads only the gate coordinator's typed round result, as `GATE-EXEC-GATE-COORDINATOR` lists it\./);
+});
