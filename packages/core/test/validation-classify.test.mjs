@@ -72,7 +72,7 @@ test("changed surfaces select existing checks and unknown or mixed changes fail 
     [["test/playwright/how-decided-article.spec.mjs"], ["bun run test:playwright:how-decided-article"], ["test:playwright:how-decided-article"]],
   ];
   for (const [paths, commands, gateSuites] of cases) assert.deepEqual(resolveTargetedValidation(paths), { profile: "targeted", commands, gateSuites }, paths.join(","));
-  for (const paths of [[], ["mystery.bin"], ["docs/articles/new-page.html"], ["test/playwright/ui-review-drive.spec.mjs"], ["packages/core/src/x.mjs", "extension/index.ts"], ["packages/core/test/a;touch pwn.test.mjs"], ["test/loop/a;touch pwn.test.mjs"]]) {
+  for (const paths of [[], ["mystery.bin"], ["docs/articles/new-page.html"], ["test/playwright/ui-review-drive.spec.mjs"], ["skills/loop-grill/references/SKILL.md"], ["skills/loop-grill/notes.md"], ["packages/core/src/x.mjs", "extension/index.ts"], ["packages/core/test/a;touch pwn.test.mjs"], ["test/loop/a;touch pwn.test.mjs"]]) {
     assert.deepEqual(resolveTargetedValidation(paths), { profile: "full-repository", commands: [], gateSuites: [] });
   }
   const paths = ["packages/core/src/loop/validation-classify.mjs", "packages/core/test/foo.test.mjs"];
