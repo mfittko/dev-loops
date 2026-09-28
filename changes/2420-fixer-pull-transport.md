@@ -4,4 +4,5 @@
 - Claude fixer writes outside the pulled work order's branch and allowed paths, and fixer `git commit`/`git push` on another branch, are denied by the hooks (#2420)
 - `verify-fixer-disposition.mjs` takes `--fixer-plan` and requires a digest-bound plan, a matching fixer pull receipt, a post-pull handoff and the live PR head (#2420)
 - `verify-fixer-disposition.mjs` no longer accepts `--dispositions` or `--dispositions-file` (#2420)
-- On Claude, F5 is enforced by the Edit/Write guard and the fixer commit/push Bash gate (Pi has no tool-gating surface); fixer dispatch compactness is enforced by the emitter's per-harness payload plus `assertFixerDispatchPayload` (#2420)
+- On Claude, the fixer write scope is enforced by the Edit/Write guard and the fixer commit/push Bash gate. Pi has no tool-gating surface (#2420)
+- Fixer dispatch compactness is enforced by the emitter's per-harness payload plus `assertFixerDispatchPayload` (#2420)
