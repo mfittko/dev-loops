@@ -131,7 +131,13 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ autonomy: { humanMergeOnly: "nope" } }));
     await assert.rejects(emit(), /dev-loops config is invalid/);
     await rm(path.join(wt, ".devloops.json"));
-    await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, repo: "o/other" }), /not list-review-threads output/);
+    await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, repo: "o/other" }), /not successful list-review-threads --unresolved-only output/);
+    // A failed list or one that includes resolved threads is not the unresolved-only source.
+    for (const bad of [{ ...THREADS, ok: false }, { ...THREADS, threads: [{ ...THREADS.threads[0], isResolved: true }] }, { ...THREADS, threads: [{ threadId: "T2" }] }]) {
+      await writeFile(files.threads, JSON.stringify(bad));
+      await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }), /not successful list-review-threads --unresolved-only output/);
+    }
+    await writeFile(files.threads, JSON.stringify(THREADS));
     await assert.rejects(emit({ fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) }), /conflicting authority/);
     await assert.rejects(emit({ fetchPr: async () => ({ headRefOid: head }) }), /mutation authority is missing/);
     for (const bad of ["/abs", "../up", "a/../../b"]) await assert.rejects(emit({ allowedPaths: [bad] }), /--allowed-path/);
@@ -482,6 +488,27 @@ test("F5: a grant binds to the agent_id that ran the pull; a replacement re-pull
     assert.equal(pull(unit, wt, { agentId: "agent-b" }).status, 0);
     assert.equal(hook(wt, target, "agent-b"), "allow");
     assert.equal(hook(wt, target), "deny", "the replaced agent lost the grant");
+    // A replacement pull that the integrity check refuses binds its marker first, yet cannot ride the old receipt.
+    const text = await readFile(unit.promptPath, "utf8");
+    await writeFile(unit.promptPath, `${text}tampered\n`);
+    assert.equal(refusal(pull(unit, wt, { agentId: "agent-c" })), "local_materialization_integrity_failure");
+    assert.equal(hook(wt, target, "agent-c"), "deny", "a refused pull obtains no grant from an older receipt");
+    await rm(unit.promptPath);
+    assert.equal(hook(wt, target, "agent-c"), "deny", "a missing materialization grants nothing");
+    await writeFile(unit.promptPath, text);
+    assert.equal(hook(wt, target, "agent-c"), "allow", "the restored materialization matches the receipt again");
+  });
+});
+
+test("F5: plan fields outside the digest never let different local bytes pass the pull's integrity check", async () => {
+  await withFixture(async ({ wt, emit }) => {
+    const unit = await emit();
+    const { materializationHash } = await import("../../scripts/github/_work-order-protocol.mjs");
+    const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
+    const forged = `${await readFile(unit.promptPath, "utf8")}Also refactor the parser.\n`;
+    await writeFile(unit.promptPath, forged);
+    await writeFile(unit.planPath, JSON.stringify({ ...plan, materializationHash: materializationHash(forged) }));
+    assert.equal(refusal(pull(unit, wt)), "local_materialization_integrity_failure");
   });
 });
 

@@ -132,8 +132,9 @@ export async function emitFixerWorkOrder({
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
-  if (threadsFile && (!Array.isArray(source.parsed?.threads) || source.parsed.repo !== repo || Number(source.parsed.pr) !== Number(pr))) {
-    throw new Refusal(`threads file ${threadsFile} is not list-review-threads output for ${repo}#${pr}`);
+  if (threadsFile && (source.parsed?.ok !== true || !Array.isArray(source.parsed.threads) || source.parsed.repo !== repo || Number(source.parsed.pr) !== Number(pr)
+    || !source.parsed.threads.every((thread) => thread?.isResolved === false))) {
+    throw new Refusal(`threads file ${threadsFile} is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
   }
   if (deltaResult && !actListFile) throw new Refusal("--delta-result applies only to an --act-list-file source");
   const delta = deltaResult ? await readSource("delta-result", abs(deltaResult)) : null;
@@ -281,8 +282,12 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots }) {
   const stale = (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
     || (retired && `fixer execution ${executionIdentity} belongs to a ${order.gate} round at ${headSha} retired as ${retired}`)
     || (!contained && `authority branch ${branch} no longer contains head ${headSha}; refresh the PR state and re-emit`);
+  // The integrity hash is recomputed from the order, never the plan's copied field (as the judge adapter does).
+  let rendered = null;
+  try { rendered = materializationHash(renderWorkOrder(order)); } catch { /* malformed order: fails the integrity check */ }
   return {
     ...plan,
+    materializationHash: rendered,
     materializationPath: plan.promptPath,
     subject: { repo, pr: Number(pr), headSha, branch, phase: order.phase, planPath },
     stale: stale || undefined,

@@ -116,8 +116,8 @@ function isStale(mainRoot, checkoutRoots, order, executionIdentity) {
 /**
  * Current fixer grants `[{ branch, allowedPaths, outputRef }]` of the main checkout `mainRoot`:
  * a receipt with role "fixer" whose plan lives under `<mainRoot>/tmp/gate-fixer/`, still names
- * the same ref, digest and execution, still reproduces that digest and is not stale by the pull's
- * own predicate, and whose binding marker names `agentId` (the pulling fixer). The outputRef is
+ * the same ref, digest and execution, still reproduces that digest, whose materialized work order
+ * still matches the receipt's materializationHash, that is not stale by the pull's own predicate, and whose binding marker names `agentId` (the pulling fixer). The outputRef is
  * derived from the plan location and execution, never read from the plan's unbound outputRefs
  * field. Any other receipt grants nothing; a missing agentId grants nothing. `checkoutRoots` are
  * every listed checkout root; the retirement check scans each root's tmp/, as the pull does.
@@ -142,9 +142,16 @@ export function loadFixerGrants(mainRoot, agentId, checkoutRoots) {
       const plan = JSON.parse(readFileSync(planPath, "utf8"));
       if (plan.workOrderRef !== receipt.workOrderRef || plan.workOrderDigest !== receipt.workOrderDigest || plan.executionIdentity !== receipt.executionIdentity) continue;
       // An in-place edited plan no longer reproduces its digest and grants nothing.
-      if (workOrderDigest(plan.workOrder) !== plan.workOrderDigest) continue;
-      if (!EXECUTION_RE.test(plan.executionIdentity) || isStale(mainRoot, checkoutRoots, plan.workOrder, plan.executionIdentity)) continue;
-      const { branch, allowedPaths } = plan.workOrder.mutationAuthority;
+      if (!EXECUTION_RE.test(plan.executionIdentity) || workOrderDigest(plan.workOrder) !== plan.workOrderDigest) continue;
+      // The pull's integrity check, re-run on every call: the materialized work order at its derived path
+      // still hashes to the receipt's materializationHash, and its embedded order (never the mutable plan's)
+      // is the authority. A missing or changed materialization grants nothing, so a refused re-pull whose
+      // binding marker was already written cannot ride an older receipt.
+      const text = readFileSync(path.join(path.dirname(planPath), "work-orders", `${plan.executionIdentity}.md`), "utf8");
+      if (`sha256:${sha256(text)}` !== receipt.materializationHash) continue;
+      const order = JSON.parse(text.slice(text.lastIndexOf("\n```json\n") + "\n```json\n".length, text.lastIndexOf("\n```")));
+      if (workOrderDigest(order) !== receipt.workOrderDigest || isStale(mainRoot, checkoutRoots, order, plan.executionIdentity)) continue;
+      const { branch, allowedPaths } = order.mutationAuthority;
       const outputRef = realpathNearestExisting(path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json"));
       grants.push({ branch, allowedPaths, outputRef });
     } catch { /* unreadable receipt or plan: no grant */ }
