@@ -1,0 +1,340 @@
+// Fixer work-order pull transport (#2420, ADR 0106): typed sources -> deterministic
+// emission -> compact dispatch -> sanctioned pull -> guarded mutation -> checked disposition.
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync } from "node:fs";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { test } from "bun:test";
+import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
+import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
+import { emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
+import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
+
+const EMITTER = path.resolve("scripts/loop/emit-fixer-work-order.mjs");
+const PULL = path.resolve("scripts/github/pull-work-order.mjs");
+const HOOK = path.resolve(".claude/hooks/pre-tool-use-write-guard.mjs");
+const REPO = "o/r";
+const PR = 7;
+const ACT = [{ severity: "high", title: "null deref", path: "src/a.mjs", line: 3, disposition: "act" }];
+const THREADS = { ok: true, repo: REPO, pr: PR, threads: [{ threadId: "T1", commentId: 1, body: "fix", isResolved: false, isOutdated: false, path: "src/a.mjs", line: 3 }] };
+
+const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...runIdFreeEnv(), GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout).refusal);
+const pull = (unit, cwd, over = {}) => spawnSync("node", [PULL, "--ref", over.ref ?? unit.workOrderRef, "--digest", over.digest ?? unit.workOrderDigest, "--execution", over.execution ?? unit.executionIdentity], { cwd, encoding: "utf8", env: runIdFreeEnv() });
+let clock = 1_790_000_000_000;
+const nextExecution = () => `f${clock++}-0000abcd`;
+
+// A main checkout on `main` (commit C0) with the PR branch issue-1 at head C1 in a
+// linked worktree, plus typed source files under the main checkout's tmp/.
+async function withFixture(fn) {
+  await withTempDir(async (dir) => {
+    const root = path.join(await realpath(dir), "repo");
+    await mkdir(root);
+    git(root, "init", "-q", "-b", "main");
+    git(root, "config", "user.email", "t@example.com");
+    git(root, "config", "user.name", "T");
+    await writeFile(path.join(root, ".gitignore"), "tmp/\n");
+    git(root, "add", ".gitignore");
+    git(root, "commit", "-q", "-m", "c0");
+    git(root, "branch", "issue-1");
+    const wt = path.join(root, "tmp", "worktrees", "wt");
+    git(root, "worktree", "add", "-q", wt, "issue-1");
+    git(wt, "commit", "-q", "--allow-empty", "-m", "c1");
+    const head = git(wt, "rev-parse", "HEAD");
+    const src = path.join(root, "tmp", "src");
+    await mkdir(src, { recursive: true });
+    const files = { actList: path.join(src, "act.json"), threads: path.join(src, "threads.json"), delta: path.join(src, "delta.json") };
+    await writeFile(files.actList, JSON.stringify(ACT));
+    await writeFile(files.threads, JSON.stringify(THREADS));
+    await writeFile(files.delta, JSON.stringify({ nextStep: "fix_and_rereview", items: [{ ref: 0, status: "not_resolved" }] }));
+    const emit = (over = {}) => emitFixerWorkOrder({
+      repo: REPO, pr: PR, headSha: head, phase: "full", actListFile: files.actList, gate: "draft_gate", cwd: wt,
+      fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), executionIdentity: nextExecution(), ...over,
+    });
+    await fn({ root, wt, head, files, emit });
+  }, { prefix: "dev-loops-fixer-" });
+}
+
+// ---------------------------------------------------------------------------
+// F1 — the briefing is derived by tooling from typed sources
+// ---------------------------------------------------------------------------
+
+test("F1: real act-list, threads and delta inputs resolve into the work order under the main checkout", async () => {
+  await withFixture(async ({ root, head, files, emit }) => {
+    const act = await emit({ deltaResult: files.delta });
+    assert.ok(act.planPath.startsWith(path.join(root, "tmp", "gate-fixer", "o-r", `pr-${PR}`)), act.planPath);
+    assert.deepEqual(act.workOrder.requiredReads.map((read) => read.kind), ["act-list", "delta-result"]);
+    assert.equal(act.workOrder.source, "act-list");
+    assert.equal(act.workOrder.gate, "draft_gate");
+    assert.deepEqual(act.workOrder.mutationAuthority, { repo: REPO, pr: PR, branch: "issue-1", allowedPaths: ["."] });
+    assert.equal(act.workOrder.headSha, head);
+    const threads = await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, allowedPaths: ["src/", "test/a.test.mjs"] });
+    assert.deepEqual(threads.workOrder.requiredReads.map((read) => read.kind), ["threads"]);
+    assert.equal(threads.workOrder.gate, undefined);
+    assert.deepEqual(threads.workOrder.mutationAuthority.allowedPaths, ["src", "test/a.test.mjs"]);
+  });
+});
+
+test("F1: free-form brief, payload override and summary-file substitution exit 2", () => {
+  for (const flag of ["--brief", "--payload", "--summary-file"]) {
+    const result = spawnSync("node", [EMITTER, "--repo", REPO, "--pr", "7", "--head-sha", "a".repeat(40), "--phase", "full", "--threads-file", "t.json", flag, "x"], { encoding: "utf8", env: runIdFreeEnv() });
+    assert.equal(result.status, 2, `${flag}: ${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /Unknown option/);
+  }
+});
+
+test("F1: missing or conflicting source and authority refuse before dispatch", async () => {
+  await withFixture(async ({ wt, head, files, emit }) => {
+    await assert.rejects(emit({ actListFile: path.join(wt, "missing.json") }), /required fixer source act-list is missing/);
+    await assert.rejects(emit({ actListFile: undefined }), /exactly one of --act-list-file and --threads-file/);
+    await assert.rejects(emit({ threadsFile: files.threads }), /exactly one of/);
+    await assert.rejects(emit({ gate: undefined }), /needs --gate/);
+    await assert.rejects(emit({ actListFile: files.threads }), /not a judge-pass --out array/);
+    await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, repo: "o/other" }), /not list-review-threads output/);
+    await assert.rejects(emit({ fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) }), /conflicting authority/);
+    await assert.rejects(emit({ fetchPr: async () => ({ headRefOid: head }) }), /mutation authority is missing/);
+    for (const bad of ["/abs", "../up", "a/../../b"]) await assert.rejects(emit({ allowedPaths: [bad] }), /--allowed-path/);
+    await assert.rejects(emit({ phase: "push" }), /--phase must be one of/);
+    const cli = spawnSync("node", [EMITTER, "--repo", REPO, "--pr", "7", "--head-sha", head, "--phase", "full", "--threads-file", path.join(wt, "missing.json")], { cwd: wt, encoding: "utf8", env: runIdFreeEnv() });
+    assert.equal(cli.status, 1, cli.stderr);
+    assert.equal(JSON.parse(cli.stdout).ok, false);
+  });
+});
+
+test("F1/F4: changing act list, threads, allowed paths, branch, phase or head changes the digest; equal inputs keep it", async () => {
+  await withFixture(async ({ files, emit }) => {
+    const base = await emit();
+    assert.equal((await emit()).workOrderDigest, base.workOrderDigest);
+    const variants = [
+      await emit({ allowedPaths: ["src"] }),
+      await emit({ phase: "commit_only" }),
+      await emit({ gate: "pre_approval_gate" }),
+      await emit({ fetchPr: async () => ({ headRefName: "other", headRefOid: base.workOrder.headSha }) }),
+      await emit({ headSha: "b".repeat(40), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) }),
+      await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }),
+    ];
+    await writeFile(files.actList, JSON.stringify([...ACT, { ...ACT[0], line: 9 }]));
+    variants.push(await emit());
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [] }));
+    variants.push(await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }));
+    const digests = new Set([base, ...variants].map((unit) => unit.workOrderDigest));
+    assert.equal(digests.size, variants.length + 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2 — every dispatch is the compact envelope only
+// ---------------------------------------------------------------------------
+
+test("F2: dispatchPrompt is the shared envelope, fits the cap for a worst-case ref, and refuses appended prose", async () => {
+  await withFixture(async ({ emit }) => {
+    const unit = await emit();
+    assert.equal(unit.dispatchPrompt, buildDispatchPointer(unit));
+    assert.throws(() => buildDispatchPointer({ ...unit, executionIdentity: `${unit.executionIdentity} and also refactor the parser` }), /not shell-safe/);
+  });
+  const worst = { workOrderRef: `fixer:${"o".repeat(39)}/${"r".repeat(100)}#99999:${"f".repeat(64)}:f1790000000000-abcdef12`, workOrderDigest: "f".repeat(64), executionIdentity: "f1790000000000-abcdef12" };
+  assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
+});
+
+test("F2: initial, resumed and replacement dispatches of one reference pull the same bytes", async () => {
+  await withFixture(async ({ wt, emit }) => {
+    const unit = await emit();
+    const pulls = [pull(unit, wt), pull(unit, wt), pull(unit, wt)];
+    for (const result of pulls) assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(new Set(pulls.map((result) => result.stdout)).size, 1);
+    assert.equal(pulls[0].stdout, await readFile(unit.promptPath, "utf8"));
+  });
+});
+
+test("F2: the Claude and Pi paths emit the same envelope and work order", async () => {
+  await withFixture(async ({ root, wt, head, files }) => {
+    const bin = path.join(root, "tmp", "bin");
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ headRefName: "issue-1", headRefOid: head })}'\n`);
+    chmodSync(path.join(bin, "gh"), 0o755);
+    const perHarness = [];
+    for (const harness of [{ CLAUDECODE: "1" }, { PI_SUBAGENT_RUN_ID: "pi-run" }]) {
+      const env = { ...runIdFreeEnv(), CLAUDECODE: undefined, PATH: `${bin}${path.delimiter}${process.env.PATH}`, ...harness };
+      const result = spawnSync("node", [EMITTER, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate"], { cwd: wt, encoding: "utf8", env });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const out = JSON.parse(result.stdout);
+      const plan = JSON.parse(await readFile(out.planPath, "utf8"));
+      const neutral = (text) => text.replaceAll(out.executionIdentity, "<execution>");
+      perHarness.push({ digest: out.workOrderDigest, prompt: neutral(out.dispatchPrompt), order: neutral(await readFile(plan.promptPath, "utf8")) });
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    assert.deepEqual(perHarness[0], perHarness[1]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F3 — the pull returns only the intended fixer work order
+// ---------------------------------------------------------------------------
+
+test("F3: the pull writes a fixer receipt under the main checkout", async () => {
+  await withFixture(async ({ root, wt, head, emit }) => {
+    const unit = await emit();
+    assert.equal(pull(unit, wt).status, 0);
+    const receipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
+    assert.equal(receipt.role, "fixer");
+    assert.deepEqual(receipt.subject, { repo: REPO, pr: PR, headSha: head, branch: "issue-1", phase: "full", planPath: unit.planPath });
+  });
+});
+
+test("F3: wrong digest, execution or role and a malformed payload refuse by name", async () => {
+  await withFixture(async ({ wt, emit }) => {
+    const unit = await emit();
+    assert.equal(refusal(pull(unit, wt, { digest: "0".repeat(64) })), "dispatch_reference_mismatch");
+    assert.equal(refusal(pull(unit, wt, { execution: "f1-ffffffff" })), "dispatch_identity_mismatch");
+    assert.equal(refusal(pull(unit, wt, { ref: unit.workOrderRef.replace(/^fixer:/, "review:") })), "dispatch_reference_mismatch");
+    const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
+    await writeFile(unit.planPath, JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, mutationAuthority: { ...plan.workOrder.mutationAuthority, allowedPaths: ["src"] } } }));
+    assert.equal(refusal(pull(unit, wt)), "semantic_identity_mismatch");
+    const { workOrderDigest } = await import("../../scripts/github/_work-order-protocol.mjs");
+    const invalid = { ...plan.workOrder, mutationAuthority: { ...plan.workOrder.mutationAuthority, allowedPaths: [] } };
+    await writeFile(unit.planPath, JSON.stringify({ ...plan, workOrder: invalid, workOrderDigest: workOrderDigest(invalid) }));
+    assert.equal(refusal(pull(unit, wt, { digest: workOrderDigest(invalid) })), "invalid_work_order");
+  });
+});
+
+test("F3: a superseded ref, a changed act list, a retired gate round and a rewritten branch are stale", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const first = await emit();
+    const second = await emit();
+    assert.equal(refusal(pull(first, wt)), "stale_dispatch");
+    assert.equal(pull(second, wt).status, 0);
+
+    await writeFile(files.actList, JSON.stringify([]));
+    assert.equal(refusal(pull(second, wt)), "stale_dispatch");
+    await writeFile(files.actList, JSON.stringify(ACT));
+
+    const retired = path.join(root, "tmp", "retired-gate-rounds", head, "r1");
+    await mkdir(retired, { recursive: true });
+    await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date(clock).toISOString() }));
+    assert.match(pull(second, wt).stdout, /stale_dispatch.*retired/);
+    await rm(path.join(root, "tmp", "retired-gate-rounds"), { recursive: true });
+    assert.equal(pull(second, wt).status, 0);
+
+    git(wt, "reset", "-q", "--hard", "HEAD~1");
+    assert.match(pull(second, wt).stdout, /stale_dispatch.*no longer contains head/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F4 — portable identity, immutable reference
+// ---------------------------------------------------------------------------
+
+test("F4: two checkout roots emit equal digests with independently valid materializations", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const clone = path.join(path.dirname(root), "clone");
+    git(path.dirname(root), "clone", "-q", root, clone);
+    git(clone, "branch", "-q", "issue-1", `origin/issue-1`);
+    const cloneAct = path.join(clone, "tmp", "act.json");
+    await mkdir(path.dirname(cloneAct), { recursive: true });
+    await writeFile(cloneAct, await readFile(files.actList));
+    const a = await emit();
+    const b = await emit({ cwd: clone, actListFile: cloneAct });
+    assert.equal(a.workOrderDigest, b.workOrderDigest);
+    assert.notEqual(a.materializationHash, b.materializationHash);
+    assert.ok(b.promptPath.startsWith(clone));
+    assert.equal(pull(a, wt).status, 0);
+    assert.equal(pull(b, clone).status, 0);
+    assert.equal(head, git(clone, "rev-parse", "issue-1"));
+  });
+});
+
+test("F4: a conflicting rewrite under the same reference is refused", async () => {
+  await withFixture(async ({ files, emit }) => {
+    const unit = await emit();
+    await emit({ executionIdentity: unit.executionIdentity });
+    await writeFile(files.actList, JSON.stringify([]));
+    await assert.rejects(emit({ executionIdentity: unit.executionIdentity }), /already exists with different content/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F5 — the write hook binds fixer mutation to a current pull's authority
+// ---------------------------------------------------------------------------
+
+const hook = (cwd, file) => {
+  const result = spawnSync("node", [HOOK], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: file }, cwd, agent_type: "fixer" }), encoding: "utf8", env: runIdFreeEnv() });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim() ? JSON.parse(result.stdout).hookSpecificOutput.permissionDecision : "allow";
+};
+
+test("F5: the write hook denies without a pull, with a foreign or superseded receipt and outside authority", async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    const target = path.join(wt, "src", "x.mjs");
+    assert.equal(hook(wt, target), "deny");
+    const unit = await emit({ allowedPaths: ["src"] });
+    assert.equal(hook(wt, target), "deny", "an emitted but unpulled work order grants nothing");
+    const foreign = pullReceiptPath(path.join(root, "tmp"), "review:o/r#7:x");
+    await mkdir(path.dirname(foreign), { recursive: true });
+    await writeFile(foreign, JSON.stringify({ role: "review", workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity, subject: { planPath: unit.planPath } }));
+    assert.equal(hook(wt, target), "deny", "a review receipt grants nothing");
+    assert.equal(pull(unit, wt).status, 0);
+    assert.equal(hook(wt, target), "allow");
+    assert.equal(hook(wt, unit.workOrder.outputRefs[0]), "allow");
+    assert.equal(hook(wt, path.join(wt, "README.md")), "deny");
+    assert.equal(hook(wt, path.join(root, "src", "x.mjs")), "deny", "the main checkout is on another branch");
+    assert.equal(hook(wt, path.join(root, "tmp", "work-order-receipts", "forged.json")), "deny");
+    await emit({ allowedPaths: ["src"] });
+    assert.equal(hook(wt, target), "deny", "a superseded receipt grants nothing");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F7 — end to end with only the #2416 transport registered
+// ---------------------------------------------------------------------------
+
+test("F7: emit, pull, mutate in authority and verify the disposition; missing materialization and re-emission refuse", async () => {
+  await withFixture(async ({ root, wt, head, emit }) => {
+    const unit = await emit();
+    assert.equal(pull(unit, wt).status, 0);
+    const target = path.join(wt, "src", "fix.mjs");
+    assert.equal(hook(wt, target), "allow");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, "export const fixed = true;\n");
+    const [outputRef] = unit.workOrder.outputRefs;
+    assert.equal(hook(wt, outputRef), "allow");
+    await mkdir(path.dirname(outputRef), { recursive: true });
+    await writeFile(outputRef, JSON.stringify({ headSha: head, dispositions: [] }));
+    const { runChild } = makeGhMock([{ assertArgs: ["api", "graphql"], stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } })}\n` }]);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath }, { env: runIdFreeEnv(), runChild, repoRoot: wt });
+    assert.equal(result.complete, true);
+    assert.ok(result.checkpointPath.startsWith(path.join(root, "tmp")));
+
+    await rm(unit.promptPath);
+    assert.equal(refusal(pull(unit, wt)), "local_materialization_integrity_failure");
+    const reemitted = await emit();
+    assert.notEqual(reemitted.workOrderRef, unit.workOrderRef);
+    assert.equal(refusal(pull(unit, wt)), "stale_dispatch");
+    assert.equal(pull(reemitted, wt).status, 0);
+
+    const source = await readFile(EMITTER, "utf8");
+    const imports = [...source.matchAll(/^import[^;]*?from\s+"([^"]+)"/gm)].map((match) => match[1]);
+    assert.ok(imports.length > 0);
+    assert.deepEqual(imports.filter((spec) => /reconcil|recover|regenerat/i.test(spec)), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F8 — validation ownership is unchanged
+// ---------------------------------------------------------------------------
+
+test("F8: the work order routes validation through the canonical policy and carries no full-run command", async () => {
+  await withFixture(async ({ emit }) => {
+    for (const phase of ["commit_only", "full"]) {
+      const unit = await emit({ phase });
+      assert.match(unit.workOrder.executionRules.validation, /VALIDATE-TARGETED-FIRST/);
+      assert.match(unit.workOrder.executionRules.validation, /dev-loops gate resolve-validation/);
+      const strings = [];
+      const walk = (value) => (typeof value === "string" ? strings.push(value) : value && typeof value === "object" && Object.values(value).forEach(walk));
+      walk(unit.workOrder);
+      strings.push(...(await readFile(unit.promptPath, "utf8")).split("\n"));
+      for (const text of strings) assert.notEqual(classifyValidationCommand(text), "full-repository", text);
+    }
+  });
+});

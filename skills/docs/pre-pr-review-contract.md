@@ -130,19 +130,24 @@ dev-loop coordinator runs them through `dev-loops loop pre-push-delta`.
 The dev-loop coordinator owns delta mode, because it dispatches the Phase 4
 fixer and owns the push. The sequence is:
 
-1. The dev-loop coordinator dispatches the fixer with the act list. The fixer
-   commits the fix and hands back the commit SHA unpushed.
+1. The dev-loop coordinator emits a `commit_only` fixer work order from the act
+   list with `scripts/loop/emit-fixer-work-order.mjs` and dispatches its
+   `dispatchPrompt` only (ADR 0106). The fixer commits the fix and hands back
+   the commit SHA unpushed.
 2. The dev-loop coordinator dispatches one fresh delta reviewer for the current
    worktree head.
 3. The coordinator follows the CLI `nextStep`. On `nextStep: fix_and_rereview`,
-   it dispatches a fresh fixer again, commit-only, and returns to step 2. That
-   fixer receives the delta result's `not_resolved` and `cannot_verify` act
+   it dispatches a fresh fixer again, commit-only, and returns to step 2. It
+   emits a new work order with `--delta-result <result>` at the current head.
+   That fixer receives the delta result's `not_resolved` and `cannot_verify` act
    refs with their evidence, plus the result's medium-or-higher `newFindings`.
    On `nextStep: rereview_current_head`, the result is stale for the current
    head; the coordinator returns to step 2 without a fixer.
 4. On `nextStep: push` (`locally_clear`) or `nextStep: push_to_gate`
-   (`bounded_out`), it dispatches
-   the fixer to push and reply to each gate thread with the fixing commit. On
+   (`bounded_out`), it emits a `full` work order with `--delta-result <result>`
+   and dispatches the fixer to push and reply to each gate thread with the
+   fixing commit. `verify-fixer-disposition.mjs --fixer-plan <plan>` then checks
+   the handoff that fixer wrote to the work order's outputRef. On
    `locally_clear`, the fixer resolves each thread. On `bounded_out`, the fixer
    resolves only the threads of act items with status `resolved`. For
    `not_resolved` and `cannot_verify` items, it replies with the residual delta

@@ -2,7 +2,10 @@
 /**
  * PreToolUse Write/Edit guard hook (#773).
  *
- * Two independent boundaries on a Write/Edit:
+ * Independent boundaries on a Write/Edit:
+ *
+ * 0. FIXER mutation boundary (always on, ADR 0106): the `fixer` agent writes only
+ *    inside the mutation authority of a current work-order pull (see the block below).
  *
  * 1. WRONG-CHECKOUT guard (always on): when the call context is operating
  *    inside a linked worktree (the active cycle worktree) but the target resolves
@@ -24,15 +27,75 @@
  *    agentType facts computed for boundary 2.
  */
 import { execFileSync } from "node:child_process";
+import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 
-import { decideWriteGuard, decideCoordinatorWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
+import { decideFixerWriteGuard, FIXER_AGENT_TYPE, normalizeAgentType, decideWriteGuard, decideCoordinatorWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
 import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 
 const input = readHookInput();
 const filePath = input?.tool_input?.file_path;
+
+// --- Fixer mutation boundary (ADR 0106, always on) ---------------------------
+// A `fixer` writes only inside the mutation authority of a CURRENT work-order pull:
+// a main-checkout receipt with role "fixer" whose plan still names the same ref,
+// digest and execution. No pull, a superseded or foreign receipt, another branch or
+// a path outside allowedPaths denies before the write; so does an unresolvable target.
+if (typeof input?.agent_type === "string" && normalizeAgentType(input.agent_type) === FIXER_AGENT_TYPE) {
+  const fixerCwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+  const fixerAbs = typeof filePath === "string" && filePath ? path.resolve(fixerCwd, filePath) : null;
+  let checkouts = [];
+  try {
+    const porcelain = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: fixerCwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    checkouts = porcelain.split(/\n\s*\n/u).map((block) => {
+      const lines = block.split("\n");
+      const field = (key) => lines.find((l) => l.startsWith(`${key} `))?.slice(key.length + 1);
+      const root = field("worktree");
+      return root ? { root: realpathNearestExisting(root), branch: field("branch")?.replace(/^refs\/heads\//u, "") ?? null } : null;
+    }).filter(Boolean);
+  } catch { /* no git context: no checkout, so the decider denies */ }
+  const grants = [];
+  const receiptsDir = checkouts[0] ? path.join(checkouts[0].root, "tmp", "work-order-receipts") : null;
+  let receiptFiles = [];
+  try { receiptFiles = receiptsDir ? readdirSync(receiptsDir).filter((name) => name.endsWith(".json")) : []; } catch { /* no receipts: no grant */ }
+  // ponytail: parses every receipt per fixer write; key receipts by role if the directory grows large.
+  for (const name of receiptFiles) {
+    try {
+      const receipt = JSON.parse(readFileSync(path.join(receiptsDir, name), "utf8"));
+      if (receipt?.role !== "fixer") continue;
+      const plan = JSON.parse(readFileSync(receipt.subject.planPath, "utf8"));
+      if (plan.workOrderRef !== receipt.workOrderRef || plan.workOrderDigest !== receipt.workOrderDigest || plan.executionIdentity !== receipt.executionIdentity) continue;
+      const { branch, allowedPaths } = plan.workOrder.mutationAuthority;
+      grants.push({ branch, allowedPaths, outputRef: realpathNearestExisting(plan.workOrder.outputRefs[0]) });
+    } catch { /* unreadable receipt or plan: no grant */ }
+  }
+  const roots = checkouts.map((c) => c.root);
+  // A dangling symlink, or one that resolves into a checkout, on the literal path.
+  const crossesSymlink = (p) => {
+    for (;;) {
+      if (lstatSync(p, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        let real;
+        try { real = realpathNearestExisting(realpathSync(p)); } catch { return true; }
+        if (roots.some((r) => real === r || real.startsWith(`${r}/`))) return true;
+      }
+      if (path.dirname(p) === p) return false;
+      p = path.dirname(p);
+    }
+  };
+  const fixerDecision = decideFixerWriteGuard({
+    agentType: input.agent_type,
+    targetPath: fixerAbs ? realpathNearestExisting(fixerAbs) : null,
+    symlinked: fixerAbs ? crossesSymlink(fixerAbs) : false,
+    checkouts,
+    grants,
+  });
+  if (fixerDecision.decision === "deny") {
+    emitDeny(fixerDecision.reason);
+  }
+}
+
 if (typeof filePath !== "string" || !filePath) {
   emitAllow();
 }

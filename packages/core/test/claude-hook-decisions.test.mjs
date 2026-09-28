@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { decideBashGate, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType } from "../src/claude/hook-decisions.mjs";
+import { decideBashGate, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType, decideFixerWriteGuard } from "../src/claude/hook-decisions.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -1357,4 +1357,55 @@ test("decideWorktreeCheckoutGuard allows an outside-repo / gitignored scratch wr
 
 test("WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV reuses the default-branch-guard override (one operator flag)", () => {
   assert.equal(WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, "DEVLOOPS_ALLOW_MAIN");
+});
+
+// ---------------------------------------------------------------------------
+// decideFixerWriteGuard (ADR 0106, #2420 F5)
+// ---------------------------------------------------------------------------
+
+const FX_MAIN = "/repo";
+const FX_WT = "/repo/tmp/worktrees/dev-loops/issue-1";
+const FX_CHECKOUTS = [{ root: FX_MAIN, branch: "main" }, { root: FX_WT, branch: "issue-1" }];
+const FX_OUTPUT = `${FX_MAIN}/tmp/gate-fixer/o-r/pr-1/f1-0000abcd/fixer-disposition.json`;
+const FX_GRANT = { branch: "issue-1", allowedPaths: ["src", "test/a.test.mjs"], outputRef: FX_OUTPUT };
+const fixer = (targetPath, over = {}) => decideFixerWriteGuard({ agentType: "fixer", targetPath, checkouts: FX_CHECKOUTS, grants: [FX_GRANT], ...over });
+
+test("decideFixerWriteGuard allows the outputRef and in-authority paths of a current pull", () => {
+  assert.equal(fixer(FX_OUTPUT).decision, "allow");
+  assert.equal(fixer(`${FX_WT}/src/x.mjs`).decision, "allow");
+  assert.equal(fixer(`${FX_WT}/test/a.test.mjs`).decision, "allow");
+  assert.equal(fixer(`${FX_WT}/src/x.mjs`, { agentType: "dev-loops:fixer" }).decision, "allow");
+  assert.equal(fixer(`${FX_WT}/README.md`, { grants: [{ ...FX_GRANT, allowedPaths: ["."] }] }).decision, "allow");
+});
+
+test("decideFixerWriteGuard denies every in-checkout write without a current pull", () => {
+  const d = fixer(`${FX_WT}/src/x.mjs`, { grants: [] });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /pull-work-order\.mjs --ref <ref> --digest <digest> --execution <execution>/);
+  assert.match(d.reason, /no current fixer work-order pull/);
+});
+
+test("decideFixerWriteGuard never widens authority: other path, branch, checkout or evidence roots stay denied", () => {
+  assert.equal(fixer(`${FX_WT}/test/b.test.mjs`).decision, "deny");
+  assert.equal(fixer(`${FX_WT}/srcx/y.mjs`).decision, "deny");
+  assert.equal(fixer(`${FX_MAIN}/src/x.mjs`).decision, "deny");
+  assert.equal(fixer(`${FX_MAIN}/tmp/work-order-receipts/abc.json`).decision, "deny");
+  assert.equal(fixer(`${FX_MAIN}/tmp/gate-fixer/o-r/pr-1/fixer-emit-plan.json`).decision, "deny");
+  const grantMain = { ...FX_GRANT, branch: "main", allowedPaths: ["."] };
+  assert.equal(fixer(`${FX_MAIN}/tmp/work-order-receipts/abc.json`, { grants: [grantMain] }).decision, "deny");
+  assert.match(fixer(`${FX_WT}/test/b.test.mjs`).reason, /"test\/b\.test\.mjs" on branch "issue-1"/);
+});
+
+test("decideFixerWriteGuard allows scratch outside every checkout and fails closed on unresolvable input", () => {
+  assert.equal(fixer("/private/tmp/scratch.txt", { grants: [] }).decision, "allow");
+  assert.equal(fixer(null).decision, "deny");
+  assert.equal(fixer("src/x.mjs").decision, "deny");
+  assert.equal(fixer(`${FX_WT}/src/x.mjs`, { symlinked: true }).decision, "deny");
+  assert.equal(fixer("/private/tmp/scratch.txt", { checkouts: [] }).decision, "deny");
+});
+
+test("decideFixerWriteGuard leaves every non-fixer agent to the other boundaries", () => {
+  for (const agentType of [null, "developer", "dev-loop", "judge"]) {
+    assert.equal(decideFixerWriteGuard({ agentType, targetPath: `${FX_MAIN}/src/x.mjs`, checkouts: [], grants: [] }).decision, "allow");
+  }
 });

@@ -12,6 +12,7 @@ import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "..
 import { WorkOrderRefusal, pullWorkOrder, registerWorkOrderRole } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
+import "../loop/emit-fixer-work-order.mjs"; // registers the fixer role adapter
 
 const USAGE = `Usage: pull-work-order.mjs --ref <workOrderRef> --digest <workOrderDigest> --execution <executionIdentity> [--tmp-root <path>]
 Verifies the compact reference against the role's canonical emitted unit, prints
@@ -32,7 +33,7 @@ const EXECUTION_ROUND_RE = /^(r(\d+)-[0-9a-f]+)-u/;
 
 // A round is retired once a GATE-EXEC-ROUND-RETIREMENT record for its gate+head
 // (retire-gate-round.mjs) was written at or after the round's emission time.
-async function findRetirementAfter(tmpRoot, gate, headSha, emittedAtMs) {
+export async function findRetirementAfter(tmpRoot, gate, headSha, emittedAtMs) {
   const retiredRoot = path.join(tmpRoot, "retired-gate-rounds", headSha);
   for (const round of await readdir(retiredRoot).catch(() => [])) {
     const record = await readJson(path.join(retiredRoot, round, "retirement.json"));

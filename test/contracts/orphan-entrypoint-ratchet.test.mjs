@@ -73,6 +73,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/loop/check-retro-tooling.mjs", "standalone — retrospective-tooling check (whole script); its analyzeTranscript export is separately ratcheted as a predicate orphan"],
   ["scripts/loop/conductor-monitor.mjs", "standalone — agent/operator conductor monitor tool (documented in scripts/README)"],
   ["scripts/loop/detect-refinement-grill-state.mjs", "standalone — refinement-grill state detector, agent-invoked"],
+  ["scripts/loop/emit-fixer-work-order.mjs", "standalone — coordinator-invoked fixer work-order producer (issue #2420); pull-work-order.mjs loads its role adapter through a bare side-effect import, which this scraper does not count"],
   ["scripts/loop/pr-runner-coordination.mjs", "delete — public duplicate; the wired sibling is scripts/loop/_pr-runner-coordination.mjs"],
   ["scripts/loop/pre-write-remote-freshness-guard.mjs", "standalone — remote-freshness guard step, agent-invoked"],
   ["scripts/loop/resolve-verdict-ledger-source.mjs", "standalone — verdict/ledger tooling source resolver (issue #1661), skill-agent-invoked to prefer worktree-source when installed CLI stale"],
