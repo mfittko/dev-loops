@@ -455,7 +455,13 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
       {
         repo: options.repo,
         pr: options.pr,
-        reviewSummary: { hasPendingReviewOnCurrentHead, hasSubmittedReviewOnCurrentHead, latestSubmittedReviewOnCurrentHeadAt },
+        reviewSummary: {
+          hasPendingReviewOnCurrentHead,
+          hasSubmittedReviewOnCurrentHead,
+          latestSubmittedReviewOnCurrentHeadAt,
+          // Includes an error review (ADR 0114), so a request it answered settles.
+          latestCopilotReviewOnCurrentHeadAt: priorReviewState.reviewSummary?.latestCopilotReviewOnCurrentHeadAt ?? null,
+        },
         copilotRequested: requested,
       },
       runtime,
@@ -469,6 +475,7 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
       actionableThreadCount: parsedThreads.summary.actionableThreads,
       copilotReviewRoundCount: priorReviewState.completedCopilotReviewRounds ?? 0,
+      copilotErrorReviewCountOnCurrentHead: priorReviewState.reviewSummary?.errorReviewCountOnCurrentHead,
       ...(await resolveBodyFeedbackFacts(options, runtime, priorReviewState, parsedThreads.threads)),
     });
     const interpretation = interpretLoopState(snapshot, refinementConfig);
@@ -503,7 +510,13 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
       {
         repo: options.repo,
         pr: options.pr,
-        reviewSummary: { hasPendingReviewOnCurrentHead, hasSubmittedReviewOnCurrentHead, latestSubmittedReviewOnCurrentHeadAt },
+        reviewSummary: {
+          hasPendingReviewOnCurrentHead,
+          hasSubmittedReviewOnCurrentHead,
+          latestSubmittedReviewOnCurrentHeadAt,
+          // Includes an error review (ADR 0114), so a request it answered settles.
+          latestCopilotReviewOnCurrentHeadAt: priorReviewState.reviewSummary?.latestCopilotReviewOnCurrentHeadAt ?? null,
+        },
         copilotRequested: requested,
       },
       runtime,
@@ -517,6 +530,7 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
       actionableThreadCount: parsedThreads.summary.actionableThreads,
       copilotReviewRoundCount: priorReviewState.completedCopilotReviewRounds ?? 0,
+      copilotErrorReviewCountOnCurrentHead: priorReviewState.reviewSummary?.errorReviewCountOnCurrentHead,
       ...(await resolveBodyFeedbackFacts(options, runtime, priorReviewState, parsedThreads.threads)),
     });
     const interpretation = interpretLoopState(snapshot, refinementConfig);
@@ -901,7 +915,18 @@ export async function performCopilotReviewRequest(
       detail: "Current head already has a clean submitted Copilot review; same-head clean-convergence suppression is always enforced.",
     });
   }
-  if (before.requested || before.hasPendingReviewOnCurrentHead) {
+  // A requested_reviewers entry can linger after Copilot answered with an error
+  // review (ADR 0114). When the reconciled status settles it, fall through and
+  // make the same-head re-request instead of reporting already-requested.
+  const requestSettledByErrorReview = before.requested
+    && !before.hasPendingReviewOnCurrentHead
+    && !before.hasSubmittedReviewOnCurrentHead
+    && (before.reviewSummary?.errorReviewCountOnCurrentHead ?? 0) > 0
+    && await resolveCopilotReviewRequestStatus(
+      { repo: options.repo, pr: options.pr, reviewSummary: before.reviewSummary, copilotRequested: true },
+      runtime,
+    ) === "none";
+  if ((before.requested && !requestSettledByErrorReview) || before.hasPendingReviewOnCurrentHead) {
     return withConfigWarning({
       ok: true,
       status: "already-requested",

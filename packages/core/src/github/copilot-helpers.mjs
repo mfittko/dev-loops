@@ -759,7 +759,7 @@ export function resolveDraftGateRoundResetMs({ draftGate, currentHeadSha } = {})
 
 export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs } = {}) {
   const allReviews = Array.isArray(reviews) ? reviews : [];
-  const copilotReviews = allReviews.filter((review) => isCopilotLogin(review?.author?.login));
+  const copilotReviews = allReviews.filter((review) => isCopilotLogin(review?.author?.login ?? review?.user?.login));
 
   // When draft gate has re-passed on a different head, only count reviews
   // after the most recent draft gate approval to prevent round accumulation.
@@ -783,6 +783,7 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
   let hasSubmittedReviewOnCurrentHead = false;
   let latestSubmittedReviewOnCurrentHeadAt = null;
   let latestErrorReviewOnCurrentHeadAt = null;
+  let errorReviewCountOnCurrentHead = 0;
   let hasBodyFindingOnCurrentHead = false;
   // The id of the review whose body set hasBodyFindingOnCurrentHead: the
   // review a copilot-body-disposition record must name to clear the finding.
@@ -798,9 +799,11 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
     // the request-settle reconciliation reads.
     if (isCopilotErrorReview(review)) {
       const errorAt = review?.submittedAt ?? review?.submitted_at;
-      if (headSha !== null && extractReviewCommitSha(review) === headSha && typeof errorAt === "string"
-        && (latestErrorReviewOnCurrentHeadAt === null || errorAt > latestErrorReviewOnCurrentHeadAt)) {
-        latestErrorReviewOnCurrentHeadAt = errorAt;
+      if (headSha !== null && extractReviewCommitSha(review) === headSha) {
+        errorReviewCountOnCurrentHead += 1;
+        if (typeof errorAt === "string" && (latestErrorReviewOnCurrentHeadAt === null || errorAt > latestErrorReviewOnCurrentHeadAt)) {
+          latestErrorReviewOnCurrentHeadAt = errorAt;
+        }
       }
       continue;
     }
@@ -860,6 +863,9 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
     // Latest current-head Copilot review timestamp including error reviews.
     latestCopilotReviewOnCurrentHeadAt: [latestSubmittedReviewOnCurrentHeadAt, latestErrorReviewOnCurrentHeadAt]
       .filter((at) => at !== null).sort().at(-1) ?? null,
+    // Current-head Copilot error reviews, from the same reset-filtered set as
+    // every other fact here (ADR 0114 bounded retry).
+    errorReviewCountOnCurrentHead,
     hasBodyFindingOnCurrentHead,
     bodyFindingReviewId,
   };

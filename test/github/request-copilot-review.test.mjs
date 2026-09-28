@@ -332,6 +332,30 @@ test("request-copilot-review re-requests after one current-head Copilot error re
   assert.ok(calls.some((c) => c.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]")));
 });
 
+const lingeringErrorReview = '{"id":"r-err","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"newsha"},"submittedAt":"2026-09-27T20:23:16Z","body":"Copilot encountered an error and was unable to review this pull request."}';
+const lingeringRequestEntries = (requestedAt) => [
+  { stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n' },
+  { stdout: `{"isDraft":false,"state":"OPEN","number":17,"headRefOid":"newsha","reviews":[${lingeringErrorReview}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n` },
+  { stdout: `{"login":"copilot-pull-request-reviewer[bot]","created_at":"${requestedAt}"}\n`, assertArgContains: ["/timeline"] },
+  { stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+  { stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n' },
+  { stdout: `{"headRefOid":"newsha","reviews":[${lingeringErrorReview}]}\n` },
+];
+
+test("request-copilot-review re-requests when the request lingers after a current-head Copilot error review (ADR 0114)", async () => {
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], lingeringRequestEntries("2026-09-27T20:00:00Z"));
+
+  assert.equal(result.status, "requested");
+  assert.ok(calls.some((c) => c.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]")));
+});
+
+test("request-copilot-review keeps already-requested when the request is newer than the error review", async () => {
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], lingeringRequestEntries("2026-09-27T21:00:00Z"));
+
+  assert.equal(result.status, "already-requested");
+  assert.ok(!calls.some((c) => c.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]")));
+});
+
 
 test("request-copilot-review treats pending review as already-requested even when a submitted current-head review exists", async () => {
   const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [

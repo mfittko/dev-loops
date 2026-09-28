@@ -1644,3 +1644,46 @@ test("two current-head error reviews plus one real clean current-head review con
   assert.notEqual(result.state, STATE.BLOCKED_NEEDS_USER_DECISION);
   assert.equal(result.sameHeadCleanConverged, true);
 });
+
+test("two current-head error reviews with an outstanding request wait for Copilot", () => {
+  const snapshot = { ...errorReviewSnapshot(2), copilotReviewRequestStatus: "requested" };
+  assert.equal(interpretLoopState(snapshot, { maxCopilotRounds: 3 }).state, STATE.WAITING_FOR_COPILOT_REVIEW);
+});
+
+const errorBody = () => readFileSync(new URL("./fixtures/copilot-overview/review-error.md", import.meta.url), "utf8");
+
+test("error reviews on an earlier head or from a non-Copilot author do not count", () => {
+  const reviews = [
+    { id: "R_old0", author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", body: errorBody(), commit: { oid: "f".repeat(40) }, submittedAt: "2026-09-27T20:20:00Z" },
+    { id: "R_old1", author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", body: errorBody(), commit: { oid: "f".repeat(40) }, submittedAt: "2026-09-27T20:21:00Z" },
+    { id: "R_human", author: { login: "someone" }, state: "COMMENTED", body: errorBody(), commit: { oid: ERROR_HEAD }, submittedAt: "2026-09-27T20:22:00Z" },
+  ];
+  const snapshot = buildSnapshotFromPrFacts({ prData: { number: 17, state: "OPEN", headRefOid: ERROR_HEAD, reviews }, prNumber: 17, ciStatus: "success" });
+  assert.equal(snapshot.copilotErrorReviewCountOnCurrentHead, 0);
+  assert.notEqual(interpretLoopState(snapshot, { maxCopilotRounds: 3 }).state, STATE.BLOCKED_NEEDS_USER_DECISION);
+});
+
+test("a REST-shaped current-head error review counts once", () => {
+  const reviews = [{ id: 1, user: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", body: errorBody(), commit_id: ERROR_HEAD, submitted_at: "2026-09-27T20:20:00Z" }];
+  const snapshot = buildSnapshotFromPrFacts({ prData: { number: 17, state: "OPEN", headRefOid: ERROR_HEAD, reviews }, prNumber: 17 });
+  assert.equal(snapshot.copilotErrorReviewCountOnCurrentHead, 1);
+});
+
+test("an error review before the draft-gate reset does not count toward the block", () => {
+  const reviews = [
+    { id: "R_pre", author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", body: errorBody(), commit: { oid: ERROR_HEAD }, submittedAt: "2026-09-27T20:00:00Z" },
+    { id: "R_post", author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", body: errorBody(), commit: { oid: ERROR_HEAD }, submittedAt: "2026-09-27T21:00:00Z" },
+  ];
+  const summary = summarizeCopilotReviews(reviews, { headSha: ERROR_HEAD, draftGateResetAtMs: Date.parse("2026-09-27T20:30:00Z") });
+  assert.equal(summary.errorReviewCountOnCurrentHead, 1);
+  const snapshot = buildSnapshotFromPrFacts({
+    prData: { number: 17, state: "OPEN", headRefOid: ERROR_HEAD, reviews },
+    prNumber: 17,
+    copilotReviewPresent: summary.copilotReviewPresent,
+    copilotReviewRoundCount: summary.completedCopilotReviewRounds,
+    copilotErrorReviewCountOnCurrentHead: summary.errorReviewCountOnCurrentHead,
+    ciStatus: "success",
+  });
+  assert.equal(snapshot.copilotErrorReviewCountOnCurrentHead, 1);
+  assert.equal(interpretLoopState(snapshot, { maxCopilotRounds: 3 }).state, STATE.READY_TO_REREQUEST_REVIEW);
+});

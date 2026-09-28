@@ -354,6 +354,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     unresolvedThreadCount,
     actionableThreadCount,
     copilotReviewRoundCount: reviewSummary.completedCopilotReviewRounds,
+    copilotErrorReviewCountOnCurrentHead: reviewSummary.errorReviewCountOnCurrentHead,
     lastCopilotRoundMaxSignal,
     ciStatus: currentHeadCiStatus,
     failureDetails,

@@ -7,7 +7,7 @@
  */
 
 import { deriveLoopCiStatusFromRollup } from "./copilot-ci-status.mjs";
-import { extractReviewCommitSha, isCopilotErrorReview, isCopilotLogin } from "../github/copilot-helpers.mjs";
+import { summarizeCopilotReviews } from "../github/copilot-helpers.mjs";
 
 /** Stable state name constants for the async Copilot review/fix loop. */
 export const STATE = Object.freeze({
@@ -200,6 +200,10 @@ export function buildSnapshotFromPrFacts({
   excludedFailureDetails,
   copilotBodyFeedbackUnresolved = false,
   copilotPriorHeadBodyFeedbackUnresolved = false,
+  // summarizeCopilotReviews(...).errorReviewCountOnCurrentHead, so the count
+  // reads the same draft-gate-reset-filtered set as the other Copilot facts.
+  // Omitted, it is counted over the unfiltered reviews.
+  copilotErrorReviewCountOnCurrentHead,
 }) {
   const prState = typeof prData?.state === "string" ? prData.state.toUpperCase() : "OPEN";
   const prMerged = prState === "MERGED";
@@ -214,7 +218,8 @@ export function buildSnapshotFromPrFacts({
 
   return normalizeSnapshot({
     prExists: true,
-    copilotErrorReviewCountOnCurrentHead: countCopilotErrorReviewsOnHead(prData?.reviews, currentHeadSha),
+    copilotErrorReviewCountOnCurrentHead: copilotErrorReviewCountOnCurrentHead
+      ?? summarizeCopilotReviews(prData?.reviews, { headSha: currentHeadSha }).errorReviewCountOnCurrentHead,
     prNumber: typeof prData?.number === "number" ? prData.number : prNumber,
     prDraft: Boolean(prData?.isDraft),
     prMerged,
@@ -233,14 +238,6 @@ export function buildSnapshotFromPrFacts({
     copilotBodyFeedbackUnresolved,
     copilotPriorHeadBodyFeedbackUnresolved,
   });
-}
-
-// Copilot error reviews (ADR 0114) on `headSha`, GraphQL or REST shape.
-function countCopilotErrorReviewsOnHead(reviews, headSha) {
-  if (headSha === null || !Array.isArray(reviews)) return 0;
-  return reviews.filter((review) => isCopilotLogin(review?.author?.login ?? review?.user?.login)
-    && extractReviewCommitSha(review) === headSha
-    && isCopilotErrorReview(review)).length;
 }
 
 function isAutoRerequestEligible(snapshot, state) {
