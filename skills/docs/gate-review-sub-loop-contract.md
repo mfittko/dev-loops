@@ -1532,6 +1532,13 @@ rename/copy, an unavailable compare, or any non-doc/unclassifiable file re-opens
 preserving the round cap and the significant-post-convergence-change exception
 (`COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)).
 
+## Self-hosting gates
+
+In the dev-loops repository, a PR changes the toolchain that gates it. The gate scripts run the review root's toolchain: run each gate step as `cd <worktree> && dev-loops-run <script> ...` or as `dev-loops-run --repo-root <worktree> <script> ...` (`WORKTREE-SCRIPT-LAUNCHER-CWD` in [worktree-guidance](./worktree-guidance.md)). Both forms load the worktree's scripts, `@dev-loops/core` and the shipped gate config, and write the round's bundle, sentinels and emit plan under `<worktree>/tmp/`. `consolidate-fanin.mjs`, `judge-pass.mjs` and `generate-claude-assets.mjs` refuse a `--repo-root` that names another dev-loops checkout with `toolchain_root_mismatch`. A dispatched pull line runs bare: when the execution index entry sits in another linked dev-loops worktree (never the main checkout), `pull-work-order.mjs` re-runs that worktree's pull script, so a self-hosting PR needs no operator cwd exception. The session hooks always load from the main checkout (ADR 0117).
+
+<!-- rule: GATE-SELF-HOST-EXPAND-CONTRACT -->
+`GATE-SELF-HOST-EXPAND-CONTRACT`: In this repository, a change to a shape that a session hook or a main-checkout script consumes MUST land in two steps. Step 1 makes every consumer accept both the old and the new shape. Step 2 switches the producer and drops the old shape. The session hooks always load from the main checkout, so a PR that changes a hook-consumed shape in one step cannot pass its own gate.
+
 ## Machine-parseable fields
 
 The sub-loop execution shape can be referenced programmatically via these fields:

@@ -52,7 +52,7 @@ import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructure
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
 import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-protocol.mjs";
-import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
@@ -1581,6 +1581,12 @@ async function main() {
   }
   if (options.help) {
     process.stdout.write(`${USAGE}\n`);
+    return;
+  }
+  const mismatch = options.repoRoot && toolchainRootMismatch(path.resolve(options.repoRoot),"scripts/loop/consolidate-fanin.mjs");
+  if (mismatch) {
+    process.stderr.write(`${JSON.stringify({ ok: false, error: mismatch })}\n`);
+    process.exitCode = 1;
     return;
   }
   try {

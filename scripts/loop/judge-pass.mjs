@@ -33,7 +33,7 @@ import { materializationHash, verifyPulledResult, workOrderDigest } from "../git
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
-import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "./_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
   JQ_OUTPUT_USAGE,
@@ -990,6 +990,12 @@ function main() {
   }
   if (opts.help) {
     process.stdout.write(`${USAGE}\n`);
+    return;
+  }
+  const mismatch = opts.repoRoot && toolchainRootMismatch(path.resolve(opts.repoRoot), "scripts/loop/judge-pass.mjs");
+  if (mismatch) {
+    process.stderr.write(`${mismatch}\n`);
+    process.exitCode = 1;
     return;
   }
   judgePassCli(opts)

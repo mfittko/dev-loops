@@ -17,8 +17,9 @@
  * from the checkout's git-toplevel so config resolves correctly.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseAllWorktreePaths, parseMainWorktreePath, realpathNearestExisting, resolveContainingWorktreeRoot } from "@dev-loops/core/loop/worktree-guard";
 
 // Scrub GIT_DIR/GIT_WORK_TREE for every git call in this module: an inherited
@@ -175,4 +176,32 @@ export function resolveLedgerCheckouts(cwd, { gitCommand = "git" } = {}) {
   } catch { /* git failed, not inside a git repo, or git unavailable: cwd-toplevel is all we have */ }
   if (roots.length === 0) add(cwd);
   return roots;
+}
+
+/** The dev-loops checkout (or installed package) this module, and every script importing it, runs from. */
+export const TOOLCHAIN_ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
+
+/** A dev-loops source checkout: `package.json` names `dev-loops` and a sibling `scripts/` exists (the launcher's test). */
+export function isDevLoopsCheckout(dir) {
+  try {
+    return isDirectorySync(path.join(dir, "scripts")) && JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")).name === "dev-loops";
+  } catch {
+    return false;
+  }
+}
+
+/** True when `dir` is a dev-loops source checkout whose real path differs from `toolchainRoot`'s. */
+export function isOtherDevLoopsCheckout(dir, toolchainRoot = TOOLCHAIN_ROOT) {
+  const real = (p) => { try { return realpathSync(p); } catch { return path.resolve(p); } };
+  return isDevLoopsCheckout(dir) && real(dir) !== real(toolchainRoot);
+}
+
+/**
+ * The `toolchain_root_mismatch` message when `repoRoot` is a dev-loops source checkout other than
+ * `toolchainRoot`, else null (ADR 0117). Running one checkout's script against another dev-loops
+ * checkout mixes two toolchains; the launcher flag runs the target checkout's own script instead.
+ */
+export function toolchainRootMismatch(repoRoot, script, { toolchainRoot = TOOLCHAIN_ROOT } = {}) {
+  if (!isOtherDevLoopsCheckout(repoRoot, toolchainRoot)) return null;
+  return `toolchain_root_mismatch: --repo-root ${repoRoot} is a dev-loops checkout other than this script's toolchain root ${toolchainRoot}; run \`dev-loops-run --repo-root ${repoRoot} ${script} ...\` instead`;
 }
