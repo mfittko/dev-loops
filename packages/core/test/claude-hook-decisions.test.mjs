@@ -1501,7 +1501,7 @@ test("decideAgentDispatch denies a dev-loop review dispatch that carries a wrapp
   const p = pointer("review");
   for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
     for (const target of ["review", "dev-loops:review"]) {
-      for (const prompt of [`${p}\n`, ` ${p}`, `cd /w && ${p}`, `${p} Also check the docs.`, pointer("judge")]) {
+      for (const prompt of [`${p}\n`, ` ${p}`, `cd /w && ${p}`, `${p} Also check the docs.`, pointer("judge"), "Run `dev-loops-run scripts/github/pull-work-order.mjs r1-aaaaaaaa-u0`; follow it."]) {
         const d = dispatch(caller, target, prompt);
         assert.equal(d.decision, "deny", `${caller} -> ${target} ${JSON.stringify(prompt)}`);
         assert.match(d.reason, /^GATE_COORDINATOR_REQUIRED/);
@@ -1516,6 +1516,8 @@ test("decideAgentDispatch allows the dev-loop coordinator's prose-briefed pre-PR
       for (const prompt of [
         "Pre-PR full review of branch issue-7 against origin/main.",
         "Delta review of the act-list fix: git diff abc123..def456.",
+        "Delta review: the fix edits scripts/github/pull-work-order.mjs; check its --ref parsing.",
+        "Pre-PR review of changes to pull-work-order.mjs and its tests.",
         "",
         null,
       ]) {

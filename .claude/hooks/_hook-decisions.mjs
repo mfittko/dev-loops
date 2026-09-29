@@ -872,7 +872,7 @@ const dispatchPointerRe = (role) => new RegExp(
 /**
  * Decide whether a PreToolUse Agent/Task dispatch must be denied (GATE-EXEC-GATE-COORDINATOR,
  * ADRs 0112 and 0116). The dev-loop coordinator never dispatches a `judge` agent and never
- * dispatches a `review` agent whose prompt carries a work-order pull (`pull-work-order`), exact or wrapped; its prose-briefed pre-PR
+ * dispatches a `review` agent whose prompt carries a `pull-work-order.mjs` invocation, exact or wrapped; its prose-briefed pre-PR
  * and delta `review` dispatches are allowed. The `gate-coordinator` agent dispatches only
  * `review` and `judge`, each with the emitted `dispatchPrompt` byte for byte. Every other
  * caller, including the main session (no `agent_type`), is allowed.
@@ -887,9 +887,9 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
   const caller = normalizeAgentType(callerAgentType);
   const target = normalizeAgentType(targetAgentType);
   const gateChild = GATE_ROUND_CHILD_ROLES.has(target);
-  // Unanchored: any embedded work-order pull marks a gate unit, wrapped or not.
+  // Unanchored invocation match (3-flag or execution-identity form): a wrapped pull marks a gate unit; a prose mention of the script does not.
   if (caller === DEV_LOOP_AGENT_TYPE && gateChild &&
-    (target === "judge" || (typeof prompt === "string" && /pull-work-order/.test(prompt)))) {
+    (target === "judge" || (typeof prompt === "string" && /pull-work-order\.mjs\s+(?:--ref\s|[rjf]\d+-[0-9a-f]{8})/.test(prompt)))) {
     return {
       decision: "deny",
       reason:
