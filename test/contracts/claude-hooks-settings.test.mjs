@@ -896,8 +896,11 @@ function withNestedWorktree(fn) {
   }
 }
 
-const decisionOf = (cwd, file, agent_type, env) =>
-  runHook("pre-tool-use-write-guard.mjs", { tool_name: "Edit", tool_input: { file_path: file }, cwd, ...(agent_type ? { agent_type } : {}) }, env).json?.hookSpecificOutput?.permissionDecision ?? "allow";
+const decisionOf = (cwd, file, agent_type, env) => {
+  const res = runHook("pre-tool-use-write-guard.mjs", { tool_name: "Edit", tool_input: { file_path: file }, cwd, ...(agent_type ? { agent_type } : {}) }, env);
+  assert.equal(res.code, 0, `hook crashed (exit ${res.code}): ${res.stderr}`);
+  return res.json?.hookSpecificOutput?.permissionDecision ?? "allow";
+};
 
 test("write-guard hook classifies a target by its containing repository: a tracked linked-worktree file is a repo mutation", () => {
   withNestedWorktree(({ main, wt, base }) => {
@@ -905,13 +908,15 @@ test("write-guard hook classifies a target by its containing repository: a track
     const tracked = path.join(wt, "README.md");
     assert.equal(decisionOf(main, tracked, "dev-loop", coordinator), "deny");
     assert.equal(decisionOf(main, tracked, "dev-loops:dev-loop", coordinator), "deny");
-    assert.equal(decisionOf(main, tracked, "developer", coordinator), "allow", "workers keep write access");
+    assert.equal(decisionOf(main, tracked, "developer", coordinator), "allow", "workers keep write access in a linked worktree");
     assert.equal(decisionOf(main, path.join(wt, "tmp", "scratch", "n.txt"), "dev-loop", coordinator), "allow", "gitignored worktree file");
     fs.mkdirSync(path.join(base, "plain"));
     assert.equal(decisionOf(main, path.join(base, "plain", "f.txt"), "dev-loop", coordinator), "allow", "outside every repository");
     assert.equal(decisionOf(main, tracked, undefined, { DEVLOOPS_MAIN_AGENT_READONLY: "1", DEVLOOPS_ALLOW_MAIN: "1" }), "deny", "main agent");
     const mainBoundary = { DEVLOOPS_MAIN_AGENT_READONLY: "1" };
     assert.equal(decisionOf(main, tracked, "developer", mainBoundary), "allow", "worker under the main-agent boundary");
+    assert.equal(decisionOf(main, path.join(main, "README.md"), "developer", mainBoundary), "deny", "developer denied on a main-checkout target under DEVLOOPS_MAIN_AGENT_READONLY=1");
+    assert.equal(decisionOf(main, tracked, "otherplugin:docs", mainBoundary), "deny", "a foreign-namespace docs agent is not a worker");
     assert.equal(decisionOf(main, tracked, "dev-loops:quality", { ...coordinator, ...mainBoundary }), "allow", "worker with both boundaries");
     assert.equal(decisionOf(main, tracked, "general-purpose", mainBoundary), "deny", "generic subagent");
     // Git internals: rev-parse --show-toplevel fails there, and the guard must fail closed.
