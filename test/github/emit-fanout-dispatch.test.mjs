@@ -1729,7 +1729,7 @@ test("buildAngleNamingSuffix requires the file-write tool for single-angle and g
     assert.ok(suffix.includes("emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished>"));
   }
   assert.match(single, /Write one findings artifact for this angle at its per-angle path with the file-write tool/);
-  assert.match(group, /one artifact per angle, never one merged artifact for the unit, each with the file-write tool/);
+  assert.match(group, /Write one findings artifact PER ANGLE at its per-angle path, each with the file-write tool .*, never one merged artifact for the unit\./);
 });
 
 test("buildAngleNamingSuffix adds the fixed verifiedItems instruction to every unit carrying an AC angle, keyed on membership", () => {

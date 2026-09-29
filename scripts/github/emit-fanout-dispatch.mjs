@@ -245,7 +245,7 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
   const writeTool = "with the file-write tool (the `write` builtin, `Write` on Claude Code), never a shell write (redirect, heredoc, `tee`, or an inline script)";
   const body = single
     ? `Review this angle adversarially per your scoped angle-review mode, using the persona and focus prompt below. Write one findings artifact for this angle at its per-angle path ${writeTool}.`
-    : `Review EACH angle below adversarially per your scoped angle-review mode, using its persona and focus prompt. Write one findings artifact PER ANGLE at its per-angle path — one artifact per angle, never one merged artifact for the unit, each ${writeTool}.`;
+    : `Review EACH angle below adversarially per your scoped angle-review mode, using its persona and focus prompt. Write one findings artifact PER ANGLE at its per-angle path, each ${writeTool}, never one merged artifact for the unit.`;
   const instructions = angleInstructions
     .map(({ angle, persona, prompt }) => `### Angle: ${angle} (persona: ${persona})\n${prompt}`)
     .join("\n\n");
