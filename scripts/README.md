@@ -278,7 +278,7 @@ Required:
 - `--disposition <fixed|deferred|rejected>` (a missing or invalid flag is refused)
 
 Contract:
-- a `fixed` reply must contain a full 40-character SHA that is contained in the PR head; otherwise the call is refused before any post or resolve (`fixed_reply_missing_full_sha` prints the head SHA, `fixed_reply_sha_not_in_head`); `deferred` and `rejected` replies are not SHA-checked
+- a `fixed` reply must contain a full 40-character SHA that is contained in the PR head; otherwise the call is refused before any post or resolve (`fixed_reply_missing_full_sha` prints the head SHA, `fixed_reply_sha_not_in_head`, `fixed_reply_sha_unverifiable` when git could not verify the SHA, for example the head or the SHA is not fetched locally; fail-closed); `deferred` and `rejected` replies are not SHA-checked
 - reads the reply body from a file so shell quoting does not become part of the workflow logic
 - validates the live PR thread snapshot before mutating GitHub so `--comment-id` and `--thread-id` must refer to the same thread on the target PR
 - posts the reply to `repos/<owner>/<name>/pulls/<pr>/comments/<comment-id>/replies`

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { test } from "bun:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { initGitFixture, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import { hasCommitShaReference } from "../../scripts/github/reply-resolve-review-thread.mjs";
 
 const scriptPath = path.resolve("scripts/github/reply-resolve-review-thread.mjs");
@@ -708,14 +708,11 @@ test("reply-resolve-review-thread refuses a fixed reply citing an existing commi
   // Temp fixture: independent of the ambient checkout and its clone depth.
   const repoDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-git-"));
   try {
-    const git = (...args) => execFileSync("git", args, { cwd: repoDir, encoding: "utf8" }).trim();
-    git("init", "-q");
-    const commit = (msg) => {
-      git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", msg);
-      return git("rev-parse", "HEAD");
-    };
-    const olderHead = commit("older");
-    const newer = commit("newer");
+    initGitFixture(repoDir, { commit: "older" });
+    const git = (...args) => execFileSync("git", args, { cwd: repoDir, encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+    const olderHead = git("rev-parse", "HEAD");
+    git("commit", "-q", "--allow-empty", "-m", "newer");
+    const newer = git("rev-parse", "HEAD");
     const olderHeadEntry = { ...headViewEntry, stdout: `${JSON.stringify({ headRefOid: olderHead })}\n` };
     const { result, ghLog } = await runFixedReply(`Fixed in ${newer} with the missing guard.\n`, [olderHeadEntry], undefined, repoDir);
     assert.equal(result.code, 1);

@@ -92,6 +92,13 @@ test("parseReplyResolveThreadsCliArgs rejects --message and --message-map togeth
   );
 });
 
+test("parseReplyResolveThreadsCliArgs rejects --disposition combined with --message-map before any gh call", () => {
+  assert.throws(
+    () => parseReplyResolveThreadsCliArgs(["--repo", "owner/repo", "--pr", "17", "--message-map", "tmp/map.json", "--disposition", "fixed"]),
+    /--disposition applies to --message or stdin only/,
+  );
+});
+
 test("reply-resolve-review-threads rejects malformed arguments and conflicting or empty message input", async () => {
   const missing = await runNode(["--repo", "owner/repo"]);
   assert.equal(missing.code, 1);
