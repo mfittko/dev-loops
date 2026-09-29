@@ -204,6 +204,7 @@ const agentType = typeof input?.agent_type === "string" ? input.agent_type : nul
 // (not the hook's cwd) AND not gitignored there. A linked worktree under a gitignored
 // directory of the main checkout is its own repository, so its tracked files count.
 let isRepoMutation = false;
+let inLinkedWorktree = false;
 const targetReal = realpathNearestExisting(abs);
 try {
   const gitOpts = { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] };
@@ -218,6 +219,10 @@ try {
       ignored = false;
     }
     isRepoMutation = !ignored;
+    // A linked worktree's git dir differs from the shared common dir; the main checkout's are equal.
+    const gitDirs = ["--git-dir", "--git-common-dir"].map((flag) =>
+      path.resolve(repoRoot, execFileSync("git", ["-C", repoRoot, "rev-parse", flag], gitOpts).trim()));
+    inLinkedWorktree = gitDirs[0] !== gitDirs[1];
   }
 } catch {
   // Outside every repo: allow. A target under a git directory (.git/hooks, .git/worktrees/<n>) makes
@@ -225,7 +230,7 @@ try {
   isRepoMutation = targetReal.split("/").includes(".git");
 }
 
-const decision = decideWriteGuard({ filePath, isRepoMutation, enforce, env: process.env, agentType });
+const decision = decideWriteGuard({ filePath, isRepoMutation, enforce, env: process.env, agentType, inLinkedWorktree });
 if (decision.decision === "deny") {
   emitDeny(decision.reason);
 }

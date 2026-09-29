@@ -69,6 +69,9 @@ export const GATE_COORDINATOR_AGENT_TYPE = "gate-coordinator";
 const COORDINATOR_AGENT_TYPES = new Set([DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE]);
 /** Worker agents that keep write access to tracked worktree files under the main-agent read-only boundary. */
 const WORKER_AGENT_TYPES = new Set(["developer", "fixer", "quality", "docs"]);
+/** A worker by bare name or the `dev-loops:` plugin namespace only; `otherplugin:docs` is not a worker. */
+const isWorkerAgentType = (agentType) =>
+  typeof agentType === "string" && WORKER_AGENT_TYPES.has(agentType.startsWith("dev-loops:") ? agentType.slice("dev-loops:".length) : agentType);
 
 /**
  * Normalize a Claude `agent_type` hook-payload value that may be PLUGIN-NAMESPACED
@@ -506,9 +509,11 @@ export function decideBashGate({
  * @param {boolean} [params.enforce] - Strict mode (DEVLOOPS_MAIN_AGENT_READONLY=1).
  * @param {Record<string,string|undefined>} [params.env] - Environment (for the CA2 run id).
  * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload, if any.
+ * @param {boolean} [params.inLinkedWorktree] - True when the target's repo is a linked worktree
+ *   (`git rev-parse --git-dir` differs from `--git-common-dir`); default false denies workers.
  * @returns {HookDecision}
  */
-export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, env = {}, agentType = null }) {
+export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, env = {}, agentType = null, inLinkedWorktree = false }) {
   if (!enforce) {
     return ALLOW; // strict enforcement not enabled — fail open
   }
@@ -516,9 +521,10 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
     return ALLOW; // non-repo or gitignored path (e.g. /tmp, tmp/) — allowed by the contract
   }
   // Authorized only inside the dev-loop subagent context: CA2 run id, the dev-loop agent type, or
-  // a worker agent (developer/fixer/quality/docs). Any other subagent type is treated like the
-  // main agent and denied.
-  if (resolveRunId(env) || agentType === DEV_LOOP_AGENT_TYPE || WORKER_AGENT_TYPES.has(normalizeAgentType(agentType))) {
+  // a worker agent (developer/fixer/quality/docs) writing inside a LINKED worktree. A worker
+  // matches only by bare name or the `dev-loops:` namespace; a worker targeting the main checkout,
+  // a foreign-plugin namesake and any other subagent type are treated like the main agent and denied.
+  if (resolveRunId(env) || agentType === DEV_LOOP_AGENT_TYPE || (inLinkedWorktree && isWorkerAgentType(agentType))) {
     return ALLOW;
   }
   return {
