@@ -2016,7 +2016,7 @@ function enforceForeignAngles(foreignAngles, { sourceLabel, gate, gateKey, confi
   }
 }
 function unjudgedLedgerMessage(options, headSha, count) {
-  return `--findings-ledger "${options.findingsLedger}" for ${options.gate} @ ${headSha} has ${count} finding(s) with no judgeDisposition, so the judge act list is unknown (ADR 0089). Re-write the log with write-gate-findings-log --judge-verdict after the judge pass (the full enriched ledger, judge-pass --ledger-out, not the --out act list), or also pass a --findings-json with the full per-angle input (every finding with its judgeDisposition, covering every mandatory angle under fanout_fanin).`;
+  return `--findings-ledger "${options.findingsLedger}" for ${options.gate} @ ${headSha} has ${count} finding(s) with no judgeDisposition, so the judge act list is unknown (GATE-COMMENT-VERDICT-VALUES, ADR 0089). Re-write the log with write-gate-findings-log --judge-verdict after the judge pass (the full enriched ledger, judge-pass --ledger-out, not the --out act list), or also pass a --findings-json with the full per-angle input (every finding with its judgeDisposition, covering every mandatory angle under fanout_fanin).`;
 }
 // Read `--findings-ledger` and confirm it is THIS round's ledger (same
 // repo/pr/gate/head), not a stale or foreign one. Shared by the finding-surface
@@ -2609,7 +2609,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
     // A fan-out draft or pre-approval round ran a judge, so the act list must come from judge-enriched data:
     // a ledger finding without a disposition is pre-judge, and only an enriched --findings-json can stand in.
-    const fanout = (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin" || preloadedFindingsLedger.executionMode === "fanout_fanin";
+    // The angle checks, tick and recorded marker all key on options.executionMode, so a ledger-declared
+    // fan-out is promoted onto it rather than enforced only for this local check.
+    if (preloadedFindingsLedger.executionMode === "fanout_fanin") options.executionMode = "fanout_fanin";
+    const fanout = (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin";
     if (options.gate !== "review" && fanout) {
       unjudgedLedgerFindings = (preloadedFindingsLedger.findings ?? []).filter((f) => !f?.judgeDisposition);
     }

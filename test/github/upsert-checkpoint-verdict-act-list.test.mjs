@@ -307,7 +307,7 @@ test("a fan-out ledger with unjudged findings and a same-summary defer-judged --
     const padded = { ...preJudgeFinding, summary: "  pre-judge finding  " };
     const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [padded], executionMode: "fanout_fanin" });
     const jsonPath = path.join(tempDir, "deferred.json");
-    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ ...preJudgeFinding, judgeDisposition: "defer", judgeRationale: "r" }] }]), "utf8");
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ ...preJudgeFinding, judgeDisposition: "defer", judgeRationale: "r" }] }, { angle: "pr-description", verdict: "clean", findings: [] }, { angle: "holistic", verdict: "clean", findings: [] }]), "utf8");
     const derived = await postWithJson(ledgerPath, jsonPath);
     assert.equal(derived.error, undefined);
     assert.match(derived.body, /\*\*Verdict:\*\* clean/);
