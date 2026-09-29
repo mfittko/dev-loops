@@ -110,7 +110,8 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     return 2;
   }
   const tmpRoots = values["tmp-root"] ? [path.resolve(cwd, values["tmp-root"])] : resolveLedgerCheckouts(cwd).map((root) => path.join(root, "tmp"));
-  const target = pullDelegationTarget(short ? positionals[0] : values.execution, tmpRoots);
+  // An injected receiptTmpRoot pins where the receipt lands, which the child cannot honor: pull locally.
+  const target = receiptTmpRoot ? null : pullDelegationTarget(short ? positionals[0] : values.execution, tmpRoots);
   if (target) {
     // stdout, stderr and the exit code pass through unchanged. The child runs under cwd `target`, so a
     // --tmp-root goes over as the absolute path this process resolved.

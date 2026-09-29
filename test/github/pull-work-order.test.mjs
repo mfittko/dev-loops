@@ -10,7 +10,7 @@ import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, exe
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
 import { withTempDir } from "../_helpers.mjs";
-import { pullDelegationTarget } from "../../scripts/github/pull-work-order.mjs";
+import { main as pullMain, pullDelegationTarget } from "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 
@@ -390,6 +390,13 @@ test("self-hosting pull: from the main cwd, the pull runs the linked worktree's 
     const delegated = pullShort(DELEGATE_ID, main);
     assert.equal(delegated.status, 7, delegated.stderr);
     assert.equal(delegated.stdout, `DELEGATED ${linked} ${DELEGATE_ID} 1\n`);
+    // The 3-flag form forwards --ref, --digest and --execution verbatim.
+    const flagArgs = ["--ref", "review:o/r#7:x", "--digest", `sha256:${"0".repeat(64)}`, "--execution", DELEGATE_ID];
+    const flagged = run("pull-work-order.mjs", flagArgs, main);
+    assert.equal(flagged.status, 7, flagged.stderr);
+    assert.equal(flagged.stdout, `DELEGATED ${linked} ${flagArgs.join(" ")} 1\n`);
+    // An injected receiptTmpRoot keeps the pull local, so the receipt lands where the caller pinned it.
+    assert.equal(await pullMain([DELEGATE_ID], { cwd: main, receiptTmpRoot: base }), 1);
     // The marker stops a second delegation: the pull resolves locally and refuses as today.
     const marked = spawnSync("node", [path.join(SCRIPTS, "pull-work-order.mjs"), DELEGATE_ID], { cwd: main, encoding: "utf8", env: { ...process.env, DEV_LOOPS_PULL_DELEGATED: "1" } });
     assert.equal(refusal(marked).refusal, "dispatch_reference_mismatch");
