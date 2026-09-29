@@ -1721,6 +1721,17 @@ test("buildAngleNamingSuffix names angles and carries their supplied instruction
   assert.match(group, /one findings artifact PER ANGLE/);
 });
 
+test("buildAngleNamingSuffix requires the file-write tool for single-angle and grouped units and keeps the blocked invocation (#2510)", () => {
+  const single = buildAngleNamingSuffix({ name: "acceptance-criteria", angles: ["acceptance-criteria"] }, "pre-approval-gate-acceptance-criteria");
+  const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] }, "pre-approval-gate-group-design-simplicity");
+  for (const suffix of [single, group]) {
+    assert.ok(suffix.includes("with the file-write tool (the `write` builtin, `Write` on Claude Code), never a shell write (redirect, heredoc, `tee`, or an inline script)"));
+    assert.ok(suffix.includes("emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished>"));
+  }
+  assert.match(single, /Write one findings artifact for this angle at its per-angle path with the file-write tool/);
+  assert.match(group, /one artifact per angle, never one merged artifact for the unit, each with the file-write tool/);
+});
+
 test("buildAngleNamingSuffix adds the fixed verifiedItems instruction to every unit carrying an AC angle, keyed on membership", () => {
   const units = [
     { name: "acceptance-criteria", angles: ["acceptance-criteria"] },
