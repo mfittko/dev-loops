@@ -676,7 +676,10 @@ async function runFixedReply(body, entries, disposition, cwd) {
     const bodyFile = path.join(tempDir, "reply.md");
     await writeFile(bodyFile, body, "utf8");
     const gh = await writeGhStub(tempDir, entries);
-    const result = await runNode(threadArgs(bodyFile, disposition), { env: gh.env, cwd });
+    const env = { ...gh.env };
+    delete env.GIT_DIR;
+    delete env.GIT_WORK_TREE;
+    const result = await runNode(threadArgs(bodyFile, disposition), { env, cwd });
     const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
     return { result, ghLog };
   } finally {
