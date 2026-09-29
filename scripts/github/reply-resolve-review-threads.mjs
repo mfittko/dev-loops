@@ -10,6 +10,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   authorMatchesFilter,
   captureParsedReviewThreads,
+  assertFixedReplyShas,
   replyAndMaybeResolve,
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
@@ -401,6 +402,11 @@ export async function runCli(
   }
   const resolveBodyForThread = (threadId) => (
     hasMessageMapEntry(messageMap, threadId) ? messageMap[threadId] : message
+  );
+  await assertFixedReplyShas(
+    matchedTargets.map((target) => resolveBodyForThread(target.threadId)),
+    { repo: options.repo, pr: options.pr },
+    { env, ghCommand },
   );
   if (matchedTargets.length === 0) {
     process.exitCode = emitResult(createSuccessPayload({

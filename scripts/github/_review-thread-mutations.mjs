@@ -28,6 +28,42 @@ export function validateResolutionMessage(body) {
     hasDismissalReason,
   };
 }
+const FULL_SHA_PATTERN = /\b[0-9a-f]{40}\b/gi;
+// A reply that cites a commit claims a fix. Such a reply must carry a full
+// 40-character SHA that the PR head contains, so the disposition verifier can
+// match it later. The check runs before any post or resolve.
+export async function assertFixedReplyShas(
+  bodies,
+  { repo, pr },
+  { env = process.env, ghCommand = "gh", runChild = runChildWithInput } = {},
+) {
+  const claims = bodies.filter((body) => hasCommitShaReference(body));
+  if (claims.length === 0) return;
+  const view = await runChild(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid"], env);
+  let head = null;
+  try { head = JSON.parse(view.stdout).headRefOid; } catch { /* handled below */ }
+  if (view.code !== 0 || typeof head !== "string" || head.length === 0) {
+    throw new Error(`Cannot read the head commit of ${repo}#${pr} to check the fixed reply SHA`);
+  }
+  for (const body of claims) {
+    const fullShas = body.match(FULL_SHA_PATTERN) ?? [];
+    if (fullShas.length === 0) {
+      throw new Error(
+        `fixed_reply_missing_full_sha: a fixed reply must contain the full 40-character fixing commit SHA. Repeat the call with the full SHA of the fixing commit, currently ${head}.`,
+      );
+    }
+    let contained = false;
+    for (const sha of fullShas) {
+      const result = await runChild("git", ["merge-base", "--is-ancestor", sha, head], env);
+      if (result.code === 0) { contained = true; break; }
+    }
+    if (!contained) {
+      throw new Error(
+        `fixed_reply_sha_not_in_head: no 40-character SHA in the fixed reply is contained in the PR head ${head}. Use the full SHA of the fixing commit.`,
+      );
+    }
+  }
+}
 export function runChildWithInput(command, args, env, stdinText) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {

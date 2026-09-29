@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { test } from "bun:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import { hasCommitShaReference } from "../../scripts/github/reply-resolve-review-thread.mjs";
@@ -30,7 +30,7 @@ const writeGhStub = (tempDir, entries) => writeGhStubHelper(tempDir, entries, { 
 test("reply-resolve-review-thread posts a reply then resolves the thread", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-thread-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in 93cd7f8. Added the missing symlinked-ancestor guard and coverage.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch. Added the missing symlinked-ancestor guard and coverage.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -49,7 +49,7 @@ test("reply-resolve-review-thread posts a reply then resolves the thread", async
       },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/123/replies", "--input", "-"],
-        assertStdinIncludes: ['"body":"Fixed in 93cd7f8. Added the missing symlinked-ancestor guard and coverage.\\n"'],
+        assertStdinIncludes: ['"body":"Fixed in the review-thread follow-up branch. Added the missing symlinked-ancestor guard and coverage.\\n"'],
         stdout: '{"id":456,"html_url":"https://github.com/owner/repo/pull/17#discussion_r456"}\n',
       },
       {
@@ -88,7 +88,7 @@ test("reply-resolve-review-thread posts a reply then resolves the thread", async
 test("reply-resolve-review-thread neutralizes a bare /copilot token in the reply body before posting", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-sanitize-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in 93cd7f8. Also note the /copilot prohibition rule applies here.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch. Also note the /copilot prohibition rule applies here.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -107,7 +107,7 @@ test("reply-resolve-review-thread neutralizes a bare /copilot token in the reply
       },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/123/replies", "--input", "-"],
-        assertStdinIncludes: ['"body":"Fixed in 93cd7f8. Also note the `/copilot` prohibition rule applies here.\\n"'],
+        assertStdinIncludes: ['"body":"Fixed in the review-thread follow-up branch. Also note the `/copilot` prohibition rule applies here.\\n"'],
         stdout: '{"id":456,"html_url":"https://github.com/owner/repo/pull/17#discussion_r456"}\n',
       },
       {
@@ -286,7 +286,7 @@ test("reply-resolve-review-thread preserves leading whitespace in the reply body
 test("reply-resolve-review-thread reports reply and resolve failures deterministically", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-failure-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Resolved in 93cd7f8.\n", "utf8");
+  await writeFile(bodyFile, "Resolved in the review-thread follow-up branch.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -387,7 +387,7 @@ test("reply-resolve-review-thread reports reply and resolve failures determinist
 test("reply-resolve-review-thread fails closed before mutating when comment and thread do not match", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-mismatch-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -436,7 +436,7 @@ test("reply-resolve-review-thread fails closed before mutating when comment and 
 test("reply-resolve-review-thread fails closed before mutating when the target thread is missing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-missing-thread-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -476,7 +476,7 @@ test("reply-resolve-review-thread fails closed before mutating when the target t
 test("reply-resolve-review-thread fails closed before mutating when the target comment is missing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-missing-comment-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -516,7 +516,7 @@ test("reply-resolve-review-thread fails closed before mutating when the target c
 test("reply-resolve-review-thread fails closed before mutating when the validation snapshot is malformed", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-malformed-snapshot-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -619,7 +619,7 @@ test("#1731: reply-resolve-review-thread allows a DELIBERATE cross-ref via --all
 test("#1817: reply-resolve-review-thread rejects a syntactically invalid --jq BEFORE replying/resolving (no mutation)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-jq-invalid-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in 93cd7f8. Added coverage.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch. Added coverage.\n", "utf8");
   try {
     // Zero stubbed gh responses AND no overflow repeat: if the code regresses
     // to validating --jq only after mutating (the original #1817 footgun),
@@ -658,4 +658,53 @@ test("#1731: reply-resolve-review-thread rejects a non-numeric --allowed-refs en
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+const headSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const headViewEntry = { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `${JSON.stringify({ headRefOid: headSha })}\n` };
+const threadEntry = {
+  assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
+  stdout: createReviewThreadsPayload([{ id: "THREAD_123", comments: { nodes: [{ id: "PRRC_node_123", databaseId: 123 }] } }]),
+};
+const threadArgs = (bodyFile) => ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile];
+
+async function runFixedReply(body, entries) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-fixed-sha-"));
+  try {
+    const bodyFile = path.join(tempDir, "reply.md");
+    await writeFile(bodyFile, body, "utf8");
+    const gh = await writeGhStub(tempDir, entries);
+    const result = await runNode(threadArgs(bodyFile), { env: gh.env });
+    const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    return { result, ghLog };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("reply-resolve-review-thread refuses a fixed reply with only a short SHA, prints the full head SHA and mutates nothing", async () => {
+  const { result, ghLog } = await runFixedReply("Fixed in b08a862 with the missing guard.\n", [headViewEntry]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /fixed_reply_missing_full_sha/);
+  assert.ok(result.stderr.includes(headSha));
+  assert.equal(ghLog.length, 1, "only the head lookup ran; no post or resolve");
+});
+
+test("reply-resolve-review-thread posts and resolves a fixed reply whose full SHA is contained in the PR head", async () => {
+  const { result, ghLog } = await runFixedReply(`Fixed in ${headSha} with the missing guard.\n`, [
+    headViewEntry,
+    threadEntry,
+    { stdout: '{"id":456,"html_url":"https://github.com/owner/repo/pull/17#discussion_r456"}\n' },
+    { stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_123","isResolved":true}}}}\n' },
+  ]);
+  assert.equal(result.code, 0);
+  assert.equal(JSON.parse(result.stdout).resolved, true);
+  assert.equal(ghLog.length, 4);
+});
+
+test("reply-resolve-review-thread refuses a fixed reply whose full SHA is not contained in the PR head", async () => {
+  const { result, ghLog } = await runFixedReply(`Fixed in ${"deadbeef".repeat(5)} with the missing guard.\n`, [headViewEntry]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /fixed_reply_sha_not_in_head/);
+  assert.equal(ghLog.length, 1);
 });

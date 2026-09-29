@@ -6,6 +6,7 @@ import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
 import { parsePositiveInteger, parseAllowedRefsCsv } from "@dev-loops/core/cli/primitives";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
+  assertFixedReplyShas,
   replyAndMaybeResolve,
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
@@ -103,6 +104,7 @@ async function run(argv) {
   const rawBody = await readFile(bodyFile, "utf8");
   if (rawBody.trim().length === 0) throw new Error("--body-file must contain non-empty text");
   validateResolutionMessage(rawBody);
+  await assertFixedReplyShas([rawBody], { repo: repoSlug, pr }, { env: process.env, ghCommand: "gh" });
 
   const result = await replyAndMaybeResolve(
     { repo: repoSlug, pr, commentId, threadId, body: rawBody, resolve: true, allowedRefs },

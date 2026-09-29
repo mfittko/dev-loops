@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { test } from "bun:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
@@ -99,7 +99,7 @@ test("reply-resolve-review-threads rejects malformed arguments and conflicting o
   assert.equal(missingParsed.hint, "run with --help for usage");
 
   const conflicting = await runNode(
-    ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the contract"],
+    ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the contract"],
     { stdinText: "Also from stdin\n" },
   );
   assert.equal(conflicting.code, 1);
@@ -170,18 +170,18 @@ test("reply-resolve-review-threads replies to matching unresolved threads withou
       },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/101/replies", "--input", "-"],
-        assertStdinIncludes: ['"body":"Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."'],
+        assertStdinIncludes: ['"body":"Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."'],
         stdout: '{"id":501,"html_url":"https://github.com/owner/repo/pull/17#discussion_r501"}\n',
       },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/201/replies", "--input", "-"],
-        assertStdinIncludes: ['"body":"Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."'],
+        assertStdinIncludes: ['"body":"Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."'],
         stdout: '{"id":502,"html_url":"https://github.com/owner/repo/pull/17#discussion_r502"}\n',
       },
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--author", "Copilot", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      ["--repo", "owner/repo", "--pr", "17", "--author", "Copilot", "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."],
       { env: gh.env },
     );
 
@@ -282,7 +282,7 @@ test("reply-resolve-review-threads resolves matched threads and verifies they st
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.", "--resolve"],
+      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract.", "--resolve"],
       { env: gh.env },
     );
 
@@ -347,7 +347,7 @@ test("reply-resolve-review-threads chooses the newest matching author-authored c
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."],
       { env: gh.env },
     );
 
@@ -380,7 +380,7 @@ test("reply-resolve-review-threads returns deterministic success when nothing ma
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."],
       { env: gh.env },
     );
 
@@ -414,7 +414,7 @@ test("reply-resolve-review-threads fails closed on malformed capture payloads", 
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."],
       { env: gh.env },
     );
 
@@ -460,7 +460,7 @@ test("reply-resolve-review-threads stops on reply failure and reports partial pr
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."],
       { env: gh.env },
     );
 
@@ -527,7 +527,7 @@ test("reply-resolve-review-threads fails closed when post-resolve verification s
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.", "--resolve"],
+      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract.", "--resolve"],
       { env: gh.env },
     );
 
@@ -577,14 +577,14 @@ test("reply-resolve-review-threads preserves leading whitespace and newlines fro
       },
       {
         assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
-        assertStdinIncludes: ['"body":"\\n  Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.'],
+        assertStdinIncludes: ['"body":"\\n  Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract.'],
         stdout: '{"id":1001,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1001"}\n',
       },
     ]);
 
     const result = await runNode(
       ["--repo", "owner/repo", "--pr", "17"],
-      { env: gh.env, stdinText: "\n  Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.\n" },
+      { env: gh.env, stdinText: "\n  Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract.\n" },
     );
 
     assert.equal(result.code, 0);
@@ -610,13 +610,13 @@ test("reply-resolve-review-threads preserves leading whitespace from --message",
       },
       {
         assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
-        assertStdinIncludes: ['"body":"  Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."'],
+        assertStdinIncludes: ['"body":"  Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."'],
         stdout: '{"id":1002,"html_url":"https://github.com/owner/repo/pull/17#discussion_r1002"}\n',
       },
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--message", "  Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      ["--repo", "owner/repo", "--pr", "17", "--message", "  Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."],
       { env: gh.env },
     );
 
@@ -665,7 +665,7 @@ test("reply-resolve-review-threads defaults to all reviewers and processes mixed
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."],
       { env: gh.env },
     );
 
@@ -715,7 +715,7 @@ test("reply-resolve-review-threads filters to human-only unresolved threads with
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--author", "reviewer", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      ["--repo", "owner/repo", "--pr", "17", "--author", "reviewer", "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."],
       { env: gh.env },
     );
 
@@ -765,7 +765,7 @@ test("reply-resolve-review-threads skips resolved human threads by default", asy
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract."],
+      ["--repo", "owner/repo", "--pr", "17", "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract."],
       { env: gh.env },
     );
 
@@ -804,7 +804,7 @@ test("reply-resolve-review-threads terminates on an idle open stdin pipe with no
       const child = spawn((Bun.which("node") ?? "node"), [
         scriptPath,
         "--repo", "owner/repo", "--pr", "17",
-        "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
+        "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract.",
       ], { env: gh.env, stdio: ["pipe", "pipe", "pipe"] });
       let stdout = "";
       let stderr = "";
@@ -844,7 +844,7 @@ test("reply-resolve-review-threads detects a conflicting stdin source promptly o
       const child = spawn((Bun.which("node") ?? "node"), [
         scriptPath,
         "--repo", "owner/repo", "--pr", "17",
-        "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
+        "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract.",
       ], { env: gh.env, stdio: ["pipe", "pipe", "pipe"] });
       let stdout = "";
       let stderr = "";
@@ -886,7 +886,7 @@ test("reply-resolve-review-threads detects a conflict when a whitespace-only chu
       const child = spawn((Bun.which("node") ?? "node"), [
         scriptPath,
         "--repo", "owner/repo", "--pr", "17",
-        "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
+        "--message", "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract.",
       ], { env: gh.env, stdio: ["pipe", "pipe", "pipe"] });
       let stdout = "";
       let stderr = "";
@@ -934,7 +934,7 @@ test("reply-resolve-review-threads --message-map fails closed before any mutatio
       },
     ]);
     const mapPath = path.join(tempDir, "message-map.json");
-    await writeJsonHelper(mapPath, { THREAD_1: "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract." });
+    await writeJsonHelper(mapPath, { THREAD_1: "Fixed in the review-thread follow-up branch with enough detail to satisfy the resolution contract." });
 
     const result = await runNode(
       ["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath],
@@ -977,19 +977,19 @@ test("reply-resolve-review-threads posts a distinct mapped reply body per thread
       },
       {
         assertArgs: ["repos/owner/repo/pulls/17/comments/101/replies"],
-        assertStdinIncludes: ['"body":"Fixed the null check in file-a.mjs in 93cd7f8."'],
+        assertStdinIncludes: ['"body":"Fixed the null check in file-a.mjs in the review-thread follow-up branch."'],
         stdout: '{"id":2001,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2001"}\n',
       },
       {
         assertArgs: ["repos/owner/repo/pulls/17/comments/202/replies"],
-        assertStdinIncludes: ['"body":"Fixed the off-by-one in file-b.mjs in 93cd7f8."'],
+        assertStdinIncludes: ['"body":"Fixed the off-by-one in file-b.mjs in the review-thread follow-up branch."'],
         stdout: '{"id":2002,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2002"}\n',
       },
     ]);
     const mapPath = path.join(tempDir, "message-map.json");
     await writeJsonHelper(mapPath, {
-      THREAD_1: "Fixed the null check in file-a.mjs in 93cd7f8.",
-      THREAD_2: "Fixed the off-by-one in file-b.mjs in 93cd7f8.",
+      THREAD_1: "Fixed the null check in file-a.mjs in the review-thread follow-up branch.",
+      THREAD_2: "Fixed the off-by-one in file-b.mjs in the review-thread follow-up branch.",
     });
 
     const result = await runNode(
@@ -1066,9 +1066,9 @@ test("reply-resolve-review-threads --message-map --resolve pins true matched/rep
     ]);
     const mapPath = path.join(tempDir, "message-map.json");
     await writeJsonHelper(mapPath, {
-      THREAD_1: "Fixed the null check in file-a.mjs in 93cd7f8.",
-      THREAD_2: "Fixed the off-by-one in file-b.mjs in 93cd7f8.",
-      THREAD_3: "Fixed the missing await in file-c.mjs in 93cd7f8.",
+      THREAD_1: "Fixed the null check in file-a.mjs in the review-thread follow-up branch.",
+      THREAD_2: "Fixed the off-by-one in file-b.mjs in the review-thread follow-up branch.",
+      THREAD_3: "Fixed the missing await in file-c.mjs in the review-thread follow-up branch.",
     });
 
     const result = await runNode(
@@ -1108,12 +1108,12 @@ test("reply-resolve-review-threads sanitizes Copilot summon tokens in --message-
       },
       {
         assertArgs: ["repos/owner/repo/pulls/17/comments/401/replies"],
-        assertStdinIncludes: ['"body":"Addressed `@copilot`\'s note in 93cd7f8."'],
+        assertStdinIncludes: ['"body":"Addressed `@copilot`\'s note in the review-thread follow-up branch."'],
         stdout: '{"id":2301,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2301"}\n',
       },
     ]);
     const mapPath = path.join(tempDir, "message-map.json");
-    await writeJsonHelper(mapPath, { THREAD_1: "Addressed @copilot's note in 93cd7f8." });
+    await writeJsonHelper(mapPath, { THREAD_1: "Addressed @copilot's note in the review-thread follow-up branch." });
 
     const result = await runNode(
       ["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath],
@@ -1122,6 +1122,37 @@ test("reply-resolve-review-threads sanitizes Copilot summon tokens in --message-
 
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stderr, "");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-threads refuses the whole call before any post when one mapped fixed reply lacks a full SHA", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-fixed-sha-"));
+  try {
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const gh = await writeGhStub(tempDir, [
+      {
+        stdout: createReviewThreadsPayload([
+          { id: "THREAD_1", isResolved: false, comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: "note", author: { login: "reviewer", __typename: "User" } }] } },
+          { id: "THREAD_2", isResolved: false, comments: { nodes: [{ id: "PRRC_node_202", databaseId: 202, body: "note", author: { login: "reviewer", __typename: "User" } }] } },
+        ]),
+      },
+      { stdout: `${JSON.stringify({ headRefOid: headSha })}\n` },
+    ]);
+    const mapPath = path.join(tempDir, "message-map.json");
+    await writeJsonHelper(mapPath, {
+      THREAD_1: `Fixed the null check in ${headSha}.`,
+      THREAD_2: "Fixed the off-by-one in b08a862.",
+    });
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--message-map", mapPath, "--resolve"], { env: gh.env });
+
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /fixed_reply_missing_full_sha/);
+    assert.ok(result.stderr.includes(headSha));
+    const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+    assert.equal(ghLog.length, 2, "only the capture and head lookup ran; no post for either thread");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
