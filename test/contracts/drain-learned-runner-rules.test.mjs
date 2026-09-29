@@ -125,9 +125,10 @@ test("GATE-EXEC-GATE-COORDINATOR dispatch guidance points to the issue body and 
   const content = await readRepo(GATE_DOC);
   assert.ok(sectionFrom(content, "<!-- rule: GATE-EXEC-GATE-COORDINATOR -->").includes("Dispatch guidance."));
   const guidance = dispatchGuidance(content);
-  assert.match(guidance, /worker, reviewer, judge or fixer dispatch/);
+  assert.match(guidance, /A reviewer or judge dispatch is exactly the emitted `dispatchPrompt`/);
+  assert.match(guidance, /A worker or fixer dispatch names the\s+linked issue/);
   assert.match(guidance, /"The issue body is the spec; read it\."/);
-  assert.match(guidance, /`pr_body` path the PR body is the\s+spec/);
+  assert.match(guidance, /`pr_body` path\s+the PR body is the\s+spec/);
   assert.match(guidance, /never restates issue-specific spec/);
   assert.match(guidance, /cites rules by rule ID, never by copied text/);
   const bullet = (label) => {
@@ -297,6 +298,12 @@ test("README Claude Code plugin section names the permission rule for both verdi
 
 const DEV_LOOP_AGENT_SURFACES = ["agents/dev-loop.agent.md", ".claude/agents/dev-loop.md"];
 
+test("reviewer and judge agent definitions deliver WORKTREE-SCRIPT-LAUNCHER-CWD", async () => {
+  for (const agent of ["agents/review.agent.md", "agents/judge.agent.md"]) {
+    assert.match(await readRepo(agent), /`WORKTREE-SCRIPT-LAUNCHER-CWD`/, agent);
+  }
+});
+
 function subagentDelegation(content) {
   return sectionFrom(content, "## Subagent delegation", "\n## ");
 }
@@ -304,7 +311,8 @@ function subagentDelegation(content) {
 for (const surface of DEV_LOOP_AGENT_SURFACES) {
   test(`${surface} Subagent delegation points to the issue body and cites rules by role`, async () => {
     const section = subagentDelegation(await readRepo(surface));
-    assert.match(section, /worker, reviewer, judge or fixer dispatch names the linked issue and states "The issue body is the spec; read it\."/);
+    assert.match(section, /a reviewer or judge dispatch is exactly the emitted `dispatchPrompt`\. Its pulled work order carries the spec pointer, and its agent definition cites the rules it needs\./);
+    assert.match(section, /A worker or fixer dispatch names the linked issue and states "The issue body is the spec; read it\."/);
     assert.match(section, /`pr_body` path the PR body is the spec/);
     assert.match(section, /never restates issue-specific spec/);
     assert.match(section, /cites rules by rule ID, never by copied text/);
@@ -315,6 +323,7 @@ for (const surface of DEV_LOOP_AGENT_SURFACES) {
     assert.doesNotMatch(editing, /HARNESS-JOIN/);
     const runners = bullet("script runners");
     assert.match(runners, /`WORKTREE-SCRIPT-LAUNCHER-CWD`/);
+    assert.match(runners, /a reviewer or judge gets it through its agent definition/);
     assert.doesNotMatch(runners, /HARNESS-JOIN/);
     assert.match(section, /A worker, reviewer, judge or fixer dispatches no children and receives no join rule\./);
     assert.match(bullet("Awaiting any wait the run depends on"), /Join rule: `GATE-EXEC-HARNESS-JOIN`\./);

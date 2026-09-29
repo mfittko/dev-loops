@@ -70,8 +70,8 @@ Both gates run the identical phases with their own review angles.
 
 <!-- rule: GATE-EXEC-GATE-COORDINATOR -->
 `GATE-EXEC-GATE-COORDINATOR`: Every `draft_gate` and `pre_approval_gate` review round MUST run
-in a dedicated, fresh-context **gate coordinator** agent. This is the only sanctioned round
-shape. The gate coordinator is the "gate-round capsule" of ADR 0081. It owns exactly one round
+in a dedicated, fresh-context **gate coordinator**, dispatched as the `gate-coordinator` agent
+(ADR 0112). This is the only sanctioned round shape. The gate coordinator is the "gate-round capsule" of ADR 0081. It owns exactly one round
 for one gate at one head and runs every in-round step: gate validation, the Phase 1 context,
 Phase 1.2 carry-forward, the Phase 2 wave dispatch of `review` agents, the
 Phase 3 fan-in and durable ledger write, the Phase 3.5 judge, and `judge-pass`. A light-mode
@@ -104,21 +104,26 @@ If a harness cannot fan out at the gate coordinator's depth, the round fails clo
 `FANOUT_UNAVAILABLE_MESSAGE` ([below](#fail-closed-fan-out-unavailable--route-to-conductor))
 and never degrades to inline review.
 
-Dispatch guidance. A worker, reviewer, judge or fixer dispatch names the linked issue and states
-"The issue body is the spec; read it." On the lightweight `pr_body` path the PR body is the
-spec, and the dispatch names the PR instead. The dispatch never restates issue-specific spec.
+Dispatch guidance. A reviewer or judge dispatch is exactly the emitted `dispatchPrompt`. Its pulled
+work order carries the spec pointer, and its agent definition cites the rules it needs. A worker or fixer dispatch names the
+linked issue and states "The issue body is the spec; read it." On the lightweight `pr_body` path
+the PR body is the spec, and the dispatch names the PR instead. The dispatch never restates issue-specific spec.
 It cites rules by rule ID, never by copied text, and it cites each rule only to the roles that
 need it:
 
 - agents that dispatch children, such as the gate coordinator: `GATE-EXEC-HARNESS-JOIN`;
 - editing workers (developer, fixer, docs): `WORKTREE-NONINTERACTIVE-FILE-OPS` and
   `OPS-NO-INLINE-INTERPRETER`;
-- script runners (any role that runs repo scripts, reviewers included):
+- script runners (any role that runs repo scripts; a reviewer or judge gets it through its agent definition):
   `WORKTREE-SCRIPT-LAUNCHER-CWD`.
 
 A worker, reviewer, judge or fixer dispatches no children and receives no join rule.
 
-The standalone `review` gate is outside this rule's scope.
+The standalone `review` gate is outside this rule's scope, with one exception. On the dev-loop
+`--review` route, a `gate-coordinator` agent runs the review round's Phases 1 to 3 through fan-in
+and the ledger write. The route runs no judge phase, so the typed result omits the act-list path,
+the spec-authority identity path and the judge summary. The dev-loop
+coordinator then posts the verdict and makes the submit choice.
 
 ### Base refresh before a gate round
 
@@ -726,9 +731,11 @@ retirement affects only its gate+head, never carried angles' prior-head sentinel
 (deprecated alias: `--pr-body-fix-retry`). It overwrites only that scope+head sentinel
 and only when supplied `--prefix-hash`/`--prefix-file` EXACTLY matches the existing
 recorded hash. The reason never affects eligibility. Missing hash or mismatch fails
-closed; changed briefing bytes require retirement instead.
+closed; changed briefing bytes require retirement instead. On Claude Code the agent dispatch
+guard denies any reviewer relay other than the emitted `dispatchPrompt`, so an interrupted
+reviewer at the same head recovers through `GATE-EXEC-ROUND-RETIREMENT` and a fresh round.
 
-Re-brief with the UNCHANGED invariant prefix; do not rerun `write-gate-context.mjs`.
+On a harness without the agent dispatch guard (Pi), re-brief with the UNCHANGED invariant prefix; do not rerun `write-gate-context.mjs`.
 Other angles' sentinels remain untouched and verify against the same prefix record;
 no full re-fan or manual deletion is needed. A same-head retry replays the
 build-time evidence file and known-findings snapshot, so it never sees a PR-body edit

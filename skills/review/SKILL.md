@@ -42,6 +42,14 @@ bare `/loop-review` form is dev-loops-repo-local (repo-local
 
 Read [Gate-review sub-loop contract](../docs/gate-review-sub-loop-contract.md) before execution. Reuse its context, fan-out and fan-in procedure with `--gate review` through every stage; stop after verdict-post and the submit choice, before judge, fix or repeat phases.
 
+When the `review` route runs inside a `dev-loop` agent (`loop startup --pr <n> --review`), that
+agent dispatches one `gate-coordinator` agent for the round. The `gate-coordinator` agent runs
+steps 1 to 3 and step 4 up to the ledger write, dispatches the `review` agents, and returns the
+typed round result without the act-list path, the spec-authority identity path and the judge
+summary, since the route runs no judge phase (`GATE-EXEC-GATE-COORDINATOR`). The `dev-loop` agent
+then runs the `upsert-checkpoint-verdict.mjs` post and the submit choice. In the main session
+this skill dispatches the `review` agents directly.
+
 1. **Phase 1 — context-builder.** `node scripts/github/write-gate-context.mjs
    --repo <owner/repo> --pr <n> --gate review --head-sha <sha> --base <ref>
    [...]` — the SAME build-once neutral bundle (diff + adjacent code) draft/

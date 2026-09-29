@@ -26,8 +26,8 @@
  *
  * 3. Coordinator→worker delegation boundary (#2082, opt-in via
  *    DEVLOOPS_COORDINATOR_READONLY=1, default fail-open): the INVERSE of boundary 2, one
- *    level down. Denies a tracked-repo-file Write/Edit whose Claude agent_type is the
- *    coordinator's own ("dev-loop"); the coordinator must delegate the edit to a fresh
+ *    level down. Denies a tracked-repo-file Write/Edit whose Claude agent_type is
+ *    a coordinator's own ("dev-loop" or "gate-coordinator"); the coordinator must delegate the edit to a fresh
  *    worker subagent (developer/fixer/quality/docs). Reuses the same isRepoMutation/
  *    agentType facts computed for boundary 2.
  */

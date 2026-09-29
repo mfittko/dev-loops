@@ -16,7 +16,7 @@
  *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
  *   - `bun run verify` / `bun test` / `vitest` / `npm test` / `npm run test` / `bun run build` /
  *     `npm run build` (and yarn/pnpm equivalents) — blocked ONLY from the dev-loop COORDINATOR
- *     (agent_type "dev-loop"), opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (#2082). Worker
+ *     (agent_type "dev-loop" or "gate-coordinator"), opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (#2082). Worker
  *     subagents (developer/fixer/quality/review) may run these freely.
  *   - the `fixer` agent passes through, and its exact sanctioned work-order pull line
  *     records its agent_id as the binding the Write/Edit guard checks (ADR 0107). The fixer Bash
@@ -112,8 +112,8 @@ const isReplyResolve =
 const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command, managedRepoSlug);
 const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
 const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
-// COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType ===
-// "dev-loop"), so the quick pre-check here only detects the command shape; the hook must not
+// COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType is
+// "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
 const isVerifyEntrypoint = typeof command === "string" && commandContainsCodeVerificationEntrypoint(command);
 // The read-only judge may run only its work-order pull (ADR 0106); every judge command reaches the decider.

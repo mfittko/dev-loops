@@ -13,7 +13,7 @@ The coordinator MAY still write EPHEMERAL gitignored/non-repo artifacts directly
 scratchpad, and sanctioned ledger paths (the PR body markdown, comment bodies, dispatch prompts,
 gate evidence/ledgers under `tmp/gate-findings/`). The `PreToolUse` Write/Edit guard hook enforces
 this boundary: opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once
-enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop`; a worker
+enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop` or `gate-coordinator`; a worker
 subagent's `agent_type` is unaffected. It is a targeted denylist, not an airtight sandbox:
 Bash-driven tracked mutations (`git commit`, `sed -i`, `> file`) stay convention-enforced, and
 the top-level/inline agent (`agent_type: null`) falls under the main-agent boundary below. On Pi, see
@@ -190,9 +190,12 @@ the full run.
   `COORDINATOR-VERIFY-BOUNDARY`: the dev-loop coordinator MUST NOT run a known
   code-verification/build entrypoint (`bun run verify`/`bun test`/`vitest`/`npm test`/
   `npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/`pnpm`) inline; it
-  MUST delegate targeted runs to a fresh worker subagent (`developer`/`fixer`/`quality`/`review`) and request any local full-repository run through `dev-loops gate resolve-validation` instead. Enforced by the
+  MUST delegate targeted runs to a fresh worker subagent (`developer`/`fixer`/`quality`) and request any local full-repository run through `dev-loops gate resolve-validation` instead. Enforced by the
   `PreToolUse` Bash gate hook (`.claude/hooks/pre-tool-use-bash-gate.mjs`), which denies the
-  command when the caller's `agent_type` is the coordinator's own (`dev-loop`). Gated by the SAME
+  command when the caller's `agent_type` is a coordinator's own (`dev-loop` or `gate-coordinator`).
+  For a `gate-coordinator` caller, the deny reason names `dev-loops gate resolve-validation` for the
+  round's validation and a typed observation to the dev-loop coordinator for anything else, because a
+  gate coordinator dispatches no worker subagent. Gated by the SAME
   `DEVLOOPS_COORDINATOR_READONLY=1` flag as the write-guard boundary above (default fail-open); a
   worker subagent's `agent_type` is unaffected. The classifier tolerates a wrapping `env`
   invocation carrying either `NAME=value` assignments or common `env` options (`-i`, `-u <NAME>`,
@@ -200,7 +203,7 @@ the full run.
   (`env -u DEVLOOPS_COORDINATOR_READONLY bun run verify` is still denied), on top of the bare
   leading-assignment and `nice`/`timeout` wrapper forms already covered.
 - **Guarded surface and deliberate ceilings.** Both coordinator boundaries are non-bypassable BY
-  THE AGENT only for their GUARDED SURFACE: a dispatched coordinator's (`agent_type: "dev-loop"`)
+  THE AGENT only for their GUARDED SURFACE: a dispatched coordinator's (`agent_type: "dev-loop"` or `"gate-coordinator"`)
   `Write`/`Edit` tracked-file mutations and its use of a recognized code-verification/build
   command ENTRYPOINT. Three deliberate ceilings apply:
   1. Bash-driven tracked mutations the contract also forbids (`git commit`/`git push`/branch

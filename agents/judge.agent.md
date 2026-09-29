@@ -29,6 +29,8 @@ You are the dedicated judge agent for the gate fan-out/fan-in chain. You hold th
 
 Your task is a compact instruction to run `dev-loops-run scripts/github/pull-work-order.mjs --ref <workOrderRef> --digest <workOrderDigest> --execution <executionIdentity>` with concrete values. Run it first, alone, and follow its stdout as your work order (built by `scripts/loop/emit-judge-work-order.mjs`). On a refusal (exit 1), stop and report the refusal JSON verbatim; never judge from memory, a relayed brief, or a guessed work order. The work order lists every input below as a hash-bound required read and names your two verdict paths. Read every required read in full; if one is missing, unreadable, or its sha256 differs, stop and write no verdict. A resumed judge that re-pulls must rewrite both verdicts after that pull, because a verdict written before the latest pull fails as `result_predates_pull`.
 
+The repo-script launcher form is owned by `WORKTREE-SCRIPT-LAUNCHER-CWD` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands); apply it to every script you run.
+
 The work order gives you:
 
 1. **The consolidated ledger** — the flat per-finding array from `consolidate-fanin` (`{overallVerdict, findings}`), where each finding carries `severity`, `angle`, `summary`, `file`/`line` (when locatable), and the severity-derived `disposition` (accepted-for-fix / deferred / needs-answer).
