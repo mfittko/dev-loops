@@ -12,11 +12,11 @@ Amends [ADR 0112](./0112-gate-coordinator-agent-joins-the-agent-taxonomy.md): th
 
 ## Decision
 
-- A `dev-loop` caller that dispatches `review` is denied with `GATE_COORDINATOR_REQUIRED` only when the prompt carries a `pull-work-order` invocation, exact or wrapped in other text. A prose-briefed `review` dispatch from `dev-loop` is allowed.
+- A `dev-loop` caller that dispatches `review` is denied with `GATE_COORDINATOR_REQUIRED` only when the prompt carries a work-order ref token (`review:`, `judge:` or `fixer:` followed by `owner/repo#N:`) or an execution identity token, in any flag order, quoting or wrapping. A prose-briefed `review` dispatch from `dev-loop` is allowed.
 - A `dev-loop` caller that dispatches `judge` is denied with `GATE_COORDINATOR_REQUIRED` for every prompt.
 - The `gate-coordinator` rules of ADR 0112 are unchanged.
 
-A gate-round unit is reached only through a work-order pull. A `review` prompt that carries no `pull-work-order` invocation cannot pull a unit, so it cannot produce a gate-round result, because fan-in accepts only pull-bound unit artifacts.
+A gate-round unit is reached only through a work-order pull. A `review` prompt that carries neither the unit's work-order ref nor its execution identity cannot pull it, so it cannot produce a gate-round result, because fan-in accepts only pull-bound unit artifacts.
 
 Rejected: an allow-list of pre-PR and delta prompt shapes (the contracts brief these reviewers in prose, so no stable shape exists to match).
 

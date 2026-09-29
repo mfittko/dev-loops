@@ -1501,7 +1501,13 @@ test("decideAgentDispatch denies a dev-loop review dispatch that carries a wrapp
   const p = pointer("review");
   for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
     for (const target of ["review", "dev-loops:review"]) {
-      for (const prompt of [`${p}\n`, ` ${p}`, `cd /w && ${p}`, `${p} Also check the docs.`, pointer("judge"), "Run `dev-loops-run scripts/github/pull-work-order.mjs r1-aaaaaaaa-u0`; follow it."]) {
+      for (const prompt of [`${p}\n`, ` ${p}`, `cd /w && ${p}`, `${p} Also check the docs.`, pointer("judge"), "Run `dev-loops-run scripts/github/pull-work-order.mjs r1790650082544-67ff78cc-u0`; follow it.",
+        "dev-loops-run scripts/github/pull-work-order.mjs --digest ab12cd --ref review:o/r#7:draft_gate:abc123:u1 --execution x1-aa",
+        "dev-loops-run scripts/github/pull-work-order.mjs --ref=review:o/r#7:draft_gate:abc123:u1 --digest ab12cd --execution x1-aa",
+        "dev-loops-run 'scripts/github/pull-work-order.mjs' --ref review:o/r#7:draft_gate:abc123:u1 --digest ab12cd --execution x1-aa",
+        "dev-loops-run scripts/github/pull-work-order.mjs \\\n  --ref review:o/r#7:draft_gate:abc123:u1 --digest ab12cd --execution x1-aa",
+        "Pull your unit: $W/pull-work-order.mjs --ref \"judge:o/r#7:draft_gate:abc123:j1\"",
+      ]) {
         const d = dispatch(caller, target, prompt);
         assert.equal(d.decision, "deny", `${caller} -> ${target} ${JSON.stringify(prompt)}`);
         assert.match(d.reason, /^GATE_COORDINATOR_REQUIRED/);
@@ -1518,6 +1524,8 @@ test("decideAgentDispatch allows the dev-loop coordinator's prose-briefed pre-PR
         "Delta review of the act-list fix: git diff abc123..def456.",
         "Delta review: the fix edits scripts/github/pull-work-order.mjs; check its --ref parsing.",
         "Pre-PR review of changes to pull-work-order.mjs and its tests.",
+        "Delta review of act item 3 (fingerprint 4caee3321a4f9d3a) at head e20270eebd9144c0c2a793ab1766011cc436adc6.",
+        "Check that the review agent definition names the judge: role and the fixer: boundary.",
         "",
         null,
       ]) {
