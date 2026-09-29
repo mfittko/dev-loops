@@ -105,7 +105,7 @@ test("resolveLedgerCheckouts returns [dir] when git is unavailable (exec failure
   }
 });
 
-// #2506: the toolchain guard. A --repo-root that names another dev-loops source checkout refuses.
+// ADR 0117: the toolchain guard. A --repo-root that names another dev-loops source checkout refuses.
 async function makeDevLoopsCheckout(name = "dev-loops") {
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-toolchain-guard-")));
   await mkdir(path.join(dir, "scripts"), { recursive: true });

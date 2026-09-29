@@ -308,7 +308,7 @@ test("propagates the resolved child script's non-zero exit code", () => {
   }
 });
 
-// #2506: `--repo-root <checkout>` binds the review-target root. A dev-loops checkout supplies the
+// ADR 0117: `--repo-root <checkout>` binds the review-target root. A dev-loops checkout supplies the
 // toolchain, and the script always runs with cwd `<checkout>`.
 function makeDevLoopsCheckout(dir, label) {
   mkdirSync(path.join(dir, "scripts"), { recursive: true });
@@ -397,5 +397,46 @@ test("--repo-root: a missing value or a non-directory exits 2 and names --repo-r
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--repo-root: a symlink, a relative path, or a trailing slash into a checkout subdirectory walks up from the real path", () => {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "dev-loops-run-reporoot-link-")));
+  try {
+    const a = path.join(root, "a");
+    const b = path.join(root, "b");
+    makeDevLoopsCheckout(a, "A");
+    makeDevLoopsCheckout(b, "B");
+    const sub = path.join(b, "sub");
+    mkdirSync(sub);
+    // The link sits inside checkout A; a lexical walk-up from it would find A.
+    symlinkSync(sub, path.join(a, "link"));
+    for (const target of [path.join(a, "link"), "link", "link/"]) {
+      const r = runLauncher(launcherSource, ["--repo-root", target, "scripts/probe.mjs"], a);
+      assert.equal(r.status, 0, `${target}: ${r.stderr}`);
+      const out = JSON.parse(r.stdout);
+      assert.equal(out.label, "B", target);
+      assert.equal(out.cwd, sub, target);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("--repo-root: a directory that stats but cannot be entered exits 1 and names the spawn error", () => {
+  if (process.getuid?.() === 0) return; // root enters any directory
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "dev-loops-run-reporoot-locked-")));
+  const locked = path.join(root, "b", "locked");
+  try {
+    makeDevLoopsCheckout(path.join(root, "b"), "B");
+    mkdirSync(locked);
+    chmodSync(locked, 0o000);
+    const r = runLauncher(launcherSource, ["--repo-root", locked, "scripts/probe.mjs"], root);
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, /dev-loops-run: cannot start .*EACCES/);
+    assert.equal(r.stdout, "");
+  } finally {
+    chmodSync(locked, 0o755);
+    rmSync(root, { recursive: true, force: true });
   }
 });

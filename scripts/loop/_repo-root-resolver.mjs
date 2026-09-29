@@ -198,7 +198,7 @@ export function isOtherDevLoopsCheckout(dir, toolchainRoot = TOOLCHAIN_ROOT) {
 
 /**
  * The `toolchain_root_mismatch` message when `repoRoot` is a dev-loops source checkout other than
- * `toolchainRoot`, else null (#2506). Running one checkout's script against another dev-loops
+ * `toolchainRoot`, else null (ADR 0117). Running one checkout's script against another dev-loops
  * checkout mixes two toolchains; the launcher flag runs the target checkout's own script instead.
  */
 export function toolchainRootMismatch(repoRoot, script, { toolchainRoot = TOOLCHAIN_ROOT } = {}) {

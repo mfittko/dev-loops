@@ -1,4 +1,4 @@
-// #2506: the self-hosting gate rules live in their canonical docs and state the two-step rollout,
+// ADR 0117: the self-hosting gate rules live in their canonical docs and state the two-step rollout,
 // the self-gate grill question and the launcher flag form.
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";

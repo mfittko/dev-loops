@@ -1583,7 +1583,7 @@ async function main() {
     process.stdout.write(`${USAGE}\n`);
     return;
   }
-  const mismatch = options.repoRoot && toolchainRootMismatch(options.repoRoot, "scripts/loop/consolidate-fanin.mjs");
+  const mismatch = options.repoRoot && toolchainRootMismatch(path.resolve(options.repoRoot),"scripts/loop/consolidate-fanin.mjs");
   if (mismatch) {
     process.stderr.write(`${JSON.stringify({ ok: false, error: mismatch })}\n`);
     process.exitCode = 1;

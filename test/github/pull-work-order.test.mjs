@@ -367,7 +367,7 @@ test("the short pull: two tmp roots whose index entries for one identity differ 
   }));
 });
 
-// #2506 pull delegation: on a self-hosting PR the execution index entry sits in the PR worktree,
+// ADR 0117 pull delegation: on a self-hosting PR the execution index entry sits in the PR worktree,
 // so the pull re-runs that worktree's pull script. The stub there prints a marker and exits 7.
 const DELEGATE_ID = "r1790000000001-abcdef12-u0";
 async function seedDelegateCheckout(dir, { name = "dev-loops", stub = true } = {}) {
@@ -409,4 +409,18 @@ test("pullDelegationTarget: no delegation for the own checkout, a non-dev-loops 
     assert.equal(pullDelegationTarget(DELEGATE_ID, tmp(a), { env: { DEV_LOOPS_PULL_DELEGATED: "1" } }), null);
     assert.equal(pullDelegationTarget("r1790000000001-abcdef12-u9", tmp(a), { env: {} }), null);
   })));
+});
+
+test("self-hosting pull: a relative --tmp-root delegates as the absolute path, so the child finds the same tmp root", async () => {
+  await withDir(async (base) => {
+    const linked = path.join(base, "linked");
+    await seedDelegateCheckout(linked);
+    // This stub succeeds only when the forwarded --tmp-root resolves, under its own cwd, to a real tmp root.
+    await writeFile(path.join(linked, "scripts/github/pull-work-order.mjs"), `import { existsSync } from "node:fs";\nconst tmpRoot = process.argv[process.argv.indexOf("--tmp-root") + 1];\nconsole.log(tmpRoot);\nprocess.exit(existsSync(tmpRoot + "/work-order-executions") ? 0 : 9);\n`, "utf8");
+    for (const rel of ["linked/tmp", "linked/tmp/"]) {
+      const r = run("pull-work-order.mjs", [DELEGATE_ID, "--tmp-root", rel], base);
+      assert.equal(r.status, 0, `${rel}: ${r.stdout}${r.stderr}`);
+      assert.equal(r.stdout, `${path.join(linked, "tmp")}\n`);
+    }
+  });
 });

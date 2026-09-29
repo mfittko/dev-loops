@@ -3793,9 +3793,9 @@ test("#1618: the briefing-prefix check only runs with --head-sha (no head-sha = 
   );
 });
 
-// #2506: run from another cwd through `dev-loops-run --repo-root <fixture>`, the fan-in reads
+// ADR 0117: run from another cwd through `dev-loops-run --repo-root <fixture>`, the fan-in reads
 // the reviewer sentinels under <fixture>/tmp/ (the default --tmp-root follows the launcher cwd).
-test("#2506: through dev-loops-run --repo-root, the fan-in counts the sentinels under <root>/tmp/", async () => {
+test("through dev-loops-run --repo-root, the fan-in counts the sentinels under <root>/tmp/", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-reporoot-"));
   const shellCwd = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-shell-"));
   try {

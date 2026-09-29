@@ -3496,7 +3496,7 @@ test("dogfood round-trip: CLI-built briefing prefix verifies clean across two re
   }
 });
 
-// #2506 (folds #2331): a gate built in a linked worktree, with the findings ledger anchored at the
+// ADR 0117: a gate built in a linked worktree, with the findings ledger anchored at the
 // main checkout's tmp/, briefs a cwd-relative --context-path and a `cd <worktree>` sentinel
 // command. Run that way from the worktree, the fresh-context locality guard passes.
 test("linked worktree + main-anchored ledger: the sentinel runs from the worktree with a cwd-relative --context-path and passes", async () => {

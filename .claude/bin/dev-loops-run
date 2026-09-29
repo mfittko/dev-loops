@@ -23,7 +23,7 @@
 //   dev-loops-run scripts/loop/watch-cycle.mjs --pr 5
 //   dev-loops-run cli/index.mjs gate judge-pass --pr 5
 //   dev-loops-run --repo-root <worktree> scripts/loop/consolidate-fanin.mjs …
-// `--repo-root <checkout>` (#2506) names the review-target root. It acts as `cd <checkout> &&`:
+// `--repo-root <checkout>` (ADR 0117) names the review-target root. It acts as `cd <checkout> &&`:
 // the walk-up in step 1 starts at <checkout>, and the script runs with cwd <checkout>.
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
@@ -63,7 +63,8 @@ if (argv[0] === "--repo-root") {
   let isDir = false;
   try { isDir = Boolean(dir) && statSync(dir).isDirectory(); } catch { /* reported below */ }
   if (!isDir) { console.error(`dev-loops-run: --repo-root needs an existing directory, got ${JSON.stringify(dir ?? null)}`); process.exit(2); }
-  cwd = path.resolve(dir);
+  // The real path, so a symlink walks up like `cd <dir> &&`. An unreadable dir keeps the lexical path; the spawn reports it.
+  try { cwd = realpathSync(dir); } catch { cwd = path.resolve(dir); }
   argv = argv.slice(2);
 }
 const rel = argv[0];
@@ -92,4 +93,5 @@ if (escapes) {
 }
 const target = resolved;
 const r = spawnSync(process.execPath, [target, ...argv.slice(1)], { stdio: "inherit", cwd });
+if (r.error) console.error(`dev-loops-run: cannot start ${target}: ${r.error.message}`);
 process.exit(r.status ?? 1);

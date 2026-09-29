@@ -81,7 +81,7 @@ registerWorkOrderRole("review", {
   ),
 });
 
-// #2506: on a self-hosting PR the emitter wrote the execution index entry in the PR worktree. That
+// ADR 0117: on a self-hosting PR the emitter wrote the execution index entry in the PR worktree. That
 // checkout is the review root, so its own pull script serves the pull. The marker stops a second hop.
 const PULL_DELEGATED_ENV = "DEV_LOOPS_PULL_DELEGATED";
 const PULL_SCRIPT = "scripts/github/pull-work-order.mjs";
@@ -112,8 +112,14 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   const tmpRoots = values["tmp-root"] ? [path.resolve(cwd, values["tmp-root"])] : resolveLedgerCheckouts(cwd).map((root) => path.join(root, "tmp"));
   const target = pullDelegationTarget(short ? positionals[0] : values.execution, tmpRoots);
   if (target) {
-    // stdout, stderr and the exit code pass through unchanged.
-    const r = spawnSync(process.execPath, [path.join(target, PULL_SCRIPT), ...argv], { cwd: target, stdio: "inherit", env: { ...process.env, [PULL_DELEGATED_ENV]: "1" } });
+    // stdout, stderr and the exit code pass through unchanged. The child runs under cwd `target`, so a
+    // --tmp-root goes over as the absolute path this process resolved.
+    const childArgs = [
+      ...(short ? [positionals[0]] : ["--ref", values.ref, "--digest", values.digest, "--execution", values.execution]),
+      ...(values["tmp-root"] ? ["--tmp-root", tmpRoots[0]] : []),
+    ];
+    const r = spawnSync(process.execPath, [path.join(target, PULL_SCRIPT), ...childArgs], { cwd: target, stdio: "inherit", env: { ...process.env, [PULL_DELEGATED_ENV]: "1" } });
+    if (r.error) process.stderr.write(`pull-work-order: delegated pull failed to start: ${r.error.message}\n`);
     return r.status ?? 2;
   }
   try {
