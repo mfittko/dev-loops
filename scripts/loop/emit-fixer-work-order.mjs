@@ -17,7 +17,7 @@ import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement"
 import { startDeltaSequence, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
-import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
@@ -124,7 +124,8 @@ export async function emitFixerWorkOrder({
   if (Boolean(actListFile) === Boolean(threadsFile)) throw new Refusal("pass exactly one of --act-list-file and --threads-file");
   if (actListFile && !GATE_NAMES.includes(gate)) throw new Refusal(`--act-list-file needs --gate ${GATE_NAMES.join("|")}, got ${gate}`);
   if (threadsFile && gate) throw new Refusal("--gate applies only to an --act-list-file source");
-  const dir = path.resolve(buildFixerDir({ repo, pr, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(cwd) }));
+  tmpRoot ??= resolveGateArtifactTmpRoot(cwd);
+  const dir = path.resolve(buildFixerDir({ repo, pr, tmpRoot }));
   const paths = [...new Set((allowedPaths.length > 0 ? allowedPaths : ["."]).map(normalizeAllowedPath))].sort();
   const abs = (p) => path.resolve(cwd, p);
 
@@ -190,6 +191,7 @@ export async function emitFixerWorkOrder({
     if (err?.code !== "EEXIST") throw err;
     if (await readFile(promptPath, "utf8") !== text) throw new Refusal(`work order ${identityTriple.workOrderRef} already exists with different content; emit a new reference instead`);
   }
+  await writeExecutionIndex(tmpRoot, identityTriple);
   const plan = { ...identityTriple, materializationHash: materializationHash(text), promptPath, dispatchPrompt, workOrder };
   const planPath = path.join(dir, PLAN_FILE);
   // Atomic: a concurrent pull never reads a half-written plan. One plan per PR names the only current unit.

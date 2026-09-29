@@ -9,7 +9,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE, dispatchPromptLayoutRecordPath } from "./record-dispatch-prompt-layout.mjs";
-import { buildDispatchPointer, materializationHash, workOrderDigest } from "./_work-order-protocol.mjs";
+import { WorkOrderRefusal, buildDispatchPointer, materializationHash, workOrderDigest, writeExecutionIndex } from "./_work-order-protocol.mjs";
 import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, renderRequiredReadLine } from "./write-gate-context.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
@@ -379,7 +379,7 @@ function resolveFlagValue(argv, flag) {
   return val;
 }
 
-export async function main(argv = process.argv.slice(2), { tmpRootDefault = path.join(process.cwd(), "tmp"), ledgerTmpRootDefault = resolveGateArtifactTmpRoot(process.cwd()), persistPlan = writeFile } = {}) {
+export async function main(argv = process.argv.slice(2), { tmpRootDefault = path.join(process.cwd(), "tmp"), ledgerTmpRootDefault = resolveGateArtifactTmpRoot(process.cwd()), persistPlan = writeFile, roundId: injectedRoundId } = {}) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
@@ -665,7 +665,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const findingsDir = path.resolve(buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot }));
   // This emission's round identity. Its ms timestamp lets the pull tool tell a
   // round retired after it (GATE-EXEC-ROUND-RETIREMENT record) from a typo.
-  const roundId = `r${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const roundId = injectedRoundId ?? `r${Date.now()}-${randomBytes(4).toString("hex")}`;
   // Each unit's budget scales with the filtered diff it reads. A thin briefing
   // records no diff read, so every unit gets the floor.
   const diffRead = artifact.scope?.diffSource === "none" ? undefined : sharedReads.find((read) => read?.kind === "diff");
@@ -761,6 +761,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     };
     // An over-cap envelope or unreadable record throws to the CLI wrapper (exit 2).
     const dispatchPrompt = buildDispatchPointer(identity);
+    try {
+      await writeExecutionIndex(tmpRoot, identity);
+    } catch (err) {
+      if (!(err instanceof WorkOrderRefusal)) throw err;
+      return finish({ ok: false, refusal: err.refusal, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — ${err.message}` }, false);
+    }
     // The dispatch-prompt record binds the compact reference the reviewer receives.
     const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha);
     const record = JSON.parse(await readFile(recordPath, "utf8"));

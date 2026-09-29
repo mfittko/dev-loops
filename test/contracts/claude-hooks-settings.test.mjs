@@ -853,7 +853,7 @@ test("agent-guard hook denies a dev-loop gate-pointer review dispatch, allows a 
     cwd: repoRoot,
     ...(agent_type ? { agent_type } : {}),
   });
-  const pointer = buildDispatchPointer({ workOrderRef: "review:o/r#7:draft_gate:abc123:u1", workOrderDigest: "ab12cd", executionIdentity: "x1-aa" });
+  const pointer = buildDispatchPointer({ workOrderRef: "review:o/r#7:draft_gate:abc123:u1", workOrderDigest: "ab12cd", executionIdentity: "r1790000000000-abcdef12-u1" });
   const denied = run(pointer, "dev-loops:dev-loop");
   assert.equal(denied.code, 0);
   assert.equal(denied.json?.hookSpecificOutput?.permissionDecision, "deny");

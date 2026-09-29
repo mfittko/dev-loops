@@ -6,7 +6,9 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
+import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
@@ -20,6 +22,9 @@ const run = (script, args, cwd) => spawnSync("node", [path.join(SCRIPTS, script)
 const pull = (unit, cwd, over = {}) => run("pull-work-order.mjs", [
   "--ref", over.ref ?? unit.workOrderRef, "--digest", over.digest ?? unit.workOrderDigest, "--execution", over.execution ?? unit.executionIdentity,
 ], cwd);
+// The short pull (ADR 0115): the execution identity alone, resolved through the execution index.
+const pullShort = (execution, cwd) => run("pull-work-order.mjs", [execution], cwd);
+const indexPath = (root, unit) => executionIndexPath(path.join(root, "tmp"), unit.executionIdentity);
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout));
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-pull-" });
 
@@ -117,18 +122,24 @@ test("semantic mutation refuses as semantic_identity_mismatch; a materialization
     mutated.units[0].workOrder.angleInstructions[0].prompt = "Something else.";
     await writeFile(planPath, JSON.stringify(mutated), "utf8");
     assert.equal(refusal(pull(unit, root)).refusal, "semantic_identity_mismatch");
+    assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "semantic_identity_mismatch");
 
     await writeFile(planPath, JSON.stringify(plan), "utf8");
     await writeFile(unit.promptPath, `${await readFile(unit.promptPath, "utf8")} `, "utf8");
     assert.equal(refusal(pull(unit, root)).refusal, "local_materialization_integrity_failure");
+    assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "local_materialization_integrity_failure");
     await rm(unit.promptPath);
     assert.equal(refusal(pull(unit, root)).refusal, "local_materialization_integrity_failure");
+    assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "local_materialization_integrity_failure");
     // A self-consistent work order without the widening rule fails the review adapter.
     const [invalid] = plan.units;
     delete invalid.workOrder.executionRules.widening;
     invalid.workOrderDigest = workOrderDigest(invalid.workOrder);
     await writeFile(planPath, JSON.stringify(plan), "utf8");
     assert.equal(refusal(pull(unit, root, { digest: invalid.workOrderDigest })).refusal, "invalid_work_order");
+    const entry = JSON.parse(await readFile(indexPath(root, unit), "utf8"));
+    await writeFile(indexPath(root, unit), JSON.stringify({ ...entry, workOrderDigest: invalid.workOrderDigest }), "utf8");
+    assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "invalid_work_order");
   });
 });
 
@@ -145,6 +156,8 @@ test("a ref bound to a retired same-head round refuses as stale even when a newe
     assert.equal(body.refusal, "stale_dispatch");
     assert.match(body.error, /never retarget/);
     assert.equal(pull(current, root).status, 0);
+    assert.equal(refusal(pullShort(retiredUnit.executionIdentity, root)).refusal, "stale_dispatch");
+    assert.equal(pullShort(current.executionIdentity, root).status, 0);
   });
 });
 
@@ -212,4 +225,144 @@ test("the pull is role-keyed: a stub second role pulls through its adapter, an u
     located.workOrderDigest = workOrderDigest(located.workOrder);
     assert.equal(await refused({ digest: located.workOrderDigest }), "unknown_role");
   });
+});
+
+// ---------------------------------------------------------------------------
+// Step 1 of ADR 0115: the pull also accepts the execution identity alone.
+// ---------------------------------------------------------------------------
+
+test("the short pull prints the same work order and writes the same receipt as the 3-flag pull, for a review and a judge unit", async () => {
+  await withDir(async (root) => {
+    const review = await emitRound(root);
+    const judge = await emitJudgeWorkOrder(await seedJudgeSources(root, { headSha: HEAD }));
+    for (const unit of [review, judge]) {
+      const receiptFile = pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef);
+      const shortPull = pullShort(unit.executionIdentity, root);
+      assert.equal(shortPull.status, 0, shortPull.stdout + shortPull.stderr);
+      assert.equal(shortPull.stdout, await readFile(unit.promptPath, "utf8"));
+      const shortReceipt = JSON.parse(await readFile(receiptFile, "utf8"));
+      assert.equal(pull(unit, root).status, 0);
+      const flagReceipt = JSON.parse(await readFile(receiptFile, "utf8"));
+      assert.deepEqual({ ...shortReceipt, pulledAt: undefined }, { ...flagReceipt, pulledAt: undefined });
+      const { executionIdentity, workOrderRef, workOrderDigest: digest, materializationHash: hash } = unit;
+      assert.deepEqual({ executionIdentity, workOrderRef, workOrderDigest: digest, materializationHash: hash, role: workOrderRef.split(":")[0] },
+        { executionIdentity: shortReceipt.executionIdentity, workOrderRef: shortReceipt.workOrderRef, workOrderDigest: shortReceipt.workOrderDigest, materializationHash: shortReceipt.materializationHash, role: shortReceipt.role });
+    }
+  });
+});
+
+test("the pull takes one positional identity or all three flags; any other shape exits 2 with the usage text", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    for (const args of [[], [unit.executionIdentity, "--execution", unit.executionIdentity], ["--ref", unit.workOrderRef, "--execution", unit.executionIdentity], [unit.executionIdentity, unit.executionIdentity]]) {
+      const result = run("pull-work-order.mjs", args, root);
+      assert.equal(result.status, 2, args.join(" "));
+      assert.match(result.stderr, /Usage: pull-work-order\.mjs <executionIdentity>/);
+    }
+  });
+});
+
+test("each emitted unit has one execution index entry; a colliding entry refuses the write", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    assert.deepEqual(JSON.parse(await readFile(indexPath(root, unit), "utf8")), { executionIdentity: unit.executionIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest });
+    const entry = { executionIdentity: "r1-abcdef12-u0", workOrderRef: "review:o/r#7:x", workOrderDigest: "sha256:0" };
+    await writeExecutionIndex(path.join(root, "tmp"), entry);
+    await writeExecutionIndex(path.join(root, "tmp"), entry);
+    await assert.rejects(writeExecutionIndex(path.join(root, "tmp"), { ...entry, workOrderDigest: "sha256:1" }), (err) => err.refusal === "execution_index_collision");
+  });
+});
+
+test("the short pull: an unknown identity or a typed index entry is a retryable dispatch_reference_mismatch; the same unit then pulls", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const indexBefore = await readFile(indexPath(root, unit), "utf8");
+    for (const identity of [`${unit.executionIdentity}9`, "r1-abcdef12-u0", "../x"]) {
+      const body = refusal(pullShort(identity, root));
+      assert.equal(body.refusal, "dispatch_reference_mismatch");
+      assert.equal(body.retryable, true);
+    }
+    const typoDigest = `${unit.workOrderDigest.slice(0, -1)}${unit.workOrderDigest.endsWith("0") ? "1" : "0"}`;
+    for (const over of [{ workOrderDigest: typoDigest }, { workOrderRef: `${unit.workOrderRef}x` }]) {
+      await writeFile(indexPath(root, unit), JSON.stringify({ ...JSON.parse(indexBefore), ...over }), "utf8");
+      const body = refusal(pullShort(unit.executionIdentity, root));
+      assert.equal(body.refusal, "dispatch_reference_mismatch");
+      assert.equal(body.retryable, true);
+    }
+    await writeFile(indexPath(root, unit), indexBefore, "utf8");
+    assert.equal(pullShort(unit.executionIdentity, root).status, 0);
+  });
+});
+
+test("the short pull: a corrupt or mis-shaped execution index entry refuses with structured JSON and exit 1", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const valid = await readFile(indexPath(root, unit), "utf8");
+    const entry = JSON.parse(valid);
+    const { workOrderDigest: _digest, ...noDigest } = entry;
+    const shapes = [
+      JSON.stringify({ ...entry, workOrderRef: 7 }),
+      JSON.stringify(noDigest),
+      JSON.stringify({ ...entry, executionIdentity: "r1-0000beef-u0" }),
+    ];
+    for (const bytes of ["{ truncated", "null", "[]", "{}", ...shapes]) {
+      await writeFile(indexPath(root, unit), bytes, "utf8");
+      const result = pullShort(unit.executionIdentity, root);
+      assert.doesNotMatch(result.stderr, /SyntaxError/);
+      const body = refusal(result);
+      assert.equal(body.refusal, "local_materialization_integrity_failure", bytes);
+      assert.match(body.error, /is not a valid entry/);
+    }
+    await rm(indexPath(root, unit));
+    await mkdir(indexPath(root, unit));
+    const unreadable = refusal(pullShort(unit.executionIdentity, root));
+    assert.equal(unreadable.refusal, "local_materialization_integrity_failure");
+    assert.match(unreadable.error, /is unreadable \(EISDIR\)/);
+    await rm(indexPath(root, unit), { recursive: true });
+    await writeFile(indexPath(root, unit), valid, "utf8");
+    assert.equal(pullShort(unit.executionIdentity, root).status, 0);
+  });
+});
+
+test("the short pull: a plan digest edited after dispatch refuses as dispatch_reference_mismatch", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const planPath = buildGateEmitPlanPath({ repo: "o/r", pr: "7", gate: GATE, headSha: HEAD, tmpRoot: path.join(root, "tmp") });
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    plan.units[0].workOrderDigest = `sha256:${"0".repeat(64)}`;
+    await writeFile(planPath, JSON.stringify(plan), "utf8");
+    assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "dispatch_reference_mismatch");
+  });
+});
+
+test("the short pull: an identity of a superseded round refuses as stale_dispatch", async () => {
+  await withDir(async (root) => {
+    const old = await emitRound(root);
+    const current = await emitRound(root, { prompt: "Review the coverage angle, including error paths." });
+    assert.equal(refusal(pullShort(old.executionIdentity, root)).refusal, "stale_dispatch");
+    assert.equal(pullShort(current.executionIdentity, root).status, 0);
+  });
+});
+
+test("the short pull: an identity whose prefix role differs from its index ref refuses as dispatch_identity_mismatch", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const fixerIdentity = "f1790000000000-abcdef12";
+    await writeExecutionIndex(path.join(root, "tmp"), { executionIdentity: fixerIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest });
+    assert.equal(refusal(pullShort(fixerIdentity, root)).refusal, "dispatch_identity_mismatch");
+    const ghostIdentity = "f1790000000001-abcdef12";
+    await writeExecutionIndex(path.join(root, "tmp"), { executionIdentity: ghostIdentity, workOrderRef: "ghost:o/r#7:x", workOrderDigest: unit.workOrderDigest });
+    assert.equal(refusal(pullShort(ghostIdentity, root)).refusal, "dispatch_identity_mismatch");
+  });
+});
+
+test("the short pull: two tmp roots whose index entries for one identity differ refuse as local_materialization_integrity_failure", async () => {
+  await withDir(async (a) => withDir(async (b) => {
+    const unit = await emitRound(a);
+    await writeExecutionIndex(path.join(b, "tmp"), { ...unit, workOrderDigest: `sha256:${"0".repeat(64)}` });
+    const tmpRoots = [a, b].map((root) => path.join(root, "tmp"));
+    await assert.rejects(pullWorkOrder({ execution: unit.executionIdentity, tmpRoots, receiptTmpRoot: a }), (err) => err.refusal === "local_materialization_integrity_failure");
+    await writeFile(executionIndexPath(path.join(b, "tmp"), unit.executionIdentity), await readFile(indexPath(a, unit), "utf8"), "utf8");
+    assert.equal((await pullWorkOrder({ execution: unit.executionIdentity, tmpRoots, receiptTmpRoot: a })).receipt.workOrderRef, unit.workOrderRef);
+  }));
 });

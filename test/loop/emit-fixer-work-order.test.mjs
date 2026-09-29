@@ -8,7 +8,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
-import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
@@ -187,6 +187,14 @@ test("F2: dispatchPrompt is the shared envelope, fits the cap for a worst-case r
     const unit = await emit();
     assert.equal(unit.dispatchPrompt, buildDispatchPointer(unit));
     assert.throws(() => buildDispatchPointer({ ...unit, executionIdentity: `${unit.executionIdentity} and also refactor the parser` }), /not shell-safe/);
+    // The unit's execution index entry (ADR 0115) sits under the emit plan's tmp root.
+    const tmpRoot = path.resolve(path.dirname(unit.planPath), "../../..");
+    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(tmpRoot, unit.executionIdentity), "utf8")),
+      { executionIdentity: unit.executionIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest });
+    // A colliding index entry for the next identity refuses the emission.
+    const next = { executionIdentity: "f1790000000001-0000beef", workOrderRef: "fixer:o/r#7:other", workOrderDigest: "sha256:0" };
+    await writeExecutionIndex(tmpRoot, next);
+    await assert.rejects(emit({ executionIdentity: next.executionIdentity }), (err) => err.refusal === "execution_index_collision");
   });
   const worst = { workOrderRef: `fixer:${"o".repeat(39)}/${"r".repeat(100)}#99999:${"f".repeat(64)}:f1790000000000-abcdef12`, workOrderDigest: `sha256:${"f".repeat(64)}`, executionIdentity: "f1790000000000-abcdef12" };
   assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
@@ -250,6 +258,32 @@ test("F3: the pull writes a fixer receipt under the main checkout", async () => 
     const receipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
     assert.equal(receipt.role, "fixer");
     assert.deepEqual(receipt.subject, { repo: REPO, pr: PR, headSha: head, branch: "issue-1", phase: "full", planPath: unit.planPath });
+  });
+});
+
+test("F3: the short pull line binds the grant, pulls the same bytes and writes the same receipt (ADR 0115)", async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    const unit = await emit();
+    const line = `dev-loops-run scripts/github/pull-work-order.mjs ${unit.executionIdentity}`;
+    assert.equal(bash(wt, line), "allow");
+    const result = spawnSync("node", [PULL, unit.executionIdentity], { cwd: wt, encoding: "utf8", env: gitFreeEnv() });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(result.stdout, await readFile(unit.promptPath, "utf8"));
+    const receipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
+    const { role, executionIdentity, workOrderRef, workOrderDigest, materializationHash } = receipt;
+    assert.deepEqual(
+      { role, executionIdentity, workOrderRef, workOrderDigest, materializationHash },
+      { role: "fixer", executionIdentity: unit.executionIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, materializationHash: unit.materializationHash },
+    );
+    assert.equal(pull(unit, wt).status, 0);
+    const longReceipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
+    assert.deepEqual({ ...longReceipt, pulledAt: undefined }, { ...receipt, pulledAt: undefined });
+    const target = path.join(wt, "src", "x.mjs");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, "x\n");
+    assert.equal(hook(wt, target), "allow");
+    assert.equal(bash(wt, `${line}; echo "EXIT $?"`, "agent-b"), "deny");
+    assert.equal(hook(wt, target, "agent-b"), "deny", "a denied suffixed line binds nothing");
   });
 });
 
