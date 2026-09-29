@@ -90,7 +90,7 @@ test("judge fixture writes both valid verdicts with read, search, write and a pu
   assert.ok(generated);
   assert.match(generated, /^tools: Read, Grep, Glob, Bash, Write$/m);
   // Bash exists only for the work-order pull (ADR 0106); the Bash gate denies everything else.
-  const pull = "dev-loops-run scripts/github/pull-work-order.mjs --ref judge:o/r#1:draft_gate:abc:j1-aa --digest ab12 --execution j1-aa";
+  const pull = "dev-loops-run scripts/github/pull-work-order.mjs j1-000000aa";
   assert.equal(decideBashGate({ command: pull, agentType: "judge" }).decision, "allow");
   assert.equal(decideBashGate({ command: "bun test", agentType: "judge" }).decision, "deny");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "judge-tool-fixture-"));

@@ -10,8 +10,9 @@ import { mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFile
 import path from "node:path";
 
 import { findRetirementAfter } from "./_gate-round-retirement.mjs";
+import { parseSanctionedPullLine } from "./_hook-decisions.mjs";
 import { realpathNearestExisting } from "./_worktree-guard.mjs";
-import { workOrderDigest } from "./_work-order-digest.mjs";
+import { executionIndexPath, workOrderDigest } from "./_work-order-digest.mjs";
 
 /**
  * Env for every git call in this module: an inherited GIT_DIR/GIT_WORK_TREE overrides `-C`, so a pointer at
@@ -55,15 +56,21 @@ const EXECUTION_RE = /^f(\d+)-[0-9a-f]{8}$/u;
 const bindingPath = (mainRoot, workOrderRef, workOrderDigest, executionIdentity) =>
   path.join(mainRoot, "tmp", "work-order-receipts", "fixer-agents", `${sha256(`${workOrderRef}\n${workOrderDigest}\n${executionIdentity}`)}.json`);
 
-// The exact sanctioned pull line of buildDispatchPointer (scripts/github/_work-order-protocol.mjs),
-// with the same shell-inert value charset. Anything else records no binding.
-const PULL_VALUE = "[A-Za-z0-9][\\w.:/#-]*";
-const PULL_LINE_RE = new RegExp(`^dev-loops-run scripts/github/pull-work-order\\.mjs --ref (fixer:${PULL_VALUE}) --digest (${PULL_VALUE}) --execution (${PULL_VALUE})$`, "u");
-
-/** `{ workOrderRef, workOrderDigest, executionIdentity }` of an exact sanctioned fixer pull line, or null. */
-export function parseFixerPullCommand(command) {
-  const match = typeof command === "string" ? PULL_LINE_RE.exec(command.trim()) : null;
-  return match ? { workOrderRef: match[1], workOrderDigest: match[2], executionIdentity: match[3] } : null;
+/**
+ * `{ workOrderRef, workOrderDigest, executionIdentity }` of an exact sanctioned fixer pull line (ADR 0115),
+ * resolved through the execution index under `<mainRoot>/tmp`; null for any other command, an `r`/`j`
+ * identity, a missing or unreadable entry, an entry for another execution or a non-`fixer:` ref.
+ */
+export function parseFixerPullCommand(command, mainRoot) {
+  const executionIdentity = parseSanctionedPullLine(command)?.executionIdentity;
+  if (!executionIdentity?.startsWith("f")) return null;
+  try {
+    const entry = JSON.parse(readFileSync(executionIndexPath(path.join(mainRoot, "tmp"), executionIdentity), "utf8"));
+    const valid = entry.executionIdentity === executionIdentity && String(entry.workOrderRef).startsWith("fixer:") && typeof entry.workOrderDigest === "string";
+    return valid ? { workOrderRef: entry.workOrderRef, workOrderDigest: entry.workOrderDigest, executionIdentity } : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

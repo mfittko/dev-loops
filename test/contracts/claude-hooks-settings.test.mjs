@@ -168,7 +168,7 @@ test("bash-gate hook passes through non-gh-pr-ready commands", () => {
 });
 
 test("bash-gate hook lets the judge run only its work-order pull; shell, test and build commands are denied (ADR 0106)", () => {
-  const pull = "dev-loops-run scripts/github/pull-work-order.mjs --ref judge:o/r#7:pre_approval_gate:abc:j1-aa --digest ab12 --execution j1-aa";
+  const pull = "dev-loops-run scripts/github/pull-work-order.mjs j1-000000aa";
   const decide = (command, agent_type = "dev-loops:judge") =>
     runHook("pre-tool-use-bash-gate.mjs", { tool_name: "Bash", tool_input: { command }, cwd: repoRoot, agent_type }).json?.hookSpecificOutput?.permissionDecision ?? "allow";
   assert.equal(decide(pull), "allow");

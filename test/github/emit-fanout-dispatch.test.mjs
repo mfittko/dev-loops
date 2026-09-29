@@ -18,6 +18,7 @@ import { verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-d
 import { CHECKPOINT_SENTINEL_PREFIX } from "../../scripts/github/verify-fresh-review-context.mjs";
 import { verifyBriefingPrefixesForHead } from "../../scripts/github/verify-briefing-prefixes.mjs";
 import { createHash } from "node:crypto";
+import { executionIndexPath } from "../../scripts/github/_work-order-protocol.mjs";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
@@ -27,7 +28,7 @@ function runEmitCli(args = [], opts = {}) {
 
 // The reviewer's first step (#2416): pull its work order with the compact reference.
 function runPullCli(unit, opts = {}) {
-  return spawnSync("node", [path.resolve("scripts/github/pull-work-order.mjs"), "--ref", unit.workOrderRef, "--digest", unit.workOrderDigest, "--execution", unit.executionIdentity], { encoding: "utf8", ...opts });
+  return spawnSync("node", [path.resolve("scripts/github/pull-work-order.mjs"), unit.executionIdentity], { encoding: "utf8", ...opts });
 }
 
 async function withTmpDir(fn) {
@@ -924,6 +925,11 @@ test("a successful run persists the keyed emit-plan artifact with the full resul
       assert.deepEqual(unit.budgetBasis, { scope: "none", files: 0, changedLines: 0 });
       assert.deepEqual(unit.budget, { ...REVIEWER_UNIT_BUDGET });
       assert.deepEqual(unit.workOrder.executionRules.budget, unit.budget);
+      // The short pointer (ADR 0115) and the unit's execution index entry.
+      assert.match(unit.executionIdentity, /^r\d+-[0-9a-f]{8}-u\d+$/);
+      assert.equal(unit.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${unit.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);
+      assert.deepEqual(JSON.parse(await readFile(executionIndexPath(tmpRoot, unit.executionIdentity), "utf8")),
+        { executionIdentity: unit.executionIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest });
     }
   });
 });

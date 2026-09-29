@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { withTempDir } from "../_helpers.mjs";
@@ -14,9 +14,9 @@ import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 const HEAD = "d".repeat(40);
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-judge-wo-" });
 const node = (script, args, cwd) => spawnSync("node", [path.resolve(script), ...args], { cwd, encoding: "utf8" });
-const pull = (plan, cwd, over = {}) => node("scripts/github/pull-work-order.mjs", [
-  "--ref", over.ref ?? plan.workOrderRef, "--digest", over.digest ?? plan.workOrderDigest, "--execution", over.execution ?? plan.executionIdentity,
-], cwd);
+const pull = (plan, cwd, execution = plan.executionIdentity) => node("scripts/github/pull-work-order.mjs", [execution], cwd);
+const indexFile = (root, plan) => executionIndexPath(path.join(root, "tmp"), plan.executionIdentity);
+const writeIndex = (root, plan, over) => writeFile(indexFile(root, plan), JSON.stringify({ executionIdentity: plan.executionIdentity, workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, ...over }));
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout).refusal);
 const seed = (root, over = {}) => seedJudgeSources(root, { headSha: HEAD, ...over });
 
@@ -95,11 +95,12 @@ test("J1: a cross-checkout --tmp-root resolves the context's evidence against th
 test("J2: every dispatch is the fixed compact pointer under the shared cap, reused for resume and replacement", async () => {
   await withDir(async (root) => {
     const plan = await emitJudgeWorkOrder(await seed(root));
-    const { workOrderRef, workOrderDigest: digest, executionIdentity } = plan;
-    assert.equal(plan.dispatchPrompt, buildDispatchPointer({ workOrderRef, workOrderDigest: digest, executionIdentity }));
-    const worst = { workOrderRef: `judge:${"o".repeat(39)}/${"r".repeat(40)}#99999:pre_approval_gate:${"f".repeat(64)}:j1790000000000-abcdef12`, workOrderDigest: "f".repeat(64), executionIdentity: "j1790000000000-abcdef12" };
-    assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
-    assert.throws(() => buildDispatchPointer({ ...worst, workOrderRef: `${workOrderRef} and also check X` }), /not shell-safe/);
+    assert.match(plan.executionIdentity, /^j\d+-[0-9a-f]{8}$/);
+    assert.equal(plan.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${plan.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);
+    assert.equal(plan.dispatchPrompt, buildDispatchPointer(plan));
+    assert.ok(Buffer.byteLength(buildDispatchPointer({ executionIdentity: "j1790000000000-abcdef12" })) <= DISPATCH_POINTER_MAX_BYTES);
+    assert.throws(() => buildDispatchPointer({ executionIdentity: `${plan.executionIdentity} and also check X` }), /EXECUTION_IDENTITY_RE/);
+    assert.deepEqual(JSON.parse(await readFile(indexFile(root, plan), "utf8")), { executionIdentity: plan.executionIdentity, workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest });
     const saved = JSON.parse(await readFile(plan.planPath, "utf8"));
     assert.equal(saved.dispatchPrompt, plan.dispatchPrompt);
     // Initial, resumed and replacement dispatches pull the same unit through the same path.
@@ -115,9 +116,16 @@ test("J3: the right identity pulls and writes a judge receipt; wrong digest, exe
   await withDir(async (root) => {
     const plan = await emitJudgeWorkOrder(await seed(root));
     const receiptTmpRoot = path.join(root, "tmp");
-    assert.equal(refusal(pull(plan, root, { digest: "0".repeat(64) })), "dispatch_reference_mismatch");
-    assert.equal(refusal(pull(plan, root, { execution: `${plan.executionIdentity}9` })), "dispatch_identity_mismatch");
-    assert.equal(refusal(pull(plan, root, { ref: plan.workOrderRef.replace(/^judge:/, "review:") })), "dispatch_reference_mismatch");
+    const indexBefore = await readFile(indexFile(root, plan), "utf8");
+    assert.equal(refusal(pull(plan, root, "j1-deadbeef")), "dispatch_reference_mismatch");
+    await writeIndex(root, plan, { workOrderDigest: "0".repeat(64) });
+    assert.equal(refusal(pull(plan, root)), "dispatch_reference_mismatch");
+    await writeIndex(root, plan, { workOrderRef: plan.workOrderRef.replace(/^judge:/, "review:") });
+    assert.equal(refusal(pull(plan, root)), "dispatch_identity_mismatch");
+    const other = { ...plan, executionIdentity: "j1-deadbeef" };
+    await writeIndex(root, other, {});
+    assert.equal(refusal(pull(other, root)), "dispatch_identity_mismatch");
+    await writeFile(indexFile(root, plan), indexBefore);
     assert.equal((await verifyPullReceipt({ receiptTmpRoot, role: "judge", ...plan })).reason, "receipt_missing");
     assert.equal(pull(plan, root).status, 0);
     assert.equal((await verifyPullReceipt({ receiptTmpRoot, role: "judge", ...plan })).ok, true);
@@ -125,7 +133,8 @@ test("J3: the right identity pulls and writes a judge receipt; wrong digest, exe
     // A malformed payload that still reproduces its digest refuses before adjudication.
     const { requiredReads, ...malformed } = plan.workOrder;
     await writeFile(plan.planPath, JSON.stringify({ ...plan, workOrder: malformed, workOrderDigest: workOrderDigest(malformed) }));
-    assert.equal(refusal(pull({ ...plan, workOrderDigest: workOrderDigest(malformed) }, root)), "invalid_work_order");
+    await writeIndex(root, plan, { workOrderDigest: workOrderDigest(malformed) });
+    assert.equal(refusal(pull(plan, root)), "invalid_work_order");
   });
 });
 
@@ -151,9 +160,9 @@ test("J3: a superseded ref, a changed spec or ledger, and a retired round refuse
 
 test("J3: after the head moves, a newer emission at the new head supersedes the old head's ref at pull", async () => {
   await withDir(async (root) => {
-    const first = await emitJudgeWorkOrder({ ...(await seed(root)), roundId: "j1-aa" });
-    const second = await emitJudgeWorkOrder({ ...(await seed(root, { headSha: "e".repeat(40) })), roundId: "j2-bb" });
-    const pullFrom = (plan) => pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [path.join(root, "tmp")], receiptTmpRoot: path.join(root, "tmp") });
+    const first = await emitJudgeWorkOrder({ ...(await seed(root)), roundId: "j1-000000aa" });
+    const second = await emitJudgeWorkOrder({ ...(await seed(root, { headSha: "e".repeat(40) })), roundId: "j2-000000bb" });
+    const pullFrom = (plan) => pullWorkOrder({ execution: plan.executionIdentity, cwd: root, tmpRoots: [path.join(root, "tmp")], receiptTmpRoot: path.join(root, "tmp") });
     await assert.rejects(pullFrom(first), (err) => err.refusal === "stale_dispatch" && err.message.includes(second.workOrderRef));
     assert.ok((await pullFrom(second)).receipt);
   });
@@ -161,9 +170,9 @@ test("J3: after the head moves, a newer emission at the new head supersedes the 
 
 test("J3: a re-emission from another checkout supersedes the older ref in every scan order", async () => {
   await withDir(async (a) => withDir(async (b) => {
-    const first = await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-aa" });
-    const second = await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j2-bb" });
-    const pullFrom = (plan, tmpRoots) => pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: a, tmpRoots, receiptTmpRoot: path.join(a, "tmp") });
+    const first = await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-000000aa" });
+    const second = await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j2-000000bb" });
+    const pullFrom = (plan, tmpRoots) => pullWorkOrder({ execution: plan.executionIdentity, cwd: a, tmpRoots, receiptTmpRoot: path.join(a, "tmp") });
     for (const tmpRoots of [[path.join(a, "tmp"), path.join(b, "tmp")], [path.join(b, "tmp"), path.join(a, "tmp")]]) {
       await assert.rejects(pullFrom(first, tmpRoots), (err) => err.refusal === "stale_dispatch" && err.message.includes(second.workOrderRef));
       assert.ok((await pullFrom(second, tmpRoots)).receipt);
@@ -178,7 +187,7 @@ test("J3: a round retired from another checkout refuses as stale_dispatch on pul
     await mkdir(retired, { recursive: true });
     await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "pre_approval_gate", retiredAt: new Date().toISOString() }));
     await assert.rejects(
-      pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: a, tmpRoots: [path.join(a, "tmp"), path.join(b, "tmp")], receiptTmpRoot: path.join(a, "tmp") }),
+      pullWorkOrder({ execution: plan.executionIdentity, cwd: a, tmpRoots: [path.join(a, "tmp"), path.join(b, "tmp")], receiptTmpRoot: path.join(a, "tmp") }),
       (err) => err.refusal === "stale_dispatch" && /retired as r1/.test(err.message),
     );
   }));
@@ -201,14 +210,24 @@ test("J3: an emission from a checkout subdirectory lands under the checkout root
 
 test("J4: two checkout roots emit the same digest; a conflicting rewrite under the same ref refuses", async () => {
   await withDir(async (a) => withDir(async (b) => {
-    const [pa, pb] = [await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-aa" }), await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j1-aa" })];
+    const [pa, pb] = [await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-000000aa" }), await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j1-000000aa" })];
     assert.notEqual(pa.workOrder.requiredReads[0].path, pb.workOrder.requiredReads[0].path);
     assert.equal(pa.workOrderDigest, pb.workOrderDigest);
     assert.notEqual(pa.materializationHash, pb.materializationHash);
     const sources = await seed(a);
     await writeFile(path.join(a, sources.findingsFile), JSON.stringify({ findings: [] }));
-    await assert.rejects(emitJudgeWorkOrder({ ...sources, roundId: "j1-aa" }), /already exists with different content/);
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, roundId: "j1-000000aa" }), /already exists with different content/);
   }));
+});
+
+test("J4: a colliding execution index entry for the next identity refuses the emission", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const next = { executionIdentity: "j3-000000cc", workOrderRef: "judge:o/r#7:other", workOrderDigest: "sha256:0" };
+    await writeExecutionIndex(path.join(root, "tmp"), next);
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, roundId: next.executionIdentity }), (err) => err.refusal === "execution_index_collision");
+    assert.deepEqual(JSON.parse(await readFile(indexFile(root, next), "utf8")), next);
+  });
 });
 
 test("J1: a truncated identity stamp or a partial checkedCriteria refuses", async () => {
@@ -226,11 +245,11 @@ test("J1: a truncated identity stamp or a partial checkedCriteria refuses", asyn
 
 test("J4: one ref with conflicting plans in two checkouts refuses in every scan order", async () => {
   await withDir(async (a) => withDir(async (b) => {
-    const pa = await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-aa" });
-    await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j1-aa" });
+    const pa = await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-000000aa" });
+    await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j1-000000aa" });
     for (const tmpRoots of [[path.join(a, "tmp"), path.join(b, "tmp")], [path.join(b, "tmp"), path.join(a, "tmp")]]) {
       await assert.rejects(
-        pullWorkOrder({ ref: pa.workOrderRef, digest: pa.workOrderDigest, execution: pa.executionIdentity, cwd: a, tmpRoots, receiptTmpRoot: path.join(a, "tmp") }),
+        pullWorkOrder({ execution: pa.executionIdentity, cwd: a, tmpRoots, receiptTmpRoot: path.join(a, "tmp") }),
         (err) => err.refusal === "local_materialization_integrity_failure" && /conflicting emit plans/.test(err.message),
       );
     }
@@ -263,9 +282,9 @@ test("J6: with only the shared transport, a missing local work order refuses by 
 
 test("J6: a corrupt plan at another head is skipped; a corrupt own plan refuses by name and re-emission recovers", async () => {
   await withDir(async (root) => {
-    const old = await emitJudgeWorkOrder({ ...(await seed(root, { headSha: "e".repeat(40) })), roundId: "j1-aa" });
+    const old = await emitJudgeWorkOrder({ ...(await seed(root, { headSha: "e".repeat(40) })), roundId: "j1-000000aa" });
     const sources = await seed(root);
-    const current = await emitJudgeWorkOrder({ ...sources, roundId: "j2-bb" });
+    const current = await emitJudgeWorkOrder({ ...sources, roundId: "j2-000000bb" });
     await writeFile(old.planPath, "{ truncated");
     assert.equal(pull(current, root).status, 0);
     await writeFile(current.planPath, "{ truncated");

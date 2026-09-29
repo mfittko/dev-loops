@@ -2,8 +2,8 @@
 /**
  * Sanctioned read-only work-order pull (ADR 0106). A
  * worker receives only a compact envelope that tells it to run this CLI with
- * its workOrderRef, workOrderDigest and executionIdentity, to fetch and verify
- * its own immutable work order. The only write is the pull receipt.
+ * its executionIdentity (ADR 0115), to fetch and verify its own immutable work
+ * order. The only write is the pull receipt.
  */
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -15,8 +15,10 @@ import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_rep
 import "../loop/emit-fixer-work-order.mjs"; // registers the fixer role adapter
 import "../loop/emit-judge-work-order.mjs"; // registers the judge role adapter
 
-const USAGE = `Usage: pull-work-order.mjs --ref <workOrderRef> --digest <workOrderDigest> --execution <executionIdentity> [--tmp-root <path>]
-Verifies the compact reference against the role's canonical emitted unit, prints
+const USAGE = `Usage: pull-work-order.mjs <executionIdentity> [--tmp-root <path>]
+Resolves the executionIdentity to its workOrderRef and workOrderDigest through the
+emitter's tmp/work-order-executions/ index (ADR 0115), verifies them against the
+role's canonical emitted unit, prints
 the exact emitted work order, and writes a pull receipt under the MAIN checkout's
 tmp/work-order-receipts/. The ref's "<role>:" prefix selects the role adapter; the
 work order's header "role" must match it. --tmp-root pins where emitted work orders
@@ -77,19 +79,26 @@ registerWorkOrderRole("review", {
 
 export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), receiptTmpRoot } = {}) {
   // A parseArgs error throws to the CLI wrapper (exit 2).
-  const { values } = parseArgs({ args: argv, options: { ref: { type: "string" }, digest: { type: "string" }, execution: { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" } } });
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" } } });
+  } catch (err) {
+    process.stderr.write(`${err.message}\n${USAGE}\n`);
+    return 2;
+  }
+  const { values, positionals } = parsed;
   if (values.help) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
-  if (!values.ref || !values.digest || !values.execution) {
-    process.stderr.write(`--ref, --digest and --execution are required\n${USAGE}\n`);
+  if (positionals.length !== 1) {
+    process.stderr.write(`exactly one <executionIdentity> is required\n${USAGE}\n`);
     return 2;
   }
   const tmpRoots = values["tmp-root"] ? [path.resolve(cwd, values["tmp-root"])] : resolveLedgerCheckouts(cwd).map((root) => path.join(root, "tmp"));
   try {
     const { workOrderText } = await pullWorkOrder({
-      ref: values.ref, digest: values.digest, execution: values.execution, cwd, tmpRoots,
+      execution: positionals[0], cwd, tmpRoots,
       receiptTmpRoot: receiptTmpRoot ?? resolveGateArtifactTmpRoot(cwd),
     });
     process.stdout.write(workOrderText);

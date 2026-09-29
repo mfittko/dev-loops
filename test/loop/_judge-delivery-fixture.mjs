@@ -57,6 +57,6 @@ export async function writeVerdictAfterPull(filePath, bytes) {
 export async function deliverJudge(root, sources) {
   const plan = await emitJudgeWorkOrder(sources);
   const receiptTmpRoot = path.join(root, "tmp");
-  await pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [receiptTmpRoot], receiptTmpRoot });
+  await pullWorkOrder({ execution: plan.executionIdentity, cwd: root, tmpRoots: [receiptTmpRoot], receiptTmpRoot });
   return { plan, receiptTmpRoot };
 }

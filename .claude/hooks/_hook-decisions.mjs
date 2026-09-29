@@ -12,6 +12,7 @@
 
 import { resolveRunId } from "./_run-context.mjs";
 import { isUnderWorktreePath } from "./_worktree-guard.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE } from "./_work-order-digest.mjs";
 import {
   deriveInManagedRepo,
   commandContainsGhPrReady,
@@ -88,12 +89,22 @@ export function normalizeAgentType(agentType) {
 
 /**
  * The read-only judge holds Bash only to pull its work order (ADR 0106). The one allowed command
- * is the dispatch envelope's pull line with shell-inert values (the same charset
- * `buildDispatchPointer` enforces), so chaining, redirection and substitution cannot match.
+ * is the dispatch envelope's pull line with its execution identity alone (ADR 0115), so chaining,
+ * redirection and substitution cannot match.
  */
 export const JUDGE_AGENT_TYPE = "judge";
-const PULL_VALUE = "[A-Za-z0-9][\\w.:/#-]*";
-const SANCTIONED_WORK_ORDER_PULL_RE = new RegExp(`^dev-loops-run scripts/github/pull-work-order\\.mjs --ref ${PULL_VALUE} --digest ${PULL_VALUE} --execution ${PULL_VALUE}$`);
+const IDENTITY_PATTERN = EXECUTION_IDENTITY_RE.source.slice(1, -1);
+const SANCTIONED_WORK_ORDER_PULL_RE = new RegExp(`^dev-loops-run scripts/github/pull-work-order\\.mjs (${IDENTITY_PATTERN})$`);
+const FIXER_IDENTITY_TOKEN_RE = /\bf\d+-[0-9a-f]{8}\b/;
+
+/** `{ executionIdentity }` of the exact trimmed sanctioned pull line, or null. */
+export function parseSanctionedPullLine(command) {
+  const match = typeof command === "string" ? SANCTIONED_WORK_ORDER_PULL_RE.exec(command.trim()) : null;
+  return match ? { executionIdentity: match[1] } : null;
+}
+
+/** True when `command` references pull-work-order and carries a fixer execution identity token, in any shell segment. */
+export const isFixerPullAttempt = (command) => typeof command === "string" && command.includes("pull-work-order") && FIXER_IDENTITY_TOKEN_RE.test(command);
 
 /**
  * Decide whether a PreToolUse Bash command must be blocked by a dev-loop gate boundary.
@@ -147,13 +158,23 @@ export function decideBashGate({
   enforceCoordinator = false,
 }) {
   if (normalizeAgentType(agentType) === JUDGE_AGENT_TYPE) {
-    return typeof command === "string" && SANCTIONED_WORK_ORDER_PULL_RE.test(command.trim()) ? ALLOW : {
+    return parseSanctionedPullLine(command) ? ALLOW : {
       decision: "deny",
       reason:
         "Judge read-only boundary (agents/judge.agent.md, ADR 0106): the judge may run only its " +
-        "dispatched `dev-loops-run scripts/github/pull-work-order.mjs --ref <ref> --digest <digest> " +
-        "--execution <execution>` line, alone, with no chaining, redirection or substitution. Read " +
+        "dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line, " +
+        "alone, with no chaining, redirection or substitution. Read " +
         "files with Read/Grep/Glob; never run shell, test or build commands.",
+    };
+  }
+  // The fixer's binding is recorded only for the exact pull line (ADR 0107), so a modified one denies with the fix.
+  if (normalizeAgentType(agentType) === FIXER_AGENT_TYPE && isFixerPullAttempt(command) && !parseSanctionedPullLine(command)) {
+    return {
+      decision: "deny",
+      reason:
+        "Fixer pull boundary (agents/fixer.agent.md, ADR 0107): the fixer's grant binding is recorded only for the exact " +
+        `dispatched pull line. Run \`dev-loops-run scripts/github/pull-work-order.mjs ${command.match(FIXER_IDENTITY_TOKEN_RE)[0]}\` ` +
+        "alone, with no prefix, suffix, redirect, chaining or `cd`.",
     };
   }
   if (typeof command !== "string") {
@@ -840,7 +861,7 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
     decision: "deny",
     reason:
       `Fixer mutation boundary (agents/fixer.agent.md, ADR 0107): refusing to write ${JSON.stringify(targetPath)}: ${why}. ` +
-      "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs --ref <ref> --digest <digest> --execution <execution>` first. " +
+      "Run the dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` first. " +
       "A fixer writes only its work order's outputRef and files under mutationAuthority.allowedPaths in a checkout of mutationAuthority.branch.",
   });
   if (typeof targetPath !== "string" || !targetPath.startsWith("/")) return deny("the target path is missing or relative");
@@ -858,16 +879,19 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
   const granted = grants.some((g) => typeof g?.branch === "string" && g.branch === checkout.branch && inAllowedPaths(rel, g.allowedPaths));
   if (granted) return ALLOW;
   return deny(grants.length === 0
-    ? "no current fixer work-order pull grants a mutation authority"
+    ? "no current fixer work-order pull grants a mutation authority. A pull line run with a prefix, suffix, redirect or `cd` records no grant; run the exact dispatched pull line again, alone"
     : `no current pull grants path ${JSON.stringify(rel)} on branch ${JSON.stringify(checkout.branch)}`);
 }
 
 const GATE_ROUND_CHILD_ROLES = new Set(["review", "judge"]);
-// The exact `buildDispatchPointer` text (scripts/github/_work-order-protocol.mjs) for a ref of `role`.
-const dispatchPointerRe = (role) => new RegExp(
-  `^Run \`dev-loops-run scripts/github/pull-work-order\\.mjs --ref ${role}:[\\w.:/#-]+ --digest ${PULL_VALUE} --execution ${PULL_VALUE}\`; ` +
+// The exact `buildDispatchPointer` text (scripts/github/_work-order-protocol.mjs); the identity prefix names the role.
+const DISPATCH_POINTER_RE = new RegExp(
+  `^Run \`dev-loops-run scripts/github/pull-work-order\\.mjs (${IDENTITY_PATTERN})\`; ` +
   "follow its printed work order exactly\\. Exit 1: report its JSON verbatim, stop\\.$",
 );
+const IDENTITY_PREFIX = { review: "r", judge: "j" };
+const isDispatchPointer = (prompt, role) => typeof prompt === "string" && Buffer.byteLength(prompt) <= DISPATCH_POINTER_MAX_BYTES
+  && DISPATCH_POINTER_RE.exec(prompt)?.[1][0] === IDENTITY_PREFIX[role];
 
 /**
  * Decide whether a PreToolUse Agent/Task dispatch must be denied (GATE-EXEC-GATE-COORDINATOR,
@@ -903,7 +927,7 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
         "The gate coordinator dispatches only the round's `review` and `judge` agents; the dev-loop coordinator dispatches fixers and repeat rounds.",
     };
   }
-  if (typeof prompt === "string" && dispatchPointerRe(target).test(prompt)) return ALLOW;
+  if (isDispatchPointer(prompt, target)) return ALLOW;
   return {
     decision: "deny",
     reason:

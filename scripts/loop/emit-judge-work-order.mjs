@@ -15,7 +15,7 @@ import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
-import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath } from "../github/_gate-artifact-paths.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
@@ -147,6 +147,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     if (err?.code !== "EEXIST") throw err;
     if (await readFile(promptPath, "utf8") !== text) throw new Refusal(`work order ${identityTriple.workOrderRef} already exists with different content; emit a new reference instead`);
   }
+  await writeExecutionIndex(tmpRoot, identityTriple);
   const plan = { ...identityTriple, roundId, materializationHash: materializationHash(text), promptPath, dispatchPrompt, workOrder };
   const planPath = path.join(dir, "judge-emit-plan.json");
   // Atomic: a concurrent pull never reads a half-written plan.
@@ -272,7 +273,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd() }
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });
   } catch (err) {
-    if (!(err instanceof Refusal)) throw err;
+    if (!(err instanceof Refusal || err instanceof WorkOrderRefusal)) throw err;
     return emit({ ok: false, error: err.message });
   }
 }
