@@ -350,6 +350,9 @@ test("the short pull: an identity whose prefix role differs from its index ref r
     const fixerIdentity = "f1790000000000-abcdef12";
     await writeExecutionIndex(path.join(root, "tmp"), { executionIdentity: fixerIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest });
     assert.equal(refusal(pullShort(fixerIdentity, root)).refusal, "dispatch_identity_mismatch");
+    const ghostIdentity = "f1790000000001-abcdef12";
+    await writeExecutionIndex(path.join(root, "tmp"), { executionIdentity: ghostIdentity, workOrderRef: "ghost:o/r#7:x", workOrderDigest: unit.workOrderDigest });
+    assert.equal(refusal(pullShort(ghostIdentity, root)).refusal, "dispatch_identity_mismatch");
   });
 });
 

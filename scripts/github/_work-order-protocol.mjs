@@ -101,9 +101,9 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
   const fromIndex = ref === undefined;
   if (fromIndex) ({ workOrderRef: ref, workOrderDigest: digest } = await resolveExecutionIndex(execution, tmpRoots));
   const role = String(ref).split(":", 1)[0];
+  if (fromIndex && IDENTITY_ROLES[execution[0]] !== role) throw new WorkOrderRefusal("dispatch_identity_mismatch", `execution ${execution} names role ${IDENTITY_ROLES[execution[0]]}, but its index entry names ref ${ref}`);
   const adapter = WORK_ORDER_ROLES.get(role);
   if (!adapter) throw new WorkOrderRefusal("unknown_role", `work-order role ${JSON.stringify(role)} has no registered adapter`);
-  if (fromIndex && IDENTITY_ROLES[execution[0]] !== role) throw new WorkOrderRefusal("dispatch_identity_mismatch", `execution ${execution} names role ${IDENTITY_ROLES[execution[0]]}, but its index entry names ref ${ref}`);
   const unit = await adapter.locate({ ref, digest, execution, cwd, tmpRoots });
   // Stale first: a retired or superseded round never retargets onto the newest unit.
   if (unit?.stale) throw new WorkOrderRefusal("stale_dispatch", `${unit.stale}; never retarget to the newest round, reconcile and re-dispatch the current lawful unit`);
