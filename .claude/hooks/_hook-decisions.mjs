@@ -181,7 +181,8 @@ export function decideBashGate({
       decision: "deny",
       reason:
         "Fixer pull boundary (agents/fixer.agent.md, ADR 0107): the fixer's grant binding is recorded only for the exact " +
-        `dispatched pull line. Run \`dev-loops-run scripts/github/pull-work-order.mjs ${command.match(FIXER_IDENTITY_TOKEN_RE)[0]}\` ` +
+        `dispatched pull line. Run it again exactly as dispatched: \`dev-loops-run scripts/github/pull-work-order.mjs ${command.match(FIXER_IDENTITY_TOKEN_RE)[0]}\`, ` +
+        "or the emitted 3-flag line (`--ref`, `--digest`, `--execution`) when your dispatch carried that form, " +
         "alone, with no prefix, suffix, redirect, chaining or `cd`.",
     };
   }

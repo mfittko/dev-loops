@@ -270,7 +270,14 @@ test("F3: the short pull line binds the grant, pulls the same bytes and writes t
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.equal(result.stdout, await readFile(unit.promptPath, "utf8"));
     const receipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
-    assert.deepEqual([receipt.role, receipt.executionIdentity, receipt.workOrderDigest], ["fixer", unit.executionIdentity, unit.workOrderDigest]);
+    const { role, executionIdentity, workOrderRef, workOrderDigest, materializationHash } = receipt;
+    assert.deepEqual(
+      { role, executionIdentity, workOrderRef, workOrderDigest, materializationHash },
+      { role: "fixer", executionIdentity: unit.executionIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, materializationHash: unit.materializationHash },
+    );
+    assert.equal(pull(unit, wt).status, 0);
+    const longReceipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
+    assert.deepEqual({ ...longReceipt, pulledAt: undefined }, { ...receipt, pulledAt: undefined });
     const target = path.join(wt, "src", "x.mjs");
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, "x\n");

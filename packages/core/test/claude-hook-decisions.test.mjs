@@ -1479,6 +1479,7 @@ test("decideBashGate denies a fixer pull that is not the exact sanctioned line a
       assert.equal(d.decision, "deny", command);
       assert.ok(d.reason.includes(`\`${pull}\``), d.reason);
       assert.match(d.reason, /alone, with no prefix, suffix, redirect/);
+      assert.match(d.reason, /or the emitted 3-flag line \(`--ref`, `--digest`, `--execution`\) when your dispatch carried that form/);
     }
   }
   assert.equal(decideBashGate({ command: "bun test", agentType: "fixer" }).decision, "allow");
