@@ -78,7 +78,7 @@ export function normalizeFixerDispositionHandoff(raw) {
       throw new Error(`Fixer disposition handoff entry ${index} is missing threadId`);
     }
     const threadId = entry.threadId.trim();
-    if (!/^[A-Za-z0-9_=-]+$/.test(threadId)) {
+    if (!/^PRRT_[A-Za-z0-9_-]+$/.test(threadId)) {
       throw new Error(`Fixer disposition handoff entry ${index} threadId ${threadId} is not a review-thread node id; a threadless act item gets no handoff entry`);
     }
     if (seenThreadIds.has(threadId)) {

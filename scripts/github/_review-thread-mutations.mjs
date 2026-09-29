@@ -46,6 +46,8 @@ export async function assertFixedReplyShas(
   { env = process.env, ghCommand = "gh", runChild = runChildWithInput } = {},
 ) {
   if (bodies.length === 0) return;
+  const gitEnv = { ...env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete gitEnv[key];
   const view = await runChild(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid"], env);
   let head = null;
   try { head = JSON.parse(view.stdout).headRefOid; } catch { /* handled below */ }
@@ -62,7 +64,7 @@ export async function assertFixedReplyShas(
     let contained = false;
     let unverifiable = false;
     for (const sha of fullShas) {
-      const result = await runChild("git", ["merge-base", "--is-ancestor", sha, head], env);
+      const result = await runChild("git", ["merge-base", "--is-ancestor", sha, head], gitEnv);
       if (result.code === 0) { contained = true; break; }
       if (result.code !== 1) unverifiable = true;
     }
