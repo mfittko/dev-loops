@@ -2441,6 +2441,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // result) captured from enforcePostTimeFanoutMode, so the durable-ledger
   // refusal below reuses its already-computed per-gate ledgerExists/ledgerPath.
   let postTimeFanoutEnforcement = null;
+  let preloadedFindingsLedger;
   if (!isReviewGate) {
     // Thread the light-dispatch signal so the context interpreter and the
     // maxCopilotRounds resolution below use the same composed lightweight cap
@@ -2571,6 +2572,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // verdict here, before it is posted, for every verdict value. No override
     // flag — requireFanoutEvidence: false is the only opt-out, and that is
     // already handled inside buildFanoutEnforcement.
+    // A ledger-declared fan-out counts as fan-out for this check too, so promote it first.
+    if (options.findingsLedger) {
+      preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+      if (preloadedFindingsLedger.executionMode === "fanout_fanin") options.executionMode = "fanout_fanin";
+    }
     postTimeFanoutEnforcement = await enforcePostTimeFanoutMode(
       {
         repo: options.repo,
@@ -2603,10 +2609,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // so the resolved verdict drives every downstream guard; reused by the
   // withheld-tier coverage check and resolveFindingSurface so the file is
   // read once.
-  let preloadedFindingsLedger;
   let unjudgedLedgerFindings = [];
   if (options.findingsLedger) {
-    preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+    preloadedFindingsLedger ??= await loadMatchingFindingsLedger(options, canonicalHeadSha);
     // A fan-out draft or pre-approval round ran a judge, so the act list must come from judge-enriched data:
     // a ledger finding without a disposition is pre-judge, and only an enriched --findings-json can stand in.
     // The angle checks, tick and recorded marker all key on options.executionMode, so a ledger-declared

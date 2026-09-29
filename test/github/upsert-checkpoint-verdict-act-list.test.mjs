@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
@@ -343,4 +343,28 @@ test("a review-gate post over an unjudged fan-out ledger is not refused for miss
     }
     assert.doesNotMatch(message, unjudgedLedgerMsg);
   }, { prefix: "dev-loops-act-list-review-gate-" });
+});
+
+test("a fan-out ledger with no --execution-mode is not refused as an inline post under requireFanoutEvidence", async () => {
+  await withTempDir(async (tempDir) => {
+    const strictRoot = path.join(tempDir, "strict-repo");
+    await mkdir(strictRoot);
+    await writeFile(path.join(strictRoot, ".devloops"), await readFile(path.resolve(".devloops"), "utf8"), "utf8");
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [preJudgeFinding], executionMode: "fanout_fanin" });
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+      "--findings-ledger", ledgerPath, "--findings-summary", "act list test", "--next-action", "follow the verdict",
+      "--inline-reason", "parser default needs a reason",
+      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 1, low: 0, question: 0, nit: 0 }),
+    ];
+    let message = "";
+    try {
+      await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+        env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: strictRoot, runChild: makeRunChild([]),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    assert.doesNotMatch(message, /Cannot post a inline_single_agent/);
+  }, { prefix: "dev-loops-act-list-real-config-" });
 });
