@@ -6,13 +6,15 @@
  * alone (ADR 0115), to fetch and verify its own immutable work order. The only
  * write is the pull receipt.
  */
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
-import { WorkOrderRefusal, pullWorkOrder, registerWorkOrderRole } from "./_work-order-protocol.mjs";
+import { EXECUTION_IDENTITY_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
-import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
+import { TOOLCHAIN_ROOT, isOtherDevLoopsCheckout, resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import "../loop/emit-fixer-work-order.mjs"; // registers the fixer role adapter
 import "../loop/emit-judge-work-order.mjs"; // registers the judge role adapter
 
@@ -79,6 +81,20 @@ registerWorkOrderRole("review", {
   ),
 });
 
+// #2506: on a self-hosting PR the emitter wrote the execution index entry in the PR worktree. That
+// checkout is the review root, so its own pull script serves the pull. The marker stops a second hop.
+const PULL_DELEGATED_ENV = "DEV_LOOPS_PULL_DELEGATED";
+const PULL_SCRIPT = "scripts/github/pull-work-order.mjs";
+
+/** The dev-loops checkout whose pull script must serve `execution`, or null to pull locally. */
+export function pullDelegationTarget(execution, tmpRoots, { toolchainRoot = TOOLCHAIN_ROOT, env = process.env } = {}) {
+  if (env[PULL_DELEGATED_ENV] || !EXECUTION_IDENTITY_RE.test(String(execution))) return null;
+  const tmpRoot = tmpRoots.find((root) => existsSync(executionIndexPath(root, execution)));
+  const checkout = tmpRoot ? path.dirname(tmpRoot) : null;
+  if (!checkout || !existsSync(path.join(checkout, PULL_SCRIPT)) || !isOtherDevLoopsCheckout(checkout, toolchainRoot)) return null;
+  return checkout;
+}
+
 export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), receiptTmpRoot } = {}) {
   // A parseArgs error throws to the CLI wrapper (exit 2).
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { ref: { type: "string" }, digest: { type: "string" }, execution: { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" } } });
@@ -94,6 +110,12 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     return 2;
   }
   const tmpRoots = values["tmp-root"] ? [path.resolve(cwd, values["tmp-root"])] : resolveLedgerCheckouts(cwd).map((root) => path.join(root, "tmp"));
+  const target = pullDelegationTarget(short ? positionals[0] : values.execution, tmpRoots);
+  if (target) {
+    // stdout, stderr and the exit code pass through unchanged.
+    const r = spawnSync(process.execPath, [path.join(target, PULL_SCRIPT), ...argv], { cwd: target, stdio: "inherit", env: { ...process.env, [PULL_DELEGATED_ENV]: "1" } });
+    return r.status ?? 2;
+  }
   try {
     const { workOrderText } = await pullWorkOrder({
       ...(short ? { execution: positionals[0] } : { ref: values.ref, digest: values.digest, execution: values.execution }), cwd, tmpRoots,

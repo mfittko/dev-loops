@@ -10,7 +10,7 @@ import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, exe
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
 import { withTempDir } from "../_helpers.mjs";
-import "../../scripts/github/pull-work-order.mjs";
+import { pullDelegationTarget } from "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 
@@ -365,4 +365,48 @@ test("the short pull: two tmp roots whose index entries for one identity differ 
     await writeFile(executionIndexPath(path.join(b, "tmp"), unit.executionIdentity), await readFile(indexPath(a, unit), "utf8"), "utf8");
     assert.equal((await pullWorkOrder({ execution: unit.executionIdentity, tmpRoots, receiptTmpRoot: a })).receipt.workOrderRef, unit.workOrderRef);
   }));
+});
+
+// #2506 pull delegation: on a self-hosting PR the execution index entry sits in the PR worktree,
+// so the pull re-runs that worktree's pull script. The stub there prints a marker and exits 7.
+const DELEGATE_ID = "r1790000000001-abcdef12-u0";
+async function seedDelegateCheckout(dir, { name = "dev-loops", stub = true } = {}) {
+  await mkdir(path.join(dir, "scripts", "github"), { recursive: true });
+  await writeFile(path.join(dir, "package.json"), JSON.stringify({ name }), "utf8");
+  if (stub) await writeFile(path.join(dir, "scripts/github/pull-work-order.mjs"), `console.log("DELEGATED", process.cwd(), process.argv.slice(2).join(" "), process.env.DEV_LOOPS_PULL_DELEGATED);\nprocess.exit(7);\n`, "utf8");
+  await writeExecutionIndex(path.join(dir, "tmp"), { executionIdentity: DELEGATE_ID, workOrderRef: `review:o/r#7:${GATE}:${HEAD}:coverage`, workOrderDigest: `sha256:${"0".repeat(64)}` });
+}
+
+test("self-hosting pull: from the main cwd, the pull runs the linked worktree's pull script that holds the index entry", async () => {
+  await withDir(async (base) => {
+    const main = path.join(base, "main");
+    const linked = path.join(base, "linked");
+    await mkdir(main);
+    const git = (args, cwd = main) => execFileSync("git", args, { cwd, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+    git(["init", "-q"]);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+    git(["worktree", "add", "-q", linked]);
+    await seedDelegateCheckout(linked);
+    const delegated = pullShort(DELEGATE_ID, main);
+    assert.equal(delegated.status, 7, delegated.stderr);
+    assert.equal(delegated.stdout, `DELEGATED ${linked} ${DELEGATE_ID} 1\n`);
+    // The marker stops a second delegation: the pull resolves locally and refuses as today.
+    const marked = spawnSync("node", [path.join(SCRIPTS, "pull-work-order.mjs"), DELEGATE_ID], { cwd: main, encoding: "utf8", env: { ...process.env, DEV_LOOPS_PULL_DELEGATED: "1" } });
+    assert.equal(refusal(marked).refusal, "dispatch_reference_mismatch");
+  });
+});
+
+test("pullDelegationTarget: no delegation for the own checkout, a non-dev-loops checkout, a missing pull script, the marker, or no index entry", async () => {
+  await withDir(async (a) => withDir(async (b) => withDir(async (c) => {
+    await seedDelegateCheckout(a);
+    await seedDelegateCheckout(b, { name: "some-consumer-app" });
+    await seedDelegateCheckout(c, { stub: false });
+    const tmp = (root) => [path.join(root, "tmp")];
+    assert.equal(pullDelegationTarget(DELEGATE_ID, tmp(a), { env: {} }), a);
+    assert.equal(pullDelegationTarget(DELEGATE_ID, tmp(a), { toolchainRoot: a, env: {} }), null);
+    assert.equal(pullDelegationTarget(DELEGATE_ID, tmp(b), { env: {} }), null);
+    assert.equal(pullDelegationTarget(DELEGATE_ID, tmp(c), { env: {} }), null);
+    assert.equal(pullDelegationTarget(DELEGATE_ID, tmp(a), { env: { DEV_LOOPS_PULL_DELEGATED: "1" } }), null);
+    assert.equal(pullDelegationTarget("r1790000000001-abcdef12-u9", tmp(a), { env: {} }), null);
+  })));
 });

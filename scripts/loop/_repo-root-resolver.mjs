@@ -190,14 +190,18 @@ export function isDevLoopsCheckout(dir) {
   }
 }
 
+/** True when `dir` is a dev-loops source checkout whose real path differs from `toolchainRoot`'s. */
+export function isOtherDevLoopsCheckout(dir, toolchainRoot = TOOLCHAIN_ROOT) {
+  const real = (p) => { try { return realpathSync(p); } catch { return path.resolve(p); } };
+  return isDevLoopsCheckout(dir) && real(dir) !== real(toolchainRoot);
+}
+
 /**
  * The `toolchain_root_mismatch` message when `repoRoot` is a dev-loops source checkout other than
  * `toolchainRoot`, else null (#2506). Running one checkout's script against another dev-loops
  * checkout mixes two toolchains; the launcher flag runs the target checkout's own script instead.
  */
 export function toolchainRootMismatch(repoRoot, script, { toolchainRoot = TOOLCHAIN_ROOT } = {}) {
-  if (!isDevLoopsCheckout(repoRoot)) return null;
-  const real = (p) => { try { return realpathSync(p); } catch { return path.resolve(p); } };
-  if (real(repoRoot) === real(toolchainRoot)) return null;
+  if (!isOtherDevLoopsCheckout(repoRoot, toolchainRoot)) return null;
   return `toolchain_root_mismatch: --repo-root ${repoRoot} is a dev-loops checkout other than this script's toolchain root ${toolchainRoot}; run \`dev-loops-run --repo-root ${repoRoot} ${script} ...\` instead`;
 }
