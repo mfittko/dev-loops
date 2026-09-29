@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:f
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 import {
@@ -3790,6 +3791,27 @@ test("#1618: the briefing-prefix check only runs with --head-sha (no head-sha = 
       }
     },
   );
+});
+
+// #2506: run from another cwd through `dev-loops-run --repo-root <fixture>`, the fan-in reads
+// the reviewer sentinels under <fixture>/tmp/ (the default --tmp-root follows the launcher cwd).
+test("#2506: through dev-loops-run --repo-root, the fan-in counts the sentinels under <root>/tmp/", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-reporoot-"));
+  const shellCwd = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-shell-"));
+  try {
+    await mkdir(path.join(root, "findings"), { recursive: true });
+    for (const angle of ["coverage", "correctness"]) {
+      await writeFile(path.join(root, "findings", `${angle}.json`), JSON.stringify({ angle, verdict: "clean", findings: [], headSha: HEAD_A }));
+    }
+    await writePrefixSentinel(path.join(root, "tmp"), "draft-gate-coverage", HEAD_A, "a".repeat(64));
+    const launcher = fileURLToPath(new URL("../../.claude/bin/dev-loops-run", import.meta.url));
+    const r = await runNode(launcher, ["--repo-root", root, "scripts/loop/consolidate-fanin.mjs", "--findings-dir", "findings", "--head-sha", HEAD_A, "--expected-dispatch-units", "2"], { cwd: shellCwd });
+    assert.equal(r.code, 1, r.stderr);
+    assert.match(r.stderr, /sentinel count \(1\) is short of the expected dispatch-unit count \(2\)/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(shellCwd, { recursive: true, force: true });
+  }
 });
 
 // CLI parsing: --expected-dispatch-units must be a positive integer.
