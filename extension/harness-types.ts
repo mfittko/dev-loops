@@ -32,7 +32,7 @@ export type HarnessContext = {
   sendUserMessage?: (message: string, options?: Record<string, unknown>) => unknown;
 };
 
-export type HarnessLifecycleEvent = 'session_start' | 'tool_result' | 'user_bash' | 'agent_end';
+export type HarnessLifecycleEvent = 'session_start' | 'tool_result' | 'user_bash' | 'agent_end' | 'tool_call';
 
 export type HarnessCommandConfig = {
   description: string;
