@@ -1146,7 +1146,7 @@ test("decideBashGate (hook-decisions.mjs) resolves inManagedRepo via the shared 
 });
 
 // ---------------------------------------------------------------------------
-// env option runs behind the shared SHELL_EXEC_PREFIX (#2550)
+// env option runs behind the shared SHELL_EXEC_PREFIX
 // ---------------------------------------------------------------------------
 
 const ENV_PREFIX_FORMS = [

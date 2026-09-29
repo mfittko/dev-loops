@@ -230,7 +230,7 @@ const ENV_ASSIGNMENT_RUN = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*";
  * The `env` wrapper word plus any trailing run (any order/count) of `NAME=value` assignments and the
  * common `env` options: `-i`/`--ignore-environment`, `-u <NAME>`/`--unset=<NAME>`, `-C <dir>`/
  * `--chdir=<dir>`, `-S <str>`/`--split-string=<str>`, `--` and a bare `-`. Shared by
- * `SHELL_EXEC_PREFIX` and `VERIFY_EXEC_PREFIX` so both see the same `env` forms (#2550).
+ * `SHELL_EXEC_PREFIX` and `VERIFY_EXEC_PREFIX` so both see the same `env` forms.
  * Ceilings: an `-S` string is one token and is not split into words; any other `env` option is
  * not covered. The `-C <dir>` target is not resolved, so the caller's repo scoping applies
  * (fails closed for a managed context).
