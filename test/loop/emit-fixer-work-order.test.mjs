@@ -2,11 +2,13 @@
 // emission -> compact dispatch -> sanctioned pull -> guarded mutation -> checked disposition.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync } from "node:fs";
+import { chmodSync, existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
+import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
+import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
@@ -437,11 +439,19 @@ test("F5: a cwd in another repo cannot make an in-repo target look like scratch;
   });
 });
 
-test("F5: a case-variant path to an in-repo file denies without a pull on a case-insensitive filesystem", async () => {
+test("F5: a case-variant path to an in-repo file denies without a pull", async () => {
   await withFixture(async ({ root, wt }) => {
-    const variant = path.join(path.dirname(root), "REPO", path.relative(root, wt), "README.md");
-    if (!existsSync(path.dirname(variant))) return; // case-sensitive filesystem: no variant path exists
-    assert.equal(hook(wt, variant), "deny", "a case-variant in-repo path is not scratch");
+    const rootReal = await realpath(root);
+    const wtReal = await realpath(wt);
+    // Fold case for the checkout root, as a case-insensitive filesystem does; other paths resolve as on disk.
+    const foldingRealpath = (p) => (p.toLowerCase().startsWith(rootReal.toLowerCase()) ? realpathSync.native(rootReal + p.slice(rootReal.length)) : realpathSync.native(p));
+    const variant = path.join(rootReal.toUpperCase(), path.relative(rootReal, wtReal), "README.md");
+    const normalized = realpathNearestExisting(variant, foldingRealpath);
+    assert.equal(normalized, path.join(wtReal, "README.md"), "the variant normalizes to the on-disk case");
+    const checkouts = [{ root: rootReal, branch: "main" }, { root: wtReal, branch: "issue-1" }];
+    assert.equal(decideFixerWriteGuard({ agentType: "fixer", targetPath: normalized, checkouts, grants: [] }).decision, "deny", "a case-variant in-repo path is not scratch");
+    const onDiskVariant = path.join(path.dirname(root), "REPO", path.relative(root, wt), "README.md");
+    if (existsSync(path.dirname(onDiskVariant))) assert.equal(hook(wt, onDiskVariant), "deny", "the hook denies a case-variant path on a case-insensitive filesystem");
   });
 });
 

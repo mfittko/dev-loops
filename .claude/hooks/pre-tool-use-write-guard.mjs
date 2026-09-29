@@ -39,7 +39,7 @@ import { decideFixerWriteGuard, FIXER_AGENT_TYPE, decideJudgeWriteGuard, JUDGE_A
 import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
-import { loadFixerContext, nearestExistingDir } from "./_fixer-grants.mjs";
+import { gitEnv, loadFixerContext, nearestExistingDir } from "./_fixer-grants.mjs";
 
 const input = readHookInput();
 const filePath = input?.tool_input?.file_path ?? input?.tool_input?.notebook_path;
@@ -200,15 +200,19 @@ const enforce = process.env.DEVLOOPS_MAIN_AGENT_READONLY === "1";
 // subagent is authorized to mutate — a generic subagent must not bypass the boundary.
 const agentType = typeof input?.agent_type === "string" ? input.agent_type : null;
 
-// Repo mutation = inside the repo working tree AND not gitignored.
+// Repo mutation = inside the working tree of the repository that CONTAINS the target
+// (not the hook's cwd) AND not gitignored there. A linked worktree under a gitignored
+// directory of the main checkout is its own repository, so its tracked files count.
 let isRepoMutation = false;
 try {
-  const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim();
-  if (abs === repoRoot || abs.startsWith(repoRoot + path.sep)) {
+  const gitOpts = { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] };
+  const targetReal = realpathNearestExisting(abs);
+  const repoRoot = execFileSync("git", ["-C", nearestExistingDir(targetReal), "rev-parse", "--show-toplevel"], gitOpts).trim();
+  if (targetReal === repoRoot || targetReal.startsWith(repoRoot + "/")) {
     let ignored = false;
     try {
       // `git check-ignore -q` exits 0 when ignored, 1 when not ignored.
-      execFileSync("git", ["check-ignore", "-q", "--", abs], { cwd: repoRoot, stdio: "ignore" });
+      execFileSync("git", ["check-ignore", "-q", "--", targetReal], { ...gitOpts, cwd: repoRoot });
       ignored = true;
     } catch {
       ignored = false;

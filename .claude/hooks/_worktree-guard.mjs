@@ -273,16 +273,17 @@ export function classifyWorktreeIsolation({ cwd, mainWorktreePath, allWorktreePa
  * filesystem a case-variant path still matches its checkout root.
  *
  * @param {string} p - Absolute or relative path (possibly not yet existing).
+ * @param {(p: string) => string} [realpath] - Test seam; production callers pass nothing.
  * @returns {string} A realpath-normalized absolute path (forward-slash, no trailing slash).
  */
-export function realpathNearestExisting(p) {
+export function realpathNearestExisting(p, realpath = realpathSync.native) {
   const abs = path.resolve(p);
   let dir = abs;
   const tail = [];
   // Walk up to the nearest existing ancestor.
   for (;;) {
     try {
-      const real = realpathSync.native(dir);
+      const real = realpath(dir);
       const joined = tail.length ? path.join(real, ...tail) : real;
       return joined.replace(/\\/g, "/").replace(/\/+$/u, "");
     } catch {

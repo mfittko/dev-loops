@@ -868,3 +868,44 @@ test("agent-guard hook denies a dev-loop gate-pointer review dispatch, allows a 
   assert.equal(allowed.code, 0);
   assert.equal(allowed.json, null, "no deny output for a main-session dispatch");
 });
+
+// ---------------------------------------------------------------------------
+// Target-repo classification: a linked worktree under a gitignored directory of the main checkout
+// ---------------------------------------------------------------------------
+
+function withNestedWorktree(fn) {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "write-guard-nested-")));
+  const main = path.join(base, "main");
+  const git = (cwd, ...args) => spawnSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+  try {
+    fs.mkdirSync(main);
+    git(main, "init", "-q", "-b", "main");
+    fs.writeFileSync(path.join(main, ".gitignore"), "tmp/\n");
+    fs.writeFileSync(path.join(main, "README.md"), "x\n");
+    git(main, "add", ".");
+    git(main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+    const wt = path.join(main, "tmp", "worktrees", "issue-1");
+    git(main, "worktree", "add", "-q", "-b", "issue-1", wt);
+    fs.mkdirSync(path.join(wt, "tmp", "scratch"), { recursive: true });
+    fn({ main, wt, base });
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+
+const decisionOf = (cwd, file, agent_type, env) =>
+  runHook("pre-tool-use-write-guard.mjs", { tool_name: "Edit", tool_input: { file_path: file }, cwd, ...(agent_type ? { agent_type } : {}) }, env).json?.hookSpecificOutput?.permissionDecision ?? "allow";
+
+test("write-guard hook classifies a target by its containing repository: a tracked linked-worktree file is a repo mutation", () => {
+  withNestedWorktree(({ main, wt, base }) => {
+    const coordinator = { DEVLOOPS_COORDINATOR_READONLY: "1" };
+    const tracked = path.join(wt, "README.md");
+    assert.equal(decisionOf(main, tracked, "dev-loop", coordinator), "deny");
+    assert.equal(decisionOf(main, tracked, "dev-loops:dev-loop", coordinator), "deny");
+    assert.equal(decisionOf(main, tracked, "developer", coordinator), "allow", "workers keep write access");
+    assert.equal(decisionOf(main, path.join(wt, "tmp", "scratch", "n.txt"), "dev-loop", coordinator), "allow", "gitignored worktree file");
+    fs.mkdirSync(path.join(base, "plain"));
+    assert.equal(decisionOf(main, path.join(base, "plain", "f.txt"), "dev-loop", coordinator), "allow", "outside every repository");
+    assert.equal(decisionOf(main, tracked, undefined, { DEVLOOPS_MAIN_AGENT_READONLY: "1", DEVLOOPS_ALLOW_MAIN: "1" }), "deny", "main agent");
+  });
+});
