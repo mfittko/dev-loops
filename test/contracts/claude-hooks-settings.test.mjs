@@ -7,6 +7,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
 import { evaluateSubagentStop } from "../../.claude/hooks/subagent-stop-uncommitted-guard.mjs";
+import { buildDispatchPointer } from "../../scripts/github/_work-order-protocol.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 // Hook scripts live under the plugin root (.claude/hooks) so the Claude plugin can bundle them
@@ -845,13 +846,25 @@ test("the Agent|Task dispatch guard is registered in settings.json and hooks.jso
   assert.match(plugin.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-tool-use-agent-guard\.mjs/);
 });
 
-test("agent-guard hook denies a dev-loop review dispatch and allows the main session (e2e)", () => {
-  const tool_input = { subagent_type: "dev-loops:review", description: "review", prompt: "Review PR 7." };
-  const denied = runHook("pre-tool-use-agent-guard.mjs", { tool_name: "Agent", tool_input, cwd: repoRoot, agent_type: "dev-loops:dev-loop" });
+test("agent-guard hook denies a dev-loop gate-pointer review dispatch, allows a prose-briefed one and the main session (e2e)", () => {
+  const run = (prompt, agent_type) => runHook("pre-tool-use-agent-guard.mjs", {
+    tool_name: "Agent",
+    tool_input: { subagent_type: "dev-loops:review", description: "review", prompt },
+    cwd: repoRoot,
+    ...(agent_type ? { agent_type } : {}),
+  });
+  const pointer = buildDispatchPointer({ workOrderRef: "review:o/r#7:draft_gate:abc123:u1", workOrderDigest: "ab12cd", executionIdentity: "x1-aa" });
+  const denied = run(pointer, "dev-loops:dev-loop");
   assert.equal(denied.code, 0);
   assert.equal(denied.json?.hookSpecificOutput?.permissionDecision, "deny");
   assert.match(denied.json.hookSpecificOutput.permissionDecisionReason, /GATE_COORDINATOR_REQUIRED/);
-  const allowed = runHook("pre-tool-use-agent-guard.mjs", { tool_name: "Agent", tool_input, cwd: repoRoot });
+  const judge = runHook("pre-tool-use-agent-guard.mjs", { tool_name: "Agent", tool_input: { subagent_type: "dev-loops:judge", description: "judge", prompt: "Judge PR 7." }, cwd: repoRoot, agent_type: "dev-loops:dev-loop" });
+  assert.equal(judge.json?.hookSpecificOutput?.permissionDecision, "deny");
+  assert.match(judge.json.hookSpecificOutput.permissionDecisionReason, /GATE_COORDINATOR_REQUIRED/);
+  const prose = run("Delta review of the act-list fix: git diff abc123..def456.", "dev-loops:dev-loop");
+  assert.equal(prose.code, 0);
+  assert.equal(prose.json, null, "no deny output for a prose-briefed dev-loop review dispatch");
+  const allowed = run("Review PR 7.");
   assert.equal(allowed.code, 0);
   assert.equal(allowed.json, null, "no deny output for a main-session dispatch");
 });

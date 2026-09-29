@@ -862,6 +862,11 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
 }
 
 const GATE_ROUND_CHILD_ROLES = new Set(["review", "judge"]);
+// A gate unit is reachable only through its work-order ref or execution identity, so a dev-loop `review` prompt
+// that names `pull-work-order` and carries either token marks a gate dispatch, whatever the flag order, `=` form,
+// quoting or wrapping. A prose pre-PR or delta brief may quote a token but runs no pull. ponytail: a shape gate; a ref or identity assembled from
+// shell variables at runtime evades it, and the digest-verified pull stays the integrity boundary.
+const GATE_UNIT_TOKEN_RE = /\b(?:review|judge|fixer):[\w.-]+\/[\w.-]+#\d+:|\b[rjf]\d{10,}-[0-9a-f]{8}\b/;
 // The exact `buildDispatchPointer` text (scripts/github/_work-order-protocol.mjs) for a ref of `role`.
 const dispatchPointerRe = (role) => new RegExp(
   `^Run \`dev-loops-run scripts/github/pull-work-order\\.mjs --ref ${role}:[\\w.:/#-]+ --digest ${PULL_VALUE} --execution ${PULL_VALUE}\`; ` +
@@ -870,10 +875,11 @@ const dispatchPointerRe = (role) => new RegExp(
 
 /**
  * Decide whether a PreToolUse Agent/Task dispatch must be denied (GATE-EXEC-GATE-COORDINATOR,
- * ADR 0112). The dev-loop coordinator never dispatches a `review` or `judge` agent; the
- * `gate-coordinator` agent dispatches only those two roles, each with the emitted
- * `dispatchPrompt` byte for byte. Every other caller, including the main session (no
- * `agent_type`), is allowed.
+ * ADRs 0112 and 0116). The dev-loop coordinator never dispatches a `judge` agent and never
+ * dispatches a `review` agent whose prompt carries a `pull-work-order` invocation with a work-order ref or execution identity, in any flag order or wrapping; its prose-briefed pre-PR
+ * and delta `review` dispatches are allowed. The `gate-coordinator` agent dispatches only
+ * `review` and `judge`, each with the emitted `dispatchPrompt` byte for byte. Every other
+ * caller, including the main session (no `agent_type`), is allowed.
  *
  * @param {Object} params
  * @param {string|null} [params.callerAgentType] - Hook payload `agent_type` of the caller.
@@ -885,7 +891,8 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
   const caller = normalizeAgentType(callerAgentType);
   const target = normalizeAgentType(targetAgentType);
   const gateChild = GATE_ROUND_CHILD_ROLES.has(target);
-  if (caller === DEV_LOOP_AGENT_TYPE && gateChild) {
+  if (caller === DEV_LOOP_AGENT_TYPE && gateChild &&
+    (target === "judge" || (typeof prompt === "string" && /pull-work-order/.test(prompt) && GATE_UNIT_TOKEN_RE.test(prompt)))) {
     return {
       decision: "deny",
       reason:
