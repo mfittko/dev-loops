@@ -86,9 +86,10 @@ judge verdict path comes from that head's `judge-emit-plan.json` `workOrder.outp
 Phase 3.5 Dispatch), so
 `GATE-EXEC-JUDGE-NOT-FRESH` inputs and `judge-pass`'s `--prior-approvals` survive the fresh
 context. The dev-loop coordinator never runs these steps in its own context. The dev-loop
-coordinator keeps its pre-PR full review and delta reviewer `review` dispatches
-([Pre-PR review contract](./pre-pr-review-contract.md)); these are not gate-round units and are
-briefed in prose and never carry a `pull-work-order` invocation (ADR 0116). The gate
+coordinator keeps its pre-PR full review and delta reviewer dispatches, with the agent type
+the [Pre-PR review contract](./pre-pr-review-contract.md) names per harness; these are not
+gate-round units, are briefed in prose and never carry a `pull-work-order` invocation, so the
+hook allows them even when dispatched as a `review` agent (ADR 0116). The gate
 coordinator returns only the round's typed result: the verdict, the execution mode
 (`fanout_fanin` or `inline_single_agent`, plus the inline reason and findings summary when the
 round resolves to `inline_single_agent`), the severity counts, the fan-in output path, the

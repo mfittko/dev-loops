@@ -8,7 +8,7 @@ Amends [ADR 0112](./0112-gate-coordinator-agent-joins-the-agent-taxonomy.md): th
 
 ## Context
 
-`decideAgentDispatch` denied every `review` and `judge` dispatch from the `dev-loop` agent with `GATE_COORDINATOR_REQUIRED`. The contracts still give the dev-loop coordinator two `review` dispatches that are not gate-round units: the pre-PR full review and the delta reviewer of `PRE-PUSH-DELTA-TRIGGER` (both in `skills/docs/pre-pr-review-contract.md`). After ADR 0112 took effect, no dev-loop run could push an act-list fix, because the delta review must run before the push and the hook denied its dispatch.
+`decideAgentDispatch` denied every `review` and `judge` dispatch from the `dev-loop` agent with `GATE_COORDINATOR_REQUIRED`. The contracts still give the dev-loop coordinator two reviewer dispatches that are not gate-round units, and a run can dispatch either as a `review` agent: the pre-PR full review and the delta reviewer of `PRE-PUSH-DELTA-TRIGGER` (both in `skills/docs/pre-pr-review-contract.md`). On Claude Code that contract dispatches the pre-PR reviewer as the built-in `general-purpose` subagent, which this guard never gated. After ADR 0112 took effect, no dev-loop run could push an act-list fix, because the delta review must run before the push and the hook denied its dispatch.
 
 ## Decision
 
