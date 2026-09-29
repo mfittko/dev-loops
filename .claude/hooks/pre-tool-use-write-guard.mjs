@@ -220,9 +220,14 @@ try {
     }
     isRepoMutation = !ignored;
     // A linked worktree's git dir differs from the shared common dir; the main checkout's are equal.
-    const gitDirs = ["--git-dir", "--git-common-dir"].map((flag) =>
-      path.resolve(repoRoot, execFileSync("git", ["-C", repoRoot, "rev-parse", flag], gitOpts).trim()));
-    inLinkedWorktree = gitDirs[0] !== gitDirs[1];
+    // A lookup failure leaves inLinkedWorktree false and isRepoMutation true (fail closed).
+    try {
+      const gitDirs = ["--git-dir", "--git-common-dir"].map((flag) =>
+        path.resolve(repoRoot, execFileSync("git", ["-C", repoRoot, "rev-parse", flag], gitOpts).trim()));
+      inLinkedWorktree = gitDirs[0] !== gitDirs[1];
+    } catch {
+      inLinkedWorktree = false;
+    }
   }
 } catch {
   // Outside every repo: allow. A target under a git directory (.git/hooks, .git/worktrees/<n>) makes
