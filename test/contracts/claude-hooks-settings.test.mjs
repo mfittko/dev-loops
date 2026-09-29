@@ -927,3 +927,29 @@ test("write-guard hook classifies a target by its containing repository: a track
     }
   });
 });
+
+test("write-guard hook denies a submodule git-dir hook write (rev-parse succeeds there via core.worktree)", () => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "write-guard-submodule-")));
+  const git = (cwd, ...args) => {
+    const result = gitFixture(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always", ...args], cwd);
+    assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+  };
+  try {
+    const lib = path.join(base, "lib");
+    const main = path.join(base, "main");
+    for (const dir of [lib, main]) {
+      fs.mkdirSync(dir);
+      git(dir, "init", "-q", "-b", "main");
+      fs.writeFileSync(path.join(dir, "README.md"), "x\n");
+      git(dir, "add", ".");
+      git(dir, "commit", "-q", "-m", "init");
+    }
+    git(main, "submodule", "add", "-q", lib, "sub");
+    const hook = path.join(main, ".git", "modules", "sub", "hooks", "pre-commit");
+    fs.mkdirSync(path.dirname(hook), { recursive: true });
+    assert.equal(decisionOf(main, hook, "dev-loop", { DEVLOOPS_COORDINATOR_READONLY: "1" }), "deny", "coordinator");
+    assert.equal(decisionOf(main, hook, undefined, { DEVLOOPS_MAIN_AGENT_READONLY: "1", DEVLOOPS_ALLOW_MAIN: "1" }), "deny", "main agent");
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

@@ -230,10 +230,12 @@ try {
     }
   }
 } catch {
-  // Outside every repo: allow. A target under a git directory (.git/hooks, .git/worktrees/<n>) makes
-  // rev-parse --show-toplevel fail, so fail closed on a `.git` path segment (a hook write is code execution).
-  isRepoMutation = targetReal.split("/").includes(".git");
+  // Outside every repo: allow (the `.git` rule below still applies).
 }
+// A target under a git directory (.git/hooks, .git/worktrees/<n>, .git/modules/<n>) fails closed on a `.git`
+// path segment (a hook write is code execution). rev-parse can fail there, or succeed with a toplevel
+// that does not contain the target (a submodule git dir has core.worktree set).
+if (targetReal.split("/").includes(".git")) isRepoMutation = true;
 
 const decision = decideWriteGuard({ filePath, isRepoMutation, enforce, env: process.env, agentType, inLinkedWorktree });
 if (decision.decision === "deny") {
