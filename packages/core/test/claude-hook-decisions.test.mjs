@@ -1475,7 +1475,7 @@ test("decideJudgeWriteGuard lets the judge write only its verdict files under an
 const pointer = (role) => buildDispatchPointer({ workOrderRef: `${role}:o/r#7:draft_gate:abc123:u1`, workOrderDigest: "ab12cd", executionIdentity: "x1-aa" });
 const dispatch = (callerAgentType, targetAgentType, prompt = "anything") => decideAgentDispatch({ callerAgentType, targetAgentType, prompt });
 
-test("decideAgentDispatch denies review and judge dispatches from the dev-loop coordinator", () => {
+test("decideAgentDispatch denies gate-pointer review and judge dispatches from the dev-loop coordinator", () => {
   for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
     for (const target of ["review", "judge", "dev-loops:review"]) {
       const d = dispatch(caller, target, pointer("review"));
@@ -1483,6 +1483,32 @@ test("decideAgentDispatch denies review and judge dispatches from the dev-loop c
       assert.match(d.reason, /^GATE_COORDINATOR_REQUIRED/);
       assert.match(d.reason, /GATE-EXEC-GATE-COORDINATOR/);
       assert.match(d.reason, /`gate-coordinator` agent/);
+    }
+  }
+});
+
+test("decideAgentDispatch denies every judge dispatch from the dev-loop coordinator, pointer or not", () => {
+  for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
+    for (const prompt of [pointer("judge"), "Judge PR 7.", "", null]) {
+      const d = dispatch(caller, "judge", prompt);
+      assert.equal(d.decision, "deny", `${caller} ${JSON.stringify(prompt)}`);
+      assert.match(d.reason, /^GATE_COORDINATOR_REQUIRED/);
+    }
+  }
+});
+
+test("decideAgentDispatch allows the dev-loop coordinator's prose-briefed pre-PR and delta review dispatches", () => {
+  for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
+    for (const target of ["review", "dev-loops:review"]) {
+      for (const prompt of [
+        "Pre-PR full review of branch issue-7 against origin/main.",
+        "Delta review of the act-list fix: git diff abc123..def456.",
+        pointer("judge"),
+        "",
+        null,
+      ]) {
+        assert.equal(dispatch(caller, target, prompt).decision, "allow", `${caller} -> ${target} ${JSON.stringify(prompt)}`);
+      }
     }
   }
 });

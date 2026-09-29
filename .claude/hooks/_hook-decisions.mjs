@@ -871,10 +871,11 @@ const dispatchPointerRe = (role) => new RegExp(
 
 /**
  * Decide whether a PreToolUse Agent/Task dispatch must be denied (GATE-EXEC-GATE-COORDINATOR,
- * ADR 0112). The dev-loop coordinator never dispatches a `review` or `judge` agent; the
- * `gate-coordinator` agent dispatches only those two roles, each with the emitted
- * `dispatchPrompt` byte for byte. Every other caller, including the main session (no
- * `agent_type`), is allowed.
+ * ADRs 0112 and 0116). The dev-loop coordinator never dispatches a `judge` agent and never
+ * dispatches a `review` agent with a gate `review:` dispatch pointer; its prose-briefed pre-PR
+ * and delta `review` dispatches are allowed. The `gate-coordinator` agent dispatches only
+ * `review` and `judge`, each with the emitted `dispatchPrompt` byte for byte. Every other
+ * caller, including the main session (no `agent_type`), is allowed.
  *
  * @param {Object} params
  * @param {string|null} [params.callerAgentType] - Hook payload `agent_type` of the caller.
@@ -886,7 +887,8 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
   const caller = normalizeAgentType(callerAgentType);
   const target = normalizeAgentType(targetAgentType);
   const gateChild = GATE_ROUND_CHILD_ROLES.has(target);
-  if (caller === DEV_LOOP_AGENT_TYPE && gateChild) {
+  if (caller === DEV_LOOP_AGENT_TYPE && gateChild &&
+    (target === "judge" || (typeof prompt === "string" && dispatchPointerRe("review").test(prompt)))) {
     return {
       decision: "deny",
       reason:
