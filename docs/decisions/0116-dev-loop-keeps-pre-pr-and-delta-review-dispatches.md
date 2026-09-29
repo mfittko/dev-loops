@@ -4,7 +4,7 @@
 
 Accepted — 2026-09-29 ([issue 2558](https://github.com/mfittko/dev-loops/issues/2558))
 
-Amends [ADR 0112](./0112-gate-coordinator-agent-joins-the-agent-taxonomy.md): that record denies every `review` dispatch from a `dev-loop` caller. This record narrows the deny to a `review` dispatch whose prompt is a gate `review:` dispatch pointer. The rest of ADR 0112 stands.
+Amends [ADR 0112](./0112-gate-coordinator-agent-joins-the-agent-taxonomy.md): that record denies every `review` dispatch from a `dev-loop` caller. This record narrows the deny to a `review` dispatch whose prompt carries a work-order pull. The rest of ADR 0112 stands.
 
 ## Context
 
@@ -12,14 +12,14 @@ Amends [ADR 0112](./0112-gate-coordinator-agent-joins-the-agent-taxonomy.md): th
 
 ## Decision
 
-- A `dev-loop` caller that dispatches `review` is denied with `GATE_COORDINATOR_REQUIRED` only when the prompt is exactly the `buildDispatchPointer` text for a `review:` ref. A prose-briefed `review` dispatch from `dev-loop` is allowed.
+- A `dev-loop` caller that dispatches `review` is denied with `GATE_COORDINATOR_REQUIRED` only when the prompt carries a `pull-work-order` invocation, exact or wrapped in other text. A prose-briefed `review` dispatch from `dev-loop` is allowed.
 - A `dev-loop` caller that dispatches `judge` is denied with `GATE_COORDINATOR_REQUIRED` for every prompt.
 - The `gate-coordinator` rules of ADR 0112 are unchanged.
 
-A gate-round unit is identified by its emitted dispatch pointer. A prose-briefed `review` dispatch cannot produce a gate-round result, because fan-in accepts only pull-bound unit artifacts.
+A gate-round unit is reached only through a work-order pull. A `review` prompt that carries no `pull-work-order` invocation cannot pull a unit, so it cannot produce a gate-round result, because fan-in accepts only pull-bound unit artifacts.
 
 Rejected: an allow-list of pre-PR and delta prompt shapes (the contracts brief these reviewers in prose, so no stable shape exists to match).
 
 ## Consequences
 
-The dev-loop coordinator runs its pre-PR and delta reviews again, and act-list fixes can be pushed. A dev-loop coordinator that relays a gate `review:` pointer, or dispatches any `judge`, is still routed to the gate coordinator. A dev-loop coordinator can still run a gate-round-like review in prose; fan-in rejects its output as a gate-round result.
+The dev-loop coordinator runs its pre-PR and delta reviews again, and act-list fixes can be pushed. A dev-loop coordinator that sends a `review` prompt that carries a work-order pull, or dispatches any `judge`, is still routed to the gate coordinator. A dev-loop coordinator can still run a gate-round-like review in prose; fan-in rejects its output as a gate-round result.

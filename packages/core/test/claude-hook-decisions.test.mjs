@@ -1497,13 +1497,25 @@ test("decideAgentDispatch denies every judge dispatch from the dev-loop coordina
   }
 });
 
+test("decideAgentDispatch denies a dev-loop review dispatch that carries a wrapped work-order pull", () => {
+  const p = pointer("review");
+  for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
+    for (const target of ["review", "dev-loops:review"]) {
+      for (const prompt of [`${p}\n`, ` ${p}`, `cd /w && ${p}`, `${p} Also check the docs.`, pointer("judge")]) {
+        const d = dispatch(caller, target, prompt);
+        assert.equal(d.decision, "deny", `${caller} -> ${target} ${JSON.stringify(prompt)}`);
+        assert.match(d.reason, /^GATE_COORDINATOR_REQUIRED/);
+      }
+    }
+  }
+});
+
 test("decideAgentDispatch allows the dev-loop coordinator's prose-briefed pre-PR and delta review dispatches", () => {
   for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
     for (const target of ["review", "dev-loops:review"]) {
       for (const prompt of [
         "Pre-PR full review of branch issue-7 against origin/main.",
         "Delta review of the act-list fix: git diff abc123..def456.",
-        pointer("judge"),
         "",
         null,
       ]) {

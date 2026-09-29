@@ -88,7 +88,7 @@ Phase 3.5 Dispatch), so
 context. The dev-loop coordinator never runs these steps in its own context. The dev-loop
 coordinator keeps its pre-PR full review and delta reviewer `review` dispatches
 ([Pre-PR review contract](./pre-pr-review-contract.md)); these are not gate-round units and are
-briefed in prose, never with a gate `review:` dispatch pointer (ADR 0116). The gate
+briefed in prose and never carry a `pull-work-order` invocation (ADR 0116). The gate
 coordinator returns only the round's typed result: the verdict, the execution mode
 (`fanout_fanin` or `inline_single_agent`, plus the inline reason and findings summary when the
 round resolves to `inline_single_agent`), the severity counts, the fan-in output path, the
