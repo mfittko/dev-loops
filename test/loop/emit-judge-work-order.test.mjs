@@ -5,9 +5,9 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
-import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
+import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 
@@ -100,6 +100,7 @@ test("J2: every dispatch is the fixed compact pointer under the shared cap, reus
     const worst = { workOrderRef: `judge:${"o".repeat(39)}/${"r".repeat(40)}#99999:pre_approval_gate:${"f".repeat(64)}:j1790000000000-abcdef12`, workOrderDigest: "f".repeat(64), executionIdentity: "j1790000000000-abcdef12" };
     assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
     assert.throws(() => buildDispatchPointer({ ...worst, workOrderRef: `${workOrderRef} and also check X` }), /not shell-safe/);
+    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), executionIdentity), "utf8")), { executionIdentity, workOrderRef, workOrderDigest: digest });
     const saved = JSON.parse(await readFile(plan.planPath, "utf8"));
     assert.equal(saved.dispatchPrompt, plan.dispatchPrompt);
     // Initial, resumed and replacement dispatches pull the same unit through the same path.
@@ -151,8 +152,8 @@ test("J3: a superseded ref, a changed spec or ledger, and a retired round refuse
 
 test("J3: after the head moves, a newer emission at the new head supersedes the old head's ref at pull", async () => {
   await withDir(async (root) => {
-    const first = await emitJudgeWorkOrder({ ...(await seed(root)), roundId: "j1-aa" });
-    const second = await emitJudgeWorkOrder({ ...(await seed(root, { headSha: "e".repeat(40) })), roundId: "j2-bb" });
+    const first = await emitJudgeWorkOrder({ ...(await seed(root)), roundId: "j1-000000aa" });
+    const second = await emitJudgeWorkOrder({ ...(await seed(root, { headSha: "e".repeat(40) })), roundId: "j2-000000bb" });
     const pullFrom = (plan) => pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [path.join(root, "tmp")], receiptTmpRoot: path.join(root, "tmp") });
     await assert.rejects(pullFrom(first), (err) => err.refusal === "stale_dispatch" && err.message.includes(second.workOrderRef));
     assert.ok((await pullFrom(second)).receipt);
@@ -161,8 +162,8 @@ test("J3: after the head moves, a newer emission at the new head supersedes the 
 
 test("J3: a re-emission from another checkout supersedes the older ref in every scan order", async () => {
   await withDir(async (a) => withDir(async (b) => {
-    const first = await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-aa" });
-    const second = await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j2-bb" });
+    const first = await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-000000aa" });
+    const second = await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j2-000000bb" });
     const pullFrom = (plan, tmpRoots) => pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: a, tmpRoots, receiptTmpRoot: path.join(a, "tmp") });
     for (const tmpRoots of [[path.join(a, "tmp"), path.join(b, "tmp")], [path.join(b, "tmp"), path.join(a, "tmp")]]) {
       await assert.rejects(pullFrom(first, tmpRoots), (err) => err.refusal === "stale_dispatch" && err.message.includes(second.workOrderRef));
@@ -201,14 +202,36 @@ test("J3: an emission from a checkout subdirectory lands under the checkout root
 
 test("J4: two checkout roots emit the same digest; a conflicting rewrite under the same ref refuses", async () => {
   await withDir(async (a) => withDir(async (b) => {
-    const [pa, pb] = [await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-aa" }), await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j1-aa" })];
+    const [pa, pb] = [await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-000000aa" }), await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j1-000000aa" })];
     assert.notEqual(pa.workOrder.requiredReads[0].path, pb.workOrder.requiredReads[0].path);
     assert.equal(pa.workOrderDigest, pb.workOrderDigest);
     assert.notEqual(pa.materializationHash, pb.materializationHash);
     const sources = await seed(a);
     await writeFile(path.join(a, sources.findingsFile), JSON.stringify({ findings: [] }));
-    await assert.rejects(emitJudgeWorkOrder({ ...sources, roundId: "j1-aa" }), /already exists with different content/);
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, roundId: "j1-000000aa" }), /already exists with different content/);
   }));
+});
+
+test("J4: a colliding execution index entry for the next identity refuses the emission", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const next = { executionIdentity: "j3-000000cc", workOrderRef: "judge:o/r#7:other", workOrderDigest: "sha256:0" };
+    await writeExecutionIndex(path.join(root, "tmp"), next);
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, roundId: next.executionIdentity }), (err) => err.refusal === "execution_index_collision");
+    const out = [];
+    const write = process.stdout.write;
+    process.stdout.write = (chunk) => (out.push(String(chunk)), true);
+    try {
+      await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
+        "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, roundId: next.executionIdentity });
+    } finally {
+      process.stdout.write = write;
+    }
+    const body = JSON.parse(out.join(""));
+    assert.equal(body.refusal, "execution_index_collision");
+    assert.match(body.error, /already names a different unit/);
+    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), next.executionIdentity), "utf8")), next);
+  });
 });
 
 test("J1: a truncated identity stamp or a partial checkedCriteria refuses", async () => {
@@ -226,8 +249,8 @@ test("J1: a truncated identity stamp or a partial checkedCriteria refuses", asyn
 
 test("J4: one ref with conflicting plans in two checkouts refuses in every scan order", async () => {
   await withDir(async (a) => withDir(async (b) => {
-    const pa = await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-aa" });
-    await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j1-aa" });
+    const pa = await emitJudgeWorkOrder({ ...(await seed(a)), roundId: "j1-000000aa" });
+    await emitJudgeWorkOrder({ ...(await seed(b)), roundId: "j1-000000aa" });
     for (const tmpRoots of [[path.join(a, "tmp"), path.join(b, "tmp")], [path.join(b, "tmp"), path.join(a, "tmp")]]) {
       await assert.rejects(
         pullWorkOrder({ ref: pa.workOrderRef, digest: pa.workOrderDigest, execution: pa.executionIdentity, cwd: a, tmpRoots, receiptTmpRoot: path.join(a, "tmp") }),
@@ -263,9 +286,9 @@ test("J6: with only the shared transport, a missing local work order refuses by 
 
 test("J6: a corrupt plan at another head is skipped; a corrupt own plan refuses by name and re-emission recovers", async () => {
   await withDir(async (root) => {
-    const old = await emitJudgeWorkOrder({ ...(await seed(root, { headSha: "e".repeat(40) })), roundId: "j1-aa" });
+    const old = await emitJudgeWorkOrder({ ...(await seed(root, { headSha: "e".repeat(40) })), roundId: "j1-000000aa" });
     const sources = await seed(root);
-    const current = await emitJudgeWorkOrder({ ...sources, roundId: "j2-bb" });
+    const current = await emitJudgeWorkOrder({ ...sources, roundId: "j2-000000bb" });
     await writeFile(old.planPath, "{ truncated");
     assert.equal(pull(current, root).status, 0);
     await writeFile(current.planPath, "{ truncated");
