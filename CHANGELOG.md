@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.5-pre.1
+
+### Added
+
+- `dev-loops loop spec-lint` reports unregistered rule IDs and unknown, unaccepted, superseded or amended ADR citations in an issue body; loop-grill runs it (#2521)
+
+### Changed
+
+- Each gate reviewer unit's turn and tool-call budget now scales with the size of the diff it reviews, from 50/45 up to a cap of 100/95 (#2503)
+- Each gate round runs in a dedicated `gate-coordinator` agent; a Claude Code hook stops the `dev-loop` coordinator from dispatching reviewers or the judge itself (#2531)
+- The `dev-loop` coordinator agent sets `experimental.cacheTtl: 1h`, so its prompt cache survives child-agent waits over 5 minutes (Claude Code v2.1.248+) (#2537)
+- The work-order pull also accepts the execution identity alone, resolved through a new execution index; emitters still emit the 3-flag pointer, so no re-emit is needed (#2551)
+- A fixer pull line run with a prefix, suffix, redirect or `cd` is denied with the exact line to run (#2551)
+- The repo `.devloops` now splits Claude model tiers into regular (Sonnet) and strong (Opus), and agent frontmatter accepts a Claude-only `claudeModel` key that pins the judge to Opus (#2565)
+
+### Fixed
+
+- Local targeted validation now catches SKILL.md rule-ownership and `.claude` drift from core edits before CI (#2490)
+- A repo can drop generated mirror trees from the required reviewer diff with `gates.reviewDiff.excludeGlobs`, and the evidence file lists each excluded path with its reason (#2504)
+- A dev-loops PR gates itself: `dev-loops-run --repo-root <checkout>` runs the review root's toolchain and the pull serves a self-hosting unit from its worktree (#2506)
+- Gate reviewers now write findings artifacts with the file-write tool, never a shell write, so the Claude Code auto-mode classifier no longer denies them (#2510)
+- A Copilot "encountered an error" review now counts as no review: one same-head re-request, then block; `merge-pr` refuses (ADR 0114) (#2549)
+- The Bash command guards now see commands behind `env` options such as `env -C <dir>`, so inline-interpreter, `git stash` and `gh pr merge`/`ready` denies fire (#2550)
+- The dev-loop coordinator can dispatch its pre-PR and delta `review` agents again; the hook denies only a work-order `review` dispatch and every `judge` dispatch (ADR 0116) (#2558)
+
 ## 1.0.5-pre.0
 
 ### Added
