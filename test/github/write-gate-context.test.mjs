@@ -3027,6 +3027,18 @@ test("renderBriefingPrefix: pins the WORKTREE-ABSOLUTE findings write dir so a r
   assert.ok(!text.includes(`/gate-reviews/owner-repo/pr-9/draft_gate-${sha}/security.json`));
 });
 
+test("renderBriefingPrefix: the findings write-path invariant requires the file-write tool and forbids a shell write (#2510)", () => {
+  const invariantLine = (text) => text.split("\n").find((l) => l.startsWith("Findings write-path invariant:"));
+  const line = invariantLine(renderBriefingPrefix(renderInput()).text);
+  assert.ok(line, "briefing carries the findings write-path invariant line");
+  assert.ok(line.includes("file-write tool (the `write` builtin, `Write` on Claude Code)"), "invariant names the write / Write tool");
+  assert.ok(line.includes("never a shell write (redirect, heredoc, `tee`, or an inline script)"), "invariant forbids a shell write");
+  assert.ok(line.includes("A `blocked` result goes through `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` instead."), "invariant routes a blocked result to the emitter");
+  // Byte-identity across reviewers: renderBriefingPrefix takes no angle or
+  // scope input, and the line names the artifact only by the <angle> placeholder.
+  assert.ok(line.includes("/<angle>.json` (`<angle>` = your angle name)"), "invariant uses the angle placeholder");
+});
+
 test("renderBriefingPrefix: findings write-path uses the head-specific worktree dir for a different gate/head (#1978)", () => {
   const sha = "deadbeef12345";
   const { text } = renderBriefingPrefix(renderInput({ gate: "pre_approval_gate", headSha: sha, worktreeRoot: "/wt/issue-1" }));
@@ -3955,7 +3967,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
       "",
-      `Findings write-path invariant: WRITE each per-angle findings artifact to the ABSOLUTE path \`${path.resolve(repoRoot)}/tmp/gate-reviews/owner-repo/pr-80/draft_gate-${options.headSha}/<angle>.json\` (\`<angle>\` = your angle name) under THIS worktree's tmp/, never the primary checkout's. Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a per-angle artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence. Do NOT pin \`--tmp-root "${path.resolve(repoRoot)}/tmp"\` on the findings-log LEDGER writer (\`write-gate-findings-log.mjs\`): the ledger is anchored at the MAIN worktree automatically so the orchestrator's merge can read it and it survives worktree pruning — pinning it to this worktree loses it on prune and refuses the merge for missing provenance.`,
+      `Findings write-path invariant: WRITE each per-angle findings artifact to the ABSOLUTE path \`${path.resolve(repoRoot)}/tmp/gate-reviews/owner-repo/pr-80/draft_gate-${options.headSha}/<angle>.json\` (\`<angle>\` = your angle name) under THIS worktree's tmp/, never the primary checkout's. Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a per-angle artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence. Author it with the file-write tool (the \`write\` builtin, \`Write\` on Claude Code), never a shell write (redirect, heredoc, \`tee\`, or an inline script): the Claude Code auto-mode classifier denies a Bash write of a findings artifact. A \`blocked\` result goes through \`dev-loops-run scripts/github/emit-reviewer-blocked.mjs\` instead. Do NOT pin \`--tmp-root "${path.resolve(repoRoot)}/tmp"\` on the findings-log LEDGER writer (\`write-gate-findings-log.mjs\`): the ledger is anchored at the MAIN worktree automatically so the orchestrator's merge can read it and it survives worktree pruning — pinning it to this worktree loses it on prune and refuses the merge for missing provenance.`,
       "",
       "## Reviewer source-read invariant",
       "",
