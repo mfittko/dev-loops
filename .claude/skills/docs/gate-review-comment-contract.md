@@ -282,6 +282,14 @@ Enforcement at write time and post time:
   `findings_present`. It derives the verdict by default (passing no `--verdict` is valid),
   accepts a matching explicit value, and refuses a contradiction citing this rule. A ledger
   without `overallVerdict` still refuses an explicit `clean` while its act list is not empty.
+- The act list for a verdict post comes from judge-enriched data: the ledger written with
+  `--judge-verdict`, or a judge-enriched `--findings-json` (its open act items also yield
+  `findings_present` over a ledger). A durable log written before the judge pass carries no
+  dispositions. A fan-out `draft_gate` or `pre_approval_gate` post over such a ledger refuses
+  unless a `--findings-json` finding with a `judgeDisposition` covers every unjudged ledger
+  finding, where coverage means the same summary text after trimming. Pass the full enriched
+  findings (judge-pass `--ledger-out`), not the `--out` act list. The post counts as fan-out when `--execution-mode` or the ledger's own
+  `executionMode` is `fanout_fanin`.
 - No override flag exists. A round whose verdict genuinely differs from the computed one is a
   consolidator bug to fix.
 - A `blocked` verdict may sit over a completed `clean` or `findings_present` ledger only when the

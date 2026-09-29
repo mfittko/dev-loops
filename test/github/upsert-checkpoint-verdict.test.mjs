@@ -6320,7 +6320,7 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict whose --fi
     ].join("\n"), "utf8");
     // Same ledger shape as the covered-provenance positive test below, but
     // with NO provenance key at all — the vacuous-coverage case under test.
-    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING]);
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [{ ...BODY_FILED_FINDING, judgeDisposition: "defer" }]);
     // requireFanoutEvidence stays on (the .devloops above leaves the schema
     // default), so stage the canonical durable ledger the existence check reads.
     await stageDurableLedger(tempDir, { headSha: SINGLE_SURFACE_HEAD, verdict: "findings_present" });
@@ -7437,8 +7437,8 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
       { angle: "pr-description", verdict: "clean", findings: [] },
       { angle: "scope", verdict: "clean", findings: [] },
       { angle: "holistic", verdict: "clean", findings: [] },
-      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: LOCATABLE_FINDING.summary, file: "src/db.mjs", line: 2 }] },
-      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary }] },
+      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: LOCATABLE_FINDING.summary, judgeDisposition: "defer", file: "src/db.mjs", line: 2 }] },
+      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, judgeDisposition: "defer" }] },
     ]), "utf8");
 
     let postedPayload = null;
@@ -8015,7 +8015,7 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --fin
       "        enabled: false",
       "",
     ].join("\n"), "utf8");
-    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING], {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [{ ...BODY_FILED_FINDING, judgeDisposition: "defer" }], {
       provenance: {
         distinctReviewers: 2,
         perAngle: [

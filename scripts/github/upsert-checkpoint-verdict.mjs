@@ -226,7 +226,13 @@ Optional:
   --findings-ledger <path>                  Path to this round's
                                             write-gate-findings-log.mjs ledger
                                             ({ repo, pr, gate, headSha, verdict,
-                                            findings[], verifiedItems? }). For
+                                            findings[], executionMode?,
+                                            verifiedItems? }). A fan-out
+                                            draft/pre-approval post refuses
+                                            ledger findings without
+                                            judgeDisposition unless a judged
+                                            --findings-json finding with the
+                                            same summary covers each one. For
                                             pre_approval_gate (never draft_gate),
                                             the poster first ticks those exact
                                             verifiedItems labels, then composes.
@@ -2009,10 +2015,20 @@ function enforceForeignAngles(foreignAngles, { sourceLabel, gate, gateKey, confi
     process.stderr.write(`WARNING: ${message} (gates.rejectForeignAngles is false; recorded as a warning)\n`);
   }
 }
+function unjudgedLedgerMessage(options, headSha, count) {
+  return `--findings-ledger "${options.findingsLedger}" for ${options.gate} @ ${headSha} has ${count} finding(s) with no judgeDisposition, so the judge act list is unknown (GATE-COMMENT-VERDICT-VALUES, ADR 0089). Re-write the log with write-gate-findings-log --judge-verdict after the judge pass (the full enriched ledger, judge-pass --ledger-out, not the --out act list), or also pass a --findings-json with the full per-angle input (every finding with its judgeDisposition, covering every mandatory angle under fanout_fanin).`;
+}
 // Read `--findings-ledger` and confirm it is THIS round's ledger (same
 // repo/pr/gate/head), not a stale or foreign one. Shared by the finding-surface
 // resolver below and the withheld-tier mandatory-angle-coverage check, so
 // both trust the ledger only after the identical cross-check.
+// A ledger-declared fan-out becomes the execution mode; the inline reason is dropped as the parser does.
+function promoteLedgerFanout(options, ledger) {
+  if (ledger.executionMode !== "fanout_fanin") return;
+  options.executionMode = "fanout_fanin";
+  options.inlineReason = undefined;
+}
+
 async function loadMatchingFindingsLedger(options, headSha) {
   if (!options.findingsLedger) {
     return null;
@@ -2432,6 +2448,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // result) captured from enforcePostTimeFanoutMode, so the durable-ledger
   // refusal below reuses its already-computed per-gate ledgerExists/ledgerPath.
   let postTimeFanoutEnforcement = null;
+  let preloadedFindingsLedger;
   if (!isReviewGate) {
     // Thread the light-dispatch signal so the context interpreter and the
     // maxCopilotRounds resolution below use the same composed lightweight cap
@@ -2562,6 +2579,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // verdict here, before it is posted, for every verdict value. No override
     // flag — requireFanoutEvidence: false is the only opt-out, and that is
     // already handled inside buildFanoutEnforcement.
+    // A ledger-declared fan-out counts as fan-out for this check too, so promote it first.
+    if (options.findingsLedger) {
+      preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+      promoteLedgerFanout(options, preloadedFindingsLedger);
+    }
     postTimeFanoutEnforcement = await enforcePostTimeFanoutMode(
       {
         repo: options.repo,
@@ -2594,10 +2616,24 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // so the resolved verdict drives every downstream guard; reused by the
   // withheld-tier coverage check and resolveFindingSurface so the file is
   // read once.
-  let preloadedFindingsLedger;
+  let unjudgedLedgerFindings = [];
   if (options.findingsLedger) {
-    preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+    preloadedFindingsLedger ??= await loadMatchingFindingsLedger(options, canonicalHeadSha);
+    // A fan-out draft or pre-approval round ran a judge, so the act list must come from judge-enriched data:
+    // a ledger finding without a disposition is pre-judge, and only an enriched --findings-json can stand in.
+    // The angle checks, tick and recorded marker all key on options.executionMode, so a ledger-declared
+    // fan-out is promoted onto it rather than enforced only for this local check.
+    promoteLedgerFanout(options, preloadedFindingsLedger);
+    const fanout = (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin";
+    if (options.gate !== "review" && fanout) {
+      unjudgedLedgerFindings = (preloadedFindingsLedger.findings ?? []).filter((f) => !f?.judgeDisposition);
+    }
+    if (unjudgedLedgerFindings.length > 0 && !options.findingsJson) {
+      throw new Error(unjudgedLedgerMessage(options, canonicalHeadSha, unjudgedLedgerFindings.length));
+    }
   }
+  // Open act items from an enriched --findings-json posted alongside a ledger.
+  let enrichedActItems = [];
   // Fan-out angle-coverage enforcement for a ledger-only round (no
   // --findings-json): runs BEFORE the tick below, so a ledger this post refuses
   // never leaves ticked boxes behind. The --findings-json coverage refusal runs
@@ -2695,16 +2731,21 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     if (!structuredFindings) {
       throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
     }
-    // ADR 0089: without a ledger, the structured findings carry the judge act list.
+    // ADR 0089: the structured findings carry the judge act list, with or without a ledger; over a ledger they also cover its unjudged findings.
     // Read the RAW entries: normalization turns an unparseable finding into a bare marker and drops its judgeDisposition.
-    const flatFindings = preloadedFindingsLedger ? [] : candidate.flatMap((e) => (looksLikePerAngleEntry(e) ? e.findings : [e])).map((f) => ({
+    const flatFindings = candidate.flatMap((e) => (looksLikePerAngleEntry(e) ? e.findings : [e])).map((f) => ({
       severity: f?.severity,
       summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
       judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
     }));
     const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
     if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
+    // An unjudged ledger finding stays unknown unless a judged --findings-json finding covers it (same summary).
+    const judgedSummaries = new Set(flatFindings.filter((f) => f.judgeDisposition).map((f) => f.summary));
+    const uncovered = unjudgedLedgerFindings.filter((f) => !judgedSummaries.has(typeof f.summary === "string" ? f.summary.trim() : f.summary));
+    if (uncovered.length > 0) throw new Error(unjudgedLedgerMessage(options, canonicalHeadSha, uncovered.length));
     const actItems = listOpenActItems(flatFindings);
+    enrichedActItems = actItems;
     if (options.verdict === "clean" && actItems.length > 0) {
       throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
     }
@@ -2733,7 +2774,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let checkpointComposition = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
-    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, preloadedFindingsLedger.findings);
+    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
     const gateBlockers = collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact);
@@ -2756,7 +2797,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
           ? ` No deterministic pre-approval blocker is proven, so "blocked" cannot sit over this completed ledger; the composed checkpoint verdict is "${composedVerdict}".`
           : "");
       const actNote = ledgerVerdict !== preloadedFindingsLedger.overallVerdict
-        ? ` The ledger's severity overallVerdict "${preloadedFindingsLedger.overallVerdict}" is composed with ${listOpenActItems(preloadedFindingsLedger.findings).length} open judge act item(s) (ADR 0089).`
+        ? ` The ledger's severity overallVerdict "${preloadedFindingsLedger.overallVerdict}" is composed with ${listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]).length} open judge act item(s) (ADR 0089).`
         : "";
       throw new Error(
         `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}).${actNote}${compositionNote} The verdict must match the fan-in consolidator's computed value composed with any deterministic gate blocker — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = no findings at a blocking severity remain and the judge act list is empty; "findings_present" = the gate found issues at blocking severities or the judge act list is not empty; "blocked" = the fan-in could not complete or a proven deterministic gate blocker (unchecked AC/DoD) prevents crossing. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or omit --verdict to post the composed verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
@@ -2774,9 +2815,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     throw new Error(
       `--verdict is required for ${options.gate} @ ${canonicalHeadSha}${options.findingsLedger ? `: --findings-ledger "${options.findingsLedger}" carries no overallVerdict to derive it from` : ""}. Pass --verdict, or supply a --findings-ledger written from a consolidate-fanin --ledger-out that carries overallVerdict.`,
     );
-  } else if (options.verdict === "clean" && listOpenActItems(preloadedFindingsLedger?.findings).length > 0) {
+  } else if (options.verdict === "clean" && listOpenActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems]).length > 0) {
     // ADR 0089: a ledger without overallVerdict still carries its judge act list.
-    const actItems = listOpenActItems(preloadedFindingsLedger.findings);
+    const actItems = listOpenActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems]);
     throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-ledger "${options.findingsLedger}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
   }
   if (
