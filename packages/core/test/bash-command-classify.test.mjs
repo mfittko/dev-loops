@@ -1160,6 +1160,12 @@ const ENV_PREFIX_FORMS = [
   "env - ",
   "env FOO=1 ",
   "env -u X FOO=1 -C /w ",
+  "env -C/w ",
+  "env -uX ",
+  "env -Sx ",
+  "env --chdir /w ",
+  "env --unset X ",
+  "env --split-string x ",
 ];
 
 const ENV_PREFIX_CONSUMERS = [
@@ -1191,7 +1197,8 @@ test("the four guarded matchers return true for env -C /w <command> (#2550)", ()
 test("env prefix forms add no false positives (#2550)", () => {
   assert.equal(commandContainsInlineInterpreter("env -C /w node script.mjs"), false);
   const quoted = 'echo "env -C /w gh pr merge 1"';
-  for (const cmd of [quoted, "env -u FOO"]) {
+  const quotedAttached = 'echo "env -C/w gh pr merge 1"';
+  for (const cmd of [quoted, quotedAttached, "env -u FOO", "env -uFOO"]) {
     assert.equal(commandContainsGhPrMerge(cmd), false, cmd);
     assert.equal(commandContainsGhPrReady(cmd), false, cmd);
     assert.equal(commandContainsGhPrCreate(cmd), false, cmd);
@@ -1204,7 +1211,13 @@ test("env prefix forms add no false positives (#2550)", () => {
 
 test("decideBashGate denies the env -C forms (#2550)", () => {
   const ctx = { repoSlug: TARGET_REPO_SLUG, inManagedContext: true, managedRepoSlug: TARGET_REPO_SLUG };
-  assert.equal(decideBashGate({ ...ctx, command: "env -C /w gh pr merge 1", humanMergeOnly: true, gatePassed: true }).decision, "deny");
-  assert.equal(decideBashGate({ ...ctx, command: "env -C /w git stash" }).decision, "deny");
-  assert.equal(decideBashGate({ ...ctx, command: "env -C /w node -e 'x'" }).decision, "deny");
+  for (const [extra, reason] of [
+    [{ command: "env -C /w gh pr merge 1", humanMergeOnly: true, gatePassed: true }, /^STOP-HUMAN-MERGE-001:/],
+    [{ command: "env -C /w git stash" }, /^git stash blocked:/],
+    [{ command: "env -C /w node -e 'x'" }, /^OPS-NO-INLINE-INTERPRETER:/],
+  ]) {
+    const result = decideBashGate({ ...ctx, ...extra });
+    assert.equal(result.decision, "deny", extra.command);
+    assert.match(result.reason, reason, extra.command);
+  }
 });

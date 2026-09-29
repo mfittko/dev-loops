@@ -230,14 +230,16 @@ const ENV_ASSIGNMENT_RUN = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*";
 /**
  * The `env` wrapper word plus any trailing run (any order/count) of `NAME=value` assignments and the
  * common `env` options: `-i`/`--ignore-environment`, `-u <NAME>`/`--unset=<NAME>`, `-C <dir>`/
- * `--chdir=<dir>`, `-S <str>`/`--split-string=<str>`, `--` and a bare `-`. Shared by
+ * `--chdir=<dir>`, `-S <str>`/`--split-string=<str>`, `--` and a bare `-`. A short option also
+ * takes its argument attached (`-C/w`, `-uX`), and a long option also takes it after a space
+ * (`--chdir /w`), as GNU `env` accepts. Shared by
  * `SHELL_EXEC_PREFIX` and `VERIFY_EXEC_PREFIX` so both see the same `env` forms.
  * Ceilings: an `-S` string is one token and is not split into words; any other `env` option is
  * not covered. The `-C <dir>` target is not resolved, so the caller's repo scoping applies
  * (fails closed for a managed context).
  */
 const ENV_WRAPPER =
-  "env(?:\\s+(?:[A-Za-z_][A-Za-z0-9_]*=\\S*|-i|--ignore-environment|-u\\s+\\S+|--unset=\\S+|-C\\s+\\S+|--chdir=\\S+|-S\\s+\\S+|--split-string=\\S+|--|-))*\\s+";
+  "env(?:\\s+(?:[A-Za-z_][A-Za-z0-9_]*=\\S*|-i|--ignore-environment|-u\\s*\\S+|--unset(?:=|\\s+)\\S+|-C\\s*\\S+|--chdir(?:=|\\s+)\\S+|-S\\s*\\S+|--split-string(?:=|\\s+)\\S+|--|-))*\\s+";
 
 /**
  * Leading prefix a command segment may carry before its real executable: a run of `NAME=value`
