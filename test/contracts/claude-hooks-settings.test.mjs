@@ -876,14 +876,17 @@ test("agent-guard hook denies a dev-loop gate-pointer review dispatch, allows a 
 function withNestedWorktree(fn) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "write-guard-nested-")));
   const main = path.join(base, "main");
-  const git = (cwd, ...args) => spawnSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+  const git = (cwd, ...args) => {
+    const result = gitFixture(["-c", "user.name=t", "-c", "user.email=t@t", ...args], cwd);
+    assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+  };
   try {
     fs.mkdirSync(main);
     git(main, "init", "-q", "-b", "main");
     fs.writeFileSync(path.join(main, ".gitignore"), "tmp/\n");
     fs.writeFileSync(path.join(main, "README.md"), "x\n");
     git(main, "add", ".");
-    git(main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+    git(main, "commit", "-q", "-m", "init");
     const wt = path.join(main, "tmp", "worktrees", "issue-1");
     git(main, "worktree", "add", "-q", "-b", "issue-1", wt);
     fs.mkdirSync(path.join(wt, "tmp", "scratch"), { recursive: true });
@@ -907,5 +910,11 @@ test("write-guard hook classifies a target by its containing repository: a track
     fs.mkdirSync(path.join(base, "plain"));
     assert.equal(decisionOf(main, path.join(base, "plain", "f.txt"), "dev-loop", coordinator), "allow", "outside every repository");
     assert.equal(decisionOf(main, tracked, undefined, { DEVLOOPS_MAIN_AGENT_READONLY: "1", DEVLOOPS_ALLOW_MAIN: "1" }), "deny", "main agent");
+    // Git internals: rev-parse --show-toplevel fails there, and the guard must fail closed.
+    for (const hook of [path.join(main, ".git", "hooks", "pre-commit"), path.join(main, ".git", "worktrees", "issue-1", "hooks", "pre-commit")]) {
+      fs.mkdirSync(path.dirname(hook), { recursive: true });
+      assert.equal(decisionOf(main, hook, "dev-loop", coordinator), "deny", hook);
+      assert.equal(decisionOf(main, hook, undefined, { DEVLOOPS_MAIN_AGENT_READONLY: "1", DEVLOOPS_ALLOW_MAIN: "1" }), "deny", hook);
+    }
   });
 });

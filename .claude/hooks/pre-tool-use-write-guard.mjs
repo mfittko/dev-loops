@@ -204,9 +204,9 @@ const agentType = typeof input?.agent_type === "string" ? input.agent_type : nul
 // (not the hook's cwd) AND not gitignored there. A linked worktree under a gitignored
 // directory of the main checkout is its own repository, so its tracked files count.
 let isRepoMutation = false;
+const targetReal = realpathNearestExisting(abs);
 try {
   const gitOpts = { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] };
-  const targetReal = realpathNearestExisting(abs);
   const repoRoot = execFileSync("git", ["-C", nearestExistingDir(targetReal), "rev-parse", "--show-toplevel"], gitOpts).trim();
   if (targetReal === repoRoot || targetReal.startsWith(repoRoot + "/")) {
     let ignored = false;
@@ -220,7 +220,9 @@ try {
     isRepoMutation = !ignored;
   }
 } catch {
-  isRepoMutation = false; // not a git repo / path outside any repo
+  // Outside every repo: allow. A target under a git directory (.git/hooks, .git/worktrees/<n>) makes
+  // rev-parse --show-toplevel fail, so fail closed on a `.git` path segment (a hook write is code execution).
+  isRepoMutation = targetReal.split("/").includes(".git");
 }
 
 const decision = decideWriteGuard({ filePath, isRepoMutation, enforce, env: process.env, agentType });
