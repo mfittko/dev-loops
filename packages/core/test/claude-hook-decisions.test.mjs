@@ -675,9 +675,13 @@ test("decideWriteGuard allows the dev-loop subagent via agent_type", () => {
 });
 
 test("decideWriteGuard denies a generic (non-dev-loop) subagent — no bypass via arbitrary agents", () => {
-  for (const agentType of ["Explore", "Plan", "general-purpose", "developer"]) {
+  for (const agentType of ["Explore", "Plan", "general-purpose"]) {
     const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType });
     assert.equal(d.decision, "deny", `agent_type ${agentType} must not bypass the boundary`);
+  }
+  for (const agentType of ["developer", "dev-loops:fixer", "quality", "docs"]) {
+    const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType });
+    assert.equal(d.decision, "allow", `worker ${agentType} keeps write access`);
   }
 });
 

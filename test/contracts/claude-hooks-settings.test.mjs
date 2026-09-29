@@ -910,6 +910,10 @@ test("write-guard hook classifies a target by its containing repository: a track
     fs.mkdirSync(path.join(base, "plain"));
     assert.equal(decisionOf(main, path.join(base, "plain", "f.txt"), "dev-loop", coordinator), "allow", "outside every repository");
     assert.equal(decisionOf(main, tracked, undefined, { DEVLOOPS_MAIN_AGENT_READONLY: "1", DEVLOOPS_ALLOW_MAIN: "1" }), "deny", "main agent");
+    const mainBoundary = { DEVLOOPS_MAIN_AGENT_READONLY: "1" };
+    assert.equal(decisionOf(main, tracked, "developer", mainBoundary), "allow", "worker under the main-agent boundary");
+    assert.equal(decisionOf(main, tracked, "dev-loops:quality", { ...coordinator, ...mainBoundary }), "allow", "worker with both boundaries");
+    assert.equal(decisionOf(main, tracked, "general-purpose", mainBoundary), "deny", "generic subagent");
     // Git internals: rev-parse --show-toplevel fails there, and the guard must fail closed.
     for (const hook of [path.join(main, ".git", "hooks", "pre-commit"), path.join(main, ".git", "worktrees", "issue-1", "hooks", "pre-commit")]) {
       fs.mkdirSync(path.dirname(hook), { recursive: true });

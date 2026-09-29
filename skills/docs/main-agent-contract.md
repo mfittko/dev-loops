@@ -183,7 +183,7 @@ the full run.
   Claude plugin): the hook classifies a target by the git repository that contains it (not the hook cwd), so tracked files of a loop worktree under `tmp/`, of any other git repository, and git internals (`.git/`) count as repo mutations. A Write/Edit whose target is inside such a working tree and not
   gitignored is **denied** when it originates from the main agent, and allowed only inside the
   `dev-loop` subagent context (detected via the neutral `DEVLOOPS_RUN_ID` run-id contract, or
-  the dev-loop `agent_type` — a generic subagent is not authorized).
+  the dev-loop `agent_type`) or a worker subagent (`developer`/`fixer`/`quality`/`docs`); a generic subagent is not authorized.
   Strict enforcement is opt-in via `DEVLOOPS_MAIN_AGENT_READONLY=1` (default fail-open).
 - **Coordinator→worker delegation boundary (#2082).** The same hook enforces the coordinator
   write boundary defined at the top of this document.
