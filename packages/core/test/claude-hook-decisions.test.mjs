@@ -1526,6 +1526,7 @@ test("decideAgentDispatch allows the dev-loop coordinator's prose-briefed pre-PR
         "Pre-PR review of changes to pull-work-order.mjs and its tests.",
         "Delta review of act item 3 (fingerprint 4caee3321a4f9d3a) at head e20270eebd9144c0c2a793ab1766011cc436adc6.",
         "Check that the review agent definition names the judge: role and the fixer: boundary.",
+        "Delta review of act item 1: judgeRationale cites review:o/r#7:draft_gate:abc123:u1 and execution r1790650082544-67ff78cc.",
         "",
         null,
       ]) {

@@ -12,7 +12,7 @@ Amends [ADR 0112](./0112-gate-coordinator-agent-joins-the-agent-taxonomy.md): th
 
 ## Decision
 
-- A `dev-loop` caller that dispatches `review` is denied with `GATE_COORDINATOR_REQUIRED` only when the prompt carries a work-order ref token (`review:`, `judge:` or `fixer:` followed by `owner/repo#N:`) or an execution identity token, in any flag order, quoting or wrapping. A prose-briefed `review` dispatch from `dev-loop` is allowed.
+- A `dev-loop` caller that dispatches `review` is denied with `GATE_COORDINATOR_REQUIRED` only when the prompt names `pull-work-order` and carries a work-order ref token (`review:`, `judge:` or `fixer:` followed by `owner/repo#N:`) or an execution identity token, in any flag order, quoting or wrapping. A prose-briefed `review` dispatch from `dev-loop` is allowed.
 - A `dev-loop` caller that dispatches `judge` is denied with `GATE_COORDINATOR_REQUIRED` for every prompt.
 - The `gate-coordinator` rules of ADR 0112 are unchanged.
 
