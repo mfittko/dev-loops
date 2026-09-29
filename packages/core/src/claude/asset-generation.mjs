@@ -243,8 +243,8 @@ function normalizeToolList(value) {
  * a concrete model is written, `inherit`/null omits the field. `config` defaults
  * to `{}` so the committed tree bakes the zero-config built-in policy; pass a
  * loaded config to tune the generated tree per repo. A Claude-only `claudeModel`
- * frontmatter key wins over the resolved role model, so a role without a tier
- * does not inherit its dispatcher's model.
+ * frontmatter key is the fallback when the resolver returns inherit, so a role
+ * without a tier does not inherit its dispatcher's model and config still wins.
  * @param {{ source: string, raw: string, version?: string, config?: object }} input
  * @returns {string} Full generated file content.
  */
@@ -252,7 +252,7 @@ export function transformAgent({ source, raw, version = "latest", config = {} })
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
   const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version)));
   const tools = mapTools(normalizeToolList(frontmatter.tools));
-  const model = frontmatter.claudeModel ?? resolveRoleModel(config, { role: String(frontmatter.name ?? ""), harness: "claude" });
+  const model = resolveRoleModel(config, { role: String(frontmatter.name ?? ""), harness: "claude" }) ?? frontmatter.claudeModel;
 
   const lines = ["---"];
   lines.push(`name: ${JSON.stringify(String(frontmatter.name ?? ""))}`);
