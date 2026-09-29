@@ -54,7 +54,10 @@ async function resolveExecutionIndex(execution, tmpRoots) {
   if (EXECUTION_IDENTITY_RE.test(String(execution))) {
     for (const tmpRoot of tmpRoots) {
       const file = executionIndexPath(tmpRoot, execution);
-      const text = await readFile(file, "utf8").catch(() => null);
+      const text = await readFile(file, "utf8").catch((err) => {
+        if (err?.code === "ENOENT") return null;
+        throw new WorkOrderRefusal("local_materialization_integrity_failure", `execution index ${file} is unreadable (${err?.code ?? err}); re-emit the round`);
+      });
       if (text === null) continue;
       let entry = null;
       try { entry = JSON.parse(text); } catch { /* refused below */ }

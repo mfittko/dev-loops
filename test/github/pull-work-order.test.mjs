@@ -313,6 +313,12 @@ test("the short pull: a corrupt or mis-shaped execution index entry refuses with
       assert.equal(body.refusal, "local_materialization_integrity_failure", bytes);
       assert.match(body.error, /is not a valid entry/);
     }
+    await rm(indexPath(root, unit));
+    await mkdir(indexPath(root, unit));
+    const unreadable = refusal(pullShort(unit.executionIdentity, root));
+    assert.equal(unreadable.refusal, "local_materialization_integrity_failure");
+    assert.match(unreadable.error, /is unreadable \(EISDIR\)/);
+    await rm(indexPath(root, unit), { recursive: true });
     await writeFile(indexPath(root, unit), valid, "utf8");
     assert.equal(pullShort(unit.executionIdentity, root).status, 0);
   });
