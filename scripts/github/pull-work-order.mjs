@@ -7,7 +7,7 @@
  * write is the pull receipt.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
@@ -94,7 +94,10 @@ export function pullDelegationTarget(execution, tmpRoots, { toolchainRoot = TOOL
   const tmpRoot = tmpRoots.find((root) => existsSync(executionIndexPath(root, execution)));
   const checkout = tmpRoot ? path.dirname(tmpRoot) : null;
   if (!checkout || !existsSync(path.join(checkout, PULL_SCRIPT)) || !isOtherDevLoopsCheckout(checkout, toolchainRoot)) return null;
-  if (!isOtherDevLoopsCheckout(checkout, resolveMainWorktreeRoot(toolchainRoot))) return null;
+  const mainRoot = resolveMainWorktreeRoot(toolchainRoot);
+  if (!isOtherDevLoopsCheckout(checkout, mainRoot)) return null;
+  // Only a linked worktree of this same repository may serve the pull, never an unrelated checkout.
+  if (realpathSync(resolveMainWorktreeRoot(checkout)) !== realpathSync(mainRoot)) return null;
   return checkout;
 }
 

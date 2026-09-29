@@ -377,15 +377,22 @@ async function seedDelegateCheckout(dir, { name = "dev-loops", stub = true } = {
   await writeExecutionIndex(path.join(dir, "tmp"), { executionIdentity: DELEGATE_ID, workOrderRef: `review:o/r#7:${GATE}:${HEAD}:coverage`, workOrderDigest: `sha256:${"0".repeat(64)}` });
 }
 
+// A checkout-less linked worktree of THIS repo, so the real toolchain's same-repo check accepts it as a delegate.
+async function withRealLinkedWorktree(base, name, fn) {
+  const linked = path.join(base, name);
+  const git = (args) => execFileSync("git", args, { stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+  git(["worktree", "add", "-q", "--detach", "--no-checkout", linked]);
+  try {
+    return await fn(linked);
+  } finally {
+    git(["worktree", "remove", "--force", linked]);
+  }
+}
+
 test("self-hosting pull: from the main cwd, the pull runs the linked worktree's pull script that holds the index entry", async () => {
   await withDir(async (base) => {
-    const main = path.join(base, "main");
-    const linked = path.join(base, "linked");
-    await mkdir(main);
-    const git = (args, cwd = main) => execFileSync("git", args, { cwd, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
-    git(["init", "-q"]);
-    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
-    git(["worktree", "add", "-q", linked]);
+    const main = process.cwd();
+    await withRealLinkedWorktree(base, "linked", async (linked) => {
     await seedDelegateCheckout(linked);
     const delegated = pullShort(DELEGATE_ID, main);
     assert.equal(delegated.status, 7, delegated.stderr);
@@ -400,11 +407,12 @@ test("self-hosting pull: from the main cwd, the pull runs the linked worktree's 
     // The marker stops a second delegation: the pull resolves locally and refuses as today.
     const marked = spawnSync("node", [path.join(SCRIPTS, "pull-work-order.mjs"), DELEGATE_ID], { cwd: main, encoding: "utf8", env: { ...process.env, DEV_LOOPS_PULL_DELEGATED: "1" } });
     assert.equal(refusal(marked).refusal, "dispatch_reference_mismatch");
+    });
   });
 });
 
 test("pullDelegationTarget: no delegation for the own checkout, a non-dev-loops checkout, a missing pull script, the marker, or no index entry", async () => {
-  await withDir(async (a) => withDir(async (b) => withDir(async (c) => {
+  await withDir(async (base) => withRealLinkedWorktree(base, "a", async (a) => withDir(async (b) => withDir(async (c) => {
     await seedDelegateCheckout(a);
     await seedDelegateCheckout(b, { name: "some-consumer-app" });
     await seedDelegateCheckout(c, { stub: false });
@@ -415,7 +423,11 @@ test("pullDelegationTarget: no delegation for the own checkout, a non-dev-loops 
     assert.equal(pullDelegationTarget(DELEGATE_ID, tmp(c), { env: {} }), null);
     assert.equal(pullDelegationTarget(DELEGATE_ID, tmp(a), { env: { DEV_LOOPS_PULL_DELEGATED: "1" } }), null);
     assert.equal(pullDelegationTarget("r1790000000001-abcdef12-u9", tmp(a), { env: {} }), null);
-  })));
+    // An unrelated dev-loops checkout (its own repo) never delegates, even with index entry and pull script.
+    assert.equal(pullDelegationTarget(DELEGATE_ID, tmp(c), { env: {} }), null);
+    await seedDelegateCheckout(c);
+    assert.equal(pullDelegationTarget(DELEGATE_ID, tmp(c), { env: {} }), null);
+  }))));
 });
 
 test("pullDelegationTarget: a linked-worktree pull never delegates back to the main checkout's entry", async () => {
@@ -437,8 +449,7 @@ test("pullDelegationTarget: a linked-worktree pull never delegates back to the m
 });
 
 test("self-hosting pull: a relative --tmp-root delegates as the absolute path, so the child finds the same tmp root", async () => {
-  await withDir(async (base) => {
-    const linked = path.join(base, "linked");
+  await withDir(async (base) => withRealLinkedWorktree(base, "linked", async (linked) => {
     await seedDelegateCheckout(linked);
     // This stub succeeds only when the forwarded --tmp-root resolves, under its own cwd, to a real tmp root.
     await writeFile(path.join(linked, "scripts/github/pull-work-order.mjs"), `import { existsSync } from "node:fs";\nconst tmpRoot = process.argv[process.argv.indexOf("--tmp-root") + 1];\nconsole.log(tmpRoot);\nprocess.exit(existsSync(tmpRoot + "/work-order-executions") ? 0 : 9);\n`, "utf8");
@@ -447,5 +458,5 @@ test("self-hosting pull: a relative --tmp-root delegates as the absolute path, s
       assert.equal(r.status, 0, `${rel}: ${r.stdout}${r.stderr}`);
       assert.equal(r.stdout, `${path.join(linked, "tmp")}\n`);
     }
-  });
+  }));
 });
