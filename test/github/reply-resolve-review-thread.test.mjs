@@ -670,13 +670,13 @@ const threadEntry = {
 };
 const threadArgs = (bodyFile, disposition = "fixed") => ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, ...(disposition ? ["--disposition", disposition] : [])];
 
-async function runFixedReply(body, entries, disposition) {
+async function runFixedReply(body, entries, disposition, cwd) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-fixed-sha-"));
   try {
     const bodyFile = path.join(tempDir, "reply.md");
     await writeFile(bodyFile, body, "utf8");
     const gh = await writeGhStub(tempDir, entries);
-    const result = await runNode(threadArgs(bodyFile, disposition), { env: gh.env });
+    const result = await runNode(threadArgs(bodyFile, disposition), { env: gh.env, cwd });
     const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
     return { result, ghLog };
   } finally {
@@ -705,12 +705,25 @@ test("reply-resolve-review-thread posts and resolves a fixed reply whose full SH
 });
 
 test("reply-resolve-review-thread refuses a fixed reply citing an existing commit that is not an ancestor of the PR head", async () => {
-  const olderHead = execFileSync("git", ["rev-parse", "HEAD~1"], { encoding: "utf8" }).trim();
-  const olderHeadEntry = { ...headViewEntry, stdout: `${JSON.stringify({ headRefOid: olderHead })}\n` };
-  const { result, ghLog } = await runFixedReply(`Fixed in ${headSha} with the missing guard.\n`, [olderHeadEntry]);
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /fixed_reply_sha_not_in_head/);
-  assert.equal(ghLog.length, 1);
+  // Temp fixture: independent of the ambient checkout and its clone depth.
+  const repoDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-git-"));
+  try {
+    const git = (...args) => execFileSync("git", args, { cwd: repoDir, encoding: "utf8" }).trim();
+    git("init", "-q");
+    const commit = (msg) => {
+      git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", msg);
+      return git("rev-parse", "HEAD");
+    };
+    const olderHead = commit("older");
+    const newer = commit("newer");
+    const olderHeadEntry = { ...headViewEntry, stdout: `${JSON.stringify({ headRefOid: olderHead })}\n` };
+    const { result, ghLog } = await runFixedReply(`Fixed in ${newer} with the missing guard.\n`, [olderHeadEntry], undefined, repoDir);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /fixed_reply_sha_not_in_head/);
+    assert.equal(ghLog.length, 1);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
 });
 
 test("reply-resolve-review-thread refuses an unverifiable SHA (unknown object) with a distinct reason and a fetch hint", async () => {
