@@ -15,11 +15,11 @@ import { realpathNearestExisting } from "./_worktree-guard.mjs";
 import { EXECUTION_IDENTITY_RE, executionIndexPath, workOrderDigest } from "./_work-order-digest.mjs";
 
 /**
- * Env for every git call in this module: an inherited GIT_DIR/GIT_WORK_TREE overrides `-C`, so a pointer at
+ * Env for every git call in this module: an inherited GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR/GIT_INDEX_FILE overrides `-C`, so a pointer at
  * another repo would list that repo's checkouts and fail the fixer boundary open. Same shape as
  * scripts/loop/_repo-root-resolver.mjs gitEnvNoDirOverrides (the hook bundle cannot import scripts/).
  */
-export const gitEnv = () => ({ ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined });
+export const gitEnv = () => ({ ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_COMMON_DIR: undefined, GIT_INDEX_FILE: undefined });
 
 /** Nearest existing directory at or above `p` (absolute). */
 export function nearestExistingDir(p) {

@@ -19,10 +19,12 @@
  *    commit. Override a deliberate main-checkout edit with DEVLOOPS_ALLOW_MAIN=1.
  *
  * 2. Main-agent read-only boundary (#773, opt-in via DEVLOOPS_MAIN_AGENT_READONLY=1,
- *    default fail-open): denies a Write/Edit whose target is inside the repo working
- *    tree AND not gitignored when the call originates from the MAIN agent; allowed
- *    inside the dev-loop subagent context (CA2 DEVLOOPS_RUN_ID, or Claude
- *    agent_type === "dev-loop").
+ *    default fail-open): denies a repo-mutation Write/Edit from the MAIN agent and from
+ *    unknown subagents. A run id (CA2 DEVLOOPS_RUN_ID) or the dev-loop agent type is
+ *    authorized. Worker agents (developer, fixer, quality, docs; bare name or the
+ *    dev-loops: namespace only) are authorized only when the target is inside a linked
+ *    worktree. A repo mutation is a target inside a repository working tree and not
+ *    gitignored; any path under a `.git` segment is also a repo mutation.
  *
  * 3. Coordinator→worker delegation boundary (#2082, opt-in via
  *    DEVLOOPS_COORDINATOR_READONLY=1, default fail-open): the INVERSE of boundary 2, one

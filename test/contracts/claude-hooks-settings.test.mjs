@@ -916,6 +916,7 @@ test("write-guard hook classifies a target by its containing repository: a track
     const mainBoundary = { DEVLOOPS_MAIN_AGENT_READONLY: "1" };
     assert.equal(decisionOf(main, tracked, "developer", mainBoundary), "allow", "worker under the main-agent boundary");
     assert.equal(decisionOf(main, path.join(main, "README.md"), "developer", mainBoundary), "deny", "developer denied on a main-checkout target under DEVLOOPS_MAIN_AGENT_READONLY=1");
+    assert.equal(decisionOf(main, path.join(main, "README.md"), "developer", { ...mainBoundary, GIT_COMMON_DIR: path.join(main, ".git"), GIT_INDEX_FILE: path.join(main, ".git", "index") }), "deny", "inherited GIT_COMMON_DIR/GIT_INDEX_FILE do not steer the worktree classification");
     assert.equal(decisionOf(main, tracked, "otherplugin:docs", mainBoundary), "deny", "a foreign-namespace docs agent is not a worker");
     assert.equal(decisionOf(main, tracked, "dev-loops:quality", { ...coordinator, ...mainBoundary }), "allow", "worker with both boundaries");
     assert.equal(decisionOf(main, tracked, "general-purpose", mainBoundary), "deny", "generic subagent");

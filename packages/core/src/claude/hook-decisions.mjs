@@ -494,12 +494,13 @@ export function decideBashGate({
 /**
  * Decide whether a PreToolUse Write/Edit must be blocked by the main-agent read-only boundary.
  *
- * Denies a mutation whose target is inside the repo working tree AND not gitignored, when the
- * call originates from the MAIN agent. Allows it only inside the *dev-loop* subagent context:
- * the CA2 run id (`DEVLOOPS_RUN_ID`) is present, or the Claude `agent_type` is the dev-loop
- * agent. A generic subagent (Explore, Plan, an arbitrary Task agent) is NOT authorized — the
- * contract requires mutations to flow through the dev-loop subagent specifically. Non-repo /
- * gitignored paths are always allowed. Strict enforcement is opt-in via `enforce` (the hook
+ * Denies a repo-mutation write from the main agent and from unknown subagents (Explore, Plan,
+ * an arbitrary Task agent). A run id (`DEVLOOPS_RUN_ID`) or the dev-loop agent type is
+ * authorized. Worker agents (developer, fixer, quality, docs; bare name or the `dev-loops:`
+ * namespace only) are authorized only when the target is inside a linked worktree
+ * (`inLinkedWorktree`). A repo mutation is a target inside a repository working tree and not
+ * gitignored; any path under a `.git` segment is also a repo mutation. Non-repo / gitignored
+ * paths are always allowed. Strict enforcement is opt-in via `enforce` (the hook
  * derives it from `DEVLOOPS_MAIN_AGENT_READONLY=1`) so adopting the harness does not
  * retroactively break a repo's own interactive dev; default is fail-open.
  *
