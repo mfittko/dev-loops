@@ -242,9 +242,10 @@ export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unit
   const reads = unitReads.length > 0
     ? `Unit required read. It REPLACES the shared \`evidence\` read of the prefix's \`## Required reads\` for this unit: read this scoped evidence IN FULL instead of the shared evidence file, and verify its sha256 before judgment. Every other prefix read still applies:\n${unitReads.map((read) => renderRequiredReadLine(read, process.cwd())).join("\n")}\n\n`
     : "";
+  const writeTool = "with the file-write tool (the `write` builtin, `Write` on Claude Code), never a shell write (redirect, heredoc, `tee`, or an inline script)";
   const body = single
-    ? `Review this angle adversarially per your scoped angle-review mode, using the persona and focus prompt below. Write one findings artifact for this angle at its per-angle path.`
-    : `Review EACH angle below adversarially per your scoped angle-review mode, using its persona and focus prompt. Write one findings artifact PER ANGLE at its per-angle path — one artifact per angle, never one merged artifact for the unit.`;
+    ? `Review this angle adversarially per your scoped angle-review mode, using the persona and focus prompt below. Write one findings artifact for this angle at its per-angle path ${writeTool}.`
+    : `Review EACH angle below adversarially per your scoped angle-review mode, using its persona and focus prompt. Write one findings artifact PER ANGLE at its per-angle path, each ${writeTool}, never one merged artifact for the unit.`;
   const instructions = angleInstructions
     .map(({ angle, persona, prompt }) => `### Angle: ${angle} (persona: ${persona})\n${prompt}`)
     .join("\n\n");
