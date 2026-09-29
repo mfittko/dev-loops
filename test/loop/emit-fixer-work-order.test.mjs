@@ -621,3 +621,10 @@ test("F8: the work order routes validation through the canonical policy and carr
     }
   });
 });
+
+test("F1: the rendered work order says a threadless act item gets no disposition handoff entry", async () => {
+  await withFixture(async ({ emit }) => {
+    const { promptPath } = await emit({});
+    assert.match(await readFile(promptPath, "utf8"), /threadless act item gets no disposition handoff entry/);
+  });
+});

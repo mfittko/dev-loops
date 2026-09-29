@@ -321,3 +321,10 @@ test("FIXER_DISPOSITION_FORBIDDEN_ACTIONS tokens match PR_CHECKPOINT_ACTION valu
 test("COMPLETE_FIXER_DISPOSITION_ACTION matches PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION", () => {
   assert.equal(COMPLETE_FIXER_DISPOSITION_ACTION, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
 });
+
+test("normalizeFixerDispositionHandoff refuses a threadId that is not a review-thread node id", () => {
+  assert.throws(
+    () => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: [{ threadId: "none:0123abcd", fixingCommitSha: SHA, disposition: "tackled" }] }),
+    /not a review-thread node id/,
+  );
+});
