@@ -133,7 +133,9 @@ Built-in Pi tiers are `null`, so with zero config dispatch passes no model overr
 Operators opt in by setting concrete Pi ids under `models.tiers.<alias>.pi` (and may
 retune `models.roleTiers` / `models.roles`) in `.devloops`. On the Claude harness the same
 resolver bakes the tier into each agent's `model:` frontmatter at asset-generation time
-(`harness: "claude"`).
+(`harness: "claude"`). A Claude-only `claudeModel` key in canonical agent frontmatter
+is the fallback when the resolver inherits (the judge uses it to pin the strong tier);
+`models.roles` and `models.roleTiers` still win.
 
 ## Boundary examples
 

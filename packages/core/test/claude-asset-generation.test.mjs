@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "bun:test";
 
 import {
@@ -254,4 +255,16 @@ test("transformAgent passes the nested experimental map through to Claude frontm
   const listRaw = `---\nname: "dev-loop"\ntools: read\nexperimental: [1]\n---\n\nbody\n`;
   const list = transformAgent({ source: "agents/dev-loop.agent.md", raw: listRaw });
   assert.equal(list.includes("experimental:"), false, "a non-map experimental value emits no experimental key");
+});
+
+test("transformAgent pins the judge to opus via claudeModel", () => {
+  const raw = readFileSync(new URL("../../../agents/judge.agent.md", import.meta.url), "utf8");
+  assert.match(transformAgent({ source: "agents/judge.agent.md", raw }), /\nmodel: "opus"\n/);
+  const unpinned = transformAgent({ source: "agents/judge.agent.md", raw: raw.replace("claudeModel: opus\n", "") });
+  assert.equal(unpinned.split("\n---\n")[0].includes("\nmodel:"), false, "the pin is what sets the model");
+});
+
+test("committed .claude/agents/judge.md carries model opus", () => {
+  const generated = readFileSync(new URL("../../../.claude/agents/judge.md", import.meta.url), "utf8");
+  assert.match(generated.split("\n---\n")[0], /\nmodel: "opus"/);
 });

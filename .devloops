@@ -186,19 +186,29 @@ localImplementation:
 # native OpenAI-Codex child model served by pi's own openai-codex (Codex
 # Responses) provider. The model is never hardcoded in phase prose/tooling — it
 # is resolved via resolveRoleModel(config, { role: "pre-push-reviewer", harness }).
+#
+# Regular vs. strong split: the regular tier (`low`) runs the routine roles
+# (developer, fixer, docs, quality) on Claude's `sonnet` family token. It sets
+# no Pi model, so those roles inherit the conductor's model on Pi. The strong
+# tier (`high`) keeps review, refiner and every gate angle on `opus`.
+# `pre-pr-strong` stays the pre-push reviewer's tier, with its own Pi model.
+# On Claude the agents' `model:` frontmatter is baked from the built-in policy
+# (the judge pins `opus` through `claudeModel` in its canonical frontmatter).
+# The orchestrator's dispatch-time model parameter selects `sonnet` for the
+# developer and fixer.
 models:
   tiers:
+    low:
+      claude: sonnet
+    high:
+      claude: opus
     pre-pr-strong:
       claude: opus
       pi: openai-codex/gpt-6-sol
-  # The two implementation roles carry the most code weight in the chain. The
-  # built-in `low` alias they default to has no Pi model, so on that harness it
-  # is a silent no-op that leaves them inheriting the conductor's model; pin
-  # them to the same strong tier as the pre-push reviewer instead.
   roleTiers:
     pre-push-reviewer: pre-pr-strong
-    developer: pre-pr-strong
-    fixer: pre-pr-strong
+    developer: low
+    fixer: low
 
 tracker:
   board:
