@@ -679,6 +679,9 @@ test("decideWriteGuard denies a generic (non-dev-loop) subagent — no bypass vi
     const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType });
     assert.equal(d.decision, "deny", `agent_type ${agentType} must not bypass the boundary`);
   }
+});
+
+test("decideWriteGuard allows a worker agent inside a linked worktree", () => {
   for (const agentType of ["developer", "dev-loops:fixer", "quality", "docs"]) {
     const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType, inLinkedWorktree: true });
     assert.equal(d.decision, "allow", `worker ${agentType} may write inside a linked worktree`);
