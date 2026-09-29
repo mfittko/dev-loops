@@ -418,6 +418,24 @@ test("pullDelegationTarget: no delegation for the own checkout, a non-dev-loops 
   })));
 });
 
+test("pullDelegationTarget: a linked-worktree pull never delegates back to the main checkout's entry", async () => {
+  await withDir(async (base) => {
+    const main = path.join(base, "main");
+    const linked = path.join(base, "linked");
+    await mkdir(main);
+    const git = (args) => execFileSync("git", args, { cwd: main, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+    git(["init", "-q"]);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+    git(["worktree", "add", "-q", linked]);
+    await seedDelegateCheckout(main);
+    await seedDelegateCheckout(linked, { stub: false });
+    assert.equal(pullDelegationTarget(DELEGATE_ID, [path.join(main, "tmp")], { toolchainRoot: linked, env: {} }), null);
+    // The reverse direction still delegates: toolchain = main, entry in the linked worktree.
+    await seedDelegateCheckout(linked);
+    assert.equal(pullDelegationTarget(DELEGATE_ID, [path.join(linked, "tmp")], { toolchainRoot: main, env: {} }), linked);
+  });
+});
+
 test("self-hosting pull: a relative --tmp-root delegates as the absolute path, so the child finds the same tmp root", async () => {
   await withDir(async (base) => {
     const linked = path.join(base, "linked");

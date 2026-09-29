@@ -14,7 +14,7 @@ import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement"
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { EXECUTION_IDENTITY_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
-import { TOOLCHAIN_ROOT, isOtherDevLoopsCheckout, resolveGateArtifactTmpRoot, resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
+import { TOOLCHAIN_ROOT, isOtherDevLoopsCheckout, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveMainWorktreeRoot } from "../loop/_repo-root-resolver.mjs";
 import "../loop/emit-fixer-work-order.mjs"; // registers the fixer role adapter
 import "../loop/emit-judge-work-order.mjs"; // registers the judge role adapter
 
@@ -83,6 +83,8 @@ registerWorkOrderRole("review", {
 
 // ADR 0117: on a self-hosting PR the emitter wrote the execution index entry in the PR worktree. That
 // checkout is the review root, so its own pull script serves the pull. The marker stops a second hop.
+// The pull never delegates back to the main checkout. A main-anchored entry (the fixer index) can be
+// emitted from any checkout, so its location names no review root and the local toolchain serves it.
 const PULL_DELEGATED_ENV = "DEV_LOOPS_PULL_DELEGATED";
 const PULL_SCRIPT = "scripts/github/pull-work-order.mjs";
 
@@ -92,6 +94,7 @@ export function pullDelegationTarget(execution, tmpRoots, { toolchainRoot = TOOL
   const tmpRoot = tmpRoots.find((root) => existsSync(executionIndexPath(root, execution)));
   const checkout = tmpRoot ? path.dirname(tmpRoot) : null;
   if (!checkout || !existsSync(path.join(checkout, PULL_SCRIPT)) || !isOtherDevLoopsCheckout(checkout, toolchainRoot)) return null;
+  if (!isOtherDevLoopsCheckout(checkout, resolveMainWorktreeRoot(toolchainRoot))) return null;
   return checkout;
 }
 
