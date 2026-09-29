@@ -1508,7 +1508,7 @@ test("judge-pass J5: prose-only, receipt-missing and foreign-invocation dispatch
 
 test("judge-pass J5: a verdict written before the pull (replayed or stale) and a swapped ledger refuse", async () => {
   const { root, plan, verdictPath, runPass } = await deliveryCase();
-  await pullWorkOrder({ execution: plan.executionIdentity, cwd: root, tmpRoots: [path.join(root, "tmp")], receiptTmpRoot: path.join(root, "tmp") });
+  await pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [path.join(root, "tmp")], receiptTmpRoot: path.join(root, "tmp") });
   await utimes(verdictPath, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
   await assert.rejects(runPass(), /result_predates_pull/);
   await writeVerdictAfterPull(verdictPath, JSON.stringify(verdict()));

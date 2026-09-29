@@ -21,13 +21,15 @@ export { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE, canonicalizeWorkOrde
 export const materializationHash = sha256Hex;
 
 // The compact dispatch envelope, the ONLY text relayed to a worker: a self-describing pull instruction
-// (a lagging agent definition still pulls), never task prose. It carries the execution identity alone
-// (ADR 0115); the pull resolves the ref and digest from the emitter's execution index.
-export function buildDispatchPointer({ executionIdentity }) {
-  if (!EXECUTION_IDENTITY_RE.test(String(executionIdentity))) throw new Error(`execution identity ${JSON.stringify(executionIdentity)} does not match EXECUTION_IDENTITY_RE`);
-  const text = `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
+// (a lagging agent definition still pulls), never task prose. Values go unquoted, so each is one shell-inert word.
+// Step 1 of ADR 0115 keeps this 3-flag form; issue 2560 switches it to the execution identity alone.
+export function buildDispatchPointer({ workOrderRef, workOrderDigest: digest, executionIdentity }) {
+  const unsafe = [workOrderRef, digest, executionIdentity].find((value) => !/^[A-Za-z0-9][\w.:/#-]*$/.test(String(value)));
+  if (unsafe !== undefined) throw new Error(`dispatch envelope value ${JSON.stringify(unsafe)} is not shell-safe`);
+  if (!EXECUTION_IDENTITY_RE.test(executionIdentity)) throw new Error(`execution identity ${JSON.stringify(executionIdentity)} does not match EXECUTION_IDENTITY_RE`);
+  const text = `Run \`dev-loops-run scripts/github/pull-work-order.mjs --ref ${workOrderRef} --digest ${digest} --execution ${executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`;
   const bytes = Buffer.byteLength(text);
-  if (bytes > DISPATCH_POINTER_MAX_BYTES) throw new Error(`dispatch envelope for ${executionIdentity} is ${bytes} bytes, over DISPATCH_POINTER_MAX_BYTES ${DISPATCH_POINTER_MAX_BYTES}`);
+  if (bytes > DISPATCH_POINTER_MAX_BYTES) throw new Error(`dispatch envelope for ${workOrderRef} is ${bytes} bytes, over DISPATCH_POINTER_MAX_BYTES ${DISPATCH_POINTER_MAX_BYTES}`);
   return text;
 }
 
@@ -51,8 +53,12 @@ async function resolveExecutionIndex(execution, tmpRoots) {
   let found = null;
   if (EXECUTION_IDENTITY_RE.test(String(execution))) {
     for (const tmpRoot of tmpRoots) {
-      const entry = await readFile(executionIndexPath(tmpRoot, execution), "utf8").then(JSON.parse, () => null);
-      if (!entry) continue;
+      const file = executionIndexPath(tmpRoot, execution);
+      const text = await readFile(file, "utf8").catch(() => null);
+      if (text === null) continue;
+      let entry = null;
+      try { entry = JSON.parse(text); } catch { /* refused below */ }
+      if (!entry || typeof entry !== "object") throw new WorkOrderRefusal("local_materialization_integrity_failure", `execution index ${file} is not a JSON entry; re-emit the round`);
       if (found && (found.workOrderRef !== entry.workOrderRef || found.workOrderDigest !== entry.workOrderDigest)) {
         throw new WorkOrderRefusal("local_materialization_integrity_failure", `execution ${execution} has conflicting execution index entries; re-emit the round`);
       }
@@ -82,15 +88,17 @@ export class WorkOrderRefusal extends Error {
 export const pullReceiptPath = (receiptTmpRoot, workOrderRef) => path.join(receiptTmpRoot, "work-order-receipts", `${sha256Hex(workOrderRef)}.json`);
 
 /**
- * Resolve an execution identity through the execution index, verify the unit and pull its
- * work order. Returns { workOrderText, receipt, receiptPath }; throws WorkOrderRefusal.
+ * Verify a compact reference and pull its work order. Without a `ref` (the short pull, ADR 0115)
+ * the ref and digest resolve through the execution index. Returns { workOrderText, receipt,
+ * receiptPath }; throws WorkOrderRefusal.
  */
-export async function pullWorkOrder({ execution, cwd, tmpRoots, receiptTmpRoot }) {
-  const { workOrderRef: ref, workOrderDigest: digest } = await resolveExecutionIndex(execution, tmpRoots);
+export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, receiptTmpRoot }) {
+  const fromIndex = ref === undefined;
+  if (fromIndex) ({ workOrderRef: ref, workOrderDigest: digest } = await resolveExecutionIndex(execution, tmpRoots));
   const role = String(ref).split(":", 1)[0];
   const adapter = WORK_ORDER_ROLES.get(role);
   if (!adapter) throw new WorkOrderRefusal("unknown_role", `work-order role ${JSON.stringify(role)} has no registered adapter`);
-  if (IDENTITY_ROLES[execution[0]] !== role) throw new WorkOrderRefusal("dispatch_identity_mismatch", `execution ${execution} names role ${IDENTITY_ROLES[execution[0]]}, but its index entry names ref ${ref}`);
+  if (fromIndex && IDENTITY_ROLES[execution[0]] !== role) throw new WorkOrderRefusal("dispatch_identity_mismatch", `execution ${execution} names role ${IDENTITY_ROLES[execution[0]]}, but its index entry names ref ${ref}`);
   const unit = await adapter.locate({ ref, digest, execution, cwd, tmpRoots });
   // Stale first: a retired or superseded round never retargets onto the newest unit.
   if (unit?.stale) throw new WorkOrderRefusal("stale_dispatch", `${unit.stale}; never retarget to the newest round, reconcile and re-dispatch the current lawful unit`);

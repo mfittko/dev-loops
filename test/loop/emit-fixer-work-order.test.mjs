@@ -2,7 +2,7 @@
 // emission -> compact dispatch -> sanctioned pull -> guarded mutation -> checked disposition.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
@@ -27,21 +27,11 @@ const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8",
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout).refusal);
 // The fixer runs the dispatch pointer's exact pull line; the Bash gate binds the grant to its agent_id.
 const AGENT = "agent-a";
-const pullLine = (executionIdentity) => /`([^`]+)`/.exec(buildDispatchPointer({ executionIdentity }))[1];
-// The unit's emit tmp root (<tmp>/gate-fixer/<repo>/pr-<n>/fixer-emit-plan.json).
-const unitTmpRoot = (unit) => path.resolve(path.dirname(unit.planPath), "../../..");
-// A ref, digest or execution override rewrites the execution index entry for the pulled identity, then restores it.
+const pullLine = (identity) => /`([^`]+)`/.exec(buildDispatchPointer(identity))[1];
 const pull = (unit, cwd, over = {}) => {
-  const execution = over.execution ?? unit.executionIdentity;
-  const file = executionIndexPath(unitTmpRoot(unit), execution);
-  const original = existsSync(file) ? readFileSync(file, "utf8") : null;
-  if (over.ref || over.digest || over.execution) writeFileSync(file, JSON.stringify({ executionIdentity: execution, workOrderRef: over.ref ?? unit.workOrderRef, workOrderDigest: over.digest ?? unit.workOrderDigest }));
-  try {
-    assert.equal(bash(cwd, pullLine(execution), over.agentId ?? AGENT), "allow");
-    return spawnSync("node", [PULL, execution], { cwd, encoding: "utf8", env: gitFreeEnv() });
-  } finally {
-    if (original !== null) writeFileSync(file, original);
-  }
+  const identity = { workOrderRef: over.ref ?? unit.workOrderRef, workOrderDigest: over.digest ?? unit.workOrderDigest, executionIdentity: over.execution ?? unit.executionIdentity };
+  assert.equal(bash(cwd, pullLine(identity), over.agentId ?? AGENT), "allow");
+  return spawnSync("node", [PULL, "--ref", identity.workOrderRef, "--digest", identity.workOrderDigest, "--execution", identity.executionIdentity], { cwd, encoding: "utf8", env: gitFreeEnv() });
 };
 // A real DeltaPrePushReviewResult for ACT reviewed against baseline `head`.
 const deltaResultFor = (head, over = {}) => ({
@@ -195,17 +185,19 @@ test("F1/F4: changing act list, threads, allowed paths, branch, phase or head ch
 test("F2: dispatchPrompt is the shared envelope, fits the cap for a worst-case ref, and refuses appended prose", async () => {
   await withFixture(async ({ emit }) => {
     const unit = await emit();
-    assert.equal(unit.dispatchPrompt, `Run \`dev-loops-run scripts/github/pull-work-order.mjs ${unit.executionIdentity}\`; follow its printed work order exactly. Exit 1: report its JSON verbatim, stop.`);
     assert.equal(unit.dispatchPrompt, buildDispatchPointer(unit));
-    assert.throws(() => buildDispatchPointer({ ...unit, executionIdentity: `${unit.executionIdentity} and also refactor the parser` }), /EXECUTION_IDENTITY_RE/);
-    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(unitTmpRoot(unit), unit.executionIdentity), "utf8")),
+    assert.throws(() => buildDispatchPointer({ ...unit, executionIdentity: `${unit.executionIdentity} and also refactor the parser` }), /not shell-safe/);
+    // The unit's execution index entry (ADR 0115) sits under the emit plan's tmp root.
+    const tmpRoot = path.resolve(path.dirname(unit.planPath), "../../..");
+    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(tmpRoot, unit.executionIdentity), "utf8")),
       { executionIdentity: unit.executionIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest });
     // A colliding index entry for the next identity refuses the emission.
     const next = { executionIdentity: "f1790000000001-0000beef", workOrderRef: "fixer:o/r#7:other", workOrderDigest: "sha256:0" };
-    await writeExecutionIndex(unitTmpRoot(unit), next);
+    await writeExecutionIndex(tmpRoot, next);
     await assert.rejects(emit({ executionIdentity: next.executionIdentity }), (err) => err.refusal === "execution_index_collision");
   });
-  assert.ok(Buffer.byteLength(buildDispatchPointer({ executionIdentity: "f1790000000000-abcdef12" })) <= DISPATCH_POINTER_MAX_BYTES);
+  const worst = { workOrderRef: `fixer:${"o".repeat(39)}/${"r".repeat(100)}#99999:${"f".repeat(64)}:f1790000000000-abcdef12`, workOrderDigest: `sha256:${"f".repeat(64)}`, executionIdentity: "f1790000000000-abcdef12" };
+  assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
 });
 
 test("F2: initial, resumed and replacement dispatches of one reference pull the same bytes", async () => {
@@ -269,14 +261,32 @@ test("F3: the pull writes a fixer receipt under the main checkout", async () => 
   });
 });
 
+test("F3: the short pull line binds the grant, pulls the same bytes and writes the same receipt (ADR 0115)", async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    const unit = await emit();
+    const line = `dev-loops-run scripts/github/pull-work-order.mjs ${unit.executionIdentity}`;
+    assert.equal(bash(wt, line), "allow");
+    const result = spawnSync("node", [PULL, unit.executionIdentity], { cwd: wt, encoding: "utf8", env: gitFreeEnv() });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(result.stdout, await readFile(unit.promptPath, "utf8"));
+    const receipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
+    assert.deepEqual([receipt.role, receipt.executionIdentity, receipt.workOrderDigest], ["fixer", unit.executionIdentity, unit.workOrderDigest]);
+    const target = path.join(wt, "src", "x.mjs");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, "x\n");
+    assert.equal(hook(wt, target), "allow");
+    assert.equal(bash(wt, `${line}; echo "EXIT $?"`, "agent-b"), "deny");
+    assert.equal(hook(wt, target, "agent-b"), "deny", "a denied suffixed line binds nothing");
+  });
+});
+
 test("F3: wrong digest, execution, role or target and a malformed payload refuse by name", async () => {
   await withFixture(async ({ wt, emit }) => {
     const unit = await emit();
     assert.equal(refusal(pull(unit, wt, { digest: "0".repeat(64) })), "dispatch_reference_mismatch");
     assert.equal(refusal(pull(unit, wt, { ref: unit.workOrderRef.replace(`#${PR}:`, `#${PR + 1}:`) })), "dispatch_reference_mismatch");
     assert.equal(refusal(pull(unit, wt, { execution: "f1-ffffffff" })), "dispatch_identity_mismatch");
-    assert.equal(refusal(pull(unit, wt, { ref: unit.workOrderRef.replace(/^fixer:/, "review:") })), "dispatch_identity_mismatch");
-    assert.equal(refusal(spawnSync("node", [PULL, "f1-deadbeef"], { cwd: wt, encoding: "utf8", env: gitFreeEnv() })), "dispatch_reference_mismatch");
+    assert.equal(refusal(pull(unit, wt, { ref: unit.workOrderRef.replace(/^fixer:/, "review:") })), "dispatch_reference_mismatch");
     const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
     await writeFile(unit.planPath, JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, mutationAuthority: { ...plan.workOrder.mutationAuthority, allowedPaths: ["src"] } } }));
     assert.equal(refusal(pull(unit, wt)), "semantic_identity_mismatch");

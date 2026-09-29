@@ -23,7 +23,7 @@
  *     fixer pull line (prefix, suffix, redirect, `cd`) is denied with the exact line to run.
  *     The fixer Bash commit/push boundary is owned by issue 2534.
  *   - every command from the read-only `judge` subagent except its sanctioned work-order pull
- *     (`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>`, ADR 0106, ADR 0115).
+ *     (`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` or the 3-flag line, ADR 0106, ADR 0115).
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";

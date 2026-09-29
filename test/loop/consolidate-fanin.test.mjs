@@ -1641,7 +1641,7 @@ test("emit CLI then consolidate-fanin CLI with --emit-plan: one round end to end
     const [unit] = emitPayload.units;
     const pulled = await runNode(
       path.join(import.meta.dirname, "..", "..", "scripts", "github", "pull-work-order.mjs"),
-      [unit.executionIdentity],
+      ["--ref", unit.workOrderRef, "--digest", unit.workOrderDigest, "--execution", unit.executionIdentity],
       { cwd: workDir },
     );
     assert.equal(pulled.code, 0, pulled.stdout + pulled.stderr);

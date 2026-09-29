@@ -1,4 +1,4 @@
-// Fixer pull-line binding at the Bash gate hook (issue 2551, ADR 0115): only the exact short pull
+// Fixer pull-line binding at the Bash gate hook (issue 2551, ADR 0115): only an exact pull
 // line records the binding; a modified line is denied with the exact line and records nothing.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -64,6 +64,10 @@ test("parseFixerPullCommand resolves only an exact fixer line whose index entry 
   await withRepo(async (root) => {
     assert.deepEqual(parseFixerPullCommand(LINE, root), ENTRY);
     assert.equal(parseFixerPullCommand(`${LINE}; echo`, root), null);
+    // Step 1 keeps the 3-flag line: it binds its own values when the ref is a fixer ref.
+    const threeFlag = (ref) => `dev-loops-run scripts/github/pull-work-order.mjs --ref ${ref} --digest ${ENTRY.workOrderDigest} --execution ${ID}`;
+    assert.deepEqual(parseFixerPullCommand(threeFlag(ENTRY.workOrderRef), root), ENTRY);
+    assert.equal(parseFixerPullCommand(threeFlag("review:o/r#7:x"), root), null);
     assert.equal(parseFixerPullCommand("dev-loops-run scripts/github/pull-work-order.mjs f1-deadbeef", root), null, "missing index entry");
     const reviewRef = { executionIdentity: "f2-deadbeef", workOrderRef: "review:o/r#7:x", workOrderDigest: "sha256:0" };
     await writeExecutionIndex(path.join(root, "tmp"), reviewRef);

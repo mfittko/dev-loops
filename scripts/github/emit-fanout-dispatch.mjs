@@ -379,7 +379,7 @@ function resolveFlagValue(argv, flag) {
   return val;
 }
 
-export async function main(argv = process.argv.slice(2), { tmpRootDefault = path.join(process.cwd(), "tmp"), ledgerTmpRootDefault = resolveGateArtifactTmpRoot(process.cwd()), persistPlan = writeFile } = {}) {
+export async function main(argv = process.argv.slice(2), { tmpRootDefault = path.join(process.cwd(), "tmp"), ledgerTmpRootDefault = resolveGateArtifactTmpRoot(process.cwd()), persistPlan = writeFile, roundId: injectedRoundId } = {}) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
@@ -665,7 +665,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const findingsDir = path.resolve(buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot }));
   // This emission's round identity. Its ms timestamp lets the pull tool tell a
   // round retired after it (GATE-EXEC-ROUND-RETIREMENT record) from a typo.
-  const roundId = `r${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const roundId = injectedRoundId ?? `r${Date.now()}-${randomBytes(4).toString("hex")}`;
   // Each unit's budget scales with the filtered diff it reads. A thin briefing
   // records no diff read, so every unit gets the floor.
   const diffRead = artifact.scope?.diffSource === "none" ? undefined : sharedReads.find((read) => read?.kind === "diff");

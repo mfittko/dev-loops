@@ -57,12 +57,15 @@ const bindingPath = (mainRoot, workOrderRef, workOrderDigest, executionIdentity)
   path.join(mainRoot, "tmp", "work-order-receipts", "fixer-agents", `${sha256(`${workOrderRef}\n${workOrderDigest}\n${executionIdentity}`)}.json`);
 
 /**
- * `{ workOrderRef, workOrderDigest, executionIdentity }` of an exact sanctioned fixer pull line (ADR 0115),
- * resolved through the execution index under `<mainRoot>/tmp`; null for any other command, an `r`/`j`
- * identity, a missing or unreadable entry, an entry for another execution or a non-`fixer:` ref.
+ * `{ workOrderRef, workOrderDigest, executionIdentity }` of an exact sanctioned fixer pull line. The
+ * 3-flag line carries them with a `fixer:` ref. The short line (ADR 0115) resolves them through the
+ * execution index under `<mainRoot>/tmp`. Null for any other command, an `r`/`j` identity, a missing
+ * or unreadable entry, an entry for another execution or a non-`fixer:` ref.
  */
 export function parseFixerPullCommand(command, mainRoot) {
-  const executionIdentity = parseSanctionedPullLine(command)?.executionIdentity;
+  const line = parseSanctionedPullLine(command);
+  if (line?.workOrderRef) return line.workOrderRef.startsWith("fixer:") ? line : null;
+  const executionIdentity = line?.executionIdentity;
   if (!executionIdentity?.startsWith("f")) return null;
   try {
     const entry = JSON.parse(readFileSync(executionIndexPath(path.join(mainRoot, "tmp"), executionIdentity), "utf8"));
