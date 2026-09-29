@@ -208,3 +208,55 @@ test("--findings-json without a ledger fails closed on a nested unparseable find
     await assert.rejects(() => postUnparseableJson(tempDir, "bogus"), /\[low\] \(unparseable\)" carries judgeDisposition "bogus" outside act\/defer\/reject/);
   }, { prefix: "dev-loops-act-list-json-unparseable-bogus-" });
 });
+
+// A durable log written before the judge pass carries no judgeDisposition.
+const preJudgeFinding = { severity: "medium", angle: "correctness", summary: "pre-judge finding" };
+
+async function postWithJson(ledgerPath, jsonPath, extra = []) {
+  const args = [
+    "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+    "--findings-ledger", ledgerPath, "--findings-json", jsonPath, "--findings-summary", "act list test",
+    "--next-action", "follow the verdict", "--inline-reason", "act list test",
+    "--findings-severity-counts", JSON.stringify({ high: 0, medium: 1, low: 0, question: 0, nit: 0 }), ...extra,
+  ];
+  const posted = [];
+  try {
+    await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild(posted),
+    });
+    return { body: posted.join("\n") };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+test("a ledger with an unjudged durable log plus an enriched --findings-json with an act item derives findings_present", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [preJudgeFinding] });
+    const jsonPath = path.join(tempDir, "enriched.json");
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [finding("medium", "act")] }]), "utf8");
+    const derived = await postWithJson(ledgerPath, jsonPath);
+    assert.equal(derived.error, undefined);
+    assert.match(derived.body, /\*\*Verdict:\*\* findings_present/);
+    assert.match((await postWithJson(ledgerPath, jsonPath, ["--verdict", "clean"])).error, /--verdict "clean".*1 open judge act item\(s\)/s);
+    assert.equal((await postWithJson(ledgerPath, jsonPath, ["--verdict", "findings_present"])).error, undefined);
+  }, { prefix: "dev-loops-act-list-enriched-" });
+});
+
+test("a fan-out round whose ledger findings carry no judgeDisposition is refused without an enriched source", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [preJudgeFinding] });
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+      "--findings-ledger", ledgerPath, "--findings-summary", "act list test", "--execution-mode", "fanout_fanin",
+      "--next-action", "follow the verdict",
+      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 1, low: 0, question: 0, nit: 0 }),
+    ];
+    await assert.rejects(
+      () => upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+        env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]),
+      }),
+      /1 finding\(s\) with no judgeDisposition, so the judge act list is unknown/,
+    );
+  }, { prefix: "dev-loops-act-list-unjudged-" });
+});

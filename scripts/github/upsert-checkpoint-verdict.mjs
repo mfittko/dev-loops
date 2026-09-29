@@ -2597,7 +2597,15 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let preloadedFindingsLedger;
   if (options.findingsLedger) {
     preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
+    // A fan-out draft or pre-approval round ran a judge, so the act list must come from judge-enriched data:
+    // a ledger finding without a disposition is pre-judge, and only an enriched --findings-json can stand in.
+    const unjudged = (preloadedFindingsLedger.findings ?? []).filter((f) => !f?.judgeDisposition);
+    if (options.gate !== "review" && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin" && unjudged.length > 0 && !options.findingsJson) {
+      throw new Error(`--findings-ledger "${options.findingsLedger}" for ${options.gate} @ ${canonicalHeadSha} has ${unjudged.length} finding(s) with no judgeDisposition, so the judge act list is unknown (ADR 0089). Re-write the log with write-gate-findings-log --judge-verdict after the judge pass, or also pass the judge-enriched --findings-json.`);
+    }
   }
+  // Open act items from an enriched --findings-json posted alongside a ledger.
+  let enrichedActItems = [];
   // Fan-out angle-coverage enforcement for a ledger-only round (no
   // --findings-json): runs BEFORE the tick below, so a ledger this post refuses
   // never leaves ticked boxes behind. The --findings-json coverage refusal runs
@@ -2697,7 +2705,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     // ADR 0089: without a ledger, the structured findings carry the judge act list.
     // Read the RAW entries: normalization turns an unparseable finding into a bare marker and drops its judgeDisposition.
-    const flatFindings = preloadedFindingsLedger ? [] : candidate.flatMap((e) => (looksLikePerAngleEntry(e) ? e.findings : [e])).map((f) => ({
+    const flatFindings = candidate.flatMap((e) => (looksLikePerAngleEntry(e) ? e.findings : [e])).map((f) => ({
       severity: f?.severity,
       summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
       judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
@@ -2705,6 +2713,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
     if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
     const actItems = listOpenActItems(flatFindings);
+    enrichedActItems = actItems;
     if (options.verdict === "clean" && actItems.length > 0) {
       throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
     }
@@ -2733,7 +2742,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let checkpointComposition = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
-    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, preloadedFindingsLedger.findings);
+    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...preloadedFindingsLedger.findings, ...enrichedActItems]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
     const gateBlockers = collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact);
