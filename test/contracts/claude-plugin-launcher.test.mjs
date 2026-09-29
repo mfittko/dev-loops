@@ -5,10 +5,10 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const launcherSource = path.join(repoRoot, ".claude/bin/dev-loops-run");
@@ -305,5 +305,138 @@ test("propagates the resolved child script's non-zero exit code", () => {
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ADR 0117: `--repo-root <checkout>` binds the review-target root. A dev-loops checkout supplies the
+// toolchain, and the script always runs with cwd `<checkout>`.
+function makeDevLoopsCheckout(dir, label) {
+  mkdirSync(path.join(dir, "scripts"), { recursive: true });
+  writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "dev-loops", version: "0.0.1-local" }));
+  writeFileSync(
+    path.join(dir, "scripts/probe.mjs"),
+    `console.log(JSON.stringify({ label: ${JSON.stringify(label)}, script: import.meta.url, cwd: process.cwd() }));\n`,
+  );
+}
+
+test("--repo-root: run from checkout A, it runs checkout B's script with cwd B", () => {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "dev-loops-run-reporoot-")));
+  try {
+    const a = path.join(root, "a");
+    const b = path.join(root, "b");
+    makeDevLoopsCheckout(a, "A");
+    makeDevLoopsCheckout(b, "B");
+    const r = runLauncher(launcherSource, ["--repo-root", b, "scripts/probe.mjs"], a);
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.label, "B");
+    assert.equal(out.script, pathToFileURL(path.join(b, "scripts/probe.mjs")).href);
+    assert.equal(realpathSync(out.cwd), b);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("--repo-root: checkout B's script resolves @dev-loops/core from B's packages/core", () => {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "dev-loops-run-reporoot-core-")));
+  try {
+    const a = path.join(root, "a");
+    const b = path.join(root, "b");
+    makeDevLoopsCheckout(a, "A");
+    makeDevLoopsCheckout(b, "B");
+    const core = path.join(b, "packages/core");
+    mkdirSync(core, { recursive: true });
+    writeFileSync(path.join(core, "package.json"), JSON.stringify({ name: "@dev-loops/core", type: "module", main: "index.mjs" }));
+    writeFileSync(path.join(core, "index.mjs"), `export const where = import.meta.url;\n`);
+    mkdirSync(path.join(b, "node_modules/@dev-loops"), { recursive: true });
+    symlinkSync(core, path.join(b, "node_modules/@dev-loops/core"));
+    writeFileSync(path.join(b, "scripts/core-probe.mjs"), `const { where } = await import("@dev-loops/core");\nconsole.log(where);\n`);
+    const r = runLauncher(launcherSource, ["--repo-root", b, "scripts/core-probe.mjs"], a);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), pathToFileURL(path.join(core, "index.mjs")).href);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("--repo-root: a non-dev-loops directory keeps the installed toolchain and still sets the cwd", () => {
+  const { dir, pluginRoot, launcher } = makeFixtureRoot();
+  try {
+    writeInstalledManifest(pluginRoot, "1.0.2");
+    mkdirSync(path.join(pluginRoot, "node_modules/dev-loops/scripts"), { recursive: true });
+    writeFileSync(path.join(pluginRoot, "node_modules/dev-loops/scripts/probe.mjs"), `console.log("FROM_INSTALLED " + process.cwd());\n`);
+    const consumer = realpathSync(mkdtempSync(path.join(tmpdir(), "dev-loops-run-reporoot-consumer-")));
+    const shellCwd = mkdtempSync(path.join(tmpdir(), "dev-loops-run-reporoot-shell-"));
+    try {
+      mkdirSync(path.join(consumer, "scripts"), { recursive: true });
+      writeFileSync(path.join(consumer, "package.json"), JSON.stringify({ name: "some-consumer-app" }));
+      const r = runLauncher(launcher, ["--repo-root", consumer, "scripts/probe.mjs"], shellCwd);
+      assert.equal(r.status, 0, r.stderr);
+      const [label, cwd] = r.stdout.trim().split(" ");
+      assert.equal(label, "FROM_INSTALLED");
+      assert.equal(realpathSync(cwd), consumer);
+    } finally {
+      rmSync(consumer, { recursive: true, force: true });
+      rmSync(shellCwd, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--repo-root: a missing value or a non-directory exits 2 and names --repo-root", () => {
+  const { dir, launcher } = makeFixtureRoot();
+  try {
+    const file = path.join(dir, "not-a-dir.txt");
+    writeFileSync(file, "x");
+    for (const args of [["--repo-root"], ["--repo-root", file, "scripts/probe.mjs"], ["--repo-root", path.join(dir, "absent"), "scripts/probe.mjs"]]) {
+      const r = runLauncher(launcher, args, dir);
+      assert.equal(r.status, 2, `${args.join(" ")}: ${r.stderr}`);
+      assert.match(r.stderr, /--repo-root/);
+      assert.equal(r.stdout, "");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--repo-root: a symlink, a relative path, or a trailing slash into a checkout subdirectory walks up from the real path", () => {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "dev-loops-run-reporoot-link-")));
+  try {
+    const a = path.join(root, "a");
+    const b = path.join(root, "b");
+    makeDevLoopsCheckout(a, "A");
+    makeDevLoopsCheckout(b, "B");
+    const sub = path.join(b, "sub");
+    mkdirSync(sub);
+    // The link sits inside checkout A; a lexical walk-up from it would find A.
+    symlinkSync(sub, path.join(a, "link"));
+    for (const target of [path.join(a, "link"), "link", "link/"]) {
+      const r = runLauncher(launcherSource, ["--repo-root", target, "scripts/probe.mjs"], a);
+      assert.equal(r.status, 0, `${target}: ${r.stderr}`);
+      const out = JSON.parse(r.stdout);
+      assert.equal(out.label, "B", target);
+      assert.equal(out.cwd, sub, target);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("--repo-root: a directory that stats but cannot be entered exits 1 and names the spawn error", () => {
+  if (process.getuid?.() === 0) return; // root enters any directory
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "dev-loops-run-reporoot-locked-")));
+  const locked = path.join(root, "b", "locked");
+  try {
+    makeDevLoopsCheckout(path.join(root, "b"), "B");
+    mkdirSync(locked);
+    chmodSync(locked, 0o000);
+    const r = runLauncher(launcherSource, ["--repo-root", locked, "scripts/probe.mjs"], root);
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, /dev-loops-run: cannot start .*EACCES/);
+    assert.equal(r.stdout, "");
+  } finally {
+    chmodSync(locked, 0o755);
+    rmSync(root, { recursive: true, force: true });
   }
 });

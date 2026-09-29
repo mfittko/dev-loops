@@ -99,6 +99,11 @@ Additional gaps discovered through semantic reading of the spec are also recorde
 <!-- rule: GRILL-COUNT-AC-UNIT-DISPATCH-MODE -->
 `GRILL-COUNT-AC-UNIT-DISPATCH-MODE`: An acceptance criterion that names a **count** (sentinel count, angle count, dispatch-unit count) MUST specify which unit the count refers to — `sentinel` vs `angle` vs `dispatch-unit` — and MUST be validated against BOTH per-angle dispatch and the shipped grouped-dispatch default, not just one. Grouped fan-out writes one sentinel per emitted dispatch unit, not per angle; the AC MUST call out that interaction. Detect an omitted unit or dispatch-mode interaction as a gap before synthesis, then record the outcome and validation evidence in the authoritative `## AC / DoD matrix` required by Step 4.
 
+### Self-gate path
+
+<!-- rule: GRILL-SELF-HOST-PATH -->
+`GRILL-SELF-HOST-PATH`: For a dev-loops PR, the grill MUST ask two questions for each changed producer/consumer pair. First: which checkout runs each side during the PR's own gate? Second: does the main-checkout side accept the output of the PR-head side? A "no" is a gap: split the change per `GATE-SELF-HOST-EXPAND-CONTRACT` in the [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md), or record a hard-cut decision. A hard-cut decision records both answers in the grill results.
+
 For each gap, classify it as either:
 - **Bounded choice** — the answer is one of a small discrete set (e.g. yes/no, A/B/C).
 - **Open-ended** — the answer requires free-form elaboration.

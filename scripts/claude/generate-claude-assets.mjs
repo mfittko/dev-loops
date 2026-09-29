@@ -17,6 +17,7 @@ import path from "node:path";
 
 import { transformAgent, transformSkill, transformCommand, stripPiOnlyBlocks, splitFrontmatter, isSkillExcludedFromClaude } from "@dev-loops/core/claude/asset-generation";
 import { isDirectCliRun } from "../lib/direct-run.mjs";
+import { toolchainRootMismatch } from "../loop/_repo-root-resolver.mjs";
 
 /**
  * Collect the generated assets as { target, content } pairs (target is repo-relative).
@@ -264,6 +265,11 @@ function main(argv) {
       process.exit(1);
     }
     repoRoot = value;
+    const mismatch = toolchainRootMismatch(path.resolve(value), "scripts/claude/generate-claude-assets.mjs");
+    if (mismatch) {
+      process.stderr.write(JSON.stringify({ ok: false, error: mismatch }) + "\n");
+      process.exit(1);
+    }
   }
 
   const assets = collectGeneratedAssets({ repoRoot });
