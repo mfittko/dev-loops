@@ -30,7 +30,7 @@ const writeGhStub = (tempDir, entries) => writeGhStubHelper(tempDir, entries, { 
 test("reply-resolve-review-thread posts a reply then resolves the thread", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-thread-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch. Added the missing symlinked-ancestor guard and coverage.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in 93cd7f8. Added the missing symlinked-ancestor guard and coverage.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -49,7 +49,7 @@ test("reply-resolve-review-thread posts a reply then resolves the thread", async
       },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/123/replies", "--input", "-"],
-        assertStdinIncludes: ['"body":"Fixed in the review-thread follow-up branch. Added the missing symlinked-ancestor guard and coverage.\\n"'],
+        assertStdinIncludes: ['"body":"Fixed in 93cd7f8. Added the missing symlinked-ancestor guard and coverage.\\n"'],
         stdout: '{"id":456,"html_url":"https://github.com/owner/repo/pull/17#discussion_r456"}\n',
       },
       {
@@ -59,7 +59,7 @@ test("reply-resolve-review-thread posts a reply then resolves the thread", async
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -88,7 +88,7 @@ test("reply-resolve-review-thread posts a reply then resolves the thread", async
 test("reply-resolve-review-thread neutralizes a bare /copilot token in the reply body before posting", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-sanitize-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch. Also note the /copilot prohibition rule applies here.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in 93cd7f8. Also note the /copilot prohibition rule applies here.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -107,7 +107,7 @@ test("reply-resolve-review-thread neutralizes a bare /copilot token in the reply
       },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/123/replies", "--input", "-"],
-        assertStdinIncludes: ['"body":"Fixed in the review-thread follow-up branch. Also note the `/copilot` prohibition rule applies here.\\n"'],
+        assertStdinIncludes: ['"body":"Fixed in 93cd7f8. Also note the `/copilot` prohibition rule applies here.\\n"'],
         stdout: '{"id":456,"html_url":"https://github.com/owner/repo/pull/17#discussion_r456"}\n',
       },
       {
@@ -117,7 +117,7 @@ test("reply-resolve-review-thread neutralizes a bare /copilot token in the reply
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -135,7 +135,7 @@ test("reply-resolve-review-thread rejects thin replies without commit SHA or dis
 
   try {
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: { ...process.env, PATH: process.env.PATH } },
     );
 
@@ -157,7 +157,7 @@ test("reply-resolve-review-thread rejects pure-numeric tokens that are not commi
 
   try {
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: { ...process.env, PATH: process.env.PATH } },
     );
 
@@ -205,7 +205,7 @@ test("reply-resolve-review-thread rejects malformed arguments and empty body fil
   assert.equal(missingParsed.ok, false);
   assert.match(missingParsed.error, /Missing required option/i);
 
-  const badRepo = await runNode(["--repo", " owner / repo ", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", "x.md"]);
+  const badRepo = await runNode(["--repo", " owner / repo ", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", "x.md", "--disposition", "deferred"]);
   assert.equal(badRepo.code, 1);
   assert.equal(badRepo.stdout, "");
   const badRepoParsed = JSON.parse(badRepo.stderr);
@@ -228,6 +228,8 @@ test("reply-resolve-review-thread rejects malformed arguments and empty body fil
       "THREAD_123",
       "--body-file",
       emptyBody,
+      "--disposition",
+      "deferred",
     ]);
     assert.equal(empty.code, 1);
     assert.equal(empty.stdout, "");
@@ -272,7 +274,7 @@ test("reply-resolve-review-thread preserves leading whitespace in the reply body
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -286,7 +288,7 @@ test("reply-resolve-review-thread preserves leading whitespace in the reply body
 test("reply-resolve-review-thread reports reply and resolve failures deterministically", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-failure-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Resolved in the review-thread follow-up branch.\n", "utf8");
+  await writeFile(bodyFile, "Resolved in 93cd7f8.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -309,7 +311,7 @@ test("reply-resolve-review-thread reports reply and resolve failures determinist
     ]);
 
     const replyFailure = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
     assert.equal(replyFailure.code, 1);
@@ -338,7 +340,7 @@ test("reply-resolve-review-thread reports reply and resolve failures determinist
     ]);
 
     const missingReplyFields = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: ghMissingReplyFields.env },
     );
     assert.equal(missingReplyFields.code, 1);
@@ -370,7 +372,7 @@ test("reply-resolve-review-thread reports reply and resolve failures determinist
     ]);
 
     const resolveFailure = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: ghResolve.env },
     );
     assert.equal(resolveFailure.code, 1);
@@ -387,7 +389,7 @@ test("reply-resolve-review-thread reports reply and resolve failures determinist
 test("reply-resolve-review-thread fails closed before mutating when comment and thread do not match", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-mismatch-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -415,7 +417,7 @@ test("reply-resolve-review-thread fails closed before mutating when comment and 
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -436,7 +438,7 @@ test("reply-resolve-review-thread fails closed before mutating when comment and 
 test("reply-resolve-review-thread fails closed before mutating when the target thread is missing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-missing-thread-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -455,7 +457,7 @@ test("reply-resolve-review-thread fails closed before mutating when the target t
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -476,7 +478,7 @@ test("reply-resolve-review-thread fails closed before mutating when the target t
 test("reply-resolve-review-thread fails closed before mutating when the target comment is missing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-missing-comment-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -495,7 +497,7 @@ test("reply-resolve-review-thread fails closed before mutating when the target c
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -516,7 +518,7 @@ test("reply-resolve-review-thread fails closed before mutating when the target c
 test("reply-resolve-review-thread fails closed before mutating when the validation snapshot is malformed", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-malformed-snapshot-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in 93cd7f8.\n", "utf8");
 
   try {
     const gh = await writeGhStub(tempDir, [
@@ -526,7 +528,7 @@ test("reply-resolve-review-thread fails closed before mutating when the validati
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -562,7 +564,7 @@ test("#1731: reply-resolve-review-thread refuses a reply body containing a raw i
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -602,7 +604,7 @@ test("#1731: reply-resolve-review-thread allows a DELIBERATE cross-ref via --all
 
     const result = await runNode(
       ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123",
-       "--body-file", bodyFile, "--allowed-refs", "1731"],
+       "--body-file", bodyFile, "--disposition", "deferred", "--allowed-refs", "1731"],
       { env: gh.env },
     );
 
@@ -619,7 +621,7 @@ test("#1731: reply-resolve-review-thread allows a DELIBERATE cross-ref via --all
 test("#1817: reply-resolve-review-thread rejects a syntactically invalid --jq BEFORE replying/resolving (no mutation)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-jq-invalid-"));
   const bodyFile = path.join(tempDir, "reply.md");
-  await writeFile(bodyFile, "Fixed in the review-thread follow-up branch. Added coverage.\n", "utf8");
+  await writeFile(bodyFile, "Fixed in 93cd7f8. Added coverage.\n", "utf8");
   try {
     // Zero stubbed gh responses AND no overflow repeat: if the code regresses
     // to validating --jq only after mutating (the original #1817 footgun),
@@ -629,7 +631,7 @@ test("#1817: reply-resolve-review-thread rejects a syntactically invalid --jq BE
     const gh = await writeGhStubHelper(tempDir, [], { logCalls: true, repeatLastOnOverflow: false });
     const result = await runNode(
       ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123",
-       "--body-file", bodyFile, "--jq", "not!valid"],
+       "--body-file", bodyFile, "--disposition", "deferred", "--jq", "not!valid"],
       { env: gh.env },
     );
     assert.equal(result.code, 2);
@@ -650,7 +652,7 @@ test("#1731: reply-resolve-review-thread rejects a non-numeric --allowed-refs en
     const gh = await writeGhStub(tempDir, []);
     const result = await runNode(
       ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123",
-       "--body-file", bodyFile, "--allowed-refs", "1731,abc"],
+       "--body-file", bodyFile, "--disposition", "deferred", "--allowed-refs", "1731,abc"],
       { env: gh.env },
     );
     assert.notEqual(result.code, 0);
@@ -666,15 +668,15 @@ const threadEntry = {
   assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
   stdout: createReviewThreadsPayload([{ id: "THREAD_123", comments: { nodes: [{ id: "PRRC_node_123", databaseId: 123 }] } }]),
 };
-const threadArgs = (bodyFile) => ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile];
+const threadArgs = (bodyFile, disposition = "fixed") => ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, ...(disposition ? ["--disposition", disposition] : [])];
 
-async function runFixedReply(body, entries) {
+async function runFixedReply(body, entries, disposition) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-fixed-sha-"));
   try {
     const bodyFile = path.join(tempDir, "reply.md");
     await writeFile(bodyFile, body, "utf8");
     const gh = await writeGhStub(tempDir, entries);
-    const result = await runNode(threadArgs(bodyFile), { env: gh.env });
+    const result = await runNode(threadArgs(bodyFile, disposition), { env: gh.env });
     const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
     return { result, ghLog };
   } finally {
@@ -707,4 +709,26 @@ test("reply-resolve-review-thread refuses a fixed reply whose full SHA is not co
   assert.equal(result.code, 1);
   assert.match(result.stderr, /fixed_reply_sha_not_in_head/);
   assert.equal(ghLog.length, 1);
+});
+
+test("reply-resolve-review-thread refuses a call without --disposition, names the flag and runs no gh call", async () => {
+  const { result, ghLog } = await runFixedReply(`Fixed in ${headSha} with the missing guard.\n`, [headViewEntry], null);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /--disposition/);
+  assert.equal(ghLog.length, 0);
+});
+
+test("reply-resolve-review-thread refuses an unknown --disposition value", async () => {
+  const { result, ghLog } = await runFixedReply(`Fixed in ${headSha} with the missing guard.\n`, [headViewEntry], "tackled");
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /--disposition/);
+  assert.equal(ghLog.length, 0);
+});
+
+test("reply-resolve-review-thread refuses a fixed reply that cites no SHA at all and prints the full head SHA", async () => {
+  const { result, ghLog } = await runFixedReply("Added the missing guard and the coverage for it.\n", [headViewEntry]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /fixed_reply_missing_full_sha/);
+  assert.ok(result.stderr.includes(headSha));
+  assert.equal(ghLog.length, 1, "only the head lookup ran; no post or resolve");
 });

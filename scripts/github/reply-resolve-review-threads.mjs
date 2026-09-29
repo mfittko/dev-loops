@@ -11,11 +11,13 @@ import {
   authorMatchesFilter,
   captureParsedReviewThreads,
   assertFixedReplyShas,
+  assertReplyDisposition,
+  REPLY_DISPOSITIONS,
   replyAndMaybeResolve,
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-const USAGE = `Usage: reply-resolve-review-threads.mjs --repo <owner/name> --pr <number> [--author <login>] ((--message <text> | stdin) | --message-map <path>) [--resolve]
+const USAGE = `Usage: reply-resolve-review-threads.mjs --repo <owner/name> --pr <number> [--author <login>] (((--message <text> | stdin) --disposition <fixed|deferred|rejected>) | --message-map <path>) [--resolve]
 Reply to all matching unresolved review threads on one PR and optionally resolve them.
 A message source is always required, in one of two mutually exclusive modes:
   - single shared body for every matched thread: --message <text>, or the same text piped
@@ -29,10 +31,14 @@ Optional:
   --message <text>      Shared reply body text for every matched thread; provide exactly one
                         message source via --message or stdin (not both). Mutually exclusive
                         with --message-map.
-  --message-map <path>  JSON file mapping threadId -> distinct reply body for that thread. Every
+  --disposition <d>     fixed, deferred or rejected. Required with --message or stdin (one disposition
+                        for every matched thread); refused with --message-map.
+  --message-map <path>  JSON file mapping threadId -> { "message": <reply body>, "disposition": fixed|deferred|rejected }. Every
                         matched thread must have an entry here, or the run fails closed (listing
                         the unmapped thread ids) before any reply or resolve mutation is sent.
                         Stdin is never read in this mode: the map is the complete message source.
+                        A fixed reply must contain the full 40-character SHA of the fixing commit,
+                        contained in the PR head, or the whole call is refused before any post.
                         Mutually exclusive with --message.
   --resolve             Resolve each matched thread after the reply succeeds
 Output (stdout, JSON):
@@ -60,6 +66,7 @@ export function parseReplyResolveThreadsCliArgs(argv) {
       author: { type: "string" },
       message: { type: "string" },
       "message-map": { type: "string" },
+      disposition: { type: "string" },
       resolve: { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -74,6 +81,7 @@ export function parseReplyResolveThreadsCliArgs(argv) {
     author: "all",
     message: undefined,
     messageMap: undefined,
+    disposition: undefined,
     resolve: false,
   };
   for (const token of tokens) {
@@ -111,6 +119,14 @@ export function parseReplyResolveThreadsCliArgs(argv) {
       options.messageMap = messageMap;
       continue;
     }
+    if (token.name === "disposition") {
+      const value = requireTokenValue(token, parseError).trim();
+      if (!REPLY_DISPOSITIONS.includes(value)) {
+        throw parseError(`--disposition must be one of ${REPLY_DISPOSITIONS.join("|")}`);
+      }
+      options.disposition = value;
+      continue;
+    }
     if (token.name === "resolve") {
       options.resolve = true;
       continue;
@@ -126,6 +142,12 @@ export function parseReplyResolveThreadsCliArgs(argv) {
   }
   if (options.message !== undefined && options.messageMap !== undefined) {
     throw parseError("--message and --message-map are mutually exclusive; pass only one");
+  }
+  if (options.messageMap !== undefined && options.disposition !== undefined) {
+    throw parseError("--disposition applies to --message or stdin only; each --message-map entry carries its own disposition");
+  }
+  if (options.messageMap === undefined && options.disposition === undefined) {
+    throw parseError(`--disposition is required with --message or stdin and must be one of ${REPLY_DISPOSITIONS.join("|")}`);
   }
   try {
     parseRepoSlug(options.repo);
@@ -247,15 +269,18 @@ async function loadMessageMap(mapPath) {
     throw new Error(`--message-map "${mapPath}" must contain valid JSON`);
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`--message-map "${mapPath}" must contain a JSON object mapping threadId to reply body`);
+    throw new Error(`--message-map "${mapPath}" must contain a JSON object mapping threadId to { message, disposition }`);
   }
-  for (const [threadId, body] of Object.entries(parsed)) {
-    if (typeof body !== "string") {
-      throw new Error(`--message-map "${mapPath}" entry "${threadId}" must be a string reply body`);
+  const entries = {};
+  for (const [threadId, entry] of Object.entries(parsed)) {
+    if (entry === null || typeof entry !== "object" || typeof entry.message !== "string") {
+      throw new Error(`--message-map "${mapPath}" entry "${threadId}" must be an object with a string "message" reply body`);
     }
-    validateResolutionMessage(body);
+    assertReplyDisposition(entry.disposition, `--message-map "${mapPath}" entry "${threadId}" disposition`);
+    validateResolutionMessage(entry.message);
+    entries[threadId] = { body: entry.message, disposition: entry.disposition };
   }
-  return parsed;
+  return entries;
 }
 function commentRecencyValue(comment) {
   if (typeof comment?.databaseId === "string" && /^\d+$/.test(comment.databaseId)) {
@@ -400,11 +425,17 @@ export async function runCli(
       );
     }
   }
-  const resolveBodyForThread = (threadId) => (
-    hasMessageMapEntry(messageMap, threadId) ? messageMap[threadId] : message
+  const resolveEntryForThread = (threadId) => (
+    hasMessageMapEntry(messageMap, threadId)
+      ? messageMap[threadId]
+      : { body: message, disposition: options.disposition }
   );
+  const resolveBodyForThread = (threadId) => resolveEntryForThread(threadId).body;
   await assertFixedReplyShas(
-    matchedTargets.map((target) => resolveBodyForThread(target.threadId)),
+    matchedTargets
+      .map((target) => resolveEntryForThread(target.threadId))
+      .filter((entry) => entry.disposition === "fixed")
+      .map((entry) => entry.body),
     { repo: options.repo, pr: options.pr },
     { env, ghCommand },
   );

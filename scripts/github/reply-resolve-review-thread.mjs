@@ -7,6 +7,7 @@ import { parsePositiveInteger, parseAllowedRefsCsv } from "@dev-loops/core/cli/p
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   assertFixedReplyShas,
+  REPLY_DISPOSITIONS,
   replyAndMaybeResolve,
   validateResolutionMessage,
 } from "./_review-thread-mutations.mjs";
@@ -15,7 +16,7 @@ import { formatCliError } from "../_core-helpers.mjs";
 
 export { hasCommitShaReference } from "./_review-thread-mutations.mjs";
 
-const USAGE = `Usage: dev-loops reply-resolve-review-thread --repo <owner/name> --pr <n> --comment-id <n> --thread-id <id> --body-file <path>
+const USAGE = `Usage: dev-loops reply-resolve-review-thread --repo <owner/name> --pr <n> --comment-id <n> --thread-id <id> --body-file <path> --disposition <fixed|deferred|rejected>
 
 Reply to a review thread comment and resolve the thread.
 
@@ -25,6 +26,8 @@ Required:
   --comment-id <n>         GraphQL databaseId of the comment to reply to
   --thread-id <id>         GraphQL node ID of the review thread
   --body-file <path>       Path to file containing the reply body text
+  --disposition <d>        fixed, deferred or rejected. A fixed reply must contain the full
+                           40-character SHA of the fixing commit, contained in the PR head
 
 Optional:
   --allowed-refs <csv>     Explicit allowlist of issue/PR ids a deliberate cross-ref
@@ -48,6 +51,7 @@ function parseCliArgs(argv) {
         "comment-id": { type: "string" },
         "thread-id": { type: "string" },
         "body-file": { type: "string" },
+        disposition: { type: "string" },
         "allowed-refs": { type: "string" },
         help: { type: "boolean", short: "h" },
         ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -68,6 +72,9 @@ function parseCliArgs(argv) {
   if (!values["comment-id"]) throw parseError("Missing required option: --comment-id");
   if (!values["thread-id"]) throw parseError("Missing required option: --thread-id");
   if (!values["body-file"]) throw parseError("Missing required option: --body-file");
+  if (!values.disposition || !REPLY_DISPOSITIONS.includes(values.disposition)) {
+    throw parseError(`Missing or invalid required option: --disposition must be one of ${REPLY_DISPOSITIONS.join("|")}`);
+  }
 
   const repoSlug = values.repo;
   parseRepoSlug(repoSlug);
@@ -80,6 +87,7 @@ function parseCliArgs(argv) {
     commentId,
     threadId: values["thread-id"],
     bodyFile: values["body-file"],
+    disposition: values.disposition,
     allowedRefs: values["allowed-refs"] ? parseAllowedRefsCsv(values["allowed-refs"], "--allowed-refs", parseError) : [],
     jq: values.jq,
     silent: values.silent === true,
@@ -100,11 +108,11 @@ async function run(argv) {
   const jqSyntaxError = preflightJqFilter(parsed.jq, { stderr: process.stderr });
   if (jqSyntaxError !== undefined) return jqSyntaxError;
 
-  const { repo: repoSlug, pr, commentId, threadId, bodyFile, allowedRefs } = parsed;
+  const { repo: repoSlug, pr, commentId, threadId, bodyFile, allowedRefs, disposition } = parsed;
   const rawBody = await readFile(bodyFile, "utf8");
   if (rawBody.trim().length === 0) throw new Error("--body-file must contain non-empty text");
   validateResolutionMessage(rawBody);
-  await assertFixedReplyShas([rawBody], { repo: repoSlug, pr }, { env: process.env, ghCommand: "gh" });
+  if (disposition === "fixed") await assertFixedReplyShas([rawBody], { repo: repoSlug, pr }, { env: process.env, ghCommand: "gh" });
 
   const result = await replyAndMaybeResolve(
     { repo: repoSlug, pr, commentId, threadId, body: rawBody, resolve: true, allowedRefs },

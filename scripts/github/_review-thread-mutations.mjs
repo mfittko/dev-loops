@@ -29,23 +29,30 @@ export function validateResolutionMessage(body) {
   };
 }
 const FULL_SHA_PATTERN = /\b[0-9a-f]{40}\b/gi;
-// A reply that cites a commit claims a fix. Such a reply must carry a full
-// 40-character SHA that the PR head contains, so the disposition verifier can
-// match it later. The check runs before any post or resolve.
+export const REPLY_DISPOSITIONS = ["fixed", "deferred", "rejected"];
+export function assertReplyDisposition(value, label = "--disposition") {
+  if (!REPLY_DISPOSITIONS.includes(value)) {
+    throw new Error(`${label} is required and must be one of ${REPLY_DISPOSITIONS.join("|")}; got ${value === undefined ? "nothing" : JSON.stringify(value)}`);
+  }
+  return value;
+}
+// The caller passes only the bodies of replies with disposition fixed. Each
+// must carry a full 40-character SHA that the PR head contains, so the
+// disposition verifier can match it later. The check runs before any post or
+// resolve.
 export async function assertFixedReplyShas(
   bodies,
   { repo, pr },
   { env = process.env, ghCommand = "gh", runChild = runChildWithInput } = {},
 ) {
-  const claims = bodies.filter((body) => hasCommitShaReference(body));
-  if (claims.length === 0) return;
+  if (bodies.length === 0) return;
   const view = await runChild(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid"], env);
   let head = null;
   try { head = JSON.parse(view.stdout).headRefOid; } catch { /* handled below */ }
   if (view.code !== 0 || typeof head !== "string" || head.length === 0) {
     throw new Error(`Cannot read the head commit of ${repo}#${pr} to check the fixed reply SHA`);
   }
-  for (const body of claims) {
+  for (const body of bodies) {
     const fullShas = body.match(FULL_SHA_PATTERN) ?? [];
     if (fullShas.length === 0) {
       throw new Error(

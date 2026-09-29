@@ -628,3 +628,10 @@ test("F1: the rendered work order says a threadless act item gets no disposition
     assert.match(await readFile(promptPath, "utf8"), /threadless act item gets no disposition handoff entry/);
   });
 });
+
+test("F1: the full-phase work order tells the fixer to pass --disposition fixed with the full 40-character fixing SHA", async () => {
+  await withFixture(async ({ emit }) => {
+    const { promptPath } = await emit({});
+    assert.match(await readFile(promptPath, "utf8"), /--disposition fixed.*full 40-character SHA of the fixing commit/);
+  });
+});
