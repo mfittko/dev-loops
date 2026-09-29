@@ -29,14 +29,14 @@ test("normalizeFixerDispositionHandoff throws on missing threadId", () => {
 
 test("normalizeFixerDispositionHandoff throws on missing fixingCommitSha", () => {
   assert.throws(
-    () => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: [{ threadId: "T1", disposition: "tackled" }] }),
+    () => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: [{ threadId: "PRRT_T1", disposition: "tackled" }] }),
     /missing fixingCommitSha/,
   );
 });
 
 test("normalizeFixerDispositionHandoff throws on missing disposition", () => {
   assert.throws(
-    () => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: [{ threadId: "T1", fixingCommitSha: SHA }] }),
+    () => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA }] }),
     /missing disposition/,
   );
 });
@@ -64,7 +64,7 @@ test("normalizeFixerDispositionHandoff throws on an unrecognized disposition val
   assert.throws(
     () => normalizeFixerDispositionHandoff({
       headSha: SHA,
-      dispositions: [{ threadId: "T1", fixingCommitSha: SHA, disposition: "tacled" }],
+      dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "tacled" }],
     }),
     /unrecognized disposition: tacled/,
   );
@@ -75,11 +75,11 @@ test("normalizeFixerDispositionHandoff throws on duplicate threadId", () => {
     () => normalizeFixerDispositionHandoff({
       headSha: SHA,
       dispositions: [
-        { threadId: "T1", fixingCommitSha: SHA, disposition: "tackled" },
-        { threadId: "T1", fixingCommitSha: SHA, disposition: "tackled" },
+        { threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "tackled" },
+        { threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "tackled" },
       ],
     }),
-    /duplicate threadId: T1/,
+    /duplicate threadId: PRRT_T1/,
   );
 });
 
@@ -88,8 +88,8 @@ test("normalizeFixerDispositionHandoff throws on duplicate fingerprint", () => {
     () => normalizeFixerDispositionHandoff({
       headSha: SHA,
       dispositions: [
-        { threadId: "T1", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
-        { threadId: "T2", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
+        { threadId: "PRRT_T1", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
+        { threadId: "PRRT_T2", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
       ],
     }),
     /duplicate fingerprint: fp1/,
@@ -100,8 +100,8 @@ test("normalizeFixerDispositionHandoff accepts a well-formed handoff", () => {
   const normalized = normalizeFixerDispositionHandoff({
     headSha: ` ${SHA} `,
     dispositions: [
-      { threadId: "T1", fixingCommitSha: SHA, disposition: "TACKLED", validation: "unit tests pass" },
-      { threadId: "T2", fixingCommitSha: SHA, disposition: "deferred" },
+      { threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "TACKLED", validation: "unit tests pass" },
+      { threadId: "PRRT_T2", fixingCommitSha: SHA, disposition: "deferred" },
     ],
   });
   assert.equal(normalized.headSha, SHA);
@@ -118,14 +118,14 @@ test("normalizeFixerDispositionHandoff accepts a well-formed handoff", () => {
 function tackledHandoff(overrides = {}) {
   return normalizeFixerDispositionHandoff({
     headSha: SHA,
-    dispositions: [{ threadId: "T1", fixingCommitSha: SHA, disposition: "tackled", ...overrides }],
+    dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "tackled", ...overrides }],
   });
 }
 
 test("evaluateFixerDisposition: ok when contained, replied, and resolved", () => {
   const result = evaluateFixerDisposition({
     handoff: tackledHandoff(),
-    liveThreads: [{ threadId: "T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }],
+    liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }],
     containment: { [SHA]: true },
   });
   assert.equal(result.ok, true);
@@ -137,7 +137,7 @@ test("evaluateFixerDisposition: ok when contained, replied, and resolved", () =>
 test("evaluateFixerDisposition: uncontained commit cannot authorize resolution (AC row 2)", () => {
   const result = evaluateFixerDisposition({
     handoff: tackledHandoff(),
-    liveThreads: [{ threadId: "T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }],
+    liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }],
     containment: { [SHA]: false },
   });
   assert.equal(result.ok, false);
@@ -148,7 +148,7 @@ test("evaluateFixerDisposition: uncontained commit cannot authorize resolution (
 test("evaluateFixerDisposition: missing containment fact (unknown SHA) fails closed, same as uncontained", () => {
   const result = evaluateFixerDisposition({
     handoff: tackledHandoff(),
-    liveThreads: [{ threadId: "T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }],
+    liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }],
     containment: {},
   });
   assert.equal(result.ok, false);
@@ -158,7 +158,7 @@ test("evaluateFixerDisposition: missing containment fact (unknown SHA) fails clo
 test("evaluateFixerDisposition: reply missing even though resolved (bogus/uncontained-evidence style gap)", () => {
   const result = evaluateFixerDisposition({
     handoff: tackledHandoff(),
-    liveThreads: [{ threadId: "T1", isResolved: true, replyBodies: [] }],
+    liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [] }],
     containment: { [SHA]: true },
   });
   assert.equal(result.ok, false);
@@ -168,7 +168,7 @@ test("evaluateFixerDisposition: reply missing even though resolved (bogus/uncont
 test("evaluateFixerDisposition: replied but not resolved", () => {
   const result = evaluateFixerDisposition({
     handoff: tackledHandoff(),
-    liveThreads: [{ threadId: "T1", isResolved: false, replyBodies: [`Fixed in commit ${SHA}.`] }],
+    liveThreads: [{ threadId: "PRRT_T1", isResolved: false, replyBodies: [`Fixed in commit ${SHA}.`] }],
     containment: { [SHA]: true },
   });
   assert.equal(result.ok, false);
@@ -185,7 +185,7 @@ test("evaluateFixerDisposition blocks even when the live thread already reads is
   // claimed commit's evidence — the ledger's claim is simply wrong.
   const result = evaluateFixerDisposition({
     handoff: tackledHandoff(),
-    liveThreads: [{ threadId: "T1", isResolved: true, replyBodies: ["Acknowledged, will look into it."] }],
+    liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: ["Acknowledged, will look into it."] }],
     containment: { [SHA]: true },
   });
   assert.equal(result.ok, false);
@@ -197,11 +197,11 @@ test("evaluateFixerDisposition blocks even when the live thread already reads is
 test("evaluateFixerDisposition: missing_from_handoff when a live thread is claimed tackled but absent from the handoff", () => {
   const result = evaluateFixerDisposition({
     handoff: normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: [] }),
-    liveThreads: [{ threadId: "T9", isResolved: false, replyBodies: [], claimedTackled: true }],
+    liveThreads: [{ threadId: "PRRT_T9", isResolved: false, replyBodies: [], claimedTackled: true }],
     containment: {},
   });
   assert.equal(result.ok, false);
-  assert.equal(result.incomplete[0].threadId, "T9");
+  assert.equal(result.incomplete[0].threadId, "PRRT_T9");
   assert.equal(result.incomplete[0].expectedCommit, null);
   assert.equal(result.incomplete[0].failedStep, FIXER_DISPOSITION_FAILED_STEP.MISSING_FROM_HANDOFF);
 });
@@ -214,22 +214,22 @@ test("evaluateFixerDisposition never touches untackled/deferred/rejected/foreign
   const handoff = normalizeFixerDispositionHandoff({
     headSha: SHA,
     dispositions: [
-      { threadId: "T1", fixingCommitSha: SHA, disposition: "tackled" },
-      { threadId: "T2", fixingCommitSha: SHA, disposition: "deferred" },
-      { threadId: "T3", fixingCommitSha: SHA, disposition: "rejected" },
+      { threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "tackled" },
+      { threadId: "PRRT_T2", fixingCommitSha: SHA, disposition: "deferred" },
+      { threadId: "PRRT_T3", fixingCommitSha: SHA, disposition: "rejected" },
     ],
   });
   const result = evaluateFixerDisposition({
     handoff,
     liveThreads: [
-      { threadId: "T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] },
+      { threadId: "PRRT_T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] },
       // T2/T3 stay unresolved with no reply evidence at all — must NOT surface
       // as incomplete since they were never claimed tackled.
-      { threadId: "T2", isResolved: false, replyBodies: [] },
-      { threadId: "T3", isResolved: false, replyBodies: [] },
+      { threadId: "PRRT_T2", isResolved: false, replyBodies: [] },
+      { threadId: "PRRT_T3", isResolved: false, replyBodies: [] },
       // A brand-new thread that arrived after the fixer push, with no
       // handoff entry at all and no out-of-band claim either.
-      { threadId: "T-new", isResolved: false, replyBodies: [] },
+      { threadId: "PRRT_new", isResolved: false, replyBodies: [] },
     ],
     containment: { [SHA]: true },
   });
@@ -245,23 +245,23 @@ test("evaluateFixerDisposition names every incomplete thread, its expected commi
   const handoff = normalizeFixerDispositionHandoff({
     headSha: SHA,
     dispositions: [
-      { threadId: "T1", fixingCommitSha: SHA, disposition: "tackled" },
-      { threadId: "T2", fixingCommitSha: "0000000deadbeef000000000000000000000000", disposition: "tackled" },
+      { threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "tackled" },
+      { threadId: "PRRT_T2", fixingCommitSha: "0000000deadbeef000000000000000000000000", disposition: "tackled" },
     ],
   });
   const result = evaluateFixerDisposition({
     handoff,
     liveThreads: [
-      { threadId: "T1", isResolved: false, replyBodies: [`Fixed in commit ${SHA}.`] },
-      { threadId: "T2", isResolved: false, replyBodies: [] },
+      { threadId: "PRRT_T1", isResolved: false, replyBodies: [`Fixed in commit ${SHA}.`] },
+      { threadId: "PRRT_T2", isResolved: false, replyBodies: [] },
     ],
     containment: { [SHA]: true, "0000000deadbeef000000000000000000000000": false },
   });
   assert.equal(result.ok, false);
   assert.equal(result.incomplete.length, 2);
   assert.equal(result.nextAction, COMPLETE_FIXER_DISPOSITION_ACTION);
-  assert.match(result.reason, /thread T1 \(expected commit abc1234def5670000000000000000000000000000, failed step: not_resolved\)/);
-  assert.match(result.reason, /thread T2 \(expected commit 0000000deadbeef000000000000000000000000, failed step: commit_not_contained\)/);
+  assert.match(result.reason, /thread PRRT_T1 \(expected commit abc1234def5670000000000000000000000000000, failed step: not_resolved\)/);
+  assert.match(result.reason, /thread PRRT_T2 \(expected commit 0000000deadbeef000000000000000000000000, failed step: commit_not_contained\)/);
   assert.match(result.reason, new RegExp(`only legal next action is ${COMPLETE_FIXER_DISPOSITION_ACTION}`));
 });
 
@@ -276,12 +276,12 @@ test("evaluateFixerDisposition throws on a malformed array-bearing handoff inste
   // normalizeFixerDispositionHandoff rather than pass through unvalidated.
   const malformedHandoff = {
     headSha: SHA,
-    dispositions: [{ threadId: "T1", fixingCommitSha: SHA, disposition: "not-a-real-disposition" }],
+    dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "not-a-real-disposition" }],
   };
   assert.throws(
     () => evaluateFixerDisposition({
       handoff: malformedHandoff,
-      liveThreads: [{ threadId: "T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }],
+      liveThreads: [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }],
       containment: { [SHA]: true },
     }),
     /unrecognized disposition: not-a-real-disposition/,
@@ -294,7 +294,7 @@ test("evaluateFixerDisposition throws on a malformed array-bearing handoff inste
 
 test("evaluateFixerDisposition is pure: identical input always yields identical output, no mutation", () => {
   const handoff = tackledHandoff();
-  const liveThreads = [{ threadId: "T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }];
+  const liveThreads = [{ threadId: "PRRT_T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }];
   const containment = { [SHA]: true };
   const first = evaluateFixerDisposition({ handoff, liveThreads, containment });
   const second = evaluateFixerDisposition({ handoff, liveThreads, containment });
@@ -320,4 +320,20 @@ test("FIXER_DISPOSITION_FORBIDDEN_ACTIONS tokens match PR_CHECKPOINT_ACTION valu
 
 test("COMPLETE_FIXER_DISPOSITION_ACTION matches PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION", () => {
   assert.equal(COMPLETE_FIXER_DISPOSITION_ACTION, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+});
+
+test("normalizeFixerDispositionHandoff refuses bare non-PRRT ids", () => {
+  for (const threadId of ["none", "abc", SHA]) {
+    assert.throws(
+      () => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: [{ threadId, fixingCommitSha: SHA, disposition: "tackled" }] }),
+      /not a review-thread node id/,
+    );
+  }
+});
+
+test("normalizeFixerDispositionHandoff refuses a threadId that is not a review-thread node id", () => {
+  assert.throws(
+    () => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: [{ threadId: "none:0123abcd", fixingCommitSha: SHA, disposition: "tackled" }] }),
+    /not a review-thread node id/,
+  );
 });

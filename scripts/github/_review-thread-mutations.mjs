@@ -28,6 +28,58 @@ export function validateResolutionMessage(body) {
     hasDismissalReason,
   };
 }
+const FULL_SHA_PATTERN = /\b[0-9a-f]{40}\b/gi;
+export const REPLY_DISPOSITIONS = ["fixed", "deferred", "rejected"];
+export function assertReplyDisposition(value, label = "--disposition") {
+  if (!REPLY_DISPOSITIONS.includes(value)) {
+    throw new Error(`${label} is required and must be one of ${REPLY_DISPOSITIONS.join("|")}; got ${value === undefined ? "nothing" : JSON.stringify(value)}`);
+  }
+  return value;
+}
+// The caller passes only the bodies of replies with disposition fixed. Each
+// must carry a full 40-character SHA that the PR head contains, so the
+// disposition verifier can match it later. The check runs before any post or
+// resolve.
+export async function assertFixedReplyShas(
+  bodies,
+  { repo, pr },
+  { env = process.env, ghCommand = "gh", runChild = runChildWithInput } = {},
+) {
+  if (bodies.length === 0) return;
+  const gitEnv = { ...env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete gitEnv[key];
+  const view = await runChild(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid"], env);
+  let head = null;
+  try { head = JSON.parse(view.stdout).headRefOid; } catch { /* handled below */ }
+  if (view.code !== 0 || typeof head !== "string" || head.length === 0) {
+    throw new Error(`Cannot read the head commit of ${repo}#${pr} to check the fixed reply SHA`);
+  }
+  for (const body of bodies) {
+    const fullShas = body.match(FULL_SHA_PATTERN) ?? [];
+    if (fullShas.length === 0) {
+      throw new Error(
+        `fixed_reply_missing_full_sha: a fixed reply must contain the full 40-character fixing commit SHA. Repeat the call with the full SHA of the exact commit you record as fixingCommitSha (git rev-parse <commit>). The current PR head is ${head}; cite it only when the head commit is the fix.`,
+      );
+    }
+    let contained = false;
+    let unverifiable = false;
+    for (const sha of fullShas) {
+      const result = await runChild("git", ["merge-base", "--is-ancestor", sha, head], gitEnv);
+      if (result.code === 0) { contained = true; break; }
+      if (result.code !== 1) unverifiable = true;
+    }
+    if (!contained && unverifiable) {
+      throw new Error(
+        `fixed_reply_sha_unverifiable: git could not check whether the cited SHA is in the PR head ${head} (git exit code other than 1; the local object store may lack the head or the SHA). Run git fetch, then repeat the call.`,
+      );
+    }
+    if (!contained) {
+      throw new Error(
+        `fixed_reply_sha_not_in_head: no 40-character SHA in the fixed reply is contained in the PR head ${head}. Use the full SHA of the fixing commit.`,
+      );
+    }
+  }
+}
 export function runChildWithInput(command, args, env, stdinText) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {

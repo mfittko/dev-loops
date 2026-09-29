@@ -275,8 +275,10 @@ Required:
 - `--comment-id <number>`
 - `--thread-id <node-id>`
 - `--body-file <path>`
+- `--disposition <fixed|deferred|rejected>` (a missing or invalid flag is refused)
 
 Contract:
+- a `fixed` reply must contain a full 40-character SHA that is contained in the PR head; otherwise the call is refused before any post or resolve (`fixed_reply_missing_full_sha` prints the head SHA, `fixed_reply_sha_not_in_head`, `fixed_reply_sha_unverifiable` when git could not verify the SHA, for example the head or the SHA is not fetched locally; fail-closed); `deferred` and `rejected` replies are not SHA-checked
 - reads the reply body from a file so shell quoting does not become part of the workflow logic
 - validates the live PR thread snapshot before mutating GitHub so `--comment-id` and `--thread-id` must refer to the same thread on the target PR
 - posts the reply to `repos/<owner>/<name>/pulls/<pr>/comments/<comment-id>/replies`
@@ -300,7 +302,8 @@ Required:
 Optional:
 - `--author <login>` (default `all`)
 - `--message <text>` or stdin: the single shared reply body for every matched thread. Mutually exclusive with `--message-map`
-- `--message-map <path>`: a JSON file mapping threadId to that thread's distinct reply body, so each thread's resolving reply names the change that fixed it. Every matched thread must have an entry, or the run fails closed listing the unmapped thread ids before any mutation; stdin is never read in this mode. Mutually exclusive with `--message`
+- `--disposition <fixed|deferred|rejected>`: required with `--message` or stdin; one disposition for every matched thread. Refused together with `--message-map`
+- `--message-map <path>`: a JSON file mapping threadId to `{ "message": <reply body>, "disposition": fixed|deferred|rejected }`, so each thread's resolving reply names the change that fixed it. Every matched thread must have an entry, or the run fails closed listing the unmapped thread ids before any mutation; stdin is never read in this mode. Mutually exclusive with `--message`
 - `--resolve`
 
 Contract:
@@ -308,6 +311,7 @@ Contract:
 - filters to unresolved threads containing at least one comment by the selected author
 - chooses the newest matching author-authored comment in each matched thread as the REST reply target
 - with `--message-map`, validates full coverage of every matched thread before sending any reply/resolve mutation, and fails closed listing the unmapped thread ids otherwise
+- runs the fixed-reply SHA check (full 40-char SHA contained in the PR head) on every `fixed` entry and refuses the whole call before any post
 - processes matched threads sequentially in deterministic snapshot order
 - reuses the shared single-thread reply/resolve primitives instead of duplicating GitHub mutation logic
 - with `--resolve`, re-captures the review-thread snapshot at the end and fails closed if any newly-targeted thread remains unresolved

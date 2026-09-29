@@ -88,7 +88,7 @@ export function renderWorkOrder(workOrder) {
   const { branch, allowedPaths } = workOrder.mutationAuthority;
   const task = workOrder.phase === "commit_only"
     ? "Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff."
-    : `Apply and commit any fixes not yet committed, then push, reply to and resolve the addressed threads per agents/fixer.agent.md, then write the disposition handoff \`{ headSha, dispositions: [...] }\` (headSha = the pushed PR head) to \`${dispositionPath}\`.`;
+    : `Apply and commit any fixes not yet committed, then push, reply to and resolve the addressed threads per agents/fixer.agent.md (pass \`--disposition fixed\` and the full 40-character SHA of the fixing commit in each fixed reply), then write the disposition handoff \`{ headSha, dispositions: [...] }\` (headSha = the pushed PR head) to \`${dispositionPath}\`. A threadless act item gets no disposition handoff entry; every entry's \`threadId\` is a review-thread node id.`;
   return `# Fixer work order (ADR 0106)
 
 Source: the \`${workOrder.source}\` read${workOrder.gate ? ` (${workOrder.gate} act list)` : ""}. Phase: \`${workOrder.phase}\`. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.

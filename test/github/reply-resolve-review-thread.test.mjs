@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { test } from "bun:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { initGitFixture, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import { hasCommitShaReference } from "../../scripts/github/reply-resolve-review-thread.mjs";
 
 const scriptPath = path.resolve("scripts/github/reply-resolve-review-thread.mjs");
@@ -59,7 +59,7 @@ test("reply-resolve-review-thread posts a reply then resolves the thread", async
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -80,6 +80,44 @@ test("reply-resolve-review-thread posts a reply then resolves the thread", async
     assert.equal(ghLog.length, 3);
     assert.equal(ghLog[1].includes("--input"), true);
     assert.equal(ghLog[1].some((entry) => entry.startsWith("body=")), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-thread --disposition rejected skips the fixed-SHA check and still posts and resolves", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-rejected-"));
+  const bodyFile = path.join(tempDir, "reply.md");
+  await writeFile(bodyFile, "Rejected: the suggested change would broaden the scope of this PR.\n", "utf8");
+
+  try {
+    const gh = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
+        stdout: createReviewThreadsPayload([
+          { id: "THREAD_123", comments: { nodes: [{ id: "PRRC_node_123", databaseId: 123 }] } },
+        ]),
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/comments/123/replies", "--input", "-"],
+        stdout: '{"id":456,"html_url":"https://github.com/owner/repo/pull/17#discussion_r456"}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "--field", "threadId=THREAD_123"],
+        stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_123","isResolved":true}}}}\n',
+      },
+    ]);
+
+    const result = await runNode(
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "rejected"],
+      { env: gh.env },
+    );
+
+    assert.equal(result.code, 0);
+    assert.equal(JSON.parse(result.stdout).resolved, true);
+    const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(ghLog.length, 3);
+    assert.equal(ghLog.some((entry) => entry.includes("pr") && entry.includes("view")), false);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -117,7 +155,7 @@ test("reply-resolve-review-thread neutralizes a bare /copilot token in the reply
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -135,7 +173,7 @@ test("reply-resolve-review-thread rejects thin replies without commit SHA or dis
 
   try {
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: { ...process.env, PATH: process.env.PATH } },
     );
 
@@ -157,7 +195,7 @@ test("reply-resolve-review-thread rejects pure-numeric tokens that are not commi
 
   try {
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: { ...process.env, PATH: process.env.PATH } },
     );
 
@@ -205,7 +243,7 @@ test("reply-resolve-review-thread rejects malformed arguments and empty body fil
   assert.equal(missingParsed.ok, false);
   assert.match(missingParsed.error, /Missing required option/i);
 
-  const badRepo = await runNode(["--repo", " owner / repo ", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", "x.md"]);
+  const badRepo = await runNode(["--repo", " owner / repo ", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", "x.md", "--disposition", "deferred"]);
   assert.equal(badRepo.code, 1);
   assert.equal(badRepo.stdout, "");
   const badRepoParsed = JSON.parse(badRepo.stderr);
@@ -228,6 +266,8 @@ test("reply-resolve-review-thread rejects malformed arguments and empty body fil
       "THREAD_123",
       "--body-file",
       emptyBody,
+      "--disposition",
+      "deferred",
     ]);
     assert.equal(empty.code, 1);
     assert.equal(empty.stdout, "");
@@ -272,7 +312,7 @@ test("reply-resolve-review-thread preserves leading whitespace in the reply body
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -309,7 +349,7 @@ test("reply-resolve-review-thread reports reply and resolve failures determinist
     ]);
 
     const replyFailure = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
     assert.equal(replyFailure.code, 1);
@@ -338,7 +378,7 @@ test("reply-resolve-review-thread reports reply and resolve failures determinist
     ]);
 
     const missingReplyFields = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: ghMissingReplyFields.env },
     );
     assert.equal(missingReplyFields.code, 1);
@@ -370,7 +410,7 @@ test("reply-resolve-review-thread reports reply and resolve failures determinist
     ]);
 
     const resolveFailure = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: ghResolve.env },
     );
     assert.equal(resolveFailure.code, 1);
@@ -415,7 +455,7 @@ test("reply-resolve-review-thread fails closed before mutating when comment and 
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -455,7 +495,7 @@ test("reply-resolve-review-thread fails closed before mutating when the target t
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -495,7 +535,7 @@ test("reply-resolve-review-thread fails closed before mutating when the target c
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -526,7 +566,7 @@ test("reply-resolve-review-thread fails closed before mutating when the validati
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -562,7 +602,7 @@ test("#1731: reply-resolve-review-thread refuses a reply body containing a raw i
     ]);
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile],
+      ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, "--disposition", "deferred"],
       { env: gh.env },
     );
 
@@ -602,7 +642,7 @@ test("#1731: reply-resolve-review-thread allows a DELIBERATE cross-ref via --all
 
     const result = await runNode(
       ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123",
-       "--body-file", bodyFile, "--allowed-refs", "1731"],
+       "--body-file", bodyFile, "--disposition", "deferred", "--allowed-refs", "1731"],
       { env: gh.env },
     );
 
@@ -629,7 +669,7 @@ test("#1817: reply-resolve-review-thread rejects a syntactically invalid --jq BE
     const gh = await writeGhStubHelper(tempDir, [], { logCalls: true, repeatLastOnOverflow: false });
     const result = await runNode(
       ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123",
-       "--body-file", bodyFile, "--jq", "not!valid"],
+       "--body-file", bodyFile, "--disposition", "deferred", "--jq", "not!valid"],
       { env: gh.env },
     );
     assert.equal(result.code, 2);
@@ -650,7 +690,7 @@ test("#1731: reply-resolve-review-thread rejects a non-numeric --allowed-refs en
     const gh = await writeGhStub(tempDir, []);
     const result = await runNode(
       ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123",
-       "--body-file", bodyFile, "--allowed-refs", "1731,abc"],
+       "--body-file", bodyFile, "--disposition", "deferred", "--allowed-refs", "1731,abc"],
       { env: gh.env },
     );
     assert.notEqual(result.code, 0);
@@ -658,4 +698,105 @@ test("#1731: reply-resolve-review-thread rejects a non-numeric --allowed-refs en
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+const headSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const headViewEntry = { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `${JSON.stringify({ headRefOid: headSha })}\n` };
+const threadEntry = {
+  assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
+  stdout: createReviewThreadsPayload([{ id: "THREAD_123", comments: { nodes: [{ id: "PRRC_node_123", databaseId: 123 }] } }]),
+};
+const threadArgs = (bodyFile, disposition = "fixed") => ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, ...(disposition ? ["--disposition", disposition] : [])];
+
+async function runFixedReply(body, entries, disposition, cwd) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-fixed-sha-"));
+  try {
+    const bodyFile = path.join(tempDir, "reply.md");
+    await writeFile(bodyFile, body, "utf8");
+    const gh = await writeGhStub(tempDir, entries);
+    const env = { ...gh.env };
+    delete env.GIT_DIR;
+    delete env.GIT_WORK_TREE;
+    const result = await runNode(threadArgs(bodyFile, disposition), { env, cwd });
+    const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    return { result, ghLog };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("reply-resolve-review-thread refuses a fixed reply with only a short SHA, prints the full head SHA and mutates nothing", async () => {
+  const { result, ghLog } = await runFixedReply("Fixed in b08a862 with the missing guard.\n", [headViewEntry]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /fixed_reply_missing_full_sha/);
+  assert.ok(result.stderr.includes(headSha));
+  assert.equal(ghLog.length, 1, "only the head lookup ran; no post or resolve");
+});
+
+test("reply-resolve-review-thread posts and resolves a fixed reply whose full SHA is contained in the PR head", async () => {
+  const { result, ghLog } = await runFixedReply(`Fixed in ${headSha} with the missing guard.\n`, [
+    headViewEntry,
+    threadEntry,
+    { stdout: '{"id":456,"html_url":"https://github.com/owner/repo/pull/17#discussion_r456"}\n' },
+    { stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_123","isResolved":true}}}}\n' },
+  ]);
+  assert.equal(result.code, 0);
+  assert.equal(JSON.parse(result.stdout).resolved, true);
+  assert.equal(ghLog.length, 4);
+});
+
+test("reply-resolve-review-thread refuses a fixed reply citing an existing commit that is not an ancestor of the PR head", async () => {
+  // Temp fixture: independent of the ambient checkout and its clone depth.
+  const repoDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-git-"));
+  try {
+    initGitFixture(repoDir, { commit: "older" });
+    const git = (...args) => execFileSync("git", args, { cwd: repoDir, encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+    const olderHead = git("rev-parse", "HEAD");
+    git("commit", "-q", "--allow-empty", "-m", "newer");
+    const newer = git("rev-parse", "HEAD");
+    const olderHeadEntry = { ...headViewEntry, stdout: `${JSON.stringify({ headRefOid: olderHead })}\n` };
+    const { result, ghLog } = await runFixedReply(`Fixed in ${newer} with the missing guard.\n`, [olderHeadEntry], undefined, repoDir);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /fixed_reply_sha_not_in_head/);
+    assert.equal(ghLog.length, 1);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test("reply-resolve-review-thread refuses an unverifiable SHA (unknown object) with a distinct reason and a fetch hint", async () => {
+  const { result, ghLog } = await runFixedReply(`Fixed in ${"deadbeef".repeat(5)} with the missing guard.\n`, [headViewEntry]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /fixed_reply_sha_unverifiable/);
+  assert.match(result.stderr, /git fetch/);
+  assert.equal(ghLog.length, 1);
+});
+
+test("reply-resolve-review-thread refuses a fixed reply and mutates nothing when the PR head cannot be read", async () => {
+  const { result, ghLog } = await runFixedReply(`Fixed in ${headSha} with the missing guard.\n`, [{ ...headViewEntry, stdout: "{}\n" }]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /Cannot read the head commit/);
+  assert.equal(ghLog.length, 1);
+});
+
+test("reply-resolve-review-thread refuses a call without --disposition, names the flag and runs no gh call", async () => {
+  const { result, ghLog } = await runFixedReply(`Fixed in ${headSha} with the missing guard.\n`, [headViewEntry], null);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /--disposition/);
+  assert.equal(ghLog.length, 0);
+});
+
+test("reply-resolve-review-thread refuses an unknown --disposition value", async () => {
+  const { result, ghLog } = await runFixedReply(`Fixed in ${headSha} with the missing guard.\n`, [headViewEntry], "tackled");
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /--disposition/);
+  assert.equal(ghLog.length, 0);
+});
+
+test("reply-resolve-review-thread refuses a fixed reply that cites no SHA at all and prints the full head SHA", async () => {
+  const { result, ghLog } = await runFixedReply("Added the missing guard and the coverage for it.\n", [headViewEntry]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /fixed_reply_missing_full_sha/);
+  assert.ok(result.stderr.includes(headSha));
+  assert.equal(ghLog.length, 1, "only the head lookup ran; no post or resolve");
 });

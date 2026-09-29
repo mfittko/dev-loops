@@ -3494,7 +3494,7 @@ for (const location of ["main", "linked", "both"]) test(`detect-pr-gate-coordina
     await mkdir(path.dirname(fullPath), { recursive: true });
     const handoff = normalizeFixerDispositionHandoff({
       headSha: HEAD_SHA,
-      dispositions: [{ threadId: "T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }],
+      dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }],
     });
     await writeFile(fullPath, `${JSON.stringify(handoff, null, 2)}\n`, "utf8");
     if (location === "both") {
@@ -3503,7 +3503,7 @@ for (const location of ["main", "linked", "both"]) test(`detect-pr-gate-coordina
       await mkdir(path.dirname(mainPath), { recursive: true });
       const complete = normalizeFixerDispositionHandoff({
         headSha: HEAD_SHA,
-        dispositions: [{ threadId: "T1", fixingCommitSha: FIX_SHA, disposition: "deferred" }],
+        dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "deferred" }],
       });
       await writeFile(mainPath, `${JSON.stringify(complete, null, 2)}\n`, "utf8");
     }
@@ -3532,7 +3532,7 @@ for (const location of ["main", "linked", "both"]) test(`detect-pr-gate-coordina
               pullRequest: {
                 // T1 is claimed tackled in the checkpoint above but carries no
                 // commit-evidenced reply live — an incomplete disposition.
-                reviewThreads: { nodes: [{ id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } }] },
+                reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } }] },
               },
             },
           },

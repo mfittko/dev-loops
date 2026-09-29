@@ -117,7 +117,7 @@ test("F6: a caller-supplied --dispositions or --dispositions-file is rejected", 
 // F6 — delivery evidence: receipt + handoff + observed head, or no advance
 // ---------------------------------------------------------------------------
 
-const TACKLED = [{ threadId: "T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }];
+const TACKLED = [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }];
 
 for (const [name, setup, expected] of [
   ["a missing receipt", { writeReceipt: false }, /receipt_missing/],
@@ -243,22 +243,22 @@ test("F6: a --head-sha other than the live PR head refuses before any checkpoint
 test("records a checkpoint, replies+resolves a tackled thread with missing evidence, and reports complete", async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, [
-      { threadId: "T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
+      { threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
     ]);
     const { deps, calls } = runtime([
       // 1. initial live-thread capture
       threadsCallEntry([
-        { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
       ]),
       // 2. containment compare for FIX_SHA
       compareEntry(FIX_SHA, "ahead"),
       // 3. reply POST
       { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
       // 4. resolve GraphQL mutation
-      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
       // 5. re-read live threads
       threadsCallEntry([
-        { id: "T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
       ]),
     ], repoRoot);
 
@@ -274,7 +274,7 @@ test("records a checkpoint, replies+resolves a tackled thread with missing evide
     const checkpointRaw = await readFile(path.join(repoRoot, result.checkpointPath), "utf8");
     const checkpoint = JSON.parse(checkpointRaw);
     assert.equal(checkpoint.headSha, HEAD_SHA);
-    assert.equal(checkpoint.dispositions[0].threadId, "T1");
+    assert.equal(checkpoint.dispositions[0].threadId, "PRRT_T1");
   });
 });
 
@@ -285,11 +285,11 @@ test("records a checkpoint, replies+resolves a tackled thread with missing evide
 test("uncontained commit stays incomplete and never triggers a reply/resolve mutation", async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, [
-      { threadId: "T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
+      { threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
     ]);
     const { deps, calls } = runtime([
       threadsCallEntry([
-        { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
       ]),
       compareEntry(FIX_SHA, "diverged"),
     ], repoRoot);
@@ -314,19 +314,19 @@ test("uncontained commit stays incomplete and never triggers a reply/resolve mut
 test("re-entry after reply-succeeded/resolve-failed only resolves, never posts a second reply", async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, [
-      { threadId: "T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
+      { threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
     ]);
     // First run: reply succeeds, then the mock's resolveReviewThread call
     // reports the thread as NOT resolved (simulating a resolve failure).
     const first = runtime([
       threadsCallEntry([
-        { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
       ]),
       compareEntry(FIX_SHA, "ahead"),
       { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
-      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "T1", isResolved: false } } } })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: false } } } })}\n` },
       threadsCallEntry([
-        { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
       ]),
     ], repoRoot);
 
@@ -340,12 +340,12 @@ test("re-entry after reply-succeeded/resolve-failed only resolves, never posts a
     // resolveThread — never postReply again.
     const second = runtime([
       threadsCallEntry([
-        { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
       ]),
       compareEntry(FIX_SHA, "ahead"),
-      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
       threadsCallEntry([
-        { id: "T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
       ]),
     ], repoRoot);
 
@@ -367,7 +367,7 @@ test("re-entry after reply-succeeded/resolve-failed only resolves, never posts a
 test("resolve-only path (NOT_RESOLVED) proceeds via threadId alone when no commentId is matched", async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, [
-      { threadId: "T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
+      { threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
     ]);
     const { deps, calls } = runtime([
       // 1. initial live-thread capture: T1 already carries the commit-evidenced
@@ -376,15 +376,15 @@ test("resolve-only path (NOT_RESOLVED) proceeds via threadId alone when no comme
       // never matches a commentId for T1. This is NOT_RESOLVED only — no
       // reply is missing — so no commentId should ever be required.
       threadsCallEntry([
-        { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: null }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: null }] } },
       ]),
       // 2. containment compare for FIX_SHA
       compareEntry(FIX_SHA, "ahead"),
       // 3. resolve GraphQL mutation — no reply POST at all.
-      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
       // 4. re-read live threads
       threadsCallEntry([
-        { id: "T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: null }] } },
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: null }] } },
       ]),
     ], repoRoot);
 
@@ -409,22 +409,22 @@ test("resolve-only path (NOT_RESOLVED) proceeds via threadId alone when no comme
 test("resolve mutation reports isResolved:true but the live re-read still shows unresolved, so it stays incomplete", async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, [
-      { threadId: "T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
+      { threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
     ]);
     const { deps, calls } = runtime([
       // 1. initial live-thread capture
       threadsCallEntry([
-        { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
       ]),
       // 2. containment compare for FIX_SHA
       compareEntry(FIX_SHA, "ahead"),
       // 3. reply POST
       { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
       // 4. resolve GraphQL mutation LIES: reports isResolved:true.
-      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
       // 5. re-read live threads: still unresolved despite the mutation's claim.
       threadsCallEntry([
-        { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
       ]),
     ], repoRoot);
 
@@ -448,14 +448,14 @@ test("resolve mutation reports isResolved:true but the live re-read still shows 
 test("deferred/foreign/newly-arrived threads are never replied to or resolved", async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, [
-      { threadId: "T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
-      { threadId: "T2", fixingCommitSha: FIX_SHA, disposition: "deferred" },
+      { threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
+      { threadId: "PRRT_T2", fixingCommitSha: FIX_SHA, disposition: "deferred" },
     ]);
     const { deps, calls } = runtime([
       threadsCallEntry([
-        { id: "T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
-        { id: "T2", isResolved: false, comments: { nodes: [{ id: "c2", databaseId: 201, body: "unrelated nit", author: { login: "someone-else", __typename: "User" } }] } },
-        { id: "T3", isResolved: false, comments: { nodes: [{ id: "c3", databaseId: 301, body: "brand new finding", author: { login: "reviewer", __typename: "User" } }] } },
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        { id: "PRRT_T2", isResolved: false, comments: { nodes: [{ id: "c2", databaseId: 201, body: "unrelated nit", author: { login: "someone-else", __typename: "User" } }] } },
+        { id: "PRRT_T3", isResolved: false, comments: { nodes: [{ id: "c3", databaseId: 301, body: "brand new finding", author: { login: "reviewer", __typename: "User" } }] } },
       ]),
       compareEntry(FIX_SHA, "identical"),
     ], repoRoot);
