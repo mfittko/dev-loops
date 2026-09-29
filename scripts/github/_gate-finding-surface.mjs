@@ -686,6 +686,10 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     && (!Array.isArray(verifiedItems) || verifiedItems.some((item) => typeof item !== "string" || item.trim().length === 0))) {
     throw fail(`Gate findings ledger "${ledgerPath}" "verifiedItems" must be an array of non-empty strings`);
   }
+  // The writer emits only these modes; a drifted value would silently skip the fan-out judge-coverage refusal.
+  if (parsed.executionMode !== undefined && parsed.executionMode !== "inline_single_agent" && parsed.executionMode !== "fanout_fanin") {
+    throw fail(`Gate findings ledger "${ledgerPath}" "executionMode" must be "inline_single_agent" or "fanout_fanin"`);
+  }
   return {
     repo: repoSlug, pr, gate, headSha: fullHeadSha, verdict, findings: normalizedFindings, provenance,
     overallVerdict: overallVerdictRaw !== undefined ? overallVerdictRaw : null,

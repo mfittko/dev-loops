@@ -264,7 +264,7 @@ test("a fan-out round whose ledger findings carry no judgeDisposition is refused
 // The ledger's own executionMode (written by write-gate-findings-log) triggers the refusal without --execution-mode.
 const unjudgedLedgerMsg = /1 finding\(s\) with no judgeDisposition, so the judge act list is unknown/;
 
-test("a fan-out ledger with unjudged findings refuses an empty or non-enriched --findings-json", async () => {
+test("a fan-out ledger with unjudged findings refuses a --findings-json that does not cover the unjudged findings", async () => {
   await withTempDir(async (tempDir) => {
     const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [preJudgeFinding], executionMode: "fanout_fanin" });
     const nonEnriched = path.join(tempDir, "non-enriched.json");
@@ -280,9 +280,15 @@ test("a fan-out ledger plus a judge-enriched --findings-json with an act item de
   await withTempDir(async (tempDir) => {
     const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [preJudgeFinding], executionMode: "fanout_fanin" });
     const jsonPath = path.join(tempDir, "enriched.json");
-    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ ...preJudgeFinding, judgeDisposition: "act", judgeRationale: "r" }] }]), "utf8");
+    // Under fanout_fanin the --findings-json is the full per-angle input, covering every mandatory angle.
+    await writeFile(jsonPath, JSON.stringify([
+      { angle: "correctness", findings: [{ ...preJudgeFinding, judgeDisposition: "act", judgeRationale: "r" }] },
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+    ]), "utf8");
     const derived = await postWithJson(ledgerPath, jsonPath, ["--execution-mode", "fanout_fanin"]);
-    assert.doesNotMatch(derived.error ?? "", unjudgedLedgerMsg);
+    assert.equal(derived.error, undefined);
+    assert.match(derived.body, /\*\*Verdict:\*\* findings_present/);
     const inline = await postWithJson(ledgerPath, jsonPath);
     assert.equal(inline.error, undefined);
     assert.match(inline.body, /\*\*Verdict:\*\* findings_present/);
@@ -294,4 +300,47 @@ test("a fan-out ledger with no --execution-mode flag refuses unjudged findings",
     const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [preJudgeFinding], executionMode: "fanout_fanin" });
     assert.match((await post(ledgerPath)).error, unjudgedLedgerMsg);
   }, { prefix: "dev-loops-act-list-ledger-mode-" });
+});
+
+test("a fan-out ledger with unjudged findings and a same-summary defer-judged --findings-json (padded ledger summary) posts clean", async () => {
+  await withTempDir(async (tempDir) => {
+    const padded = { ...preJudgeFinding, summary: "  pre-judge finding  " };
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [padded], executionMode: "fanout_fanin" });
+    const jsonPath = path.join(tempDir, "deferred.json");
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ ...preJudgeFinding, judgeDisposition: "defer", judgeRationale: "r" }] }]), "utf8");
+    const derived = await postWithJson(ledgerPath, jsonPath);
+    assert.equal(derived.error, undefined);
+    assert.match(derived.body, /\*\*Verdict:\*\* clean/);
+  }, { prefix: "dev-loops-act-list-ledger-mode-defer-" });
+});
+
+test("a ledger with a drifted executionMode is rejected at read", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [preJudgeFinding], executionMode: "fanout_fanin " });
+    assert.match((await post(ledgerPath)).error, /"executionMode" must be "inline_single_agent" or "fanout_fanin"/);
+  }, { prefix: "dev-loops-act-list-ledger-mode-drift-" });
+});
+
+test("a review-gate post over an unjudged fan-out ledger is not refused for missing judgeDisposition", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = path.join(tempDir, "review-ledger.json");
+    await writeFile(ledgerPath, JSON.stringify({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: HEAD, verdict: "clean", overallVerdict: "clean",
+      loggedAt: "2026-09-23T00:00:00.000Z", findings: [preJudgeFinding], executionMode: "fanout_fanin",
+    }), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "review", "--head-sha", HEAD, "--submit", "comment",
+      "--findings-ledger", ledgerPath, "--findings-summary", "act list test", "--next-action", "follow the verdict",
+      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 1, low: 0, question: 0, nit: 0 }),
+    ];
+    let message = "";
+    try {
+      await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+        env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    assert.doesNotMatch(message, unjudgedLedgerMsg);
+  }, { prefix: "dev-loops-act-list-review-gate-" });
 });

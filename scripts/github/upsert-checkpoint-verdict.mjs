@@ -226,7 +226,13 @@ Optional:
   --findings-ledger <path>                  Path to this round's
                                             write-gate-findings-log.mjs ledger
                                             ({ repo, pr, gate, headSha, verdict,
-                                            findings[], verifiedItems? }). For
+                                            findings[], executionMode?,
+                                            verifiedItems? }). A fan-out
+                                            draft/pre-approval post refuses
+                                            ledger findings without
+                                            judgeDisposition unless a judged
+                                            --findings-json finding with the
+                                            same summary covers each one. For
                                             pre_approval_gate (never draft_gate),
                                             the poster first ticks those exact
                                             verifiedItems labels, then composes.
@@ -2009,13 +2015,13 @@ function enforceForeignAngles(foreignAngles, { sourceLabel, gate, gateKey, confi
     process.stderr.write(`WARNING: ${message} (gates.rejectForeignAngles is false; recorded as a warning)\n`);
   }
 }
+function unjudgedLedgerMessage(options, headSha, count) {
+  return `--findings-ledger "${options.findingsLedger}" for ${options.gate} @ ${headSha} has ${count} finding(s) with no judgeDisposition, so the judge act list is unknown (ADR 0089). Re-write the log with write-gate-findings-log --judge-verdict after the judge pass (the full enriched ledger, judge-pass --ledger-out, not the --out act list), or also pass a --findings-json with the full per-angle input (every finding with its judgeDisposition, covering every mandatory angle under fanout_fanin).`;
+}
 // Read `--findings-ledger` and confirm it is THIS round's ledger (same
 // repo/pr/gate/head), not a stale or foreign one. Shared by the finding-surface
 // resolver below and the withheld-tier mandatory-angle-coverage check, so
 // both trust the ledger only after the identical cross-check.
-function unjudgedLedgerMessage(options, headSha, count) {
-  return `--findings-ledger "${options.findingsLedger}" for ${options.gate} @ ${headSha} has ${count} finding(s) with no judgeDisposition, so the judge act list is unknown (ADR 0089). Re-write the log with write-gate-findings-log --judge-verdict after the judge pass, or also pass a --findings-json whose findings carry the judgeDisposition.`;
-}
 async function loadMatchingFindingsLedger(options, headSha) {
   if (!options.findingsLedger) {
     return null;
@@ -2710,7 +2716,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     if (!structuredFindings) {
       throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
     }
-    // ADR 0089: without a ledger, the structured findings carry the judge act list.
+    // ADR 0089: the structured findings carry the judge act list, with or without a ledger; over a ledger they also cover its unjudged findings.
     // Read the RAW entries: normalization turns an unparseable finding into a bare marker and drops its judgeDisposition.
     const flatFindings = candidate.flatMap((e) => (looksLikePerAngleEntry(e) ? e.findings : [e])).map((f) => ({
       severity: f?.severity,
@@ -2721,7 +2727,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
     // An unjudged ledger finding stays unknown unless a judged --findings-json finding covers it (same summary).
     const judgedSummaries = new Set(flatFindings.filter((f) => f.judgeDisposition).map((f) => f.summary));
-    const uncovered = unjudgedLedgerFindings.filter((f) => !judgedSummaries.has(f.summary));
+    const uncovered = unjudgedLedgerFindings.filter((f) => !judgedSummaries.has(typeof f.summary === "string" ? f.summary.trim() : f.summary));
     if (uncovered.length > 0) throw new Error(unjudgedLedgerMessage(options, canonicalHeadSha, uncovered.length));
     const actItems = listOpenActItems(flatFindings);
     enrichedActItems = actItems;
