@@ -416,10 +416,19 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-SELF-HOST-EXPAND-CONTRACT",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE"
     },
     {
       "id": "GRILL-COUNT-AC-UNIT-DISPATCH-MODE"
+    },
+    {
+      "id": "GRILL-SELF-HOST-PATH",
+      "enforcement": "agent",
+      "enforcementNote": "The grill agent asks the self-gate question; no script checks the answer."
     },
     {
       "id": "GRILL-SPEC-LINT",

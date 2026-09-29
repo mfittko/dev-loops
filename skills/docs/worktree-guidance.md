@@ -286,7 +286,11 @@ this rule by ID.
 Each Bash call may start in another checkout, and the working directory does
 not persist between calls. A standalone `cd <checkout>` call followed by a
 separate `dev-loops-run` call therefore runs the scripts of whichever checkout
-the second call starts in. `GATE-EXEC-NO-CWD-DEPENDENCE` in the
+the second call starts in. The second sanctioned form is
+`dev-loops-run --repo-root <checkout> scripts/<path>`: the launcher resolves the
+toolchain from `<checkout>` when it is a dev-loops source checkout, and runs the
+script with cwd `<checkout>`. A dispatched pull line runs bare, exactly as
+dispatched, and is never prefixed with `cd`. `GATE-EXEC-NO-CWD-DEPENDENCE` in the
 [Gate Review Sub-Loop Contract](./gate-review-sub-loop-contract.md) stays the
 reviewer-specific rule and cites this one.
 
