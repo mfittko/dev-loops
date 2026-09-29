@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -3493,6 +3493,34 @@ test("dogfood round-trip: CLI-built briefing prefix verifies clean across two re
     assert.equal(finalResult.reviewerCount, 2);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// #2506 (folds #2331): a gate built in a linked worktree, with the findings ledger anchored at the
+// main checkout's tmp/, briefs a cwd-relative --context-path and a `cd <worktree>` sentinel
+// command. Run that way from the worktree, the fresh-context locality guard passes.
+test("linked worktree + main-anchored ledger: the sentinel runs from the worktree with a cwd-relative --context-path and passes", async () => {
+  const { repoRoot: mainRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const linked = path.join(await realpath(mainRoot), "..", `${path.basename(mainRoot)}-linked`);
+  try {
+    git(mainRoot, ["worktree", "add", "-q", "--detach", linked, headSha]);
+    await mkdir(path.join(mainRoot, "tmp", "gate-findings"), { recursive: true });
+    await main([
+      "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate", "--head-sha", headSha,
+      "--angles", '["scope"]', "--base", baseSha, "--pr-body", "Fixes the helper.",
+    ], { repoRoot: linked, run: stubGhRun });
+    const identity = { repo: "owner/repo", pr: 61, gate: "draft_gate", headSha };
+    const contextPath = buildGateContextPath(identity);
+    const prefixPath = buildGateBriefingPrefixPath(identity);
+    assert.equal(path.isAbsolute(contextPath), false);
+    const prefix = await readFile(path.join(linked, prefixPath), "utf8");
+    assert.ok(prefix.includes(`--context-path ${contextPath} `), "the briefed --context-path is cwd-relative");
+    assert.ok(prefix.includes(`cd "${linked}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs`), "the sentinel cd target is the worktree");
+    const r = spawnSync("node", [contextGuardPath, "--scope", "scope", "--context-path", contextPath, "--prefix-file", prefixPath], { cwd: linked, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    await rm(linked, { recursive: true, force: true });
+    await rm(mainRoot, { recursive: true, force: true });
   }
 });
 
