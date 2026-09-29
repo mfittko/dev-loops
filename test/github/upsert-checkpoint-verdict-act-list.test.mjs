@@ -330,6 +330,7 @@ test("a review-gate post over an unjudged fan-out ledger is not refused for miss
     }), "utf8");
     const args = [
       "--repo", "owner/repo", "--pr", "17", "--gate", "review", "--head-sha", HEAD, "--submit", "comment",
+      "--inline-reason", "review gate runs no judge",
       "--findings-ledger", ledgerPath, "--findings-summary", "act list test", "--next-action", "follow the verdict",
       "--findings-severity-counts", JSON.stringify({ high: 0, medium: 1, low: 0, question: 0, nit: 0 }),
     ];
@@ -342,6 +343,7 @@ test("a review-gate post over an unjudged fan-out ledger is not refused for miss
       message = error instanceof Error ? error.message : String(error);
     }
     assert.doesNotMatch(message, unjudgedLedgerMsg);
+    assert.doesNotMatch(message, /--inline-reason is required/);
   }, { prefix: "dev-loops-act-list-review-gate-" });
 });
 

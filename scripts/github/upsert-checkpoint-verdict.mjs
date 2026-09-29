@@ -2022,6 +2022,13 @@ function unjudgedLedgerMessage(options, headSha, count) {
 // repo/pr/gate/head), not a stale or foreign one. Shared by the finding-surface
 // resolver below and the withheld-tier mandatory-angle-coverage check, so
 // both trust the ledger only after the identical cross-check.
+// A ledger-declared fan-out becomes the execution mode; the inline reason is dropped as the parser does.
+function promoteLedgerFanout(options, ledger) {
+  if (ledger.executionMode !== "fanout_fanin") return;
+  options.executionMode = "fanout_fanin";
+  options.inlineReason = undefined;
+}
+
 async function loadMatchingFindingsLedger(options, headSha) {
   if (!options.findingsLedger) {
     return null;
@@ -2575,7 +2582,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // A ledger-declared fan-out counts as fan-out for this check too, so promote it first.
     if (options.findingsLedger) {
       preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
-      if (preloadedFindingsLedger.executionMode === "fanout_fanin") options.executionMode = "fanout_fanin";
+      promoteLedgerFanout(options, preloadedFindingsLedger);
     }
     postTimeFanoutEnforcement = await enforcePostTimeFanoutMode(
       {
@@ -2616,7 +2623,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // a ledger finding without a disposition is pre-judge, and only an enriched --findings-json can stand in.
     // The angle checks, tick and recorded marker all key on options.executionMode, so a ledger-declared
     // fan-out is promoted onto it rather than enforced only for this local check.
-    if (preloadedFindingsLedger.executionMode === "fanout_fanin") options.executionMode = "fanout_fanin";
+    promoteLedgerFanout(options, preloadedFindingsLedger);
     const fanout = (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin";
     if (options.gate !== "review" && fanout) {
       unjudgedLedgerFindings = (preloadedFindingsLedger.findings ?? []).filter((f) => !f?.judgeDisposition);
