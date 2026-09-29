@@ -689,6 +689,7 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
   return {
     repo: repoSlug, pr, gate, headSha: fullHeadSha, verdict, findings: normalizedFindings, provenance,
     overallVerdict: overallVerdictRaw !== undefined ? overallVerdictRaw : null,
+    executionMode: parsed.executionMode,
     verifiedItems: verifiedItems === undefined ? [] : verifiedItems.map((item) => item.trim()),
   };
 }

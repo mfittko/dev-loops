@@ -7437,8 +7437,8 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
       { angle: "pr-description", verdict: "clean", findings: [] },
       { angle: "scope", verdict: "clean", findings: [] },
       { angle: "holistic", verdict: "clean", findings: [] },
-      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: LOCATABLE_FINDING.summary, file: "src/db.mjs", line: 2 }] },
-      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary }] },
+      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: LOCATABLE_FINDING.summary, judgeDisposition: "defer", file: "src/db.mjs", line: 2 }] },
+      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, judgeDisposition: "defer" }] },
     ]), "utf8");
 
     let postedPayload = null;

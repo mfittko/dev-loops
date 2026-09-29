@@ -43,11 +43,11 @@ const finding = (severity, judgeDisposition) => ({
   judgeRationale: "test rationale",
 });
 
-async function writeLedger(tempDir, { overallVerdict, verdict = overallVerdict, findings }) {
+async function writeLedger(tempDir, { overallVerdict, verdict = overallVerdict, findings, executionMode }) {
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
     repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD,
-    verdict, overallVerdict, loggedAt: "2026-09-23T00:00:00.000Z", findings,
+    verdict, overallVerdict, loggedAt: "2026-09-23T00:00:00.000Z", findings, executionMode,
   }), "utf8");
   return ledgerPath;
 }
@@ -259,4 +259,39 @@ test("a fan-out round whose ledger findings carry no judgeDisposition is refused
       /1 finding\(s\) with no judgeDisposition, so the judge act list is unknown/,
     );
   }, { prefix: "dev-loops-act-list-unjudged-" });
+});
+
+// The ledger's own executionMode (written by write-gate-findings-log) triggers the refusal without --execution-mode.
+const unjudgedLedgerMsg = /1 finding\(s\) with no judgeDisposition, so the judge act list is unknown/;
+
+test("a fan-out ledger with unjudged findings refuses an empty or non-enriched --findings-json", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [preJudgeFinding], executionMode: "fanout_fanin" });
+    const nonEnriched = path.join(tempDir, "non-enriched.json");
+    await writeFile(nonEnriched, JSON.stringify([{ angle: "correctness", findings: [preJudgeFinding] }]), "utf8");
+    assert.match((await postWithJson(ledgerPath, nonEnriched)).error, unjudgedLedgerMsg);
+    const nonAct = path.join(tempDir, "non-act.json");
+    await writeFile(nonAct, JSON.stringify([{ angle: "correctness", findings: [{ ...preJudgeFinding, summary: "other", judgeDisposition: "reject" }] }]), "utf8");
+    assert.match((await postWithJson(ledgerPath, nonAct)).error, unjudgedLedgerMsg);
+  }, { prefix: "dev-loops-act-list-ledger-mode-refuse-" });
+});
+
+test("a fan-out ledger plus a judge-enriched --findings-json with an act item derives findings_present", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [preJudgeFinding], executionMode: "fanout_fanin" });
+    const jsonPath = path.join(tempDir, "enriched.json");
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ ...preJudgeFinding, judgeDisposition: "act", judgeRationale: "r" }] }]), "utf8");
+    const derived = await postWithJson(ledgerPath, jsonPath, ["--execution-mode", "fanout_fanin"]);
+    assert.doesNotMatch(derived.error ?? "", unjudgedLedgerMsg);
+    const inline = await postWithJson(ledgerPath, jsonPath);
+    assert.equal(inline.error, undefined);
+    assert.match(inline.body, /\*\*Verdict:\*\* findings_present/);
+  }, { prefix: "dev-loops-act-list-ledger-mode-enriched-" });
+});
+
+test("a fan-out ledger with no --execution-mode flag refuses unjudged findings", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [preJudgeFinding], executionMode: "fanout_fanin" });
+    assert.match((await post(ledgerPath)).error, unjudgedLedgerMsg);
+  }, { prefix: "dev-loops-act-list-ledger-mode-" });
 });

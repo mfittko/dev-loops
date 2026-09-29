@@ -285,8 +285,10 @@ Enforcement at write time and post time:
 - The act list for a verdict post comes from judge-enriched data: the ledger written with
   `--judge-verdict`, or a judge-enriched `--findings-json` (its open act items also yield
   `findings_present` over a ledger). A durable log written before the judge pass carries no
-  dispositions. A fan-out `draft_gate` or `pre_approval_gate` post over such a ledger, with no
-  enriched `--findings-json`, refuses.
+  dispositions. A fan-out `draft_gate` or `pre_approval_gate` post over such a ledger refuses
+  unless a `--findings-json` finding with a `judgeDisposition` covers every unjudged ledger
+  finding. The post counts as fan-out when `--execution-mode` or the ledger's own
+  `executionMode` is `fanout_fanin`.
 - No override flag exists. A round whose verdict genuinely differs from the computed one is a
   consolidator bug to fix.
 - A `blocked` verdict may sit over a completed `clean` or `findings_present` ledger only when the
