@@ -58,6 +58,31 @@ test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and
   assert.equal(config.models.roleTiers["pre-PR-reviewer"], undefined);
 });
 
+// Regular vs. strong split: routine roles run on the regular tier (sonnet on
+// Claude, inherit on Pi); review, refiner, the pre-push reviewer and every
+// gate angle stay on opus.
+test("this repo's .devloops resolves the regular tier to sonnet and the strong roles to opus", async () => {
+  const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+  assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
+
+  for (const role of ["developer", "fixer", "docs", "quality"]) {
+    assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "sonnet", `${role} on claude`);
+    assert.equal(resolveRoleModel(config, { role, harness: "pi" }), null, `${role} on pi`);
+  }
+  for (const role of ["review", "refiner", "pre-push-reviewer"]) {
+    assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "opus", `${role} on claude`);
+  }
+  assert.equal(resolveRoleModel(config, { role: "pre-push-reviewer", harness: "pi" }), "openai-codex/gpt-6-sol");
+
+  for (const gate of GATE_KEYS) {
+    const { pool } = resolveGateAngleContract(config, gate);
+    assert.ok(Array.isArray(pool) && pool.length > 0, `gates.${gate} must resolve a non-empty angle pool`);
+    for (const angle of pool) {
+      assert.equal(resolveRoleModel(config, { role: angle, harness: "claude", kind: "angle" }), "opus", `${gate} angle ${angle} on claude`);
+    }
+  }
+});
+
 test("a synthetic matching diff resolves a non-empty tier angle set including the gate's mandatory angles", async () => {
   const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
 

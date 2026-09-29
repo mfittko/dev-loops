@@ -7060,44 +7060,15 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
 });
 
 // ============================================================================
-// This repo's .devloops — developer/fixer run on the strong tier
+// This repo's .devloops — docs/quality keep the built-in role policy
 // ============================================================================
 
-describe("this repo's .devloops — developer and fixer run on the strong tier (#2457)", () => {
-  // Read THIS repo's real .devloops, not a synthetic fixture: the pin must fail
-  // when either roleTiers entry is dropped from the repo config.
+describe("this repo's .devloops — docs and quality keep the built-in role policy", () => {
+  // Read THIS repo's real .devloops, not a synthetic fixture. The per-role
+  // model mapping itself is pinned in test/contracts/devloops-tier-config.test.mjs.
   const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
-  test("developer and fixer are pinned to pre-pr-strong and resolve strongly on both harnesses", async () => {
-    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
-    assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
-
-    const strongTier = config.models.tiers["pre-pr-strong"];
-    assert.ok(
-      strongTier?.claude && strongTier?.pi,
-      "the pre-pr-strong tier must define a concrete model for both harnesses",
-    );
-    // resolveRoleModel reads the merged role→tier map
-    // `{ ...BUILTIN_ROLE_TIERS, ...config.models.roleTiers }`. Pinning the
-    // config layer here means dropping either entry fails loudly instead of
-    // silently falling back to the builtin `low` alias (inherit on Pi).
-    for (const role of ["developer", "fixer"]) {
-      assert.equal(
-        config.models.roleTiers[role],
-        "pre-pr-strong",
-        `.devloops must pin ${role} to pre-pr-strong`,
-      );
-      for (const harness of ["claude", "pi"]) {
-        assert.equal(
-          resolveRoleModel(config, { role, harness }),
-          strongTier[harness],
-          `${role} must resolve the strong tier on ${harness}`,
-        );
-      }
-    }
-  });
-
-  test("docs and quality keep their builtin resolution (change scoped to the two implementation roles)", async () => {
+  test("docs and quality keep their builtin resolution (not re-tiered in .devloops)", async () => {
     const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
     assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
 
