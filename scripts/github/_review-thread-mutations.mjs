@@ -56,13 +56,20 @@ export async function assertFixedReplyShas(
     const fullShas = body.match(FULL_SHA_PATTERN) ?? [];
     if (fullShas.length === 0) {
       throw new Error(
-        `fixed_reply_missing_full_sha: a fixed reply must contain the full 40-character fixing commit SHA. Repeat the call with the full SHA of the fixing commit, currently ${head}.`,
+        `fixed_reply_missing_full_sha: a fixed reply must contain the full 40-character fixing commit SHA. Repeat the call with the full SHA of the exact commit you record as fixingCommitSha (git rev-parse <commit>). The current PR head is ${head}; cite it only when the head commit is the fix.`,
       );
     }
     let contained = false;
+    let unverifiable = false;
     for (const sha of fullShas) {
       const result = await runChild("git", ["merge-base", "--is-ancestor", sha, head], env);
       if (result.code === 0) { contained = true; break; }
+      if (result.code !== 1) unverifiable = true;
+    }
+    if (!contained && unverifiable) {
+      throw new Error(
+        `fixed_reply_sha_unverifiable: git could not check whether the cited SHA is in the PR head ${head} (git exit code other than 1; the local object store may lack the head or the SHA). Run git fetch, then repeat the call.`,
+      );
     }
     if (!contained) {
       throw new Error(

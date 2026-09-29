@@ -704,10 +704,27 @@ test("reply-resolve-review-thread posts and resolves a fixed reply whose full SH
   assert.equal(ghLog.length, 4);
 });
 
-test("reply-resolve-review-thread refuses a fixed reply whose full SHA is not contained in the PR head", async () => {
-  const { result, ghLog } = await runFixedReply(`Fixed in ${"deadbeef".repeat(5)} with the missing guard.\n`, [headViewEntry]);
+test("reply-resolve-review-thread refuses a fixed reply citing an existing commit that is not an ancestor of the PR head", async () => {
+  const olderHead = execFileSync("git", ["rev-parse", "HEAD~1"], { encoding: "utf8" }).trim();
+  const olderHeadEntry = { ...headViewEntry, stdout: `${JSON.stringify({ headRefOid: olderHead })}\n` };
+  const { result, ghLog } = await runFixedReply(`Fixed in ${headSha} with the missing guard.\n`, [olderHeadEntry]);
   assert.equal(result.code, 1);
   assert.match(result.stderr, /fixed_reply_sha_not_in_head/);
+  assert.equal(ghLog.length, 1);
+});
+
+test("reply-resolve-review-thread refuses an unverifiable SHA (unknown object) with a distinct reason and a fetch hint", async () => {
+  const { result, ghLog } = await runFixedReply(`Fixed in ${"deadbeef".repeat(5)} with the missing guard.\n`, [headViewEntry]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /fixed_reply_sha_unverifiable/);
+  assert.match(result.stderr, /git fetch/);
+  assert.equal(ghLog.length, 1);
+});
+
+test("reply-resolve-review-thread refuses a fixed reply and mutates nothing when the PR head cannot be read", async () => {
+  const { result, ghLog } = await runFixedReply(`Fixed in ${headSha} with the missing guard.\n`, [{ ...headViewEntry, stdout: "{}\n" }]);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /Cannot read the head commit/);
   assert.equal(ghLog.length, 1);
 });
 

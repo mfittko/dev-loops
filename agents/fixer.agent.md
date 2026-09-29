@@ -67,7 +67,7 @@ When no judge verdict is present (a gate that has not yet wired the judge phase)
 9. Re-fetch the PR state and confirm the head still includes the pushed commit before you submit review replies.
 10. Reply to each addressed thread with a short note that references the resolving commit SHA or commit URL when applicable, summarizes the fix or explanation, and states why it resolves the underlying concern.
    - Prefer the deterministic helper `scripts/github/reply-resolve-review-thread.mjs` when it exists.
-   - Pass `--disposition fixed|deferred|rejected` (required). A `fixed` reply MUST contain the full 40-character SHA of the fixing commit (`git rev-parse <commit>`), never a short SHA. The helper refuses a `fixed` reply without a contained full SHA before posting or resolving, and prints the full SHA of the current PR head; repeat the call with the full SHA.
+   - Pass `--disposition fixed|deferred|rejected` (required). A `fixed` reply MUST contain the full 40-character SHA of the fixing commit (`git rev-parse <commit>`), never a short SHA. The helper refuses a `fixed` reply without a contained full SHA before posting or resolving, and prints the current PR head SHA; repeat the call citing the exact commit you record as fixingCommitSha (the head only when the head commit is the fix).
    - Prefer a temporary reply body file over inline shell text.
    - Keep commit SHAs and issue/PR refs unwrapped (for example 3ee82fc and owner/repo#70) when the intent is GitHub autolinks; reserve backticks for actual code/path/CLI literals.
 11. Resolve the thread only after the reply is attached successfully and the concern is genuinely addressed, even if the final resolution differs from the reviewer’s suggested implementation.
