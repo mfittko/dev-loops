@@ -122,18 +122,24 @@ test("semantic mutation refuses as semantic_identity_mismatch; a materialization
     mutated.units[0].workOrder.angleInstructions[0].prompt = "Something else.";
     await writeFile(planPath, JSON.stringify(mutated), "utf8");
     assert.equal(refusal(pull(unit, root)).refusal, "semantic_identity_mismatch");
+    assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "semantic_identity_mismatch");
 
     await writeFile(planPath, JSON.stringify(plan), "utf8");
     await writeFile(unit.promptPath, `${await readFile(unit.promptPath, "utf8")} `, "utf8");
     assert.equal(refusal(pull(unit, root)).refusal, "local_materialization_integrity_failure");
+    assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "local_materialization_integrity_failure");
     await rm(unit.promptPath);
     assert.equal(refusal(pull(unit, root)).refusal, "local_materialization_integrity_failure");
+    assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "local_materialization_integrity_failure");
     // A self-consistent work order without the widening rule fails the review adapter.
     const [invalid] = plan.units;
     delete invalid.workOrder.executionRules.widening;
     invalid.workOrderDigest = workOrderDigest(invalid.workOrder);
     await writeFile(planPath, JSON.stringify(plan), "utf8");
     assert.equal(refusal(pull(unit, root, { digest: invalid.workOrderDigest })).refusal, "invalid_work_order");
+    const entry = JSON.parse(await readFile(indexPath(root, unit), "utf8"));
+    await writeFile(indexPath(root, unit), JSON.stringify({ ...entry, workOrderDigest: invalid.workOrderDigest }), "utf8");
+    assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "invalid_work_order");
   });
 });
 
@@ -150,6 +156,8 @@ test("a ref bound to a retired same-head round refuses as stale even when a newe
     assert.equal(body.refusal, "stale_dispatch");
     assert.match(body.error, /never retarget/);
     assert.equal(pull(current, root).status, 0);
+    assert.equal(refusal(pullShort(retiredUnit.executionIdentity, root)).refusal, "stale_dispatch");
+    assert.equal(pullShort(current.executionIdentity, root).status, 0);
   });
 });
 
@@ -286,17 +294,27 @@ test("the short pull: an unknown identity or a typed index entry is a retryable 
   });
 });
 
-test("the short pull: a corrupt execution index entry refuses with structured JSON and exit 1", async () => {
+test("the short pull: a corrupt or mis-shaped execution index entry refuses with structured JSON and exit 1", async () => {
   await withDir(async (root) => {
     const unit = await emitRound(root);
-    for (const bytes of ["{ truncated", "null"]) {
+    const valid = await readFile(indexPath(root, unit), "utf8");
+    const entry = JSON.parse(valid);
+    const { workOrderDigest: _digest, ...noDigest } = entry;
+    const shapes = [
+      JSON.stringify({ ...entry, workOrderRef: 7 }),
+      JSON.stringify(noDigest),
+      JSON.stringify({ ...entry, executionIdentity: "r1-0000beef-u0" }),
+    ];
+    for (const bytes of ["{ truncated", "null", "[]", "{}", ...shapes]) {
       await writeFile(indexPath(root, unit), bytes, "utf8");
       const result = pullShort(unit.executionIdentity, root);
       assert.doesNotMatch(result.stderr, /SyntaxError/);
       const body = refusal(result);
-      assert.equal(body.refusal, "local_materialization_integrity_failure");
-      assert.match(body.error, /is not a JSON entry/);
+      assert.equal(body.refusal, "local_materialization_integrity_failure", bytes);
+      assert.match(body.error, /is not a valid entry/);
     }
+    await writeFile(indexPath(root, unit), valid, "utf8");
+    assert.equal(pullShort(unit.executionIdentity, root).status, 0);
   });
 });
 

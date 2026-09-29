@@ -949,7 +949,9 @@ test("a colliding execution index entry refuses the emission and persists no pla
       process.stdout.write = write;
     }
     assert.equal(status, 1);
-    assert.match(JSON.parse(out.join("")).error, /^GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — execution index .* already names a different unit/);
+    const body = JSON.parse(out.join(""));
+    assert.equal(body.refusal, "execution_index_collision");
+    assert.match(body.error, /^GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — execution index .* already names a different unit/);
     assert.deepEqual(JSON.parse(await readFile(executionIndexPath(tmpRoot, other.executionIdentity), "utf8")), other);
     await assert.rejects(() => readFile(buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot }), "utf8"), { code: "ENOENT" });
   });

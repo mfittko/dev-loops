@@ -58,7 +58,9 @@ async function resolveExecutionIndex(execution, tmpRoots) {
       if (text === null) continue;
       let entry = null;
       try { entry = JSON.parse(text); } catch { /* refused below */ }
-      if (!entry || typeof entry !== "object") throw new WorkOrderRefusal("local_materialization_integrity_failure", `execution index ${file} is not a JSON entry; re-emit the round`);
+      if (entry?.executionIdentity !== execution || typeof entry.workOrderRef !== "string" || typeof entry.workOrderDigest !== "string") {
+        throw new WorkOrderRefusal("local_materialization_integrity_failure", `execution index ${file} is not a valid entry for ${execution}; re-emit the round`);
+      }
       if (found && (found.workOrderRef !== entry.workOrderRef || found.workOrderDigest !== entry.workOrderDigest)) {
         throw new WorkOrderRefusal("local_materialization_integrity_failure", `execution ${execution} has conflicting execution index entries; re-emit the round`);
       }

@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
-import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
+import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 
@@ -218,6 +218,18 @@ test("J4: a colliding execution index entry for the next identity refuses the em
     const next = { executionIdentity: "j3-000000cc", workOrderRef: "judge:o/r#7:other", workOrderDigest: "sha256:0" };
     await writeExecutionIndex(path.join(root, "tmp"), next);
     await assert.rejects(emitJudgeWorkOrder({ ...sources, roundId: next.executionIdentity }), (err) => err.refusal === "execution_index_collision");
+    const out = [];
+    const write = process.stdout.write;
+    process.stdout.write = (chunk) => (out.push(String(chunk)), true);
+    try {
+      await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
+        "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, roundId: next.executionIdentity });
+    } finally {
+      process.stdout.write = write;
+    }
+    const body = JSON.parse(out.join(""));
+    assert.equal(body.refusal, "execution_index_collision");
+    assert.match(body.error, /already names a different unit/);
     assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), next.executionIdentity), "utf8")), next);
   });
 });

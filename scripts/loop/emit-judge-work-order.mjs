@@ -235,7 +235,7 @@ registerWorkOrderRole("judge", {
   },
 });
 
-export async function main(argv = process.argv.slice(2), { cwd = process.cwd() } = {}) {
+export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), roundId } = {}) {
   const { values } = parseArgs({ args: argv, options: {
     repo: { type: "string" }, pr: { type: "string" }, gate: { type: "string" }, "head-sha": { type: "string" },
     "findings-file": { type: "string" }, "spec-file": { type: "string" }, "identity-file": { type: "string" },
@@ -268,13 +268,13 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd() }
     const plan = await emitJudgeWorkOrder({
       repo: values.repo, pr: values.pr, gate: values.gate, headSha: values["head-sha"].toLowerCase(),
       findingsFile: values["findings-file"], specFile: values["spec-file"], identityFile: values["identity-file"],
-      priorVerdicts: values["prior-verdict"] ?? [], cwd, ...(tmpRoot ? { tmpRoot } : {}),
+      priorVerdicts: values["prior-verdict"] ?? [], cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}),
     });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });
   } catch (err) {
     if (!(err instanceof Refusal || err instanceof WorkOrderRefusal)) throw err;
-    return emit({ ok: false, error: err.message });
+    return emit({ ok: false, ...(err.refusal ? { refusal: err.refusal } : {}), error: err.message });
   }
 }
 

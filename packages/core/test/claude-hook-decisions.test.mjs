@@ -1569,7 +1569,14 @@ test("decideAgentDispatch allows the short pointer of every role; the core byte 
   assert.equal(CORE_DISPATCH_POINTER_MAX_BYTES, DISPATCH_POINTER_MAX_BYTES);
   assert.equal(dispatch("gate-coordinator", "review", shortPointer("review")).decision, "allow");
   assert.equal(dispatch("gate-coordinator", "judge", shortPointer("judge")).decision, "allow");
-  assert.equal(dispatch("dev-loop", "fixer", shortPointer("fixer")).decision, "allow");
+  // The fixer's own guard is its Bash pull-line binding: each fixer pointer's backtick command parses to
+  // the fixer identity, and a suffixed line parses to nothing.
+  for (const p of [pointer("fixer"), shortPointer("fixer")]) {
+    assert.equal(dispatch("dev-loop", "fixer", p).decision, "allow");
+    const command = p.match(/`([^`]+)`/)[1];
+    assert.equal(parseSanctionedPullLine(command)?.executionIdentity, IDENTITIES.fixer, command);
+    assert.equal(parseSanctionedPullLine(`${command} ; echo "EXIT $?"`), null, command);
+  }
 });
 
 test("decideAgentDispatch denies every other target from the gate coordinator", () => {

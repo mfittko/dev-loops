@@ -765,7 +765,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       await writeExecutionIndex(tmpRoot, identity);
     } catch (err) {
       if (!(err instanceof WorkOrderRefusal)) throw err;
-      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — ${err.message}` }, false);
+      return finish({ ok: false, refusal: err.refusal, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — ${err.message}` }, false);
     }
     // The dispatch-prompt record binds the compact reference the reviewer receives.
     const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha);

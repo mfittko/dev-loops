@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import { parseFixerPullCommand } from "../../.claude/hooks/_fixer-grants.mjs";
+import { isFixerExecution, parseFixerPullCommand } from "../../.claude/hooks/_fixer-grants.mjs";
 import { writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 
@@ -76,5 +76,17 @@ test("parseFixerPullCommand resolves only an exact fixer line whose index entry 
       await writeExecutionIndex(path.join(root, "tmp"), { ...ENTRY, executionIdentity: identity });
       assert.equal(parseFixerPullCommand(`dev-loops-run scripts/github/pull-work-order.mjs ${identity}`, root), null, identity);
     }
+    // A unit-suffixed identity is never a fixer execution, even with an index entry naming a fixer ref.
+    const suffixed = `${ID}-u0`;
+    await writeExecutionIndex(path.join(root, "tmp"), { ...ENTRY, executionIdentity: suffixed });
+    assert.equal(parseFixerPullCommand(`dev-loops-run scripts/github/pull-work-order.mjs ${suffixed}`, root), null);
   });
+});
+
+test("isFixerExecution accepts only an f identity of the shared pattern without a unit suffix", () => {
+  assert.equal(isFixerExecution(ID), true);
+  for (const id of [`${ID}-u0`, `j${ID.slice(1)}`, `r${ID.slice(1)}`, `F${ID.slice(1)}`, ID.toUpperCase().replace(/^F/, "f"),
+    ID.slice(0, -1), "f-a189d082", `${ID}\n`, undefined]) {
+    assert.equal(isFixerExecution(id), false, JSON.stringify(id));
+  }
 });

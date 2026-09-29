@@ -12,7 +12,7 @@ import path from "node:path";
 import { findRetirementAfter } from "./_gate-round-retirement.mjs";
 import { parseSanctionedPullLine } from "./_hook-decisions.mjs";
 import { realpathNearestExisting } from "./_worktree-guard.mjs";
-import { executionIndexPath, workOrderDigest } from "./_work-order-digest.mjs";
+import { EXECUTION_IDENTITY_RE, executionIndexPath, workOrderDigest } from "./_work-order-digest.mjs";
 
 /**
  * Env for every git call in this module: an inherited GIT_DIR/GIT_WORK_TREE overrides `-C`, so a pointer at
@@ -44,7 +44,8 @@ export function listCheckouts(dir) {
 }
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const EXECUTION_RE = /^f(\d+)-[0-9a-f]{8}$/u;
+// A fixer execution: the shared identity pattern with an `f` prefix and no `-u<n>` unit suffix.
+export const isFixerExecution = (id) => typeof id === "string" && id[0] === "f" && !id.includes("-u") && EXECUTION_IDENTITY_RE.test(id);
 
 // Grant-to-agent binding. Verified by a headless PreToolUse stdin probe: a subagent's hook input
 // carries `agent_id` (e.g. "abea5f653d974dbf2"), identical across all tool calls of that subagent;
@@ -66,7 +67,7 @@ export function parseFixerPullCommand(command, mainRoot) {
   const line = parseSanctionedPullLine(command);
   if (line?.workOrderRef) return line.workOrderRef.startsWith("fixer:") ? line : null;
   const executionIdentity = line?.executionIdentity;
-  if (!executionIdentity?.startsWith("f")) return null;
+  if (!isFixerExecution(executionIdentity)) return null;
   try {
     const entry = JSON.parse(readFileSync(executionIndexPath(path.join(mainRoot, "tmp"), executionIdentity), "utf8"));
     const valid = entry.executionIdentity === executionIdentity && String(entry.workOrderRef).startsWith("fixer:") && typeof entry.workOrderDigest === "string";
@@ -112,7 +113,7 @@ function isStale(mainRoot, checkoutRoots, order, executionIdentity) {
     if (bytes === null || sha256(bytes) !== read.sha256) return true;
   }
   if (order.source === "act-list") {
-    const emittedAtMs = Number(EXECUTION_RE.exec(executionIdentity)[1]);
+    const emittedAtMs = Number(executionIdentity.slice(1, executionIdentity.indexOf("-")));
     if (checkoutRoots.some((root) => findRetirementAfter(path.join(root, "tmp"), order.gate, order.headSha, emittedAtMs) !== null)) return true;
   }
   try {
@@ -152,7 +153,7 @@ export function loadFixerGrants(mainRoot, agentId, checkoutRoots) {
       const plan = JSON.parse(readFileSync(planPath, "utf8"));
       if (plan.workOrderRef !== receipt.workOrderRef || plan.workOrderDigest !== receipt.workOrderDigest || plan.executionIdentity !== receipt.executionIdentity) continue;
       // An in-place edited plan no longer reproduces its digest and grants nothing.
-      if (!EXECUTION_RE.test(plan.executionIdentity) || workOrderDigest(plan.workOrder) !== plan.workOrderDigest) continue;
+      if (!isFixerExecution(plan.executionIdentity) || workOrderDigest(plan.workOrder) !== plan.workOrderDigest) continue;
       // The pull's integrity check, re-run on every call: the materialized work order at its derived path
       // still hashes to the receipt's materializationHash, and its embedded order (never the mutable plan's)
       // is the authority. A missing or changed materialization grants nothing, so a refused re-pull whose
