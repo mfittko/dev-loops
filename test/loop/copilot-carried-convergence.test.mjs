@@ -1088,3 +1088,17 @@ describe("resolveCarriedConvergence converged-once predicate", () => {
     assert.equal(docs.source, "carried");
   });
 });
+
+describe("a Copilot error review is never carried (ADR 0114)", () => {
+  const ERROR_BODY = "Copilot encountered an error and was unable to review this pull request. You can try again by re-requesting a review.";
+  const review = (id, body, submittedAt) => ({ id, author: { login: COPILOT }, state: "COMMENTED", body, commit: { oid: PRIOR }, submittedAt });
+
+  it("skips a later error review and returns the prior non-error review", () => {
+    const reviews = [review("R_clean", "", "2026-09-22T09:00:00Z"), review("R_err", ERROR_BODY, "2026-09-22T10:00:00Z")];
+    assert.equal(resolveLatestCopilotReview({ reviews }).review.id, "R_clean");
+  });
+
+  it("returns no review when every Copilot review is an error review", () => {
+    assert.equal(resolveLatestCopilotReview({ reviews: [review("R_err", ERROR_BODY, "2026-09-22T10:00:00Z")] }).review, null);
+  });
+});

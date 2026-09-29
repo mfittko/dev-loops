@@ -55,7 +55,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 // SUBMITTED_REVIEW_STATES is shared with the loop-state reader on purpose:
 // whitelisting (not `!== "PENDING"`) fails a missing, null, lowercase or
 // newly-invented state closed, and one copy cannot drift from the gate's.
-import { isCopilotLogin, SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
+import { isCopilotErrorReview, isCopilotLogin, SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
 import { REVIEW_THREADS_QUERY } from "./capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -201,7 +201,8 @@ async function collectState(args, { env, runChild }) {
   const reviews = Array.isArray(pr?.reviews) ? pr.reviews : [];
   const submittedCopilotReviews = reviews.filter(
     (review) => isCopilotLogin(review?.author?.login)
-      && SUBMITTED_REVIEW_STATES.has(String(review?.state ?? "").toUpperCase()),
+      && SUBMITTED_REVIEW_STATES.has(String(review?.state ?? "").toUpperCase())
+      && !isCopilotErrorReview(review),
   );
   const submittedCopilotReview = submittedCopilotReviews.length > 0;
   const currentHeadSha = typeof pr?.headRefOid === "string" && pr.headRefOid.trim().length > 0

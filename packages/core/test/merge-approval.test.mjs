@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   isValidGithubLogin,
   resolveMergeClass,
@@ -579,4 +580,37 @@ test("evaluateMergePreconditions: a body-disposition record clears a current-hea
   const tied = [headReview, copilotReview({ id: "R_twin", body: yellow, submittedAt: "2024-01-10T00:00:00Z" })];
   const tiedNamed = evaluateMergePreconditions(greenFacts({ reviews: tied, copilotBodyDisposition: { headSha: HEAD, reviewId: "R_head" } }));
   assert.deepEqual(tiedNamed.failures.map((f) => f.precondition), ["copilot_convergence"]);
+});
+
+// ADR 0114: a Copilot error review is no current-head review.
+const REVIEW_ERROR_BODY = readFileSync(new URL("./fixtures/copilot-overview/review-error.md", import.meta.url), "utf8");
+
+test("evaluateCopilotConvergence: an error review as the only current-head review is no_current_head_review", () => {
+  const reviews = [copilotReview({ body: REVIEW_ERROR_BODY })];
+  const res = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews });
+  assert.equal(res.ok, false, JSON.stringify(res));
+  assert.equal(res.state, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+  const disposed = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews, absentReviewDisposition: { kind: "converged_once", headSha: HEAD } });
+  assert.equal(disposed.ok, true, JSON.stringify(disposed));
+  assert.equal(disposed.state, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+  assert.equal(disposed.disposition, "converged_once");
+});
+
+test("evaluateCopilotConvergence: an earlier-head clean review never covers a current-head error review", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [
+      copilotReview({ commit: OLD, body: "### 🟢 Approval recommended", submittedAt: "2024-01-09T00:00:00Z" }),
+      copilotReview({ body: REVIEW_ERROR_BODY }),
+    ],
+  });
+  assert.equal(res.ok, false, JSON.stringify(res));
+  assert.equal(res.state, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+});
+
+test("evaluateCopilotConvergence: a headerless non-error body stays current_head_clean", () => {
+  const res = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [copilotReview({ body: "Copilot reviewed 3 files." })] });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.state, COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN);
+  assert.equal(res.disposition, "none");
 });

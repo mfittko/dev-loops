@@ -40,7 +40,12 @@ export const COPILOT_DISPOSITION = Object.freeze({
   NEEDS_CLOSER_LOOK: "needs_closer_look",
   UNRECOGNIZED: "unrecognized",
   NONE: "none",
+  // Copilot posted its error text instead of a review (ADR 0114). Not a
+  // submitted Copilot review for convergence, round counts or current-head facts.
+  REVIEW_ERROR: "review_error",
 });
+
+const COPILOT_REVIEW_ERROR_PREFIX_RE = /^copilot encountered an error/i;
 
 /**
  * Classify a Copilot review's current-head body disposition. Text-matched (not
@@ -58,7 +63,10 @@ export function classifyCopilotReviewBodyDisposition(state, body) {
   const headerMatch = body.match(COPILOT_DISPOSITION_HEADER_RE);
   // No disposition header at all (empty body, generic footer, legacy format):
   // no body signal, so this is not a finding.
-  if (!headerMatch) return COPILOT_DISPOSITION.NONE;
+  // The header check runs first, so a header body never reads as an error review.
+  if (!headerMatch) {
+    return COPILOT_REVIEW_ERROR_PREFIX_RE.test(body.trim()) ? COPILOT_DISPOSITION.REVIEW_ERROR : COPILOT_DISPOSITION.NONE;
+  }
 
   const disposition = headerMatch[1]
     .replace(COPILOT_DISPOSITION_LEADING_GLYPHS_RE, "")
@@ -69,6 +77,12 @@ export function classifyCopilotReviewBodyDisposition(state, body) {
   if (disposition === COPILOT_NEEDS_CLOSER_LOOK_DISPOSITION) return COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK;
   // Fail closed on an unrecognized disposition header on the current head.
   return COPILOT_DISPOSITION.UNRECOGNIZED;
+}
+
+// Whether a review (GraphQL or REST shape) is a Copilot error review. Callers
+// filter by Copilot login first.
+export function isCopilotErrorReview(review) {
+  return classifyCopilotReviewBodyDisposition(review?.state, review?.body) === COPILOT_DISPOSITION.REVIEW_ERROR;
 }
 
 export function copilotReviewBodySignalsChanges(state, body) {
@@ -745,7 +759,7 @@ export function resolveDraftGateRoundResetMs({ draftGate, currentHeadSha } = {})
 
 export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs } = {}) {
   const allReviews = Array.isArray(reviews) ? reviews : [];
-  const copilotReviews = allReviews.filter((review) => isCopilotLogin(review?.author?.login));
+  const copilotReviews = allReviews.filter((review) => isCopilotLogin(review?.author?.login ?? review?.user?.login));
 
   // When draft gate has re-passed on a different head, only count reviews
   // after the most recent draft gate approval to prevent round accumulation.
@@ -768,6 +782,8 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
   let hasPendingReviewOnCurrentHead = false;
   let hasSubmittedReviewOnCurrentHead = false;
   let latestSubmittedReviewOnCurrentHeadAt = null;
+  let latestErrorReviewOnCurrentHeadAt = null;
+  let errorReviewCountOnCurrentHead = 0;
   let hasBodyFindingOnCurrentHead = false;
   // The id of the review whose body set hasBodyFindingOnCurrentHead: the
   // review a copilot-body-disposition record must name to clear the finding.
@@ -777,6 +793,20 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
   let completedCopilotReviewRounds = 0;
 
   for (const review of effectiveReviews) {
+    // An error review is no review (ADR 0114): it stays in copilotReviews so a
+    // watcher sees it arrive, but it sets no round and no current-head fact.
+    // Its timestamp still feeds latestCopilotReviewOnCurrentHeadAt, which only
+    // the request-settle reconciliation reads.
+    if (isCopilotErrorReview(review)) {
+      const errorAt = review?.submittedAt ?? review?.submitted_at;
+      if (headSha !== null && extractReviewCommitSha(review) === headSha) {
+        errorReviewCountOnCurrentHead += 1;
+        if (typeof errorAt === "string" && (latestErrorReviewOnCurrentHeadAt === null || errorAt > latestErrorReviewOnCurrentHeadAt)) {
+          latestErrorReviewOnCurrentHeadAt = errorAt;
+        }
+      }
+      continue;
+    }
     const state = typeof review?.state === "string" ? review.state.toUpperCase() : "";
     const reviewCommitSha = extractReviewCommitSha(review);
     const reviewOnCurrentHead = headSha !== null && reviewCommitSha === headSha;
@@ -830,6 +860,12 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
     hasPendingReviewOnCurrentHead,
     hasSubmittedReviewOnCurrentHead,
     latestSubmittedReviewOnCurrentHeadAt,
+    // Latest current-head Copilot review timestamp including error reviews.
+    latestCopilotReviewOnCurrentHeadAt: [latestSubmittedReviewOnCurrentHeadAt, latestErrorReviewOnCurrentHeadAt]
+      .filter((at) => at !== null).sort().at(-1) ?? null,
+    // Current-head Copilot error reviews, from the same reset-filtered set as
+    // every other fact here (ADR 0114 bounded retry).
+    errorReviewCountOnCurrentHead,
     hasBodyFindingOnCurrentHead,
     bodyFindingReviewId,
   };
