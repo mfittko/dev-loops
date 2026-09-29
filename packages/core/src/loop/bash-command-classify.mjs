@@ -223,21 +223,38 @@ function shellSegments(command) {
   return command.trim().split(SHELL_SEGMENT_SEPARATOR).map((s) => s.trim()).filter(Boolean);
 }
 
+/** A run of leading `NAME=value` env assignments. */
+const ENV_ASSIGNMENT_RUN = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*";
+
+/**
+ * The `env` wrapper word plus any trailing run (any order/count) of `NAME=value` assignments and the
+ * common `env` options: `-i`/`--ignore-environment`, `-u <NAME>`/`--unset=<NAME>`, `-C <dir>`/
+ * `--chdir=<dir>`, `-S <str>`/`--split-string=<str>`, `--` and a bare `-`. Shared by
+ * `SHELL_EXEC_PREFIX` and `VERIFY_EXEC_PREFIX` so both see the same `env` forms (#2550).
+ * Ceilings: an `-S` string is one token and is not split into words; any other `env` option is
+ * not covered. The `-C <dir>` target is not resolved, so the caller's repo scoping applies
+ * (fails closed for a managed context).
+ */
+const ENV_WRAPPER =
+  "env(?:\\s+(?:[A-Za-z_][A-Za-z0-9_]*=\\S*|-i|--ignore-environment|-u\\s+\\S+|--unset=\\S+|-C\\s+\\S+|--chdir=\\S+|-S\\s+\\S+|--split-string=\\S+|--|-))*\\s+";
+
 /**
  * Leading prefix a command segment may carry before its real executable: a run of `NAME=value`
- * env assignments, optional `command`/`env`/`exec` wrapper words, and an absolute/relative path on
- * the binary (`/usr/bin/gh`, `/usr/bin/git`). Shared by every classifier in this file that must
- * catch its verb behind these forms (`gh pr <verb>`, `git stash`, ...).
+ * env assignments, zero or more `ENV_WRAPPER` (`env` plus its options/assignments) or
+ * `command`/`exec` wrapper words, and an absolute/relative path on the binary (`/usr/bin/gh`,
+ * `/usr/bin/git`). Shared by every classifier in this file that must catch its verb behind these
+ * forms (`gh pr <verb>`, `git stash`, `env -C /w node -e ...`, ...). See `ENV_WRAPPER` for the
+ * `env` option ceilings.
  *
  * Note: this is a pragmatic normalizer, not a full shell tokenizer. Subshell
  * `(gh pr create)`, `{ …; }` group, `-R=value` short-flag, and backslash-escaped
  * `\gh` forms are deliberately out of scope.
  */
-const SHELL_EXEC_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env|exec)\\s+)*(?:\\S*/)?";
+const SHELL_EXEC_PREFIX = `${ENV_ASSIGNMENT_RUN}(?:${ENV_WRAPPER}|(?:command|exec)\\s+)*(?:\\S*/)?`;
 
 /**
  * Leading prefix a code-verification/build command may carry before its real executable: the
- * shared `SHELL_EXEC_PREFIX` (env assignments, `command`/`env`/`exec` wrapper words, binary path)
+ * shared `SHELL_EXEC_PREFIX` (env assignments, `ENV_WRAPPER`, `command`/`exec` wrapper words, binary path)
  * plus `nice`/`timeout` process wrappers, scoped to this classifier only so the sibling `gh`/`git`
  * classifiers above are not broadened by wrapper forms they never need to tolerate. Covers bare
  * `nice`, `nice -n <N>`, bare `timeout <duration>`, and `timeout` carrying `-s <sig>`/`-k <dur>`/
@@ -246,22 +263,13 @@ const SHELL_EXEC_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env
  * (`timeout 600 bun run verify`, `nice -n 10 bun run verify`). Not a full flag parser: other
  * `timeout`/`nice` flags are a known, deliberately uncovered ceiling.
  *
- * The `env` wrapper word additionally tolerates zero-or-more trailing `NAME=value` assignments
- * before the real executable (`env CI=1 bun run verify`, `env CI=1 FOO=bar npm test`) — the common
- * everyday `env VAR=value ... cmd` CI-invocation shape, on top of the bare-leading-assignment form
- * (`CI=1 bun run verify`) already covered by the shared assignment run at the front of this prefix.
- * It also tolerates the common `env` OPTION forms (mixed freely with `NAME=value` assignments, in
- * any order/count): `-i`/`--ignore-environment`, `-u <NAME>`/`--unset=<NAME>`, `-C <dir>`/
- * `--chdir=<dir>`, `-S <str>`/`--split-string=<str>`, a bare `-`, and `--` — so
- * `env -u DEVLOOPS_COORDINATOR_READONLY bun run verify`, `env -i bun run verify`, and
- * `env -u FOO CI=1 npm test` all match. Closes the cheap classifier gap where an `env` flag (rather
- * than a `NAME=value` assignment) reached the executable unclassified. Not a full `env` flag parser:
- * any other/exotic `env` option is a known, deliberately uncovered ceiling (documented, not chased).
- * `command`/`exec` do not get the same trailing-assignment/option tolerance — no known daily
+ * The `env` forms come from the shared `ENV_WRAPPER` (`env CI=1 bun run verify`,
+ * `env -u DEVLOOPS_COORDINATOR_READONLY bun run verify`, `env -u FOO CI=1 npm test`).
+ * `command`/`exec` do not get the trailing-assignment/option tolerance — no known daily
  * invocation shape needs it, and adding it would only widen the pattern without a use case.
  */
 const VERIFY_EXEC_PREFIX =
-  "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:env(?:\\s+(?:[A-Za-z_][A-Za-z0-9_]*=\\S*|-i|--ignore-environment|-u\\s+\\S+|--unset=\\S+|-C\\s+\\S+|--chdir=\\S+|-S\\s+\\S+|--split-string=\\S+|--|-))*\\s+|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?";
+  `${ENV_ASSIGNMENT_RUN}(?:${ENV_WRAPPER}|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?`;
 
 /** Reuse the existing wrapper boundary for pure validation classification. */
 export function verificationCommandSegments(command) {
