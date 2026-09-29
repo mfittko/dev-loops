@@ -287,7 +287,8 @@ Enforcement at write time and post time:
   `findings_present` over a ledger). A durable log written before the judge pass carries no
   dispositions. A fan-out `draft_gate` or `pre_approval_gate` post over such a ledger refuses
   unless a `--findings-json` finding with a `judgeDisposition` covers every unjudged ledger
-  finding. The post counts as fan-out when `--execution-mode` or the ledger's own
+  finding, where coverage means the same summary text after trimming. Pass the full enriched
+  findings (judge-pass `--ledger-out`), not the `--out` act list. The post counts as fan-out when `--execution-mode` or the ledger's own
   `executionMode` is `fanout_fanin`.
 - No override flag exists. A round whose verdict genuinely differs from the computed one is a
   consolidator bug to fix.
