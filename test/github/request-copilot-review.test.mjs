@@ -317,6 +317,90 @@ test("request-copilot-review does NOT suppress when Copilot's current-head body 
   assert.ok(calls.some((c) => c.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]")));
 });
 
+test("request-copilot-review re-requests after one current-head Copilot error review (ADR 0114)", async () => {
+  const errorReview = '{"id":"r-err","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"newsha"},"submittedAt":"2026-09-27T20:23:16Z","body":"Copilot encountered an error and was unable to review this pull request."}';
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      { stdout: '{"users":[],"teams":[]}\n' },
+      { stdout: `{"isDraft":false,"state":"OPEN","number":17,"headRefOid":"newsha","reviews":[${errorReview}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n` },
+      { stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n' },
+      { stdout: `{"headRefOid":"newsha","reviews":[${errorReview}]}\n` },
+    ]);
+
+  assert.equal(result.status, "requested");
+  assert.notEqual(result.status, "suppressed_same_head_clean");
+  assert.ok(calls.some((c) => c.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]")));
+});
+
+const lingeringErrorReview = '{"id":"r-err","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"newsha"},"submittedAt":"2026-09-27T20:23:16Z","body":"Copilot encountered an error and was unable to review this pull request."}';
+const lingeringRequestEntries = (requestedAt) => [
+  { stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n' },
+  { stdout: `{"isDraft":false,"state":"OPEN","number":17,"headRefOid":"newsha","reviews":[${lingeringErrorReview}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n` },
+  { stdout: `{"login":"copilot-pull-request-reviewer[bot]","created_at":"${requestedAt}"}\n`, assertArgContains: ["/timeline"] },
+  { stdout: '{"requested_reviewers":[]}\n', assertArgContains: ["DELETE"] },
+  { stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n', assertArgContains: ["POST"] },
+  { stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n' },
+  { stdout: `{"headRefOid":"newsha","reviews":[${lingeringErrorReview}]}\n` },
+];
+
+test("request-copilot-review re-requests when the request lingers after a current-head Copilot error review (ADR 0114)", async () => {
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], lingeringRequestEntries("2026-09-27T20:00:00Z"));
+
+  assert.equal(result.status, "requested");
+  // The lingering entry is withdrawn before the re-request POST, so the POST
+  // registers a fresh review_requested event instead of a no-op.
+  const deleteIndex = calls.findIndex((c) => c.args.includes("DELETE"));
+  const postIndex = calls.findIndex((c) => c.args.includes("POST"));
+  assert.ok(deleteIndex >= 0 && postIndex > deleteIndex);
+});
+
+test("request-copilot-review throws before the re-request POST when withdrawing the lingering request fails", async () => {
+  const entries = lingeringRequestEntries("2026-09-27T20:00:00Z");
+  entries[3] = { exitCode: 1, stderr: "delete denied\n", assertArgContains: ["DELETE"] };
+  await assert.rejects(
+    () => runInProcess(["--repo", "owner/repo", "--pr", "17"], entries),
+    (error) => {
+      assert.match(error.message, /delete denied/);
+      assert.ok(error.calls.some((c) => c.args.includes("DELETE")));
+      assert.ok(!error.calls.some((c) => c.args.includes("POST")));
+      return true;
+    },
+  );
+});
+
+test("request-copilot-review keeps already-requested when the request is newer than the error review", async () => {
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], lingeringRequestEntries("2026-09-27T21:00:00Z"));
+
+  assert.equal(result.status, "already-requested");
+  assert.ok(!calls.some((c) => c.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]")));
+  assert.ok(!calls.some((c) => c.args.includes("DELETE")));
+});
+
+test("request-copilot-review keeps the error-review re-request inside the round cap", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-lingering-cap-zero-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\n\nrefinement:\n  maxCopilotRounds: 0\n", "utf8");
+    const [usersEntry, prViewEntry, timelineEntry] = lingeringRequestEntries("2026-09-27T20:00:00Z");
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      usersEntry,
+      prViewEntry,
+      timelineEntry,
+      // At the cap: the draft-gate round reset reads the gate-evidence comments,
+      // then the auto-rerequest eligibility check reads the review threads.
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
+      { assertArgs: GRAPHQL_ARGS, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      timelineEntry,
+    ], { repoRoot: tempDir });
+
+    assert.equal(result.status, "round_cap_reached");
+    assert.equal(calls.length, 7);
+    assert.ok(!calls.some((c) => c.args.includes("DELETE") || c.args.includes("POST")));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 
 test("request-copilot-review treats pending review as already-requested even when a submitted current-head review exists", async () => {
   const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [

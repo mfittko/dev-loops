@@ -7,6 +7,7 @@
  */
 
 import { deriveLoopCiStatusFromRollup } from "./copilot-ci-status.mjs";
+import { summarizeCopilotReviews } from "../github/copilot-helpers.mjs";
 
 /** Stable state name constants for the async Copilot review/fix loop. */
 export const STATE = Object.freeze({
@@ -199,6 +200,10 @@ export function buildSnapshotFromPrFacts({
   excludedFailureDetails,
   copilotBodyFeedbackUnresolved = false,
   copilotPriorHeadBodyFeedbackUnresolved = false,
+  // summarizeCopilotReviews(...).errorReviewCountOnCurrentHead, so the count
+  // reads the same draft-gate-reset-filtered set as the other Copilot facts.
+  // Omitted, it is counted over the unfiltered reviews.
+  copilotErrorReviewCountOnCurrentHead,
 }) {
   const prState = typeof prData?.state === "string" ? prData.state.toUpperCase() : "OPEN";
   const prMerged = prState === "MERGED";
@@ -213,6 +218,8 @@ export function buildSnapshotFromPrFacts({
 
   return normalizeSnapshot({
     prExists: true,
+    copilotErrorReviewCountOnCurrentHead: copilotErrorReviewCountOnCurrentHead
+      ?? summarizeCopilotReviews(prData?.reviews, { headSha: currentHeadSha }).errorReviewCountOnCurrentHead,
     prNumber: typeof prData?.number === "number" ? prData.number : prNumber,
     prDraft: Boolean(prData?.isDraft),
     prMerged,
@@ -304,6 +311,11 @@ export function normalizeSnapshot(raw) {
     // earlier head with no trusted disposition record. Consumed only at the
     // round cap, where no fresh Copilot review can supersede it.
     copilotPriorHeadBodyFeedbackUnresolved: Boolean(raw.copilotPriorHeadBodyFeedbackUnresolved),
+    // Copilot error reviews on the current head (ADR 0114). One allows a
+    // same-head re-request; two or more block for an operator decision.
+    copilotErrorReviewCountOnCurrentHead: Number.isInteger(raw.copilotErrorReviewCountOnCurrentHead) && raw.copilotErrorReviewCountOnCurrentHead > 0
+      ? raw.copilotErrorReviewCountOnCurrentHead
+      : 0,
   };
 }
 
@@ -444,6 +456,11 @@ export function interpretLoopState(snapshot, refinementConfig) {
     } else if (s.copilotReviewRequestStatus === "requested" || s.copilotReviewRequestStatus === "already-requested") {
       // A current-head Copilot request is still active/pending and must settle before gate progression.
       state = STATE.WAITING_FOR_COPILOT_REVIEW;
+    } else if (!s.copilotReviewOnCurrentHead && s.copilotErrorReviewCountOnCurrentHead >= 2) {
+      // Copilot errored twice on this head with no real review: the one
+      // same-head re-request is spent. The operator pushes a new head or
+      // runs the request wrapper again (ADR 0114).
+      state = STATE.BLOCKED_NEEDS_USER_DECISION;
     } else if (s.copilotReviewPresent) {
       // Copilot has reviewed at least once; all threads resolved. A later
       // body-only finding on an earlier commit outranks a clean current-head

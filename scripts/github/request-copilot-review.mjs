@@ -455,7 +455,13 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
       {
         repo: options.repo,
         pr: options.pr,
-        reviewSummary: { hasPendingReviewOnCurrentHead, hasSubmittedReviewOnCurrentHead, latestSubmittedReviewOnCurrentHeadAt },
+        reviewSummary: {
+          hasPendingReviewOnCurrentHead,
+          hasSubmittedReviewOnCurrentHead,
+          latestSubmittedReviewOnCurrentHeadAt,
+          // Includes an error review (ADR 0114), so a request it answered settles.
+          latestCopilotReviewOnCurrentHeadAt: priorReviewState.reviewSummary?.latestCopilotReviewOnCurrentHeadAt ?? null,
+        },
         copilotRequested: requested,
       },
       runtime,
@@ -469,6 +475,7 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
       actionableThreadCount: parsedThreads.summary.actionableThreads,
       copilotReviewRoundCount: priorReviewState.completedCopilotReviewRounds ?? 0,
+      copilotErrorReviewCountOnCurrentHead: priorReviewState.reviewSummary?.errorReviewCountOnCurrentHead,
       ...(await resolveBodyFeedbackFacts(options, runtime, priorReviewState, parsedThreads.threads)),
     });
     const interpretation = interpretLoopState(snapshot, refinementConfig);
@@ -503,7 +510,13 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
       {
         repo: options.repo,
         pr: options.pr,
-        reviewSummary: { hasPendingReviewOnCurrentHead, hasSubmittedReviewOnCurrentHead, latestSubmittedReviewOnCurrentHeadAt },
+        reviewSummary: {
+          hasPendingReviewOnCurrentHead,
+          hasSubmittedReviewOnCurrentHead,
+          latestSubmittedReviewOnCurrentHeadAt,
+          // Includes an error review (ADR 0114), so a request it answered settles.
+          latestCopilotReviewOnCurrentHeadAt: priorReviewState.reviewSummary?.latestCopilotReviewOnCurrentHeadAt ?? null,
+        },
         copilotRequested: requested,
       },
       runtime,
@@ -517,6 +530,7 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
       actionableThreadCount: parsedThreads.summary.actionableThreads,
       copilotReviewRoundCount: priorReviewState.completedCopilotReviewRounds ?? 0,
+      copilotErrorReviewCountOnCurrentHead: priorReviewState.reviewSummary?.errorReviewCountOnCurrentHead,
       ...(await resolveBodyFeedbackFacts(options, runtime, priorReviewState, parsedThreads.threads)),
     });
     const interpretation = interpretLoopState(snapshot, refinementConfig);
@@ -543,6 +557,27 @@ function classifyRequestFailure(detail) {
     return "unavailable";
   }
   return undefined;
+}
+// Withdraws a lingering Copilot requested_reviewers entry so the next POST
+// registers a fresh review_requested event. A POST over a still-listed
+// reviewer can be a no-op that leaves the request settled by the error review.
+async function withdrawCopilotReviewRequest({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  const result = await runChild(
+    ghCommand,
+    [
+      "api",
+      `repos/${repo}/pulls/${pr}/requested_reviewers`,
+      "-X",
+      "DELETE",
+      "-f",
+      `reviewers[]=${COPILOT_REVIEWER_BOT_LOGIN}`,
+    ],
+    env,
+  );
+  if (result.code !== 0) {
+    const detail = result.stderr.trim() || `exit code ${result.code}`;
+    throw new Error(`gh command failed: ${detail}`);
+  }
 }
 async function requestCopilotReview({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   // REST requested_reviewers with the app-style `[bot]`-suffixed login:
@@ -788,17 +823,29 @@ export async function performCopilotReviewRequest(
   // reset applied. A clean draft_gate re-pass on an earlier head resets the count, so
   // a post-reset PR that detect reports as under-cap must NOT be refused here as
   // cap-reached. Only query checkpoint evidence on this (at/over-cap) path.
+  // A requested_reviewers entry can linger after Copilot answered with an error
+  // review (ADR 0114). Settle it before the cap checks so the same-head retry
+  // stays inside the round cap.
+  const requestSettledByErrorReview = before.requested
+    && !before.hasPendingReviewOnCurrentHead
+    && !before.hasSubmittedReviewOnCurrentHead
+    && (before.reviewSummary?.errorReviewCountOnCurrentHead ?? 0) > 0
+    && await resolveCopilotReviewRequestStatus(
+      { repo: options.repo, pr: options.pr, reviewSummary: before.reviewSummary, copilotRequested: true },
+      runtime,
+    ) === "none";
+  const requestOutstanding = before.requested && !requestSettledByErrorReview;
   let completedRounds = before.completedCopilotReviewRounds ?? 0;
   // Tracks whether the cap path already evaluated the convergence-carry decision
   // below, so the below-cap consumption site does not double-compare.
   let convergenceCarryEvaluated = false;
   if (completedRounds >= maxRounds
-      && !before.requested
+      && !requestOutstanding
       && !before.hasPendingReviewOnCurrentHead) {
     completedRounds = await resolveDraftGateAdjustedRounds(options, runtime, before);
   }
   if (completedRounds >= maxRounds
-      && !before.requested
+      && !requestOutstanding
       && !before.hasPendingReviewOnCurrentHead) {
     // Converged-once mode: a converged latest review stands for the current
     // head, so neither the automatic re-request nor --force-rerequest-review
@@ -901,7 +948,7 @@ export async function performCopilotReviewRequest(
       detail: "Current head already has a clean submitted Copilot review; same-head clean-convergence suppression is always enforced.",
     });
   }
-  if (before.requested || before.hasPendingReviewOnCurrentHead) {
+  if (requestOutstanding || before.hasPendingReviewOnCurrentHead) {
     return withConfigWarning({
       ok: true,
       status: "already-requested",
@@ -926,6 +973,9 @@ export async function performCopilotReviewRequest(
         reviewer: "Copilot",
       });
     }
+  }
+  if (requestSettledByErrorReview) {
+    await withdrawCopilotReviewRequest(options, runtime);
   }
   const requestResult = await requestCopilotReview(options, runtime);
   if (requestResult.status === "unavailable") {

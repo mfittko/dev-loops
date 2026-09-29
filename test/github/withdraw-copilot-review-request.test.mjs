@@ -143,6 +143,16 @@ describe("withdraw-copilot-review-request", () => {
       assert.equal(result.status, "refused");
     });
 
+    it("a Copilot error review does not count as a submitted prior review (ADR 0114)", async () => {
+      const gh = ghStub({
+        copilotRequested: true,
+        reviews: [{ author: { login: "Copilot" }, state: "COMMENTED", body: "Copilot encountered an error and was unable to review this pull request." }],
+      });
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild });
+      assert.equal(result.status, "refused");
+      assert.match(result.reason, /no prior review to fall back on/);
+    });
+
     it("an unknown or missing review state is not a submitted review either — states are whitelisted", async () => {
       for (const state of [undefined, null, "", "pending", "WEIRD_NEW_STATE"]) {
         const gh = ghStub({

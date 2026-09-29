@@ -251,6 +251,7 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
     const state = typeof entry?.state === "string" ? entry.state.toUpperCase() : "";
     if (state === "PENDING" || !SUBMITTED_REVIEW_STATES.has(state)) continue; // PENDING/unknown never sets the finding
     const disposition = classifyCopilotReviewBodyDisposition(state, entry?.body);
+    if (disposition === COPILOT_DISPOSITION.REVIEW_ERROR) continue; // an error review is no review (ADR 0114)
     const reviewId = entry?.id !== null && entry?.id !== undefined ? String(entry.id) : null;
     const submittedAt = typeof entry?.submittedAt === "string"
       ? entry.submittedAt
