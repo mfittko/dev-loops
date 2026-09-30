@@ -24,7 +24,7 @@ import {
 } from "../_core-helpers.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { escapeProse, flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
-import { FAILING_CASE_CAP, MAX_FIX_STEPS, PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, splitSentences } from "./_gate-finding-text.mjs";
+import { FAILING_CASE_CAP, MAX_FIX_STEPS, PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, normalizeFindingSummary, splitSentences } from "./_gate-finding-text.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
@@ -229,7 +229,7 @@ const REVIEW_HEADER_RE = /^<!--\s*dev-loops:gate-findings-review\s+(draft_gate|p
 // for any other caller of this function.
 export function fingerprintFinding(finding) {
   const filePath = Array.isArray(finding.files) && finding.files.length > 0 ? String(finding.files[0]).trim() : "";
-  const normalizedSummary = String(finding.summary).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const normalizedSummary = normalizeFindingSummary(finding.summary);
   return createHash("sha256").update(`${filePath}|${normalizedSummary}`).digest("hex").slice(0, 16);
 }
 
@@ -474,16 +474,34 @@ export function renderInlineCommentBody(finding, { round }) {
   if (typeof finding.failingCase === "string" && finding.failingCase.trim().length > 0) {
     lines.push(`**Failing case:** ${capped(finding.failingCase, FAILING_CASE_CAP)}`);
   }
-  if (hasRecommendation(finding)) {
-    const recommendation = cutAtSentence(finding.recommendation, RECOMMENDATION_CAP);
+  const fixSteps = (text) => {
+    const recommendation = cutAtSentence(text, RECOMMENDATION_CAP);
     truncated ||= recommendation.cut;
     const allSteps = splitSentences(recommendation.text).map((step) => step.replace(/^\d+[.)]\s+/, ""));
     const steps = allSteps.slice(0, MAX_FIX_STEPS);
     truncated ||= steps.length < allSteps.length;
+    return steps;
+  };
+  if (hasRecommendation(finding)) {
+    const steps = fixSteps(finding.recommendation);
     if (steps.length === 1) {
       lines.push(`**Fix:** ${escapeProse(steps[0])}`);
     } else {
       lines.push("**Fix:**", ...steps.map((step, i) => `${i + 1}. ${escapeProse(step)}`));
+    }
+  }
+  // A defectKey merge can join different summaries: each further distinct
+  // member adds its own Problem and Fix line, labelled with its angle. An
+  // identical-summary merge adds nothing here.
+  const renderedSummaries = new Set([normalizeFindingSummary(finding.summary)]);
+  for (const member of members) {
+    const normalized = normalizeFindingSummary(member.summary);
+    if (renderedSummaries.has(normalized)) continue;
+    renderedSummaries.add(normalized);
+    const angle = neutralizeHeaderSeparator(escapeProse(member.angle));
+    lines.push(`**Problem (${angle}):** ${capped(member.summary, PROBLEM_CAP)}`);
+    if (hasRecommendation(member)) {
+      lines.push(`**Fix (${angle}):** ${fixSteps(member.recommendation).map((step) => escapeProse(step)).join(" ")}`);
     }
   }
   if (truncated) lines.push(`Full text: ledger entry ${markers[0].match(FINDING_MARKER_RE)[1]}`);

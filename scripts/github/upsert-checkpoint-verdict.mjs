@@ -50,7 +50,7 @@ import {
   updateGateReview,
 } from "./_gate-finding-surface.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
-import { mergeSameDefectFindings } from "./_gate-finding-text.mjs";
+import { mergeSameDefectFindings, normalizeFindingSummary } from "./_gate-finding-text.mjs";
 import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
@@ -1237,6 +1237,22 @@ function normalizeFlatFindingWithAngle(raw) {
   }
   return entry;
 }
+// A merged body-only row (see mergeSameDefectFindings): the primary's fields,
+// every member angle in the angle suffix, and each distinct summary joined
+// with "; ". A group of one normalizes exactly like any other finding.
+function normalizeMergedBodyOnlyRow(finding) {
+  const entry = normalizeFlatFindingWithAngle(finding);
+  if (!entry || !Array.isArray(finding.mergedFindings)) return entry;
+  const members = finding.mergedFindings.map((member) => normalizeFlatFindingWithAngle(member)).filter(Boolean);
+  entry.angle = [...new Set(members.map((member) => member.angle).filter(Boolean))].join(", ");
+  const summaries = new Map([[normalizeFindingSummary(entry.summary), entry.summary]]);
+  for (const member of members) {
+    const key = normalizeFindingSummary(member.summary);
+    if (!summaries.has(key)) summaries.set(key, member.summary);
+  }
+  entry.summary = [...summaries.values()].join("; ");
+  return entry;
+}
 // Flatten normalizeStructuredFindings' per-angle sections into the SAME flat
 // finding shape normalizeFlatFindingWithAngle produces, so the no-ledger path
 // (structuredFindings alone, no finding surface) and the ledger path can share
@@ -1585,8 +1601,10 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     // usable summary) must still render — as an unparseable row — or it
     // is invisible yet marked-suppressed, i.e. silently lost next round. Map
     // rather than filter-Boolean.
-    const bodyOnlyRows = nonLocatableFindings.map(
-      (f) => normalizeFlatFindingWithAngle(f)
+    // Same-defect findings (mergeSameDefectFindings) render as one bullet
+    // naming every angle; the marker loop below stays per member.
+    const bodyOnlyRows = mergeSameDefectFindings(nonLocatableFindings).map(
+      (f) => normalizeMergedBodyOnlyRow(f)
         ?? { unparseable: true, severity: readRawSeverity(f), angle: typeof f?.angle === "string" ? f.angle.trim() : "" },
     );
     if (bodyOnlyRows.length > 0) {

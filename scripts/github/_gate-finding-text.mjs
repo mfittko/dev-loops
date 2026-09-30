@@ -118,33 +118,33 @@ export function lintFillerPhrases(text) {
   return matches.sort((a, b) => a.index - b.index);
 }
 
-// Same-defect rule for the pre-post merge. Two findings merge only when ALL of:
-//   1. they share files[0] and line (both present),
-//   2. they are both questions or both non-questions,
-//   3. they carry the same judgeDisposition (both absent counts as the same),
-//   4. their summaries overlap: at least five shared word stems (first five
-//      letters) of words of four or more letters outside code spans, and the shared words are at least 40% of the union of both word sets.
-// Findings on one line that describe different defects share few words and stay
-// separate. The rule is conservative: a missed merge only costs an extra thread.
-// Common words carry no defect identity, so they never count toward overlap. Connective words such as "during" only place a defect in context, so a shared context phrase cannot merge two different defects.
-const STOPWORDS = new Set(["when", "that", "this", "with", "from", "then", "than", "into", "which", "where", "while", "does", "have", "will", "also", "only", "each", "they", "them", "there", "their", "been", "being", "should", "could", "would", "because", "after", "before", "during", "under", "over", "about", "between", "within", "without", "through"]);
-function summaryWords(summary) {
-  // Code-span text is an identifier; same-line findings share identifiers, so it carries no defect identity.
-  return new Set(String(summary).replace(/`[^`]*`/g, " ").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOPWORDS.has(word)).map((word) => word.slice(0, 5)));
+// The one summary normalization fingerprintFinding and isSameDefect share:
+// lowercase, every non-alphanumeric run collapsed to one space, trimmed.
+export function normalizeFindingSummary(summary) {
+  return String(summary).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+// Same-defect rule for the pre-post merge. Two findings merge only when ALL of:
+//   1. they resolve the same file (a finding with no file never merges),
+//   2. their lines are equal, or both lines are absent,
+//   3. they are both questions or both non-questions,
+//   4. they carry the same judgeDisposition (both absent counts as the same),
+//   5. both carry an equal defectKey, or neither carries one and their
+//      normalized summaries are identical. A key on one finding only blocks it.
+// The rule is conservative: a missed merge only costs an extra thread.
+const hasDefectKey = (finding) => typeof finding.defectKey === "string" && finding.defectKey.length > 0;
 export function isSameDefect(a, b) {
   const fileA = resolveFindingFile(a);
   if (!fileA || fileA !== resolveFindingFile(b)) return false;
-  if (!Number.isInteger(a.line) || a.line !== b.line) return false;
+  const lineA = Number.isInteger(a.line) ? a.line : null;
+  const lineB = Number.isInteger(b.line) ? b.line : null;
+  if (lineA !== lineB) return false;
+  // A finding without a summary renders as its own unparseable row.
+  if (typeof a.summary !== "string" || !a.summary.trim() || typeof b.summary !== "string" || !b.summary.trim()) return false;
   if ((a.severity === "question") !== (b.severity === "question")) return false;
   if ((a.judgeDisposition ?? null) !== (b.judgeDisposition ?? null)) return false;
-  const wordsA = summaryWords(a.summary);
-  const wordsB = summaryWords(b.summary);
-  let shared = 0;
-  for (const word of wordsA) if (wordsB.has(word)) shared += 1;
-  // Jaccard >= 0.4: shared words must be a large part of the union, so a shared subject phrase cannot merge different defects.
-  return shared >= 5 && shared * 5 >= (wordsA.size + wordsB.size - shared) * 2;
+  if (hasDefectKey(a) || hasDefectKey(b)) return a.defectKey === b.defectKey;
+  return normalizeFindingSummary(a.summary) === normalizeFindingSummary(b.summary);
 }
 
 // Groups same-defect findings. Every group of one is returned unchanged. A

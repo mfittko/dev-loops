@@ -43,3 +43,29 @@ test("the inline layout rule names the layout, the pointer and the merge", () =>
     assert.ok(block.includes(phrase), `missing: ${phrase}`);
   }
 });
+
+test("the inline layout rule states the key-based same-defect rule and the carrier exception matches it", () => {
+  const content = read("skills/docs/gate-review-comment-contract.md");
+  const block = ruleBlock(content, "GATE-COMMENT-INLINE-LAYOUT");
+  for (const phrase of [
+    "both findings carry an equal `defectKey`",
+    "neither carries one and their normalized summaries are identical",
+    "A `defectKey` on only one of the two findings blocks the merge.",
+    "A finding with no file never merges.",
+    "The `defectKey` never renders and never enters the fingerprint or the marker.",
+    "`**Problem (<angle>):**`",
+    "`**Fix (<angle>):**`",
+    "Non-locatable findings merge by the same rule into one body-only bullet",
+  ]) {
+    assert.ok(block.includes(phrase), `missing: ${phrase}`);
+  }
+  assert.doesNotMatch(block, /at least five words|40%/);
+  assert.ok(collapse(content).includes("a same-defect merged comment or bullet carries its members together and renders each distinct summary once"));
+});
+
+test("the reviewer agent's findings shape carries the optional defectKey and when to set it", () => {
+  const agent = collapse(read("agents/review.agent.md"));
+  assert.match(agent, /"defectKey": "<rule ID or AC row label>"/);
+  assert.match(agent, /`defectKey` is optional/);
+  assert.match(agent, /\^\[A-Za-z0-9\._:-\]\{1,64\}\$/);
+});

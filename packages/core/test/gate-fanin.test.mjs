@@ -163,6 +163,25 @@ describe("tallySeverities", () => {
   });
 });
 
+describe("consolidateFanin — defectKey", () => {
+  test("a valid defectKey survives fan-in and toFindingsLogShape; a malformed key is dropped", () => {
+    const result = consolidateFanin({
+      angleResults: [
+        findingAngle("correctness", "medium", "a", { defectKey: "AC-2.row:3" }),
+        findingAngle("security", "medium", "b", { defectKey: "not valid" }),
+        findingAngle("holistic", "medium", "c", { defectKey: "x".repeat(65) }),
+      ],
+    });
+    assert.equal(result.findings[0].defectKey, "AC-2.row:3");
+    assert.equal("defectKey" in result.findings[1], false);
+    assert.equal("defectKey" in result.findings[2], false);
+    const shaped = toFindingsLogShape(result.findings);
+    assert.equal(shaped[0].defectKey, "AC-2.row:3");
+    assert.equal("defectKey" in shaped[1], false);
+    assert.equal("defectKey" in toFindingsLogShape([{ severity: "low", angle: "a", summary: "s", defectKey: "bad key" }])[0], false);
+  });
+});
+
 describe("consolidateFanin — verdict", () => {
   test("clean when all angles clean", () => {
     const result = consolidateFanin({

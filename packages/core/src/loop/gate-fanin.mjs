@@ -13,7 +13,7 @@
  *     angle: string,
  *     verdict: "clean" | "findings_present",
  *     headSha: string,   // reviewed head; consolidate-fanin --head-sha enforces it
- *     findings: [{ severity, file?, line?, summary, recommendation?, failingCase? }]
+ *     findings: [{ severity, file?, line?, summary, recommendation?, failingCase?, defectKey? }]
  *   }
  *
  * Severity vocabulary (owned here; consumers import SEVERITY_ORDER /
@@ -203,6 +203,13 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
 // force gate-close to stay blocked; "medium"/"low" eventually defer. "nit"
 // trails last: it defers immediately, with no fixer cycle.
 export const SEVERITY_ORDER = Object.freeze(["high", "question", "medium", "low", "nit"]);
+
+// A reviewer's optional `defectKey`: the rule ID or AC row label the finding
+// violates. Fan-in drops a non-matching value; the ledger writer rejects one.
+export const DEFECT_KEY_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+export function isValidDefectKey(value) {
+  return typeof value === "string" && DEFECT_KEY_RE.test(value);
+}
 
 // The non-defect subset of SEVERITY_ORDER: a "question" is answered (see
 // deriveDisposition) and a "nit" always defers regardless of any gate's
@@ -1037,6 +1044,7 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
         if (typeof f.failingCase === "string" && f.failingCase.trim().length > 0) {
           entry.failingCase = f.failingCase.trim();
         }
+        if (isValidDefectKey(f.defectKey)) entry.defectKey = f.defectKey;
         findings.push(entry);
       }
     }
@@ -1296,6 +1304,7 @@ export function toFindingsLogShape(findings) {
     if (typeof f.failingCase === "string" && f.failingCase.trim().length > 0) {
       entry.failingCase = f.failingCase.trim();
     }
+    if (isValidDefectKey(f.defectKey)) entry.defectKey = f.defectKey;
     if (typeof f.file === "string" && f.file.trim().length > 0) {
       entry.files = [f.file.trim()];
     } else if (Array.isArray(f.files)) {
