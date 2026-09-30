@@ -285,6 +285,12 @@ test("merge: shared stopwords and file identifiers do not merge two different de
   assert.equal(mergeSameDefectFindings([a, b]).length, 2);
 });
 
+test("merge: two defects that share code-span identifiers do not merge", () => {
+  const a = { ...holistic, summary: "`parseConfig()` in `loader.mjs` returns `undefined` for an empty `timeout` value" };
+  const b = { ...holistic, summary: "`parseConfig()` in `loader.mjs` throws on a negative `timeout` value" };
+  assert.equal(mergeSameDefectFindings([a, b]).length, 2);
+});
+
 test("a merged comment's non-primary fingerprints stay suppressed through fetchAllReviewThreads", async () => {
   const members = ["holistic", "no-op", "robustness"].map((angle) => ({ ...noOp, angle, summary: `${noOp.summary} Variant ${angle}.` }));
   assert.equal(new Set(members.map(fingerprintFinding)).size, 3);

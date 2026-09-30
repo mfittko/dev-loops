@@ -121,14 +121,15 @@ export function lintFillerPhrases(text) {
 //   2. they are both questions or both non-questions,
 //   3. they carry the same judgeDisposition (both absent counts as the same),
 //   4. their summaries overlap: at least four shared words of four or more
-//      letters, and the shared words are at least half of the smaller summary's
+//      letters outside code spans, and the shared words are at least half of the smaller summary's
 //      word set.
 // Findings on one line that describe different defects share few words and stay
 // separate. The rule is conservative: a missed merge only costs an extra thread.
 // Common words carry no defect identity, so they never count toward overlap.
 const STOPWORDS = new Set(["when", "that", "this", "with", "from", "then", "than", "into", "which", "where", "while", "does", "have", "will", "also", "only", "each", "they", "them", "there", "their", "been", "being", "should", "could", "would", "because", "after", "before"]);
 function summaryWords(summary) {
-  return new Set(String(summary).toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOPWORDS.has(word)));
+  // Code-span text is an identifier; same-line findings share identifiers, so it carries no defect identity.
+  return new Set(String(summary).replace(/`[^`]*`/g, " ").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOPWORDS.has(word)));
 }
 
 export function isSameDefect(a, b) {
