@@ -1421,7 +1421,7 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 // the genuine suffix by string shape alone; closing that gap fully would
 // need a render-time change (e.g. a distinguishing token) in
 // renderFindingLine itself, out of scope here.
-const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[^*\n]+\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)$/mu;
+const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)$/mu;
 // Header of the fixed inline layout (legacy bodies keep the suffix form above): `**<severity>** · <angles> · judge: <disposition>`.
 // The severity token is lowercase, so a `**Problem:**` line never matches.
 const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)$/mu;

@@ -120,8 +120,8 @@ export function lintFillerPhrases(text) {
 //   1. they share files[0] and line (both present),
 //   2. they are both questions or both non-questions,
 //   3. they carry the same judgeDisposition (both absent counts as the same),
-//   4. their summaries overlap: at least four shared words of four or more
-//      letters outside code spans, and the shared words are at least half of the smaller summary's
+//   4. their summaries overlap: at least five shared word stems (first five
+//      letters) of words of four or more letters outside code spans, and the shared words are at least half of the smaller summary's
 //      word set.
 // Findings on one line that describe different defects share few words and stay
 // separate. The rule is conservative: a missed merge only costs an extra thread.
@@ -129,7 +129,7 @@ export function lintFillerPhrases(text) {
 const STOPWORDS = new Set(["when", "that", "this", "with", "from", "then", "than", "into", "which", "where", "while", "does", "have", "will", "also", "only", "each", "they", "them", "there", "their", "been", "being", "should", "could", "would", "because", "after", "before"]);
 function summaryWords(summary) {
   // Code-span text is an identifier; same-line findings share identifiers, so it carries no defect identity.
-  return new Set(String(summary).replace(/`[^`]*`/g, " ").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOPWORDS.has(word)));
+  return new Set(String(summary).replace(/`[^`]*`/g, " ").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOPWORDS.has(word)).map((word) => word.slice(0, 5)));
 }
 
 export function isSameDefect(a, b) {
@@ -142,7 +142,7 @@ export function isSameDefect(a, b) {
   const wordsB = summaryWords(b.summary);
   let shared = 0;
   for (const word of wordsA) if (wordsB.has(word)) shared += 1;
-  return shared >= 4 && shared * 2 >= Math.min(wordsA.size, wordsB.size);
+  return shared >= 5 &&shared * 2 >= Math.min(wordsA.size, wordsB.size);
 }
 
 // Groups same-defect findings. Every group of one is returned unchanged. A

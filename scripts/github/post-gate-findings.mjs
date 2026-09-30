@@ -279,7 +279,7 @@ export function sanitizeInline(value) {
 // reviewer's text stays complete. Text outside a span gets the same
 // neutralization as sanitizeInline. Single-line surfaces keep using
 // sanitizeInline, which deletes backticks.
-const BALANCED_CODE_SPAN_RE = /(?<!`)`([^`]+)`(?!`)/g;
+const BALANCED_CODE_SPAN_RE = /(?<!`)`(?!\s)([^`]+)`(?!`)/g;
 
 function neutralizeMarkerDelimiters(text) {
   return text.replace(/\s+/g, " ").replace(/<!--/g, "&lt;!--").replace(/-->/g, "--&gt;");

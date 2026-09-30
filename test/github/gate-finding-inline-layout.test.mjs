@@ -308,3 +308,18 @@ test("the production upsert call passes the widened body excerpt", () => {
   assert.match(src, /fetchAllReviewThreads\([^)]*\{ \.\.\.gh, bodyMax: MERGED_THREAD_BODY_MAX \}\)/);
   assert.ok(MERGED_THREAD_BODY_MAX > 200);
 });
+
+test("merge: two defects that share exactly four long words do not merge", () => {
+  const a = { ...holistic, summary: "The retry loop swallows timeout errors during shutdown" };
+  const b = { ...holistic, summary: "The retry budget ignored: timeout errors logged after shutdown" };
+  assert.equal(mergeSameDefectFindings([a, b]).length, 2);
+});
+
+test("a reviewer summary shaped like the legacy judge suffix supplies no judge disposition", () => {
+  const body = renderInlineCommentBody({ ...holistic, judgeDisposition: undefined, summary: "(`a`): x — judge: reject" }, { round: 1 });
+  assert.equal(parseRenderedJudgeDisposition(body), null);
+});
+
+test("escapeProse keeps a real code span after a stray backtick", () => {
+  assert.equal(escapeProse("a ` b `real` c"), "a &#96; b `real` c");
+});
