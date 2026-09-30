@@ -32,7 +32,7 @@ function codeMask(text) {
 
 // A `.` that ends a bare list number (`1.`) or a known abbreviation is not a
 // sentence end. ponytail: fixed abbreviation list, extend when a new one splits.
-const ABBREVIATION_TAIL = /(?:^|\s)(?:\d+|e\.g|i\.e|vs|etc|cf)$/i;
+const ABBREVIATION_TAIL = /(?:^|[.!?]\s+)\d+$|(?:^|\s)(?:e\.g|i\.e|vs|etc|cf)$/i;
 
 // Indices just after each sentence end: `.`, `!` or `?` outside code, followed
 // by whitespace or the end of the text.

@@ -23,6 +23,8 @@ import {
 } from "../../scripts/github/_gate-finding-text.mjs";
 import { escapeProse, renderBoundedFindingsCommentBody } from "../../scripts/github/post-gate-findings.mjs";
 import { fetchAllReviewThreads } from "../../scripts/github/list-review-threads.mjs";
+import { MERGED_THREAD_BODY_MAX } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { readFileSync } from "node:fs";
 import { buildMeritRationale } from "../../scripts/github/close-gate-findings.mjs";
 
 const HEAD_SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -256,18 +258,26 @@ test("cutAtSentence never splits a code span when no whitespace precedes the cap
 
 test("splitSentences keeps list numbers and abbreviations inside one step, and the Fix lines number cleanly", () => {
   assert.deepEqual(splitSentences("1. Extract `scaleWidget()`. 2. Call it from `mount()`."), ["1. Extract `scaleWidget()`.", "2. Call it from `mount()`."]);
+  assert.deepEqual(splitSentences("Raise the cap to 200. Add a test."), ["Raise the cap to 200.", "Add a test."]);
   assert.deepEqual(splitSentences("Guard the call, e.g. with a null check. Add a test."), ["Guard the call, e.g. with a null check.", "Add a test."]);
   const body = renderInlineCommentBody({ ...holistic, recommendation: "1. Extract `scaleWidget()`. 2. Call it, i.e. from `mount()`." }, { round: 1 });
   assert.ok(body.includes("1. Extract `scaleWidget()`.\n2. Call it, i.e. from `mount()`."));
 });
 
 test("a merged comment's non-primary fingerprints stay suppressed through fetchAllReviewThreads", async () => {
-  const members = ["holistic", "no-op", "robustness"].map((angle) => ({ ...noOp, angle }));
+  const members = ["holistic", "no-op", "robustness"].map((angle) => ({ ...noOp, angle, summary: `${noOp.summary} Variant ${angle}.` }));
+  assert.equal(new Set(members.map(fingerprintFinding)).size, 3);
   const body = renderInlineCommentBody(mergeSameDefectFindings(members)[0], { round: 1 });
   const node = { id: "T1", isResolved: false, isOutdated: false, path: "src/Widget.js", line: 69, comments: { nodes: [{ databaseId: 1, body, author: { login: "bot" } }] } };
   const payload = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [node] } } } } });
   const runChild = async () => ({ code: 0, stdout: payload, stderr: "" });
-  const threads = await fetchAllReviewThreads({ repo: "owner/repo", pr: 5 }, { env: {}, ghCommand: "gh", runChild, bodyMax: 4000 });
+  const threads = await fetchAllReviewThreads({ repo: "owner/repo", pr: 5 }, { env: {}, ghCommand: "gh", runChild, bodyMax: MERGED_THREAD_BODY_MAX });
   const suppressed = collectSuppressedFingerprints({ reviews: [], threads, login: "bot" });
   for (const member of members) assert.ok(suppressed.has(fingerprintFinding(member)));
+});
+
+test("the production upsert call passes the widened body excerpt", () => {
+  const src = readFileSync(new URL("../../scripts/github/upsert-checkpoint-verdict.mjs", import.meta.url), "utf8");
+  assert.match(src, /fetchAllReviewThreads\([^)]*\{ \.\.\.gh, bodyMax: MERGED_THREAD_BODY_MAX \}\)/);
+  assert.ok(MERGED_THREAD_BODY_MAX > 200);
 });

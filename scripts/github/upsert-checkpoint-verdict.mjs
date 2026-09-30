@@ -2043,6 +2043,7 @@ async function loadMatchingFindingsLedger(options, headSha) {
   }
   return ledger;
 }
+export const MERGED_THREAD_BODY_MAX = 4000;
 async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger, inlineSeverityFloor }, gh) {
   // The withheld-tier coverage check above already loaded and validated this
   // same --findings-ledger file for this same round; reuse it instead of
@@ -2057,7 +2058,7 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   const issueComments = await listIssueComments({ repo: options.repo, pr: options.pr }, gh);
   // A merged comment carries one marker per merged finding, and later markers
   // fall past the default 200-char listing excerpt, so widen the excerpt.
-  const threads = await fetchAllReviewThreads({ repo: options.repo, pr: options.pr }, { ...gh, bodyMax: 4000 });
+  const threads = await fetchAllReviewThreads({ repo: options.repo, pr: options.pr }, { ...gh, bodyMax: MERGED_THREAD_BODY_MAX });
   const suppressed = collectSuppressedFingerprints({ reviews, threads, login });
   const round = await resolveGateRound({
     repo: options.repo,
