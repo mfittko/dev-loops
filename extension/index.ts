@@ -47,7 +47,8 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
     ctx.ui.setStatus(STATUS_KEY, undefined);
   });
 
-  // #2509: block shell for read-only roles; Pi honours `{ block, reason }` from `tool_call`.
+  // Read-only role enforcement on Pi (cross-harness-regression-contract.md): block shell for
+  // read-only roles; Pi honours `{ block, reason }` from `tool_call`.
   adapter.on('tool_call', (event) => {
     const { toolName, input } = event as { toolName?: string; input?: { command?: unknown } };
     return decidePiToolCall({ toolName, input, agentType: resolvePiAgentType() });

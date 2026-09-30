@@ -1,7 +1,8 @@
 import { EXECUTION_IDENTITY_RE } from '@dev-loops/core/loop/work-order-digest';
 
 /**
- * Pi enforcement of the read-only role boundary (#2509). Pi maps `search` and `bash` to
+ * Pi enforcement of the read-only role boundary
+ * (skills/docs/cross-harness-regression-contract.md, "Read-only role enforcement on Pi"). Pi maps `search` and `bash` to
  * unrestricted `bash`, and its `tool_call` event carries no agent identity. The dispatch
  * sets the role marker `DEVLOOPS_AGENT_TYPE` in the child environment; the `tool_call`
  * handler reads it here. The Pi surface must not import the Claude hook seam, so the
