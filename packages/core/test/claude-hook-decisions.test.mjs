@@ -675,10 +675,37 @@ test("decideWriteGuard allows the dev-loop subagent via agent_type", () => {
 });
 
 test("decideWriteGuard denies a generic (non-dev-loop) subagent — no bypass via arbitrary agents", () => {
-  for (const agentType of ["Explore", "Plan", "general-purpose", "developer"]) {
+  for (const agentType of ["Explore", "Plan", "general-purpose"]) {
     const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType });
     assert.equal(d.decision, "deny", `agent_type ${agentType} must not bypass the boundary`);
   }
+});
+
+test("decideWriteGuard allows a worker agent inside a linked worktree", () => {
+  for (const agentType of ["developer", "dev-loops:fixer", "quality", "docs"]) {
+    const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType, inLinkedWorktree: true });
+    assert.equal(d.decision, "allow", `worker ${agentType} may write inside a linked worktree`);
+  }
+});
+
+test("decideWriteGuard denies a worker whose target is not in a linked worktree (main checkout)", () => {
+  for (const agentType of ["developer", "dev-loops:fixer", "quality", "docs"]) {
+    for (const extra of [{}, { inLinkedWorktree: false }]) {
+      const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType, ...extra });
+      assert.equal(d.decision, "deny", `worker ${agentType} must not write the main checkout`);
+    }
+  }
+});
+
+test("decideWriteGuard denies a foreign-plugin namesake worker even inside a linked worktree", () => {
+  for (const agentType of ["otherplugin:docs", "otherplugin:developer", "Explore", null]) {
+    const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType, inLinkedWorktree: true });
+    assert.equal(d.decision, "deny", `agent_type ${agentType} is not a worker`);
+  }
+  assert.equal(
+    decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType: "dev-loops:docs", inLinkedWorktree: true }).decision,
+    "allow",
+  );
 });
 
 // ---------------------------------------------------------------------------

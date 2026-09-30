@@ -868,3 +868,93 @@ test("agent-guard hook denies a dev-loop gate-pointer review dispatch, allows a 
   assert.equal(allowed.code, 0);
   assert.equal(allowed.json, null, "no deny output for a main-session dispatch");
 });
+
+// ---------------------------------------------------------------------------
+// Target-repo classification: a linked worktree under a gitignored directory of the main checkout
+// ---------------------------------------------------------------------------
+
+function withNestedWorktree(fn) {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "write-guard-nested-")));
+  const main = path.join(base, "main");
+  const git = (cwd, ...args) => {
+    const result = gitFixture(["-c", "user.name=t", "-c", "user.email=t@t", ...args], cwd);
+    assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+  };
+  try {
+    fs.mkdirSync(main);
+    git(main, "init", "-q", "-b", "main");
+    fs.writeFileSync(path.join(main, ".gitignore"), "tmp/\n");
+    fs.writeFileSync(path.join(main, "README.md"), "x\n");
+    git(main, "add", ".");
+    git(main, "commit", "-q", "-m", "init");
+    const wt = path.join(main, "tmp", "worktrees", "issue-1");
+    git(main, "worktree", "add", "-q", "-b", "issue-1", wt);
+    fs.mkdirSync(path.join(wt, "tmp", "scratch"), { recursive: true });
+    fn({ main, wt, base });
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+
+const decisionOf = (cwd, file, agent_type, env) => {
+  const res = runHook("pre-tool-use-write-guard.mjs", { tool_name: "Edit", tool_input: { file_path: file }, cwd, ...(agent_type ? { agent_type } : {}) }, env);
+  assert.equal(res.code, 0, `hook crashed (exit ${res.code}): ${res.stderr}`);
+  return res.json?.hookSpecificOutput?.permissionDecision ?? "allow";
+};
+
+test("write-guard hook classifies a target by its containing repository: a tracked linked-worktree file is a repo mutation", () => {
+  withNestedWorktree(({ main, wt, base }) => {
+    const coordinator = { DEVLOOPS_COORDINATOR_READONLY: "1" };
+    const tracked = path.join(wt, "README.md");
+    assert.equal(decisionOf(main, tracked, "dev-loop", coordinator), "deny");
+    assert.equal(decisionOf(main, tracked, "dev-loops:dev-loop", coordinator), "deny");
+    assert.equal(decisionOf(main, tracked, "developer", coordinator), "allow", "workers keep write access in a linked worktree");
+    assert.equal(decisionOf(main, path.join(wt, "tmp", "scratch", "n.txt"), "dev-loop", coordinator), "allow", "gitignored worktree file");
+    fs.mkdirSync(path.join(base, "plain"));
+    assert.equal(decisionOf(main, path.join(base, "plain", "f.txt"), "dev-loop", coordinator), "allow", "outside every repository");
+    assert.equal(decisionOf(main, tracked, undefined, { DEVLOOPS_MAIN_AGENT_READONLY: "1", DEVLOOPS_ALLOW_MAIN: "1" }), "deny", "main agent");
+    const mainBoundary = { DEVLOOPS_MAIN_AGENT_READONLY: "1" };
+    assert.equal(decisionOf(main, tracked, "developer", mainBoundary), "allow", "worker under the main-agent boundary");
+    assert.equal(decisionOf(main, path.join(main, "README.md"), "developer", mainBoundary), "deny", "developer denied on a main-checkout target under DEVLOOPS_MAIN_AGENT_READONLY=1");
+    const other = path.join(base, "other");
+    fs.mkdirSync(other);
+    const init = gitFixture(["init", "-q", "-b", "main"], other);
+    assert.equal(init.status, 0, `git init: ${init.stderr}`);
+    assert.equal(decisionOf(main, path.join(main, "README.md"), "developer", { ...mainBoundary, GIT_COMMON_DIR: path.join(other, ".git"), GIT_INDEX_FILE: path.join(other, ".git", "index") }), "deny", "a foreign inherited GIT_COMMON_DIR/GIT_INDEX_FILE does not steer the worktree classification");
+    assert.equal(decisionOf(main, tracked, "otherplugin:docs", mainBoundary), "deny", "a foreign-namespace docs agent is not a worker");
+    assert.equal(decisionOf(main, tracked, "dev-loops:quality", { ...coordinator, ...mainBoundary }), "allow", "worker with both boundaries");
+    assert.equal(decisionOf(main, tracked, "general-purpose", mainBoundary), "deny", "generic subagent");
+    // Git internals: rev-parse --show-toplevel fails there, and the guard must fail closed.
+    for (const hook of [path.join(main, ".git", "hooks", "pre-commit"), path.join(main, ".git", "worktrees", "issue-1", "hooks", "pre-commit")]) {
+      fs.mkdirSync(path.dirname(hook), { recursive: true });
+      assert.equal(decisionOf(main, hook, "dev-loop", coordinator), "deny", hook);
+      assert.equal(decisionOf(main, hook, undefined, { DEVLOOPS_MAIN_AGENT_READONLY: "1", DEVLOOPS_ALLOW_MAIN: "1" }), "deny", hook);
+    }
+  });
+});
+
+test("write-guard hook denies a submodule git-dir hook write (rev-parse succeeds there via core.worktree)", () => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "write-guard-submodule-")));
+  const git = (cwd, ...args) => {
+    const result = gitFixture(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always", ...args], cwd);
+    assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+  };
+  try {
+    const lib = path.join(base, "lib");
+    const main = path.join(base, "main");
+    for (const dir of [lib, main]) {
+      fs.mkdirSync(dir);
+      git(dir, "init", "-q", "-b", "main");
+      fs.writeFileSync(path.join(dir, "README.md"), "x\n");
+      git(dir, "add", ".");
+      git(dir, "commit", "-q", "-m", "init");
+    }
+    git(main, "submodule", "add", "-q", lib, "sub");
+    const hook = path.join(main, ".git", "modules", "sub", "hooks", "pre-commit");
+    fs.mkdirSync(path.dirname(hook), { recursive: true });
+    assert.equal(decisionOf(main, hook, "dev-loop", { DEVLOOPS_COORDINATOR_READONLY: "1" }), "deny", "coordinator");
+    assert.equal(decisionOf(main, hook, undefined, { DEVLOOPS_MAIN_AGENT_READONLY: "1", DEVLOOPS_ALLOW_MAIN: "1" }), "deny", "main agent");
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

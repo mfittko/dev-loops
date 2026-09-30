@@ -67,6 +67,11 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 export const GATE_COORDINATOR_AGENT_TYPE = "gate-coordinator";
 /** Callers that hold the coordinator write and verify boundaries: the gate coordinator never loosens them. */
 const COORDINATOR_AGENT_TYPES = new Set([DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE]);
+/** Worker agents that keep write access to tracked worktree files under the main-agent read-only boundary. */
+const WORKER_AGENT_TYPES = new Set(["developer", "fixer", "quality", "docs"]);
+/** A worker by bare name or the `dev-loops:` plugin namespace only; `otherplugin:docs` is not a worker. */
+const isWorkerAgentType = (agentType) =>
+  typeof agentType === "string" && WORKER_AGENT_TYPES.has(agentType.startsWith("dev-loops:") ? agentType.slice("dev-loops:".length) : agentType);
 
 /**
  * Normalize a Claude `agent_type` hook-payload value that may be PLUGIN-NAMESPACED
@@ -489,12 +494,13 @@ export function decideBashGate({
 /**
  * Decide whether a PreToolUse Write/Edit must be blocked by the main-agent read-only boundary.
  *
- * Denies a mutation whose target is inside the repo working tree AND not gitignored, when the
- * call originates from the MAIN agent. Allows it only inside the *dev-loop* subagent context:
- * the CA2 run id (`DEVLOOPS_RUN_ID`) is present, or the Claude `agent_type` is the dev-loop
- * agent. A generic subagent (Explore, Plan, an arbitrary Task agent) is NOT authorized — the
- * contract requires mutations to flow through the dev-loop subagent specifically. Non-repo /
- * gitignored paths are always allowed. Strict enforcement is opt-in via `enforce` (the hook
+ * Denies a repo-mutation write from the main agent and from unknown subagents (Explore, Plan,
+ * an arbitrary Task agent). A run id (`DEVLOOPS_RUN_ID`) or the dev-loop agent type is
+ * authorized. Worker agents (developer, fixer, quality, docs; bare name or the `dev-loops:`
+ * namespace only) are authorized only when the target is inside a linked worktree
+ * (`inLinkedWorktree`). A repo mutation is a target inside a repository working tree and not
+ * gitignored; any path under a `.git` segment is also a repo mutation. Non-repo / gitignored
+ * paths are always allowed. Strict enforcement is opt-in via `enforce` (the hook
  * derives it from `DEVLOOPS_MAIN_AGENT_READONLY=1`) so adopting the harness does not
  * retroactively break a repo's own interactive dev; default is fail-open.
  *
@@ -504,18 +510,22 @@ export function decideBashGate({
  * @param {boolean} [params.enforce] - Strict mode (DEVLOOPS_MAIN_AGENT_READONLY=1).
  * @param {Record<string,string|undefined>} [params.env] - Environment (for the CA2 run id).
  * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload, if any.
+ * @param {boolean} [params.inLinkedWorktree] - True when the target's repo is a linked worktree
+ *   (`git rev-parse --git-dir` differs from `--git-common-dir`); default false denies workers.
  * @returns {HookDecision}
  */
-export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, env = {}, agentType = null }) {
+export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, env = {}, agentType = null, inLinkedWorktree = false }) {
   if (!enforce) {
     return ALLOW; // strict enforcement not enabled — fail open
   }
   if (!isRepoMutation) {
     return ALLOW; // non-repo or gitignored path (e.g. /tmp, tmp/) — allowed by the contract
   }
-  // Authorized only inside the dev-loop subagent context: CA2 run id, or the dev-loop agent
-  // type. Any other subagent type is treated like the main agent and denied.
-  if (resolveRunId(env) || agentType === DEV_LOOP_AGENT_TYPE) {
+  // Authorized only inside the dev-loop subagent context: CA2 run id, the dev-loop agent type, or
+  // a worker agent (developer/fixer/quality/docs) writing inside a LINKED worktree. A worker
+  // matches only by bare name or the `dev-loops:` namespace; a worker targeting the main checkout,
+  // a foreign-plugin namesake and any other subagent type are treated like the main agent and denied.
+  if (resolveRunId(env) || agentType === DEV_LOOP_AGENT_TYPE || (inLinkedWorktree && isWorkerAgentType(agentType))) {
     return ALLOW;
   }
   return {

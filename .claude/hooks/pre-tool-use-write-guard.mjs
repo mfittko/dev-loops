@@ -19,10 +19,12 @@
  *    commit. Override a deliberate main-checkout edit with DEVLOOPS_ALLOW_MAIN=1.
  *
  * 2. Main-agent read-only boundary (#773, opt-in via DEVLOOPS_MAIN_AGENT_READONLY=1,
- *    default fail-open): denies a Write/Edit whose target is inside the repo working
- *    tree AND not gitignored when the call originates from the MAIN agent; allowed
- *    inside the dev-loop subagent context (CA2 DEVLOOPS_RUN_ID, or Claude
- *    agent_type === "dev-loop").
+ *    default fail-open): denies a repo-mutation Write/Edit from the MAIN agent and from
+ *    unknown subagents. A run id (CA2 DEVLOOPS_RUN_ID) or the dev-loop agent type is
+ *    authorized. Worker agents (developer, fixer, quality, docs; bare name or the
+ *    dev-loops: namespace only) are authorized only when the target is inside a linked
+ *    worktree. A repo mutation is a target inside a repository working tree and not
+ *    gitignored; any path under a `.git` segment is also a repo mutation.
  *
  * 3. Coordinator→worker delegation boundary (#2082, opt-in via
  *    DEVLOOPS_COORDINATOR_READONLY=1, default fail-open): the INVERSE of boundary 2, one
@@ -39,7 +41,7 @@ import { decideFixerWriteGuard, FIXER_AGENT_TYPE, decideJudgeWriteGuard, JUDGE_A
 import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
-import { loadFixerContext, nearestExistingDir } from "./_fixer-grants.mjs";
+import { gitEnv, loadFixerContext, nearestExistingDir } from "./_fixer-grants.mjs";
 
 const input = readHookInput();
 const filePath = input?.tool_input?.file_path ?? input?.tool_input?.notebook_path;
@@ -200,26 +202,44 @@ const enforce = process.env.DEVLOOPS_MAIN_AGENT_READONLY === "1";
 // subagent is authorized to mutate — a generic subagent must not bypass the boundary.
 const agentType = typeof input?.agent_type === "string" ? input.agent_type : null;
 
-// Repo mutation = inside the repo working tree AND not gitignored.
+// Repo mutation = inside the working tree of the repository that CONTAINS the target
+// (not the hook's cwd) AND not gitignored there. A linked worktree under a gitignored
+// directory of the main checkout is its own repository, so its tracked files count.
 let isRepoMutation = false;
+let inLinkedWorktree = false;
+const targetReal = realpathNearestExisting(abs);
 try {
-  const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim();
-  if (abs === repoRoot || abs.startsWith(repoRoot + path.sep)) {
+  const gitOpts = { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] };
+  const repoRoot = execFileSync("git", ["-C", nearestExistingDir(targetReal), "rev-parse", "--show-toplevel"], gitOpts).trim();
+  if (targetReal === repoRoot || targetReal.startsWith(repoRoot + "/")) {
     let ignored = false;
     try {
       // `git check-ignore -q` exits 0 when ignored, 1 when not ignored.
-      execFileSync("git", ["check-ignore", "-q", "--", abs], { cwd: repoRoot, stdio: "ignore" });
+      execFileSync("git", ["check-ignore", "-q", "--", targetReal], { ...gitOpts, cwd: repoRoot });
       ignored = true;
     } catch {
       ignored = false;
     }
     isRepoMutation = !ignored;
+    // A linked worktree's git dir differs from the shared common dir; the main checkout's are equal.
+    // A lookup failure leaves inLinkedWorktree false and isRepoMutation true (fail closed).
+    try {
+      const gitDirs = ["--git-dir", "--git-common-dir"].map((flag) =>
+        path.resolve(repoRoot, execFileSync("git", ["-C", repoRoot, "rev-parse", flag], gitOpts).trim()));
+      inLinkedWorktree = gitDirs[0] !== gitDirs[1];
+    } catch {
+      inLinkedWorktree = false;
+    }
   }
 } catch {
-  isRepoMutation = false; // not a git repo / path outside any repo
+  // Outside every repo: allow (the `.git` rule below still applies).
 }
+// A target under a git directory (.git/hooks, .git/worktrees/<n>, .git/modules/<n>) fails closed on a `.git`
+// path segment (a hook write is code execution). rev-parse can fail there, or succeed with a toplevel
+// that does not contain the target (a submodule git dir has core.worktree set).
+if (targetReal.split("/").includes(".git")) isRepoMutation = true;
 
-const decision = decideWriteGuard({ filePath, isRepoMutation, enforce, env: process.env, agentType });
+const decision = decideWriteGuard({ filePath, isRepoMutation, enforce, env: process.env, agentType, inLinkedWorktree });
 if (decision.decision === "deny") {
   emitDeny(decision.reason);
 }

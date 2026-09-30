@@ -11,7 +11,7 @@ TRACKED repo files (source, tests, docs) and MUST delegate every tracked-file im
 and targeted verification run to a fresh WORKER subagent (`developer`/`fixer`/`quality`/`docs`).
 The coordinator MAY still write EPHEMERAL gitignored/non-repo artifacts directly: `tmp/`, the
 scratchpad, and sanctioned ledger paths (the PR body markdown, comment bodies, dispatch prompts,
-gate evidence/ledgers under `tmp/gate-findings/`). The `PreToolUse` Write/Edit guard hook enforces
+gate evidence/ledgers under `tmp/gate-findings/`; tracked files of a loop worktree under `tmp/` stay denied). The `PreToolUse` Write/Edit guard hook enforces
 this boundary: opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once
 enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop` or `gate-coordinator`; a worker
 subagent's `agent_type` is unaffected. It is a targeted denylist, not an airtight sandbox:
@@ -180,10 +180,10 @@ the full run.
 - Under **Claude Code**, the **Edit/Write tool** path is enforced **mechanically** by a
   `PreToolUse` Write/Edit hook (`.claude/hooks/pre-tool-use-write-guard.mjs`, wired via
   `.claude/settings.json` for this repo's own sessions and via `.claude/hooks/hooks.json` for the
-  Claude plugin): a Write/Edit whose target is inside the repo working tree and not
+  Claude plugin): the hook classifies a target by the git repository that contains it (not the hook cwd), so tracked files of a loop worktree under `tmp/`, of any other git repository, and git internals (`.git/`) count as repo mutations. A Write/Edit whose target is inside such a working tree and not
   gitignored is **denied** when it originates from the main agent, and allowed only inside the
   `dev-loop` subagent context (detected via the neutral `DEVLOOPS_RUN_ID` run-id contract, or
-  the dev-loop `agent_type` — a generic subagent is not authorized).
+  the dev-loop `agent_type`) or a worker subagent (`developer`/`fixer`/`quality`/`docs`) whose target is in a linked worktree (a main-checkout target stays denied); a generic subagent is not authorized.
   Strict enforcement is opt-in via `DEVLOOPS_MAIN_AGENT_READONLY=1` (default fail-open).
 - **Coordinator→worker delegation boundary (#2082).** The same hook enforces the coordinator
   write boundary defined at the top of this document.

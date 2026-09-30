@@ -11,7 +11,7 @@ TRACKED repo files (source, tests, docs) and MUST delegate every tracked-file im
 and targeted verification run to a fresh WORKER subagent (`developer`/`fixer`/`quality`/`docs`).
 The coordinator MAY still write EPHEMERAL gitignored/non-repo artifacts directly: `tmp/`, the
 scratchpad, and sanctioned ledger paths (the PR body markdown, comment bodies, dispatch prompts,
-gate evidence/ledgers under `tmp/gate-findings/`). The `PreToolUse` Write/Edit guard hook enforces
+gate evidence/ledgers under `tmp/gate-findings/`; tracked files of a loop worktree under `tmp/` stay denied). The `PreToolUse` Write/Edit guard hook enforces
 this boundary: opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once
 enforced, it denies a tracked-file Write/Edit whose `agent_type` is `dev-loop` or `gate-coordinator`; a worker
 subagent's `agent_type` is unaffected. It is a targeted denylist, not an airtight sandbox:
