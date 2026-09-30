@@ -568,12 +568,15 @@ test("consolidateGateFanin neutralizes bare #<digits> refs in finding summary/re
           severity: "must-fix",
           summary: "duplicates #1807 and ##1584 behavior",
           recommendation: "align with #1731 guard",
+          failingCase: "fails when #1807 is reopened",
           file: "src/a.mjs",
         }],
       },
     },
     async (dir) => {
       const result = await consolidateGateFanin({ findingsDir: dir });
+      // failingCase goes through the same neutralize seam and survives fan-in.
+      assert.equal(result.findings.find((f) => f.angle === "scope").failingCase, "fails when 1807 is reopened");
       // Flat ledger shape: the leading `#`(s) are stripped, the id digits kept.
       const flat = result.findings.find((f) => f.angle === "scope");
       assert.equal(flat.summary, "duplicates 1807 and 1584 behavior");
@@ -4429,4 +4432,17 @@ test("consolidateGateFanin: the GATE-EXEC-RESOLVED-ANGLE-EVIDENCE error carries 
   } finally {
     await rm(primary, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+test("consolidateGateFanin flags reviewer filler as a non-blocking warning and leaves the text unchanged", async () => {
+  const summary = "It is worth noting that `a()` skips the reset.";
+  await withFindingsDir(
+    { "dry.json": { angle: "dry", verdict: "findings_present", findings: [{ severity: "medium", summary, file: "src/a.mjs", line: 3 }] } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.fillerWarnings, [{ angle: "dry", field: "summary", phrase: "It is worth noting" }]);
+      assert.equal(result.findings[0].summary, summary);
+    },
+  );
 });

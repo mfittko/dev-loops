@@ -147,6 +147,12 @@ function validateFindingsArray(parsed, flagLabel) {
       }
       entry.recommendation = f.recommendation.trim();
     }
+    if ("failingCase" in f) {
+      if (typeof f.failingCase !== "string" || f.failingCase.trim().length === 0) {
+        throw parseError(`${flagLabel}[${i}].failingCase must be a non-empty string`);
+      }
+      entry.failingCase = f.failingCase.trim();
+    }
     if (Array.isArray(f.files)) {
       // Trimmed, not just filtered: hasLocatableShape only checks non-empty,
       // but every downstream consumer (diff commentable-line lookup, posted
@@ -417,7 +423,7 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
     for (const entry of plan.carried) {
       for (const prior of entry.findings ?? []) {
         const index = remaining.findIndex((finding) => finding.angle === entry.angle
-          && ["severity", "summary", "line", "recommendation"].every((key) => finding[key] === prior[key])
+          && ["severity", "summary", "line", "recommendation", "failingCase"].every((key) => finding[key] === prior[key])
           && isDeepStrictEqual(finding.files, prior.files ?? (prior.file ? [prior.file] : undefined)));
         if (index < 0) throw parseError(`zero-unit carry proof requires preserved findings for ${entry.angle}`);
         remaining.splice(index, 1);

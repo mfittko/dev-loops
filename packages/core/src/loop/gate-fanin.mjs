@@ -13,7 +13,7 @@
  *     angle: string,
  *     verdict: "clean" | "findings_present",
  *     headSha: string,   // reviewed head; consolidate-fanin --head-sha enforces it
- *     findings: [{ severity, file?, line?, summary, recommendation? }]
+ *     findings: [{ severity, file?, line?, summary, recommendation?, failingCase? }]
  *   }
  *
  * Severity vocabulary (owned here; consumers import SEVERITY_ORDER /
@@ -1034,6 +1034,9 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
         if (typeof f.recommendation === "string" && f.recommendation.trim().length > 0) {
           entry.recommendation = f.recommendation.trim();
         }
+        if (typeof f.failingCase === "string" && f.failingCase.trim().length > 0) {
+          entry.failingCase = f.failingCase.trim();
+        }
         findings.push(entry);
       }
     }
@@ -1289,6 +1292,9 @@ export function toFindingsLogShape(findings) {
     }
     if (typeof f.recommendation === "string" && f.recommendation.trim().length > 0) {
       entry.recommendation = f.recommendation.trim();
+    }
+    if (typeof f.failingCase === "string" && f.failingCase.trim().length > 0) {
+      entry.failingCase = f.failingCase.trim();
     }
     if (typeof f.file === "string" && f.file.trim().length > 0) {
       entry.files = [f.file.trim()];

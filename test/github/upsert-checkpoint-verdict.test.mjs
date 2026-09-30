@@ -7618,6 +7618,40 @@ test("upsert-checkpoint-verdict --findings-ledger: an all-folded round (every ca
   }, { prefix: "dev-loops-upsert-fold-all-folded-no-files-fetch-" });
 });
 
+test("upsert-checkpoint-verdict --findings-ledger posts two same-defect locatable findings as one inline comment with two markers", async () => {
+  await withTempDir(async (tempDir) => {
+    const first = { ...LOCATABLE_FINDING, summary: "SQL injection in the query builder via string concatenation" };
+    const second = { ...LOCATABLE_FINDING, angle: "security", summary: "SQL injection in the query builder via string concatenation allows attacker input" };
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [first, second]);
+    const entries = [
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":713,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-713"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "2 findings",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.inlineComments, 1);
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const posted = JSON.parse(postCall.stdinText);
+    assert.equal(posted.comments.length, 1);
+    assert.equal(posted.comments[0].body.split("<!-- dev-loops:finding").length - 1, 2);
+  }, { prefix: "dev-loops-upsert-merge-" });
+});
+
 test("upsert-checkpoint-verdict --findings-ledger: lowering inlineSeverityFloor to \"low\" restores inline posting of low findings (the escape hatch); nit still folds", async () => {
   await withTempDir(async (tempDir) => {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    inlineSeverityFloor: low\n", "utf8");

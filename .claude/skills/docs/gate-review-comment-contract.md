@@ -47,7 +47,7 @@ post. Minimizing collapses and never deletes.
 
 The body's per-angle breakdown has up to THREE TRACKS, rendered at TOP LEVEL, NEVER as a markdown
 table. The third, folded, track is severity-gated (`GATE-COMMENT-INLINE-SEVERITY-FLOOR` below):
-1. **Locatable findings** (each carried by its own inline PR review comment) are never
+1. **Locatable findings** (each carried by its own inline PR review comment, or by one merged comment per `GATE-COMMENT-INLINE-LAYOUT`) are never
    enumerated per-finding in the body. The body states only one aggregate `**Inline findings:**`
    line: the count, a severity breakdown (leading emoji per the legend below, with the severity
    word), and the distinct touched angle names, pointing the reader to the inline comments.
@@ -82,12 +82,42 @@ verdict is computed upstream from the ledger, never from which track a finding r
 Every clean (zero-finding) angle is collapsed into one trailing comma-joined `**Clean (N):**`
 line, never a list/table row. A finding's full text always lives in EXACTLY ONE reader-reachable
 carrier — its own inline review comment (locatable) or its own body-list bullet (non-locatable) —
-never both, never neither, and never only the on-disk disposition ledger. Budget pressure on an
+never both, never neither, and never only the on-disk disposition ledger. The two exceptions are in `GATE-COMMENT-INLINE-LAYOUT`: a capped field points at its ledger entry, and a same-defect merged comment renders only the primary member's Problem, Failing case and Fix, so a non-primary member's text lives in the ledger. Budget pressure on an
 over-long round SHORTENS a body-only finding's rendered text rather than degrading it to an
 omitted-count/ledger pointer. Both tracks render at TOP LEVEL, never through the
 `--findings-summary`/`--findings-file` blockquoted continuation-line path. Verdict evidence
 is read from that review body; a verdict posted as an ISSUE comment still validates and is still
 corrected on its own surface (back-compat read).
+
+<!-- rule: GATE-COMMENT-INLINE-LAYOUT -->
+`GATE-COMMENT-INLINE-LAYOUT`: an inline finding renders in a fixed layout. The header line reads
+`**<severity>** · <angle>[, <angle>][ · judge: <disposition>]`. The body lines are `**Problem:**`,
+`**Failing case:**` (when the finding carries `failingCase`) and `**Fix:**` (numbered steps when
+the recommendation holds more than one action). The renderer bounds each field at a sentence
+boundary, never inside a code span or fence, and appends `Full text: ledger entry <fingerprint>`
+after a cut. The ledger keeps the full text. Reviewer inline code spans survive into the thread,
+and every other backtick is escaped as an entity. Findings from different angles that share a file
+and line and describe the same defect post as one comment. Two findings describe the same defect only when their summaries share at least five words and those words make up at least 40% of the union of both summaries, not counting connective words such as "during". One merged comment holds at most eight findings. That comment lists every angle in the
+header and keeps one marker per merged finding, so each fingerprint stays suppressible. The
+bulleted findings comment and body-filed blocks stay single-line and never render `failingCase`; that
+field appears only on the inline surface. A merged comment renders the primary member's Problem, Failing
+case and Fix and carries every other member by marker and angle.
+
+<!-- rule: GATE-COMMENT-REVIEWER-STYLE -->
+`GATE-COMMENT-REVIEWER-STYLE`: reviewers MUST write each finding by these rules.
+
+1. Lead with the point.
+2. Give one action per recommendation. Use numbered steps for more than one action.
+3. Write no preamble, recap or closer.
+4. Cap every list at five ranked items. The ledger holds the rest.
+5. Use a matter-of-fact tone.
+6. Before sending, run a pre-send check that deletes every announcing, recapping and hedging
+   sentence.
+7. Apply the deslop style at write time, per the
+   [A/B contrast removal step](./ab-contrast-deslop-step.md).
+
+The renderer bounds each field (`GATE-COMMENT-INLINE-LAYOUT`). A filler-phrase lint flags reviewer
+filler and never rewrites it.
 
 <!-- rule: GATE-EVIDENCE-AUDIT-TWO-SURFACES -->
 `GATE-EVIDENCE-AUDIT-TWO-SURFACES`: any gate-evidence completeness audit or reporting path MUST
