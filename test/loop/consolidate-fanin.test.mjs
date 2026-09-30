@@ -4433,3 +4433,16 @@ test("consolidateGateFanin: the GATE-EXEC-RESOLVED-ANGLE-EVIDENCE error carries 
     await rm(primary, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test("consolidateGateFanin flags reviewer filler as a non-blocking warning and leaves the text unchanged", async () => {
+  const summary = "It is worth noting that `a()` skips the reset.";
+  await withFindingsDir(
+    { "dry.json": { angle: "dry", verdict: "findings_present", findings: [{ severity: "medium", summary, file: "src/a.mjs", line: 3 }] } },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.fillerWarnings, [{ angle: "dry", field: "summary", phrase: "It is worth noting" }]);
+      assert.equal(result.findings[0].summary, summary);
+    },
+  );
+});

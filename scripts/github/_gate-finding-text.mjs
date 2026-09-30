@@ -30,6 +30,10 @@ function codeMask(text) {
   return mask;
 }
 
+// A `.` that ends a bare list number (`1.`) or a known abbreviation is not a
+// sentence end. ponytail: fixed abbreviation list, extend when a new one splits.
+const ABBREVIATION_TAIL = /(?:^|\s)(?:\d+|e\.g|i\.e|vs|etc|cf)$/i;
+
 // Indices just after each sentence end: `.`, `!` or `?` outside code, followed
 // by whitespace or the end of the text.
 function sentenceEnds(text) {
@@ -37,7 +41,9 @@ function sentenceEnds(text) {
   const ends = [];
   for (let i = 0; i < text.length; i += 1) {
     if (mask[i] || !".!?".includes(text[i])) continue;
-    if (i + 1 === text.length || /\s/.test(text[i + 1])) ends.push(i + 1);
+    if (i + 1 !== text.length && !/\s/.test(text[i + 1])) continue;
+    if (text[i] === "." && i + 1 !== text.length && ABBREVIATION_TAIL.test(text.slice(0, i))) continue;
+    ends.push(i + 1);
   }
   return ends;
 }

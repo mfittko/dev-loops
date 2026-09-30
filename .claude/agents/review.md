@@ -62,7 +62,7 @@ Return your findings via the structured artifact below (this agent's canonical o
 
   `verifiedItems` is optional, and only the `acceptance-criteria` and `pr-checklist` angles may emit it; fan-in rejects it on any other angle. List the exact trimmed label of each checklist item you verified at this head: items from the PR body's Acceptance criteria and Definition of done checklists, and items from the linked issue's interactive Acceptance criteria checklist when one exists. Copy each label verbatim. Omit every item you did not verify. The `pre_approval_gate` verdict poster ticks exactly these labels before it composes the verdict (see [Acceptance Criteria Verification](../skills/docs/acceptance-criteria-verification.md)); an unlisted item stays unchecked and blocks.
 
-Write every finding by `GATE-COMMENT-REVIEWER-STYLE` in the [Gate Review Comment Contract](../skills/docs/gate-review-comment-contract.md). `failingCase` is optional and renders as its own line in the inline thread.
+Write every finding by `GATE-COMMENT-REVIEWER-STYLE` in the [Gate Review Comment Contract](../skills/docs/gate-review-comment-contract.md). `failingCase` is optional and renders as its own line in the inline thread only, never in the body-filed or bulleted findings comment.
 
 When NOT given an angle scope, behave exactly as the full-PR review agent described below.
 

@@ -46,6 +46,7 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
+import { lintFillerPhrases } from "../github/_gate-finding-text.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof } from "../github/_carried-angles.mjs";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
@@ -1517,9 +1518,18 @@ export async function consolidateGateFanin(options) {
     ({ commentFindingsJson, withheldOut } = buildBudgetMarkedFindingsJson(findingsJson));
   }
 
+  // GATE-COMMENT-REVIEWER-STYLE: flag reviewer filler as a non-blocking
+  // warning. The finding text is never rewritten.
+  const fillerWarnings = findings.flatMap((f) => ["summary", "failingCase", "recommendation"].flatMap((field) => (
+    typeof f[field] === "string"
+      ? lintFillerPhrases(f[field]).map(({ phrase }) => ({ angle: f.angle, field, phrase }))
+      : []
+  )));
+
   const result = {
     ok: true,
     ...(options.gate !== undefined ? { gate: options.gate } : {}),
+    ...(fillerWarnings.length > 0 ? { fillerWarnings } : {}),
     angles,
     findingsJson: commentFindingsJson,
     findings,

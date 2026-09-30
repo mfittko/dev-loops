@@ -452,7 +452,7 @@ export function renderInlineCommentBody(finding, { round }) {
   if (hasRecommendation(finding)) {
     const recommendation = cutAtSentence(finding.recommendation, RECOMMENDATION_CAP);
     truncated ||= recommendation.cut;
-    const allSteps = splitSentences(recommendation.text);
+    const allSteps = splitSentences(recommendation.text).map((step) => step.replace(/^\d+[.)]\s+/, ""));
     const steps = allSteps.slice(0, MAX_FIX_STEPS);
     truncated ||= steps.length < allSteps.length;
     if (steps.length === 1) {
