@@ -415,14 +415,22 @@ function hasRecommendation(finding) {
 // render a header parseRenderedJudgeDisposition reads as a genuine
 // disposition — close-gate-findings tier 3 would then reject-close an
 // answered question with no recorded disposition (ADR 0088's non-goal). The
-// middle dot is the separator's structural character, so entity-encoding every
-// U+00B7 in a rendered angle closes every spelling of the vector at once,
-// while an angle without one (every configured angle name) renders
-// byte-identically to before. The raw comment body is what the parser reads;
-// GitHub renders `&#183;` as `·` outside a code span, so the visible header
-// stays unchanged.
+// middle dot is the separator's structural character, so every spelling of it
+// in a rendered angle is replaced by a token the renderer shows as plain text.
+// Entity spellings must be replaced too, never left encoded: escapeProse does
+// not escape `&`, so an entity spelling would survive to the rendered header
+// and decode back to the separator outside a code span. The raw comment body
+// is what the parser reads, so one substitution closes the parse side and the
+// rendered side together. An angle carrying no middle dot (every configured
+// angle name) renders byte-identically to before.
+const HEADER_SEPARATOR_TOKEN = "[middot]";
+// Decimal, hex and named spellings of U+00B7. A numeric reference may omit its
+// trailing semicolon (the HTML legacy rule), so a numeric match additionally
+// requires the next character not to continue the number.
+const MIDDLE_DOT_ENTITY_RE = /&(?:#0*183(?!\d);?|#x0*b7(?![\da-f]);?|middot;)/giu;
+
 function neutralizeHeaderSeparator(angle) {
-  return angle.replace(/\u00b7/g, "&#183;");
+  return angle.replace(MIDDLE_DOT_ENTITY_RE, HEADER_SEPARATOR_TOKEN).replace(/\u00b7/g, HEADER_SEPARATOR_TOKEN);
 }
 
 export function renderInlineCommentBody(finding, { round }) {
