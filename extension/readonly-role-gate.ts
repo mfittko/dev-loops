@@ -15,11 +15,11 @@ const SANCTIONED_PULL_RE = new RegExp(
 );
 const parseSanctionedPullLine = (command: string) => SANCTIONED_PULL_RE.test(command.trim());
 const stripPluginNamespace = (agentType: string) => agentType.slice(agentType.lastIndexOf(':') + 1);
-export const PI_AGENT_TYPE_ENV = 'DEVLOOPS_AGENT_TYPE';
+export const AGENT_TYPE_ENV = 'DEVLOOPS_AGENT_TYPE';
 
 /** Roles whose Pi `bash` is restricted. The judge pulls only; the reviewer also reads and searches. */
 const READ_SEARCH_ROLES = new Set(['review']);
-export const PI_BASH_RESTRICTED_ROLES = Object.freeze(['judge', 'review']);
+export const BASH_RESTRICTED_ROLES = Object.freeze(['judge', 'review']);
 
 // Read and search programs. Test and build runners (bun, npm, node, vitest, make) are absent.
 const READ_PROGRAMS = new Set(['cat', 'head', 'tail', 'wc', 'ls', 'grep', 'rg', 'stat', 'file', 'diff']);
@@ -38,7 +38,7 @@ export type PiToolCallDecision = { block: false } | { block: true; reason: strin
 
 /** Read the calling role from the dispatch marker. Returns null for the unmarked main agent. */
 export function resolvePiAgentType(env: Record<string, string | undefined> = process.env): string | null {
-  const raw = env[PI_AGENT_TYPE_ENV];
+  const raw = env[AGENT_TYPE_ENV];
   return raw === undefined ? null : stripPluginNamespace(raw.trim());
 }
 
@@ -53,7 +53,7 @@ export function decidePiToolCall({ toolName, input, agentType }: {
   agentType: string | null;
 }): PiToolCallDecision {
   if (agentType === null || toolName !== 'bash') return { block: false };
-  if (agentType !== '' && !PI_BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
+  if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
   const command = typeof input?.command === 'string' ? input.command : '';
   if (parseSanctionedPullLine(command)) return { block: false };
   if (READ_SEARCH_ROLES.has(agentType) && isReadSearchCommand(command)) return { block: false };

@@ -47,6 +47,10 @@ Symmetrically, for a change targeting the Claude-Code-specific seam that MUST NO
 3. Add or extend a test asserting the other harness's behavior directly — do not rely on an untested assumption that the change is inert there.
 4. Run the relevant suite locally (`bun run test:assets`, `bun run test:core`, `bun run test:extension`, or `bun run smoke:headless` as applicable) before opening the pull request.
 
+## Read-only role enforcement on Pi
+
+`READONLY_SUBAGENT_ROLES` boundaries hold on both harnesses. Claude Code enforces them in the PreToolUse Bash gate (`decideBashGate`). Pi enforces them in the `tool_call` handler in `extension/readonly-role-gate.ts`, which reads the dispatch role marker `DEVLOOPS_AGENT_TYPE`. The judge may run only the sanctioned `pull-work-order.mjs` line. The reviewer may also run shell-inert read and search commands. Both are denied test and build commands. A blank marker fails closed. `test/extension-pi-readonly-role-gate.test.mjs` pins the Pi fixtures, the parity of the Pi pull matcher with `parseSanctionedPullLine`, and the agreement of the source agents, generated `.claude` assets and Pi mapping.
+
 ## Non-goals
 
 - No new or expanded CI matrix: `bun run verify` (which CI runs on every pull request) already covers `test:assets`, `test:extension`, `test:scripts`, `test:core`, `test:docs`, and `test:dev-loop`. Only `bun run smoke:headless` stays manual/local-only.

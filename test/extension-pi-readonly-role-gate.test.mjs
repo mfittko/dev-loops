@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { READONLY_SUBAGENT_ROLES } from "@dev-loops/core/claude/hook-decisions";
 import extension from "../extension/index.ts";
 import { mapAgentToolsForPi, renderPiAgent } from "../extension/sync-packaged-agents.ts";
-import { PI_BASH_RESTRICTED_ROLES, PI_AGENT_TYPE_ENV } from "../extension/readonly-role-gate.ts";
+import { BASH_RESTRICTED_ROLES, AGENT_TYPE_ENV } from "../extension/readonly-role-gate.ts";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const PULL = "dev-loops-run scripts/github/pull-work-order.mjs j1-0123abcd";
@@ -20,14 +20,14 @@ function toolCallHandler() {
 }
 
 async function callAs(role, command, toolName = "bash") {
-  const prior = process.env[PI_AGENT_TYPE_ENV];
-  if (role === undefined) delete process.env[PI_AGENT_TYPE_ENV];
-  else process.env[PI_AGENT_TYPE_ENV] = role;
+  const prior = process.env[AGENT_TYPE_ENV];
+  if (role === undefined) delete process.env[AGENT_TYPE_ENV];
+  else process.env[AGENT_TYPE_ENV] = role;
   try {
     return await toolCallHandler()({ toolName, input: { command } }, {});
   } finally {
-    if (prior === undefined) delete process.env[PI_AGENT_TYPE_ENV];
-    else process.env[PI_AGENT_TYPE_ENV] = prior;
+    if (prior === undefined) delete process.env[AGENT_TYPE_ENV];
+    else process.env[AGENT_TYPE_ENV] = prior;
   }
 }
 
@@ -60,7 +60,7 @@ function toolsOf(file) {
 }
 
 test("source agents, generated .claude assets and the Pi mapping agree on read-only role capabilities", () => {
-  for (const role of PI_BASH_RESTRICTED_ROLES) {
+  for (const role of BASH_RESTRICTED_ROLES) {
     assert.ok(READONLY_SUBAGENT_ROLES.includes(role), role);
     const source = toolsOf(`agents/${role}.agent.md`);
     const claude = toolsOf(`.claude/agents/${role}.md`).map((t) => t.toLowerCase());
