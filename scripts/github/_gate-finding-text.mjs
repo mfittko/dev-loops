@@ -1,7 +1,8 @@
 // Pure text helpers for the inline gate-finding layout: sentence-boundary
 // cuts, per-field caps, the filler-phrase lint, and the same-defect merge
-// rule. No imports: everything here works on raw reviewer text, before any
-// sanitizer runs.
+// rule. Everything here works on raw reviewer text, before any sanitizer runs.
+
+import { resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 
 // Per-field caps in characters. The problem cap is the summary bound. The
 // recommendation has its own bound. The durable ledger keeps the full text.
@@ -66,7 +67,11 @@ export function cutAtSentence(text, cap) {
   for (let i = cap; i > 0; i -= 1) {
     if (/\s/.test(trimmed[i]) && !mask[i]) return { text: `${trimmed.slice(0, i).trim()}…`, cut: true };
   }
-  return { text: `${trimmed.slice(0, cap).trim()}…`, cut: true };
+  // No whitespace outside code before cap. If cap lands inside a code span,
+  // cut before the span starts.
+  let end = cap;
+  if (mask[cap]) while (end > 0 && mask[end - 1]) end -= 1;
+  return { text: `${trimmed.slice(0, end).trim()}…`, cut: true };
 }
 
 // Reviewer filler the style rules forbid. The lint flags and never rewrites.
@@ -97,8 +102,9 @@ export function lintFillerPhrases(text) {
 
 // Same-defect rule for the pre-post merge. Two findings merge only when ALL of:
 //   1. they share files[0] and line (both present),
-//   2. they carry the same judgeDisposition (both absent counts as the same),
-//   3. their summaries overlap: at least three shared words of four or more
+//   2. they are both questions or both non-questions,
+//   3. they carry the same judgeDisposition (both absent counts as the same),
+//   4. their summaries overlap: at least three shared words of four or more
 //      letters, and the shared words are at least half of the smaller summary's
 //      word set.
 // Findings on one line that describe different defects share few words and stay
@@ -108,10 +114,10 @@ function summaryWords(summary) {
 }
 
 export function isSameDefect(a, b) {
-  const fileA = Array.isArray(a.files) ? a.files[0] : undefined;
-  const fileB = Array.isArray(b.files) ? b.files[0] : undefined;
-  if (!fileA || fileA !== fileB) return false;
+  const fileA = resolveFindingFile(a);
+  if (!fileA || fileA !== resolveFindingFile(b)) return false;
   if (!Number.isInteger(a.line) || a.line !== b.line) return false;
+  if ((a.severity === "question") !== (b.severity === "question")) return false;
   if ((a.judgeDisposition ?? null) !== (b.judgeDisposition ?? null)) return false;
   const wordsA = summaryWords(a.summary);
   const wordsB = summaryWords(b.summary);
@@ -119,8 +125,6 @@ export function isSameDefect(a, b) {
   for (const word of wordsA) if (wordsB.has(word)) shared += 1;
   return shared >= 3 && shared >= Math.min(wordsA.size, wordsB.size) / 2;
 }
-
-const SEVERITY_RANK = { high: 0, medium: 1, low: 2, question: 3, nit: 4 };
 
 // Groups same-defect findings. Every group of one is returned unchanged. A
 // merged group is the highest-severity finding (first wins a tie) plus
@@ -135,7 +139,7 @@ export function mergeSameDefectFindings(findings) {
   }
   return groups.map((members) => {
     if (members.length === 1) return members[0];
-    const primary = members.reduce((best, m) => ((SEVERITY_RANK[m.severity] ?? 9) < (SEVERITY_RANK[best.severity] ?? 9) ? m : best));
-    return { ...primary, mergedFindings: members };
+    const primary = members.reduce((best, m) => (severityRank(m.severity) < severityRank(best.severity) ? m : best));
+    return { ...primary, operatorVisible: members.some((m) => m.operatorVisible === true), mergedFindings: members };
   });
 }

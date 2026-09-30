@@ -180,7 +180,7 @@ test("summary bound: an over-length summary is cut at a sentence and points at t
   assert.equal(body.split("\n").at(-1), `Full text: ledger entry ${fingerprintFinding({ summary })}`);
 });
 
-test("caps: failing case and recommendation each cut at their own bound; a short comment has no pointer", () => {
+test("caps: failing case cuts at its own bound; a short comment has no pointer", () => {
   const long = (n) => Array.from({ length: n }, (_, i) => `Sentence number ${i} is here.`).join(" ");
   assert.ok(FAILING_CASE_CAP !== RECOMMENDATION_CAP && RECOMMENDATION_CAP !== PROBLEM_CAP);
   const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short.", failingCase: long(40), recommendation: long(2) }, { round: 1 });
@@ -233,4 +233,20 @@ test("merge: the merged comment keeps every member fingerprint as a line-start m
   assert.equal(parseFindingMarker(body).angle, "holistic");
   assert.equal(parseFindingMarker(body).severity, "medium");
   assert.ok(body.includes(fingerprintFinding(holistic)) && body.includes(fingerprintFinding({ ...noOp })));
+});
+
+test("merge: a question and a defect on the same line do not merge", () => {
+  assert.equal(mergeSameDefectFindings([holistic, { ...noOp, severity: "question" }]).length, 2);
+});
+
+test("merge: a findings-only `file` location merges, and the primary carries operatorVisible from any member", () => {
+  const { files, ...withoutFiles } = noOp;
+  const [merged] = mergeSameDefectFindings([{ ...holistic, files: undefined, file: files[0] }, { ...withoutFiles, file: files[0], operatorVisible: true }]);
+  assert.equal(merged.mergedFindings.length, 2);
+  assert.equal(merged.operatorVisible, true);
+});
+
+test("cutAtSentence never splits a code span when no whitespace precedes the cap", () => {
+  const { text } = cutAtSentence(`x\`${"a".repeat(60)}\``, 20);
+  assert.doesNotMatch(text, /`/);
 });

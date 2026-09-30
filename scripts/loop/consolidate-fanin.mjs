@@ -1354,6 +1354,7 @@ export async function consolidateGateFanin(options) {
   for (const f of consolidated.findings) {
     f.summary = truncateFindingText(neutralizeBareIssuePrIds(f.summary));
     if (f.recommendation) f.recommendation = truncateFindingText(neutralizeBareIssuePrIds(f.recommendation));
+    if (f.failingCase) f.failingCase = truncateFindingText(neutralizeBareIssuePrIds(f.failingCase));
     if (f.file) f.file = truncateFindingText(f.file, MAX_FINDING_FILE_LENGTH);
   }
   // toFindingsLogShape's output ({ severity, angle, summary, disposition?, files? })

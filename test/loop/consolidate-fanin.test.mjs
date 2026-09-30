@@ -568,12 +568,15 @@ test("consolidateGateFanin neutralizes bare #<digits> refs in finding summary/re
           severity: "must-fix",
           summary: "duplicates #1807 and ##1584 behavior",
           recommendation: "align with #1731 guard",
+          failingCase: "fails when #1807 is reopened",
           file: "src/a.mjs",
         }],
       },
     },
     async (dir) => {
       const result = await consolidateGateFanin({ findingsDir: dir });
+      // failingCase goes through the same neutralize seam and survives fan-in.
+      assert.equal(result.findings.find((f) => f.angle === "scope").failingCase, "fails when 1807 is reopened");
       // Flat ledger shape: the leading `#`(s) are stripped, the id digits kept.
       const flat = result.findings.find((f) => f.angle === "scope");
       assert.equal(flat.summary, "duplicates 1807 and 1584 behavior");

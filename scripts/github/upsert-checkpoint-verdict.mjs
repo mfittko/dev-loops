@@ -49,8 +49,8 @@ import {
   submitPendingReview,
   updateGateReview,
 } from "./_gate-finding-surface.mjs";
-import { mergeSameDefectFindings } from "./_gate-finding-text.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
+import { mergeSameDefectFindings } from "./_gate-finding-text.mjs";
 import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
@@ -2055,12 +2055,9 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   const login = await resolveAuthenticatedLogin(gh);
   const reviews = await listPrReviews({ repo: options.repo, pr: options.pr }, gh);
   const issueComments = await listIssueComments({ repo: options.repo, pr: options.pr }, gh);
-  // The cheap thread LISTING is enough for fingerprint suppression: a finding
-  // thread's first comment opens with its finding marker, and that marker is
-  // bounded well under list-review-threads.mjs's 200-char listing excerpt (a
-  // 16-hex fingerprint plus two 40-char slugged fields, a round, and an
-  // optional disposition), so the fingerprint always survives the excerpt.
-  const threads = await fetchAllReviewThreads({ repo: options.repo, pr: options.pr }, gh);
+  // A merged comment carries one marker per merged finding, and later markers
+  // fall past the default 200-char listing excerpt, so widen the excerpt.
+  const threads = await fetchAllReviewThreads({ repo: options.repo, pr: options.pr }, { ...gh, bodyMax: 4000 });
   const suppressed = collectSuppressedFingerprints({ reviews, threads, login });
   const round = await resolveGateRound({
     repo: options.repo,
@@ -3223,7 +3220,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const findingSurfaceFields = findingSurface
     ? {
         round: findingSurface.round,
-        inlineComments: findingSurface.locatable.length,
+        inlineComments: mergeSameDefectFindings(findingSurface.locatable).length,
         bodyFiled: findingSurface.nonLocatable.length,
         folded: findingSurface.folded.length,
         suppressed: findingSurface.suppressedCount,

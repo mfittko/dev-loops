@@ -2773,3 +2773,24 @@ test("writeGateFindingsLog: --spec-authority fails closed on malformed JSON", as
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("writeGateFindingsLog validates failingCase: blank or non-string throws, a valid value persists trimmed", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-fc-"));
+  const run = (failingCase) => writeGateFindingsLog({
+    repo: "a/b",
+    pr: 1,
+    gate: "draft_gate",
+    headSha: "abc1234500000000000000000000000000000000",
+    verdict: "findings_present",
+    findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "x", failingCase }]),
+    tmpRoot: dir,
+  });
+  try {
+    await assert.rejects(run(""), /failingCase must be a non-empty string/);
+    await assert.rejects(run(3), /failingCase must be a non-empty string/);
+    const result = await run("  the widget overflows  ");
+    assert.equal(JSON.parse(await readFile(result.path, "utf8")).findings[0].failingCase, "the widget overflows");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

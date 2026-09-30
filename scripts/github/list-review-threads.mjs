@@ -176,15 +176,15 @@ function readThreadsConnection(payload) {
   };
 }
 
-function excerptBody(rawBody) {
+function excerptBody(rawBody, max = BODY_EXCERPT_MAX_CHARS) {
   const text = typeof rawBody === "string" ? rawBody.trim() : "";
-  if (text.length <= BODY_EXCERPT_MAX_CHARS) {
+  if (text.length <= max) {
     return text;
   }
-  return `${text.slice(0, BODY_EXCERPT_MAX_CHARS)}…`;
+  return `${text.slice(0, max)}…`;
 }
 
-function normalizeThreadNode(node) {
+function normalizeThreadNode(node, bodyMax) {
   const firstComment = node?.comments?.nodes?.[0] ?? null;
   const commentId = Number.isFinite(firstComment?.databaseId) ? firstComment.databaseId : null;
   const authorLogin = firstComment?.author?.login;
@@ -193,7 +193,7 @@ function normalizeThreadNode(node) {
     threadId: typeof node?.id === "string" ? node.id : "",
     commentId,
     author,
-    body: excerptBody(firstComment?.body),
+    body: excerptBody(firstComment?.body, bodyMax),
     isResolved: Boolean(node?.isResolved),
     isOutdated: Boolean(node?.isOutdated),
     path: typeof node?.path === "string" ? node.path : null,
@@ -203,7 +203,7 @@ function normalizeThreadNode(node) {
 
 export async function fetchAllReviewThreads(
   { repo, pr },
-  { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
+  { env = process.env, ghCommand = "gh", runChild = defaultRunChild, bodyMax = BODY_EXCERPT_MAX_CHARS } = {},
 ) {
   const { owner, name } = parseRepoSlug(repo);
   const threads = [];
@@ -225,7 +225,7 @@ export async function fetchAllReviewThreads(
     const payload = parseJsonText(result.stdout);
     const { nodes, hasNextPage, endCursor } = readThreadsConnection(payload);
     for (const node of nodes) {
-      threads.push(normalizeThreadNode(node));
+      threads.push(normalizeThreadNode(node, bodyMax));
     }
     if (!hasNextPage) {
       break;
