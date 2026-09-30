@@ -350,7 +350,7 @@ test("merge: the merged comment keeps every member fingerprint as a line-start m
 });
 
 test("merge: a question and a defect on the same line do not merge", () => {
-  assert.equal(mergeSameDefectFindings([holistic, { ...noOp, severity: "question" }]).length, 2);
+  assert.equal(mergeSameDefectFindings([holisticKeyed, { ...noOpKeyed, severity: "question" }]).length, 2);
 });
 
 test("merge: a findings-only `file` location merges, and the primary carries operatorVisible from any member", () => {
