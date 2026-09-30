@@ -290,6 +290,12 @@ test("merge: without a defectKey, only identical normalized summaries merge", ()
   assert.equal(mergeSameDefectFindings([a, { ...noOp, summary: "Cache lookup returns stale entries before invalidation." }]).length, 2);
 });
 
+test("merge: two summaryless same-file findings without a line stay separate", () => {
+  const { summary: _a, line: _la, ...first } = holistic;
+  const { summary: _b, line: _lb, ...second } = noOp;
+  assert.equal(mergeSameDefectFindings([first, second]).length, 2);
+});
+
 test("merge: four pairs of different defects on one line stay separate", () => {
   const pairs = [
     ["Request handler returns incorrect response status when upstream timeout occurs", "Request handler logs sensitive response headers when upstream timeout occurs"],
