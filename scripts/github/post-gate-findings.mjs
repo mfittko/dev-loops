@@ -275,7 +275,7 @@ export function sanitizeInline(value) {
 // Sanitize reviewer prose for a multi-line surface (the inline thread). A
 // balanced single-backtick code span survives with its content inert
 // (whitespace collapsed to one line, `<!--`/`-->` entity-encoded). Every other
-// backtick (stray, doubled, unbalanced) becomes `&#96;`, never deleted, so the
+// backtick (stray, doubled, unbalanced) becomes a numeric character entity, never deleted, so the
 // reviewer's text stays complete. Text outside a span gets the same
 // neutralization as sanitizeInline. Single-line surfaces keep using
 // sanitizeInline, which deletes backticks.
