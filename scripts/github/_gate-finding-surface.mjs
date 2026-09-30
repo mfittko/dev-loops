@@ -23,7 +23,8 @@ import {
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
-import { flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { escapeProse, flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
+import { FAILING_CASE_CAP, MAX_FIX_STEPS, PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, splitSentences } from "./_gate-finding-text.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
@@ -380,9 +381,9 @@ export async function commentDeferredFindings(
 // Rendering (finding lines, inline comments, body-filed blocks)
 // ---------------------------------------------------------------------------
 
-// One deterministic, round-trip-parseable line rendering severity/angle/
-// summary, shared by inline comments (unblockquoted) and body-filed blocks
-// (blockquoted by the caller). `severity` is normalized (legacy spelling
+// One deterministic single-line rendering of severity/angle/
+// summary for body-filed blocks (folded lists) and, blockquoted by the caller,
+// non-locatable blocks. The inline thread uses renderInlineCommentBody. `severity` is normalized (legacy spelling
 // renders under its canonical name) AND sanitized with sanitizeInline, not
 // sanitizeCodeSpan: it renders bare ("**${severity}**", not in a code span),
 // and sanitizing it also blocks a newline from escaping the blockquote a
@@ -408,23 +409,59 @@ function hasRecommendation(finding) {
 }
 
 export function renderInlineCommentBody(finding, { round }) {
-  const fp = fingerprintFinding(finding);
-  // Normalized ONCE and reused for both the marker and the rendered line
-  // (mirrors renderNonLocatableBlock below): a legacy-spelled severity must
-  // never render its retired spelling here while its own marker parses back
-  // as the canonical one.
+  // Normalized ONCE and reused for both the marker and the header (mirrors
+  // renderNonLocatableBlock below): a legacy-spelled severity must never
+  // render its retired spelling here while its own marker parses back as the
+  // canonical one.
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
-  // Carry the finding's own explicit operator-visibility signal onto the
-  // marker (`ov=1` when `finding.operatorVisible === true`); anything else
-  // renders no field, the conservative default isFileableDeferral treats as
-  // NOT operator visible.
-  const lines = [
-    buildFindingMarker({ fp, severity, angle: finding.angle, round, operatorVisible: finding.operatorVisible === true }),
-    renderFindingLine({ ...finding, severity }),
-  ];
-  if (hasRecommendation(finding)) {
-    lines.push(renderRecommendationLine(finding.recommendation));
+  // A merged comment (see mergeSameDefectFindings) carries one marker per
+  // member so every member's fingerprint stays suppressible; the primary's
+  // marker is first, which is the one FINDING_MARKER_RE and the thread
+  // reconciliation read. `ov=1` rides each member's own explicit
+  // operator-visibility signal.
+  const members = Array.isArray(finding.mergedFindings) ? finding.mergedFindings : [finding];
+  const markers = [];
+  const seen = new Set();
+  for (const member of [finding, ...members]) {
+    const fp = fingerprintFinding(member);
+    if (seen.has(fp)) continue;
+    seen.add(fp);
+    markers.push(buildFindingMarker({
+      fp,
+      severity: member === finding ? severity : normalizeSeverity(member.severity),
+      angle: member.angle,
+      round,
+      operatorVisible: member.operatorVisible === true,
+    }));
   }
+  const angles = [...new Set(members.map((member) => escapeProse(member.angle)))].join(", ");
+  const judge = typeof finding.judgeDisposition === "string" && finding.judgeDisposition.trim().length > 0
+    ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}`
+    : "";
+  const lines = [...markers, `**${sanitizeInline(severity)}** · ${angles}${judge}`];
+  let truncated = false;
+  const capped = (text, cap) => {
+    const result = cutAtSentence(text, cap);
+    truncated ||= result.cut;
+    return escapeProse(result.text);
+  };
+  lines.push(`**Problem:** ${capped(finding.summary, PROBLEM_CAP)}`);
+  if (typeof finding.failingCase === "string" && finding.failingCase.trim().length > 0) {
+    lines.push(`**Failing case:** ${capped(finding.failingCase, FAILING_CASE_CAP)}`);
+  }
+  if (hasRecommendation(finding)) {
+    const recommendation = cutAtSentence(finding.recommendation, RECOMMENDATION_CAP);
+    truncated ||= recommendation.cut;
+    const allSteps = splitSentences(recommendation.text);
+    const steps = allSteps.slice(0, MAX_FIX_STEPS);
+    truncated ||= steps.length < allSteps.length;
+    if (steps.length === 1) {
+      lines.push(`**Fix:** ${escapeProse(steps[0])}`);
+    } else {
+      lines.push("**Fix:**", ...steps.map((step, i) => `${i + 1}. ${escapeProse(step)}`));
+    }
+  }
+  if (truncated) lines.push(`Full text: ledger entry ${markers[0].match(FINDING_MARKER_RE)[1]}`);
   return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 
@@ -1385,9 +1422,14 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 // need a render-time change (e.g. a distinguishing token) in
 // renderFindingLine itself, out of scope here.
 const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[^*\n]+\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)$/mu;
+// Header of the fixed inline layout (legacy bodies keep the suffix form above): `**<severity>** · <angles> · judge: <disposition>`.
+// The severity token is lowercase, so a `**Problem:**` line never matches.
+const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)$/mu;
 
 export function parseRenderedJudgeDisposition(body) {
-  const match = typeof body === "string" ? body.match(RENDERED_JUDGE_DISPOSITION_RE) : null;
+  const match = typeof body === "string"
+    ? (body.match(RENDERED_HEADER_JUDGE_DISPOSITION_RE) ?? body.match(RENDERED_JUDGE_DISPOSITION_RE))
+    : null;
   return match ? match[1].toLowerCase() : null;
 }
 

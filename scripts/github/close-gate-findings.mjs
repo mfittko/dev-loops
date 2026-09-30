@@ -235,8 +235,10 @@ function unfiledResolutionReason(severity) {
 // per-finding reason to close, so every resolve-without-fix reply must record
 // the rendered finding summary rather than a bare severity label (GATE-EXEC-THREAD-DISPOSITION).
 function extractFindingSummary(body) {
+  // The fixed inline layout carries the summary on its `**Problem:**` line;
+  // a body posted before that layout keeps the single-line form.
   const match = typeof body === "string"
-    ? body.match(/^\*\*[^*\n]+\*\*\s+\(`[^`\n]+`\):\s+(.+)$/mu)
+    ? (body.match(/^\*\*Problem:\*\*\s+(.+)$/mu) ?? body.match(/^\*\*[^*\n]+\*\*\s+\(`[^`\n]+`\):\s+(.+)$/mu))
     : null;
   const summary = match?.[1]?.replace(/\s+— judge:.*$/u, "").trim();
   if (!summary) {

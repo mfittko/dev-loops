@@ -347,7 +347,7 @@ test("renderInlineCommentBody: the marker is the body's first line", () => {
   // it for both the marker and the rendered line.
   const marker = buildFindingMarker({ fp: fingerprintFinding(finding), severity: "high", angle: "security", round: 1 });
   assert.equal(body.split("\n")[0], marker);
-  assert.match(body, /Recommendation: Use a parameterized query/);
+  assert.match(body, /\*\*Fix:\*\* Use a parameterized query/);
 });
 
 test("renderInlineCommentBody neutralizes Copilot summon tokens", () => {
@@ -430,7 +430,7 @@ test("renderNonLocatableBlock: a newline-bearing severity cannot escape the bloc
 // parses back to.
 test("renderInlineCommentBody: renders the canonical severity, matching its own marker", () => {
   const body = renderInlineCommentBody({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });
-  assert.ok(body.includes("**high** (`security`): injection"), `expected the canonical "high" in the rendered line, got: ${JSON.stringify(body)}`);
+  assert.ok(body.includes("**high** · security\n**Problem:** injection"), `expected the canonical "high" in the rendered line, got: ${JSON.stringify(body)}`);
   assert.ok(!body.includes("**must-fix**"), `the retired spelling must never reach the rendered body: ${JSON.stringify(body)}`);
   assert.equal(parseFindingMarker(body).severity, "high");
 });

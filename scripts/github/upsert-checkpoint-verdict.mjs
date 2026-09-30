@@ -49,6 +49,7 @@ import {
   submitPendingReview,
   updateGateReview,
 } from "./_gate-finding-surface.mjs";
+import { mergeSameDefectFindings } from "./_gate-finding-text.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
@@ -3473,7 +3474,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     pr: options.pr,
     headSha: canonicalHeadSha,
     body: desiredBody,
-    comments: (findingSurface?.locatable ?? []).map((finding) => ({
+    // Same-defect findings from different angles post as one merged comment.
+    comments: mergeSameDefectFindings(findingSurface?.locatable ?? []).map((finding) => ({
       path: resolveFindingFile(finding),
       line: finding.line,
       side: "RIGHT",

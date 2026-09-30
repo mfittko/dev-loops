@@ -227,6 +227,16 @@
       "enforcementNote": "Behavioral routing rule (config schema + isBelowInlineFloor drive real branching), not a fail-closed refusal citing this rule ID in an error message."
     },
     {
+      "id": "GATE-COMMENT-INLINE-LAYOUT",
+      "enforcement": "doc",
+      "enforcementNote": "Rendering rule enforced by renderInlineCommentBody and its layout, cap, merge and marker tests, not a fail-closed refusal citing this rule ID."
+    },
+    {
+      "id": "GATE-COMMENT-REVIEWER-STYLE",
+      "enforcement": "doc",
+      "enforcementNote": "Reviewer writing rule. The renderer caps fields and a lint flags filler; no deterministic check can prove the style."
+    },
+    {
       "id": "GATE-COMMENT-NON-SUBSTITUTION"
     },
     {

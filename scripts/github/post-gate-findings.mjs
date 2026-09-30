@@ -272,6 +272,41 @@ export function sanitizeInline(value) {
     .replace(/!\[/g, "!&#91;");
 }
 
+// Sanitize reviewer prose for a multi-line surface (the inline thread). A
+// balanced single-backtick code span survives with its content inert
+// (whitespace collapsed to one line, `<!--`/`-->` entity-encoded). Every other
+// backtick (stray, doubled, unbalanced) becomes `&#96;`, never deleted, so the
+// reviewer's text stays complete. Text outside a span gets the same
+// neutralization as sanitizeInline. Single-line surfaces keep using
+// sanitizeInline, which deletes backticks.
+const BALANCED_CODE_SPAN_RE = /(?<!`)`([^`]+)`(?!`)/g;
+
+function neutralizeMarkerDelimiters(text) {
+  return text.replace(/\s+/g, " ").replace(/<!--/g, "&lt;!--").replace(/-->/g, "--&gt;");
+}
+
+function escapeOutsideCodeSpan(segment) {
+  return neutralizeMarkerDelimiters(segment)
+    .replace(/`/g, "&#96;")
+    .replace(/</g, "&lt;")
+    .replace(/(?<!!)\[/g, "&#91;")
+    .replace(/!\[/g, "!&#91;");
+}
+
+export function escapeProse(value) {
+  const text = String(value);
+  let out = "";
+  let last = 0;
+  for (const match of text.matchAll(BALANCED_CODE_SPAN_RE)) {
+    out += escapeOutsideCodeSpan(text.slice(last, match.index));
+    const inner = neutralizeMarkerDelimiters(match[1]).trim();
+    out += inner.length > 0 ? `\`${inner}\`` : "";
+    last = match.index + match[0].length;
+  }
+  out += escapeOutsideCodeSpan(text.slice(last));
+  return out.trim();
+}
+
 // GitHub rejects an issue comment body over this many characters. Exported so
 // the bounding resolver below (and its tests) share the one authoritative
 // number rather than a second hand-copied literal.

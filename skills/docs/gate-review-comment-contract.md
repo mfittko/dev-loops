@@ -89,6 +89,34 @@ omitted-count/ledger pointer. Both tracks render at TOP LEVEL, never through the
 is read from that review body; a verdict posted as an ISSUE comment still validates and is still
 corrected on its own surface (back-compat read).
 
+<!-- rule: GATE-COMMENT-INLINE-LAYOUT -->
+`GATE-COMMENT-INLINE-LAYOUT`: an inline finding renders in a fixed layout. The header line reads
+`**<severity>** · <angle>[, <angle>] · judge: <disposition>`. The body lines are `**Problem:**`,
+`**Failing case:**` (when the finding carries `failingCase`) and `**Fix:**` (numbered steps when
+the recommendation holds more than one action). The renderer bounds each field at a sentence
+boundary, never inside a code span or fence, and appends `Full text: ledger entry <fingerprint>`
+after a cut. The ledger keeps the full text. Reviewer inline code spans survive into the thread,
+and every other backtick is escaped as an entity. Findings from different angles that share a file
+and line and describe the same defect post as one comment. That comment lists every angle in the
+header and keeps one marker per merged finding, so each fingerprint stays suppressible. The
+bulleted findings comment and body-filed blocks stay single-line.
+
+<!-- rule: GATE-COMMENT-REVIEWER-STYLE -->
+`GATE-COMMENT-REVIEWER-STYLE`: reviewers MUST write each finding by these rules.
+
+1. Lead with the point.
+2. Give one action per recommendation. Use numbered steps for more than one action.
+3. Write no preamble, recap or closer.
+4. Cap every list at five ranked items. The ledger holds the rest.
+5. Use a matter-of-fact tone.
+6. Before sending, run a pre-send check that deletes every announcing, recapping and hedging
+   sentence.
+7. Apply the deslop style at write time, per the
+   [A/B contrast removal step](./ab-contrast-deslop-step.md).
+
+The renderer bounds each field (`GATE-COMMENT-INLINE-LAYOUT`). A filler-phrase lint flags reviewer
+filler and never rewrites it.
+
 <!-- rule: GATE-EVIDENCE-AUDIT-TWO-SURFACES -->
 `GATE-EVIDENCE-AUDIT-TWO-SURFACES`: any gate-evidence completeness audit or reporting path MUST
 scan BOTH verdict surfaces — the PR-review stream (`pulls/<n>/reviews`, the primary surface per
