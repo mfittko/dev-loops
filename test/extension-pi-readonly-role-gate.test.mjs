@@ -40,16 +40,20 @@ test("Pi judge runs the sanctioned pull and nothing else (J7)", async () => {
 });
 
 test("Pi reviewer reads and searches but cannot run tests or builds", async () => {
-  for (const cmd of ["git diff origin/main...HEAD", "grep -rn foo src", "rg foo", "cat README.md", PULL]) {
+  for (const cmd of ["git diff origin/main...HEAD", "grep -rn foo src", "rg foo", "cat README.md", PULL,
+    "cd /w/tree && dev-loops-run scripts/github/verify-fresh-review-context.mjs --context-path a.json",
+    "dev-loops-run scripts/github/emit-reviewer-blocked.mjs --head abc", "jq .adjacentCode a.json", "find src -name x.ts", 'git -C "/w/tree" diff origin/main...HEAD']) {
     assert.deepEqual(await callAs("review", cmd), { block: false }, cmd);
   }
-  for (const cmd of ["bun run test", "npm test", "bun run build", "node script.mjs", "cat a > b", "git push", "grep x $(id)", "ls; bun test"]) {
+  for (const cmd of ["bun run test", "npm test", "bun run build", "node script.mjs", "cat a > b", "git push", "grep x $(id)", "ls; bun test",
+    "rg --pre bun foo test/", "rg --pre sh . x", "git grep -Obun foo", "git grep --open-files-in-pager=sh x", "git diff --output=x", "git diff --ext-diff",
+    "find . -exec sh -c x ;", "find . -delete", "dev-loops-run scripts/other.mjs", "cd /w && bun test", "git -C /w push"]) {
     assert.equal((await callAs("review", cmd)).block, true, cmd);
   }
 });
 
 test("Pi tool_call fails closed on a blank marker and leaves the unmarked and non-read-only callers alone", async () => {
-  assert.equal((await callAs("", "ls")).block, true);
+  for (const marker of ["", "  ", "dev-loops:"]) assert.equal((await callAs(marker, "ls")).block, true, JSON.stringify(marker));
   assert.deepEqual(await callAs(undefined, "bun run test"), { block: false });
   assert.deepEqual(await callAs("developer", "bun run test"), { block: false });
   assert.deepEqual(await callAs("judge", "bun run test", "read"), { block: false });
@@ -64,7 +68,7 @@ test("source agents, generated .claude assets and the Pi mapping agree on read-o
     assert.ok(READONLY_SUBAGENT_ROLES.includes(role), role);
     const source = toolsOf(`agents/${role}.agent.md`);
     const claude = toolsOf(`.claude/agents/${role}.md`).map((t) => t.toLowerCase());
-    const pi = toolsOf(`agents/${role}.agent.md`) && mapAgentToolsForPi(source);
+    const pi = mapAgentToolsForPi(source);
     const piRendered = renderPiAgent(fs.readFileSync(path.join(repoRoot, `agents/${role}.agent.md`), "utf8"));
     assert.deepEqual(toolsOfText(piRendered), pi);
     // Shell access exists on all three surfaces; the Pi gate restricts it to the role's allowed operations.

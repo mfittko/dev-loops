@@ -3,9 +3,9 @@ import { EXECUTION_IDENTITY_RE } from '@dev-loops/core/loop/work-order-digest';
 /**
  * Pi enforcement of the read-only role boundary
  * (skills/docs/cross-harness-regression-contract.md, "Read-only role enforcement on Pi"). Pi maps `search` and `bash` to
- * unrestricted `bash`, and its `tool_call` event carries no agent identity. The dispatch
- * sets the role marker `DEVLOOPS_AGENT_TYPE` in the child environment; the `tool_call`
- * handler reads it here. The Pi surface must not import the Claude hook seam, so the
+ * unrestricted `bash`, and its `tool_call` event carries no agent identity. The `tool_call`
+ * handler reads the role marker `DEVLOOPS_AGENT_TYPE` when dispatch sets it; Pi dispatch
+ * wiring is tracked in #2582 and an absent marker is the unrestricted main agent. The Pi surface must not import the Claude hook seam, so the
  * sanctioned pull line is rebuilt from the shared identity regex; a test pins parity with
  * the Claude gate's `parseSanctionedPullLine`.
  */
@@ -22,16 +22,42 @@ const READ_SEARCH_ROLES = new Set(['review']);
 export const BASH_RESTRICTED_ROLES = Object.freeze(['judge', 'review']);
 
 // Read and search programs. Test and build runners (bun, npm, node, vitest, make) are absent.
-const READ_PROGRAMS = new Set(['cat', 'head', 'tail', 'wc', 'ls', 'grep', 'rg', 'stat', 'file', 'diff']);
+const READ_PROGRAMS = new Set(['cat', 'head', 'tail', 'wc', 'ls', 'grep', 'rg', 'stat', 'file', 'diff', 'jq', 'find']);
 const READ_GIT_SUBCOMMANDS = new Set(['diff', 'log', 'show', 'status', 'ls-files', 'grep', 'blame', 'rev-parse', 'cat-file']);
 // Shell-inert commands only: no chaining, redirection, substitution or newlines.
 const SHELL_ACTIVE_RE = /[;&|<>`$\n\r(){}\\]/;
 
-function isReadSearchCommand(command: string): boolean {
+// The reviewer contract's mandated sentinel and bound-escape scripts, and its `cd <worktree> && ...` prefix.
+const REVIEWER_SCRIPT_RE = /^dev-loops-run scripts\/github\/(?:verify-fresh-review-context|emit-reviewer-blocked)\.mjs(?: .*)?$/;
+const CD_PREFIX_RE = /^cd "?[\w./-]+"? && /;
+const GIT_C_RE = /^-C "?[\w./-]+"?$/;
+// Flags that make an allowed program execute another program or write a file. Git accepts unique prefixes, so match prefixes.
+const EXEC_FLAG_RE = /^(?:-O|--op|--out|--ext|--tex)/;
+const RG_PRE_RE = /^--pre(?:-glob)?(?:=|$)/;
+const FIND_EXEC_RE = /^-(?:exec|execdir|ok|okdir|delete|fprint\w*|fls)$/;
+
+function isReadSearchCommand(rawCommand: string): boolean {
+  const command = rawCommand.trim().replace(CD_PREFIX_RE, '');
   if (SHELL_ACTIVE_RE.test(command)) return false;
-  const [program, sub] = command.trim().split(/\s+/);
-  if (program === 'git') return READ_GIT_SUBCOMMANDS.has(sub);
-  return READ_PROGRAMS.has(program);
+  if (REVIEWER_SCRIPT_RE.test(command)) return true;
+  let tokens = command.split(/\s+/);
+  const program = tokens[0];
+  if (program === 'git') {
+    tokens = tokens.slice(1);
+    if (tokens[0] === '-C') {
+      if (!GIT_C_RE.test(`${tokens[0]} ${tokens[1]}`)) return false;
+      tokens = tokens.slice(2);
+    }
+    if (!READ_GIT_SUBCOMMANDS.has(tokens[0])) return false;
+  } else if (!READ_PROGRAMS.has(program)) {
+    return false;
+  }
+  const args = tokens.slice(1);
+  if (args.some((t) => EXEC_FLAG_RE.test(t))) return false;
+  if (program === 'rg' && args.some((t) => RG_PRE_RE.test(t))) return false;
+  if (program === 'file' && args.includes('-C')) return false;
+  if (program === 'find' && args.some((t) => FIND_EXEC_RE.test(t))) return false;
+  return true;
 }
 
 export type PiToolCallDecision = { block: false } | { block: true; reason: string };
