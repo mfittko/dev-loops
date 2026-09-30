@@ -1,2 +1,2 @@
 ### Fixed
-- On Pi, judge and reviewer roles no longer get unrestricted `bash`: a `tool_call` handler reads `DEVLOOPS_AGENT_TYPE` and denies all but the sanctioned pull line and shell-inert reads (#2509)
+- On Pi, a `tool_call` gate restricts `bash` for judge and reviewer roles marked by `DEVLOOPS_AGENT_TYPE`; dispatch sets the marker in #2582 (#2509)
