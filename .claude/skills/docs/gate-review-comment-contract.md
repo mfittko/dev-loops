@@ -97,7 +97,7 @@ the recommendation holds more than one action). The renderer bounds each field a
 boundary, never inside a code span or fence, and appends `Full text: ledger entry <fingerprint>`
 after a cut. The ledger keeps the full text. Reviewer inline code spans survive into the thread,
 and every other backtick is escaped as an entity. Findings from different angles that share a file
-and line and describe the same defect post as one comment. That comment lists every angle in the
+and line and describe the same defect post as one comment. Two findings describe the same defect only when their summaries share at least five words and those words make up at least 40% of the union of both summaries, not counting connective words such as "during". One merged comment holds at most eight findings. That comment lists every angle in the
 header and keeps one marker per merged finding, so each fingerprint stays suppressible. The
 bulleted findings comment and body-filed blocks stay single-line and never render `failingCase`; that
 field appears only on the inline surface. A merged comment renders the primary member's Problem, Failing

@@ -18,6 +18,7 @@ import {
   RECOMMENDATION_CAP,
   cutAtSentence,
   lintFillerPhrases,
+  MAX_MERGED_MEMBERS,
   mergeSameDefectFindings,
   splitSentences,
 } from "../../scripts/github/_gate-finding-text.mjs";
@@ -322,4 +323,38 @@ test("a reviewer summary shaped like the legacy judge suffix supplies no judge d
 
 test("escapeProse keeps a real code span after a stray backtick", () => {
   assert.equal(escapeProse("a ` b `real` c"), "a &#96; b `real` c");
+});
+
+test("cutAtSentence never exceeds its hard cap, ellipsis included", () => {
+  assert.ok(cutAtSentence("x".repeat(401), 400).text.length <= 400);
+  assert.ok(cutAtSentence("word ".repeat(100), 400).text.length <= 400);
+});
+
+test("merge: a same-defect group stops at MAX_MERGED_MEMBERS", () => {
+  const many = Array.from({ length: 10 }, (_, i) => ({ ...noOp, angle: `a${i}` }));
+  const merged = mergeSameDefectFindings(many);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].mergedFindings.length, 8);
+});
+
+test("merge: lookalike summaries with five shared contextual words stay separate", () => {
+  const status = { ...noOp, angle: "holistic", summary: "Request handler returns incorrect response status during timeout" };
+  const leak = { ...noOp, angle: "security", summary: "Request handler logs sensitive response headers during timeout" };
+  assert.equal(mergeSameDefectFindings([status, leak]).length, 2);
+});
+
+test("cutAtSentence caps the unbroken 401-character case at 400 with the ellipsis", () => {
+  assert.equal(cutAtSentence("x".repeat(401), 400).text.length, 400);
+});
+
+test("merge: MAX_MERGED_MEMBERS markers all fit inside the merged thread excerpt", () => {
+  const members = Array.from({ length: MAX_MERGED_MEMBERS }, (_, i) => ({ ...noOp, angle: `angle-${i}`, summary: `${noOp.summary} Variant ${i}.` }));
+  const [merged] = mergeSameDefectFindings(members);
+  assert.equal(merged.mergedFindings.length, MAX_MERGED_MEMBERS);
+  const body = renderInlineCommentBody(merged, { round: 1 });
+  const markerLines = body.split("\n").filter((line) => line.startsWith("<!-- dev-loops:finding"));
+  assert.equal(markerLines.length, MAX_MERGED_MEMBERS);
+  const markerBlockLength = markerLines.join("\n").length;
+  assert.ok(markerBlockLength < MERGED_THREAD_BODY_MAX, `markers use ${markerBlockLength} of ${MERGED_THREAD_BODY_MAX}`);
+  assert.ok(body.indexOf(markerLines.at(-1)) + markerLines.at(-1).length <= MERGED_THREAD_BODY_MAX);
 });

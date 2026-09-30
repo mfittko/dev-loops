@@ -80,13 +80,15 @@ export function cutAtSentence(text, cap) {
   const fitting = sentenceEnds(trimmed).filter((end) => end <= cap);
   if (fitting.length > 0) return { text: trimmed.slice(0, fitting[fitting.length - 1]).trim(), cut: true };
   const mask = codeMask(trimmed);
-  for (let i = cap; i > 0; i -= 1) {
+  // The ellipsis takes one character, so cut inside cap - 1 to keep the hard cap.
+  const room = cap - 1;
+  for (let i = room; i > 0; i -= 1) {
     if (/\s/.test(trimmed[i]) && !mask[i]) return { text: `${trimmed.slice(0, i).trim()}…`, cut: true };
   }
   // No whitespace outside code before cap. If cap lands inside a code span,
   // cut before the span starts.
-  let end = cap;
-  if (mask[cap]) while (end > 0 && mask[end - 1]) end -= 1;
+  let end = room;
+  if (mask[room]) while (end > 0 && mask[end - 1]) end -= 1;
   return { text: `${trimmed.slice(0, end).trim()}…`, cut: true };
 }
 
@@ -121,12 +123,11 @@ export function lintFillerPhrases(text) {
 //   2. they are both questions or both non-questions,
 //   3. they carry the same judgeDisposition (both absent counts as the same),
 //   4. their summaries overlap: at least five shared word stems (first five
-//      letters) of words of four or more letters outside code spans, and the shared words are at least half of the smaller summary's
-//      word set.
+//      letters) of words of four or more letters outside code spans, and the shared words are at least 40% of the union of both word sets.
 // Findings on one line that describe different defects share few words and stay
 // separate. The rule is conservative: a missed merge only costs an extra thread.
-// Common words carry no defect identity, so they never count toward overlap.
-const STOPWORDS = new Set(["when", "that", "this", "with", "from", "then", "than", "into", "which", "where", "while", "does", "have", "will", "also", "only", "each", "they", "them", "there", "their", "been", "being", "should", "could", "would", "because", "after", "before"]);
+// Common words carry no defect identity, so they never count toward overlap. Connective words such as "during" only place a defect in context, so a shared context phrase cannot merge two different defects.
+const STOPWORDS = new Set(["when", "that", "this", "with", "from", "then", "than", "into", "which", "where", "while", "does", "have", "will", "also", "only", "each", "they", "them", "there", "their", "been", "being", "should", "could", "would", "because", "after", "before", "during", "under", "over", "about", "between", "within", "without", "through"]);
 function summaryWords(summary) {
   // Code-span text is an identifier; same-line findings share identifiers, so it carries no defect identity.
   return new Set(String(summary).replace(/`[^`]*`/g, " ").toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOPWORDS.has(word)).map((word) => word.slice(0, 5)));
@@ -142,17 +143,20 @@ export function isSameDefect(a, b) {
   const wordsB = summaryWords(b.summary);
   let shared = 0;
   for (const word of wordsA) if (wordsB.has(word)) shared += 1;
-  return shared >= 5 &&shared * 2 >= Math.min(wordsA.size, wordsB.size);
+  // Jaccard >= 0.4: shared words must be a large part of the union, so a shared subject phrase cannot merge different defects.
+  return shared >= 5 && shared * 5 >= (wordsA.size + wordsB.size - shared) * 2;
 }
 
 // Groups same-defect findings. Every group of one is returned unchanged. A
 // merged group is the highest-severity finding (first wins a tie) plus
 // `mergedFindings` (every member, in input order), so the renderer keeps each
 // member's fingerprint and angle.
+export const MAX_MERGED_MEMBERS = 8;
 export function mergeSameDefectFindings(findings) {
   const groups = [];
   for (const finding of findings) {
-    const group = groups.find((members) => isSameDefect(members[0], finding));
+    // Cap group size so every member marker stays inside the thread-body excerpt the suppression read uses.
+    const group = groups.find((members) => members.length < MAX_MERGED_MEMBERS && isSameDefect(members[0], finding));
     if (group) group.push(finding);
     else groups.push([finding]);
   }
