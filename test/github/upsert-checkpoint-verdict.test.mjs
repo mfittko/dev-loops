@@ -7620,8 +7620,9 @@ test("upsert-checkpoint-verdict --findings-ledger: an all-folded round (every ca
 
 test("upsert-checkpoint-verdict --findings-ledger posts two same-defect locatable findings as one inline comment with two markers", async () => {
   await withTempDir(async (tempDir) => {
-    const second = { ...LOCATABLE_FINDING, angle: "security", summary: "SQL injection in the query builder allows attacker input" };
-    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_FINDING, second]);
+    const first = { ...LOCATABLE_FINDING, summary: "SQL injection in the query builder via string concatenation" };
+    const second = { ...LOCATABLE_FINDING, angle: "security", summary: "SQL injection in the query builder via string concatenation allows attacker input" };
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [first, second]);
     const entries = [
       ...singleSurfaceLeadingEntries(),
       {
