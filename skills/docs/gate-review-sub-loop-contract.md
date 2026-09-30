@@ -1648,7 +1648,12 @@ line (count, severity breakdown, touched angle names) pointing at the inline com
 **non-locatable** ("body-filed") finding has no inline carrier, so it renders in full as its own
 plain bulleted list item in the body (never a table row) — summary, `file:line` blob-linked when
 known, and its angle in trailing brackets. A finding's full text therefore lives in EXACTLY ONE
-reader-reachable carrier, never both and never neither. A finding's own free text can never be
+reader-reachable carrier, never both and never neither. Two exceptions, named by
+`GATE-COMMENT-INLINE-LAYOUT` (owned by
+[Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md)): a capped field points
+at its ledger entry, and a same-defect merged comment renders only the primary member's Problem,
+Failing case and Fix, so a non-primary member's text lives in the ledger. A finding's own free
+text can never be
 mistaken for a genuine gate verdict field by the line-start `gate:`/`head sha:`/`verdict:`/
 `summary:` structured field parser: each body-list item runs through the same sanitizer the rest
 of the structured render uses (neutralizing markdown/HTML forgery and collapsing any embedded

@@ -408,6 +408,23 @@ function hasRecommendation(finding) {
   return typeof finding.recommendation === "string" && finding.recommendation.trim().length > 0;
 }
 
+// The inline header's own field separator is ` · judge: ` (U+00B7 MIDDLE DOT).
+// A reviewer-supplied `angle` is untrusted free text at the same trust
+// boundary as the summary, and escapeProse leaves both the middle dot and the
+// literal `judge:` intact, so an angle ending in ` · judge: reject` would
+// render a header parseRenderedJudgeDisposition reads as a genuine
+// disposition — close-gate-findings tier 3 would then reject-close an
+// answered question with no recorded disposition (ADR 0088's non-goal). The
+// middle dot is the separator's structural character, so entity-encoding every
+// U+00B7 in a rendered angle closes every spelling of the vector at once,
+// while an angle without one (every configured angle name) renders
+// byte-identically to before. The raw comment body is what the parser reads;
+// GitHub renders `&#183;` as `·` outside a code span, so the visible header
+// stays unchanged.
+function neutralizeHeaderSeparator(angle) {
+  return angle.replace(/\u00b7/g, "&#183;");
+}
+
 export function renderInlineCommentBody(finding, { round }) {
   // Normalized ONCE and reused for both the marker and the header (mirrors
   // renderNonLocatableBlock below): a legacy-spelled severity must never
@@ -434,7 +451,7 @@ export function renderInlineCommentBody(finding, { round }) {
       operatorVisible: member.operatorVisible === true,
     }));
   }
-  const angles = [...new Set(members.map((member) => escapeProse(member.angle)))].join(", ");
+  const angles = [...new Set(members.map((member) => neutralizeHeaderSeparator(escapeProse(member.angle))))].join(", ");
   const judge = typeof finding.judgeDisposition === "string" && finding.judgeDisposition.trim().length > 0
     ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}`
     : "";
