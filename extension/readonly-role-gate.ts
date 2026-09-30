@@ -4,8 +4,8 @@ import { EXECUTION_IDENTITY_RE } from '@dev-loops/core/loop/work-order-digest';
  * Pi enforcement of the read-only role boundary
  * (skills/docs/cross-harness-regression-contract.md, "Read-only role enforcement on Pi"). Pi maps `search` and `bash` to
  * unrestricted `bash`, and its `tool_call` event carries no agent identity. The `tool_call`
- * handler reads the role marker `DEVLOOPS_AGENT_TYPE` when dispatch sets it; Pi dispatch
- * wiring is tracked in #2582 and an absent marker is the unrestricted main agent. The Pi surface must not import the Claude hook seam, so the
+ * handler reads the role marker `DEVLOOPS_AGENT_TYPE` when dispatch sets it; an absent
+ * marker is the unrestricted main agent until Pi dispatch sets it. The Pi surface must not import the Claude hook seam, so the
  * sanctioned pull line is rebuilt from the shared identity regex; a test pins parity with
  * the Claude gate's `parseSanctionedPullLine`.
  */
@@ -63,7 +63,7 @@ export type PiToolCallDecision = { block: false } | { block: true; reason: strin
 /** Read the calling role from the dispatch marker. Returns null for the unmarked main agent. */
 export function resolvePiAgentType(env: Record<string, string | undefined> = process.env): string | null {
   const raw = env[AGENT_TYPE_ENV];
-  return raw === undefined ? null : stripPluginNamespace(raw.trim());
+  return raw === undefined ? null : stripPluginNamespace(raw).trim();
 }
 
 /**

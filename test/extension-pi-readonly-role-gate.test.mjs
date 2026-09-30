@@ -55,6 +55,7 @@ test("Pi reviewer reads and searches but cannot run tests or builds", async () =
 
 test("Pi tool_call fails closed on a blank marker and leaves the unmarked and non-read-only callers alone", async () => {
   for (const marker of ["", "  ", "dev-loops:"]) assert.equal((await callAs(marker, "ls")).block, true, JSON.stringify(marker));
+  assert.equal((await callAs("dev-loops: judge", "rm -rf /")).block, true);
   assert.deepEqual(await callAs(undefined, "bun run test"), { block: false });
   assert.deepEqual(await callAs("developer", "bun run test"), { block: false });
   assert.deepEqual(await callAs("judge", "bun run test", "read"), { block: false });
@@ -65,8 +66,8 @@ function toolsOf(file) {
 }
 
 test("source agents, generated .claude assets and the Pi mapping agree on read-only role capabilities", () => {
-  for (const role of BASH_RESTRICTED_ROLES) {
-    assert.ok(READONLY_SUBAGENT_ROLES.includes(role), role);
+  for (const role of BASH_RESTRICTED_ROLES) assert.ok(READONLY_SUBAGENT_ROLES.includes(role), role);
+  for (const role of READONLY_SUBAGENT_ROLES) {
     const source = toolsOf(`agents/${role}.agent.md`);
     const claude = toolsOf(`.claude/agents/${role}.md`).map((t) => t.toLowerCase());
     const pi = mapAgentToolsForPi(source);
