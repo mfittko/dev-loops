@@ -19,6 +19,9 @@ function codeMask(text) {
     if (text[i] !== "`") { i += 1; continue; }
     let run = 1;
     while (text[i + run] === "`") run += 1;
+    // A run followed by whitespace is a stray backtick, not a span opener, so
+    // it cannot pair with the opener of the next real span.
+    if (run === 1 && i + run < text.length && /\s/.test(text[i + run])) { i += run; continue; }
     // A run of backticks closes at the next run of the same length; an
     // unclosed run is plain text.
     const closer = text.indexOf("`".repeat(run), i + run);
@@ -32,7 +35,7 @@ function codeMask(text) {
 
 // A `.` that ends a bare list number (`1.`) or a known abbreviation is not a
 // sentence end. ponytail: fixed abbreviation list, extend when a new one splits.
-const ABBREVIATION_TAIL = /(?:^|[.!?]\s+)\d+$|(?:^|\s)(?:e\.g|i\.e|vs|etc|cf)$/i;
+const ABBREVIATION_TAIL = /(?:^|[.!?]\s+)\d+$|(?:^|\n)[ \t]*\d+$|(?:^|\s)(?:e\.g|i\.e|vs|etc|cf)$/i;
 
 // Indices just after each sentence end: `.`, `!` or `?` outside code, followed
 // by whitespace or the end of the text.
@@ -45,6 +48,13 @@ function sentenceEnds(text) {
     if (text[i] === "." && i + 1 !== text.length && ABBREVIATION_TAIL.test(text.slice(0, i))) continue;
     ends.push(i + 1);
   }
+  // A newline that starts a numbered list line also ends the previous step,
+  // so an unpunctuated newline list splits at each marker.
+  const marker = /\n(?=[ \t]*\d+[.)]\s)/g;
+  for (let m = marker.exec(text); m; m = marker.exec(text)) {
+    if (!mask[m.index] && !ends.includes(m.index)) ends.push(m.index);
+  }
+  ends.sort((a, b) => a - b);
   return ends;
 }
 
@@ -110,13 +120,15 @@ export function lintFillerPhrases(text) {
 //   1. they share files[0] and line (both present),
 //   2. they are both questions or both non-questions,
 //   3. they carry the same judgeDisposition (both absent counts as the same),
-//   4. their summaries overlap: at least three shared words of four or more
+//   4. their summaries overlap: at least four shared words of four or more
 //      letters, and the shared words are at least half of the smaller summary's
 //      word set.
 // Findings on one line that describe different defects share few words and stay
 // separate. The rule is conservative: a missed merge only costs an extra thread.
+// Common words carry no defect identity, so they never count toward overlap.
+const STOPWORDS = new Set(["when", "that", "this", "with", "from", "then", "than", "into", "which", "where", "while", "does", "have", "will", "also", "only", "each", "they", "them", "there", "their", "been", "being", "should", "could", "would", "because", "after", "before"]);
 function summaryWords(summary) {
-  return new Set(String(summary).toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4));
+  return new Set(String(summary).toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOPWORDS.has(word)));
 }
 
 export function isSameDefect(a, b) {
@@ -129,7 +141,7 @@ export function isSameDefect(a, b) {
   const wordsB = summaryWords(b.summary);
   let shared = 0;
   for (const word of wordsA) if (wordsB.has(word)) shared += 1;
-  return shared >= 3 && shared >= Math.min(wordsA.size, wordsB.size) / 2;
+  return shared >= 4 && shared * 2 >= Math.min(wordsA.size, wordsB.size);
 }
 
 // Groups same-defect findings. Every group of one is returned unchanged. A

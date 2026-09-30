@@ -82,7 +82,7 @@ verdict is computed upstream from the ledger, never from which track a finding r
 Every clean (zero-finding) angle is collapsed into one trailing comma-joined `**Clean (N):**`
 line, never a list/table row. A finding's full text always lives in EXACTLY ONE reader-reachable
 carrier — its own inline review comment (locatable) or its own body-list bullet (non-locatable) —
-never both, never neither, and never only the on-disk disposition ledger. The one exception is the field cap of `GATE-COMMENT-INLINE-LAYOUT`: a capped field points at its ledger entry. Budget pressure on an
+never both, never neither, and never only the on-disk disposition ledger. The two exceptions are in `GATE-COMMENT-INLINE-LAYOUT`: a capped field points at its ledger entry, and a same-defect merged comment renders only the primary member's Problem, Failing case and Fix, so a non-primary member's text lives in the ledger. Budget pressure on an
 over-long round SHORTENS a body-only finding's rendered text rather than degrading it to an
 omitted-count/ledger pointer. Both tracks render at TOP LEVEL, never through the
 `--findings-summary`/`--findings-file` blockquoted continuation-line path. Verdict evidence

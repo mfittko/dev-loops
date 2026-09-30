@@ -264,6 +264,27 @@ test("splitSentences keeps list numbers and abbreviations inside one step, and t
   assert.ok(body.includes("1. Extract `scaleWidget()`.\n2. Call it, i.e. from `mount()`."));
 });
 
+test("splitSentences splits an unpunctuated newline list at each marker", () => {
+  assert.deepEqual(splitSentences("1. Extract the block\n2. Call it from mount\n3. Add a test"), ["1. Extract the block", "2. Call it from mount", "3. Add a test"]);
+});
+
+test("cutAtSentence does not pair a stray backtick with the next real span", () => {
+  assert.equal(cutAtSentence("a ` b. `c. d` e. more text here", 12).text, "a ` b.");
+});
+
+test("a recommendation with more than MAX_FIX_STEPS sentences renders five steps and the ledger pointer", () => {
+  const recommendation = "Do one. Do two. Do three. Do four. Do five. Do six.";
+  const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short.", recommendation }, { round: 1 });
+  assert.equal(body.split("\n").filter((line) => /^\d+\. /.test(line)).length, 5);
+  assert.match(body, /Full text: ledger entry/);
+});
+
+test("merge: shared stopwords and file identifiers do not merge two different defects", () => {
+  const a = { ...holistic, summary: "`refresh()` in `Widget.js` skips `applyScale` when the widget mounts" };
+  const b = { ...holistic, summary: "`refresh()` in `Widget.js` leaks the listener when the widget mounts" };
+  assert.equal(mergeSameDefectFindings([a, b]).length, 2);
+});
+
 test("a merged comment's non-primary fingerprints stay suppressed through fetchAllReviewThreads", async () => {
   const members = ["holistic", "no-op", "robustness"].map((angle) => ({ ...noOp, angle, summary: `${noOp.summary} Variant ${angle}.` }));
   assert.equal(new Set(members.map(fingerprintFinding)).size, 3);
