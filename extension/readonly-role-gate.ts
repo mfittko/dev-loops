@@ -52,8 +52,8 @@ function isReadSearchCommand(rawCommand: string): boolean {
   }
   const args = tokens.slice(1);
   if (args.some((t) => EXEC_FLAG_RE.test(t))) return false;
-  if (program === 'rg' && args.some((t) => RG_PRE_RE.test(t))) return false;
-  if (program === 'file' && args.some((t) => /^-[^-\s]*C/.test(t))) return false;
+  if (program === 'rg' && args.some((t) => RG_PRE_RE.test(t) || /^--host/.test(t))) return false;
+  if (program === 'file' && args.some((t) => /^-[^-\s]*C/.test(t) || /^--comp/.test(t))) return false;
   if (program === 'find' && args.some((t) => FIND_EXEC_RE.test(t))) return false;
   return true;
 }
