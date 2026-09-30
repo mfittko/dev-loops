@@ -464,26 +464,28 @@ export function renderInlineCommentBody(finding, { round }) {
     ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}`
     : "";
   const lines = [...markers, `**${sanitizeInline(severity)}** · ${angles}${judge}`];
-  let truncated = false;
-  const capped = (text, cap) => {
+  // Each cut records the fingerprint of the member whose field was cut, so
+  // every pointer names the ledger entry that holds the full text.
+  const cutFingerprints = new Set();
+  const primaryFp = fingerprintFinding(finding);
+  const capped = (text, cap, fp) => {
     const result = cutAtSentence(text, cap);
-    truncated ||= result.cut;
+    if (result.cut) cutFingerprints.add(fp);
     return escapeProse(result.text);
   };
-  lines.push(`**Problem:** ${capped(finding.summary, PROBLEM_CAP)}`);
+  lines.push(`**Problem:** ${capped(finding.summary, PROBLEM_CAP, primaryFp)}`);
   if (typeof finding.failingCase === "string" && finding.failingCase.trim().length > 0) {
-    lines.push(`**Failing case:** ${capped(finding.failingCase, FAILING_CASE_CAP)}`);
+    lines.push(`**Failing case:** ${capped(finding.failingCase, FAILING_CASE_CAP, primaryFp)}`);
   }
-  const fixSteps = (text) => {
+  const fixSteps = (text, fp) => {
     const recommendation = cutAtSentence(text, RECOMMENDATION_CAP);
-    truncated ||= recommendation.cut;
     const allSteps = splitSentences(recommendation.text).map((step) => step.replace(/^\d+[.)]\s+/, ""));
     const steps = allSteps.slice(0, MAX_FIX_STEPS);
-    truncated ||= steps.length < allSteps.length;
+    if (recommendation.cut || steps.length < allSteps.length) cutFingerprints.add(fp);
     return steps;
   };
   if (hasRecommendation(finding)) {
-    const steps = fixSteps(finding.recommendation);
+    const steps = fixSteps(finding.recommendation, primaryFp);
     if (steps.length === 1) {
       lines.push(`**Fix:** ${escapeProse(steps[0])}`);
     } else {
@@ -499,12 +501,13 @@ export function renderInlineCommentBody(finding, { round }) {
     if (renderedSummaries.has(normalized)) continue;
     renderedSummaries.add(normalized);
     const angle = neutralizeHeaderSeparator(escapeProse(member.angle));
-    lines.push(`**Problem (${angle}):** ${capped(member.summary, PROBLEM_CAP)}`);
+    const memberFp = fingerprintFinding(member);
+    lines.push(`**Problem (${angle}):** ${capped(member.summary, PROBLEM_CAP, memberFp)}`);
     if (hasRecommendation(member)) {
-      lines.push(`**Fix (${angle}):** ${fixSteps(member.recommendation).map((step) => escapeProse(step)).join(" ")}`);
+      lines.push(`**Fix (${angle}):** ${fixSteps(member.recommendation, memberFp).map((step) => escapeProse(step)).join(" ")}`);
     }
   }
-  if (truncated) lines.push(`Full text: ledger entry ${markers[0].match(FINDING_MARKER_RE)[1]}`);
+  for (const fp of cutFingerprints) lines.push(`Full text: ledger entry ${fp}`);
   return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 

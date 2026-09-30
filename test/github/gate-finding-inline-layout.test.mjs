@@ -224,6 +224,19 @@ test("summary bound: an over-length summary is cut at a sentence and points at t
   assert.equal(body.split("\n").at(-1), `Full text: ledger entry ${fingerprintFinding({ summary })}`);
 });
 
+test("merged member bound: a cut in a further member's field points at that member's ledger entry", () => {
+  const sentence = "The handler drops the retry counter on every reload.";
+  const member = { ...noOpKeyed, recommendation: undefined, summary: Array.from({ length: 30 }, () => sentence).join(" ") };
+  const merged = mergeSameDefectFindings([holisticKeyed, member]);
+  assert.equal(merged.length, 1);
+  const lines = renderInlineCommentBody(merged[0], { round: 2 }).split("\n");
+  const problem = lines.find((line) => line.startsWith("**Problem (no-op):**"));
+  assert.ok(problem.length <= PROBLEM_CAP + "**Problem (no-op):** ".length);
+  assert.ok(problem.endsWith("reload."));
+  assert.ok(!lines.some((line) => line.startsWith("**Fix (no-op):**")), "a member without a recommendation renders no Fix line");
+  assert.deepEqual(lines.filter((line) => line.startsWith("Full text:")), [`Full text: ledger entry ${fingerprintFinding(member)}`]);
+});
+
 test("caps: failing case cuts at its own bound; a short comment has no pointer", () => {
   const long = (n) => Array.from({ length: n }, (_, i) => `Sentence number ${i} is here.`).join(" ");
   assert.ok(FAILING_CASE_CAP !== RECOMMENDATION_CAP && RECOMMENDATION_CAP !== PROBLEM_CAP);
