@@ -15,7 +15,7 @@ const errorsOf = (extraTools) => {
 };
 const CONFIG = withTools({ developer: ["mcp__codebase-memory"] });
 
-describe("extraTools schema (#2598)", () => {
+describe("extraTools schema", () => {
   test("accepts each enabled role with valid entries in both schemas", () => {
     for (const role of ["developer", "fixer", "refiner"]) {
       const input = withTools({ [role]: ["mcp__srv", "mcp__srv__*", "mcp__srv__tool_1"] });
@@ -46,7 +46,7 @@ describe("extraTools schema (#2598)", () => {
   });
 });
 
-describe("buildAgentOverrides and launcher argv (#2598)", () => {
+describe("buildAgentOverrides and launcher argv", () => {
   test("renders only roles with entries: mapped built-in tools then deduplicated entries", () => {
     const overrides = buildAgentOverrides(withTools({ developer: ["mcp__codebase-memory", "mcp__codebase-memory__*"] }), repoRoot);
     assert.deepEqual(Object.keys(overrides), ["developer"]);
@@ -83,7 +83,7 @@ describe("buildAgentOverrides and launcher argv (#2598)", () => {
   });
 });
 
-describe("decideAgentDispatch with agent overrides (#2598)", () => {
+describe("decideAgentDispatch with agent overrides", () => {
   const dispatch = (target, agentOverrides) => decideAgentDispatch({ callerAgentType: null, targetAgentType: target, prompt: "x", agentOverrides });
 
   test("denies a namespaced dispatch of a listed role and names the bare type", () => {

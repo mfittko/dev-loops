@@ -25,7 +25,7 @@ async function judgeCall(command) {
   }
 }
 
-// Cross-harness non-regression for #2598: extraTools is Claude-only (#1086).
+// Cross-harness non-regression: extraTools is Claude-only (see skills/docs/cross-harness-regression-contract.md).
 test("Pi renders every agent identically with and without extraTools and keeps its read-only gate", async () => {
   const config = { version: 1, extraTools: { developer: ["mcp__codebase-memory"] } };
   assert.deepEqual(resolveRoleExtraTools(config, "developer"), ["mcp__codebase-memory"]);

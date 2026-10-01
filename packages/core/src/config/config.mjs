@@ -113,7 +113,7 @@ const ModelsConfigBase = z.strictObject({
 
 const ModelsConfig = ModelsConfigBase.superRefine(refineRoleTiers);
 
-/** Roles that may take `extraTools` (#2598); hooks enforce no boundary that an MCP tool could bypass. */
+/** Roles that may take `extraTools`; hooks enforce no boundary that an MCP tool could bypass. */
 export const EXTRA_TOOLS_ROLES = Object.freeze(["developer", "fixer", "refiner"]);
 const EXTRA_TOOLS_GUARDED_ROLES = Object.freeze(["judge", "review", "gate-coordinator", "dev-loop"]);
 const EXTRA_TOOL_ENTRY_RE = /^mcp__[A-Za-z0-9_-]+(__([A-Za-z0-9_-]+|\*))?$/;
@@ -3117,7 +3117,7 @@ export function resolveUiReviewRunRecipe(config) {
 }
 
 /**
- * Resolve the `extraTools` entries configured for a role (#2598); `[]` when none.
+ * Resolve the `extraTools` entries configured for a role; `[]` when none.
  * Single source for every consumer (launcher, headless entry).
  * @param {DevLoopConfig} config
  * @param {string} role

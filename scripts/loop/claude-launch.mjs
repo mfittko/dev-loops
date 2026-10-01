@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * claude-launch (#2598)
+ * claude-launch
  *
  * Starts Claude Code with the `.devloops` `extraTools` entries delivered to the configured roles
  * through a session-scoped `--agents` render, plus `--allowedTools`. With no `extraTools` entry

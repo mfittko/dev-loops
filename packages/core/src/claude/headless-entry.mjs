@@ -22,7 +22,7 @@ import { splitFrontmatter, transformAgent } from "./asset-generation.mjs";
 export const DEFAULT_CLAUDE_BIN = "claude";
 
 /**
- * Render the session-scoped `claude --agents` overrides for roles with `extraTools` (#2598).
+ * Render the session-scoped `claude --agents` overrides for roles with `extraTools`.
  * Each override is the shipped role (via `transformAgent`) with the configured entries
  * appended, deduplicated, after the mapped built-in tools. Roles without entries are absent.
  *
@@ -100,7 +100,7 @@ export function buildDevLoopPrompt({ issue, pr } = {}) {
  * @param {string} [params.claudeBin] - Claude CLI binary (default "claude").
  * @param {string[]} [params.extraArgs] - Extra args appended after `-p <prompt>`.
  * @param {Record<string,string|undefined>} [params.baseEnv] - Base env (default process.env).
- * @param {{ config: object, repoRoot: string }} [params.extraTools] - When set, adds the `extraTools` --agents/--allowedTools args and env (#2598).
+ * @param {{ config: object, repoRoot: string }} [params.extraTools] - When set, adds the `extraTools` --agents/--allowedTools args and env.
  * @returns {{ command: string, args: string[], env: Record<string,string|undefined> }}
  */
 export function buildHeadlessClaudeInvocation({ prompt, runId, claudeBin = DEFAULT_CLAUDE_BIN, extraArgs = [], baseEnv = process.env, extraTools }) {
@@ -125,7 +125,7 @@ export function buildHeadlessClaudeInvocation({ prompt, runId, claudeBin = DEFAU
 }
 
 /**
- * Build the interactive `claude` invocation for `dev-loops loop claude-launch` (#2598).
+ * Build the interactive `claude` invocation for `dev-loops loop claude-launch`.
  * With no `extraTools` entry the argv is the passthrough args only and no env is added.
  *
  * @param {Object} params
