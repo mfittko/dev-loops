@@ -85,6 +85,15 @@ Each row represents one `session_info` agent segment within a transcript, so mul
 - **Final Prompt**: Size of the prompt on the final prompt-bearing turn.
 - **Growth**: Growth factor `finalPromptTokens / initialPromptTokens`.
 
+### 4. Tool Calls and MCP Usage by Role
+Each `sessions[]` row carries `toolCalls: { calls, byTool, denied }` over all tools of that segment. Claude `tool_use` blocks and Pi `toolCall` blocks both count. Replayed calls of a resumed Claude session count once, through the same `message.id` + `requestId` dedupe as turns.
+
+`denied` counts Claude calls whose `tool_use_id` matches a user record with a non-empty `toolDenialKind` (hook or auto-mode denial). An ordinary `is_error` result does not count as denied. Pi has no structured denial marker, so Pi `denied` is `null` and Markdown shows `n/a`.
+
+The top-level `mcpUsageByRole` object is keyed by the session `role` and holds `{ calls, byTool, denied, bySessionCwd }` for MCP calls only (tool names matching `mcp__<server>__<tool>`). `calls` includes denied calls. `bySessionCwd` always has `main`, `worktree` and `other`. The cwd comes from the calling record (Claude) or the `session` header (Pi). `worktree` is a path under `<main checkout>/tmp/worktrees/`, `main` is the main checkout or any other path inside it, and `other` is any other or missing path.
+
+Every audited role has an entry, with zeros when it made no MCP call, so a measured zero differs from a missing report. Markdown prints this as the `### MCP usage by role` table (`Role | MCP calls | Denied | main | worktree | other | Tools`). Calls are counted, not tokens.
+
 ## Detecting Token Bloat Anti-Patterns
 
 When auditing transcripts, look for these specific indicators:
