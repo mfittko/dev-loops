@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -106,6 +106,24 @@ describe("launcher and headless entry scripts", () => {
       const viaBin = dry(["--claude-bin", "x", "--", "--resume"]);
       assert.deepEqual([viaBin.command, viaBin.args], ["x", ["--resume"]]);
       assert.deepEqual(dry(["--resume"]).args, ["--resume"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--dry-run loads .devloops from the git toplevel of a subdirectory, not the package root", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "extra-tools-"));
+    try {
+      assert.equal(spawnSync("git", ["init", "-q"], { cwd: dir }).status, 0);
+      writeFileSync(path.join(dir, ".devloops"), "version: 1\nextraTools:\n  developer: [mcp__consumer-only]\n");
+      const sub = path.join(dir, "a", "b");
+      mkdirSync(sub, { recursive: true });
+      const res = run("scripts/loop/claude-launch.mjs", ["--dry-run"], sub);
+      assert.equal(res.status, 0, res.stderr);
+      const dry = JSON.parse(res.stdout);
+      assert.equal(dry.DEVLOOPS_AGENT_OVERRIDES, "developer");
+      assert.ok(dry.args.includes("--allowedTools=mcp__consumer-only"));
+      assert.notEqual(dry.DEVLOOPS_AGENT_OVERRIDES, JSON.parse(run("scripts/loop/claude-launch.mjs", ["--dry-run"], repoRoot).stdout).DEVLOOPS_AGENT_OVERRIDES);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
