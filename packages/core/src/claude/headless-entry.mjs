@@ -51,7 +51,7 @@ export function buildAgentOverrides(config, repoRoot) {
 
 /**
  * Claude args and env that deliver `extraTools`; empty when no role has entries.
- * `--allowedTools` is one comma-joined value so a following positional is never swallowed.
+ * `--allowedTools=<entries>` is one token because the option is variadic and would swallow a following positional.
  *
  * @param {object} config
  * @param {string} repoRoot
@@ -63,7 +63,7 @@ export function buildExtraToolsLaunch(config, repoRoot) {
   if (roles.length === 0) return { args: [], env: {} };
   const entries = [...new Set(roles.flatMap((role) => overrides[role].tools.filter((tool) => tool.startsWith("mcp__"))))];
   return {
-    args: ["--agents", JSON.stringify(overrides), "--allowedTools", entries.join(",")],
+    args: ["--agents", JSON.stringify(overrides), `--allowedTools=${entries.join(",")}`],
     env: { DEVLOOPS_AGENT_OVERRIDES: roles.join(",") },
   };
 }

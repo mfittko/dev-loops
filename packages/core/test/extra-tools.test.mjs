@@ -69,12 +69,13 @@ describe("buildAgentOverrides and launcher argv", () => {
     const launch = buildClaudeLaunch({ config, repoRoot, passthroughArgs: ["--resume"], baseEnv: {} });
     assert.equal(launch.args[0], "--agents");
     assert.deepEqual(Object.keys(JSON.parse(launch.args[1])), ["developer", "refiner"]);
-    assert.deepEqual(launch.args.slice(2), ["--allowedTools", "mcp__codebase-memory,mcp__other", "--resume"]);
+    assert.deepEqual(launch.args.slice(2), ["--allowedTools=mcp__codebase-memory,mcp__other", "--resume"]);
+    assert.equal(buildClaudeLaunch({ config, repoRoot, passthroughArgs: ["fix X"], baseEnv: {} }).args.at(-1), "fix X");
     assert.equal(launch.env.DEVLOOPS_AGENT_OVERRIDES, "developer,refiner");
 
     const headless = buildHeadlessClaudeInvocation({ prompt: "p", runId: "r", baseEnv: {}, extraTools: { config, repoRoot } });
     assert.deepEqual(headless.args.slice(0, 2), ["-p", "p"]);
-    assert.deepEqual(headless.args.slice(2), launch.args.slice(0, 4));
+    assert.deepEqual(headless.args.slice(2), launch.args.slice(0, 3));
     assert.equal(headless.env.DEVLOOPS_AGENT_OVERRIDES, "developer,refiner");
   });
 
