@@ -106,7 +106,7 @@ async function main(argv) {
   const { runId } = ensureRunId({ env: opts.dryRun ? {} : process.env, root: opts.dryRun ? undefined : repoRoot });
   const loaded = await loadDevLoopConfig({ cwd: process.cwd() });
   if (loaded.errors?.length > 0) {
-    process.stderr.write(JSON.stringify({ ok: false, error: "invalid .devloops config" }) + "\n");
+    process.stderr.write(JSON.stringify({ ok: false, error: `invalid .devloops config: ${loaded.errors.map((e) => e.message ?? JSON.stringify(e)).join("; ")}` }) + "\n");
     return 1;
   }
   const prompt = opts.prompt ?? buildDevLoopPrompt({ issue: opts.issue, pr: opts.pr });

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
@@ -75,11 +78,47 @@ describe("buildAgentOverrides and launcher argv", () => {
     assert.equal(headless.env.DEVLOOPS_AGENT_OVERRIDES, "developer,refiner");
   });
 
-  test("dropEntry removes entries for unconnected servers", () => {
-    const config = withTools({ developer: ["mcp__live", "mcp__gone__*"] });
-    const overrides = buildAgentOverrides(config, repoRoot, { dropEntry: (entry) => entry.startsWith("mcp__gone") });
-    assert.deepEqual(overrides.developer.tools.slice(-1), ["mcp__live"]);
-    assert.deepEqual(buildAgentOverrides(withTools({ developer: ["mcp__gone"] }), repoRoot, { dropEntry: () => true }), {});
+  test("a stale DEVLOOPS_AGENT_OVERRIDES is dropped when no role renders", () => {
+    const baseEnv = { A: "1", DEVLOOPS_AGENT_OVERRIDES: "developer" };
+    assert.deepEqual(buildClaudeLaunch({ config: { version: 1 }, repoRoot, baseEnv }).env, { A: "1" });
+    const headless = buildHeadlessClaudeInvocation({ prompt: "p", runId: "r", baseEnv, extraTools: { config: { version: 1 }, repoRoot } });
+    assert.equal(headless.env.DEVLOOPS_AGENT_OVERRIDES, undefined);
+  });
+});
+
+describe("launcher and headless entry scripts", () => {
+  const node = Bun.which("node") ?? "node";
+  const run = (script, args, cwd = repoRoot) => spawnSync(node, [path.join(repoRoot, script), ...args], { cwd, encoding: "utf8" });
+
+  test("--help prints the launcher usage and does not spawn claude", () => {
+    const res = run("scripts/loop/claude-launch.mjs", ["--help"]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /^Usage: dev-loops loop claude-launch/);
+  });
+
+  test("own flags precede a leading -- and the claude args", () => {
+    const dry = (args) => JSON.parse(run("scripts/loop/claude-launch.mjs", ["--dry-run", ...args]).stdout);
+    const viaBin = dry(["--claude-bin", "x", "--", "--resume"]);
+    assert.deepEqual([viaBin.command, viaBin.args], ["x", ["--resume"]]);
+    assert.deepEqual(dry(["--resume"]).args, ["--resume"]);
+  });
+
+  test("--claude-bin without a value is an error", () => {
+    const res = run("scripts/loop/claude-launch.mjs", ["--dry-run", "--claude-bin"]);
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /--claude-bin requires a path/);
+  });
+
+  test("headless entry fails with the config error details", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "extra-tools-"));
+    try {
+      writeFileSync(path.join(dir, ".devloops"), "version: 1\nextraTools:\n  judge: [mcp__a]\n");
+      const res = run("scripts/claude/headless-dev-loop.mjs", ["--issue", "1", "--dry-run"], dir);
+      assert.equal(res.status, 1);
+      assert.match(res.stderr, /invalid .devloops config: .*hook-guarded/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -88,6 +127,7 @@ describe("decideAgentDispatch with agent overrides", () => {
 
   test("denies a namespaced dispatch of a listed role and names the bare type", () => {
     const decision = dispatch("dev-loops:developer", "developer,fixer");
+    assert.match(decision.reason, /dev-loops loop claude-launch/);
     assert.equal(decision.decision, "deny");
     assert.match(decision.reason, /Dispatch the bare agent type `developer`/);
   });

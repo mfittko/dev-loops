@@ -207,7 +207,9 @@ export async function emitFixerWorkOrder({
  * sibling scripts/) resolves its repo-local `fixer`; any other repo resolves the plugin
  * install's `dev-loops:fixer`. The hooks accept both through normalizeAgentType.
  */
-export function claudeFixerAgentType(cwd = process.cwd()) {
+export function claudeFixerAgentType(cwd = process.cwd(), env = process.env) {
+  // A launcher-rendered `fixer` replaces only the bare name; the hooks deny the namespaced type then.
+  if ((env.DEVLOOPS_AGENT_OVERRIDES ?? "").split(",").map((role) => role.trim()).includes("fixer")) return "fixer";
   const root = resolveRepoRoot(cwd);
   try {
     if (existsSync(path.join(root, "scripts")) && JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).name === "dev-loops") return "fixer";

@@ -28,13 +28,12 @@ export const DEFAULT_CLAUDE_BIN = "claude";
  *
  * @param {object} config - Loaded dev-loops config.
  * @param {string} repoRoot - Root that holds `agents/<role>.agent.md`.
- * @param {{ dropEntry?: (entry: string) => boolean }} [options] - Return true to drop an entry (unconnected server).
  * @returns {Record<string, { description: string, prompt: string, tools: string[], model?: string }>}
  */
-export function buildAgentOverrides(config, repoRoot, { dropEntry = () => false } = {}) {
+export function buildAgentOverrides(config, repoRoot) {
   const overrides = {};
   for (const role of EXTRA_TOOLS_ROLES) {
-    const extra = resolveRoleExtraTools(config, role).filter((entry) => !dropEntry(entry));
+    const extra = resolveRoleExtraTools(config, role);
     if (extra.length === 0) continue;
     const source = `agents/${role}.agent.md`;
     const raw = fs.readFileSync(path.join(repoRoot, source), "utf8");
@@ -56,11 +55,10 @@ export function buildAgentOverrides(config, repoRoot, { dropEntry = () => false 
  *
  * @param {object} config
  * @param {string} repoRoot
- * @param {{ dropEntry?: (entry: string) => boolean }} [options]
  * @returns {{ args: string[], env: Record<string,string> }}
  */
-export function buildExtraToolsLaunch(config, repoRoot, options) {
-  const overrides = buildAgentOverrides(config, repoRoot, options);
+export function buildExtraToolsLaunch(config, repoRoot) {
+  const overrides = buildAgentOverrides(config, repoRoot);
   const roles = Object.keys(overrides);
   if (roles.length === 0) return { args: [], env: {} };
   const entries = [...new Set(roles.flatMap((role) => overrides[role].tools.filter((tool) => tool.startsWith("mcp__"))))];
@@ -89,6 +87,12 @@ export function buildDevLoopPrompt({ issue, pr } = {}) {
     return `Run the dev-loop for PR #${pr}. Use the /dev-loop skill; routing resolves the rest.`;
   }
   return "Run the dev-loop. Use the /dev-loop skill; routing resolves the current state.";
+}
+
+// A stale value inherited from a parent session must not outlive a launch that renders no roles.
+function withoutAgentOverrides(baseEnv) {
+  const { DEVLOOPS_AGENT_OVERRIDES: _stale, ...rest } = baseEnv;
+  return rest;
 }
 
 /**
@@ -120,7 +124,7 @@ export function buildHeadlessClaudeInvocation({ prompt, runId, claudeBin = DEFAU
   return {
     command: claudeBin,
     args: ["-p", prompt, ...launch.args, ...extraArgs],
-    env: { ...baseEnv, ...runContextEnv(runId), ...launch.env },
+    env: { ...withoutAgentOverrides(baseEnv), ...runContextEnv(runId), ...launch.env },
   };
 }
 
@@ -134,10 +138,9 @@ export function buildHeadlessClaudeInvocation({ prompt, runId, claudeBin = DEFAU
  * @param {string[]} [params.passthroughArgs]
  * @param {string} [params.claudeBin]
  * @param {Record<string,string|undefined>} [params.baseEnv]
- * @param {{ dropEntry?: (entry: string) => boolean }} [params.options]
  * @returns {{ command: string, args: string[], env: Record<string,string|undefined> }}
  */
-export function buildClaudeLaunch({ config, repoRoot, passthroughArgs = [], claudeBin = DEFAULT_CLAUDE_BIN, baseEnv = process.env, options }) {
-  const launch = buildExtraToolsLaunch(config, repoRoot, options);
-  return { command: claudeBin, args: [...launch.args, ...passthroughArgs], env: { ...baseEnv, ...launch.env } };
+export function buildClaudeLaunch({ config, repoRoot, passthroughArgs = [], claudeBin = DEFAULT_CLAUDE_BIN, baseEnv = process.env }) {
+  const launch = buildExtraToolsLaunch(config, repoRoot);
+  return { command: claudeBin, args: [...launch.args, ...passthroughArgs], env: { ...withoutAgentOverrides(baseEnv), ...launch.env } };
 }

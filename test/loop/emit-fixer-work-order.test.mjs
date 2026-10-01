@@ -246,6 +246,15 @@ test("F2: Claude and Pi initial, resumed and replacement adapter payloads are th
     assert.throws(() => buildFixerDispatchPayload({ harness: "codex", plan: {} }), (err) => err.refusal === "unsupported_adapter");
     // The dev-loops source checkout resolves its repo-local agent.
     assert.equal(buildFixerDispatchPayload({ harness: "claude", plan: {}, cwd: process.cwd() }).subagent_type, "fixer");
+    // A launcher-rendered fixer override makes the bare type the only dispatchable one.
+    const saved = process.env.DEVLOOPS_AGENT_OVERRIDES;
+    process.env.DEVLOOPS_AGENT_OVERRIDES = "developer, fixer";
+    try {
+      assert.equal(buildFixerDispatchPayload({ harness: "claude", plan: {}, cwd: wt }).subagent_type, "fixer");
+    } finally {
+      if (saved === undefined) delete process.env.DEVLOOPS_AGENT_OVERRIDES;
+      else process.env.DEVLOOPS_AGENT_OVERRIDES = saved;
+    }
   });
 });
 

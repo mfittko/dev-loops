@@ -940,7 +940,7 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
       return {
         decision: "deny",
         reason:
-          `AGENT_OVERRIDE_NAMESPACED_DISPATCH: \`dev-loops claude-launch\` rendered \`${bare}\` with extraTools for this session. ` +
+          `AGENT_OVERRIDE_NAMESPACED_DISPATCH: \`dev-loops loop claude-launch\` rendered \`${bare}\` with extraTools for this session. ` +
           `Dispatch the bare agent type \`${bare}\` instead of \`${targetAgentType}\`.`,
       };
     }
