@@ -294,6 +294,7 @@ export const SUBCOMMAND_ROUTES = {
     "build-envelope": "scripts/loop/build-handoff-envelope.mjs",
     outer:          "scripts/loop/outer-loop.mjs",
     "watch-cycle":  "scripts/loop/run-watch-cycle.mjs",
+    "claude-launch": "scripts/loop/claude-launch.mjs",
     "watch-ci":     "scripts/github/probe-ci-status.mjs",
     handoff:        "scripts/loop/copilot-pr-handoff.mjs",
     "watch-initial": "scripts/loop/watch-initial-copilot-pr.mjs",
@@ -407,6 +408,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "build-envelope": "Build handoff envelope from startup output",
     outer: "Run outer-loop detection",
     "watch-cycle": "Run Copilot wait cycle",
+    "claude-launch": "Start Claude Code with .devloops extraTools delivered to developer/fixer/refiner",
     "watch-ci": "Block-wait on provider-agnostic CI (CircleCI/Actions/external)",
     handoff: "Copilot PR handoff",
     "watch-initial": "Watch initial Copilot PR",
@@ -599,6 +601,8 @@ export function createCliRuntime({
 
 // ── Subcommand routing dispatch ────────────────────────────────────
 
+const INHERIT_STDIO_SCRIPTS = new Set([path.resolve(REPO_ROOT, "scripts/loop/claude-launch.mjs")]);
+
 function resolveSubcommandRoute(args) {
   if (args.length === 0) return null;
   const category = args[0];
@@ -668,7 +672,9 @@ function parseTopLevelCommand(argv) {
       return { kind: "category_help", category: cmd };
     }
     // Check if any remaining arg is --help — delegate to script
-    if (args.slice(1).some((a) => a === "--help" || a === "-h")) {
+    // Args after `--` belong to the launched program, not to the routed script.
+    const ownArgs = args.includes("--") ? args.slice(0, args.indexOf("--")) : args;
+    if (ownArgs.slice(1).some((a) => a === "--help" || a === "-h")) {
       const alias = resolveSubcommandAlias(cmd, sub);
       const resolvedSub = alias ? alias.canonical : sub;
       const scriptPath = routes[resolvedSub];
@@ -796,6 +802,15 @@ export async function runCli({
       if (!isCoreResolvable()) return writeCoreUnresolvableError(stderr);
       if (fromTop.deprecationNotice) { writeLines(stderr, [fromTop.deprecationNotice]); }
       const scriptArgs = fromTop.forwardedArgs || [];
+      // Interactive launchers hand the terminal to the child: inherited stdio, no usage-retry.
+      if (INHERIT_STDIO_SCRIPTS.has(fromTop.scriptPath)) {
+        // Ctrl-C reaches the whole foreground group; the child handles it, this wrapper must stay alive.
+        const ignoreSigint = () => {};
+        process.on("SIGINT", ignoreSigint);
+        const inherited = spawnSync("node", [fromTop.scriptPath, ...scriptArgs], { cwd, stdio: "inherit" });
+        process.off("SIGINT", ignoreSigint);
+        return inherited.status ?? 1;
+      }
       const result = spawnSync("node", [fromTop.scriptPath, ...scriptArgs], {
         cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       });

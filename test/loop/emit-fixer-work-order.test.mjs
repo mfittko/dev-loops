@@ -213,12 +213,16 @@ test("F2: initial, resumed and replacement dispatches of one reference pull the 
 });
 
 test("F2: Claude and Pi initial, resumed and replacement adapter payloads are the fixed pointer only; other harnesses refuse", async () => {
+  const hostOverrides = process.env.DEVLOOPS_AGENT_OVERRIDES;
+  delete process.env.DEVLOOPS_AGENT_OVERRIDES;
+  try {
   await withFixture(async ({ root, wt, head, files }) => {
     const bin = path.join(root, "tmp", "bin");
     await mkdir(bin, { recursive: true });
     await writeFile(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ headRefName: "issue-1", headRefOid: head })}'\n`);
     chmodSync(path.join(bin, "gh"), 0o755);
-    const env = { ...runIdFreeEnv(), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+    // Hermetic: a launched session's DEVLOOPS_AGENT_OVERRIDES must not flip the consumer-checkout agent type.
+    const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
     const cli = (harness) => spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate"], { cwd: wt, encoding: "utf8", env });
     for (const [harness, textKey] of [["claude", "prompt"], ["pi", "task"]]) {
       const initial = JSON.parse(cli(harness).stdout);
@@ -246,7 +250,19 @@ test("F2: Claude and Pi initial, resumed and replacement adapter payloads are th
     assert.throws(() => buildFixerDispatchPayload({ harness: "codex", plan: {} }), (err) => err.refusal === "unsupported_adapter");
     // The dev-loops source checkout resolves its repo-local agent.
     assert.equal(buildFixerDispatchPayload({ harness: "claude", plan: {}, cwd: process.cwd() }).subagent_type, "fixer");
+    // A launcher-rendered fixer override makes the bare type the only dispatchable one.
+    const saved = process.env.DEVLOOPS_AGENT_OVERRIDES;
+    process.env.DEVLOOPS_AGENT_OVERRIDES = "developer, fixer";
+    try {
+      assert.equal(buildFixerDispatchPayload({ harness: "claude", plan: {}, cwd: wt }).subagent_type, "fixer");
+    } finally {
+      if (saved === undefined) delete process.env.DEVLOOPS_AGENT_OVERRIDES;
+      else process.env.DEVLOOPS_AGENT_OVERRIDES = saved;
+    }
   });
+  } finally {
+    if (hostOverrides !== undefined) process.env.DEVLOOPS_AGENT_OVERRIDES = hostOverrides;
+  }
 });
 
 // ---------------------------------------------------------------------------

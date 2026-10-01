@@ -13,6 +13,7 @@ const decision = decideAgentDispatch({
   callerAgentType: typeof input?.agent_type === "string" ? input.agent_type : null,
   targetAgentType: input?.tool_input?.subagent_type ?? null,
   prompt: input?.tool_input?.prompt ?? null,
+  agentOverrides: process.env.DEVLOOPS_AGENT_OVERRIDES ?? null,
 });
 if (decision.decision === "deny") emitDeny(decision.reason);
 emitAllow();

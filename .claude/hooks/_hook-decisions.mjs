@@ -929,9 +929,22 @@ const isDispatchPointer = (prompt, role) => {
  * @param {string|null} [params.callerAgentType] - Hook payload `agent_type` of the caller.
  * @param {string|null} [params.targetAgentType] - `tool_input.subagent_type` of the dispatch.
  * @param {string|null} [params.prompt] - `tool_input.prompt` of the dispatch.
+ * @param {string|null} [params.agentOverrides] - `DEVLOOPS_AGENT_OVERRIDES` (comma-separated roles rendered by the launcher).
  * @returns {HookDecision}
  */
-export function decideAgentDispatch({ callerAgentType = null, targetAgentType = null, prompt = null }) {
+export function decideAgentDispatch({ callerAgentType = null, targetAgentType = null, prompt = null, agentOverrides = null }) {
+  // A launcher-rendered CLI agent replaces only the bare role name, so a namespaced dispatch would bypass it.
+  if (typeof targetAgentType === "string" && targetAgentType.startsWith("dev-loops:") && typeof agentOverrides === "string") {
+    const bare = normalizeAgentType(targetAgentType);
+    if (agentOverrides.split(",").map((role) => role.trim()).includes(bare)) {
+      return {
+        decision: "deny",
+        reason:
+          `AGENT_OVERRIDE_NAMESPACED_DISPATCH: \`dev-loops loop claude-launch\` rendered \`${bare}\` with extraTools for this session. ` +
+          `Dispatch the bare agent type \`${bare}\` instead of \`${targetAgentType}\`.`,
+      };
+    }
+  }
   const caller = normalizeAgentType(callerAgentType);
   const target = normalizeAgentType(targetAgentType);
   const gateChild = GATE_ROUND_CHILD_ROLES.has(target);

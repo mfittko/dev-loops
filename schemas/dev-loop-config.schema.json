@@ -97,6 +97,22 @@
       "additionalProperties": false,
       "description": "Model routing: conductor override, per-role overrides, tier aliases, and role→tier policy."
     },
+    "extraTools": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "minItems": 1,
+        "maxItems": 16,
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^mcp__[A-Za-z0-9_-]+(__([A-Za-z0-9_-]+|\\*))?$"
+        }
+      },
+      "description": "Claude-only: role (developer, fixer, refiner) → MCP tool entries appended to that role's tools list by `dev-loops loop claude-launch` (session-scoped; Pi ignores it)."
+    },
     "refinement": {
       "type": "object",
       "properties": {
