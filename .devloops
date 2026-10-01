@@ -210,6 +210,16 @@ models:
     developer: low
     fixer: low
 
+# Extra MCP tools delivered to the Claude developer, fixer and refiner agents
+# (issue #2604). Entries must be MCP tool names; hook-guarded roles are rejected.
+extraTools:
+  developer:
+    - mcp__codebase-memory
+  fixer:
+    - mcp__codebase-memory
+  refiner:
+    - mcp__codebase-memory
+
 tracker:
   board:
     number: 3  # https://github.com/users/mfittko/projects/3 (stable; survives project renames)
