@@ -13,6 +13,8 @@ import {
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildGateArtifactPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { readGateFindingsLedger } from "../../scripts/github/_gate-finding-surface.mjs";
+import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
 const writeGateFindingsLogScript = path.resolve("scripts/github/write-gate-findings-log.mjs");
@@ -2769,6 +2771,31 @@ test("writeGateFindingsLog: --spec-authority fails closed on malformed JSON", as
       }),
       /--spec-authority ".*" must contain valid JSON/,
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog rejects a malformed defectKey, and a valid key round-trips through toFindingsLogShape and readGateFindingsLedger", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-dk-"));
+  const run = (findings) => writeGateFindingsLog({
+    repo: "a/b",
+    pr: 1,
+    gate: "draft_gate",
+    headSha: "abc1234500000000000000000000000000000000",
+    verdict: "findings_present",
+    findings: JSON.stringify(findings),
+    tmpRoot: dir,
+  });
+  try {
+    for (const bad of ["", "has space", "x".repeat(65), 7, null]) {
+      await assert.rejects(run([{ severity: "low", angle: "scope", summary: "x", defectKey: bad }]), /defectKey must match/);
+    }
+    const shaped = toFindingsLogShape([{ severity: "low", angle: "scope", summary: "x", files: ["a.js"], defectKey: "GATE-COMMENT-INLINE-LAYOUT" }]);
+    assert.equal(shaped[0].defectKey, "GATE-COMMENT-INLINE-LAYOUT");
+    const result = await run(shaped);
+    const ledger = await readGateFindingsLedger(result.path);
+    assert.equal(ledger.findings[0].defectKey, "GATE-COMMENT-INLINE-LAYOUT");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -49,7 +49,7 @@ Return your findings via the structured artifact below (this agent's canonical o
     "verdict": "clean" | "findings_present" | "blocked",
     "headSha": "<reviewed head SHA from the briefing>",
     "findings": [
-      { "severity": "high" | "medium" | "low" | "question" | "nit", "file": "<path>", "line": 42, "summary": "<the defect and its location>", "failingCase": "<one scenario line, optional>", "recommendation": "<one sentence per action>" }
+      { "severity": "high" | "medium" | "low" | "question" | "nit", "file": "<path>", "line": 42, "summary": "<the defect and its location>", "failingCase": "<one scenario line, optional>", "recommendation": "<one sentence per action>", "defectKey": "<rule ID or AC row label>" }
     ],
     "contextWidened": ["<path-that-moved-judgment>", "..."],
     "verifiedItems": ["<exact checklist label>", "..."]
@@ -62,7 +62,7 @@ Return your findings via the structured artifact below (this agent's canonical o
 
   `verifiedItems` is optional, and only the `acceptance-criteria` and `pr-checklist` angles may emit it; fan-in rejects it on any other angle. List the exact trimmed label of each checklist item you verified at this head: items from the PR body's Acceptance criteria and Definition of done checklists, and items from the linked issue's interactive Acceptance criteria checklist when one exists. Copy each label verbatim. Omit every item you did not verify. The `pre_approval_gate` verdict poster ticks exactly these labels before it composes the verdict (see [Acceptance Criteria Verification](../skills/docs/acceptance-criteria-verification.md)); an unlisted item stays unchecked and blocks.
 
-Write every finding by `GATE-COMMENT-REVIEWER-STYLE` in the [Gate Review Comment Contract](../skills/docs/gate-review-comment-contract.md). `failingCase` is optional and renders as its own line in the inline thread only, never in the body-filed or bulleted findings comment.
+Write every finding by `GATE-COMMENT-REVIEWER-STYLE` in the [Gate Review Comment Contract](../skills/docs/gate-review-comment-contract.md). `failingCase` is optional and renders as its own line in the inline thread only, never in the body-filed or bulleted findings comment. `defectKey` is optional. Set it when the finding violates a named requirement: a registered rule ID or an AC row label of the linked spec. Other angles name the same requirement, so equal keys merge their findings on one file and line, or on one file with no line, into one comment (`GATE-COMMENT-INLINE-LAYOUT`). A key on only one of two findings blocks their merge. Omit it when no named requirement applies; findings without a key merge only on identical summaries. The value matches `^[A-Za-z0-9._:-]{1,64}$`, and a non-matching value is dropped. The key never renders.
 
 When NOT given an angle scope, behave exactly as the full-PR review agent described below.
 

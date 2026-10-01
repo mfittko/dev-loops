@@ -3585,6 +3585,48 @@ test("renderGateReviewCommentBody URL-encodes an untrusted body-only finding fil
   assert.doesNotMatch(body, /\/a\)b\.js#L3/, "raw unencoded path must never reach the URL destination");
 });
 
+test("renderGateReviewCommentBody merges one file-level defect from three angles into one body-only bullet with three markers", () => {
+  const defect = { severity: "medium", summary: "Config loader ignores the env override", files: ["src/config.mjs"] };
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    round: 1,
+    nonLocatableFindings: [
+      { ...defect, angle: "correctness" },
+      { ...defect, angle: "security", summary: "config loader ignores the env-override." },
+      { ...defect, angle: "holistic" },
+    ],
+  });
+  const bullets = body.split("\n").filter((line) => line.startsWith("- "));
+  assert.deepEqual(bullets, ["- 🟠 medium — Config loader ignores the env override _`src/config.mjs`_ _(correctness, security, holistic)_"]);
+  assert.equal(body.split("<!-- dev-loops:finding").length - 1, 3);
+});
+
+test("renderGateReviewCommentBody joins each distinct summary of a defectKey-merged body-only bullet with a semicolon", () => {
+  const defect = { severity: "medium", files: ["src/config.mjs"], defectKey: "AC-3" };
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    round: 1,
+    nonLocatableFindings: [
+      { ...defect, angle: "correctness", summary: "Env override is ignored" },
+      { ...defect, angle: "security", summary: "Override path is never read" },
+    ],
+  });
+  const bullets = body.split("\n").filter((line) => line.startsWith("- "));
+  assert.equal(bullets.length, 1);
+  assert.match(bullets[0], /Env override is ignored; Override path is never read .*_\(correctness, security\)_$/);
+  assert.ok(!body.includes("AC-3"), "the defectKey is never rendered");
+});
+
 test("renderStructuredFindings renders no double-space and no dangling em-dash when a finding has no severity (#1964 copilot)", () => {
   // A finding with a missing/empty severity has no emoji and no severity word;
   // the bullet must be `- <summary>` with a single space, never `-  <summary>`
@@ -7620,8 +7662,8 @@ test("upsert-checkpoint-verdict --findings-ledger: an all-folded round (every ca
 
 test("upsert-checkpoint-verdict --findings-ledger posts two same-defect locatable findings as one inline comment with two markers", async () => {
   await withTempDir(async (tempDir) => {
-    const first = { ...LOCATABLE_FINDING, summary: "SQL injection in the query builder via string concatenation" };
-    const second = { ...LOCATABLE_FINDING, angle: "security", summary: "SQL injection in the query builder via string concatenation allows attacker input" };
+    const first = { ...LOCATABLE_FINDING, summary: "SQL injection in the query builder via string concatenation", defectKey: "SEC-SQLI-7" };
+    const second = { ...LOCATABLE_FINDING, angle: "security", summary: "SQL injection in the query builder via string concatenation allows attacker input", defectKey: "SEC-SQLI-7" };
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, [first, second]);
     const entries = [
       ...singleSurfaceLeadingEntries(),
@@ -7649,6 +7691,7 @@ test("upsert-checkpoint-verdict --findings-ledger posts two same-defect locatabl
     const posted = JSON.parse(postCall.stdinText);
     assert.equal(posted.comments.length, 1);
     assert.equal(posted.comments[0].body.split("<!-- dev-loops:finding").length - 1, 2);
+    assert.ok(!postCall.stdinText.includes("SEC-SQLI-7"), "the defectKey is never rendered");
   }, { prefix: "dev-loops-upsert-merge-" });
 });
 

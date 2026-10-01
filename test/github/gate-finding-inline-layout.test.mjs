@@ -20,6 +20,7 @@ import {
   lintFillerPhrases,
   MAX_MERGED_MEMBERS,
   mergeSameDefectFindings,
+  normalizeFindingSummary,
   splitSentences,
 } from "../../scripts/github/_gate-finding-text.mjs";
 import { escapeProse, renderBoundedFindingsCommentBody } from "../../scripts/github/post-gate-findings.mjs";
@@ -56,6 +57,11 @@ const noOp = {
 const BEFORE_HOLISTIC = "**medium** (`holistic`): The late-load path re-renders through refresh(), but applyScale only runs in mount(). update() has its applyScale call commented out, so a Widget that mounts before the asset pack loads now renders at its unscaled size. The scaling special cases for choice buttons and sort items are skipped, so content can overflow its container on the exact race this change fixes. Recommendation: In the whenReady().then callback, call refresh with a callback that runs the same scaling as mount (extract the find-node + applyScale block into a method and call it from both places). Assert in Widget.test.js that the late-rendered widget gets an inline font-size. — judge: act";
 const BEFORE_NOOP = "**medium** (`no-op`): The late-load path calls refresh(), which re-renders but only triggers update(). update() has its applyScale call commented out, so it is a no-op. applyScale runs only in mount(), and there it finds no node when the pack was not ready. Result: a widget that renders after the pack-loaded event is never scaled, so choice buttons and sort items can overflow or render at the wrong size. Recommendation: Run the scaling step after the late render, for example refresh(() => scaleWidget()), where scaleWidget is the existing mount scaling block extracted into a method. Add an assertion to Widget.test.js that scaling runs on the late-load path. — judge: act";
 
+// The two angles describe one defect in different words, so both name the
+// violated requirement as their defectKey.
+const holisticKeyed = { ...holistic, defectKey: "AC-late-scale" };
+const noOpKeyed = { ...noOp, defectKey: "AC-late-scale" };
+
 const AFTER_LINES = [
   "**medium** · holistic, no-op · judge: act",
   "**Problem:** `update()` never scales a widget that renders after the asset pack loads. `applyScale` only runs in `mount()` (`Widget.js:69`).",
@@ -64,9 +70,11 @@ const AFTER_LINES = [
   "1. Extract the find-node + `applyScale` block into `scaleWidget()`.",
   "2. Call it from `mount()` and from `refresh(() => scaleWidget())` in the ready callback.",
   "3. Assert in `Widget.test.js` that a late-rendered widget gets an inline `font-size`.",
+  "**Problem (no-op):** `update()` has its `applyScale` call commented out, so a widget that renders after the pack-loaded event is never scaled.",
+  "**Fix (no-op):** Run the scaling step after the late render with `refresh(() => scaleWidget())`.",
 ];
 
-test("golden: the two-angle same-defect fixture renders one merged comment, verbatim", () => {
+test("golden: the two-angle defectKey-merged fixture renders one merged comment with each distinct Problem and Fix, verbatim", () => {
   const legacyHolistic = renderFindingLine({
     severity: "medium",
     angle: "holistic",
@@ -82,13 +90,18 @@ test("golden: the two-angle same-defect fixture renders one merged comment, verb
   assert.equal(legacyHolistic, BEFORE_HOLISTIC);
   assert.equal(legacyNoOp, BEFORE_NOOP);
 
-  const merged = mergeSameDefectFindings([holistic, noOp]);
+  const merged = mergeSameDefectFindings([holisticKeyed, noOpKeyed]);
   assert.equal(merged.length, 1);
   const body = renderInlineCommentBody(merged[0], { round: 2 });
+  assert.ok(!body.includes("AC-late-scale"), "the defectKey is never rendered");
   const marker = (finding) => `<!-- dev-loops:finding ${fingerprintFinding(finding)} severity=medium angle=${finding.angle} round=2 -->`;
   assert.equal(body, [marker(holistic), marker(noOp), ...AFTER_LINES].join("\n"));
+  // The primary block keeps the single-finding bound; the further member's
+  // Problem and Fix lines sit under their own field caps.
+  const primaryLength = AFTER_LINES.slice(0, -2).join("\n").length;
+  assert.ok(primaryLength < (BEFORE_HOLISTIC.length + BEFORE_NOOP.length) * 0.5, `primary block is ${primaryLength} chars`);
   const afterLength = AFTER_LINES.join("\n").length;
-  assert.ok(afterLength < (BEFORE_HOLISTIC.length + BEFORE_NOOP.length) * 0.5, `merged comment is ${afterLength} chars`);
+  assert.ok(afterLength < (BEFORE_HOLISTIC.length + BEFORE_NOOP.length) * 0.65, `merged comment is ${afterLength} chars`);
 });
 
 test("layout: header, Problem, Failing case, Fix in fixed order with no preamble or closer", () => {
@@ -211,6 +224,19 @@ test("summary bound: an over-length summary is cut at a sentence and points at t
   assert.equal(body.split("\n").at(-1), `Full text: ledger entry ${fingerprintFinding({ summary })}`);
 });
 
+test("merged member bound: a cut in a further member's field points at that member's ledger entry", () => {
+  const sentence = "The handler drops the retry counter on every reload.";
+  const member = { ...noOpKeyed, recommendation: undefined, summary: Array.from({ length: 30 }, () => sentence).join(" ") };
+  const merged = mergeSameDefectFindings([holisticKeyed, member]);
+  assert.equal(merged.length, 1);
+  const lines = renderInlineCommentBody(merged[0], { round: 2 }).split("\n");
+  const problem = lines.find((line) => line.startsWith("**Problem (no-op):**"));
+  assert.ok(problem.length <= PROBLEM_CAP + "**Problem (no-op):** ".length);
+  assert.ok(problem.endsWith("reload."));
+  assert.ok(!lines.some((line) => line.startsWith("**Fix (no-op):**")), "a member without a recommendation renders no Fix line");
+  assert.deepEqual(lines.filter((line) => line.startsWith("Full text:")), [`Full text: ledger entry ${fingerprintFinding(member)}`]);
+});
+
 test("caps: failing case cuts at its own bound; a short comment has no pointer", () => {
   const long = (n) => Array.from({ length: n }, (_, i) => `Sentence number ${i} is here.`).join(" ");
   assert.ok(FAILING_CASE_CAP !== RECOMMENDATION_CAP && RECOMMENDATION_CAP !== PROBLEM_CAP);
@@ -244,20 +270,87 @@ test("filler lint flags matches and never rewrites", () => {
 });
 
 test("merge: same file, line and defect merge with every angle; a different defect on the same line does not", () => {
-  const merged = mergeSameDefectFindings([holistic, noOp]);
+  const merged = mergeSameDefectFindings([holisticKeyed, noOpKeyed]);
   assert.equal(merged.length, 1);
   assert.deepEqual(merged[0].mergedFindings.map((f) => f.angle), ["holistic", "no-op"]);
   const different = { ...noOp, angle: "robustness", summary: "Missing null check: `config` may be undefined when `mount()` runs before init." };
   const kept = mergeSameDefectFindings([holistic, different]);
   assert.equal(kept.length, 2);
   assert.equal(kept[0], holistic);
-  assert.equal(mergeSameDefectFindings([holistic, { ...noOp, line: 70 }]).length, 2);
-  assert.equal(mergeSameDefectFindings([holistic, { ...noOp, files: ["src/Other.js"] }]).length, 2);
-  assert.equal(mergeSameDefectFindings([holistic, { ...noOp, judgeDisposition: "reject" }]).length, 2);
+  assert.equal(mergeSameDefectFindings([holisticKeyed, { ...noOpKeyed, line: 70 }]).length, 2);
+  assert.equal(mergeSameDefectFindings([holisticKeyed, { ...noOpKeyed, files: ["src/Other.js"] }]).length, 2);
+  assert.equal(mergeSameDefectFindings([holisticKeyed, { ...noOpKeyed, judgeDisposition: "reject" }]).length, 2);
+});
+
+test("merge: without a defectKey, only identical normalized summaries merge", () => {
+  const a = { ...holistic, summary: "Cache lookup returns stale entries after invalidation." };
+  const merged = mergeSameDefectFindings([a, { ...noOp, summary: "cache LOOKUP returns stale-entries, after invalidation" }]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].mergedFindings.length, 2);
+  // Both members share one fingerprint; each still keeps its own marker.
+  const markers = [...renderInlineCommentBody(merged[0], { round: 1 }).matchAll(new RegExp(FINDING_MARKER_RE.source, "gm"))];
+  assert.equal(markers.length, 2);
+  assert.deepEqual(markers.map((m) => parseFindingMarker(m[0]).angle), ["holistic", "no-op"]);
+  assert.equal(mergeSameDefectFindings([a, { ...noOp, summary: "Cache lookup returns stale entries before invalidation." }]).length, 2);
+});
+
+test("merge: two summaryless same-file findings without a line stay separate", () => {
+  const { summary: _a, line: _la, ...first } = holistic;
+  const { summary: _b, line: _lb, ...second } = noOp;
+  assert.equal(mergeSameDefectFindings([first, second]).length, 2);
+});
+
+test("merge: four pairs of different defects on one line stay separate", () => {
+  const pairs = [
+    ["Request handler returns incorrect response status when upstream timeout occurs", "Request handler logs sensitive response headers when upstream timeout occurs"],
+    ["Cache lookup returns stale entries after invalidation", "Cache lookup leaks another user's entries after invalidation"],
+    ["The retry loop swallows timeout errors during shutdown", "The retry budget ignored: timeout errors logged after shutdown"],
+    ["Request handler returns incorrect response status during timeout", "Request handler logs sensitive response headers during timeout"],
+  ];
+  for (const [first, second] of pairs) {
+    assert.equal(mergeSameDefectFindings([{ ...holistic, summary: first }, { ...noOp, summary: second }]).length, 2, `${first} / ${second}`);
+  }
+});
+
+test("merge: different defectKeys, or a key on one finding only, block an identical-summary merge", () => {
+  assert.equal(mergeSameDefectFindings([{ ...holistic, defectKey: "AC-1" }, { ...noOp, summary: holistic.summary, defectKey: "AC-2" }]).length, 2);
+  assert.equal(mergeSameDefectFindings([{ ...holistic, defectKey: "AC-1" }, { ...noOp, summary: holistic.summary }]).length, 2);
+  assert.equal(mergeSameDefectFindings([{ ...holistic, defectKey: "AC-1" }, { ...noOp, summary: holistic.summary, defectKey: "AC-1" }]).length, 1);
+});
+
+test("merge: a finding with no file never merges; two file-level findings with no line merge", () => {
+  const { files: _files, line: _line, ...bare } = holistic;
+  assert.equal(mergeSameDefectFindings([bare, { ...bare, angle: "no-op" }]).length, 2);
+  const fileLevel = { ...bare, files: ["src/Widget.js"] };
+  assert.equal(mergeSameDefectFindings([fileLevel, { ...fileLevel, angle: "no-op" }]).length, 1);
+  assert.equal(mergeSameDefectFindings([fileLevel, { ...fileLevel, angle: "no-op", line: 3 }]).length, 2);
+});
+
+test("defectKey never changes the fingerprint or the finding marker", () => {
+  assert.equal(fingerprintFinding(holisticKeyed), fingerprintFinding(holistic));
+  assert.equal(renderInlineCommentBody(holisticKeyed, { round: 1 }), renderInlineCommentBody(holistic, { round: 1 }));
+});
+
+test("normalizeFindingSummary is the one normalization fingerprintFinding and isSameDefect share", () => {
+  assert.equal(normalizeFindingSummary("  Cache `lookup()` -- STALE!  "), "cache lookup stale");
+  const surfaceSrc = readFileSync(new URL("../../scripts/github/_gate-finding-surface.mjs", import.meta.url), "utf8");
+  const textSrc = readFileSync(new URL("../../scripts/github/_gate-finding-text.mjs", import.meta.url), "utf8");
+  const fingerprintSrc = surfaceSrc.slice(surfaceSrc.indexOf("export function fingerprintFinding"), surfaceSrc.indexOf("export function collectFingerprints"));
+  const sameDefectSrc = textSrc.slice(textSrc.indexOf("export function isSameDefect"), textSrc.indexOf("export const MAX_MERGED_MEMBERS"));
+  assert.match(fingerprintSrc, /normalizeFindingSummary\(finding\.summary\)/);
+  assert.match(sameDefectSrc, /normalizeFindingSummary\(a\.summary\) === normalizeFindingSummary\(b\.summary\)/);
+  assert.doesNotMatch(fingerprintSrc + sameDefectSrc, /toLowerCase/);
+});
+
+test("merge: an identical-summary merge renders exactly like its primary alone, plus the extra marker and angle", () => {
+  const twin = { ...noOp, summary: holistic.summary };
+  const body = renderInlineCommentBody(mergeSameDefectFindings([holistic, twin])[0], { round: 1 });
+  assert.doesNotMatch(body, /\*\*(?:Problem|Fix) \(/);
+  assert.equal(body.split("\n").filter((line) => line.startsWith("**Problem")).length, 1);
 });
 
 test("merge: the merged comment keeps every member fingerprint as a line-start marker", () => {
-  const [merged] = mergeSameDefectFindings([{ ...noOp, severity: "low" }, holistic]);
+  const [merged] = mergeSameDefectFindings([{ ...noOpKeyed, severity: "low" }, holisticKeyed]);
   const body = renderInlineCommentBody(merged, { round: 1 });
   const markers = body.split("\n").filter((line) => line.startsWith("<!-- dev-loops:finding"));
   assert.equal(markers.length, 2);
@@ -267,12 +360,12 @@ test("merge: the merged comment keeps every member fingerprint as a line-start m
 });
 
 test("merge: a question and a defect on the same line do not merge", () => {
-  assert.equal(mergeSameDefectFindings([holistic, { ...noOp, severity: "question" }]).length, 2);
+  assert.equal(mergeSameDefectFindings([holisticKeyed, { ...noOpKeyed, severity: "question" }]).length, 2);
 });
 
 test("merge: a findings-only `file` location merges, and the primary carries operatorVisible from any member", () => {
-  const { files, ...withoutFiles } = noOp;
-  const [merged] = mergeSameDefectFindings([{ ...holistic, files: undefined, file: files[0] }, { ...withoutFiles, file: files[0], operatorVisible: true }]);
+  const { files, ...withoutFiles } = noOpKeyed;
+  const [merged] = mergeSameDefectFindings([{ ...holisticKeyed, files: undefined, file: files[0] }, { ...withoutFiles, file: files[0], operatorVisible: true }]);
   assert.equal(merged.mergedFindings.length, 2);
   assert.equal(merged.operatorVisible, true);
 });
@@ -318,7 +411,7 @@ test("merge: two defects that share code-span identifiers do not merge", () => {
 });
 
 test("a merged comment's non-primary fingerprints stay suppressed through fetchAllReviewThreads", async () => {
-  const members = ["holistic", "no-op", "robustness"].map((angle) => ({ ...noOp, angle, summary: `${noOp.summary} Variant ${angle}.` }));
+  const members = ["holistic", "no-op", "robustness"].map((angle) => ({ ...noOpKeyed, angle, summary: `${noOp.summary} Variant ${angle}.` }));
   assert.equal(new Set(members.map(fingerprintFinding)).size, 3);
   const body = renderInlineCommentBody(mergeSameDefectFindings(members)[0], { round: 1 });
   const node = { id: "T1", isResolved: false, isOutdated: false, path: "src/Widget.js", line: 69, comments: { nodes: [{ databaseId: 1, body, author: { login: "bot" } }] } };
@@ -373,7 +466,7 @@ test("cutAtSentence caps the unbroken 401-character case at 400 with the ellipsi
 });
 
 test("merge: MAX_MERGED_MEMBERS markers all fit inside the merged thread excerpt", () => {
-  const members = Array.from({ length: MAX_MERGED_MEMBERS }, (_, i) => ({ ...noOp, angle: `angle-${i}`, summary: `${noOp.summary} Variant ${i}.` }));
+  const members = Array.from({ length: MAX_MERGED_MEMBERS }, (_, i) => ({ ...noOpKeyed, angle: `angle-${i}`, summary: `${noOp.summary} Variant ${i}.` }));
   const [merged] = mergeSameDefectFindings(members);
   assert.equal(merged.mergedFindings.length, MAX_MERGED_MEMBERS);
   const body = renderInlineCommentBody(merged, { round: 1 });
