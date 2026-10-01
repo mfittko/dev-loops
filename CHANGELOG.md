@@ -61,7 +61,7 @@ All notable changes to this project will be documented in this file.
 - `write-gate-context.mjs --prev-head` is removed; `resolve-angle-carry-forward.mjs --prev-head` is unchanged (#2528)
 - ADR 0109 amends ADR 0070: cumulative prior dispositions within one gate (#2528)
 - `wait-pr-checks` and `spec-context` wait for the GraphQL rate-limit reset and retry once when the GraphQL budget is exhausted; otherwise they return `RATE_LIMITED` with `resetAt` at once (#2529)
-- Inline gate findings render in a fixed, bounded layout with kept code spans; same-defect merges need a stricter word overlap and cap at eight (#2254)
+- Inline gate findings render in a fixed, bounded layout with kept code spans; a merged comment caps at eight findings (#2254)
 - A reviewer angle can no longer forge the inline header's judge disposition: the separator and its entity spellings are neutralized on the rendered surface too (#2254)
 
 ### Fixed
