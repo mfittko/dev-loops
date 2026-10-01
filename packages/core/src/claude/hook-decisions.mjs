@@ -933,7 +933,7 @@ const isDispatchPointer = (prompt, role) => {
  */
 export function decideAgentDispatch({ callerAgentType = null, targetAgentType = null, prompt = null, agentOverrides = null }) {
   // A launcher-rendered CLI agent replaces only the bare role name, so a namespaced dispatch would bypass it.
-  if (typeof targetAgentType === "string" && targetAgentType.includes(":") && typeof agentOverrides === "string") {
+  if (typeof targetAgentType === "string" && targetAgentType.startsWith("dev-loops:") && typeof agentOverrides === "string") {
     const bare = normalizeAgentType(targetAgentType);
     if (agentOverrides.split(",").map((role) => role.trim()).includes(bare)) {
       return {

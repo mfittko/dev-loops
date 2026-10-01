@@ -97,10 +97,17 @@ describe("launcher and headless entry scripts", () => {
   });
 
   test("own flags precede a leading -- and the claude args", () => {
-    const dry = (args) => JSON.parse(run("scripts/loop/claude-launch.mjs", ["--dry-run", ...args]).stdout);
-    const viaBin = dry(["--claude-bin", "x", "--", "--resume"]);
-    assert.deepEqual([viaBin.command, viaBin.args], ["x", ["--resume"]]);
-    assert.deepEqual(dry(["--resume"]).args, ["--resume"]);
+    // A fixture cwd keeps the argv independent of this repository's own `.devloops`.
+    const dir = mkdtempSync(path.join(tmpdir(), "extra-tools-"));
+    try {
+      writeFileSync(path.join(dir, ".devloops"), "version: 1\n");
+      const dry = (args) => JSON.parse(run("scripts/loop/claude-launch.mjs", ["--dry-run", ...args], dir).stdout);
+      const viaBin = dry(["--claude-bin", "x", "--", "--resume"]);
+      assert.deepEqual([viaBin.command, viaBin.args], ["x", ["--resume"]]);
+      assert.deepEqual(dry(["--resume"]).args, ["--resume"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("--claude-bin without a value is an error", () => {
@@ -137,6 +144,7 @@ describe("decideAgentDispatch with agent overrides", () => {
     assert.equal(dispatch("developer", "developer").decision, "allow");
     assert.equal(dispatch("dev-loops:developer", null).decision, "allow");
     assert.equal(dispatch("dev-loops:developer", undefined).decision, "allow");
+    assert.equal(dispatch("acme:developer", "developer").decision, "allow");
   });
 });
 
