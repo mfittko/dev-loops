@@ -38,6 +38,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
+import { parse as parseYaml } from "yaml";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
 import { normalizeToBareBranch, resolveBaseBranch } from "@dev-loops/core/config";
 import { provisionWorktree } from "./provision-worktree.mjs";
@@ -99,7 +100,8 @@ Output (stdout, JSON):
                // always present, on both the create and reuse paths. Guards the
                // repo's own default AND, when it differs, an explicit --base.
     "commitMsgGuard": { "ok": bool, "installed": bool, "refreshed": bool,
-               "skipped": bool, "reason"? }              // commit-message
+               "skipped": bool, "reason"?,
+               "requireClaudeSession": bool }            // commit-message
                // contract guard's install result (best-effort; see
                // installCommitMsgGuard) — always present, on both the create
                // and reuse paths. Enforces the attribution trailers, the
@@ -534,6 +536,40 @@ function installGuard(gitCommand, root, explicitBase) {
   }
 }
 
+// worktree.commitMsgGuard.requireClaudeSession (issue #2605), read ONLY from
+// the .devloops family at refs/remotes/origin/<default>: never the working
+// tree, a PR head, env, git config or a flag, so one worktree cannot change
+// the policy of the shared hook. Absent policy -> false (built-in default);
+// an existing but unreadable/unparsable/non-boolean policy -> true + WARN, so
+// an unreadable policy never loosens the guard. Probe order and
+// existence-before-read mirror readHeadDevloopsSource.
+function readRequireClaudeSession(gitCommand, root) {
+  const repoDefault = guardedBranches(gitCommand, root, null).repoDefault;
+  if (!repoDefault) return false;
+  for (const name of [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json"]) {
+    const ref = `refs/remotes/origin/${repoDefault}:${name}`;
+    try {
+      runGit(gitCommand, ["cat-file", "-e", ref], root);
+    } catch {
+      continue; // absent at this extension
+    }
+    const warn = (why) => {
+      process.stderr.write(`[ensure-worktree] WARN default-branch ${name} ${why}; requiring the Claude-Session trailer\n`);
+      return true;
+    };
+    let parsed;
+    try {
+      parsed = parseYaml(runGit(gitCommand, ["show", ref], root)) ?? {};
+    } catch {
+      return warn("is unreadable or does not parse");
+    }
+    const value = parsed?.worktree?.commitMsgGuard?.requireClaudeSession;
+    if (value === undefined) return false;
+    return typeof value === "boolean" ? value : warn("sets worktree.commitMsgGuard.requireClaudeSession to a non-boolean value");
+  }
+  return false;
+}
+
 // Installs the commit-msg contract guard alongside the default-branch guard
 // above — same resolveHooksInstallTarget, same common hooks directory, so it
 // rides into every worktree the same way. Best-effort, like installGuard: a
@@ -541,11 +577,12 @@ function installGuard(gitCommand, root, explicitBase) {
 function installCommitMsgGuardForRoot(gitCommand, root) {
   try {
     const { gitDir, hooksPathOverride } = resolveHooksInstallTarget(gitCommand, root);
-    const result = installCommitMsgGuard({ gitDir, hooksPathOverride });
+    const requireClaudeSession = readRequireClaudeSession(gitCommand, root);
+    const result = installCommitMsgGuard({ gitDir, hooksPathOverride, requireClaudeSession });
     if (!result.ok) {
       process.stderr.write(`[ensure-worktree] WARN commit-msg guard not installed: ${result.reason}\n`);
     }
-    return result;
+    return { ...result, requireClaudeSession };
   } catch (err) {
     const detail = (err?.stderr ?? err?.message ?? "").toString().trim();
     process.stderr.write(`[ensure-worktree] WARN commit-msg guard not installed: ${detail}\n`);

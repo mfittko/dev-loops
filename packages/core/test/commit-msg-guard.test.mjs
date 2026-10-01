@@ -10,6 +10,7 @@ import {
   COMMIT_MSG_GUARD_MARKER,
   COMMIT_MSG_WAIVER_MARKER,
   installCommitMsgGuard,
+  renderCommitMsgGuardHook,
 } from "../src/loop/commit-msg-guard.mjs";
 
 // The hook is a real Node script that runs inside real git — asserting on
@@ -21,7 +22,7 @@ import {
 // requirement is gated on it (issue #1869: a plain human commit is never
 // "Claude", so it must not be forced to carry a Claude co-author trailer).
 const BASE_GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
-delete BASE_GIT_ENV.CLAUDECODE;
+for (const name of ["CLAUDECODE", "PI_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "AI_AGENT"]) delete BASE_GIT_ENV[name];
 
 const AGENT_TRAILERS = "\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_test\n";
 
@@ -78,7 +79,7 @@ test("installs the commit-msg hook into an empty hooks dir, executable and marke
 test("rejects an agent-authored commit missing the attribution trailers", async () => {
   const { dir, gitDir } = await repoFixture();
   try {
-    installCommitMsgGuard({ gitDir });
+    installCommitMsgGuard({ gitDir, requireClaudeSession: true });
     const result = commitAttempt(dir, "fix(gate): do the thing", { CLAUDECODE: "1" });
     assert.equal(result.blocked, true);
     assert.match(result.stderr, /missing required trailer: Co-Authored-By/);
@@ -286,5 +287,97 @@ test("refuses to install into a linked worktree's own gitdir, not the common one
   } finally {
     await rm(dir, { recursive: true, force: true });
     await rm(linked, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2605: the Claude-Session trailer is an opt-in baked at install time.
+// ---------------------------------------------------------------------------
+
+const UUID = "0b9c1f0e-0000-4000-8000-000000000001";
+const CO_AUTHOR = "\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>\n";
+const SESSION_LINE = `Claude-Session: https://claude.ai/code/session_${UUID}\n`;
+const SUBJECT = "fix(gate): do the thing";
+
+const ENVS = {
+  agent: { CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: UUID, AI_AGENT: "claude-code" },
+  operator: { CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: UUID },
+  plain: {},
+  pi: { PI_SESSION_ID: "pi-1" },
+  piInherited: { PI_SESSION_ID: "pi-1", CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: UUID },
+};
+
+async function withHook(options, run) {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    installCommitMsgGuard({ gitDir, ...options });
+    return await run(dir, gitDir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+for (const [envName, env] of Object.entries(ENVS)) {
+  const claude = env.CLAUDECODE === "1";
+  for (const [label, options] of [["default", {}], ["false", { requireClaudeSession: false }], ["true", { requireClaudeSession: true }]]) {
+    const required = options.requireClaudeSession === true;
+    test(`${envName} env, hook rendered ${label}: attribution matrix`, async () => {
+      await withHook(options, (dir) => {
+        if (!claude) {
+          assert.equal(commitAttempt(dir, SUBJECT, env).blocked, false);
+          return;
+        }
+        const noCoAuthor = commitAttempt(dir, SUBJECT, env);
+        assert.equal(noCoAuthor.blocked, true);
+        assert.match(noCoAuthor.stderr, /missing required trailer: Co-Authored-By/);
+        assert.equal(noCoAuthor.stderr.includes("Claude-Session") || noCoAuthor.stderr.includes("claude.ai"), required);
+        assert.equal(noCoAuthor.stderr.includes("requireClaudeSession"), false);
+        const coAuthorOnly = commitAttempt(dir, `${SUBJECT}${CO_AUTHOR}`, env);
+        assert.equal(coAuthorOnly.blocked, required, coAuthorOnly.stderr);
+        if (required) assert.match(coAuthorOnly.stderr, /missing required trailer: Claude-Session/);
+        assert.equal(commitAttempt(dir, `${SUBJECT}${CO_AUTHOR}${SESSION_LINE}`, env).blocked, false);
+      });
+    });
+  }
+}
+
+for (const [label, options] of [["false", { requireClaudeSession: false }], ["true", { requireClaudeSession: true }]]) {
+  test(`the other checks do not depend on the key (${label})`, async () => {
+    await withHook(options, (dir) => {
+      assert.equal(commitAttempt(dir, "fix(gate): see #123 and more").blocked, true);
+      assert.equal(commitAttempt(dir, "do the thing").blocked, true);
+      assert.equal(commitAttempt(dir, "fixup! fix(gate): earlier").blocked, false);
+      assert.equal(commitAttempt(dir, 'Revert "fix(gate): earlier"').blocked, false);
+      assert.equal(commitAttempt(dir, `bad subject\n\n${COMMIT_MSG_WAIVER_MARKER}\n`, ENVS.agent).blocked, false);
+    });
+  });
+}
+
+test("environment variables and git config cannot change the baked value", async () => {
+  const message = `${SUBJECT}${CO_AUTHOR}`;
+  await withHook({ requireClaudeSession: true }, (dir) => {
+    assert.equal(commitAttempt(dir, message, { ...ENVS.agent, DEVLOOPS_REQUIRE_CLAUDE_SESSION: "0" }).blocked, true);
+    const file = `change-${fileCounter++}.txt`;
+    fs.writeFileSync(path.join(dir, file), "x\n");
+    git(dir, ["add", file]);
+    assert.throws(() => git(dir, ["-c", "devloops.requireClaudeSession=false", "commit", "--quiet", "-m", message], ENVS.agent));
+  });
+  await withHook({ requireClaudeSession: false }, (dir) => {
+    for (const value of ["1", "true"]) {
+      assert.equal(commitAttempt(dir, message, { ...ENVS.agent, DEVLOOPS_REQUIRE_CLAUDE_SESSION: value }).blocked, false);
+    }
+    const file = `change-${fileCounter++}.txt`;
+    fs.writeFileSync(path.join(dir, file), "x\n");
+    git(dir, ["add", file]);
+    git(dir, ["-c", "devloops.requireClaudeSession=true", "commit", "--quiet", "-m", message], ENVS.agent);
+  });
+});
+
+test("the rendered hook bakes a boolean literal and reads no lever for it", async () => {
+  for (const [options, literal] of [[{}, "false"], [{ requireClaudeSession: false }, "false"], [{ requireClaudeSession: true }, "true"]]) {
+    const source = renderCommitMsgGuardHook(options);
+    assert.ok(source.includes(`const REQUIRE_CLAUDE_SESSION = ${literal};`));
+    assert.equal(source.includes("DEVLOOPS_REQUIRE_CLAUDE_SESSION"), false);
+    assert.equal(source.includes("git config"), false);
   }
 });

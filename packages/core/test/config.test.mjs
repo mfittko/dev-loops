@@ -123,6 +123,13 @@ describe("schema validation", () => {
     assert.ok(!result.success);
   });
 
+  test("worktree.commitMsgGuard.requireClaudeSession accepts only a boolean (#2605)", () => {
+    for (const value of [true, false]) {
+      assert.ok(DevLoopConfigSchema.safeParse({ version: 1, worktree: { commitMsgGuard: { requireClaudeSession: value } } }).success);
+    }
+    assert.ok(!DevLoopConfigSchema.safeParse({ version: 1, worktree: { commitMsgGuard: { requireClaudeSession: "yes" } } }).success);
+  });
+
   test("S6: strategy is a bare enum (flattened, #1404) — an object value is rejected", () => {
     const result = DevLoopConfigSchema.safeParse({
       version: 1,

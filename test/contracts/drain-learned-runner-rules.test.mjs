@@ -264,6 +264,21 @@ test("WORKTREE-COMMIT-MSG-GUARD states the default merge subject and the agent n
   assert.match(rule, /The waiver is operator-only: an agent-authored commit never carries the waiver line\./);
 });
 
+test("WORKTREE-COMMIT-MSG-GUARD states the Claude-Session opt-in and the agent boundary", async () => {
+  const rule = collapse(sectionFrom(await readRepo(WORKTREE_DOC), "<!-- rule: WORKTREE-COMMIT-MSG-GUARD -->"));
+  assert.match(rule, /carries `Co-Authored-By: Claude <model> <noreply@anthropic\.com>` in every repository, and carries a `Claude-Session:` trailer only when the repository opts in/);
+  assert.ok(rule.includes("`worktree.commitMsgGuard.requireClaudeSession`"));
+  assert.match(rule, /Its default is `false`/);
+  assert.match(rule, /read only from the `\.devloops` family .* at `refs\/remotes\/origin\/<default>`/);
+  assert.match(rule, /never read from the working-tree `\.devloops`, a PR head, an environment variable, git config or a CLI flag/);
+  assert.match(rule, /`true` only when that file parses and sets the literal `true`/);
+  assert.match(rule, /`false` when `origin\/HEAD` or the remote-tracking ref does not resolve/);
+  assert.match(rule, /`true` with one `\[ensure-worktree\] WARN` line when the file exists but cannot be read/);
+  assert.match(rule, /takes effect on the next `ensure-worktree\.mjs` run/);
+  assert.match(rule, /`Co-Authored-By`, bare issue reference and subject checks stay mandatory for both values/);
+  assert.match(rule, /An agent never sets the key to `false`, never removes it, never changes `origin\/HEAD` or a remote-tracking ref to change the read, and never skips the session check with an environment variable, git config or the waiver line\./);
+});
+
 test("WORKTREE-SCRIPT-LAUNCHER-CWD pins the compound launcher form", async () => {
   const rule = sectionFrom(await readRepo(WORKTREE_DOC), "<!-- rule: WORKTREE-SCRIPT-LAUNCHER-CWD -->", "\n## ");
   assert.ok(rule.includes("`cd <checkout> && dev-loops-run scripts/<path>`"));

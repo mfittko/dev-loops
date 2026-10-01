@@ -607,8 +607,13 @@ const WorktreeEntry = z.strictObject({
   mode: z.enum(["copy", "link"]).describe("copy = fs.cp into the worktree (isolated, mutable); link = absolute symlink to the main checkout (shared, read-only)."),
 });
 
+const WorktreeCommitMsgGuardConfig = z.strictObject({
+  requireClaudeSession: z.boolean().optional().describe("Opt in to the commit-msg guard's Claude-Session trailer check (default false). Read only from the default branch's .devloops (refs/remotes/origin/<default>) when ensure-worktree installs the hook."),
+});
+
 const WorktreeConfig = z.strictObject({
   entries: z.array(WorktreeEntry).optional().describe("Gitignored paths/globs provisioned into a fresh worktree."),
+  commitMsgGuard: WorktreeCommitMsgGuardConfig.optional().describe("Commit-msg guard policy."),
 });
 
 /**

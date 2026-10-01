@@ -172,9 +172,30 @@ guards message CONTENT rather than a branch). It enforces the commit-message
 contract at commit time instead of leaving it to agent discipline:
 
 - An agent-authored commit (`CLAUDECODE=1` in the environment — a plain
-  human commit is exempt, since it is never "Claude") must carry both
-  `Co-Authored-By: Claude <model> <noreply@anthropic.com>` and a
-  `Claude-Session:` trailer.
+  human commit is exempt, since it is never "Claude") carries
+  `Co-Authored-By: Claude <model> <noreply@anthropic.com>` in every
+  repository, and carries a `Claude-Session:` trailer only when the
+  repository opts in (the key bullet below).
+- The key `worktree.commitMsgGuard.requireClaudeSession` opts a repository in
+  to the `Claude-Session:` check. Its default is `false`. The value is read
+  only from the `.devloops` family (`.devloops`, `.devloops.yaml`,
+  `.devloops.yml`, `.devloops.json`) at `refs/remotes/origin/<default>`, where
+  `<default>` comes from `origin/HEAD`. It is never read from the working-tree
+  `.devloops`, a PR head, an environment variable, git config or a CLI flag.
+  The value is `true` only when that file parses and sets the literal `true`.
+  The value is `false` when `origin/HEAD` or the remote-tracking ref does not
+  resolve, when no `.devloops` family file exists there, or when the key is
+  absent or `false`. The value is `true` with one `[ensure-worktree] WARN`
+  line when the file exists but cannot be read, does not parse, or sets a
+  non-boolean value, so an unreadable policy never loosens the guard.
+  `ensure-worktree.mjs` bakes the value into the hook at install time and the
+  hook reads nothing at commit time, so a change takes effect on the next
+  `ensure-worktree.mjs` run. The `Co-Authored-By`, bare issue reference and
+  subject checks stay mandatory for both values. An agent may add the key as
+  `true`. An agent never sets the key to `false`, never removes it, never
+  changes `origin/HEAD` or a remote-tracking ref to change the read, and never
+  skips the session check with an environment variable, git config or the
+  waiver line.
 - A bare non-issue `#<digits>` enumeration is rejected — GitHub auto-links it
   to an unrelated issue/PR when rendered. A genuine `Closes #N` / `Fixes #N`
   / `Refs #N` reference is allowed, including its trailer colon form

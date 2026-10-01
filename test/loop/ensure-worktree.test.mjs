@@ -1244,3 +1244,129 @@ test("ensure: refusal reason JSON-escapes a special-character core.hooksPath val
     repo.cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Issue #2605: worktree.commitMsgGuard.requireClaudeSession is read only from
+// the .devloops family at refs/remotes/origin/<default> and baked into the hook.
+// ---------------------------------------------------------------------------
+
+const REQUIRE_KEY_TRUE = "version: 1\nworktree:\n  commitMsgGuard:\n    requireClaudeSession: true\n";
+
+function hookBakes(root) {
+  const hook = readFileSync(path.join(root, ".git", "hooks", "commit-msg"), "utf8");
+  return hook.match(/const REQUIRE_CLAUDE_SESSION = (true|false);/)[1] === "true";
+}
+
+async function ensureCapturingStderr(repo, issue) {
+  const lines = [];
+  const realWrite = process.stderr.write;
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true; };
+  try {
+    const res = await ensureWorktree({ repoRoot: repo.root, issue });
+    return { res, warns: lines.filter((l) => l.startsWith("[ensure-worktree] WARN") && l.includes(".devloops")) };
+  } finally {
+    process.stderr.write = realWrite;
+  }
+}
+
+test("requireClaudeSession: true on origin/<default> is reported and baked into the hook", async () => {
+  const repo = makeRepo({ devloops: REQUIRE_KEY_TRUE });
+  try {
+    const { res, warns } = await ensureCapturingStderr(repo, 6001);
+    assert.equal(res.commitMsgGuard.requireClaudeSession, true);
+    assert.equal(hookBakes(repo.root), true);
+    assert.deepEqual(warns, []);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("requireClaudeSession: only the working tree or a non-default remote branch never opts in", async () => {
+  const repo = makeRepo();
+  try {
+    repo.git("checkout", "-q", "-b", "other");
+    writeFileSync(path.join(repo.root, ".devloops"), REQUIRE_KEY_TRUE);
+    repo.git("add", "-A");
+    repo.git("commit", "-q", "-m", "other");
+    repo.git("fetch", "-q", "origin");
+    repo.git("checkout", "-q", "main");
+    // Working-tree only, uncommitted on main.
+    writeFileSync(path.join(repo.root, ".devloops"), REQUIRE_KEY_TRUE);
+    const { res, warns } = await ensureCapturingStderr(repo, 6002);
+    assert.equal(res.commitMsgGuard.requireClaudeSession, false);
+    assert.equal(hookBakes(repo.root), false);
+    assert.deepEqual(warns, []);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("requireClaudeSession: absent policy is false with no WARN", async () => {
+  const noKey = makeRepo({ devloops: "version: 1\n" });
+  try {
+    const { res, warns } = await ensureCapturingStderr(noKey, 6003);
+    assert.equal(res.commitMsgGuard.requireClaudeSession, false);
+    assert.deepEqual(warns, []);
+  } finally {
+    noKey.cleanup();
+  }
+  const noFile = makeRepo();
+  try {
+    const { res, warns } = await ensureCapturingStderr(noFile, 6004);
+    assert.equal(res.commitMsgGuard.requireClaudeSession, false);
+    assert.deepEqual(warns, []);
+  } finally {
+    noFile.cleanup();
+  }
+  // The remote's HEAD names an unborn branch, so no fetch can recreate origin/HEAD.
+  const remote = makeOriginRepo();
+  try {
+    writeFileSync(path.join(remote.originDir, ".devloops"), REQUIRE_KEY_TRUE);
+    remote.originGit("add", "-A");
+    remote.originGit("commit", "-q", "-m", "key");
+    const clone = cloneRepo(remote.tmp, remote.originDir);
+    remote.originGit("symbolic-ref", "HEAD", "refs/heads/unborn");
+    clone.git("remote", "set-head", "origin", "--delete");
+    const { res, warns } = await ensureCapturingStderr({ root: clone.root }, 6005);
+    assert.equal(res.commitMsgGuard.requireClaudeSession, false);
+    assert.deepEqual(warns, []);
+  } finally {
+    remote.cleanup();
+  }
+});
+
+test("requireClaudeSession: unparsable or non-boolean default-branch policy is true with exactly one WARN", async () => {
+  for (const [issue, devloops] of [
+    [6006, "version: [unclosed\n"],
+    [6007, "version: 1\nworktree:\n  commitMsgGuard:\n    requireClaudeSession: \"yes\"\n"],
+  ]) {
+    const repo = makeRepo({ devloops });
+    try {
+      const { res, warns } = await ensureCapturingStderr(repo, issue);
+      assert.equal(res.commitMsgGuard.requireClaudeSession, true);
+      assert.equal(hookBakes(repo.root), true);
+      assert.equal(warns.length, 1);
+    } finally {
+      repo.cleanup();
+    }
+  }
+});
+
+test("requireClaudeSession: the value survives a refresh and follows a default-branch removal", async () => {
+  const repo = makeRepo({ devloops: REQUIRE_KEY_TRUE });
+  try {
+    const first = await ensureWorktree({ repoRoot: repo.root, issue: 6008 });
+    const second = await ensureWorktree({ repoRoot: repo.root, issue: 6008 });
+    assert.equal(first.commitMsgGuard.requireClaudeSession, true);
+    assert.equal(second.commitMsgGuard.refreshed, true);
+    assert.equal(second.commitMsgGuard.requireClaudeSession, true);
+    assert.equal(hookBakes(repo.root), true);
+    repo.git("rm", "-q", ".devloops");
+    repo.git("-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "drop key");
+    const third = await ensureWorktree({ repoRoot: repo.root, issue: 6008 });
+    assert.equal(third.commitMsgGuard.requireClaudeSession, false);
+    assert.equal(hookBakes(repo.root), false);
+  } finally {
+    repo.cleanup();
+  }
+});

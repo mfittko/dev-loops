@@ -1385,6 +1385,17 @@
             ],
             "additionalProperties": false
           }
+        },
+        "commitMsgGuard": {
+          "description": "Commit-msg guard policy.",
+          "type": "object",
+          "properties": {
+            "requireClaudeSession": {
+              "description": "Opt in to the commit-msg guard's Claude-Session trailer check (default false). Read only from the default branch's .devloops (refs/remotes/origin/<default>) when ensure-worktree installs the hook.",
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false,

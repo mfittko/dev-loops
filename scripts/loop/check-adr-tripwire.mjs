@@ -28,6 +28,10 @@
  *     ANY change (looser OR stricter) is decision-shaped. A changed devloops
  *     config source whose base+head content cannot BOTH be parsed as YAML
  *     fails closed (unresolvable-devloops-scan) rather than silently passing.
+ *  5. commit-msg-guard-loosening: the same devloops config sources, when
+ *     `worktree.commitMsgGuard.requireClaudeSession` is `true` at base and not
+ *     `true` at head (set false, key removed, file removed). Only loosening
+ *     fires; opting in is stricter.
  *
  * Satisfaction: the diff adds or updates a `docs/decisions/NNNN-*.md` record,
  * or the PR body carries a one-line waiver marker
@@ -82,7 +86,7 @@ Output (stdout, JSON):
                                // 0 on pass, 2 on a usage error (fail-closed)
     "outcome": "pass"|"block",
     "satisfiedBy": "adr"|"waiver"|null,
-    "triggers": [{ "type": "contract-doc"|"gate-config"|"rule-modality-reversal"|"unresolvable-rule-scan"|"devloops-proportionality"|"unresolvable-devloops-scan", "path": "...", ... }],
+    "triggers": [{ "type": "contract-doc"|"gate-config"|"rule-modality-reversal"|"unresolvable-rule-scan"|"devloops-proportionality"|"commit-msg-guard-loosening"|"unresolvable-devloops-scan", "path": "...", ... }],
     "adrFiles": ["docs/decisions/0052-..."],
     "waiver": { "requested": false, "valid": false, "reason": null },
     "reasons": []
@@ -119,7 +123,8 @@ export const DEVLOOPS_PROPORTIONALITY_FIELD_PATHS = Object.freeze([
   ["localImplementation", "lightMode", "maxLines"],
   ["localImplementation", "lightMode", "riskPaths"],
 ]);
-export const WAIVER_MARKER = "adr-tripwire:allow";
+const COMMIT_MSG_GUARD_FIELD_PATH = Object.freeze(["worktree", "commitMsgGuard", "requireClaudeSession"]);
+export const WAIVER_MARKER ="adr-tripwire:allow";
 const WAIVER_RE = /^\s*adr-tripwire:allow[ \t]+(\S.*?)\s*$/u;
 
 /** True when the path is a markdown doc under skills/docs (rule-marker scan surface). */
@@ -314,6 +319,12 @@ export function computeAdrTripwire({
     if (changedFields.length > 0) {
       triggers.push({ type: "devloops-proportionality", path: file.path, fields: changedFields });
     }
+    // commit-msg-guard-loosening (issue #2605): fires only when the effective
+    // key goes true -> not true (set false, key removed, file removed).
+    // Opting in is stricter and never fires.
+    if (getFieldPath(baseParsed, COMMIT_MSG_GUARD_FIELD_PATH) === true && getFieldPath(headParsed, COMMIT_MSG_GUARD_FIELD_PATH) !== true) {
+      triggers.push({ type: "commit-msg-guard-loosening", path: file.path });
+    }
   }
 
   // Rule-modality reversal scan over changed skills/docs markdown. Only
@@ -401,6 +412,7 @@ export function computeAdrTripwire({
     if (t.type === "gate-config") return `${t.path}: shared gate config touched`;
     if (t.type === "unresolvable-rule-scan") return `${t.path}: rule-bearing doc changed but base+head content not both readable (fail-closed)`;
     if (t.type === "devloops-proportionality") return `${t.path}: GATE-EXEC-PROPORTIONALITY field(s) changed (${t.fields.join(", ")})`;
+    if (t.type === "commit-msg-guard-loosening") return `${t.path}: worktree.commitMsgGuard.requireClaudeSession loosened from true`;
     if (t.type === "unresolvable-devloops-scan") return `${t.path}: changed but base+head content not both parsable as YAML (fail-closed)`;
     return `${t.path}: decision-shaped contract doc touched`;
   });
