@@ -287,6 +287,10 @@ test("merge: without a defectKey, only identical normalized summaries merge", ()
   const merged = mergeSameDefectFindings([a, { ...noOp, summary: "cache LOOKUP returns stale-entries, after invalidation" }]);
   assert.equal(merged.length, 1);
   assert.equal(merged[0].mergedFindings.length, 2);
+  // Both members share one fingerprint; each still keeps its own marker.
+  const markers = [...renderInlineCommentBody(merged[0], { round: 1 }).matchAll(new RegExp(FINDING_MARKER_RE.source, "gm"))];
+  assert.equal(markers.length, 2);
+  assert.deepEqual(markers.map((m) => parseFindingMarker(m[0]).angle), ["holistic", "no-op"]);
   assert.equal(mergeSameDefectFindings([a, { ...noOp, summary: "Cache lookup returns stale entries before invalidation." }]).length, 2);
 });
 

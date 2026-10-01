@@ -443,14 +443,19 @@ export function renderInlineCommentBody(finding, { round }) {
   // member so every member's fingerprint stays suppressible; the primary's
   // marker is first, which is the one FINDING_MARKER_RE and the thread
   // reconciliation read. `ov=1` rides each member's own explicit
-  // operator-visibility signal.
+  // operator-visibility signal. Members of a keyless merge share one
+  // fingerprint, so the primary's own member entry is skipped by its
+  // fingerprint, severity and angle, never by fingerprint alone.
   const members = Array.isArray(finding.mergedFindings) ? finding.mergedFindings : [finding];
   const markers = [];
-  const seen = new Set();
-  for (const member of [finding, ...members]) {
+  const primaryKey = `${fingerprintFinding(finding)}|${finding.severity}|${finding.angle}`;
+  let primarySkipped = false;
+  for (const member of members === finding.mergedFindings ? [finding, ...members] : [finding]) {
     const fp = fingerprintFinding(member);
-    if (seen.has(fp)) continue;
-    seen.add(fp);
+    if (member !== finding && !primarySkipped && `${fp}|${member.severity}|${member.angle}` === primaryKey) {
+      primarySkipped = true;
+      continue;
+    }
     markers.push(buildFindingMarker({
       fp,
       severity: member === finding ? severity : normalizeSeverity(member.severity),
