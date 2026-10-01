@@ -113,6 +113,33 @@ const ModelsConfigBase = z.strictObject({
 
 const ModelsConfig = ModelsConfigBase.superRefine(refineRoleTiers);
 
+/** Roles that may take `extraTools` (#2598); hooks enforce no boundary that an MCP tool could bypass. */
+export const EXTRA_TOOLS_ROLES = Object.freeze(["developer", "fixer", "refiner"]);
+const EXTRA_TOOLS_GUARDED_ROLES = Object.freeze(["judge", "review", "gate-coordinator", "dev-loop"]);
+const EXTRA_TOOL_ENTRY_RE = /^mcp__[A-Za-z0-9_-]+(__([A-Za-z0-9_-]+|\*))?$/;
+
+const ExtraToolsConfig = z
+  .record(
+    z.string(),
+    z
+      .array(z.string().regex(EXTRA_TOOL_ENTRY_RE, "extraTools entries must be MCP tools: mcp__<server>, mcp__<server>__* or mcp__<server>__<tool>"))
+      .min(1)
+      .max(16)
+      .refine((entries) => new Set(entries).size === entries.length, { message: "extraTools entries must be unique" }),
+  )
+  .superRefine((extraTools, ctx) => {
+    for (const role of Object.keys(extraTools)) {
+      if (EXTRA_TOOLS_ROLES.includes(role)) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [role],
+        message: EXTRA_TOOLS_GUARDED_ROLES.includes(role)
+          ? `role "${role}" is hook-guarded and cannot take extra tools`
+          : `role "${role}" does not support extraTools`,
+      });
+    }
+  });
+
 const LowSignalConfig = z.strictObject({
   enabled: z.boolean().default(false).describe("Stop Copilot rounds early once they stop producing signal."),
   roundThreshold: z.number().int().nonnegative().default(3).describe("Rounds counted toward the low-signal stop decision."),
@@ -847,6 +874,7 @@ export const DevLoopConfigSchema = z.strictObject({
   strategy: StrategyConfig.optional(),
   inputSource: InputSourceConfig.optional(),
   models: ModelsConfig.optional(),
+  extraTools: ExtraToolsConfig.optional(),
   refinement: RefinementConfig.optional(),
   gates: GatesConfig.optional(),
   autonomy: AutonomyConfig.optional(),
@@ -921,6 +949,7 @@ export const FileConfigSchema = z.strictObject({
   strategy: StrategyConfig.optional().describe("Work-intake strategy default."),
   inputSource: InputSourceConfig.optional().describe("Spec source for local-first work."),
   models: ModelsConfigBase.partial().superRefine(refineRoleTiers).describe("Model routing: conductor override, per-role overrides, tier aliases, and role→tier policy.").optional(),
+  extraTools: ExtraToolsConfig.describe("Claude-only: role (developer, fixer, refiner) → MCP tool entries appended to that role's tools list by `dev-loops loop claude-launch` (session-scoped; Pi ignores it).").optional(),
   refinement: RefinementConfig.partial().describe("Refinement fan-out and Copilot review-round behavior.").optional(),
   gates: FileGatesConfig.describe("Gate review configuration: per-gate angle sets plus fan-out enforcement knobs.").optional(),
   autonomy: AutonomyConfig.partial().describe("How far the loop proceeds without operator confirmation.").optional(),
@@ -3085,6 +3114,18 @@ export function resolveUiReviewRunRecipe(config) {
     migrate,
     rowTeardown,
   };
+}
+
+/**
+ * Resolve the `extraTools` entries configured for a role (#2598); `[]` when none.
+ * Single source for every consumer (launcher, headless entry).
+ * @param {DevLoopConfig} config
+ * @param {string} role
+ * @returns {string[]}
+ */
+export function resolveRoleExtraTools(config, role) {
+  const entries = config?.extraTools?.[role];
+  return Array.isArray(entries) ? [...entries] : [];
 }
 
 /**

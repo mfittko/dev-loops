@@ -185,6 +185,23 @@ models:
 
 Angles are dispatched with `resolveRoleModel(config, { role: angle, harness, kind: "angle" })`. Their precedence is: `models.roles[angle]` (concrete) > explicit `models.roleTiers[angle]` > the **`review` tier** (high). A gate review runs at review quality regardless of the angle's persona, so an angle whose **name** collides with a built-in routine role no longer takes that role's tier — e.g. the `docs` review angle resolves via the `review` tier (`high`), not the `docs`→low writer role (only its persona/agent still comes from the registry). Genuinely distinct angles (`correctness`, `renderer-security`, `acceptance-criteria`) resolve `high` too. Only a **bare routine role** dispatch (no `kind`, e.g. the `docs`/`developer` subagents) still resolves `low` via `roleTiers`. Retarget a specific angle by setting `models.roleTiers[angle]` explicitly. An unknown tier alias in `models.roleTiers` is rejected by the schema with a clear error.
 
+### MCP tools for Claude subagents (`extraTools`)
+
+Claude Code agents carry an explicit `tools:` allowlist, so an MCP tool (for example a code-graph server) is invisible to every dev-loops subagent. The top-level `extraTools` key appends MCP entries to the tools list of `developer`, `fixer` and `refiner` for a session. The shipped and committed agent files do not change. Pi ignores the key.
+
+```yaml
+extraTools:
+  developer:
+    - mcp__codebase-memory      # whole server; also mcp__server__* or mcp__server__tool
+```
+
+- Each role takes 1 to 16 unique entries that match `mcp__<server>`, `mcp__<server>__*` or `mcp__<server>__<tool>`. Built-in tool names are rejected.
+- `judge`, `review`, `gate-coordinator` and `dev-loop` fail with `role "<role>" is hook-guarded and cannot take extra tools`. Any other role fails with `role "<role>" does not support extraTools`.
+- Start Claude Code with `dev-loops loop claude-launch [-- <claude args>]`. The launcher renders the configured roles through `claude --agents`, passes the entries through `--allowedTools` and sets `DEVLOOPS_AGENT_OVERRIDES`. The headless entry does the same. With no `extraTools` entry the launcher runs plain `claude`.
+- The `--agents` render replaces the bare agent name only. The agent guard denies a `dev-loops:<role>` dispatch of a rendered role and names the bare agent type to dispatch.
+- A session started without the launcher needs the same entries in `.claude/settings.local.json` under `permissions.allow`. In auto mode the classifier may still deny an allowed MCP call.
+- Worktree freshness limit: a code-graph index is rooted at the main checkout, while loop work runs in `tmp/worktrees/<slug>/`. A graph answer describes the main checkout at its last index. Confirm the answer with Read or Grep in the worktree before you edit.
+
 ### Available review angles
 
 The shipped defaults activate these angles. Additional angles are available as opt-in — add them to your `gates.draft.angles` or `gates.preApproval.angles` and they'll use the prompts defined in the personas registry. Opt-in prompts are generic and can be overridden in consumer repos through `personas.<angle>.prompt` without depending on this repository's audit examples.
