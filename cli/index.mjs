@@ -804,7 +804,11 @@ export async function runCli({
       const scriptArgs = fromTop.forwardedArgs || [];
       // Interactive launchers hand the terminal to the child: inherited stdio, no usage-retry.
       if (INHERIT_STDIO_SCRIPTS.has(fromTop.scriptPath)) {
+        // Ctrl-C reaches the whole foreground group; the child handles it, this wrapper must stay alive.
+        const ignoreSigint = () => {};
+        process.on("SIGINT", ignoreSigint);
         const inherited = spawnSync("node", [fromTop.scriptPath, ...scriptArgs], { cwd, stdio: "inherit" });
+        process.off("SIGINT", ignoreSigint);
         return inherited.status ?? 1;
       }
       const result = spawnSync("node", [fromTop.scriptPath, ...scriptArgs], {

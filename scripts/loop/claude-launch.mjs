@@ -47,6 +47,8 @@ if (dryRun) {
   process.stdout.write(JSON.stringify({ ok: true, dryRun: true, command, args, DEVLOOPS_AGENT_OVERRIDES: env.DEVLOOPS_AGENT_OVERRIDES ?? null }, null, 2) + "\n");
   process.exit(0);
 }
+// Ctrl-C reaches the whole foreground group; claude handles it, this wrapper must stay alive.
+process.on("SIGINT", () => {});
 const res = spawnSync(command, args, { env, stdio: "inherit" });
 if (res.error) fail(`failed to spawn ${command}: ${res.error.message}`);
 process.exit(res.status ?? 1);
