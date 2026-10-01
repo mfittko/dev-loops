@@ -38,9 +38,9 @@ for (; i < argv.length; i += 1) {
 }
 const passthroughArgs = argv[i] === "--" ? argv.slice(i + 1) : argv.slice(i);
 
-const result = await loadDevLoopConfig({ cwd: process.cwd() });
-if (result.errors?.length > 0) fail(`invalid .devloops config: ${result.errors.map((e) => e.message ?? JSON.stringify(e)).join("; ")}`);
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
+const result = await loadDevLoopConfig({ repoRoot });
+if (result.errors?.length > 0) fail(`invalid .devloops config: ${result.errors.map((e) => e.message ?? JSON.stringify(e)).join("; ")}`);
 const { command, args, env } = buildClaudeLaunch({ config: result.config ?? result, repoRoot, passthroughArgs, claudeBin });
 
 if (dryRun) {
