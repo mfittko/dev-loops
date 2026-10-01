@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -105,6 +105,27 @@ describe("launcher and headless entry scripts", () => {
       const viaBin = dry(["--claude-bin", "x", "--", "--resume"]);
       assert.deepEqual([viaBin.command, viaBin.args], ["x", ["--resume"]]);
       assert.deepEqual(dry(["--resume"]).args, ["--resume"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the CLI route inherits stdio, forwards post--- args and never retries", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "extra-tools-"));
+    try {
+      writeFileSync(path.join(dir, ".devloops"), "version: 1\n");
+      const log = path.join(dir, "calls.log");
+      const fake = path.join(dir, "fake-claude.mjs");
+      writeFileSync(fake, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+console.error("Usage: fake");
+process.exit(3);
+`, { mode: 0o755 });
+      const res = spawnSync("node", [path.join(repoRoot, "cli/index.mjs"), "loop", "claude-launch", "--claude-bin", fake, "--", "--help"],
+        { cwd: dir, encoding: "utf8" });
+      assert.equal(res.status, 3, res.stderr);
+      assert.deepEqual(readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l)), [["--help"]]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

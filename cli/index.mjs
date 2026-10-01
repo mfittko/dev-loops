@@ -601,6 +601,8 @@ export function createCliRuntime({
 
 // ── Subcommand routing dispatch ────────────────────────────────────
 
+const INHERIT_STDIO_SCRIPTS = new Set([path.resolve(REPO_ROOT, "scripts/loop/claude-launch.mjs")]);
+
 function resolveSubcommandRoute(args) {
   if (args.length === 0) return null;
   const category = args[0];
@@ -670,7 +672,9 @@ function parseTopLevelCommand(argv) {
       return { kind: "category_help", category: cmd };
     }
     // Check if any remaining arg is --help — delegate to script
-    if (args.slice(1).some((a) => a === "--help" || a === "-h")) {
+    // Args after `--` belong to the launched program, not to the routed script.
+    const ownArgs = args.includes("--") ? args.slice(0, args.indexOf("--")) : args;
+    if (ownArgs.slice(1).some((a) => a === "--help" || a === "-h")) {
       const alias = resolveSubcommandAlias(cmd, sub);
       const resolvedSub = alias ? alias.canonical : sub;
       const scriptPath = routes[resolvedSub];
@@ -798,6 +802,11 @@ export async function runCli({
       if (!isCoreResolvable()) return writeCoreUnresolvableError(stderr);
       if (fromTop.deprecationNotice) { writeLines(stderr, [fromTop.deprecationNotice]); }
       const scriptArgs = fromTop.forwardedArgs || [];
+      // Interactive launchers hand the terminal to the child: inherited stdio, no usage-retry.
+      if (INHERIT_STDIO_SCRIPTS.has(fromTop.scriptPath)) {
+        const inherited = spawnSync("node", [fromTop.scriptPath, ...scriptArgs], { cwd, stdio: "inherit" });
+        return inherited.status ?? 1;
+      }
       const result = spawnSync("node", [fromTop.scriptPath, ...scriptArgs], {
         cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       });
