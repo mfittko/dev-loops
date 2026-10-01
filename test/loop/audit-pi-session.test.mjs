@@ -1763,6 +1763,18 @@ describe("audit-pi-session tool calls and MCP usage", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("merges tool calls Claude splits across records sharing one message.id", async () => {
+    const { dir, file } = claudeAgentDir("dev-loops:developer");
+    writeClaudeTranscript(file, [
+      { id: "m1", usage, cwd: mainRoot, content: [use("t1", mcpA)] },
+      { id: "m1", usage, cwd: mainRoot, content: [use("t2", "Bash")] },
+    ]);
+    const audit = await auditPiSession(file);
+    assert.equal(audit.sessions[0].toolCalls.calls, 2);
+    assert.equal(audit.mcpUsageByRole["dev-loops:developer"].calls, 1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("counts a replayed tool call of a resumed session once", async () => {
     const dir = createTempDir();
     const turn = { id: "msg_shared", requestId: "req_shared", usage, cwd: mainRoot, content: [use("t1", mcpA)] };
