@@ -2,11 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.0.5-pre.1
+## 1.0.5
 
 ### Added
 
 - `dev-loops loop spec-lint` reports unregistered rule IDs and unknown, unaccepted, superseded or amended ADR citations in an issue body; loop-grill runs it (#2521)
+- `dev-loops gate resolve-validation` records head-bound targeted checks or the sanctioned local full suite; changed surfaces select narrow checks by default (#2469)
 
 ### Changed
 
@@ -16,25 +17,6 @@ All notable changes to this project will be documented in this file.
 - The work-order pull also accepts the execution identity alone, resolved through a new execution index; emitters still emit the 3-flag pointer, so no re-emit is needed (#2551)
 - A fixer pull line run with a prefix, suffix, redirect or `cd` is denied with the exact line to run (#2551)
 - The repo `.devloops` now splits Claude model tiers into regular (Sonnet) and strong (Opus), and agent frontmatter accepts a Claude-only `claudeModel` key that pins the judge to Opus (#2565)
-
-### Fixed
-
-- Local targeted validation now catches SKILL.md rule-ownership and `.claude` drift from core edits before CI (#2490)
-- A repo can drop generated mirror trees from the required reviewer diff with `gates.reviewDiff.excludeGlobs`, and the evidence file lists each excluded path with its reason (#2504)
-- A dev-loops PR gates itself: `dev-loops-run --repo-root <checkout>` runs the review root's toolchain and the pull serves a self-hosting unit from its worktree (#2506)
-- Gate reviewers now write findings artifacts with the file-write tool, never a shell write, so the Claude Code auto-mode classifier no longer denies them (#2510)
-- A Copilot "encountered an error" review now counts as no review: one same-head re-request, then block; `merge-pr` refuses (ADR 0114) (#2549)
-- The Bash command guards now see commands behind `env` options such as `env -C <dir>`, so inline-interpreter, `git stash` and `gh pr merge`/`ready` denies fire (#2550)
-- The dev-loop coordinator can dispatch its pre-PR and delta `review` agents again; the hook denies only a work-order `review` dispatch and every `judge` dispatch (ADR 0116) (#2558)
-
-## 1.0.5-pre.0
-
-### Added
-
-- `dev-loops gate resolve-validation` records head-bound targeted checks or the sanctioned local full suite; changed surfaces select narrow checks by default (#2469)
-
-### Changed
-
 - The `pre_approval_gate` verdict poster ticks reviewer-verified AC/DoD checklist items before it composes the verdict (#2407)
 - Acceptance-criteria and PR-checklist reviewers list verified checklist labels in `verifiedItems`; fan-in carries them into the findings ledger (#2407)
 - Gate fan-out releases its first reviewer wave immediately; the mandatory cache primer and lead-reviewer wait are gone, and priming is an optional adapter optimization (#2414)
@@ -79,9 +61,18 @@ All notable changes to this project will be documented in this file.
 - `write-gate-context.mjs --prev-head` is removed; `resolve-angle-carry-forward.mjs --prev-head` is unchanged (#2528)
 - ADR 0109 amends ADR 0070: cumulative prior dispositions within one gate (#2528)
 - `wait-pr-checks` and `spec-context` wait for the GraphQL rate-limit reset and retry once when the GraphQL budget is exhausted; otherwise they return `RATE_LIMITED` with `resetAt` at once (#2529)
+- Inline gate findings render in a fixed, bounded layout with kept code spans; a merged comment caps at eight findings (#2254)
+- A reviewer angle can no longer forge the inline header's judge disposition: the separator and its entity spellings are neutralized on the rendered surface too (#2254)
 
 ### Fixed
 
+- Local targeted validation now catches SKILL.md rule-ownership and `.claude` drift from core edits before CI (#2490)
+- A repo can drop generated mirror trees from the required reviewer diff with `gates.reviewDiff.excludeGlobs`, and the evidence file lists each excluded path with its reason (#2504)
+- A dev-loops PR gates itself: `dev-loops-run --repo-root <checkout>` runs the review root's toolchain and the pull serves a self-hosting unit from its worktree (#2506)
+- Gate reviewers now write findings artifacts with the file-write tool, never a shell write, so the Claude Code auto-mode classifier no longer denies them (#2510)
+- A Copilot "encountered an error" review now counts as no review: one same-head re-request, then block; `merge-pr` refuses (ADR 0114) (#2549)
+- The Bash command guards now see commands behind `env` options such as `env -C <dir>`, so inline-interpreter, `git stash` and `gh pr merge`/`ready` denies fire (#2550)
+- The dev-loop coordinator can dispatch its pre-PR and delta `review` agents again; the hook denies only a work-order `review` dispatch and every `judge` dispatch (ADR 0116) (#2558)
 - Gate reviewers now see `.claude/` and `lib/` changes; default diff and adjacent-code excludes cover only lockfiles and generated trees (#1889)
 - `merge-pr.mjs` now fast-forwards the main checkout, removes the merged branch's worktree, and runs `postMerge.actions` after a merge (#2207)
 - The spec extractor reads AC, DoD and Non-goals at any heading level, and a spec without AC or DoD names the expected shape (#2438)
@@ -102,6 +93,13 @@ All notable changes to this project will be documented in this file.
 - `loop info` no longer advises a Copilot re-request the requester suppresses, and names missing ruleset-required checks and operator approvals instead of CI success (#2478)
 - ADR validation accepts renaming one record of an already-merged number collision to a free number with an unchanged body, and the duplicate 0095 record is renumbered to 0105 (#2479)
 - The test runner strips inherited run-id markers (DEVLOOPS_RUN_ID, PI_SUBAGENT_RUN_ID) so tests that leak on them fail locally as in CI (#2489)
+- On Pi, a `tool_call` gate restricts `bash` for judge and reviewer roles marked by `DEVLOOPS_AGENT_TYPE`; dispatch sets the marker in #2582 (#2509)
+- The coordinator and main-agent write guards classify a file by its containing repository, so edits in a loop worktree are no longer allowed by default (#2539)
+- With `DEVLOOPS_MAIN_AGENT_READONLY=1` or `DEVLOOPS_COORDINATOR_READONLY=1`, the guards also deny tracked files of other repositories and paths inside a git directory (#2539)
+- Under `DEVLOOPS_MAIN_AGENT_READONLY=1`, worker agents keep write access to tracked files in a linked worktree (#2539)
+- A fan-out draft or pre-approval verdict post now refuses a ledger with no judge dispositions and composes `findings_present` from an enriched `--findings-json` act item (#2553)
+- The reply-resolve scripts require `--disposition` and refuse a `fixed` reply without a full 40-character SHA contained in the PR head, before any post or resolve (#2578)
+- Gate findings merge only on an equal reviewer `defectKey` or identical normalized summary; merged comments show each distinct Problem and Fix, and file-level findings merge into one bullet (#2594)
 
 ## 1.0.4
 
