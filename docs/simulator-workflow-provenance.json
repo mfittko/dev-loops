@@ -1,7 +1,7 @@
 {
   "researchDate": "2026-10-02",
   "selection": "Twelve curated hybrid software/product workflows; no archive",
-  "adaptations": "ES-module createModel factory; prototype comment removal and production-label changes only. Handler/data semantics preserved. QA Wolf, EvalGen and UXAgent source identities include producer-authorized +80 x0 geometry correction. Incident source identity includes producer-authorized root x0=180/viewBox width=1440 correction; nodes/edges/handlers/scenarios unchanged. Seven originally flagged benign bibliographic lines use the existing reasoned same-line source-reference exception policy; citation-only reflow isolates each reference, leaving all URL literals intact.",
+  "adaptations": "ES-module createModel factory, prototype comment removal and production-label changes. Raw producer identities remain frozen. Production Collaborative Grilling intentionally repairs tradeoff/joint authority: version-specific selector values must match the current proposal; stale/pending decisions WAIT rather than being restamped. Its fixtures and revised-version actions are updated; other model handler/data semantics are retained. QA Wolf, EvalGen and UXAgent retain producer-authorized +80 x0 geometry corrections. Incident retains producer-authorized root x0=180/viewBox width=1440 correction with unchanged nodes/edges/handlers/scenarios. Seven originally flagged benign bibliographic lines use existing reasoned per-line source-reference exceptions, with literal URLs intact.",
   "frozenProducerEnvelope": {
     "scope": "Producer-local reference runtime only; not production verification",
     "modelManifestArtifact": "agent-workflow-promotion-model-manifest-12.json",
@@ -48,11 +48,13 @@
     {
       "slug": "collaborative-grilling",
       "sourceSha256": "57c8a7ff8319ebc6537505cbc14fd0de99701ed4d852cd02b402f8c0befef0c1",
-      "productionSha256": "11268097c3eaf1604f27d90076c5ddc7b580c440031662936f8d2ed795d109e8",
+      "productionSha256": "f76b2ba7d4926e5d3340234fc3bd5543dff78429f2f999a989fac852f2b79a5a",
       "adaptations": [
         "ES-module factory with isolated profile data",
         "Removed prototype-only leading comments",
-        "Production labels; all execution/source limitations retained"
+        "Production labels; all execution/source limitations retained",
+        "Intentional production repair: proposal-specific tradeoff/joint selector guards and fixtures for versions 1–3; stale or pending contributions cannot resolve an affected revision",
+        "Unchanged raw source identity records upstream input, not a claim of verbatim production semantics"
       ]
     },
     {
