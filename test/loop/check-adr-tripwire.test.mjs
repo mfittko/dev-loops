@@ -756,3 +756,21 @@ test("a new key-less .devloops shadowing an unchanged .devloops.yaml that sets t
   assert.equal(r.outcome, "block");
   assert.ok(r.triggers.some((t) => t.type === "commit-msg-guard-loosening"));
 });
+
+test("evaluateAdrTripwire (#2605): a real key-less .devloops shadowing an unchanged .devloops.yaml that sets the key blocks", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "adr-guard-shadow-"));
+  try {
+    const fixture = path.join(tmp, "repo");
+    await mkdir(fixture, { recursive: true });
+    execSync("git init -q -b main && git config user.email t@t && git config user.name t", { cwd: fixture, stdio: "ignore" });
+    await writeFile(path.join(fixture, ".devloops.yaml"), GUARD_ON);
+    execSync("git add . && git commit -qm base && git branch base", { cwd: fixture, stdio: "ignore" });
+    await writeFile(path.join(fixture, DEVLOOPS_CONFIG_PATH), GUARD_ABSENT);
+    execSync("git add . && git commit -qm head", { cwd: fixture, stdio: "ignore" });
+    const r = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture });
+    assert.equal(r.outcome, "block");
+    assert.ok(r.triggers.some((t) => t.type === "commit-msg-guard-loosening"));
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
