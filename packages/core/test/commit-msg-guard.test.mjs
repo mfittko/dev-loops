@@ -349,6 +349,14 @@ for (const [label, options] of [["false", { requireClaudeSession: false }], ["tr
       assert.equal(commitAttempt(dir, "fixup! fix(gate): earlier").blocked, false);
       assert.equal(commitAttempt(dir, 'Revert "fix(gate): earlier"').blocked, false);
       assert.equal(commitAttempt(dir, `bad subject\n\n${COMMIT_MSG_WAIVER_MARKER}\n`, ENVS.agent).blocked, false);
+      git(dir, ["checkout", "--quiet", "-b", "feature"]);
+      const file = `feature-${fileCounter++}.txt`;
+      fs.writeFileSync(path.join(dir, file), "feature\n");
+      git(dir, ["add", file]);
+      git(dir, ["commit", "--quiet", "--no-verify", "-m", "fix(gate): feature work"]);
+      git(dir, ["checkout", "--quiet", "-"]);
+      // The default merge subject is not conventional and carries no trailers.
+      git(dir, ["merge", "--no-ff", "feature"], ENVS.agent);
     });
   });
 }

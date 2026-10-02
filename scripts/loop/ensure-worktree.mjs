@@ -536,7 +536,7 @@ function installGuard(gitCommand, root, explicitBase) {
   }
 }
 
-// worktree.commitMsgGuard.requireClaudeSession (issue #2605), read ONLY from
+// worktree.commitMsgGuard.requireClaudeSession, read ONLY from
 // the .devloops family at refs/remotes/origin/<default>: never the working
 // tree, a PR head, env, git config or a flag, so one worktree cannot change
 // the policy of the shared hook. Absent policy -> false (built-in default);
@@ -586,7 +586,7 @@ function installCommitMsgGuardForRoot(gitCommand, root) {
   } catch (err) {
     const detail = (err?.stderr ?? err?.message ?? "").toString().trim();
     process.stderr.write(`[ensure-worktree] WARN commit-msg guard not installed: ${detail}\n`);
-    return { ok: false, installed: false, refreshed: false, skipped: true, reason: detail };
+    return { ok: false, installed: false, refreshed: false, skipped: true, reason: detail, requireClaudeSession: false };
   }
 }
 

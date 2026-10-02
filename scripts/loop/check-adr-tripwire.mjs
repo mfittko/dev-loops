@@ -124,7 +124,7 @@ export const DEVLOOPS_PROPORTIONALITY_FIELD_PATHS = Object.freeze([
   ["localImplementation", "lightMode", "riskPaths"],
 ]);
 const COMMIT_MSG_GUARD_FIELD_PATH = Object.freeze(["worktree", "commitMsgGuard", "requireClaudeSession"]);
-export const WAIVER_MARKER ="adr-tripwire:allow";
+export const WAIVER_MARKER = "adr-tripwire:allow";
 const WAIVER_RE = /^\s*adr-tripwire:allow[ \t]+(\S.*?)\s*$/u;
 
 /** True when the path is a markdown doc under skills/docs (rule-marker scan surface). */
@@ -319,11 +319,23 @@ export function computeAdrTripwire({
     if (changedFields.length > 0) {
       triggers.push({ type: "devloops-proportionality", path: file.path, fields: changedFields });
     }
-    // commit-msg-guard-loosening (issue #2605): fires only when the effective
-    // key goes true -> not true (set false, key removed, file removed).
-    // Opting in is stricter and never fires.
-    if (getFieldPath(baseParsed, COMMIT_MSG_GUARD_FIELD_PATH) === true && getFieldPath(headParsed, COMMIT_MSG_GUARD_FIELD_PATH) !== true) {
-      triggers.push({ type: "commit-msg-guard-loosening", path: file.path });
+  }
+
+  // commit-msg-guard-loosening: fires only when the effective key goes
+  // true -> not true. The effective value comes from the first existing
+  // .devloops family file in the reader's probe order, at base and at head,
+  // so a new file shadowing an unchanged one is caught. Opting in is
+  // stricter and never fires.
+  const touchesFamily = (f) => DEVLOOPS_CONFIG_PATHS_SET.has(f.path) || (f.origPath && DEVLOOPS_CONFIG_PATHS_SET.has(f.origPath));
+  const changedFamilyFile = files.find(touchesFamily);
+  if (changedFamilyFile) {
+    const effective = (contents) => {
+      const name = DEVLOOPS_CONFIG_PATHS.find((n) => contents[n] != null);
+      if (name === undefined) return undefined;
+      try { return getFieldPath(parseYaml(contents[name]) ?? {}, COMMIT_MSG_GUARD_FIELD_PATH); } catch { return undefined; }
+    };
+    if (effective(baseContents) === true && effective(headContents) !== true) {
+      triggers.push({ type: "commit-msg-guard-loosening", path: changedFamilyFile.path });
     }
   }
 
@@ -473,6 +485,17 @@ export async function evaluateAdrTripwire({
       try { baseContents[file.path] = runGit(["show", `${base}:${file.path}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
     }
     try { headContents[file.path] = runGit(["show", `${head}:${file.path}`], { repoRoot, env: gitEnv }); } catch { /* absent at head */ }
+  }
+  if (files.some((f) => DEVLOOPS_CONFIG_PATHS_SET.has(f.path) || (f.origPath && DEVLOOPS_CONFIG_PATHS_SET.has(f.origPath)))) {
+    // The loosening check needs the whole family, changed or not.
+    for (const name of DEVLOOPS_CONFIG_PATHS) {
+      if (baseContents[name] === undefined) {
+        try { baseContents[name] = runGit(["show", `${base}:${name}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
+      }
+      if (headContents[name] === undefined) {
+        try { headContents[name] = runGit(["show", `${head}:${name}`], { repoRoot, env: gitEnv }); } catch { /* absent at head */ }
+      }
+    }
   }
   return computeAdrTripwire({ nameStatusOutput, baseContents, headContents, prBody });
 }

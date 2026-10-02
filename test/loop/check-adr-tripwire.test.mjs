@@ -734,3 +734,13 @@ test("a loosening is satisfied by a decision record or the waiver", () => {
   const waived = guardDiff("M", GUARD_ON, GUARD_OFF, { prBody: "adr-tripwire:allow operator opted out" });
   assert.equal(waived.satisfiedBy, "waiver");
 });
+
+test("a new key-less .devloops shadowing an unchanged .devloops.yaml that sets the key blocks", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["A\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { ".devloops.yaml": GUARD_ON },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: GUARD_ABSENT, ".devloops.yaml": GUARD_ON },
+  });
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "commit-msg-guard-loosening"));
+});

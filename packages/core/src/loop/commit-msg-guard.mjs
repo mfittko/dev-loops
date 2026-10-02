@@ -76,7 +76,7 @@ if (/^${COMMIT_MSG_GUARD_MARKER}:allow\b/mu.test(message)) process.exit(0);
 
 const errors = [];
 
-// Baked at install time from the default branch's .devloops (issue #2605).
+// Baked at install time from the default branch's .devloops.
 const REQUIRE_CLAUDE_SESSION = ${requireSession};
 
 // Trailers are required only for an AGENT-authored commit: Claude Code sets
