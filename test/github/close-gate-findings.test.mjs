@@ -2111,6 +2111,21 @@ test("#1581 (a): a per-gate worthFixingNowFixWindow is honored by the dispositio
   ));
 });
 
+// A config load error keeps the built-in window (3): the configured window 2
+// is dropped with the whole layer, so the thread stays open at round 3.
+test("a config load error keeps the default worthFixingNowFixWindow in the disposition pass", async () => {
+  const thread = openWfnThread({ commentId: 7102 });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStubAndConfig(
+    roundEntries({ issueComments: roundHistory("draft_gate", 3), threads: [thread] }),
+    { version: 1, futureKnob: true, gates: { draft: { worthFixingNowFixWindow: 2 } } },
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.round, 3);
+      assert.equal(result.deferredResolved, 0);
+    },
+  ));
+});
+
 // (a cont.) the SAME gate at round 2 with window 2 keeps the WFN thread open —
 // the window boundary is inclusive (round <= window stays open).
 test("#1581 (a): a WFN thread stays open at round == window (boundary is inclusive)", async () => {
