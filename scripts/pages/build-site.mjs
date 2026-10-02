@@ -232,7 +232,7 @@ export function injectNav(html, repoUrl, publishedFile) {
   }
   // Simulator --accent-soft is a background tint, not a link foreground.
   const navCss = publishedFile === 'simulator.html' || publishedFile === 'simulator-overview.html' || publishedFile?.startsWith('workflow-')
-    ? `${NAV_CSS}\n  .site-nav a:hover { color: var(--accent); }`
+    ? `${NAV_CSS}\n  .site-nav { max-width: var(--simulator-content-width); padding-inline: 0; margin-bottom: 24px; }\n  .site-nav a:hover { color: var(--accent); }\n  @media (max-width: 760px) { .site-nav { margin-bottom: 16px; } }`
     : NAV_CSS;
   return html
     .replace('</style>', `${navCss}\n</style>`)
