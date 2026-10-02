@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -198,6 +199,28 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
       await entry.focus(); await page.keyboard.press('Enter');
       await expect(page.locator('#backrun')).toBeVisible();
       await page.locator('#backrun').click();
+      await page.locator('#nav [data-g]').last().click();
+      const frozenGraphExecution = (await state(page)).execution;
+      for (const full of [false,true]) {
+        if (full) { await page.keyboard.press('f');await expect(page.locator('.board')).toHaveClass(/\bfull\b/); }
+        await page.locator('#scroller').focus();
+        expect(await page.evaluate(() => document.activeElement.id)).toBe('scroller');
+        await page.locator('#scroller').evaluate(el => { el.scrollLeft=0;el.scrollTop=0; });
+        for (const [forward,backward,size,client,offset] of [
+          ['ArrowRight','ArrowLeft','scrollWidth','clientWidth','scrollLeft'],
+          ['ArrowDown','ArrowUp','scrollHeight','clientHeight','scrollTop'],
+        ]) {
+          const overflow=await page.locator('#scroller').evaluate((el,{size,client})=>el[size]>el[client],{size,client});
+          await page.keyboard.press(forward);
+          if (overflow) await expect.poll(()=>page.locator('#scroller').evaluate((el,offset)=>el[offset],offset)).toBeGreaterThan(0);
+          const moved=await page.locator('#scroller').evaluate((el,offset)=>el[offset],offset);
+          await page.keyboard.press(backward);
+          if (overflow) await expect.poll(()=>page.locator('#scroller').evaluate((el,offset)=>el[offset],offset)).toBeLessThan(moved);
+        }
+        expect((await state(page)).execution).toEqual(frozenGraphExecution);
+        expect((await new AxeBuilder({page}).include('#scroller').withRules(['scrollable-region-focusable']).analyze()).violations).toEqual([]);
+        if (full) { await page.keyboard.press('f');await expect(page.locator('.board')).not.toHaveClass(/\bfull\b/); }
+      }
       await page.locator('#trace').focus(); await page.keyboard.press('ArrowRight');
       expect((await state(page)).step).toBe(0);
       await expect(page.locator('#sources a').first()).toHaveAttribute('href', /^https:\/\//);
@@ -220,3 +243,83 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
     });
   }
 }
+
+for (const width of [1280,390]) {
+  test(`collaborative-grilling ${width}px rejects stale version 2 and 3 decisions`, async ({page},testInfo) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({width,height:844});
+    await page.goto(`${fixture.url}/workflow-collaborative-grilling.html`);
+    await page.waitForFunction(() => document.querySelector('#runtime-state')?.textContent.includes('"position"'));
+    const smoke=WORKFLOW_EXAMPLES.find(example=>example.slug==='collaborative-grilling').metadata.smoke;
+    for (const version of [2,3]) {
+      await page.locator('#chips [data-s="2"]').click();
+      await click(page,'run');
+      const initial=await state(page);
+      const independent={knowledge:initial.records.questionRegister.knowledge,excluded:initial.records.questionRegister.excluded,risk:initial.records.questionRegister.risk,decisions:initial.records.preservedDecisions,dissent:initial.records.questionRegister.conflict.dissent};
+      if (version===3) {
+        await supply(page,[{key:'freshTradeoff',value:'proposal 2: revise scope'},{key:'jointInput',value:'proposal 2: joint resolution recorded'}]);
+        await click(page,'run');
+      }
+      const staleTradeoff=await state(page);
+      expect(staleTradeoff.position).toEqual({g:'deliberation',n:'grillTradeoff'});
+      expect(staleTradeoff.records).toMatchObject({proposalVersion:version,waiting:true,decisionRecorded:false,stageReady:false});
+      if (version===3) await supply(page,[{key:'freshTradeoff',value:'proposal 2: accept bounded scope'}]);
+      await click(page,'next');await click(page,'run');
+      expect((await state(page)).records).toEqual(staleTradeoff.records);
+      await supply(page,[{key:'freshTradeoff',value:`proposal ${version}: accept bounded scope`}]);
+      await click(page,'run');
+      const staleJoint=await state(page);
+      expect(staleJoint.position).toEqual({g:'deliberation',n:'grillConflict'});
+      expect(staleJoint.records).toMatchObject({proposalVersion:version,waiting:true,decisionRecorded:false,stageReady:false});
+      for (const control of ['next','run']) {
+        await click(page,control);
+        expect((await state(page)).records).toEqual(staleJoint.records);
+        expect((await state(page)).scratch).toEqual(staleJoint.scratch);
+      }
+      await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`grilling-v${version}-stale-joint-${width}`,viewport:{width,height:844},fullPage:false});
+      await supply(page,[{key:'jointInput',value:`proposal ${version}: joint resolution recorded`}]);
+      const beforeResume=(await state(page)).execution;
+      await click(page,'next');const resumed=await state(page);
+      expect(resumed.records.questionRegister.conflict).toMatchObject({version,status:'resolved with dissent'});
+      await click(page,'back');expect((await state(page)).execution).toEqual(beforeResume);
+      await click(page,'next');expect(await state(page)).toEqual(resumed);
+      const completed=(await finish(page,smoke,false)).result;
+      expect(completed.records).toMatchObject({proposalVersion:version,stageReady:true,outcomeAchieved:false});
+      expect({knowledge:completed.records.questionRegister.knowledge,excluded:completed.records.questionRegister.excluded,risk:completed.records.questionRegister.risk,decisions:completed.records.preservedDecisions,dissent:completed.records.questionRegister.conflict.dissent}).toEqual(independent);
+      await click(page,'back');await click(page,'next');expect(await state(page)).toEqual(completed);
+      await click(page,'reset');expect((await state(page)).records).toEqual({});
+      expect((await state(page)).conditions.jointInput).toBe(`proposal ${version}: joint resolution recorded`);
+    }
+  });
+}
+
+test('original detailed graph arrows scroll the real normal and full-window owner without executing', async ({page}) => {
+  await page.setViewportSize({width:390,height:844});
+  await page.goto(`${fixture.url}/simulator.html`);
+  await page.waitForFunction(()=>document.querySelector('#runtime-state')?.textContent.includes('"position"'));
+  await page.locator('#nav [data-g]').last().click();
+  const frozen=(await state(page)).execution;
+  for (const full of [false,true]) {
+    if (full) { await page.keyboard.press('f');await expect(page.locator('.board')).toHaveClass(/\bfull\b/); }
+    await page.locator('#scroller').focus();
+    const owner=full?page.locator('.board'):page.locator('#scroller');
+    await owner.evaluate(el=>{el.scrollLeft=0;el.scrollTop=0;});
+    for (const [forward,backward,size,client,offset] of [
+      ['ArrowRight','ArrowLeft','scrollWidth','clientWidth','scrollLeft'],
+      ['ArrowDown','ArrowUp','scrollHeight','clientHeight','scrollTop'],
+    ]) {
+      const overflow=await owner.evaluate((el,{size,client})=>el[size]>el[client],{size,client});
+      await page.keyboard.press(forward);
+      if (overflow) await expect.poll(()=>owner.evaluate((el,offset)=>el[offset],offset)).toBeGreaterThan(0);
+      const moved=await owner.evaluate((el,offset)=>el[offset],offset);
+      await page.keyboard.press(backward);
+      if (overflow) await expect.poll(()=>owner.evaluate((el,offset)=>el[offset],offset)).toBeLessThan(moved);
+    }
+    expect((await state(page)).execution).toEqual(frozen);
+    expect((await new AxeBuilder({page}).include('#scroller').withRules(['scrollable-region-focusable']).analyze()).violations).toEqual([]);
+    if (full) { await page.keyboard.press('f');await expect(page.locator('.board')).not.toHaveClass(/\bfull\b/); }
+  }
+  await page.locator('#next').focus();await page.keyboard.press('ArrowRight');expect((await state(page)).step).toBe(1);
+  await page.keyboard.press('ArrowLeft');expect((await state(page)).step).toBe(0);
+  await click(page,'next');await page.locator('#scroller').focus();await page.keyboard.press('r');expect((await state(page)).step).toBe(0);
+});

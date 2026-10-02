@@ -279,7 +279,7 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
       <nav class="crumbs" id="crumbs" aria-label="Graph path"></nav>
       <p class="gdesc" id="gdesc"></p>
     </div>
-    <div class="scroller" id="scroller">
+    <div class="scroller" id="scroller" tabindex="0" role="region" aria-label="Workflow graph — use arrow keys to scroll">
       <svg id="svg" viewBox="0 0 1000 640" role="group" aria-label="">
         <defs>
           <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
@@ -1649,6 +1649,13 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
   $("reset").addEventListener("click", reset);
   document.addEventListener("keydown", e => {
     if (e.target.matches("input,select,textarea") || e.target.closest(".trace")) return;
+    if (["ArrowRight","ArrowLeft","ArrowDown","ArrowUp"].includes(e.key) && e.target.closest("#scroller")) {
+      e.preventDefault();
+      const scroller = $("scroller");
+      const scrollOwner = getComputedStyle(scroller).overflowX === "visible" ? document.querySelector(".board") : scroller;
+      scrollOwner.scrollBy({ left: e.key === "ArrowRight" ? 40 : e.key === "ArrowLeft" ? -40 : 0, top: e.key === "ArrowDown" ? 40 : e.key === "ArrowUp" ? -40 : 0 });
+      return;
+    }
     if (e.key === "ArrowRight"){ e.preventDefault(); step(); }
     else if (e.key === "ArrowLeft"){ e.preventDefault(); back(); }
     else if (e.key === "r" || e.key === "R"){ reset(); }

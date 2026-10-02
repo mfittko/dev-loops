@@ -161,9 +161,9 @@ Source module: `articles/assets/workflow-models/open-swe.mjs`.
 
 ### Native fixtures / handoff
 - Preset 1: nested CALL/RETURN and explicit hypothetical prior contributions → `stage ready`.
-- Preset 2: deliberation `RETURN revise` → parent proposal v2 → affected rechecks → `deliberation.grillTradeoff` WAIT. Set **freshTradeoff = accept bounded scope**.
+- Preset 2: deliberation `RETURN revise` → parent proposal v2 → affected rechecks → `deliberation.grillTradeoff` WAIT. Supply **freshTradeoff = proposal 2: accept bounded scope**, then separately **jointInput = proposal 2: joint resolution recorded**. Production intentionally repairs the source's unversioned decision guards; the source's immutable hash remains provenance of the input, not of the repaired handlers.
 - Preset 3: knowledge returns pending → independent factual work → `life.grillJoin` WAIT. Set **stakeholderInput = knowledge supplied**.
-- Additional joint wait: `deliberation.grillConflict`, **jointInput = joint resolution recorded**. Waiting consumes no revision/evidence budget. Human defer/reject/capped handoff are not readiness.
+- At `deliberation.grillConflict`, pending or another proposal's joint input remains WAIT. A proposal-2 scope revision returns to parent proposal 3, requiring **freshTradeoff = proposal 3: accept bounded scope** and **jointInput = proposal 3: joint resolution recorded**. Prior knowledge, exclusions, accepted risk and dissent remain intact. Waiting consumes no revision/evidence budget; defer/reject/capped handoff are not readiness. This entire version-bound policy remains PROPOSED.
 
 ## Playwright test agents
 
