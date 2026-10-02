@@ -1320,6 +1320,11 @@ export function assertConfigLoaded(loadResult) {
   return loadResult;
 }
 
+/** `loadDevLoopConfig` that throws {@link ConfigLoadFailedError} on any config error. */
+export async function loadDevLoopConfigStrict(options = {}) {
+  return assertConfigLoaded(await loadDevLoopConfig(options));
+}
+
 // ============================================================================
 // Helpers
 

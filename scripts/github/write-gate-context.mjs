@@ -28,7 +28,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
@@ -3545,18 +3545,10 @@ export async function main(
     // Load the dev-loop config once: used both for dynamic angle resolution
     // (when --angles is omitted) and, regardless of --angles, to resolve each
     // angle's concrete review model for the dispatch-plan artifact
-    // (resolveRoleModel(kind:"angle"), inside writeGateContext). loadDevLoopConfig never
-    // throws: it returns { config, warnings, errors }, and on a validation
-    // error it still returns `config` with every layer merged (its own
-    // documented fallback) — nulling it out here would replace a
-    // partially-valid configured angle set with an EMPTY one, a worse
-    // regression than the signal gap this fixes.
-    const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
-    if (Array.isArray(configErrors) && configErrors.length > 0) {
-      process.stderr.write(
-        `[write-gate-context] warning: dev-loop config could not be fully loaded/validated; resolving angles from the merged fallback config. errors=${JSON.stringify(configErrors)}\n`,
-      );
-    }
+    // (resolveRoleModel(kind:"angle"), inside writeGateContext). A config load
+    // error throws config_load_failed: the angle set, mandatory list and tiers
+    // never fall back to defaults.
+    const { config } = await loadDevLoopConfigStrict({ repoRoot });
     options.config = config;
 
     // Angle resolution: when --angles is omitted, resolve dynamically from the

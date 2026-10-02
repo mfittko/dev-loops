@@ -26,7 +26,7 @@ import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, isSizeOutcomeT1Clean, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance, touchesRiskPath } from "@dev-loops/core/config";
+import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, isSizeOutcomeT1Clean, loadDevLoopConfig, loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance, touchesRiskPath } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, ledgerAngleNames, listOpenActItems, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseChangedFiles, detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
@@ -1115,13 +1115,9 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });
   const draftGateMarker = normalizeGateMarkerSummary(markerSummary.draft_gate);
   const preApprovalGateMarker = normalizeGateMarkerSummary(markerSummary.pre_approval_gate);
-  // loadDevLoopConfig never throws: it returns { config, warnings, errors }.
-  // A non-empty errors array means the config could not be loaded/validated, so
-  // treat it as config-unavailable and leave fan-out enforcement disabled
-  // (preserves default behavior). Other gate checks remain unaffected.
-  let config = null;
-  const { config: loadedConfig, errors: configErrors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
-  config = Array.isArray(configErrors) && configErrors.length > 0 ? null : loadedConfig;
+  // A config load error throws config_load_failed: fan-out evidence
+  // enforcement is never disabled by an unreadable config.
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(cwd) });
   // Light-mode pre-merge facts: the base commit for the merge-base scope
   // re-derivation and whether the PR forces full fan-out via the gate:full label.
   // Fetched LAZILY — only when fan-out enforcement is active AND lightMode is on
