@@ -38,7 +38,7 @@ Everything after the tag is hands-off.
    The generated forms carry no version pin: they run `dev-loops-run
    cli/index.mjs <ns> <sub>`, which resolves a live dev-loops checkout and
    otherwise the plugin's installed package (see
-   [ADR 0118](../../docs/decisions/0118-launcher-resolves-cli-forms.md)).
+   ADR 0118).
    The remaining release pins are the plugin manifest `version` and the
    `.claude/package.json` dependency pin with its lockfile entries.
 
