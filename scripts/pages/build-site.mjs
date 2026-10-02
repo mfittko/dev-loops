@@ -225,12 +225,16 @@ ${links}
 // markup right after <body>. Idempotent enough for assembly (each source file
 // is read once). Throws if the page lacks the expected anchors so a structural
 // drift fails the build rather than publishing an un-navigable page.
-export function injectNav(html, repoUrl) {
+export function injectNav(html, repoUrl, publishedFile) {
   if (!html.includes('</style>') || !/<body[^>]*>/.test(html)) {
     throw new Error('cannot inject nav: page is missing a <style> block or <body> tag');
   }
+  // Simulator --accent-soft is a background tint, not a link foreground.
+  const navCss = publishedFile === 'simulator.html' || publishedFile === 'simulator-overview.html'
+    ? `${NAV_CSS}\n  .site-nav a:hover { color: var(--accent); }`
+    : NAV_CSS;
   return html
-    .replace('</style>', `${NAV_CSS}\n</style>`)
+    .replace('</style>', `${navCss}\n</style>`)
     .replace(/<body([^>]*)>/, `<body$1>\n    ${navMarkup(repoUrl)}`);
 }
 
@@ -270,7 +274,7 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
     readFile(mermaidSrc),
   ]);
   const landingOutput = injectNav(landingHtml, repoUrl);
-  const articleOutput = articleHtml.map((html) => injectNav(html, repoUrl));
+  const articleOutput = articleHtml.map((html, index) => injectNav(html, repoUrl, ARTICLES[index].file));
   const stateAtlasOutput = injectNav(buildStateAtlasHtml(), repoUrl);
 
   await prepareOutputDirectory(root, out);
