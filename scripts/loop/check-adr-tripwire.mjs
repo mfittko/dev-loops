@@ -332,7 +332,11 @@ export function computeAdrTripwire({
     const effective = (contents) => {
       const name = DEVLOOPS_CONFIG_PATHS.find((n) => contents[n] != null);
       if (name === undefined) return undefined;
-      try { return getFieldPath(parseYaml(contents[name]) ?? {}, COMMIT_MSG_GUARD_FIELD_PATH); } catch { return undefined; }
+      // Mirror the reader: an unparseable file or a non-boolean value is enforced (true).
+      try {
+        const v = getFieldPath(parseYaml(contents[name]) ?? {}, COMMIT_MSG_GUARD_FIELD_PATH);
+        return v === undefined || typeof v === "boolean" ? v : true;
+      } catch { return true; }
     };
     if (effective(baseContents) === true && effective(headContents) !== true) {
       triggers.push({ type: "commit-msg-guard-loosening", path: changedFamilyFile.path });

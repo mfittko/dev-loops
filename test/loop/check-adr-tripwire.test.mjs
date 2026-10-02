@@ -714,6 +714,18 @@ test("loosening requireClaudeSession (set false, key removed, file removed) bloc
   }
 });
 
+test("loosening from an unparseable or non-boolean base value blocks", () => {
+  const nonBoolean = GUARD_ON.replace("true", "\"true\"");
+  const unparseable = "a: [unclosed\n";
+  for (const base of [nonBoolean, unparseable]) {
+    for (const [status, head] of [["M", GUARD_OFF], ["M", GUARD_ABSENT], ["D", null]]) {
+      const r = guardDiff(status, base, head);
+      assert.equal(r.outcome, "block");
+      assert.ok(r.triggers.some((t) => t.type === "commit-msg-guard-loosening"));
+    }
+  }
+});
+
 test("opting in or leaving requireClaudeSession unchanged passes", () => {
   for (const [status, base, head] of [["M", GUARD_ABSENT, GUARD_ON], ["M", GUARD_OFF, GUARD_ON], ["A", null, GUARD_ON], ["M", GUARD_ON, GUARD_ON + "# c\n"]]) {
     const r = guardDiff(status, base, head);
