@@ -57,12 +57,24 @@ export function defineSimulatorSuite({
         const crosslink = views.getByRole("link", { name: linkedView, exact: true });
         await expect(crosslink).toBeVisible();
         await expect(crosslink).toHaveAttribute("href", linkedFile);
-        const graph = page.getByRole("img", { name: /lifecycle/i });
+        const graph = page.getByRole(sliceId === "simulator-article" ? "group" : "img", { name: /lifecycle/i });
         await expect(graph).toBeVisible();
         await expect(graph.getByText("startup", { exact: true })).toBeVisible();
         await expect(page.locator('#chips button[aria-pressed="true"]')).toHaveCount(1);
         await expect(page.locator("#stepno")).toHaveText("Step 0");
         await expect(page.locator("#now")).toHaveText("Ready");
+
+        if (sliceId === "simulator-article") {
+          const openGraph = graph.getByRole("button", { name: /^Open the .* sub-loop$/ }).first();
+          for (const key of ["Enter", "Space"]) {
+            await openGraph.focus();
+            await page.keyboard.press(key);
+            await expect(page.getByRole("button", { name: "Back to the run", exact: true })).toBeVisible();
+            await expect(page.locator("#stepno")).toHaveText("Step 0");
+            await page.getByRole("button", { name: "Back to the run", exact: true }).click();
+            await expect(graph).toBeVisible();
+          }
+        }
 
         const next = page.getByRole("button", { name: "Next step", exact: true });
         const back = page.getByRole("button", { name: "Back", exact: true });
@@ -98,6 +110,18 @@ export function defineSimulatorSuite({
         await expect(page.locator("#now")).toHaveText("Ready");
         await expect(next).toBeEnabled();
         await expect(back).toBeDisabled();
+        await assertFit();
+        await page.getByRole("button", { name: "Run to the end", exact: true }).click();
+        const completedStep = await page.locator("#stepno").textContent();
+        const trace = page.getByRole("list", { name: "Trace", exact: true });
+        await trace.focus();
+        await expect(trace).toBeFocused();
+        await page.keyboard.press("Home");
+        await expect.poll(() => trace.evaluate((el) => el.scrollTop)).toBe(0);
+        await page.keyboard.press("PageDown");
+        await expect.poll(() => trace.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+        await page.keyboard.press("ArrowLeft");
+        await expect(page.locator("#stepno")).toHaveText(completedStep);
         await assertFit();
         expect(pageErrors, "simulator scripts must render and respond without page errors").toEqual([]);
       } finally {

@@ -8,24 +8,24 @@
 <style>
 /* Layout: graph board left (the thing on the projector), step controls and the record right; stacks on narrow screens. */
 :root{
-  --paper:#EEF1F4; --panel:#FFFFFF; --ink:#16212E; --ink2:#4A5767; --mute:#7C8794; --line:#D3D9E0;
-  --node:#F7F9FB; --node-line:#9AA6B3;
+  --paper:#EEF1F4; --panel:#FFFFFF; --ink:#16212E; --ink2:#4A5767; --mute:#566270; --line:#D3D9E0;
+  --node:#F7F9FB; --node-line:#7A8795;
   --accent:#2347C9; --accent-ink:#FFFFFF; --accent-soft:#E2E8FA;
-  --guard:#B26A00; --guard-soft:#FBEFD9; --stop:#B3261E; --stop-soft:#F8E1DF; --ok:#1E7A4C; --ok-soft:#DDF1E6;
+  --guard:#8A5100; --guard-soft:#FBEFD9; --stop:#B3261E; --stop-soft:#F8E1DF; --ok:#1E7A4C; --ok-soft:#DDF1E6;
   --display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
   --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
 }
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
-  --paper:#0F151C; --panel:#17202A; --ink:#E6ECF2; --ink2:#AAB6C3; --mute:#76838F; --line:#2A3542;
-  --node:#1C2733; --node-line:#566475;
+  --paper:#0F151C; --panel:#17202A; --ink:#E6ECF2; --ink2:#AAB6C3; --mute:#A0ADBB; --line:#2A3542;
+  --node:#1C2733; --node-line:#7C8B9E;
   --accent:#7D98FF; --accent-ink:#0D1424; --accent-soft:#1E2A4D;
   --guard:#F0A93B; --guard-soft:#3A2B12; --stop:#F07A70; --stop-soft:#3D1D1B; --ok:#5FCB92; --ok-soft:#15301F;
   color-scheme:dark;
 }}
 :root[data-theme="dark"]{
-  --paper:#0F151C; --panel:#17202A; --ink:#E6ECF2; --ink2:#AAB6C3; --mute:#76838F; --line:#2A3542;
-  --node:#1C2733; --node-line:#566475;
+  --paper:#0F151C; --panel:#17202A; --ink:#E6ECF2; --ink2:#AAB6C3; --mute:#A0ADBB; --line:#2A3542;
+  --node:#1C2733; --node-line:#7C8B9E;
   --accent:#7D98FF; --accent-ink:#0D1424; --accent-soft:#1E2A4D;
   --guard:#F0A93B; --guard-soft:#3A2B12; --stop:#F07A70; --stop-soft:#3D1D1B; --ok:#5FCB92; --ok-soft:#15301F;
   color-scheme:dark;
@@ -48,7 +48,7 @@ code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);paddi
 .chip{font:inherit;font-size:13px;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--node);color:var(--ink2);cursor:pointer;text-align:left}
 .chip:hover{border-color:var(--accent);color:var(--ink)}
 .chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-.chip .no{font-family:var(--mono);font-size:11px;opacity:.75;margin-right:4px}
+.chip .no{font-family:var(--mono);font-size:11px;opacity:.9;margin-right:4px}
 .msg{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:15px}
 .msg .who{font-family:var(--mono);font-size:12px;color:var(--mute)}
 .about{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;border-top:1px solid var(--line);padding-top:10px}
@@ -90,7 +90,7 @@ code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);paddi
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:500}
 .btn:hover:not(:disabled){border-color:var(--accent)}
 .btn:disabled{opacity:.4;cursor:not-allowed}
-.btn:focus-visible,.chip:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible,.crumbs button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn:focus-visible,.chip:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible,.crumbs button:focus-visible,a:focus-visible,.trace:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .n.open:focus-visible rect.box{stroke:var(--accent);stroke-width:3}
 .n.open:focus{outline:none}
 .keys{font-family:var(--mono);font-size:11.5px;color:var(--mute);margin:0}
@@ -110,7 +110,7 @@ summary{cursor:pointer;font-family:var(--mono);font-size:11px;letter-spacing:.09
 .fact .k{flex:1;min-width:0}
 .fact select{font:inherit;font-size:12.5px;padding:3px 6px;border:1px solid var(--line);border-radius:4px;background:var(--node);color:var(--ink);max-width:180px}
 .fact input{accent-color:var(--accent);width:16px;height:16px;margin:0}
-.fact.off{opacity:.42}
+.fact.off{opacity:.85}
 .hint{font-size:12px;color:var(--mute);margin:0}
 
 .rgroup{display:flex;flex-direction:column;gap:3px}
@@ -161,7 +161,7 @@ footer a{color:var(--accent)}
 .n.ret rect.box{fill:var(--panel);stroke:var(--ink2);stroke-dasharray:2 3}
 .n.ret.exit rect.box{stroke:var(--stop)}
 .n.term rect.box{fill:var(--panel);stroke:var(--ink2);stroke-width:2}
-.n.aside{opacity:.62}
+.n.aside rect.box{opacity:.62}
 .n.aside rect.box{stroke-dasharray:3 3}
 .n.inf rect.box{stroke-dasharray:1.5 3}
 .n.open{cursor:pointer}
@@ -169,7 +169,7 @@ footer a{color:var(--accent)}
 .n.ran rect.box{stroke:var(--accent);stroke-width:2;stroke-dasharray:none}
 .n.act rect.box{fill:var(--accent);stroke:var(--accent);stroke-dasharray:none}
 .n.act .name,.n.act .sub{fill:var(--accent-ink)}
-.n.dim{opacity:.38}
+.n.dim rect.box{opacity:.38}
 .e path{fill:none;stroke:var(--node-line);stroke-width:1.4;marker-end:url(#arr)}
 .e.cond path{stroke-dasharray:5 4}
 .e.inf path{stroke-dasharray:1.5 3.5;stroke-width:1.6}
@@ -178,7 +178,7 @@ footer a{color:var(--accent)}
 .e.loop text{fill:var(--guard)}
 .e.taken path{stroke:var(--accent);stroke-width:2.6;stroke-dasharray:none;marker-end:url(#arrOn)}
 .e.taken text{fill:var(--accent);font-weight:500}
-.e.dead{opacity:.28}
+.e.dead path{opacity:.28}
 #arr path{fill:var(--node-line)} #arrOn path{fill:var(--accent)}
 @media (prefers-reduced-motion:no-preference){.n rect.box,.e path{transition:fill .2s,stroke .2s,opacity .2s}}
 
@@ -203,7 +203,7 @@ footer a{color:var(--accent)}
 .arow .d{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .arow .c{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--mute)}
 .arow.now{background:var(--accent-soft);color:var(--ink)}
-.arow.idle{opacity:.5}
+.arow.idle{opacity:.9}
 .rolelegend{display:flex;flex-wrap:wrap;gap:6px}
 .inftxt{font-size:11.5px;color:var(--mute);font-style:italic}
 
@@ -234,7 +234,7 @@ body.board-full{overflow:hidden}
 </head>
 <body>
 
-<div class="wrap">
+<main class="wrap">
 <header><nav class="views" aria-label="Simulator view"><a href="#" aria-current="page">Detailed: every sub-loop</a><a href="simulator-overview.html">Overview: the lifecycle</a></nav>
   <p class="lbl">dev-loops · mfittko/dev-loops · state model at commit c00aa769f</p>
   <h1>One unit of work, from startup to merge</h1>
@@ -255,7 +255,7 @@ body.board-full{overflow:hidden}
       <p class="gdesc" id="gdesc"></p>
     </div>
     <div class="scroller" id="scroller">
-      <svg id="svg" viewBox="0 0 1000 640" role="img" aria-label="">
+      <svg id="svg" viewBox="0 0 1000 640" role="group" aria-label="">
         <defs>
           <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
           <marker id="arrOn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
@@ -300,8 +300,8 @@ body.board-full{overflow:hidden}
       <div class="actors" id="actors"></div>
     </div>
     <div class="panel box">
-      <p class="lbl">Trace</p>
-      <ul class="trace" id="trace"></ul>
+      <p class="lbl" id="trace-label">Trace</p>
+      <ul class="trace" id="trace" tabindex="0" aria-labelledby="trace-label"></ul>
     </div>
   </div>
 </div>
@@ -334,7 +334,7 @@ body.board-full{overflow:hidden}
 </div>
 
 <footer>A teaching model built from a sourced state model of the dev-loops repo at commit c00aa769f (2026-10-02). It is not a port of the code. Issue #101, PR #42 and the head letters A, B, C are illustrative. A step or edge marked inferred is a conclusion drawn from reading the code, not a stated rule. Source: <a href="https://github.com/mfittko/dev-loops">github.com/mfittko/dev-loops</a>. Deck: <a href="https://mfittko.github.io/dev-loops/finding-the-flow.html">Finding the flow</a>. State atlas: <a href="state-atlas.html">the diagrams generated from the code tables</a>.</footer>
-</div>
+</main>
 
 <script>
 (function(){
@@ -1608,7 +1608,7 @@ body.board-full{overflow:hidden}
   $("run").addEventListener("click", () => { let g = 0; while (!S.done && g++ < 400) step(); });
   $("reset").addEventListener("click", reset);
   document.addEventListener("keydown", e => {
-    if (e.target.matches("input,select,textarea")) return;
+    if (e.target.matches("input,select,textarea") || e.target.closest(".trace")) return;
     if (e.key === "ArrowRight"){ e.preventDefault(); step(); }
     else if (e.key === "ArrowLeft"){ e.preventDefault(); back(); }
     else if (e.key === "r" || e.key === "R"){ reset(); }
