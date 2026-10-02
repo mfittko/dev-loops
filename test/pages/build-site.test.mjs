@@ -205,10 +205,13 @@ test('build-site: state atlas is generated from the code tables, navigable, with
     assert.ok(atlas.includes('handoff_to_copilot_loop'), 'outer OUTER_STATE rendered');
     assert.ok(atlas.includes('copilot_pr_followup'), 'public dev-loop gate contract rendered');
 
-    // The nav on the landing page links the atlas as a top-level menu item.
+    // The atlas is off the nav; the simulator footer links it, and the nav links the simulator.
     const index = await readFile(join(out, 'index.html'), 'utf8');
-    assert.ok(index.includes(`href="${STATE_ATLAS.file}"`), 'landing nav links the atlas');
-    assert.ok(index.includes(`>${STATE_ATLAS.label}</a>`), 'landing nav shows the atlas label');
+    assert.ok(!index.includes(`href="${STATE_ATLAS.file}"`), 'landing nav omits the atlas');
+    const simulator = await readFile(join(out, 'simulator.html'), 'utf8');
+    assert.ok(simulator.includes(`href="${STATE_ATLAS.file}"`), 'simulator footer links the atlas');
+    assert.ok(simulator.includes('href="simulator-overview.html"'), 'simulator links its overview');
+    assert.ok(index.includes('href="simulator.html">Simulator</a>'), 'landing nav links the simulator');
   } finally {
     await rm(out, { recursive: true, force: true });
   }
