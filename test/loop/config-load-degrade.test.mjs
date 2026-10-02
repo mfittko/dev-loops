@@ -1,0 +1,39 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, test } from "bun:test";
+
+// Scripts that keep a listed default on a config load error because the default
+// cannot relax a gate. provision-worktree, post-gate-findings, refine-plan-file,
+// close-gate-findings and outer-loop pin theirs next to their own suites.
+let fixture;
+beforeAll(() => {
+  fixture = mkdtempSync(path.join(os.tmpdir(), "config-degrade-"));
+  writeFileSync(path.join(fixture, ".devloops"), "version: 1\nfutureKnob: true\nautonomy:\n  humanMergeOnly: false\n");
+  spawnSync("git", ["init", "-q"], { cwd: fixture });
+  for (const msg of ["a", "b"]) {
+    spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", msg], { cwd: fixture });
+  }
+});
+afterAll(() => rmSync(fixture, { recursive: true, force: true }));
+
+const run = (script, args = []) =>
+  spawnSync("node", [path.resolve(script), ...args], { cwd: fixture, encoding: "utf8" });
+
+describe("a config load error keeps the listed default", () => {
+  test("resolve-human-merge-only prints true", () => {
+    const r = run("scripts/loop/resolve-human-merge-only.mjs");
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), "true");
+  });
+
+  test("detect-change-scope reports eligibleForLightMode false", () => {
+    const r = run("scripts/loop/detect-change-scope.mjs");
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.eligibleForLightMode, false);
+    assert.deepEqual(out.threshold, { maxFiles: 3, maxLines: 200 });
+  });
+});

@@ -10,12 +10,11 @@ import { collectGeneratedAssets } from "../../scripts/claude/generate-claude-ass
 
 // #801 + #833: the Pi runtime sources invoke the CLI as the package-local
 // `node <dev-loops-package-root>/cli/index.mjs` form (resolves unambiguously from the installed
-// package, no global install). The generated Claude tree rewrites that to the version-pinned
-// `npx dev-loops@<version>` form, because the Claude plugin does not bundle `cli/` and pinning
-// the version eliminates CLI-vs-plugin version skew.
+// package, no global install). The generated Claude tree rewrites that to the launcher form
+// `dev-loops-run cli/index.mjs`, because the Claude plugin does not bundle `cli/`; the launcher
+// resolves a live checkout first and otherwise the plugin's pinned installed package.
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
-const currentVersion = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version;
 
 const PI_TOKEN = "node <dev-loops-package-root>/cli/index.mjs";
 
@@ -55,16 +54,17 @@ test("the dev-loop runtime source uses the package-local `node .../cli/index.mjs
   assert.ok(agent.includes(PI_TOKEN), "dev-loop agent must invoke the package-local CLI form");
 });
 
-test("generated Claude skill/agent pin `npx dev-loops@<version>` and drop the package-local form (#833)", () => {
+test("generated Claude skill/agent render `dev-loops-run cli/index.mjs`, never a pinned npx spec, and drop the package-local form", () => {
   const assets = collectGeneratedAssets({ repoRoot });
   const byTarget = new Map(assets.map((a) => [a.target, a.content]));
   for (const target of [".claude/skills/dev-loop/SKILL.md", ".claude/agents/dev-loop.md"]) {
     const content = byTarget.get(target);
     assert.ok(content, `expected generated ${target}`);
     assert.ok(
-      content.includes(`npx dev-loops@${currentVersion}`),
-      `${target} must pin npx dev-loops@${currentVersion}`,
+      content.includes("dev-loops-run cli/index.mjs loop startup"),
+      `${target} must render the launcher form for loop startup`,
     );
+    assert.equal(/npx\s+dev-loops@/.test(content), false, `${target} must not carry a pinned npx spec`);
     assert.equal(
       content.includes(PI_TOKEN),
       false,

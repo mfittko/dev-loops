@@ -10,7 +10,7 @@ import { realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
@@ -85,6 +85,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Refusal(`--head-sha must be a full 40- or 64-char lowercase SHA, got ${headSha}`);
   // Anchor at the checkout root, never a cwd subdirectory the pull and write guard never scan.
   const checkoutRoot = resolveRepoRoot(cwd);
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: checkoutRoot });
   tmpRoot ??= path.join(checkoutRoot, "tmp");
   const abs = (p) => path.resolve(cwd, p);
   const dir = path.resolve(judgeDir({ repo, pr, gate, headSha, tmpRoot }));
@@ -109,8 +110,6 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   const priors = [];
   for (const prior of priorVerdicts) priors.push(await readSource("prior-judge-verdict", abs(prior)));
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
-  const { config } = await loadDevLoopConfig({ repoRoot: checkoutRoot });
-
   const workOrder = {
     role: "judge",
     target: { repo, pr: Number(pr) },

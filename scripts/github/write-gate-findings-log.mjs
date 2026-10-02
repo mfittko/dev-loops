@@ -15,7 +15,7 @@ import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, apply
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
-import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
@@ -378,7 +378,7 @@ export function parseProvenanceJson(raw, resolvedGroups = null, dispatchUnits = 
  * @returns {Promise<{ warning: string|null }>}
  */
 export async function checkProvenanceAngleCoverage(provenance, gate, { repoRoot = process.cwd() } = {}) {
-  const { config } = await loadDevLoopConfig({ repoRoot });
+  const { config } = await loadDevLoopConfigStrict({ repoRoot });
   const gateKey = GATE_CONFIG_KEY[gate];
   const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
   const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(provenance.perAngle, {
@@ -839,11 +839,14 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     let config = null;
     try {
       const rawPerAngle = JSON.parse(rawProvenanceJson)?.perAngle;
-      ({ config } = await loadDevLoopConfig({ repoRoot }));
+      ({ config } = await loadDevLoopConfigStrict({ repoRoot }));
       const configGate = resolveGateAngleCatalogKey(options.gate);
       const anglePool = resolveGateAngleContract(config, configGate).pool ?? [];
       resolvedGroups = resolveFanoutGroups(config, configGate, ledgerAngleNames(rawPerAngle, anglePool), { fullLabel: options.fullLabel === true });
-    } catch {
+    } catch (err) {
+      // A config load error is a hard stop; only a malformed provenance is
+      // handed to the validator below.
+      if (err?.code === "config_load_failed") throw err;
       resolvedGroups = null;
     }
     const dispatchUnits = await readContextDispatchUnits(options, config, repoRoot);
@@ -877,7 +880,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   const executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   if (executionMode === "fanout_fanin" && provenance === undefined) {
     const gateKey = GATE_CONFIG_KEY[options.gate];
-    const { config } = await loadDevLoopConfig({ repoRoot });
+    const { config } = await loadDevLoopConfigStrict({ repoRoot });
     const { mandatoryAngles } = resolveGateAngleContract(config, gateKey);
     if (mandatoryAngles.length > 0) {
       throw parseError(

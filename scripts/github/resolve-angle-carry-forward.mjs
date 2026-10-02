@@ -28,7 +28,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { loadDevLoopConfig, resolveBaseBranch, resolveGateAngleContract } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveBaseBranch, resolveGateAngleContract } from "@dev-loops/core/config";
 import {
   angleReviewSurface,
   RENAME_ONLY_ANGLES,
@@ -419,6 +419,14 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       })),
       { force: true },
     );
+    // Load the gate's CONFIGURED mandatory angles so any repo-configured
+    // mandatory angle (even a CATEGORY_ANGLE_MAP-mapped one) is NEVER carried
+    // forward — without this the "mandatory always re-runs" promise would only
+    // cover the hardcoded ALWAYS_INCLUDE set. A config load error throws
+    // config_load_failed AFTER the stale-plan removal above, so it leaves no
+    // plan behind.
+    const { config } = await loadDevLoopConfigStrict({ repoRoot });
+    const { mandatoryAngles } = resolveGateAngleContract(config, mapGateToConfigKey(options.gate));
     // The prior findings-log ledger is written under the MAIN worktree tmp
     //; resolve the read there too so a re-gate running inside a linked
     // worktree still finds the prior round's ledger to carry forward from
@@ -447,12 +455,6 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     if (recordedHead !== options.prevHead) {
       throw new Error(`prior gate findings-log at ${logPath} records headSha ${JSON.stringify(log?.headSha ?? null)}, which is not --prev-head ${options.prevHead} — cannot carry forward (fail-closed)`);
     }
-    // Load the gate's CONFIGURED mandatory angles so any repo-configured
-    // mandatory angle (even a CATEGORY_ANGLE_MAP-mapped one) is NEVER carried
-    // forward — without this the "mandatory always re-runs" promise would only
-    // cover the hardcoded ALWAYS_INCLUDE set. loadDevLoopConfig never throws.
-    const { config } = await loadDevLoopConfig({ repoRoot });
-    const { mandatoryAngles } = resolveGateAngleContract(config, mapGateToConfigKey(options.gate));
     // FAIL-CLOSED: the delta is computed against the CWD worktree HEAD, but the
     // plan is LABELED with --head-sha. A worktree checked out at a different
     // head would compute every decision against the wrong head; abort before

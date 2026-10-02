@@ -533,7 +533,7 @@ test("judgePassCli fails closed when the gate config cannot be loaded (#2246)", 
       },
       { repoRoot: tmpDir },
     ),
-    /could not be fully loaded\/validated/,
+    /config_load_failed.*CONFIG-LOAD-FAIL-CLOSED/,
   );
 });
 

@@ -104,6 +104,63 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 - Free-form string values — MUST fail closed
 - Omitting `strategy` from every layer — resolves to `local-first` from `BUILT_IN_DEFAULTS`
 
+### Config load failure
+
+<!-- rule: CONFIG-LOAD-FAIL-CLOSED -->
+`CONFIG-LOAD-FAIL-CLOSED`: A config load error MUST NOT relax a gate decision. `loadDevLoopConfig` never throws. On an unknown key it drops the whole `.devloops` layer and returns `errors`. The loader error text names each unknown key and the running dev-loops version, and, for a key without a rename record, states that the key needs a newer dev-loops. Inside a dev-loops source checkout it also names the checkout `package.json` version. A key that a later release renamed also names the new key and the renaming release. `configLoadFailure` in `@dev-loops/core/config` builds the shared outcome `{ reason: "config_load_failed", errors, unknownKeys, runningVersion, checkoutVersion }`. Startup returns it as `bundle.configError` inside the existing `needs_reconcile` kind. Every other fail-closed script exits non-zero or returns `ok: false` with the reason `config_load_failed`. Every script under `scripts/` and `cli/` that calls `loadDevLoopConfig` has exactly one row below. A conformance test fails on a caller without a row.
+
+| Script | Decision on a config error |
+|---|---|
+| `scripts/loop/resolve-dev-loop-startup.mjs` | Fail closed: `needs_reconcile` with `configError` |
+| `scripts/loop/detect-pr-gate-coordination-state.mjs` | Fail closed: `config_load_failed` |
+| `scripts/loop/detect-copilot-loop-state.mjs` | Fail closed: `config_load_failed` |
+| `scripts/loop/copilot-pr-handoff.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/request-copilot-review.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/write-gate-context.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/write-gate-findings-log.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/resolve-angle-carry-forward.mjs` | Fail closed: `config_load_failed` |
+| `scripts/loop/resolve-gate-dispatch.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/detect-checkpoint-evidence.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/emit-fanout-dispatch.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/reconcile-draft-gate.mjs` | Fail closed: `config_load_failed` |
+| `scripts/loop/emit-judge-work-order.mjs` | Fail closed: `config_load_failed` |
+| `scripts/loop/build-handoff-envelope.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/ready-for-review.mjs` | Fail closed: `config_load_failed` on its own load, plus the size budget block |
+| `scripts/loop/judge-pass.mjs` | Fail closed: throws |
+| `scripts/loop/consolidate-fanin.mjs` | Fail closed: throws with `--gate` |
+| `scripts/github/upsert-checkpoint-verdict.mjs` | Fail closed: throws |
+| `scripts/github/merge-pr.mjs` | Fail closed: refuses with `configError` |
+| `scripts/loop/check-size-budget.mjs` | Fail closed: outcome `block`, no waiver |
+| `scripts/loop/emit-fixer-work-order.mjs` | Fail closed: refusal |
+| `scripts/loop/claude-launch.mjs` | Fail closed: `fail()` |
+| `scripts/claude/headless-dev-loop.mjs` | Fail closed: `ok: false` |
+| `scripts/loop/run-queue.mjs` | Fail closed for merge authorization |
+| `scripts/loop/resolve-reviewer-role.mjs` | Fail closed: `ok: false` |
+| `scripts/loop/detect-change-scope.mjs` | Default `eligible=false`, no light mode |
+| `scripts/github/post-gate-findings.mjs` | Default `postFindingsComments=false`, step skipped |
+| `scripts/github/close-gate-findings.mjs` | Default `mediumFixWindow=3`, `inlineSeverityFloor=medium`, `trackerProvider=null` |
+| `scripts/loop/provision-worktree.mjs` | Default: no copy or link actions |
+| `scripts/loop/outer-loop.mjs` | Default `asyncStartMode=required` |
+| `scripts/loop/resolve-human-merge-only.mjs` | Default `humanMergeOnly=true` |
+| `scripts/refine/refine-plan-file.mjs` | Default: advisory warning |
+| `scripts/github/create-pr.mjs` | Not a gate decision: base branch falls back to the default |
+| `scripts/github/offer-human-handoff.mjs` | Not a gate decision: handoff candidates only |
+| `scripts/github/resolve-handoff-candidates.mjs` | Not a gate decision: handoff candidates only |
+| `scripts/github/resolve-tracker-local-spec.mjs` | Not a gate decision: default tracker adapter |
+| `scripts/loop/_loop-evidence.mjs` | Not a gate decision: refinement display setting |
+| `scripts/loop/check-adr-tripwire.mjs` | Not a gate decision: reads `.devloops` files by path |
+| `scripts/loop/detect-agent-stall.mjs` | Not a gate decision: stall detection setting |
+| `scripts/loop/inspect-run-viewer/server.mjs` | Not a gate decision: read-only viewer |
+| `scripts/loop/inspect-run.mjs` | Not a gate decision: read-only report |
+| `scripts/loop/print-gates.mjs` | Not a gate decision: prints gate settings |
+| `scripts/loop/run-post-merge-actions.mjs` | Not a gate decision: post-merge actions run after the merge |
+| `scripts/loop/spec-context.mjs` | Not a gate decision: default tracker adapter |
+| `scripts/loop/ui-review-drive.mjs` | Not a gate decision: no recipe drives nothing |
+| `scripts/loop/ui-review-provision.mjs` | Not a gate decision: UI review recipe |
+| `scripts/loop/ui-review-teardown.mjs` | Not a gate decision: UI review recipe |
+| `scripts/loop/visual-grill-capture.mjs` | Not a gate decision: capture recipe |
+| `scripts/refine/promote-plan.mjs` | Not a gate decision: base branch |
+
 ## Local-first plan-file flow end to end
 
 Under local-planning, one plan file moves through four stages. Each stage has a shipped helper script; the start, refine, and promote stages also expose their pure logic as an `@dev-loops/core` contract, while the validate stage's `validatePlanFile` lives in its helper script (`scripts/refine/validate-plan-file.mjs`). The [Local-Planning Flow](local-planning.md#local-planning-flow) skill doc walks the same sequence as operator steps, and the [Local-Planning Worked Example](local-planning.md#local-planning-worked-example) shows one plan file evolving through every stage.

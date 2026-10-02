@@ -2013,7 +2013,7 @@ test("request-copilot-review refuses immediately when the composed lightweight c
   }
 });
 
-test("request-copilot-review --lightweight with an unloadable config falls back to the lightweight default cap of 1 (not the full-PR default of 5) and surfaces the config failure", async () => {
+test("request-copilot-review --lightweight with an unloadable config fails closed with config_load_failed (no default cap)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-lightweight-broken-config-"));
 
   try {
@@ -2038,17 +2038,9 @@ test("request-copilot-review --lightweight with an unloadable config falls back 
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--lightweight"], { env, cwd: tempDir });
 
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    const parsed = JSON.parse(result.stdout);
-    // Before the fix, a config load failure with --lightweight silently kept
-    // the built-in full-PR default of 5 instead of failing toward the safer
-    // lightweight default of 1. The unloadable config also keeps the default
-    // converged-once mode, so the converged review at the cap is suppressed.
-    assert.equal(parsed.status, "suppressed_post_convergence");
-    assert.equal(parsed.completedRounds, 1);
-    assert.equal(parsed.maxRounds, 1);
-    assert.match(parsed.configWarning, /lightweight default cap of 1/);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /config_load_failed/);
+    assert.equal(result.stdout.trim(), "");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

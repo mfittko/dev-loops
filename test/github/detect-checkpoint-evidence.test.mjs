@@ -4307,21 +4307,18 @@ test("detect-checkpoint-evidence requireFanoutEvidence=true fails closed when th
   }
 });
 
-test("detect-checkpoint-evidence disables fan-out enforcement (non-fatal) when config fails to load", async () => {
-  // FIX C: loadDevLoopConfig never throws; it returns { config, warnings, errors }.
-  // A config that fails schema validation produces a non-empty errors array, which
-  // must be treated as config-unavailable => enforcement disabled, NOT a crash.
+test("detect-checkpoint-evidence fails closed with config_load_failed when config fails to load", async () => {
+  // A config that fails schema validation must never disable fan-out
+  // enforcement; the detector refuses instead.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-badconfig-"));
   try {
     // requireFanoutEvidence must be a boolean; a string value fails validation.
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: \"yes\"\n", "utf8");
     const env = await writeGhStub(tempDir, fanoutEvidenceGhEntries("inline_single_agent"));
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-    // Enforcement disabled => the gate evidence is otherwise clean => exit 0.
-    assert.equal(result.code, 0, result.stderr);
-    const payload = JSON.parse(result.stdout);
-    assert.equal(payload.fanoutEnforcement.required, false);
-    assert.deepEqual(payload.preMergeGateCheck.failures, []);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /config_load_failed/);
+    assert.equal(result.stdout.trim(), "");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

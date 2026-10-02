@@ -1853,8 +1853,9 @@ test("CLI --angles '[]' fails closed instead of writing a zero-review gate", asy
   }
 });
 
-test("CLI without --angles + malformed .devloops: warns to stderr and proceeds with the documented fallback (not fail-closed)", async () => {
+test("CLI without --angles + malformed .devloops: fails closed with config_load_failed and writes no artifact", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-badconfig-"));
+  const priorExitCode = process.exitCode;
   try {
     // dynamicAngles must be a boolean; a string value fails schema validation
     // (mirrors the postFindingsComments:"yes" fixture in post-gate-findings.test.mjs).
@@ -1887,17 +1888,16 @@ test("CLI without --angles + malformed .devloops: warns to stderr and proceeds w
     }
 
     const stderrText = stderrChunks.join("");
-    assert.match(stderrText, /could not be fully loaded\/validated/, "warns to stderr on a malformed .devloops");
-    assert.match(stderrText, /dynamicAngles/, "warning surfaces the actual validation error");
+    assert.equal(process.exitCode, 1);
+    assert.match(stderrText, /config_load_failed/);
+    assert.match(stderrText, /dynamicAngles/, "the error surfaces the actual validation error");
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: "abc1234567890",
     }, { repoRoot });
-    assert.ok(artifact, "artifact still written despite the config error (documented fallback, not a fail-closed exit)");
-    // Fallback proceeds with the merged config rather than nulling it out into
-    // an empty angle set: a non-empty resolved pool comes back either way.
-    assert.ok(Array.isArray(artifact.resolvedAngles) && artifact.resolvedAngles.length > 0);
+    assert.equal(artifact, null);
   } finally {
+    process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
@@ -6573,8 +6573,9 @@ test("buildGateContext threads input.config into the persisted request plan's re
   }
 });
 
-test("CLI with --angles + malformed .devloops: warns to stderr on the same reachable config error (the --angles path now loads config unconditionally too)", async () => {
+test("CLI with --angles + malformed .devloops: fails closed with config_load_failed and writes no artifact", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-badconfig-angles-"));
+  const priorExitCode = process.exitCode;
   try {
     // Same malformed shape as the sibling --angles-omitted warning test above
     // (dynamicAngles must be a boolean) — this one supplies --angles
@@ -6610,15 +6611,16 @@ test("CLI with --angles + malformed .devloops: warns to stderr on the same reach
     }
 
     const stderrText = stderrChunks.join("");
-    assert.match(stderrText, /could not be fully loaded\/validated/, "warns to stderr on a malformed .devloops even when --angles is supplied");
-    assert.match(stderrText, /dynamicAngles/, "warning surfaces the actual validation error");
+    assert.equal(process.exitCode, 1);
+    assert.match(stderrText, /config_load_failed/, "an explicit --angles override does not skip the config gate");
+    assert.match(stderrText, /dynamicAngles/, "the error surfaces the actual validation error");
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 64, gate: "draft_gate", headSha: "abc1234567890",
     }, { repoRoot });
-    assert.ok(artifact, "artifact still written despite the config error (documented fallback, not a fail-closed exit)");
-    assert.deepEqual(artifact.resolvedAngles, ["scope", "coverage"], "the explicit --angles override is honored verbatim, unaffected by the config error");
+    assert.equal(artifact, null);
   } finally {
+    process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
 });

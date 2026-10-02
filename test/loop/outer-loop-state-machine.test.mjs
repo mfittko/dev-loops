@@ -740,6 +740,34 @@ test("outer-loop: maintainer-controlled asyncStartMode=allowed permits non-snaps
   }
 });
 
+test("outer-loop: a config load error keeps asyncStartMode=required and rejects non-snapshot startup", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "outer-loop-async-start-"));
+  try {
+    const copilotInputPath = path.join(tempDir, "copilot.json");
+    await writeJson(copilotInputPath, MINIMAL_COPILOT_SNAPSHOT);
+    const gitEnv = await writeGitStub(tempDir);
+    const ghEnv = await writeGhStub(tempDir, { repo: "owner/repo", pr: 47 });
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\nfutureKnob: true\nworkflow:\n  asyncStartMode: allowed\n",
+      "utf8",
+    );
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "47",
+      "--copilot-input", copilotInputPath,
+      "--checkpoint-dir", tempDir,
+    // CLAUDECODE is cleared because Claude relaxes asyncStartMode by design; the pin covers the Pi harness.
+    ], { env: { ...gitEnv, ...ghEnv, CLAUDECODE: "" }, cwd: tempDir });
+
+    assert.equal(result.code, 1, `stdout=${result.stdout} stderr=${result.stderr}`);
+    assert.equal(JSON.parse(result.stderr).asyncStartContract, "rejected");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("outer-loop: snapshot mode (both inputs provided) bypasses async-start check", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "outer-loop-async-start-"));
   try {

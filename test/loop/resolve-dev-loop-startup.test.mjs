@@ -2594,15 +2594,41 @@ test("runCli --lightweight ALONE (no --issue): DIRTY-TREE above-threshold change
   }, { prefix: "resolve-dev-loop-issueless-" });
 });
 
-test("runCli --lightweight ALONE (no --issue): invalid config fails closed naming the config failure, not light_mode_disabled", async () => {
+test("runCli --lightweight ALONE (no --issue): invalid config returns needs_reconcile naming the config failure", async () => {
   await withTempDir(async (tempDir) => {
     await initFeatureBranchRepo(tempDir);
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\nnot_a_real_key: true\n", "utf8");
     const result = await runNode(["--lightweight"], { cwd: tempDir });
-    assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /config loading failed/);
-    assert.doesNotMatch(result.stderr, /lightMode\.enabled/);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.bundleKind, "needs_reconcile");
+    assert.equal(parsed.bundle.configError.reason, "config_load_failed");
+    assert.doesNotMatch(result.stdout, /lightMode\.enabled/);
   }, { prefix: "resolve-dev-loop-issueless-" });
+});
+
+test("runCli with an unknown .devloops key returns needs_reconcile with configError and never resolves requireRetrospective from defaults", async () => {
+  await withTempDir(async (tempDir) => {
+    await initFeatureBranchRepo(tempDir);
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\nworkflow:\n  requireRetrospective: true\nfutureKnob: true\n",
+      "utf8",
+    );
+    const ghStub = await writeGhStubHelper(tempDir, []);
+    const result = await runNode(["--issue", "511"], { cwd: tempDir, env: { ...ghStub.env, ...resolverTestEnv() } });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.bundleKind, "needs_reconcile");
+    assert.equal(parsed.selectedStrategy, "none");
+    assert.equal(parsed.bundle.selectedStrategy, null);
+    assert.equal(parsed.bundle.configError.reason, "config_load_failed");
+    assert.deepEqual(parsed.bundle.configError.unknownKeys, ["futureKnob"]);
+    assert.equal(typeof parsed.bundle.configError.runningVersion, "string");
+    assert.match(parsed.nextAction, /futureKnob/);
+    assert.match(parsed.nextAction, /config_load_failed/);
+    assert.ok(!("requireRetrospective" in parsed.bundle));
+    assertOperatorBriefing(parsed);
+  }, { prefix: "resolve-dev-loop-config-fail-closed-" });
 });
 
 test("runCli --lightweight ALONE (no --issue): under-threshold change resolves issue-less PR-first (AC-adjacent success path)", async () => {

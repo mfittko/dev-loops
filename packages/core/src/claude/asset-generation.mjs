@@ -78,19 +78,19 @@ export function stripPiOnlyBlocks(body) {
 }
 
 /**
- * Rewrite the Pi package-local CLI invocation into the Claude version-pinned `npx` form.
+ * Rewrite the Pi package-local CLI invocation into the Claude launcher form.
  * The Pi runtime sources invoke the CLI as `node <dev-loops-package-root>/cli/index.mjs`
  * (resolves unambiguously from the installed package). The Claude plugin does NOT bundle `cli/`,
- * so for the generated tree those tokens become `npx dev-loops@<version>` — pinning the version
- * keeps the CLI from drifting against the published plugin version. The Pi-only
+ * so for the generated tree those tokens become `dev-loops-run cli/index.mjs`. The launcher
+ * resolves a live dev-loops checkout first and otherwise the plugin's pinned installed package
+ * (`.claude/package.json`), so the generator stays repository-agnostic. The Pi-only
  * package-root resolution note is removed separately by `stripPiOnlyBlocks`.
  *
  * @param {string} body
- * @param {string} version dev-loops package version to pin (e.g. "0.2.6").
  * @returns {string}
  */
-export function rewriteCliInvocation(body, version) {
-  return String(body).split("node <dev-loops-package-root>/cli/index.mjs").join(`npx dev-loops@${version}`);
+export function rewriteCliInvocation(body) {
+  return String(body).split("node <dev-loops-package-root>/cli/index.mjs").join("dev-loops-run cli/index.mjs");
 }
 
 /**
@@ -250,7 +250,7 @@ function normalizeToolList(value) {
  */
 export function transformAgent({ source, raw, version = "latest", config = {} }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version)));
+  const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody))));
   const tools = mapTools(normalizeToolList(frontmatter.tools));
   const model = resolveRoleModel(config, { role: String(frontmatter.name ?? ""), harness: "claude" }) ?? frontmatter.claudeModel;
 
@@ -296,7 +296,7 @@ export function transformAgent({ source, raw, version = "latest", config = {} })
  */
 export function transformCommand({ source, raw, version = "latest" }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version)));
+  const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody))));
 
   const lines = ["---"];
   if (frontmatter.description != null) {
@@ -350,7 +350,7 @@ export function isSkillExcludedFromClaude(frontmatter) {
  */
 export function transformSkill({ source, raw, version = "latest" }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteWrapperInvocation(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version));
+  const body = rewriteWrapperInvocation(rewriteCliInvocation(stripPiOnlyBlocks(rawBody)));
   const tools = mapTools(normalizeToolList(frontmatter["allowed-tools"]));
 
   const lines = ["---"];

@@ -174,7 +174,7 @@ describe("decideAgentDispatch with agent overrides", () => {
 
   test("denies a namespaced dispatch of a listed role and names the bare type", () => {
     const decision = dispatch("dev-loops:developer", "developer,fixer");
-    assert.match(decision.reason, /dev-loops loop claude-launch/);
+    assert.match(decision.reason, /dev-loops-run cli\/index\.mjs loop claude-launch/);
     assert.equal(decision.decision, "deny");
     assert.match(decision.reason, /Dispatch the bare agent type `developer`/);
   });

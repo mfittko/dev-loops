@@ -20,7 +20,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildDevLoopHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
-import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -136,9 +136,7 @@ export async function buildHandoffEnvelopeCli(
   const resolverOutput = parseJsonText(inputText);
 
   // Load dev-loop settings from repo config
-  const configLoadResult = await loadDevLoopConfig({ repoRoot });
-  const hasConfigErrors = Array.isArray(configLoadResult.errors) && configLoadResult.errors.length > 0;
-  const settings = hasConfigErrors ? {} : (configLoadResult.config ?? {});
+  const settings = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
 
   // Parse optional gate state
   let gateState = {};
