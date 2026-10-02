@@ -61,6 +61,7 @@ function writeClaudeTranscript(filePath, turns) {
     type: "assistant",
     timestamp: turn.timestamp ?? `2026-01-01T00:00:0${index}.000Z`,
     requestId: turn.requestId,
+    cwd: turn.cwd,
     message: {
       model: turn.model ?? "claude-opus-5-5",
       id: turn.id ?? `msg_${index}`,
@@ -1678,5 +1679,143 @@ describe("audit-pi-session unit & integration", () => {
     assert.deepEqual(after, { count: 2, promptBytes: 2 * Buffer.byteLength(pointer), bytesPerDispatch: Buffer.byteLength(pointer) });
     assert.ok(after.bytesPerDispatch < DISPATCH_POINTER_MAX_BYTES);
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+// #2601: per-tool call counts and MCP usage by role.
+describe("audit-pi-session tool calls and MCP usage", () => {
+  const mainRoot = process.cwd().split(`${path.sep}tmp${path.sep}worktrees${path.sep}`)[0];
+  const usage = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  const use = (id, name) => ({ type: "tool_use", id, name, input: {} });
+  const mcpA = "mcp__codebase-memory__search_graph";
+  const mcpB = "mcp__codebase-memory__trace_path";
+
+  function claudeAgentDir(agentType) {
+    const dir = createTempDir();
+    const file = path.join(dir, "agent-dev1.jsonl");
+    if (agentType) fs.writeFileSync(path.join(dir, "agent-dev1.meta.json"), JSON.stringify({ agentType }));
+    return { dir, file };
+  }
+
+  it("counts Claude MCP calls per role, cwd class and denial", async () => {
+    const { dir, file } = claudeAgentDir("dev-loops:developer");
+    writeClaudeTranscript(file, [
+      { id: "m1", usage, cwd: path.join(mainRoot, "tmp", "worktrees", "slug"), content: [use("t1", mcpA)] },
+      { id: "m2", usage, cwd: mainRoot, content: [use("t2", mcpA), use("t3", mcpB)] },
+      { id: "m3", usage, cwd: "/elsewhere", content: [use("t4", mcpA)] },
+      { id: "m4", usage, cwd: mainRoot, content: [use("t5", "Bash"), use("t6", "Read")] },
+    ]);
+    const denial = (kind, id) => JSON.stringify({
+      type: "user",
+      ...(kind ? { toolDenialKind: kind } : {}),
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: true, content: "no" }] },
+    });
+    // t3 denied by a hook; t4 is an ordinary is_error result without toolDenialKind.
+    fs.appendFileSync(file, `${denial("permission-rule", "t3")}\n${denial(undefined, "t4")}\n`);
+
+    const audit = await auditPiSession(file);
+    assert.deepEqual(audit.mcpUsageByRole, {
+      "dev-loops:developer": {
+        calls: 4,
+        byTool: { [mcpA]: 3, [mcpB]: 1 },
+        denied: 1,
+        bySessionCwd: { main: 2, worktree: 1, other: 1 },
+      },
+    });
+    // Built-in calls stay out of the MCP entry but count in the per-session total.
+    assert.deepEqual(audit.sessions[0].toolCalls, {
+      calls: 6,
+      byTool: { [mcpA]: 3, [mcpB]: 1, Bash: 1, Read: 1 },
+      denied: 1,
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("counts Pi toolCall blocks with the session header cwd and denied null", async () => {
+    const dir = createTempDir();
+    const file = path.join(dir, "session.jsonl");
+    fs.writeFileSync(file, [
+      JSON.stringify({ type: "session", cwd: path.join(mainRoot, "tmp", "worktrees", "x") }),
+      JSON.stringify({ type: "session_info", name: "subagent-fixer-unit-0" }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          model: "m",
+          content: [
+            { type: "toolCall", id: "p1", name: mcpA, arguments: {} },
+            { type: "toolCall", id: "p2", name: "bash", arguments: {} },
+          ],
+          usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 },
+        },
+      }),
+    ].join("\n") + "\n");
+    const audit = await auditPiSession(file);
+    assert.deepEqual(audit.mcpUsageByRole, {
+      fixer: {
+        calls: 1,
+        byTool: { [mcpA]: 1 },
+        denied: null,
+        bySessionCwd: { main: 0, worktree: 1, other: 0 },
+      },
+    });
+    assert.deepEqual(audit.sessions[0].toolCalls, { calls: 2, byTool: { [mcpA]: 1, bash: 1 }, denied: null });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("merges tool calls Claude splits across records sharing one message.id", async () => {
+    const { dir, file } = claudeAgentDir("dev-loops:developer");
+    writeClaudeTranscript(file, [
+      { id: "m1", usage, cwd: mainRoot, content: [use("t1", mcpA)] },
+      { id: "m1", usage, cwd: mainRoot, content: [use("t2", "Bash")] },
+    ]);
+    const audit = await auditPiSession(file);
+    assert.equal(audit.sessions[0].toolCalls.calls, 2);
+    assert.equal(audit.mcpUsageByRole["dev-loops:developer"].calls, 1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("counts a replayed tool call of a resumed session once", async () => {
+    const dir = createTempDir();
+    const turn = { id: "msg_shared", requestId: "req_shared", usage, cwd: mainRoot, content: [use("t1", mcpA)] };
+    writeClaudeTranscript(path.join(dir, "agent-a.jsonl"), [{ ...turn, timestamp: "2026-01-01T00:00:00.000Z" }]);
+    writeClaudeTranscript(path.join(dir, "agent-b.jsonl"), [
+      { ...turn, timestamp: "2026-01-01T00:05:00.000Z" },
+      { id: "msg_new", requestId: "req_new", usage, cwd: mainRoot, timestamp: "2026-01-01T00:05:01.000Z", content: [use("t2", "Bash")] },
+    ]);
+    const audit = await auditPiSession(dir);
+    assert.equal(audit.sessions.reduce((sum, s) => sum + s.toolCalls.calls, 0), 2);
+    assert.equal(Object.values(audit.mcpUsageByRole).reduce((sum, r) => sum + r.calls, 0), 1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("prints a zero MCP row per role when no MCP call exists, and a populated row otherwise", async () => {
+    const none = claudeAgentDir("dev-loops:review");
+    writeClaudeTranscript(none.file, [{ usage, cwd: mainRoot, content: [use("t1", "Bash")] }]);
+    const noneAudit = await auditPiSession(none.file);
+    assert.deepEqual(noneAudit.mcpUsageByRole["dev-loops:review"].bySessionCwd, { main: 0, worktree: 0, other: 0 });
+    const noneMd = formatMarkdownSummary(noneAudit);
+    assert.match(noneMd, /### MCP usage by role/);
+    assert.match(noneMd, /\| Role \| MCP calls \| Denied \| main \| worktree \| other \| Tools \|/);
+    assert.match(noneMd, /\| \*\*dev-loops:review\*\* \| 0 \| 0 \| 0 \| 0 \| 0 \| {2}\|/);
+
+    const some = claudeAgentDir("dev-loops:developer");
+    writeClaudeTranscript(some.file, [
+      { usage, cwd: mainRoot, content: [use("t1", mcpB), use("t2", mcpA), use("t3", mcpA)] },
+    ]);
+    const someMd = formatMarkdownSummary(await auditPiSession(some.file));
+    assert.match(someMd, new RegExp(`\\| \\*\\*dev-loops:developer\\*\\* \\| 3 \\| 0 \\| 3 \\| 0 \\| 0 \\| ${mcpA} x2, ${mcpB} x1 \\|`));
+    fs.rmSync(none.dir, { recursive: true, force: true });
+    fs.rmSync(some.dir, { recursive: true, force: true });
+  });
+
+  it("renders Denied as n/a for a Pi-only role", () => {
+    const md = formatMarkdownSummary({
+      summary: { totalTurns: 0 },
+      byModel: {},
+      sessions: [],
+      mcpUsageByRole: { pi: { calls: 0, byTool: {}, denied: null, bySessionCwd: { main: 0, worktree: 0, other: 0 } } },
+    });
+    assert.match(md, /\| \*\*pi\*\* \| 0 \| n\/a \| 0 \| 0 \| 0 \|/);
   });
 });

@@ -330,6 +330,30 @@ export function collectTranscriptFiles(targetPath) {
   return collectTranscriptFilesWithMetadata(targetPath).files;
 }
 
+function extractToolCalls(msg, blockType, cwd) {
+  return (Array.isArray(msg.content) ? msg.content : [])
+    .filter((block) => block?.type === blockType && typeof block.name === "string")
+    .map((block) => ({ id: block.id ?? null, name: block.name, cwd: typeof cwd === "string" ? cwd : null }));
+}
+
+const MCP_TOOL_NAME = /^mcp__(.+?)__(.+)$/;
+
+/**
+ * Class a call cwd against the main checkout root: worktree, main or other.
+ * @param {string | null} cwd
+ * @param {string} root
+ * @returns {"main" | "worktree" | "other"}
+ */
+function classifyCwd(cwd, root) {
+  if (typeof cwd !== "string") return "other";
+  if (cwd.startsWith(`${root}${path.sep}tmp${path.sep}worktrees${path.sep}`)) return "worktree";
+  return cwd === root || cwd.startsWith(`${root}${path.sep}`) ? "main" : "other";
+}
+
+function incrementCount(map, key) {
+  map[key] = (map[key] ?? 0) + 1;
+}
+
 /**
  * Build a turn from a Claude Code assistant usage envelope
  * (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`).
@@ -369,6 +393,8 @@ function buildClaudeTurn(data, msg, usage, currentAgent, segmentId) {
       totalTokens: componentTotal,
       cost: null, // Claude transcripts carry no cost; list-price estimation is out of scope.
     },
+    harness: "claude",
+    toolCalls: extractToolCalls(msg, "tool_use", data.cwd),
     // Cross-file identity for a resumed session's replayed history (see the audit-wide
     // dedupe Set in auditPiSession). Pi turns never set this.
     dedupeKey: messageId !== null ? `${messageId}:${requestId ?? ""}` : null,
@@ -432,6 +458,7 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
       inheritedTurnCount: 0,
       unresolvedForkBoundary: false,
       malformedLineCount: 0,
+      deniedToolUseIds: new Set(),
       harness: null,
       detectedOtherHarnesses: [],
     };
@@ -447,6 +474,8 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
   let forkBoundarySeen = false;
   let inheritedTurnCount = 0;
   let malformedLineCount = 0;
+  let sessionCwd = null;
+  const deniedToolUseIds = new Set();
   // Claude Code logs one record per content block; consecutive or interleaved records
   // sharing one message.id are one API call. Track each id's turn by index (in first-
   // appearance order) so a later record for the same id overwrites in place instead of
@@ -473,6 +502,7 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
       // run-0 transcript may contain many session_info records and is not a fork.
       if (data.type === "session" && !sessionHeaderSeen) {
         sessionHeaderSeen = true;
+        if (typeof data.cwd === "string") sessionCwd = data.cwd;
         isForkSnapshot = typeof data.parentSession === "string" && data.parentSession.length > 0;
         if (isForkSnapshot) {
           const parsedTimestamp = Date.parse(data.timestamp);
@@ -501,6 +531,15 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
         currentAgent = data.name;
       }
 
+      // Claude denial marker: a user record with toolDenialKind names the call by tool_use_id.
+      if (data.type === "user" && typeof data.toolDenialKind === "string" && data.toolDenialKind) {
+        for (const block of Array.isArray(data.message?.content) ? data.message.content : []) {
+          if (block?.type === "tool_result" && typeof block.tool_use_id === "string") {
+            deniedToolUseIds.add(block.tool_use_id);
+          }
+        }
+      }
+
       const isAssistant =
         (data.type === "message" && data.message?.role === "assistant") ||
         (data.type === "assistant" && data.message?.role === "assistant") ||
@@ -527,6 +566,7 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
             } else if (claudeTurnIndexById.has(messageId)) {
               // One record per content block: keep earlier blocks' dispatches.
               claudeTurn.dispatches.unshift(...turns[claudeTurnIndexById.get(messageId)].dispatches);
+              claudeTurn.toolCalls.unshift(...turns[claudeTurnIndexById.get(messageId)].toolCalls);
               turns[claudeTurnIndexById.get(messageId)] = claudeTurn;
             } else {
               claudeTurnIndexById.set(messageId, turns.length);
@@ -548,6 +588,8 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
               agent: data.agent || currentAgent || null,
               segmentId,
               promptTokens,
+              harness: "pi",
+              toolCalls: extractToolCalls(msg, "toolCall", sessionCwd),
               usage: {
                 input,
                 output,
@@ -578,6 +620,7 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
     inheritedTurnCount,
     unresolvedForkBoundary: isForkSnapshot && !forkBoundarySeen,
     malformedLineCount,
+    deniedToolUseIds,
     harness: fileHarness,
     detectedOtherHarnesses: [...detectedOtherHarnesses],
   };
@@ -704,6 +747,8 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
   }
 
   const sessions = [];
+  const mcpUsageByRole = Object.create(null);
+  const mainRoot = canonicalRepositoryRoot(process.cwd());
   const modelAggregates = Object.create(null);
   const overallAggregate = createUsageAggregate();
   const harnessesSeen = new Set();
@@ -803,6 +848,24 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
         sessionInfo: group.agent ? { name: group.agent } : null,
         agent: group.agent,
       });
+      const toolCalls = { calls: 0, byTool: {}, denied: null };
+      const roleUsage = (mcpUsageByRole[role] ??= { calls: 0, byTool: {}, denied: null, bySessionCwd: { main: 0, worktree: 0, other: 0 } });
+      for (const turn of group.turns) {
+        const isClaude = turn.harness === "claude";
+        if (isClaude && toolCalls.denied === null) toolCalls.denied = 0;
+        if (isClaude && roleUsage.denied === null) roleUsage.denied = 0;
+        for (const call of turn.toolCalls ?? []) {
+          const denied = isClaude && call.id !== null && parsed.deniedToolUseIds.has(call.id);
+          toolCalls.calls += 1;
+          incrementCount(toolCalls.byTool, call.name);
+          if (denied) toolCalls.denied += 1;
+          if (!MCP_TOOL_NAME.test(call.name)) continue;
+          roleUsage.calls += 1;
+          incrementCount(roleUsage.byTool, call.name);
+          if (denied) roleUsage.denied += 1;
+          roleUsage.bySessionCwd[classifyCwd(call.cwd, mainRoot)] += 1;
+        }
+      }
       sessions.push({
         file: path.relative(process.cwd(), file),
         role,
@@ -816,6 +879,7 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
         totalTokens: aggregateValue(sessionAggregate, "totalTokens"),
         cost: roundCost(aggregateValue(sessionAggregate, "cost")),
         availability: sessionAvailability(sessionAggregate),
+        toolCalls,
         snowball: {
           initialPromptTokens,
           finalPromptTokens,
@@ -882,6 +946,7 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
       unresolvedForkBoundaries,
     },
     byModel: modelAggregation,
+    mcpUsageByRole: { ...mcpUsageByRole },
     sessions,
   };
 }
@@ -992,6 +1057,22 @@ export function formatMarkdownSummary(auditResult) {
     const growth = s.snowball.promptGrowthFactor === null ? "n/a" : `${s.snowball.promptGrowthFactor}x`;
     lines.push(
       `| **${escapeMarkdown(s.role)}** | ${s.turnCount} | ${modelsStr} | ${formatTokenCount(s.totalTokens, s.availability?.totalTokens)} | ${formatTokenCount(s.cacheWriteTokens, s.availability?.cacheWriteTokens)} | ${formatRatio(s.snowball.cacheHitRatio, s.availability?.cacheHitRatio)} | ${formatTokenCount(s.snowball.initialPromptTokens)} | ${formatTokenCount(s.snowball.finalPromptTokens)} | ${growth} |`
+    );
+  }
+  lines.push("");
+
+  lines.push("### MCP usage by role");
+  lines.push("");
+  lines.push("| Role | MCP calls | Denied | main | worktree | other | Tools |");
+  lines.push("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |");
+  for (const [role, usage] of Object.entries(auditResult.mcpUsageByRole ?? {})) {
+    const tools = Object.entries(usage.byTool)
+      .sort(([nameA, countA], [nameB, countB]) => countB - countA || (nameA < nameB ? -1 : nameA > nameB ? 1 : 0))
+      .map(([name, count]) => `${escapeMarkdown(name)} x${count}`)
+      .join(", ");
+    const { main, worktree, other } = usage.bySessionCwd;
+    lines.push(
+      `| **${escapeMarkdown(role)}** | ${usage.calls} | ${usage.denied ?? "n/a"} | ${main} | ${worktree} | ${other} | ${tools} |`
     );
   }
   lines.push("");
