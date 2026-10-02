@@ -25,6 +25,9 @@ export const LANDING = { file: 'introducing-dev-loops.html' };
 // to docs/articles/; navLabel is how the nav refers to it.
 export const ARTICLES = [
   { file: 'dev-loops-deep-dive.html', navLabel: 'Deep dive' },
+  // The simulator pages: simulator.html is linked from the nav, simulator-overview.html from it.
+  { file: 'simulator.html' },
+  { file: 'simulator-overview.html' },
 ];
 
 // The decks to publish. file is relative to docs/presentations/; outFile is the
@@ -161,15 +164,15 @@ async function prepareOutputDirectory(repoRoot, outDir) {
   await writeFile(join(outDir, OUTPUT_MARKER), OUTPUT_MARKER_CONTENT, 'utf8');
 }
 
-// The State atlas: a generated page (site/state-atlas.html) rendering every
+// The State atlas (built, but linked from the simulator footer rather than the nav): a generated page (site/state-atlas.html) rendering every
 // dev-loops state machine as mermaid diagrams straight from the code's tables.
 export const STATE_ATLAS = { file: 'state-atlas.html', label: 'State atlas' };
 
 // The other resources linked from the navigation, in order.
 export const NAV_LINKS = [
-  ...ARTICLES.map((a) => ({ file: a.file, label: a.navLabel })),
+  ...ARTICLES.filter((a) => a.navLabel).map((a) => ({ file: a.file, label: a.navLabel })),
   ...DECKS.map((d) => ({ file: deckOut(d), label: d.navLabel })),
-  { file: STATE_ATLAS.file, label: STATE_ATLAS.label },
+  { file: 'simulator.html', label: 'Simulator' },
 ];
 
 // Nav styling, appended to each article page's own <style> block so it reuses
@@ -177,9 +180,9 @@ export const NAV_LINKS = [
 const NAV_CSS = `
   .site-nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1.1rem; max-width: 48rem; margin: 0 auto; padding: 0.9rem clamp(1.1rem, 5vw, 2rem); border-bottom: 1px solid rgba(148, 163, 184, 0.16); }
   @media (min-width: 900px) { .site-nav { max-width: 56rem; } }
-  .site-nav-brand { font-weight: 700; letter-spacing: -0.01em; color: var(--heading); text-decoration: none; border: 0; margin-right: auto; }
+  .site-nav-brand { font-weight: 700; letter-spacing: -0.01em; color: var(--heading, var(--ink)); text-decoration: none; border: 0; margin-right: auto; }
   .site-nav-links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.1rem; }
-  .site-nav a { color: var(--kicker); text-decoration: none; font-size: 0.9rem; border: 0; }
+  .site-nav a { color: var(--kicker, var(--ink2)); text-decoration: none; font-size: 0.9rem; border: 0; }
   .site-nav a:hover { color: var(--accent-soft); }
   .site-nav-gh { display: inline-flex; align-items: center; }
   .site-nav-gh svg { width: 1.125rem; height: 1.125rem; fill: currentColor; display: block; }`;
