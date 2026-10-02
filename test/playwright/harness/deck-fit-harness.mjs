@@ -473,6 +473,10 @@ export const ARTICLE_REGISTRY = {
     sliceId: "simulator-overview-article",
     file: "simulator-overview.html",
   },
+  "workflow-examples": {
+    sliceId: "workflow-examples",
+    file: "assets/workflow-models",
+  },
 };
 
 export function articleRegistryEntry(key) {

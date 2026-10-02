@@ -46,6 +46,7 @@ export const REGISTERED_ARTIFACT_SUITES = Object.freeze({
   "docs/articles/how-dev-loops-decided-itself.html": "how-decided-article",
   "docs/articles/simulator.html": "simulator-article",
   "docs/articles/simulator-overview.html": "simulator-overview-article",
+  "docs/articles/assets/workflow-models": "workflow-examples",
 });
 export const REGISTERED_ARTIFACT_PATHS = Object.freeze(Object.keys(REGISTERED_ARTIFACT_SUITES));
 
@@ -81,6 +82,9 @@ export function classifyRenderedArtifactPath(filePath) {
 
   if (VIEWER_SOURCE_PATHS.includes(normalized)) {
     return { path: normalized, kind: "viewer", id: VIEWER_ARTIFACT_ID, registered: true };
+  }
+  if (normalized === "docs/articles/assets/workflow-models" || normalized === "scripts/pages/workflow-examples.mjs" || normalized.startsWith("docs/articles/assets/workflow-models/")) {
+    return { path: normalized, kind: "article", id: "docs/articles/assets/workflow-models", registered: true };
   }
 
   for (const glob of RENDERED_ARTIFACT_GLOBS) {

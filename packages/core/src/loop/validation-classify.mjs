@@ -55,7 +55,9 @@ export function resolveTargetedValidation(paths) {
     if (path.startsWith("packages/core/")) return ["core", "bun run assets:check", "bun run test:core"];
     if (/^test\/(?:loop|github|docs|projects|pages|security)\/[^/]+\.test\.mjs$/.test(path)) return /^test\/(?:loop|github|docs|projects|pages|security)\/[A-Za-z0-9._-]+\.test\.mjs$/.test(path) ? ["scripts", `bun scripts/run-bun-test.mjs ${path}`] : null;
     if (path === "scripts/claude/generate-claude-assets.mjs") return ["generated", "bun run assets:check", "bun run test:doc-guard"];
+    if (path === "docs/articles/simulator.html") return ["ui", "bun run test:playwright:simulator-article", "bun run test:playwright:workflow-examples"];
     if (REGISTERED_ARTIFACT_SUITES[path]) return ["ui", `bun run test:playwright:${REGISTERED_ARTIFACT_SUITES[path]}`];
+    if (path === "scripts/pages/workflow-examples.mjs" || path.startsWith("docs/articles/assets/workflow-models/")) return ["ui", "bun run test:playwright:workflow-examples"];
     if (/^docs\/(?:presentations|articles)\/[^/]+\.html$/.test(path)) return null;
     if (path.startsWith("test/playwright/") && path.endsWith(".spec.mjs")) {
       const suite = path.slice("test/playwright/".length, -".spec.mjs".length);

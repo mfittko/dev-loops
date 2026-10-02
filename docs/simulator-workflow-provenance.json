@@ -1,0 +1,161 @@
+{
+  "researchDate": "2026-10-02",
+  "selection": "Twelve curated hybrid software/product workflows; no archive",
+  "adaptations": "ES-module createModel factory; prototype comment removal and production-label changes only. Handler/data semantics preserved. QA Wolf, EvalGen and UXAgent source identities include producer-authorized +80 x0 geometry correction. Incident source identity includes producer-authorized root x0=180/viewBox width=1440 correction; nodes/edges/handlers/scenarios unchanged. Seven originally flagged benign bibliographic lines use the existing reasoned same-line source-reference exception policy; citation-only reflow isolates each reference, leaving all URL literals intact.",
+  "frozenProducerEnvelope": {
+    "scope": "Producer-local reference runtime only; not production verification",
+    "modelManifestArtifact": "agent-workflow-promotion-model-manifest-12.json",
+    "modelManifestSha256": "86a66d2b8a0ea7975948036527710ceb460470e01a9045289729cb56c66f33a7",
+    "interfaceManifestArtifact": "agent-workflow-promotion-manifest.md",
+    "interfaceManifestSha256": "bc37d0ac3486aae47efdec5d2e575afc68791f3af1d5f3dcb686170680f26fdc",
+    "summaryArtifact": "agent-workflow-final-promotion-proof-12.json",
+    "summarySha256": "c0a87ac25a3b8089838c015f18700bbc279bbba0e8ebae77e174d3da29066125",
+    "observedNativePaths": 45,
+    "selectedModels": 12,
+    "graphs": 64,
+    "desktopMobileEntrySurfaces": 24,
+    "graphSurfacesWithoutViewBoxClipping": 128
+  },
+  "incidentUpstreamEvidence": {
+    "scope": "Producer-local reference runtime only; not production verification",
+    "nativeProofArtifact": "agent-incident-response-canonical-native-proof.json",
+    "nativeProofSha256": "bae6f92ba6380e8e36d080b335ef35da4c65adc44671096ce80ce285077ae7d8",
+    "preservedScenarios": 10,
+    "humanConsentArtifact": "agent-incident-response-canonical-human-consent-proof.json",
+    "humanConsentSha256": "a1d099f632a914a4f4351970a2cd59a06e11af15fa58070924e5ec62b10b288d",
+    "nativeHumanConsentChecks": 7
+  },
+  "excluded": [
+    "Strateegia",
+    "Stripe Minions",
+    "nine other cross-industry models (incident response is selected)",
+    "agent-loop and agent-task atlas assets",
+    "spike assembler and generated engine",
+    "frozen original Simulator snapshots",
+    "archive page, navigation and output"
+  ],
+  "models": [
+    {
+      "slug": "conveyor-belt",
+      "sourceSha256": "820de0c76b6898142b7454ed5b29ba95b8cdcc42775a5d45ecf50e1d1d38e3cf",
+      "productionSha256": "29c4db5687c937b13b19d1fa7c7461ac1d7a7ab95925cdb2d9aa23c9906f18f1",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Production labels; all execution/source limitations retained"
+      ]
+    },
+    {
+      "slug": "collaborative-grilling",
+      "sourceSha256": "57c8a7ff8319ebc6537505cbc14fd0de99701ed4d852cd02b402f8c0befef0c1",
+      "productionSha256": "11268097c3eaf1604f27d90076c5ddc7b580c440031662936f8d2ed795d109e8",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Production labels; all execution/source limitations retained"
+      ]
+    },
+    {
+      "slug": "magentic-ui",
+      "sourceSha256": "08a0f43a73488e1b30df049ad26b4fc5dcb397f029044bf49021c13d324869b1",
+      "productionSha256": "af0db3000e298fc6f17c1b635379de6b51caaf0fef365df26415b86d3554674a",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Production labels; all execution/source limitations retained"
+      ]
+    },
+    {
+      "slug": "open-swe",
+      "sourceSha256": "be020069448b07474f562eb8b0cc1e167e18a29046b22fc71efec3624a235d7a",
+      "productionSha256": "aca1e542aaa80946f7d6cfe71546db9f3e2f90f8e58a05e6fc6d68b9aa2e274f",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Production labels; all execution/source limitations retained"
+      ]
+    },
+    {
+      "slug": "qa-wolf-mapping-ai",
+      "sourceSha256": "db2b623f0de650be419f5ed9319d6ab395f87d0099c4880f52cd6afa3c280361",
+      "productionSha256": "b389218adcb5005f6860355143f5c29a354e3bf8bfd8c07515c10bd15756281d",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Production labels; all execution/source limitations retained"
+      ]
+    },
+    {
+      "slug": "playwright-test-agents",
+      "sourceSha256": "a3b0deb22afcde59cd4ed53e720637cd6817420a15107ca940fdbbca027b2233",
+      "productionSha256": "1c433c125b83aa7bf01d1ce12fc8e724d87850774d99799746af357df78a6cfa",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Production labels; all execution/source limitations retained"
+      ]
+    },
+    {
+      "slug": "meta-ach",
+      "sourceSha256": "a5ceceac42680fbf99eefa72db5b2b4687586ec3a9d2b76af28c7dd233ac0426",
+      "productionSha256": "d92af814c21e98c41660fd8cf7eceec8c96f26d432a8ebf6a9ac38c96f4c43f2",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Production labels; all execution/source limitations retained"
+      ]
+    },
+    {
+      "slug": "evalgen",
+      "sourceSha256": "7866d7a8f017e18305cdea761b9e0cd67f83790ec21dedd1cfa54203058fc146",
+      "productionSha256": "06ea3c84705149316baf40b065304f7f9f4a6217bde81a34bdc62a1f3ef1376a",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Production labels; all execution/source limitations retained"
+      ]
+    },
+    {
+      "slug": "uxagent",
+      "sourceSha256": "d4d4c40470c2bc008ba6393d07469e48936c5e2d19cccf51d6279df9f321f66d",
+      "productionSha256": "c5d1d9a814e3ec2a891ef704f9e9a099737422c35e218bf3c53961f8fdd58b17",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Production labels; all execution/source limitations retained"
+      ]
+    },
+    {
+      "slug": "conversational-ux-coanalysis",
+      "sourceSha256": "683856ae8575afed9d13c7bf726cad81959ee1cbd2a0ae477687f073565c708f",
+      "productionSha256": "6a91d5006e3ede0a2bed3f97acc5c35d17ba6b182968e90d214e090b4602f9fc",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Production labels; all execution/source limitations retained"
+      ]
+    },
+    {
+      "slug": "product-design-frontend",
+      "sourceSha256": "32c6fe03e9a2e61c998bbbfb4d8cdbccb6f6c0cc7916c2320b1119ba8de34f46",
+      "productionSha256": "9bf50c3518a6fd9ef095f95017fe93fa27334ac7745ba4bb959efeda67f6c10b",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Production labels; all execution/source limitations retained"
+      ]
+    },
+    {
+      "slug": "incident-response",
+      "sourceSha256": "5ceefea9166c996386b31858d6e490c189c0c14aa0941694d33ae80466ef4d3e",
+      "productionSha256": "4ccf30af1f50c37f812a2dbbed9dd46903409fe9880f60e01a1175065103eb90",
+      "adaptations": [
+        "ES-module factory with isolated profile data",
+        "Removed prototype-only leading comments",
+        "Final producer root-canvas correction retained",
+        "All five graphs and scenarios 1–10 retained; no engine/HTML/archive copied",
+        "Deployment-specific approval policy is explicitly proposed; no real production operations"
+      ]
+    }
+  ]
+}

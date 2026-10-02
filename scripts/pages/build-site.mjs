@@ -12,6 +12,7 @@ import { lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:f
 import { dirname, join, posix, relative, resolve, sep, parse as parsePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildStateAtlasHtml } from './build-state-atlas.mjs';
+import { WORKFLOW_EXAMPLES, renderWorkflowExample } from './workflow-examples.mjs';
 
 const REPO_ROOT_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OUTPUT_MARKER = '.dev-loops-pages-output';
@@ -25,7 +26,7 @@ export const LANDING = { file: 'introducing-dev-loops.html' };
 // to docs/articles/; navLabel is how the nav refers to it.
 export const ARTICLES = [
   { file: 'dev-loops-deep-dive.html', navLabel: 'Deep dive' },
-  // The simulator pages: simulator.html is linked from the nav, simulator-overview.html from it.
+  // The lifecycle overview is the Simulator entrypoint; the detailed route stays directly available.
   { file: 'simulator.html' },
   { file: 'simulator-overview.html' },
 ];
@@ -172,7 +173,7 @@ export const STATE_ATLAS = { file: 'state-atlas.html', label: 'State atlas' };
 export const NAV_LINKS = [
   ...ARTICLES.filter((a) => a.navLabel).map((a) => ({ file: a.file, label: a.navLabel })),
   ...DECKS.map((d) => ({ file: deckOut(d), label: d.navLabel })),
-  { file: 'simulator.html', label: 'Simulator' },
+  { file: 'simulator-overview.html', label: 'Simulator' },
 ];
 
 // Nav styling, appended to each article page's own <style> block so it reuses
@@ -230,7 +231,7 @@ export function injectNav(html, repoUrl, publishedFile) {
     throw new Error('cannot inject nav: page is missing a <style> block or <body> tag');
   }
   // Simulator --accent-soft is a background tint, not a link foreground.
-  const navCss = publishedFile === 'simulator.html' || publishedFile === 'simulator-overview.html'
+  const navCss = publishedFile === 'simulator.html' || publishedFile === 'simulator-overview.html' || publishedFile?.startsWith('workflow-')
     ? `${NAV_CSS}\n  .site-nav a:hover { color: var(--accent); }`
     : NAV_CSS;
   return html
@@ -252,6 +253,7 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
     ...ARTICLES.map((a) => a.file),
     ...DECKS.map((d) => deckOut(d)),
     STATE_ATLAS.file,
+    ...WORKFLOW_EXAMPLES.flatMap(example => [example.file, example.asset]),
     'assets/mermaid.min.js',
     OUTPUT_MARKER,
   ];
@@ -276,6 +278,9 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   const landingOutput = injectNav(landingHtml, repoUrl);
   const articleOutput = articleHtml.map((html, index) => injectNav(html, repoUrl, ARTICLES[index].file));
   const stateAtlasOutput = injectNav(buildStateAtlasHtml(), repoUrl);
+  const simulatorTemplate = articleHtml[ARTICLES.findIndex(article => article.file === 'simulator.html')];
+  const workflowOutput = WORKFLOW_EXAMPLES.map(example => injectNav(renderWorkflowExample(simulatorTemplate, example), repoUrl, example.file));
+  const workflowBytes = await Promise.all(WORKFLOW_EXAMPLES.map(example => readFile(join(articlesDir, example.asset))));
 
   await prepareOutputDirectory(root, out);
 
@@ -300,6 +305,11 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   // load it as an external asset rather than inlining ~3MB into the page).
   await mkdir(join(out, 'assets'), { recursive: true });
   await writeFile(join(out, 'assets', 'mermaid.min.js'), mermaidBytes);
+  await mkdir(join(out, 'assets', 'workflow-models'), { recursive: true });
+  for (const [index, example] of WORKFLOW_EXAMPLES.entries()) {
+    await writeFile(join(out, example.file), workflowOutput[index], 'utf8');
+    await writeFile(join(out, example.asset), workflowBytes[index]);
+  }
 
   return {
     out,

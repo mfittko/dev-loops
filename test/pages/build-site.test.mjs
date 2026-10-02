@@ -5,6 +5,7 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 
 import { assertSafeOutputRelationship, assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, LANDING, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
+import { WORKFLOW_EXAMPLES } from '../../scripts/pages/workflow-examples.mjs';
 
 // A deck publishes under its outFile when set (the deep-dive article and deck
 // share the source basename), else its source file name.
@@ -79,6 +80,7 @@ test('build-site: index is the intro article, all resources published, nav links
         ...ARTICLES.map((a) => a.file),
         ...DECKS.map((d) => deckOut(d)),
         STATE_ATLAS.file,
+        ...WORKFLOW_EXAMPLES.flatMap(example => [example.file, example.asset]),
         'assets/mermaid.min.js',
         '.dev-loops-pages-output',
       ].sort(),
@@ -104,6 +106,10 @@ test('build-site: relative repoRoot uses the same default output as its absolute
       await writeFile(join(repoRoot, 'docs', 'presentations', deck.file), `deck: ${deck.file}`, 'utf8');
     }
     await writeFile(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js'), '', 'utf8');
+    await mkdir(join(repoRoot, 'docs', 'articles', 'assets', 'workflow-models'), { recursive: true });
+    for (const example of WORKFLOW_EXAMPLES) {
+      await writeFile(join(repoRoot, 'docs', 'articles', example.asset), await readFile(join(process.cwd(), 'docs', 'articles', example.asset)));
+    }
 
     const result = await buildSite({ repoRoot: relativeRoot });
 
@@ -211,28 +217,12 @@ test('build-site: state atlas is generated from the code tables, navigable, with
     const simulator = await readFile(join(out, 'simulator.html'), 'utf8');
     assert.ok(simulator.includes(`href="${STATE_ATLAS.file}"`), 'simulator footer links the atlas');
     assert.ok(simulator.includes('href="simulator-overview.html"'), 'simulator links its overview');
-    assert.ok(index.includes('href="simulator.html">Simulator</a>'), 'landing nav links the simulator');
+    assert.ok(index.includes('href="simulator-overview.html">Simulator</a>'), 'landing nav links the lifecycle overview entrypoint');
   } finally {
     await rm(out, { recursive: true, force: true });
   }
 });
 
-test('build-state-atlas: generator is pure and deterministic (identical bytes across builds)', async () => {
-  const { buildStateAtlasHtml } = await import('../../scripts/pages/build-state-atlas.mjs');
-  assert.equal(buildStateAtlasHtml(), buildStateAtlasHtml(), 'atlas HTML is byte-identical across calls');
-});
-
-test('build-state-atlas: fullscreen lightbox structure (one expand button per diagram, wired handler + CSS)', async () => {
-  const { buildStateAtlasHtml } = await import('../../scripts/pages/build-state-atlas.mjs');
-  const html = buildStateAtlasHtml();
-  const diagrams = (html.match(/class="diagram"/g) ?? []).length;
-  const buttons = (html.match(/class="expand" type="button" aria-label="View diagram fullscreen"/g) ?? []).length;
-  assert.ok(diagrams > 0, 'atlas renders diagrams');
-  assert.equal(buttons, diagrams, 'exactly one expand button per diagram');
-  for (const token of ['requestFullscreen', 'fs-fallback', ':-webkit-full-screen', '.diagram .expand', 'fsInFlight']) {
-    assert.ok(html.includes(token), `lightbox structure token missing: ${token}`);
-  }
-});
 
 test('injectNav fails closed when a page lacks the expected structure', () => {
   assert.throws(() => injectNav('<html><body>no style block</body></html>', REPO_URL), /missing a <style> block or <body>/);

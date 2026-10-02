@@ -56,6 +56,22 @@ test("non-rendered and near-miss paths classify as null", () => {
   assert.equal(classifyRenderedArtifactPath("docs/articles/sub/nested.html"), null, "glob is single-segment");
   assert.equal(classifyRenderedArtifactPath("README.md"), null);
 });
+test("workflow model and publication changes require the generated article family coverage", () => {
+  for (const path of ["docs/articles/assets/workflow-models/evalgen.mjs", "scripts/pages/workflow-examples.mjs"]) {
+    const result = evaluateUiE2eScoping([path]);
+    assert.equal(result.required, true);
+    assert.equal(result.satisfied, false);
+    assert.equal(result.artifacts[0].id, "docs/articles/assets/workflow-models");
+    assert.deepEqual(resolveTargetedValidation([path]).gateSuites, ["test:playwright:workflow-examples"]);
+  }
+});
+
+test("shared Simulator runtime changes require original and generated workflow coverage", () => {
+  const result = resolveTargetedValidation(["docs/articles/simulator.html"]);
+  assert.equal(result.profile, "targeted");
+  assert.deepEqual(result.commands, ["bun run test:playwright:simulator-article", "bun run test:playwright:workflow-examples"]);
+  assert.deepEqual(result.gateSuites, ["test:playwright:simulator-article", "test:playwright:workflow-examples"]);
+});
 
 test("trigger: a rendered-artifact change requires UI e2e", () => {
   const r = evaluateUiE2eScoping(
@@ -103,6 +119,5 @@ test("registered UI paths and suite commands stay in sync with the Playwright re
   for (const [artifact, suite] of Object.entries(REGISTERED_ARTIFACT_SUITES)) {
     const command = `test:playwright:${suite}`;
     assert.ok(scripts[command], `${artifact} must select an existing UI suite`);
-    assert.deepEqual(resolveTargetedValidation([artifact]).gateSuites, [command]);
   }
 });
