@@ -15,22 +15,23 @@ import {
   isSkillExcludedFromClaude,
 } from "../src/claude/asset-generation.mjs";
 
-test("rewriteCliInvocation pins the package-local CLI to npx dev-loops@<version> (#801, #833)", () => {
+test("rewriteCliInvocation renders the package-local CLI as the launcher form", () => {
   const body = "Run `node <dev-loops-package-root>/cli/index.mjs loop info` and `node <dev-loops-package-root>/cli/index.mjs loop startup`.";
-  const out = rewriteCliInvocation(body, "0.2.6");
+  const out = rewriteCliInvocation(body);
   assert.equal(out.includes("node <dev-loops-package-root>/cli/index.mjs"), false);
-  assert.equal((out.match(/npx dev-loops@0\.2\.6/g) ?? []).length, 2, "every token is rewritten");
+  assert.equal((out.match(/dev-loops-run cli\/index\.mjs loop /g) ?? []).length, 2, "every token is rewritten");
+  assert.equal(out.includes("npx"), false);
 });
 
-test("transformAgent and transformSkill rewrite the package-local CLI form to the pinned npx form", () => {
+test("transformAgent and transformSkill rewrite the package-local CLI form to the launcher form", () => {
   const agentRaw = `---\nname: a\ndescription: d\ntools: [read]\n---\nRun \`node <dev-loops-package-root>/cli/index.mjs loop startup\`.\n`;
   const agent = transformAgent({ source: "agents/a.agent.md", raw: agentRaw, version: "1.2.3" });
-  assert.ok(agent.includes("npx dev-loops@1.2.3 loop startup"));
+  assert.ok(agent.includes("dev-loops-run cli/index.mjs loop startup"));
   assert.equal(agent.includes("<dev-loops-package-root>"), false);
 
   const skillRaw = `---\nname: s\ndescription: d\nallowed-tools: read\n---\nRun \`node <dev-loops-package-root>/cli/index.mjs loop info\`.\n`;
   const skill = transformSkill({ source: "skills/s/SKILL.md", raw: skillRaw, version: "1.2.3" });
-  assert.ok(skill.includes("npx dev-loops@1.2.3 loop info"));
+  assert.ok(skill.includes("dev-loops-run cli/index.mjs loop info"));
   assert.equal(skill.includes("<dev-loops-package-root>"), false);
 });
 
@@ -178,7 +179,7 @@ test("transformCommand keeps description+argument-hint, rewrites CLI, adds banne
   const out = transformCommand({ source: "commands/info.command.md", raw, version: "1.2.3" });
   assert.match(out, /^---\ndescription: "Show state\."\nargument-hint: "<issue\|pr>"\n---\n/);
   assert.match(out, /<!-- GENERATED from commands\/info\.command\.md by/);
-  assert.ok(out.includes("npx dev-loops@1.2.3 loop info --issue $ARGUMENTS"));
+  assert.ok(out.includes("dev-loops-run cli/index.mjs loop info --issue $ARGUMENTS"));
   assert.equal(out.includes("<dev-loops-package-root>"), false);
 });
 
