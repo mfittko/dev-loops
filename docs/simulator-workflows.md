@@ -28,6 +28,8 @@ Use repository-pinned Bun 1.4.1. Node >=24 remains the consumer/site-builder run
 
 ```sh
 bun scripts/run-bun-test.mjs test/pages/build-site.test.mjs test/pages/workflow-examples.test.mjs packages/core/test/ui-e2e-scoping.test.mjs test/loop/rendered-artifact-ci-changes.test.mjs
+bun scripts/run-bun-test.mjs test/pages/conveyor-belt.test.mjs test/pages/collaborative-grilling.test.mjs
+bun run test:playwright:workflow-examples --grep 'conveyor-belt'
 bun run test:playwright:workflow-examples
 bun run test:playwright:simulator-article
 bun run test:playwright:simulator-overview-article
@@ -41,5 +43,7 @@ Checkout paths also distinguish a local frontend code repair from Design revisio
 Incident-response coverage retains scenarios 1–10: local hypothesis and sandbox rework, rollback/re-diagnosis with fresh deployment-specific approval, access handoff, denied authorization, bounded unrecovered service, evidence recollection and health resampling. Missing, stale or premature authorization cannot spend a deployment or permit an apply; Back restores consumed approval and counters without changing live inputs.
 
 Collaborative Grilling's production decision selectors name proposals 1–3 explicitly. A revised scope decision and joint resolution must match the current proposal; pending or stale values leave the affected records unresolved without spending budgets. Unchanged knowledge, exclusions, accepted risk and dissent retain their provenance. This intentional production guard repair is recorded separately from the frozen producer source.
+
+Conveyor's design evidence must name the current design version; editorial readiness and the joint source-sheet check must name the current initiative version. Native positive inputs cover every initiative version 1–4. Pending or stale inputs WAIT without spending budgets. Technical-only revisions retain independent stakeholder/design decisions; direction reshape retains unaffected technical evidence. A new technical CALL resets its shared invocation-local probe count, while local loops, return consumption and retained evidence leave it alone. Desktop/mobile regressions exercise stale/current native contributions, exact Back replay across new CALLs and input resumes, two probes in each capped invocation, and preparation/interpretation through initiative 4. These intentional production repairs do not alter the original teaching model or frozen upstream provenance.
 
 The detailed graph scroll area is a named keyboard-focusable region, including leaf graphs and full-window display. Its four arrow keys use native DOM scrolling on the actual overflow owner without stepping execution or Back; this also works where WebKit's default arrow action does not pan. Other established shortcuts remain unchanged.
