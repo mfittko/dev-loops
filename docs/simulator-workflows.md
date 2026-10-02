@@ -2,6 +2,8 @@
 
 The primary published entrypoint is `simulator-overview.html`. Its visible workflow-examples link opens the common **Agent workflow examples** chooser on `simulator.html#examples`, with all twelve separate `workflow-<slug>.html` pages. Overview is the first/left paired view, Detailed the second/right; both stable URLs retain their original models and default scenarios. Each example includes its concrete lifecycle, shared detailed controls, live records and trace, actor annotations, and a source/reference section. `state-atlas.html` remains available. No archive page, navigation or output is published.
 
+Simulator-family header navigation and the overall content container share the view's width token, preserving its gutters, full-bleed background and normal link gaps. A separate vertical gap keeps the paired-view controls below the header divider (24px desktop, 16px mobile). This scoped layout does not change unrelated Pages navigation, fullscreen graph bounds, models or default scenarios.
+
 ## One original runtime
 
 `docs/articles/simulator.html` is the only detailed Simulator runtime/template. `scripts/pages/workflow-examples.mjs` selects the curated profiles and supplies example titles, modeled-workflow context, sources and boundaries to that template. `scripts/pages/build-site.mjs` publishes each route and its selected module through the existing article/navigation pipeline. Generated example HTML is not separately maintained.
