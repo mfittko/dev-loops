@@ -49,7 +49,7 @@ jobs:
           GITHUB_OUTPUT="$GITHUB_OUTPUT" node scripts/loop/inspect-run-viewer-ci-changes.mjs .inspect-run-viewer-changed-files.txt
 
       # Deck/article fit smoke triggers (issue #976): a change to a rendered HTML
-      # artifact must run its fit/CSP smoke so the UI-e2e gate has a satisfiable
+      # artifact must run its fit/render smoke so the UI-e2e gate has a satisfiable
       # CI signal. No usable diff base → force both (fail-safe).
       - name: Determine whether deck/article smoke is required
         id: rendered-artifact-scope
@@ -217,3 +217,5 @@ jobs:
           bun run test:playwright:intro-article
           bun run test:playwright:deep-dive-article
           bun run test:playwright:how-decided-article
+          bun run test:playwright:simulator-article
+          bun run test:playwright:simulator-overview-article

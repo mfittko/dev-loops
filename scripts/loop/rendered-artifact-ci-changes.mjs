@@ -39,7 +39,7 @@ function isSingleHtml(path, directory) {
 export function classifyRenderedArtifactCiChanges(changedPaths = []) {
   const paths = [...new Set(changedPaths.map(normalizePath).filter(Boolean))].sort();
   const presentationPaths = paths.filter((path) => isCommon(path) || isSingleHtml(path, "docs/presentations") || /^test\/playwright\/[^/]*-deck\.spec\.mjs$/u.test(path));
-  const articlePaths = paths.filter((path) => isCommon(path) || isSingleHtml(path, "docs/articles") || /^test\/playwright\/[^/]*-article\.spec\.mjs$/u.test(path));
+  const articlePaths = paths.filter((path) => isCommon(path) || path === "test/playwright/harness/simulator-harness.mjs" || isSingleHtml(path, "docs/articles") || /^test\/playwright\/[^/]*-article\.spec\.mjs$/u.test(path));
   return {
     presentations: presentationPaths.length > 0,
     articles: articlePaths.length > 0,

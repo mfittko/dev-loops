@@ -171,11 +171,14 @@ guard above (reported separately, as `commitMsgGuard` in the result, since it
 guards message CONTENT rather than a branch). It enforces the commit-message
 contract at commit time instead of leaving it to agent discipline:
 
-- An agent-authored commit (`CLAUDECODE=1` in the environment — a plain
-  human commit is exempt, since it is never "Claude") carries
+- A Claude-authored commit (`CLAUDECODE=1` without `OMPCODE=1`) carries
   `Co-Authored-By: Claude <model> <noreply@anthropic.com>` in every
   repository, and carries a `Claude-Session:` trailer only when the
-  repository opts in (the key bullet below).
+  repository opts in (the key bullet below). omp sets `OMPCODE=1` alongside
+  a compatibility `CLAUDECODE=1`; its own marker takes precedence, so omp
+  commits are not forced to carry false Claude attribution. Plain human
+  commits are also exempt from the Claude-specific trailers. All commits
+  still undergo the subject and issue-reference checks below.
 - The key `worktree.commitMsgGuard.requireClaudeSession` opts a repository in
   to the `Claude-Session:` check. Its default is `false`. The value is read
   only from the `.devloops` family (`.devloops`, `.devloops.yaml`,
@@ -190,8 +193,9 @@ contract at commit time instead of leaving it to agent discipline:
   non-boolean value, so an unreadable policy never loosens the guard.
   `ensure-worktree.mjs` bakes the value into the hook at install time and the
   hook reads nothing at commit time, so a change takes effect on the next
-  `ensure-worktree.mjs` run. The `Co-Authored-By`, bare issue reference and
-  subject checks stay mandatory for both values. An agent may add the key as
+  `ensure-worktree.mjs` run. Claude-specific `Co-Authored-By` enforcement,
+  bare issue reference and subject checks do not depend on the key's value.
+  An agent may add the key as
   `true`. An agent never sets the key to `false`, never removes it, never
   changes `origin/HEAD` or a remote-tracking ref to change the read, and never
   skips the session check with an environment variable, git config or the
