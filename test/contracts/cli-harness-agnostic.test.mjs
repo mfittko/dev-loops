@@ -99,6 +99,8 @@ const ASYNC_START_TEST = path.join("packages", "core", "test", "async-start-cont
 // CLI integration test injects native markers into a child to verify the public startup boundary.
 const STARTUP_CLI_TEST = path.join("test", "loop", "resolve-dev-loop-startup-cli-contract.test.mjs");
 const RUN_CONTEXT_GENERATED = path.join(".claude", "hooks", "_run-context.mjs");
+// Commit-msg guard test clears inherited harness session vars from its git env and sets them to cover each harness.
+const COMMIT_MSG_GUARD_TEST = path.join("packages", "core", "test", "commit-msg-guard.test.mjs");
 
 /**
  * `PI_*` vars the Pi runtime injects, mapped to the files allowed to read them.
@@ -131,7 +133,7 @@ const HARNESS_RUNTIME_ENV = new Map([
   // PI_SESSION_ID is Pi's per-child session id, injected into every Pi shell (the main agent's
   // included), so it is not async-start evidence — the run-context module reads it only as the
   // per-child identity that keeps sibling native children from sharing one synthesized run id.
-  ["PI_SESSION_ID", [RUN_CONTEXT, RUN_CONTEXT_TEST, RUN_CONTEXT_GENERATED]],
+  ["PI_SESSION_ID", [RUN_CONTEXT, RUN_CONTEXT_TEST, RUN_CONTEXT_GENERATED, COMMIT_MSG_GUARD_TEST]],
   ["PI_SESSION", [PI_ADAPTER, PI_ADAPTER_TEST]], // inside-Pi detection
   ["PI_INTERACTIVE", [PI_ADAPTER, PI_ADAPTER_TEST]], // interactivity override
   ["PI_AGENT_SESSIONS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi session dir

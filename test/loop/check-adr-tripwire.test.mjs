@@ -690,3 +690,87 @@ test("round-5 fix pinned: same-line following marker bounds the modality window"
   assert.equal(m.get("R-ONE"), null);
   assert.equal(m.get("R-TWO"), "must");
 });
+
+// ── commit-msg-guard-loosening (#2605) ────────────────────────────────────
+
+const GUARD_ON = "version: 1\nworktree:\n  commitMsgGuard:\n    requireClaudeSession: true\n";
+const GUARD_OFF = "version: 1\nworktree:\n  commitMsgGuard:\n    requireClaudeSession: false\n";
+const GUARD_ABSENT = "version: 1\n";
+
+function guardDiff(status, base, head, extra = {}) {
+  return computeAdrTripwire({
+    nameStatusOutput: ns([`${status}\t` + DEVLOOPS_CONFIG_PATH]),
+    baseContents: base == null ? {} : { [DEVLOOPS_CONFIG_PATH]: base },
+    headContents: head == null ? {} : { [DEVLOOPS_CONFIG_PATH]: head },
+    ...extra,
+  });
+}
+
+test("loosening requireClaudeSession (set false, key removed, file removed) blocks", () => {
+  for (const [status, head] of [["M", GUARD_OFF], ["M", GUARD_ABSENT], ["D", null]]) {
+    const r = guardDiff(status, GUARD_ON, head);
+    assert.equal(r.outcome, "block");
+    assert.ok(r.triggers.some((t) => t.type === "commit-msg-guard-loosening"));
+  }
+});
+
+test("loosening from an unparseable or non-boolean base value blocks", () => {
+  const nonBoolean = GUARD_ON.replace("true", "\"true\"");
+  const unparseable = "a: [unclosed\n";
+  for (const base of [nonBoolean, unparseable]) {
+    for (const [status, head] of [["M", GUARD_OFF], ["M", GUARD_ABSENT], ["D", null]]) {
+      const r = guardDiff(status, base, head);
+      assert.equal(r.outcome, "block");
+      assert.ok(r.triggers.some((t) => t.type === "commit-msg-guard-loosening"));
+    }
+  }
+});
+
+test("opting in or leaving requireClaudeSession unchanged passes", () => {
+  for (const [status, base, head] of [["M", GUARD_ABSENT, GUARD_ON], ["M", GUARD_OFF, GUARD_ON], ["A", null, GUARD_ON], ["M", GUARD_ON, GUARD_ON + "# c\n"]]) {
+    const r = guardDiff(status, base, head);
+    assert.equal(r.outcome, "pass");
+    assert.deepEqual(r.triggers, []);
+  }
+});
+
+test("a loosening is satisfied by a decision record or the waiver", () => {
+  const adr = guardDiff("M", GUARD_ON, GUARD_OFF);
+  assert.equal(adr.outcome, "block");
+  const withAdr = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH, "A\t" + ADR_FILE]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: GUARD_ON },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: GUARD_OFF },
+  });
+  assert.equal(withAdr.satisfiedBy, "adr");
+  const waived = guardDiff("M", GUARD_ON, GUARD_OFF, { prBody: "adr-tripwire:allow operator opted out" });
+  assert.equal(waived.satisfiedBy, "waiver");
+});
+
+test("a new key-less .devloops shadowing an unchanged .devloops.yaml that sets the key blocks", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["A\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { ".devloops.yaml": GUARD_ON },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: GUARD_ABSENT, ".devloops.yaml": GUARD_ON },
+  });
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "commit-msg-guard-loosening"));
+});
+
+test("evaluateAdrTripwire (#2605): a real key-less .devloops shadowing an unchanged .devloops.yaml that sets the key blocks", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "adr-guard-shadow-"));
+  try {
+    const fixture = path.join(tmp, "repo");
+    await mkdir(fixture, { recursive: true });
+    execSync("git init -q -b main && git config user.email t@t && git config user.name t", { cwd: fixture, stdio: "ignore" });
+    await writeFile(path.join(fixture, ".devloops.yaml"), GUARD_ON);
+    execSync("git add . && git commit -qm base && git branch base", { cwd: fixture, stdio: "ignore" });
+    await writeFile(path.join(fixture, DEVLOOPS_CONFIG_PATH), GUARD_ABSENT);
+    execSync("git add . && git commit -qm head", { cwd: fixture, stdio: "ignore" });
+    const r = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture });
+    assert.equal(r.outcome, "block");
+    assert.ok(r.triggers.some((t) => t.type === "commit-msg-guard-loosening"));
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});

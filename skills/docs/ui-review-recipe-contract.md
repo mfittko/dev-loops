@@ -290,6 +290,7 @@ Every `uiReview.*` and `worktree.*` key this doc references.
 <!-- ui-review-config-keys:start -->
 - `worktree.entries[].path`
 - `worktree.entries[].mode`
+- `worktree.commitMsgGuard.requireClaudeSession`
 - `uiReview.run.command`
 - `uiReview.run.readyUrl`
 - `uiReview.run.readyTimeoutMs`

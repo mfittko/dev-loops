@@ -43,7 +43,9 @@ const GUARD_MARKER_LINE = new RegExp(`^// ${COMMIT_MSG_GUARD_MARKER}$`, "mu");
  * (string concatenation instead) — a literal backtick would otherwise close
  * THIS OUTER template early.
  */
-export function renderCommitMsgGuardHook() {
+export function renderCommitMsgGuardHook({ requireClaudeSession = false } = {}) {
+  // Baked as a boolean literal: the hook reads no env or git config for it.
+  const requireSession = requireClaudeSession === true ? "true" : "false";
   return String.raw`#!/usr/bin/env node
 // ${COMMIT_MSG_GUARD_MARKER}
 // Enforces the commit-message contract (issue #1869): attribution trailers,
@@ -74,6 +76,9 @@ if (/^${COMMIT_MSG_GUARD_MARKER}:allow\b/mu.test(message)) process.exit(0);
 
 const errors = [];
 
+// Baked at install time from the default branch's .devloops.
+const REQUIRE_CLAUDE_SESSION = ${requireSession};
+
 // Trailers are required only for an AGENT-authored commit: Claude Code sets
 // CLAUDECODE=1 in every shell it spawns (the same harness-detection signal
 // packages/core/src/loop/run-context.mjs's isClaudeHarness checks) — a plain
@@ -83,7 +88,7 @@ if (process.env.CLAUDECODE === "1") {
   if (!/^Co-Authored-By:\s*Claude\s+.+\s+<noreply@anthropic\.com>\s*$/imu.test(message)) {
     errors.push("missing required trailer: Co-Authored-By: Claude <model> <noreply@anthropic.com>");
   }
-  if (!/^Claude-Session:\s*\S+/imu.test(message)) {
+  if (REQUIRE_CLAUDE_SESSION && !/^Claude-Session:\s*\S+/imu.test(message)) {
     errors.push("missing required trailer: Claude-Session: <url> (e.g. Claude-Session: https://claude.ai/code/session_abc123)");
   }
 }
@@ -127,7 +132,7 @@ process.exit(0);
  *
  * @param {{ gitDir: string, hooksPathOverride?: string|null }} target
  */
-export function installCommitMsgGuard({ gitDir, hooksPathOverride = null }) {
+export function installCommitMsgGuard({ gitDir, hooksPathOverride = null, requireClaudeSession = false }) {
   const refuse = (reason) => ({ ok: false, installed: false, refreshed: false, skipped: true, reason });
 
   if (typeof hooksPathOverride === "string") {
@@ -160,7 +165,7 @@ export function installCommitMsgGuard({ gitDir, hooksPathOverride = null }) {
   // shared across worktrees, so a direct writeFileSync would be visible
   // mid-write to a concurrent install or a real commit racing this one.
   const tmpPath = path.join(hooksDir, `.commit-msg.tmp-${process.pid}-${Date.now()}`);
-  fs.writeFileSync(tmpPath, renderCommitMsgGuardHook(), { mode: 0o755 });
+  fs.writeFileSync(tmpPath, renderCommitMsgGuardHook({ requireClaudeSession }), { mode: 0o755 });
   fs.chmodSync(tmpPath, 0o755);
   fs.renameSync(tmpPath, hookPath);
 
