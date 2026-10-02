@@ -2126,6 +2126,21 @@ test("a config load error keeps the default worthFixingNowFixWindow in the dispo
   ));
 });
 
+test("a config load error keeps the default inlineSeverityFloor and a null trackerProvider", async () => {
+  // Configured floor "nit" would keep the low inline; the error falls back to
+  // "medium", so the low folds into the deferral comment on the PR itself.
+  const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStubAndConfig(
+    [...roundEntries({ threads: [] }), targetCommentsEntry(42, []), appendFollowUpIssueEntry(42, { contains: [fingerprintFinding(finding)] })],
+    { version: 1, futureKnob: true, tracker: { provider: "linear" }, gates: { draft: { inlineSeverityFloor: "nit" } } },
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.foldedFiled, 1);
+      assert.equal(result.followUpIssueNumber, 42);
+    },
+  ));
+});
+
 // (a cont.) the SAME gate at round 2 with window 2 keeps the WFN thread open —
 // the window boundary is inclusive (round <= window stays open).
 test("#1581 (a): a WFN thread stays open at round == window (boundary is inclusive)", async () => {

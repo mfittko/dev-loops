@@ -1275,10 +1275,10 @@ const RENAMED_KEYS = Object.freeze({
 function unknownKeyGuidance(unknownKeys, repoRoot) {
   const checkoutVersion = readCheckoutVersion(repoRoot);
   const running = RUNNING_VERSION ?? "(unknown version)";
-  const parts = [
-    `Unknown key(s) ${unknownKeys.join(", ")} are not recognized by the running dev-loops ${running}; ` +
-    `they need a newer dev-loops than ${running}.`,
-  ];
+  const parts = [`Unknown key(s) ${unknownKeys.join(", ")} are not recognized by the running dev-loops ${running}.`];
+  // A renamed key is an older key, so a newer dev-loops would not help.
+  const unrenamed = unknownKeys.filter((key) => !RENAMED_KEYS[key]);
+  if (unrenamed.length > 0) parts.push(`${unrenamed.join(", ")} need a newer dev-loops than ${running}.`);
   if (checkoutVersion) parts.push(`This dev-loops checkout is ${checkoutVersion}; run it through dev-loops-run cli/index.mjs.`);
   for (const key of unknownKeys) {
     const renamed = RENAMED_KEYS[key];
@@ -1306,7 +1306,7 @@ export function configLoadFailure(loadResult) {
 
 export class ConfigLoadFailedError extends Error {
   constructor(configError) {
-    super(`config_load_failed: invalid dev-loops config: ${configError.errors.join("; ")}`);
+    super(`config_load_failed: invalid dev-loops config: ${configError.errors.join("; ")} (CONFIG-LOAD-FAIL-CLOSED)`);
     this.name = "ConfigLoadFailedError";
     this.code = "config_load_failed";
     this.configError = configError;

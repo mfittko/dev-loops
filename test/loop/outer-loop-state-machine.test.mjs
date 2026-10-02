@@ -758,6 +758,7 @@ test("outer-loop: a config load error keeps asyncStartMode=required and rejects 
       "--pr", "47",
       "--copilot-input", copilotInputPath,
       "--checkpoint-dir", tempDir,
+    // CLAUDECODE is cleared because Claude relaxes asyncStartMode by design; the pin covers the Pi harness.
     ], { env: { ...gitEnv, ...ghEnv, CLAUDECODE: "" }, cwd: tempDir });
 
     assert.equal(result.code, 1, `stdout=${result.stdout} stderr=${result.stderr}`);

@@ -405,13 +405,6 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     return;
   }
   try {
-    // Load the gate's CONFIGURED mandatory angles so any repo-configured
-    // mandatory angle (even a CATEGORY_ANGLE_MAP-mapped one) is NEVER carried
-    // forward — without this the "mandatory always re-runs" promise would only
-    // cover the hardcoded ALWAYS_INCLUDE set. A config load error throws
-    // config_load_failed before any plan is touched.
-    const { config } = await loadDevLoopConfigStrict({ repoRoot });
-    const { mandatoryAngles } = resolveGateAngleContract(config, mapGateToConfigKey(options.gate));
     // Remove any stale plan artifact for this exact (repo, pr, gate, headSha)
     // BEFORE doing any work, so EVERY invocation's outcome is authoritative and
     // a run that fails operationally (or on an integrity error) leaves NO plan
@@ -426,6 +419,14 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       })),
       { force: true },
     );
+    // Load the gate's CONFIGURED mandatory angles so any repo-configured
+    // mandatory angle (even a CATEGORY_ANGLE_MAP-mapped one) is NEVER carried
+    // forward — without this the "mandatory always re-runs" promise would only
+    // cover the hardcoded ALWAYS_INCLUDE set. A config load error throws
+    // config_load_failed AFTER the stale-plan removal above, so it leaves no
+    // plan behind.
+    const { config } = await loadDevLoopConfigStrict({ repoRoot });
+    const { mandatoryAngles } = resolveGateAngleContract(config, mapGateToConfigKey(options.gate));
     // The prior findings-log ledger is written under the MAIN worktree tmp
     //; resolve the read there too so a re-gate running inside a linked
     // worktree still finds the prior round's ledger to carry forward from

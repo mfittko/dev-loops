@@ -53,6 +53,7 @@ test("a renamed key gets a migration hint naming the new key and the renaming re
     assert.match(load.errors[0].message, /queue\.board/);
     assert.match(load.errors[0].message, /tracker\.board/);
     assert.match(load.errors[0].message, /1\.0\.2/);
+    assert.doesNotMatch(load.errors[0].message, /newer dev-loops/);
   });
 });
 
@@ -60,6 +61,7 @@ test("an unknown key without a rename record keeps the generic text", async () =
   await withRepo("version: 1\nqueue:\n  nothingLikeThis: 1\n", async (dir) => {
     const load = await loadDevLoopConfig({ repoRoot: dir });
     assert.doesNotMatch(load.errors[0].message, /renamed/);
+    assert.match(load.errors[0].message, /queue\.nothingLikeThis need a newer dev-loops/);
     assert.deepEqual(configLoadFailure(load).unknownKeys, ["queue.nothingLikeThis"]);
   });
 });

@@ -855,9 +855,9 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
  * Build the fan-out evidence enforcement descriptor.
  *
  * Enforcement is ON by default (opt-out via gates.requireFanoutEvidence: false).
- * Returns { required: false } when disabled OR config is unavailable
- * (config == null after a failed load) — config-unavailable must fail open
- * and never enable enforcement. When enabled, returns
+ * Returns { required: false } when disabled. Both callers strict-load the
+ * config and fail closed on a load error before reaching here; the
+ * `config == null` branch is only a defensive guard. When enabled, returns
  * { required: true, requireProvenance, lightMode, hasFullLabel, gates } where
  * each per-required-gate entry records executionMode, inlineReason,
  * scopeUnderThreshold, and whether the deterministic findings-log ledger exists
@@ -880,9 +880,8 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
 export { isSizeOutcomeT1Clean };
 
 export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd, hasFullLabel = false, baseRef = null }) {
-  // Fail open when config could not be loaded/validated. `== null` covers both
-  // null and undefined; the loader only ever yields null on failure, but the
-  // loose check defensively treats an absent config as unavailable.
+  // Defensive only: callers strict-load and fail closed before this point, so a
+  // null/undefined config never arrives here in practice.
   const checkouts = resolveLedgerCheckouts(cwd);
   // The act list is read independently of requireFanoutEvidence; `actList` is
   // only added when the current-head pre_approval_gate ledger exists.

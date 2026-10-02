@@ -764,6 +764,27 @@ test("CLI removes a prior successful plan when a later run at the same head fail
   }
 });
 
+test("CLI removes a prior plan when the config load fails closed", async () => {
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [{ angle: "correctness", reviewer: "review-a" }, { angle: "docs", reviewer: "review-c" }],
+    mutate: async (root) => { await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\nmore.\n", "utf8"); },
+  });
+  const planPath = path.join(repoRoot, buildCarryForwardPlanPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+  const argv = ["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha];
+  try {
+    assert.equal((await runMain(argv, { repoRoot })).ok, true);
+    await readFile(planPath, "utf8");
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\nfutureKnob: true\n", "utf8");
+    const { exitCode, stderr } = await runMainRaw(argv, { repoRoot });
+    assert.equal(exitCode, 1);
+    assert.match(stderr, /config_load_failed/);
+    await assert.rejects(() => readFile(planPath, "utf8"), "a config_load_failed run must leave no plan behind");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI leaves NO marker on a prior-log INTEGRITY failure (corrupt ledger is not an eligibility refusal) (issue #2251)", async () => {
   // A findings_present verdict with an empty findings array is an inconsistent/
   // corrupt ledger, NOT a carry-forward eligibility decision. It must be treated
