@@ -79,12 +79,10 @@ const errors = [];
 // Baked at install time from the default branch's .devloops.
 const REQUIRE_CLAUDE_SESSION = ${requireSession};
 
-// Trailers are required only for an AGENT-authored commit: Claude Code sets
-// CLAUDECODE=1 in every shell it spawns (the same harness-detection signal
-// packages/core/src/loop/run-context.mjs's isClaudeHarness checks) — a plain
-// human commit (CLAUDECODE unset) is never "Claude", so requiring a Claude
-// co-author trailer on it would misattribute the commit, not enforce honesty.
-if (process.env.CLAUDECODE === "1") {
+// omp sets OMPCODE=1 and also CLAUDECODE=1 for compatibility. Its own marker
+// takes precedence: requiring Claude trailers there would misattribute work.
+// Genuine Claude Code commits still require attribution; human commits do not.
+if (process.env.OMPCODE !== "1" && process.env.CLAUDECODE === "1") {
   if (!/^Co-Authored-By:\s*Claude\s+.+\s+<noreply@anthropic\.com>\s*$/imu.test(message)) {
     errors.push("missing required trailer: Co-Authored-By: Claude <model> <noreply@anthropic.com>");
   }

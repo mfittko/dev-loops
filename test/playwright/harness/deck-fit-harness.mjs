@@ -446,10 +446,10 @@ export function deckRegistryEntry(key) {
   return entry;
 }
 
-// The article registry. Articles are self-contained, CSP-locked rendered HTML
-// (the intro article IS the published landing page) — fit-checked like decks
-// but without the deck's named per-section states. Each article is one data
-// entry plus a thin spec that calls defineArticleSuite(ARTICLE_REGISTRY.<key>).
+// The article registry covers long-form articles and interactive simulator
+// pages. Prose uses defineArticleSuite; simulators use a dedicated runner that
+// reuses fit assertions without requiring prose markup or a locked CSP.
+// Each page is one data entry plus a thin spec.
 // `file` is the docs/articles/<file> basename; path keying in
 // ui-e2e-scoping.mjs uses the full repo-relative path so it can't alias a deck.
 export const ARTICLE_REGISTRY = {
@@ -464,6 +464,14 @@ export const ARTICLE_REGISTRY = {
   "how-decided-article": {
     sliceId: "how-decided-article",
     file: "how-dev-loops-decided-itself.html",
+  },
+  "simulator-article": {
+    sliceId: "simulator-article",
+    file: "simulator.html",
+  },
+  "simulator-overview-article": {
+    sliceId: "simulator-overview-article",
+    file: "simulator-overview.html",
   },
 };
 

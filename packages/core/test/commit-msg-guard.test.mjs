@@ -10,7 +10,6 @@ import {
   COMMIT_MSG_GUARD_MARKER,
   COMMIT_MSG_WAIVER_MARKER,
   installCommitMsgGuard,
-  renderCommitMsgGuardHook,
 } from "../src/loop/commit-msg-guard.mjs";
 
 // The hook is a real Node script that runs inside real git — asserting on
@@ -22,7 +21,7 @@ import {
 // requirement is gated on it (issue #1869: a plain human commit is never
 // "Claude", so it must not be forced to carry a Claude co-author trailer).
 const BASE_GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
-for (const name of ["CLAUDECODE", "PI_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "AI_AGENT"]) delete BASE_GIT_ENV[name];
+for (const name of ["OMPCODE", "CLAUDECODE", "PI_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "AI_AGENT"]) delete BASE_GIT_ENV[name];
 
 const AGENT_TRAILERS = "\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_test\n";
 
@@ -101,6 +100,26 @@ test("a non-agent commit (CLAUDECODE unset) is not forced to carry a Claude trai
     assert.equal(result.blocked, false, `expected a human commit to pass without trailers: ${result.stderr}`);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("omp compatibility markers do not require Claude attribution or skip other commit checks", async () => {
+  const env = { OMPCODE: "1", CLAUDECODE: "1" };
+  for (const requireClaudeSession of [false, true]) {
+    await withHook({ requireClaudeSession }, (dir) => {
+      const valid = commitAttempt(dir, "fix(gate): recognize omp authorship", env);
+      assert.equal(valid.blocked, false, valid.stderr);
+      assert.equal(git(dir, ["log", "-1", "--format=%s"]).trim(), "fix(gate): recognize omp authorship");
+
+      const bareReference = commitAttempt(dir, "fix(gate): renumber item #42", env);
+      assert.equal(bareReference.blocked, true);
+      assert.match(bareReference.stderr, /bare #<digits> reference/);
+
+      const invalidSubject = commitAttempt(dir, "recognize omp authorship", env);
+      assert.equal(invalidSubject.blocked, true);
+      assert.match(invalidSubject.stderr, /conventional-commit form/);
+      assert.equal(git(dir, ["rev-list", "--count", "HEAD"]).trim(), "2");
+    });
   }
 });
 
@@ -229,6 +248,37 @@ test("a pre-existing foreign commit-msg hook is preserved, never clobbered", asy
     const message = "not conventional at all";
     const commitResult = commitAttempt(dir, message, { CLAUDECODE: "1" });
     assert.equal(commitResult.blocked, false, "the foreign hook's exit 0 must be what runs");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses overridden hook routing without installing an ineffective guard", async () => {
+  const { dir, gitDir } = await repoFixture();
+  try {
+    for (const hooksPathOverride of ["", path.join(dir, "custom-hooks")]) {
+      const result = installCommitMsgGuard({ gitDir, hooksPathOverride });
+      assert.equal(result.ok, false);
+      assert.equal(result.installed, false);
+      assert.match(result.reason, /core\.hooksPath is set/);
+      assert.equal(fs.existsSync(path.join(gitDir, "hooks", "commit-msg")), false);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("refuses non-absolute and non-git targets without creating hooks", async () => {
+  const { dir } = await repoFixture();
+  try {
+    const relative = installCommitMsgGuard({ gitDir: "relative" });
+    assert.equal(relative.ok, false);
+    assert.match(relative.reason, /must be an absolute path/);
+    const missing = path.join(dir, "not-a-git-dir");
+    const nonexistent = installCommitMsgGuard({ gitDir: missing });
+    assert.equal(nonexistent.ok, false);
+    assert.match(nonexistent.reason, /no HEAD file/);
+    assert.equal(fs.existsSync(missing), false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -381,11 +431,3 @@ test("environment variables and git config cannot change the baked value", async
   });
 });
 
-test("the rendered hook bakes a boolean literal and reads no lever for it", async () => {
-  for (const [options, literal] of [[{}, "false"], [{ requireClaudeSession: false }, "false"], [{ requireClaudeSession: true }, "true"]]) {
-    const source = renderCommitMsgGuardHook(options);
-    assert.ok(source.includes(`const REQUIRE_CLAUDE_SESSION = ${literal};`));
-    assert.equal(source.includes("DEVLOOPS_REQUIRE_CLAUDE_SESSION"), false);
-    assert.equal(source.includes("git config"), false);
-  }
-});

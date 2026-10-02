@@ -44,6 +44,8 @@ export const REGISTERED_ARTIFACT_SUITES = Object.freeze({
   "docs/articles/introducing-dev-loops.html": "intro-article",
   "docs/articles/dev-loops-deep-dive.html": "deep-dive-article",
   "docs/articles/how-dev-loops-decided-itself.html": "how-decided-article",
+  "docs/articles/simulator.html": "simulator-article",
+  "docs/articles/simulator-overview.html": "simulator-overview-article",
 });
 export const REGISTERED_ARTIFACT_PATHS = Object.freeze(Object.keys(REGISTERED_ARTIFACT_SUITES));
 
