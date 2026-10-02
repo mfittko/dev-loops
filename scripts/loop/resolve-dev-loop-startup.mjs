@@ -31,7 +31,7 @@ import {
   ownershipNeedsViewerLogin,
 } from "@dev-loops/core/github/ownership-helpers";
 import { resolveLinkedIssuesFromPr } from "./detect-pr-gate-coordination-state.mjs";
-import { loadDevLoopConfig, normalizeToBareBranch, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { configLoadFailure, loadDevLoopConfig, normalizeToBareBranch, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { detectScope } from "./detect-change-scope.mjs";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { validatePlanFile } from "../refine/validate-plan-file.mjs";
@@ -1402,18 +1402,23 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   }
   // Resolve repo root via the adapter so the CLI stays harness-agnostic.
   const repoRoot = adapter.getRepoRoot();
-  const { config: devLoopConfig, errors: configErrors = [] } = await loadDevLoopConfig({ repoRoot });
-  const asyncStartMode = configErrors.length === 0
-    ? resolveWorkflowConfig(devLoopConfig, "asyncStartMode")
-    : "required";
-  const targetPreference = configErrors.length === 0
-    ? devLoopConfig?.strategy === "local-first"
-      ? "prefer_local"
-      : "prefer_github_first"
-    : "prefer_local";
-  const inputSource = configErrors.length === 0
-    ? normalizeConfigInputSource(devLoopConfig?.inputSource)
-    : "tracker";
+  const loadResult = await loadDevLoopConfig({ repoRoot });
+  const { config: devLoopConfig } = loadResult;
+  // A config load error never resolves a workflow key from defaults: the
+  // retro gate, async start mode and input source would silently relax.
+  const configError = configLoadFailure(loadResult);
+  if (configError) {
+    const unknown = configError.unknownKeys.length ? ` Unknown key(s): ${configError.unknownKeys.join(", ")}.` : "";
+    const nextAction = `Stop. dev-loops ${configError.runningVersion ?? "(unknown version)"} could not load .devloops (config_load_failed).${unknown} ${configError.errors.join("; ")} Fix .devloops or run a dev-loops that supports it, then rerun startup.`;
+    const result = buildNeedsReconcileStartupResult({ configError }, nextAction);
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+    return;
+  }
+  const asyncStartMode = resolveWorkflowConfig(devLoopConfig, "asyncStartMode");
+  const targetPreference = devLoopConfig?.strategy === "local-first"
+    ? "prefer_local"
+    : "prefer_github_first";
+  const inputSource = normalizeConfigInputSource(devLoopConfig?.inputSource);
   let input;
   if (options.spike !== undefined) {
     input = buildSpikeInput({ spikeFilePath: options.spike });
@@ -1449,12 +1454,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       input = { ...input, canonicalSpecSource: "pr_body" };
     }
   } else if (options.lightweight) {
-    // --lightweight used ALONE (no other mode flag): issue-less PR-first. A
-    // broken config must surface as ITS OWN failure, not decay to the
-    // misleading light_mode_disabled reason a bare {version:1} would produce.
-    if (configErrors.length > 0) {
-      throw new Error(`--lightweight without --issue (issue-less PR-first) requires a loadable dev-loop config, but config loading failed: ${configErrors.map((e) => e?.message ?? String(e)).join("; ")}. Fix the config or provide --issue <n>.`);
-    }
+    // --lightweight used ALONE (no other mode flag): issue-less PR-first.
     input = buildLightweightIssuelessInput({ config: devLoopConfig, cwd: repoRoot });
   } else {
     input = buildAutoResolvedInput({
@@ -1469,7 +1469,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   const result = buildResolveDevLoopStartupResult(input, {
     asyncStartMode,
     adapter,
-    config: configErrors.length === 0 ? devLoopConfig : undefined,
+    config: devLoopConfig,
   });
   if (result.ok === false) {
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout: stderr, stderr });
