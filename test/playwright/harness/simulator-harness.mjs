@@ -42,6 +42,13 @@ export function defineSimulatorSuite({
       });
 
       try {
+        // Keep fit measurements and captures independent of Google Fonts availability.
+        // This test-only stylesheet pins local fallback faces before either navigation.
+        await page.route("https://fonts.googleapis.com/**", (route) => route.fulfill({
+          contentType: "text/css",
+          body: ':root { --sans: Arial, sans-serif !important; --display: Arial, sans-serif !important; --mono: "Courier New", monospace !important; }',
+        }));
+        await page.route("https://fonts.gstatic.com/**", (route) => route.abort());
         if (device === "mobile") {
           await settleMobile(page, url);
         } else {
