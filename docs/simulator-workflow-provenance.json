@@ -1,7 +1,7 @@
 {
   "researchDate": "2026-10-02",
   "selection": "Twelve curated hybrid software/product workflows; no archive",
-  "adaptations": "ES-module createModel factory, prototype comment removal and production-label changes. Raw producer identities remain frozen. Production Collaborative Grilling intentionally repairs tradeoff/joint authority: version-specific selector values must match the current proposal; stale/pending decisions WAIT rather than being restamped. Its fixtures and revised-version actions are updated; other model handler/data semantics are retained. QA Wolf, EvalGen and UXAgent retain producer-authorized +80 x0 geometry corrections. Incident retains producer-authorized root x0=180/viewBox width=1440 correction with unchanged nodes/edges/handlers/scenarios. Seven originally flagged benign bibliographic lines use existing reasoned per-line source-reference exceptions, with literal URLs intact.",
+  "adaptations": "ES-module createModel factory, prototype comment removal and production-label changes. Raw producer identities remain frozen. Production Collaborative Grilling intentionally repairs proposal-specific tradeoff/joint authority; stale/pending decisions WAIT rather than being restamped. Production Conveyor intentionally binds positive design evidence to design version and editorial/source-sheet contributions to initiative version, supplies native initiative options through version 4, and resets cbProbes only on a genuine new technical CALL. Both profiles have updated native fixtures; other model handler/data semantics are retained. QA Wolf, EvalGen and UXAgent retain producer-authorized +80 x0 geometry corrections. Incident retains producer-authorized root x0=180/viewBox width=1440 correction with unchanged nodes/edges/handlers/scenarios. Seven originally flagged benign bibliographic lines use existing reasoned per-line source-reference exceptions, with literal URLs intact.",
   "frozenProducerEnvelope": {
     "scope": "Producer-local reference runtime only; not production verification",
     "modelManifestArtifact": "agent-workflow-promotion-model-manifest-12.json",
@@ -38,11 +38,14 @@
     {
       "slug": "conveyor-belt",
       "sourceSha256": "820de0c76b6898142b7454ed5b29ba95b8cdcc42775a5d45ecf50e1d1d38e3cf",
-      "productionSha256": "29c4db5687c937b13b19d1fa7c7461ac1d7a7ab95925cdb2d9aa23c9906f18f1",
+      "productionSha256": "40c586cd2d7ad3a3c69a0bd047a76c7dac911b28b389ef64a59395435b8d10a0",
       "adaptations": [
         "ES-module factory with isolated profile data",
         "Removed prototype-only leading comments",
-        "Production labels; all execution/source limitations retained"
+        "Production labels; all execution/source limitations retained",
+        "Intentional production repair: positive specialist evidence binds design version; editorial declaration and joint sheet check bind initiative version; stale/pending inputs WAIT and native initiative choices include version 4",
+        "Intentional invocation repair: shared cbProbes resets only when a new technical child is called, not on local probe loops, return consumption or retained evidence; global revision cap remains 3",
+        "Native fixtures updated; raw source identity remains upstream provenance, not a verbatim production-semantics claim"
       ]
     },
     {

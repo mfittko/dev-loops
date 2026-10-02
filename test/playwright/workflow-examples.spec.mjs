@@ -323,3 +323,124 @@ test('original detailed graph arrows scroll the real normal and full-window owne
   await page.keyboard.press('ArrowLeft');expect((await state(page)).step).toBe(0);
   await click(page,'next');await page.locator('#scroller').focus();await page.keyboard.press('r');expect((await state(page)).step).toBe(0);
 });
+
+async function resumeConveyor(page,key,value) {
+  const before=(await state(page)).execution;
+  await page.locator(`#facts [data-k="${key}"]`).selectOption(value);
+  expect((await state(page)).execution).toEqual(before);
+  await click(page,'next');const resumed=await state(page);
+  await click(page,'back');expect((await state(page)).execution).toEqual(before);
+  await click(page,'next');expect(await state(page)).toEqual(resumed);
+  return resumed;
+}
+
+for(const width of [1280,390]) {
+  test(`conveyor-belt ${width}px reshape rejects stale design and preparation authority`,async({page},testInfo)=>{
+    test.setTimeout(180_000);
+    await page.setViewportSize({width,height:844});await page.goto(`${fixture.url}/workflow-conveyor-belt.html`);
+    await page.locator('#worldbox > summary').click();
+    await page.locator('#chips [data-s="4"]').click();await click(page,'run');
+    const reshaped=await state(page);
+    expect(reshaped.position).toEqual({g:'design',n:'cbDesignDecide'});
+    expect(reshaped.records).toMatchObject({initiativeVersion:2,designVersion:2,designDecisionVersion:null,technicalVersion:1,technicalEvidenceVersion:1,technicalProbes:1,waiting:true});
+    const technical={version:reshaped.records.technicalEvidenceVersion,probes:reshaped.records.technicalProbes,scratch:reshaped.scratch};
+    const priorDesign=reshaped.records.decisionRegister.filter(r=>r.dimension==='design');
+    for(const [key,node,stale,current,record] of [
+      ['designInput','cbDesignDecide','design 1 supplied','design 2 supplied','designDecisionVersion'],
+      ['editorial','cbEditorialReady','initiative 1 declared ready','initiative 2 declared ready','editorialDecisionVersion'],
+      ['sheet','cbSheetCheck','initiative 1 both checked','initiative 2 both checked','sourceSheetVersion']
+    ]) {
+      const waiting=await state(page);
+      expect(waiting.position.n).toBe(node);expect(waiting.records.waiting).toBe(true);
+      for(const input of ['pending',stale]) {
+        await page.locator(`#facts [data-k="${key}"]`).selectOption(input);
+        for(const control of ['next','run']) {
+          await click(page,control);const still=await state(page);
+          expect(still.position).toEqual(waiting.position);expect(still.records).toEqual(waiting.records);
+          expect(still.scratch).toEqual(waiting.scratch);
+        }
+      }
+      await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`conveyor-${key}-stale-${width}`,viewport:{width,height:844},fullPage:false});
+      const resumed=await resumeConveyor(page,key,current);
+      expect(resumed.records[record]).toBe(2);expect(resumed.records.waiting).toBe(false);
+      expect({version:resumed.records.technicalEvidenceVersion,probes:resumed.records.technicalProbes,scratch:resumed.scratch}).toEqual(technical);
+      expect(resumed.records.decisionRegister.filter(r=>r.dimension==='design'&&r.version===1)).toEqual(priorDesign);
+      await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`conveyor-${key}-current-${width}`,viewport:{width,height:844},fullPage:false});
+      await click(page,'run');
+      if(key==='designInput') {
+        expect((await state(page)).position).toEqual({g:'shaping',n:'cbJoin'});
+        await resumeConveyor(page,'stakeholderKnowledge','direction 2 supplied');await click(page,'run');
+        expect((await state(page)).position).toEqual({g:'life',n:'cbCommit'});
+        await resumeConveyor(page,'commitment','version 2 committed');await click(page,'run');
+      }
+    }
+    expect((await state(page)).position).toEqual({g:'learning',n:'cbInterpret'});
+    await resumeConveyor(page,'interpretation','version 2 interpreted');await click(page,'run');
+    const complete=await state(page);
+    expect(complete.records).toMatchObject({workflowStatus:'outcome interpreted',initiativeVersion:2,designDecisionVersion:2,editorialDecisionVersion:2,sourceSheetVersion:2,importStatus:'validated source version 2'});
+    await click(page,'back');await click(page,'next');expect(await state(page)).toEqual(complete);
+    await click(page,'reset');expect((await state(page)).records).toEqual({});
+    expect((await state(page)).conditions.designInput).toBe('design 2 supplied');
+  });
+
+  test(`conveyor-belt ${width}px every technical CALL gets two local probes through the global cap`,async({page},testInfo)=>{
+    test.setTimeout(180_000);
+    await page.setViewportSize({width,height:844});await page.goto(`${fixture.url}/workflow-conveyor-belt.html`);
+    await page.locator('#worldbox > summary').click();
+    await page.locator('#facts [data-k="technicalEvidence"]').selectOption('always unresolved');
+    const probes={1:[],2:[],3:[],4:[]};let calls=0;
+    for(let i=0;i<180;i++) {
+      const before=await state(page);if(before.done)break;
+      await click(page,'next');const after=await state(page);
+      if(after.lastTransition.next?.sub==='technical') {
+        calls++;expect(after.scratch.cbProbes).toBe(0);
+        await click(page,'back');expect((await state(page)).execution).toEqual(before.execution);
+        await click(page,'next');expect(await state(page)).toEqual(after);
+      }
+      if(before.position.n==='cbTechProduce')probes[after.records.technicalVersion].push(after.records.technicalProbes);
+      expect(after.scratch.cbProbes??0).toBeLessThanOrEqual(2);
+    }
+    const capped=await state(page);
+    expect(capped.done).toBe(true);expect(calls).toBe(4);
+    expect(probes).toEqual({1:[1,2],2:[1,2],3:[1,2],4:[1,2]});
+    expect(capped.records).toMatchObject({workflowStatus:'human initiative handoff',revisions:3,initiativeVersion:4,technicalVersion:4,designVersion:1,designDecisionVersion:1,stakeholderDecisionVersion:1});
+    expect(capped.records.decisionRegister.filter(r=>r.dimension==='design').map(r=>r.version)).toEqual([1]);
+    await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`conveyor-probe-cap-${width}`,viewport:{width,height:844},fullPage:false});
+    await click(page,'back');await click(page,'next');expect(await state(page)).toEqual(capped);
+  });
+
+  test(`conveyor-belt ${width}px current human inputs remain reachable through initiative 4`,async({page},testInfo)=>{
+    test.setTimeout(180_000);
+    await page.setViewportSize({width,height:844});await page.goto(`${fixture.url}/workflow-conveyor-belt.html`);
+    await page.locator('#worldbox > summary').click();
+    await page.locator('#facts [data-k="validation"]').selectOption('always fails');
+    const commitments=[],editorial=[],sheets=[],interpretations=[],probes=[];
+    for(let i=0;i<210;i++) {
+      const before=await state(page);if(before.done)break;
+      if(before.records.waiting) {
+        const version=before.records.initiativeVersion;
+        const input={
+          cbCommit:['commitment',`version ${version} committed`,commitments],
+          cbEditorialReady:['editorial',`initiative ${version} declared ready`,editorial],
+          cbSheetCheck:['sheet',`initiative ${version} both checked`,sheets],
+          cbInterpret:['interpretation',`version ${version} interpreted`,interpretations]
+        }[before.position.n];
+        expect(input,`explicit current input at ${before.position.n}`).toBeTruthy();
+        const [key,value,versions]=input;await resumeConveyor(page,key,value);versions.push(version);
+      } else {
+        if(before.position.n==='cbValidate'&&before.records.initiativeVersion===4)await page.locator('#facts [data-k="validation"]').selectOption('validated');
+        await click(page,'next');const after=await state(page);
+        if(before.position.n==='cbTechProduce')probes.push([after.records.technicalVersion,after.records.technicalProbes]);
+      }
+    }
+    const capped=await state(page);
+    expect(capped.done).toBe(true);
+    expect([commitments,editorial,sheets]).toEqual([[2,3,4],[2,3,4],[2,3,4]]);
+    expect(probes).toEqual([[1,1],[2,1],[3,1],[4,1]]);
+    expect(interpretations).toEqual([4]);
+    expect(capped.records).toMatchObject({workflowStatus:'outcome interpreted',revisions:3,initiativeVersion:4,commitmentVersion:4,editorialDecisionVersion:4,sourceSheetVersion:4,importStatus:'validated source version 4',designDecisionVersion:1,stakeholderDecisionVersion:1,outcomeAchieved:true});
+    expect(capped.records.decisionRegister.filter(r=>r.owner==='Product + Engineering').map(r=>r.version)).toEqual([1,2,3,4]);
+    await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`conveyor-initiative-4-${width}`,viewport:{width,height:844},fullPage:false});
+    await click(page,'back');await click(page,'next');expect(await state(page)).toEqual(capped);
+  });
+}
