@@ -51,6 +51,8 @@ Each rendered-artifact family has a satisfiable CI job in `.github/workflows/ci.
 - `deck-smoke` → both presentation deck fit specs (triggered by `docs/presentations/**` and the deck specs/harness/configs).
 - `article-smoke` → both article fit specs (triggered by `docs/articles/**` and the article specs/harness/configs).
 
+Generated Simulator workflow examples use the `workflow-examples` article-family slice. Changes under `docs/articles/assets/workflow-models/` or to `scripts/pages/workflow-examples.mjs` require that slice even when no article HTML changed. Run `bun run test:playwright:workflow-examples`; it publishes and drives all selected routes rather than treating model JavaScript as non-rendered data. Changes to the shared `simulator.html` runtime select both the original detailed slice and the generated workflow slice; the original overview page retains its existing slice. See [`../../docs/simulator-workflows.md`](../../docs/simulator-workflows.md) for the runtime, selection, source boundaries and targeted proof contract.
+
 ## Verifying a UI change: render and look, but don't persist ad-hoc checks
 
 When you change a rendered artifact's layout, **verify it visually before merging**. Render the built page and inspect real geometry at desktop and mobile widths: `getBoundingClientRect` for edges and widths, and a full-page screenshot to look at it. This intermediary e2e pass is a required *verification strategy*. A layout claim is credible only once it is measured against the rendered page.

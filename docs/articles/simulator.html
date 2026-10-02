@@ -230,16 +230,41 @@ body.board-full{overflow:hidden}
 .board.full .fullbar .crumbs{flex:1;min-width:0;flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
 .board.full .bhead{display:none}
 @media (max-width:700px){.board.full .fullbar{flex-wrap:wrap}.board.full .fullbar .crumbs{flex-basis:100%;order:3}}
+body[data-workflow] .about{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+body[data-workflow] .about p{min-width:0;overflow-wrap:anywhere}
+body[data-workflow] #sources{overflow-wrap:anywhere}
+body[data-workflow] .fact .k{overflow-wrap:anywhere}
+body[data-workflow] .fact select{min-width:0;width:180px;flex:0 1 180px;overflow:hidden;text-overflow:ellipsis}
+body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 150px)}
+@media (max-width:760px){body[data-workflow] .about{grid-template-columns:minmax(0,1fr)}}
 </style>
 </head>
 <body>
 
 <main class="wrap">
-<header><nav class="views" aria-label="Simulator view"><a href="#" aria-current="page">Detailed: every sub-loop</a><a href="simulator-overview.html">Overview: the lifecycle</a></nav>
+<header><nav class="views" aria-label="Simulator view"><a href="simulator-overview.html">Overview: the lifecycle</a><a href="#" aria-current="page">Detailed: every sub-loop</a></nav>
   <p class="lbl">dev-loops · mfittko/dev-loops · state model at commit c00aa769f</p>
   <h1>One unit of work, from startup to merge</h1>
   <p class="sub">A dev-loops run, step by step, including every sub-loop it enters. Pick a scenario or set the starting conditions, then step. When the run enters a sub-loop, the board opens that graph. For the lifecycle without sub-loops, open the Overview. You can open any graph with a <b>sub-loop</b> badge yourself; the run waits until you step again.</p>
 </header>
+<details class="panel box" id="examples">
+  <summary>Agent workflow examples</summary>
+  <p>Curated modeled workflows using these same detailed Simulator controls. Conditions and contributions are hypothetical; no external agents or tools run.</p>
+  <ul>
+    <li><a href="workflow-conveyor-belt.html">Conveyor belt: initiative work</a></li>
+    <li><a href="workflow-collaborative-grilling.html">Collaborative grilling</a></li>
+    <li><a href="workflow-magentic-ui.html">Magentic-UI co-tasking</a></li>
+    <li><a href="workflow-open-swe.html">Open SWE: published 2025</a></li>
+    <li><a href="workflow-qa-wolf-mapping-ai.html">QA Wolf Mapping AI</a></li>
+    <li><a href="workflow-playwright-test-agents.html">Playwright test agents</a></li>
+    <li><a href="workflow-meta-ach.html">Meta ACH</a></li>
+    <li><a href="workflow-evalgen.html">EvalGen</a></li>
+    <li><a href="workflow-uxagent.html">UXAgent</a></li>
+    <li><a href="workflow-conversational-ux-coanalysis.html">Conversational UX co-analysis</a></li>
+    <li><a href="workflow-product-design-frontend.html">Mobile checkout improvement</a></li>
+    <li><a href="workflow-incident-response.html">Production incident response</a></li>
+  </ul>
+</details>
 
 <section class="panel scen" aria-label="Scenarios">
   <p class="lbl">Scenarios</p>
@@ -303,6 +328,7 @@ body.board-full{overflow:hidden}
       <p class="lbl" id="trace-label">Trace</p>
       <ul class="trace" id="trace" tabindex="0" aria-labelledby="trace-label"></ul>
     </div>
+    <details class="panel box"><summary>Runtime inspection</summary><pre id="runtime-state" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
   </div>
 </div>
 
@@ -337,14 +363,16 @@ body.board-full{overflow:hidden}
 </main>
 
 <script>
-(function(){
+(async function(){
   "use strict";
   const $ = id => document.getElementById(id);
   const clone = o => JSON.parse(JSON.stringify(o));
   const esc = v => String(v).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const slug = document.body.dataset.workflow;
+  const profile = slug ? (await import(`./assets/workflow-models/${slug}.mjs`)).createModel() : null;
 
   // ---------- loop ideas, with the Finding the flow slide where they fit ----------
-  const I = {
+  let I = {
     contract:["A transition is a small contract",5], rules:["The arrows are rules",3], facts:["The graph remembers facts",4],
     goal:["Make the goal testable",7], check:["Check and approve",8], back:["A failed check sends it back",10],
     unknown:["Unknown takes another arrow",11], criteria:["Changed criteria require fresh clearance",12],
@@ -365,7 +393,7 @@ body.board-full{overflow:hidden}
   // ---------- graphs as data: nodes [id, name, sub, col, row, opts], edges [from, to, label, opts] ----------
   // opts: k kind (gate | exit | ret | term | aside), a actors, s subgraph, src, L [idea, text], inf, w
   // edge opts: c conditional, l loop, inf, h / v force tangents, side l|r|b for self or back edges, d explicit path, lx ly anc label
-  const GR = {
+  let GR = {
   life:{name:"lifecycle", desc:"The top-level lifecycle of one unit of work. Nodes with a sub-loop badge open their own graph.", vb:[1000,660], w:148, cw:1, rh:1, x0:0, y0:0,
     nodes:[
       ["request","request","operator or queue",290,30,{a:"human,code",s:"queue",src:"AGENTS.md; skills/docs/main-agent-contract.md (E0)",L:["people","The operator asks for the work. The main agent only dispatches the dev-loop subagent. It never runs startup and never writes tracked files."]}],
@@ -749,7 +777,7 @@ body.board-full{overflow:hidden}
     ],
     edges:[["RL1","RL2",""],["RL2","RL3","stable"],["RL2","RL4","prerelease",{c:1,side:"r",bulge:44}],["RL3","RL4","approve release v<version>"],["RL4","RL5",""],["RL5","RL6",""]]},
   };
-  const ORDER = ["life","startup","rules","queue","grill","epic","impl","spike","plan","light","gate","ready","cop","merge","retro","review","ui","release"];
+  let ORDER = ["life","startup","rules","queue","grill","epic","impl","spike","plan","light","gate","ready","cop","merge","retro","review","ui","release"];
 
   // ---------- geometry ----------
   function geo(gid){
@@ -789,7 +817,7 @@ body.board-full{overflow:hidden}
   }
 
   // ---------- starting conditions ----------
-  const F = [
+  let F = [
     {g:"Entry", k:"entry", lbl:"entry flag", type:"sel", opts:["--issue","--pr","--pr --review","--pr --ui-review","--plan-file","--spike","--lightweight","--lightweight --issue"]},
     {g:"Entry", k:"start", lbl:"how the unit starts", type:"sel", opts:["loop startup","enqueue, then queue run"]},
     {g:"Entry", k:"assignee", lbl:"assignee", type:"sel", opts:["self","other","none"]},
@@ -828,7 +856,7 @@ body.board-full{overflow:hidden}
   const world = {};
   function defaults(){ F.forEach(f => world[f.k] = f.type === "bool" ? f.d : f.opts[0]); }
 
-  const SC = [
+  let SC = [
     {id:1, g:"Main path", name:"Happy path, tracker-first", about:"A refined issue started with --issue. Every gate is clean, and the operator approves the current head.", shows:"The run enters each sub-loop in turn: startup, route rules, implementation, the draft gate, ready checks, Copilot, the pre-approval gate, merge checks and the retro. Each one returns to the lifecycle.", w:{}},
     {id:2, g:"Startup and refinement", name:"Unrefined enqueue", about:"The operator enqueues an issue whose body has only a checklist, no AC / DoD matrix.", shows:"The enqueue gate refuses before any change. Turn on --auto under Starting conditions: the issue is parked in Backlog with a reason instead.", w:{start:"enqueue, then queue run", body:"checklist only"}},
     {id:3, g:"Startup and refinement", name:"Grill zero-iteration", about:"The body is refined and the results comment exists. The operator runs the grill anyway.", shows:"detect_gaps finds zero gaps and recorded provenance. The grill ends at grill_clean with no rewrite and no new comment.", w:{grill:true}},
@@ -894,7 +922,7 @@ body.board-full{overflow:hidden}
   // ---------- step handlers: one per node, keyed by graph ----------
   // A handler returns {next, title, note, pill, set, read, tr, L, src, inf, path, also, reply, noEdge, mark}.
   // next: node id | "END" | {sub, at} to enter a sub-loop | {up, via} to return to the parent node.
-  const H = {
+  let H = {
   life:{
     request(s,w,f,ret){
       if (ret === undefined && queueRun(w)) return {next:{sub:"queue",at:"Q1"}, title:"request: enqueue", note:"The operator adds issue #101 to the queue. The queue sub-loop checks it before it may enter Next Up.", pill:["enqueue","info"], tr:"request: enqueue #101"};
@@ -1358,10 +1386,19 @@ body.board-full{overflow:hidden}
     if (ret === "stop") return {next:"END", title:gate + ": escalated", note:f.stopWhy + " The run stops for the operator.", pill:["stop","no"], reply:{cls:"fixed",lbl:"Hand-back to the operator",txt:f.stopWhy}, tr:gate + ": escalated, run ends", L:["pause","An escalation stops at a safe point with the reason on record."]};
     return {next:nx, title:gate + " clean", note:"The round is clean for head " + s.headSha + "." + (gate === "draft_gate" ? " nextAction is mark_ready_for_review." : ""), pill:["clean","yes"], tr:gate + ": clean on " + s.headSha + " → " + nx};
   }
+  if (profile) {
+    ({ I, GR, ORDER, F, SC, H } = profile);
+  }
+  function initializeWorld(){
+    if (!profile) { defaults(); return; }
+    profile.defaults();
+    Object.assign(world, profile.world);
+  }
+  const actorsAt = (g, n) => profile ? (geo(g)[n]?.o.a || "").split(",").filter(Boolean) : (ROLE[n] || []);
 
   // ---------- engine ----------
   let S, hist, viewPath = null, showCT = true, deep = true;
-  function fresh(){ return {n:0, st:{}, prev:null, by:{}, read:[], gs:{}, pos:{g:"life",n:"request"}, stack:[], ret:undefined, act:null, crumb:["life"], trace:[], done:false, title:"Ready", note:"Nothing has run yet. Press Next step.", lens:null, reply:null, f:{h:0, g:{draft_gate:{round:0}, pre_approval_gate:{round:0}}}}; }
+  function fresh(){ return {n:0, st:{}, prev:null, by:{}, read:[], gs:{}, pos:{g:"life",n:"request"}, stack:[], ret:undefined, act:null, crumb:["life"], trace:[], done:false, title:"Ready", note:"Nothing has run yet. Press Next step.", lens:null, reply:null, f:profile ? {} : {h:0, g:{draft_gate:{round:0}, pre_approval_gate:{round:0}}}}; }
   function reset(){ S = fresh(); hist = []; viewPath = null; render(); }
   const gst = g => S.gs[g] || (S.gs[g] = {ran:[], out:{}, taken:[]});
   const edgeOf = (g, a, b) => GR[g].edges.find(e => e[0] === a && e[1] === b);
@@ -1394,9 +1431,10 @@ body.board-full{overflow:hidden}
     S.lens = {key:lk[0], txt:lk[1], src:r.src || nd.o.src || "", inf:!!(r.inf || nd.o.inf)};
     S.title = r.title; S.note = r.note; S.reply = r.reply || null;
     S.act = {g, n:at};
-    const who = ROLE[at] || []; (S.whoLog = S.whoLog || []).push({step:S.n, who});
+    const who = r.who || actorsAt(g, at); (S.whoLog = S.whoLog || []).push({step:S.n, who});
     if (r.tr) S.trace.push((who[0] ? who[0] + " · " : "") + r.tr);
     const nx = r.next;
+    S.transition = {from:{g,n}, next:clone(nx), consumedReturn:ret ?? null};
     if (nx === "END"){ S.done = true; }
     else if (typeof nx === "string"){ if (!r.noEdge) take(g, at, nx); S.pos = {g, n:nx}; }
     else if (nx.sub){ S.stack.push({g, n:at}); S.gs[nx.sub] = {ran:[], out:{}, taken:[]}; S.pos = {g:nx.sub, n:nx.at}; }
@@ -1406,6 +1444,7 @@ body.board-full{overflow:hidden}
 
   // ---------- render ----------
   function relevant(k){
+    if (profile) return true;
     const w = world, e = w.entry, pr = isPR(w), rev = e === "--pr --review", ui = e === "--pr --ui-review", sideRoute = rev || ui;
     const lifecycle = !sideRoute;
     switch (k){
@@ -1475,9 +1514,9 @@ body.board-full{overflow:hidden}
       if (o2.s) o += `<g class="badge"><rect x="${nd.x+6}" y="${nd.y+nd.h-7}" width="56" height="15" rx="3"/><text x="${nd.x+34}" y="${nd.y+nd.h+4}" text-anchor="middle">sub-loop</text></g>`;
       if (o2.inf) o += `<g class="inftag"><rect x="${nd.x+nd.w-56}" y="${nd.y-8}" width="52" height="14" rx="3"/><text x="${nd.x+nd.w-30}" y="${nd.y+2.5}" text-anchor="middle">inferred</text></g>`;
       o += `</g>`;
-      if (showCT && (ROLE[id] || o2.a)){
+      if (showCT && (profile ? o2.a : (ROLE[id] || o2.a))){
         let tx = nd.x + 6; const ty = nd.y - 8;
-        for (const a of (ROLE[id] ? (ROLE[id].length > 2 ? ROLE[id].slice(0,1).concat("+" + (ROLE[id].length-1)) : ROLE[id]) : o2.a.split(","))){ const c = RK[a] || (a[0] === "+" ? "code" : a === "agent" ? "llm" : a), w = a.length*6.4+10; o += `<g class="ct ${c}"><rect x="${tx}" y="${ty}" width="${w}" height="15" rx="3"/><text x="${tx+w/2}" y="${ty+11}" text-anchor="middle">${a}</text></g>`; tx += w + 4; }
+        for (const a of (profile ? actorsAt(gid,id) : (ROLE[id] ? (ROLE[id].length > 2 ? ROLE[id].slice(0,1).concat("+" + (ROLE[id].length-1)) : ROLE[id]) : o2.a.split(",")))){ const c = profile ? (a === "human" ? "human" : a === "agent" ? "llm" : "code") : (RK[a] || (a[0] === "+" ? "code" : a === "agent" ? "llm" : a)), w = a.length*6.4+10; o += `<g class="ct ${c}"><rect x="${tx}" y="${ty}" width="${w}" height="15" rx="3"/><text x="${tx+w/2}" y="${ty+11}" text-anchor="middle">${a}</text></g>`; tx += w + 4; }
       }
     }
     for (const [id, b] of Object.entries(st.out)){
@@ -1506,13 +1545,13 @@ body.board-full{overflow:hidden}
   ];
   function renderRecord(){
     let out = "";
-    for (const [name, keys] of GROUPS){
+    for (const [name, keys] of (profile ? [["Workflow", [...new Set([...profile.MODEL.recordKeys, ...Object.keys(S.st)])]]] : GROUPS)){
       const ks = keys.filter(k => k in S.st || S.read.includes(k));
       if (!ks.length) continue;
       out += `<div class="rgroup"><p class="lbl">${name}</p><div class="kv">` + ks.map(k => {
         const v = k in S.st ? S.st[k] : "—", pv = S.prev ? S.prev[k] : v;
         const chg = S.prev && JSON.stringify(v) !== JSON.stringify(pv), rd = S.read.includes(k) ? "rd" : "";
-        return `<span class="k ${rd}">${k}</span><span class="v ${chg ? "chg" : ""} ${rd}">${esc(v)}${S.by[k] ? `<span class="w">set by ${esc(S.by[k])}</span>` : ""}</span>`;
+        return `<span class="k ${rd}">${k}</span><span class="v ${chg ? "chg" : ""} ${rd}">${esc(typeof v === "object" ? JSON.stringify(v) : v)}${S.by[k] ? `<span class="w">set by ${esc(S.by[k])}</span>` : ""}</span>`;
       }).join("") + `</div></div>`;
     }
     $("state").innerHTML = out || `<p class="hint">Nothing recorded yet.</p>`;
@@ -1524,19 +1563,20 @@ body.board-full{overflow:hidden}
   const RK = {"operator":"human","orchestrator":"lead","coordinator":"lead","gate-coordinator":"lead","refiner":"llm","developer":"llm","reviewer":"llm","judge":"llm","fixer":"llm","docs":"llm","retro agent":"llm","script":"code","Copilot":"ext","CI":"ext"};
   const RORDER = ["operator","orchestrator","coordinator","gate-coordinator","refiner","developer","reviewer","judge","fixer","docs","retro agent","script","Copilot","CI"];
   const RDESC = {"operator":"the person who owns the work: intent, AC, waivers, merge","orchestrator":"main session: dispatches coordinators, merges, runs retros","coordinator":"dev-loop coordinator: drives one unit through its steps","gate-coordinator":"runs one gate round for one head","refiner":"grills and refines specs","developer":"writes the change and its tests","reviewer":"pre-PR, lens and delta reviews","judge":"act, defer or reject per finding","fixer":"works the act list, replies on threads","docs":"keeps docs in line with the change","retro agent":"fresh-context review of the run","script":"deterministic code decides","Copilot":"external PR reviewer","CI":"GitHub Actions checks"};
-  const rchip = r => `<span class="rchip ${RK[r]||"code"}" title="${RDESC[r]||""}">${r}</span>`;
+  const rchip = r => `<span class="rchip ${profile ? (r === "human" ? "human" : r === "agent" ? "llm" : "code") : (RK[r]||"code")}" title="${RDESC[r]||""}">${r}</span>`;
   function renderWho(){
-    const el = $("who"), cur = S.act ? (ROLE[S.act.n] || []) : [];
+    const el = $("who"), cur = S.act ? actorsAt(S.act.g,S.act.n) : [];
     el.hidden = !cur.length;
-    el.innerHTML = cur.length ? "Handled by " + cur.map((r, i) => (i === 1 ? "<span>with</span> " : "") + rchip(r)).join(" ") + (ROLE_INF.has(S.act.n) ? ' <span class="inftxt">(role inferred)</span>' : "") : "";
+    el.innerHTML = cur.length ? "Handled by " + cur.map((r, i) => (i === 1 ? "<span>with</span> " : "") + rchip(r)).join(" ") + (!profile && ROLE_INF.has(S.act.n) ? ' <span class="inftxt">(role inferred)</span>' : "") : "";
   }
   function renderActors(){
     const log = S.whoLog || [], lead = {}, help = {};
-    for (const e of log) e.who.forEach((r, i) => { (i ? help : lead)[r] = ((i ? help : lead)[r] || 0) + 1; });
-    const cur = new Set(S.act && !S.done ? (ROLE[S.act.n] || []) : []);
-    $("actors").innerHTML = RORDER.map(r => {
+    const displayRole = r => profile && r === "deterministic" ? "code" : r;
+    for (const e of log) e.who.map(displayRole).forEach((r, i) => { (i ? help : lead)[r] = ((i ? help : lead)[r] || 0) + 1; });
+    const cur = new Set(S.act && !S.done ? actorsAt(S.act.g,S.act.n).map(displayRole) : []);
+    $("actors").innerHTML = (profile ? ["human","agent","code"] : RORDER).map(r => {
       const a = lead[r] || 0, b = help[r] || 0;
-      return `<div class="arow ${cur.has(r) ? "now" : ""} ${a + b ? "" : "idle"}">${rchip(r)}<span class="d">${RDESC[r]}</span><span class="c">${a + b ? a + " lead · " + b + " help" : "none yet"}</span></div>`;
+      return `<div class="arow ${cur.has(r) ? "now" : ""} ${a + b ? "" : "idle"}">${rchip(r)}<span class="d">${profile ? ({human:"Human contribution and authority",agent:"Modeled agent assistance",code:"Deterministic modeled checks"}[r]) : RDESC[r]}</span><span class="c">${a + b ? a + " lead · " + b + " help" : "none yet"}</span></div>`;
     }).join("");
   }
   function renderStep(){
@@ -1555,7 +1595,7 @@ body.board-full{overflow:hidden}
   }
 
   function renderFacts(){
-    const locked = S.n > 0;
+    const locked = !profile && S.n > 0;
     let cur = "", h = "";
     for (const f of F){
       if (f.g !== cur){ cur = f.g; h += `<p class="fgroup">${esc(cur)}</p>`; }
@@ -1563,21 +1603,21 @@ body.board-full{overflow:hidden}
       if (f.type === "bool") h += `<label class="fact ${off}"><input type="checkbox" data-k="${f.k}" ${world[f.k] ? "checked" : ""} ${locked ? "disabled" : ""}><span class="k">${esc(f.lbl)}</span></label>`;
       else h += `<label class="fact ${off}"><span class="k">${esc(f.lbl)}</span><select data-k="${f.k}" ${locked ? "disabled" : ""}>${f.opts.map(v => `<option ${world[f.k] === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>`;
     }
-    $("facts").innerHTML = h + `<p class="hint">${locked ? "Conditions lock once the run starts. Reset to change them." : "Dimmed conditions cannot matter with the current choices."}</p>`;
+    $("facts").innerHTML = h + `<p class="hint">${profile ? "Editable hypothetical inputs. Answer the waiting role explicitly, then Next or Run. Back restores execution, not these inputs; Reset keeps current inputs." : locked ? "Conditions lock once the run starts. Reset to change them." : "Dimmed conditions cannot matter with the current choices."}</p>`;
   }
 
   function renderTrace(){
     $("trace").innerHTML = S.trace.length ? S.trace.map((t, i) => `<li><span class="s">${String(i+1).padStart(2,"0")}</span><span>${esc(t)}</span></li>`).join("") : `<li style="color:var(--mute)">No steps yet.</li>`;
     $("trace").scrollTop = $("trace").scrollHeight;
   }
-  function renderLegend(){ const el = $("rolelegend"); if (el && !el.childNodes.length) el.innerHTML = RORDER.map(rchip).join(""); }
-  function render(){ renderLegend(); renderChips(); renderBoard(); renderStep(); renderFacts(); renderRecord(); renderTrace(); renderWho(); renderActors(); }
+  function renderLegend(){ const el = $("rolelegend"); if (el && !el.childNodes.length) el.innerHTML = (profile ? ["human","agent","code"] : RORDER).map(rchip).join(""); }
+  function render(){ renderLegend(); renderChips(); renderBoard(); renderStep(); renderFacts(); renderRecord(); renderTrace(); renderWho(); renderActors(); $("runtime-state").textContent = JSON.stringify({model:profile?.MODEL.slug || "dev-loops",sourceMetadata:profile ? {evidenceStatus:profile.MODEL.evidenceStatus,researchDate:profile.MODEL.researchDate,sourceVersion:profile.MODEL.sourceVersion,sources:profile.MODEL.sources,graphAbstraction:profile.MODEL.graphAbstraction,proposedExtensions:profile.MODEL.proposedExtensions} : null,done:S.done,step:S.n,position:S.pos,stack:S.stack,pendingReturn:S.ret ?? null,lastTransition:S.transition ?? null,conditions:world,budgets:profile ? profile.MODEL.budgets(S.st,S.f) : null,records:S.st,scratch:S.f,execution:S},null,2); }
 
   // ---------- events ----------
   const JUMP = {3:"refine",4:"refine",5:"refine",9:"draft_gate",10:"draft_gate",11:"draft_gate",12:"draft_gate",13:"draft_gate",14:"draft_gate",15:"draft_gate",16:"ready",17:"ready",18:"copilot",19:"copilot",20:"merge",21:"implement",24:"spike"};
   function applyScenario(id){
-    scen = id; defaults(); Object.assign(world, SC.find(s => s.id === id).w); reset();
-    const to = JUMP[id]; if (!to) return;
+    scen = id; initializeWorld(); Object.assign(world, SC.find(s => s.id === id).w); reset();
+    const to = profile ? null : JUMP[id]; if (!to) return;
     // ponytail: fast-forward with normal steps, so Back still walks the skipped part
     let g = 0; while (!S.done && !(S.pos.g === "life" && S.pos.n === to) && g++ < 400) step();
     S.note = "Jumped ahead to " + geo("life")[to].name + ". Back steps through the part before it. " + S.note; render();
@@ -1590,7 +1630,7 @@ body.board-full{overflow:hidden}
   $("facts").addEventListener("input", e => {
     const el = e.target.closest("[data-k]"); if (!el) return;
     world[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value;
-    scen = "custom"; reset(); $("worldbox").open = true;
+    scen = "custom"; if (profile) render(); else reset(); $("worldbox").open = true;
   });
   function openGraph(gid){ viewPath = (viewPath || S.crumb).concat(gid); renderBoard(); }
   $("g").addEventListener("click", e => { const n = e.target.closest("[data-open]"); if (n) openGraph(n.dataset.open); });
@@ -1605,7 +1645,7 @@ body.board-full{overflow:hidden}
   $("cttoggle").addEventListener("click", e => { showCT = !showCT; e.currentTarget.textContent = showCT ? "Hide roles" : "Show roles"; e.currentTarget.setAttribute("aria-pressed", String(showCT)); renderBoard(); });
   $("next").addEventListener("click", step);
   $("back").addEventListener("click", back);
-  $("run").addEventListener("click", () => { let g = 0; while (!S.done && g++ < 400) step(); });
+  $("run").addEventListener("click", () => { let g = 0; if (!profile) { while (!S.done && g++ < 400) step(); return; } do { if (S.done) break; step(); } while (!S.done && !S.st.waiting && g++ < 400); });
   $("reset").addEventListener("click", reset);
   document.addEventListener("keydown", e => {
     if (e.target.matches("input,select,textarea") || e.target.closest(".trace")) return;
@@ -1615,7 +1655,8 @@ body.board-full{overflow:hidden}
     else if (e.key === "Escape" && viewPath){ viewPath = null; renderBoard(); }
   });
 
-  defaults(); applyScenario(1);
+  initializeWorld(); applyScenario(1);
+  if (location.hash === "#examples") $("examples").open = true;
 })();
 </script>
 <script>
@@ -1645,8 +1686,10 @@ body.board-full{overflow:hidden}
 <script>
 (function(){
   // ponytail: one clamp for every graph; tune MIN/MAX if node text reads too small or too big
-  const MIN = 0.75, MAX = 1;
+  const example = !!document.body.dataset.workflow;
+  const MIN = example ? 1 : 0.75, MAX = 1;
   const svg = document.querySelector(".board svg"), box = svg.parentElement, board = document.querySelector(".board");
+  let lastCamera = "";
   function size(){
     const vb = svg.viewBox.baseVal; if (!vb || !vb.width) return;
     const full = board.classList.contains("full");
@@ -1654,6 +1697,14 @@ body.board-full{overflow:hidden}
     const k = Math.min(full ? 1.2 : MAX, Math.max(MIN, Math.min(aw / vb.width, ah / vb.height)));
     svg.style.width = Math.round(vb.width * k) + "px"; svg.style.height = Math.round(vb.height * k) + "px";
     svg.style.marginInline = vb.width * k < aw ? "auto" : "0";
+    if (example) {
+      const active = svg.querySelector(".n.act .box") || svg.querySelector(".n .box");
+      const key = `${svg.getAttribute("aria-label")}|${active?.getAttribute("x")}|${active?.getAttribute("y")}|${aw}|${full}`;
+      if (active && key !== lastCamera) {
+        box.scrollLeft = Math.max(0, active.getBBox().x * k + active.getBBox().width * k / 2 - box.clientWidth / 2);
+        lastCamera = key;
+      }
+    }
   }
   new MutationObserver(size).observe(svg, {attributes:true, attributeFilter:["viewBox"]});
   new MutationObserver(size).observe(board, {attributes:true, attributeFilter:["class"]});

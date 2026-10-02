@@ -39,3 +39,11 @@ test("rendered artifact CI classifier normalizes and deduplicates paths", () => 
   const result = classifyRenderedArtifactCiChanges([" ./test/playwright/new-deck.spec.mjs ", "test/playwright/new-deck.spec.mjs"]);
   assert.deepEqual(result.presentationPaths, ["test/playwright/new-deck.spec.mjs"]);
 });
+
+test("generated workflow articles require browser coverage after model-only or renderer changes", () => {
+  for (const path of ["docs/articles/assets/workflow-models/evalgen.mjs", "scripts/pages/workflow-examples.mjs", "test/playwright/workflow-examples.spec.mjs"]) {
+    const result = classifyRenderedArtifactCiChanges([path]);
+    assert.equal(result.articles, true);
+    assert.equal(result.presentations, false);
+  }
+});
