@@ -480,8 +480,8 @@ for(const width of [1280,390]) {
     expect(second.budgets.local.testCandidates).toEqual([2,2]);
     expect({boundary:second.records.probeRegister.boundary,equivalent:second.records.probeRegister.equivalent,excluded:second.records.probeRegister.excluded}).toEqual(retained);
     await click(page,'back');await click(page,'next');expect(await state(page)).toEqual(second);
-    await page.locator('#chips [data-s="1"]').click();
-    await page.locator('#facts [data-k="mutant"]').selectOption('equivalent mutant');await click(page,'run');
+    await page.locator('#chips [data-s="2"]').click();await click(page,'run');
+    await page.locator('#facts [data-k="mutant"]').selectOption('equivalent mutant');
     await resumeNativeInput(page,'freshConcern','concern 2 authored');await click(page,'run');
     const stale=await state(page);
     expect(stale.records).toMatchObject({concernVersion:3,waiting:true,concernDecision:null});
@@ -497,8 +497,24 @@ for(const width of [1280,390]) {
     await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`meta-concern-3-stale-${width}`,viewport:{width,height:844},fullPage:false});
     await page.locator('#facts [data-k="mutant"]').selectOption('plausible uncaught mutant');
     await resumeNativeInput(page,'freshConcern','concern 3 authored');await click(page,'run');
+    const interpretationWait=await state(page);
+    expect(interpretationWait.position).toMatchObject({g:'interpretation',n:'achHumanInterpret'});
+    expect(interpretationWait.records).toMatchObject({concernVersion:3,waiting:true,interpretationRecord:null,decisionRecorded:false,stageReady:false});
+    expect(interpretationWait.records.validationEvidence).toMatchObject({version:3,valid:true});
+    for(const value of ['new concern once','pending','concern 1 valid relevant tests','concern 2 valid relevant tests']) {
+      await page.locator('#facts [data-k="interpretation"]').selectOption(value);
+      for(const control of ['next','run']) {
+        await click(page,control);const waiting=await state(page);
+        expect(waiting.records).toEqual(interpretationWait.records);
+        expect(waiting.scratch).toEqual(interpretationWait.scratch);expect(waiting.budgets).toEqual(interpretationWait.budgets);
+      }
+    }
+    await page.locator('#state .k').filter({hasText:/^humanWorkItem$/}).scrollIntoViewIfNeeded();
+    await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`meta-concern-3-interpretation-wait-${width}`,viewport:{width,height:844},fullPage:false});
+    await resumeNativeInput(page,'interpretation','concern 3 valid relevant tests');await click(page,'run');
     const third=await state(page);
-    expect(third.records).toMatchObject({concernVersion:3,revisionRounds:3,stageReady:true,faultClassProven:false});
+    expect(third.records).toMatchObject({concernVersion:3,revisionRounds:3,stageReady:true,faultClassProven:false,decisionRecorded:true});
+    expect(third.records.interpretationRecord).toMatchObject({version:3,outcome:'valid relevant tests'});
     expect(third.records.concernDecision.answer).toBe('concern 3 authored');
     expect({boundary:third.records.probeRegister.boundary,equivalent:third.records.probeRegister.equivalent,excluded:third.records.probeRegister.excluded}).toEqual(retained);
     await click(page,'back');await click(page,'next');expect(await state(page)).toEqual(third);

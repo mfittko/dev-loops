@@ -218,9 +218,10 @@ Source: https://playwright.dev/docs/test-agents — stable official documentatio
 
 ### Native fixtures / handoff
 - Preset 1 → `selected faults hardened (simulated)`; broader adequacy and outcome achievement remain unproven/false.
-- Preset 2: human interpretation `RETURN new concern` → parent concern v2 → `life.achConcern` WAIT. Set **freshConcern = revised concern authored**.
-- Preset 3: detection evidence ready but `interpretation.achHumanInterpret` WAIT. Set **interpretation = valid relevant tests**.
+- Preset 2: human interpretation `RETURN new concern` → parent concern v2 → `life.achConcern` WAIT. Set **freshConcern = concern 2 authored**. The explicit **new concern once** fixture covers concern-1 refinement followed by concern-2 validity only.
+- Preset 3: detection evidence ready but `interpretation.achHumanInterpret` WAIT. Set **interpretation = concern 1 valid relevant tests**.
 - Initial concern wait: `life.achConcern`, **concernInput = concern authored**. Only supply the requested current version input.
+- Concern 3 after another no-survivor return: **freshConcern = concern 3 authored** is necessary but does not supply test relevance. After current validated evidence exists, `interpretation.achHumanInterpret` waits for **interpretation = concern 3 valid relevant tests**. The earlier concern-1/2 positive values and **new concern once** cannot authorize concern 3; missing/stale input leaves decisions and budgets unchanged. Current **concern 2 valid relevant tests** likewise applies only to concern 2.
 - Preset 4: invalid-first candidate local repair; 5: candidate cap; 6: explicit unsupported-relevance rejection despite selected detection.
 
 
