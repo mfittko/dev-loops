@@ -5,6 +5,7 @@
 - Simulator-family navigation aligns with each view's overall content container and keeps a clear desktop/mobile gap above paired-view controls (#2624)
 - Simulator navigation changes preserve unrelated navigation and fullscreen graph layout (#2624)
 - Detailed and Overview graphs expose named keyboard-scrollable regions in normal and full-window modes; arrow panning does not change execution (#2624)
+- Overview full-window graph focus rings stay inside the viewport without changing graph geometry (#2624)
 - Simulator pages improve light/dark contrast with state cues, expose graph controls to keyboard/screen-reader users, and add labeled keyboard-scrollable traces and a main landmark (#2624)
 - Simulator desktop/mobile UI checks use controlled local fallback fonts instead of live Google Fonts, keeping layout checks and captures independent of external font availability (#2624)
 - Original Detailed and Overview models load from separate native modules; teaching scenarios, defaults, transitions, and runtime controls are preserved (#2624)
