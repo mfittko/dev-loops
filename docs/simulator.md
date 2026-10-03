@@ -16,6 +16,8 @@ The publication retains each artifact's teaching prose, graph/model tables, tran
 
 The native models live in `docs/articles/assets/simulator-model.mjs` and `docs/articles/assets/simulator-overview-model.mjs`. Both export `createModel()` but preserve distinct schemas: Detailed exposes nested graphs and `H(s, w, f, ret)` handlers; Overview exposes its lifecycle record and `advance(state, world, previous)` transition. Model instances own fresh graph/record/fact data. The pages import their models while retaining DOM rendering, controls, undo history and keyboard handling. The publisher emits both modules under `assets/`; the npm allowlist includes both for installed Node consumers. Model-only changes require their owning original page's automatic desktop/mobile suite.
 
+Overview transition helpers are defined once per model and receive the run state explicitly; advancing a step does not recreate those helpers.
+
 Extraction changes source location and bootstrap imports, not teaching semantics. Differential browser evidence compares every native preset's initial, completed, Back, replay and Reset states against the original artifacts. Full-window and graph-sizing scripts remain identical to the originals.
 
 ## Navigation and accessibility
