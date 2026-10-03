@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { afterAll as after, test } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +12,7 @@ import {
   captureDescriptorScreen,
   MAX_DESCRIPTOR_STEPS,
 } from "../../scripts/loop/visual-grill-capture.mjs";
+import { WEBKIT_MISSING_MESSAGE } from "../../scripts/loop/ui-review-capture.mjs";
 
 const tempFiles = [];
 after(() => {
@@ -372,4 +374,33 @@ test("captureDescriptorScreen: a step that throws fails closed rather than fabri
   );
   assert.equal(result.ok, false);
   assert.match(result.stopReason, /selector not found/);
+});
+
+test("captureDescriptorScreen: the default launcher fails closed when the WebKit binary is missing", () => {
+  const dir = tempDir();
+  // Isolate Playwright's import-time browser-path lookup from other test files.
+  // The child deliberately omits launchBrowser and uses the production loader.
+  const child = spawnSync(process.execPath, ["--eval", `
+    const { captureDescriptorScreen } = await import("./scripts/loop/visual-grill-capture.mjs");
+    const result = await captureDescriptorScreen(
+      {
+        repoRoot: ${JSON.stringify(dir)},
+        appUrl: "http://127.0.0.1:9/",
+        outputDir: ${JSON.stringify(path.join(dir, "out"))},
+        descriptor: { name: "probe", steps: [{ action: "goto", path: "/" }] },
+      },
+      { loadConfig: async () => ({ config: {} }) },
+    );
+    console.log(JSON.stringify(result));
+  `], {
+    cwd: path.resolve(import.meta.dir, "../.."),
+    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: path.join(dir, "no-browsers") },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const result = JSON.parse(child.stdout);
+  assert.equal(result.ok, false);
+  assert.equal(result.stopReason, WEBKIT_MISSING_MESSAGE);
+  assert.equal(result.screenshotPath, null);
 });
