@@ -32,7 +32,8 @@ Registration is keyed on the **full repo-relative path**, not the basename. `doc
 "Registered" means the artifact appears in the shared registries:
 
 - decks → `DECK_REGISTRY` in `test/playwright/harness/deck-fit-harness.mjs` (served from `docs/presentations/<deck>`) with a thin spec calling `defineDeckSuite`.
-- articles → `ARTICLE_REGISTRY` in `test/playwright/harness/deck-fit-harness.mjs` (served from `docs/articles/<file>`) with a thin spec calling `defineArticleSuite` (shared fit/CSP/no-horizontal-scroll assertions, minus the deck's per-section named captures).
+- ordinary prose articles → `ARTICLE_REGISTRY` in `test/playwright/harness/deck-fit-harness.mjs` (served from `docs/articles/<file>`) with a thin spec calling `defineArticleSuite` (shared fit/CSP/no-horizontal-scroll assertions, minus the deck's per-section named captures).
+- original Simulator pages (`simulator.html` and `simulator-overview.html`) → the same `ARTICLE_REGISTRY`, with thin specs calling `defineSimulatorSuite` in `test/playwright/harness/simulator-harness.mjs` (shared fit/no-horizontal-scroll and interaction assertions on desktop and mobile). These preserved teaching pages intentionally retain their inline runtime rather than being CSP-locked prose articles; their runner does not assert CSP.
 - the viewer → `VIEWER_REGISTRY` in `test/playwright/harness/inspect-run-viewer-harness.mjs`.
 
 The gate checks membership against `packages/core/src/loop/ui-e2e-scoping.mjs` (`REGISTERED_ARTIFACT_PATHS`, keyed by full repo-relative path; `VIEWER_ARTIFACT_ID`). Keep HTML paths aligned with the shared registries and the two native model paths mapped to their owning original article suites. Actual Playwright discovery tests protect project selection.
@@ -57,7 +58,7 @@ Each rendered-artifact family has a satisfiable CI job in `.github/workflows/ci.
 
 When you change a rendered artifact's layout, **verify it visually before merging**. Render the built page and inspect real geometry at desktop and mobile widths: `getBoundingClientRect` for edges and widths, and a full-page screenshot to look at it. This intermediary e2e pass is a required *verification strategy*. A layout claim is credible only once it is measured against the rendered page.
 
-Do not persist these checks. The shared fit/CSP suite (`defineArticleSuite`/`defineDeckSuite`) is the registered coverage. Do not grow it with one-off pixel or alignment assertions for a single fix. Use a throwaway script to render, measure and screenshot while iterating, then drop it.
+Do not persist these checks. The shared suites are the registered coverage: `defineArticleSuite`/`defineDeckSuite` retain fit/CSP assertions for ordinary prose articles and decks; the two original Simulator pages use `defineSimulatorSuite` for shared fit/no-horizontal-scroll and interaction coverage, without CSP assertions. Do not grow these suites with one-off pixel or alignment assertions for a single fix. Use a throwaway script to render, measure and screenshot while iterating, then drop it.
 
 ## An assertion must be able to fail on the defect
 
