@@ -105,6 +105,7 @@
     "cli/",
     "lib/",
     "scripts/",
+    "docs/articles/assets/workflow-models/",
     "extension/",
     "skills/",
     "agents/",
