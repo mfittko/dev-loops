@@ -105,7 +105,7 @@
     {
       "slug": "meta-ach",
       "sourceSha256": "a5ceceac42680fbf99eefa72db5b2b4687586ec3a9d2b76af28c7dd233ac0426",
-      "productionSha256": "19a80ac0f901cf526f4431ac6ef8b3ed9fa6d7bf08b74662d5ad8b486d1acfea",
+      "productionSha256": "0bbd5802171e3acebfa10b55c2a110f3436cdbe6f8d0dcfcf0f2d82e2c1b96ef",
       "adaptations": [
         "ES-module factory with isolated profile data",
         "Removed prototype-only leading comments",
