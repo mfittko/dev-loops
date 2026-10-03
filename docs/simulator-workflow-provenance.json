@@ -83,31 +83,34 @@
     {
       "slug": "qa-wolf-mapping-ai",
       "sourceSha256": "db2b623f0de650be419f5ed9319d6ab395f87d0099c4880f52cd6afa3c280361",
-      "productionSha256": "b389218adcb5005f6860355143f5c29a354e3bf8bfd8c07515c10bd15756281d",
+      "productionSha256": "a83cbfb0974162e40e941722ea9995b65094c518d42bbc2baf89287613e698f4",
       "adaptations": [
         "ES-module factory with isolated profile data",
         "Removed prototype-only leading comments",
-        "Production labels; all execution/source limitations retained"
+        "Production labels; all execution/source limitations retained",
+        "Existing conventional exact-ID/version matching is attributed to code, not an LLM agent"
       ]
     },
     {
       "slug": "playwright-test-agents",
       "sourceSha256": "a3b0deb22afcde59cd4ed53e720637cd6817420a15107ca940fdbbca027b2233",
-      "productionSha256": "1c433c125b83aa7bf01d1ce12fc8e724d87850774d99799746af357df78a6cfa",
+      "productionSha256": "1bec1abdb4a0d30352299ef7512a4cde7cdac0650f1c3114f3aab1afd82f730d",
       "adaptations": [
         "ES-module factory with isolated profile data",
         "Removed prototype-only leading comments",
-        "Production labels; all execution/source limitations retained"
+        "Production labels; all execution/source limitations retained",
+        "New healer CALL initializes shared local repairs; internal repair, RETURN and global intent rounds retain their spend"
       ]
     },
     {
       "slug": "meta-ach",
       "sourceSha256": "a5ceceac42680fbf99eefa72db5b2b4687586ec3a9d2b76af28c7dd233ac0426",
-      "productionSha256": "d92af814c21e98c41660fd8cf7eceec8c96f26d432a8ebf6a9ac38c96f4c43f2",
+      "productionSha256": "d6be502a56eb38afd76b3d8b816f72c935cb3d6003b52a98db0b188cd5369cb6",
       "adaptations": [
         "ES-module factory with isolated profile data",
         "Removed prototype-only leading comments",
-        "Production labels; all execution/source limitations retained"
+        "Production labels; all execution/source limitations retained",
+        "Revised concern authorship explicitly names concern 2 or 3; new test CALL initializes shared local candidates without resetting rework, RETURN or global concern rounds"
       ]
     },
     {
@@ -133,21 +136,23 @@
     {
       "slug": "conversational-ux-coanalysis",
       "sourceSha256": "683856ae8575afed9d13c7bf726cad81959ee1cbd2a0ae477687f073565c708f",
-      "productionSha256": "6a91d5006e3ede0a2bed3f97acc5c35d17ba6b182968e90d214e090b4602f9fc",
+      "productionSha256": "692d98ecbb43688262112410b917d4a495873212b8694c57ffaf0195b6238455",
       "adaptations": [
         "ES-module factory with isolated profile data",
         "Removed prototype-only leading comments",
-        "Production labels; all execution/source limitations retained"
+        "Production labels; all execution/source limitations retained",
+        "New supplied human question initializes the displayed explanation count with shared scratch; pending input, historical findings/questions and global revisions are retained"
       ]
     },
     {
       "slug": "product-design-frontend",
       "sourceSha256": "32c6fe03e9a2e61c998bbbfb4d8cdbccb6f6c0cc7916c2320b1119ba8de34f46",
-      "productionSha256": "9bf50c3518a6fd9ef095f95017fe93fa27334ac7745ba4bb959efeda67f6c10b",
+      "productionSha256": "867091079ec834cb6ad638bec7d938b9256a996c3c6bceb9b1d73d908156abc5",
       "adaptations": [
         "ES-module factory with isolated profile data",
         "Removed prototype-only leading comments",
-        "Production labels; all execution/source limitations retained"
+        "Production labels; all execution/source limitations retained",
+        "At the two-artifact-revision cap, Design/Product callbacks hand off before incrementing versions, spending a phantom revision or invalidating current evidence; allowed revisions and frontend-local budgets are unchanged"
       ]
     },
     {
