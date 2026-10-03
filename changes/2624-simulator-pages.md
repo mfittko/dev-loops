@@ -11,3 +11,4 @@
 - Original model asset changes select their owning automatic browser suite; published pages and npm packages include both modules (#2624)
 - Overview transitions reuse model-scoped helpers with explicit run state instead of recreating five helper functions per step (#2624)
 - Orphan-entrypoint checks distinguish published browser model metadata from real Node imports and spawns, preserving the standalone-tool ratchet (#2624)
+- Detailed Simulator graph shortcuts expose a named control group to assistive technology without adding a navigation landmark (#2624)
