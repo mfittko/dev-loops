@@ -14,7 +14,7 @@ The engine invokes the `H[g][node]` handler with `records`, `world`, `sharedScra
 
 Example conditions remain editable during execution. Editing does not silently reset execution or supply human authority. An unanswered human contribution remains **WAIT**; Next/Run/polling cannot consent, and Run stops at the wait. Explicit contributions can resume the waiting step. Back restores the entire execution record, stack, pending result and shared scratch; current editable inputs are not historical. Reset keeps those current inputs. Choosing a scenario restores its hypothetical starting inputs. The expandable **Runtime inspection** is live state, not a prerecorded trace.
 
-For examples, graph text renders at 100% initial scale and the horizontally scrollable camera centers the active/entry node; original camera behavior is unchanged. Long evidence/context and condition labels wrap. Long select choices remain available in their dropdowns.
+For examples, graph text renders at 100% initial scale and the horizontally scrollable camera centers the active/entry node; original camera behavior is unchanged. Long evidence/context and condition labels wrap. Example native selects use normal whitespace so long revised-version contributions do not expand the document after rework. Full choices remain available in their native dropdowns, including keyboard-authored contributions.
 
 ## Curated selection and evidence
 
