@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { appendFile, readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
+import { isManualUiE2ePath } from "@dev-loops/core/loop/ui-e2e-scoping";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
@@ -39,7 +40,7 @@ function isSingleHtml(path, directory) {
 export function classifyRenderedArtifactCiChanges(changedPaths = []) {
   const paths = [...new Set(changedPaths.map(normalizePath).filter(Boolean))].sort();
   const presentationPaths = paths.filter((path) => isCommon(path) || isSingleHtml(path, "docs/presentations") || /^test\/playwright\/[^/]*-deck\.spec\.mjs$/u.test(path));
-  const articlePaths = paths.filter((path) => isCommon(path) || path === "test/playwright/harness/simulator-harness.mjs" || path === "test/playwright/harness/workflow-site-server.mjs" || path === "test/playwright/workflow-examples.spec.mjs" || path === "scripts/pages/workflow-examples.mjs" || path.startsWith("docs/articles/assets/workflow-models/") || isSingleHtml(path, "docs/articles") || /^test\/playwright\/[^/]*-article\.spec\.mjs$/u.test(path));
+  const articlePaths = paths.filter((path) => !isManualUiE2ePath(path) && (isCommon(path) || path === "test/playwright/harness/simulator-harness.mjs" || path === "test/playwright/harness/workflow-site-server.mjs" || isSingleHtml(path, "docs/articles") || /^test\/playwright\/[^/]*-article\.spec\.mjs$/u.test(path)));
   return {
     presentations: presentationPaths.length > 0,
     articles: articlePaths.length > 0,

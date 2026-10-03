@@ -24,3 +24,5 @@
 - Examples visibly distinguish sources from proposed-model boundaries; no archive is published (#2624)
 - Published npm packages include the authoritative workflow model dependency directory, keeping the shipped Pages example registry importable without repository-only assets (#2624)
 - Example native dropdowns prevent long revised-version contributions from growing desktop/mobile document width; full options, keyboard authorship and original controls remain unchanged (#2624)
+- Workflow-example browser suites are excluded from automatic CI and default/aggregate selection; explicit local/manual execution remains available (#2624)
+- Original Simulator/Overview browser CI and fast model/publication/package/docs checks remain enabled; workflow artifacts still require independent rendered-UI review (#2624)
