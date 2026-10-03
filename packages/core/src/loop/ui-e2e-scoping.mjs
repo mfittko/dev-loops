@@ -2,10 +2,10 @@
 //
 // Deterministic, path-triggered criterion: a PR that adds or modifies a
 // *rendered* HTML artifact (a presentation deck, an article page, or the
-// inspect-run viewer's served page/component) MUST run the shared UI e2e
-// assertions (mobile + desktop) AND have that artifact registered in the e2e
-// suite (DECK_REGISTRY / ARTICLE_REGISTRY / VIEWER_REGISTRY). Inclusion is
-// triggered by the changed-file set, never by a human annotating the PR.
+// inspect-run viewer's served page/component) requires shared UI e2e assertions
+// (mobile + desktop) and suite registration. Explicit manual-only scheduling
+// exceptions retain rendered classification and independent review scope.
+// Inclusion is path-triggered, never a human annotation on the PR.
 //
 // This module is the testable core of that criterion: classify changed paths
 // → rendered-artifact set → check each is registered → fail closed if a
@@ -31,10 +31,8 @@ export const VIEWER_SOURCE_PATHS = Object.freeze([
 // other. Mirrors the registries' actual on-disk locations:
 //   decks   → DECK_REGISTRY served from docs/presentations/<deck>
 //   articles→ ARTICLE_REGISTRY served from docs/articles/<file>
-// Note: kept as an explicit list here rather than importing the harness
-// (which pulls @playwright/test into core); the ui-e2e-scoping.test.mjs sync
-// test fails if a registry entry is added without updating this list, so it
-// can't silently drift.
+// Kept explicit here instead of importing the harness, which pulls
+// @playwright/test into core.
 export const REGISTERED_ARTIFACT_SUITES = Object.freeze({
   "docs/presentations/introducing-dev-loops.html": "intro-deck",
   "docs/presentations/dev-loops-deep-dive.html": "deep-dive",
@@ -49,6 +47,19 @@ export const REGISTERED_ARTIFACT_SUITES = Object.freeze({
   "docs/articles/assets/workflow-models": "workflow-examples",
 });
 export const REGISTERED_ARTIFACT_PATHS = Object.freeze(Object.keys(REGISTERED_ARTIFACT_SUITES));
+
+// User-authorized scheduling exception, not a rendered-artifact/review exemption.
+const MANUAL_ONLY_UI_E2E_SUITES = Object.freeze(["workflow-examples"]);
+export function isAutomaticUiE2eSuite(suite) {
+  return !MANUAL_ONLY_UI_E2E_SUITES.includes(suite);
+}
+
+export function isManualUiE2ePath(filePath) {
+  const path = normalizePath(filePath);
+  const artifact = classifyRenderedArtifactPath(path);
+  const suite = artifact ? REGISTERED_ARTIFACT_SUITES[artifact.id] : path.match(/^test\/playwright\/([^/]+)\.spec\.mjs$/u)?.[1];
+  return !isAutomaticUiE2eSuite(suite);
+}
 
 export const VIEWER_ARTIFACT_ID = "inspect-run-viewer";
 
@@ -129,14 +140,15 @@ export function evaluateUiE2eScoping(changedPaths = [], { uiE2ePassed = null } =
     }
   }
 
-  const required = artifacts.length > 0;
+  const automaticArtifacts = artifacts.filter((artifact) => isAutomaticUiE2eSuite(REGISTERED_ARTIFACT_SUITES[artifact.id]));
+  const required = automaticArtifacts.length > 0;
   if (!required) {
     return { required: false, artifacts, unregistered: [], satisfied: true, reason: null };
   }
 
   // Fail closed: any touched rendered artifact that is not registered blocks
   // and names itself so the fix is unambiguous (register it in the suite).
-  const unregistered = artifacts.filter((a) => !a.registered).map((a) => a.id);
+  const unregistered = automaticArtifacts.filter((a) => !a.registered).map((a) => a.id);
   if (unregistered.length > 0) {
     return {
       required: true,
@@ -153,9 +165,9 @@ export function evaluateUiE2eScoping(changedPaths = [], { uiE2ePassed = null } =
     };
   }
 
-  // All touched artifacts are registered — coverage must have actually passed.
+  // All automatic artifacts are registered — their coverage must have passed.
   if (uiE2ePassed !== true) {
-    const touched = artifacts.map((a) => a.id).join(", ");
+    const touched = automaticArtifacts.map((a) => a.id).join(", ");
     return {
       required: true,
       artifacts,

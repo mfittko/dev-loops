@@ -4,7 +4,7 @@ Canonical owner for **when the shared UI/mobile e2e loop is required**. Inclusio
 
 ## Trigger: a rendered-artifact change requires UI e2e coverage
 
-A PR that **adds or modifies a rendered HTML artifact** MUST run the shared UI e2e assertions (mobile + desktop) AND register that artifact in the e2e suite. A "rendered artifact" is anything that renders to a served page or component:
+A PR that **adds or modifies a rendered HTML artifact** MUST run the shared UI e2e assertions (mobile + desktop) AND register that artifact in the e2e suite, except for the explicit manual-only browser scheduling policy below. A "rendered artifact" is anything that renders to a served page or component:
 
 - a presentation deck: `docs/presentations/*.html` (registered in `DECK_REGISTRY`)
 - an article page: `docs/articles/*.html` (registered in `ARTICLE_REGISTRY`; the intro article is the published landing page)
@@ -33,25 +33,29 @@ Registration is keyed on the **full repo-relative path**, not the basename. `doc
 - articles → `ARTICLE_REGISTRY` in `test/playwright/harness/deck-fit-harness.mjs` (served from `docs/articles/<file>`) with a thin spec calling `defineArticleSuite` (shared fit/CSP/no-horizontal-scroll assertions, minus the deck's per-section named captures).
 - the viewer → `VIEWER_REGISTRY` in `test/playwright/harness/inspect-run-viewer-harness.mjs`.
 
-The gate checks membership against `packages/core/src/loop/ui-e2e-scoping.mjs` (`REGISTERED_ARTIFACT_PATHS`, keyed by full repo-relative path; `VIEWER_ARTIFACT_ID`). A sync test keeps `REGISTERED_ARTIFACT_PATHS` aligned with `DECK_REGISTRY` + `ARTICLE_REGISTRY`. No test checks `VIEWER_ARTIFACT_ID` against `VIEWER_REGISTRY`, so keep the two in sync by hand.
+The gate checks membership against `packages/core/src/loop/ui-e2e-scoping.mjs` (`REGISTERED_ARTIFACT_PATHS`, keyed by full repo-relative path; `VIEWER_ARTIFACT_ID`). Keep these paths aligned with the shared registries. Actual Playwright discovery tests protect automatic and explicit manual project selection.
 
 ## Fail-closed semantics
 
 The check is a gate precondition in `evaluatePrGateCoordination` (`packages/core/src/loop/pr-gate-coordination.mjs`), separate from the mergeability (#980) and retrospective (#982) preconditions. It fails closed:
 
 - **Unregistered rendered artifact touched** → gate blocks with `nextAction: run_ui_e2e_suite`, reason naming the artifact and that it needs registration in the suite.
-- **Registered, but UI e2e suite did not pass for this head** (`uiE2ePassed` is `false`/unknown) → gate blocks with the same action, reason that the suite must run and pass first.
+- **Automatic registered artifact, but UI e2e suite did not pass for this head** (`uiE2ePassed` is `false`/unknown) → gate blocks with the same action, reason that the suite must run and pass first.
 - **Non-UI change** → `required: false`, gate passes through untouched.
 
 The detect layer reads the changed-file set from `gh pr view --json files` and derives `uiE2ePassed` from the `statusCheckRollup` UI e2e check(s) (`UI_E2E_CHECK_NAMES`). Every present UI e2e check must be `SUCCESS`. If none is present, the value is unknown and the gate fails closed.
 
-Each rendered-artifact family has a satisfiable CI job in `.github/workflows/ci.yml`. The `changes` job path-conditions each one, and each is named to match `UI_E2E_CHECK_NAMES`:
+Each automatic rendered-artifact family has a satisfiable CI job in `.github/workflows/ci.yml`. The `changes` job path-conditions each one, and each is named to match `UI_E2E_CHECK_NAMES`:
 
 - `viewer-smoke` → inspect-run viewer spec (triggered by the viewer source set).
 - `deck-smoke` → both presentation deck fit specs (triggered by `docs/presentations/**` and the deck specs/harness/configs).
 - `article-smoke` → both article fit specs (triggered by `docs/articles/**` and the article specs/harness/configs).
 
-Generated Simulator workflow examples use the `workflow-examples` article-family slice. Changes under `docs/articles/assets/workflow-models/` or to `scripts/pages/workflow-examples.mjs` require that slice even when no article HTML changed. Run `bun run test:playwright:workflow-examples`; it publishes and drives all selected routes rather than treating model JavaScript as non-rendered data. Changes to the shared `simulator.html` runtime select both the original detailed slice and the generated workflow slice; the original overview page retains its existing slice. See the [Simulator workflow guide](https://github.com/mfittko/dev-loops/blob/main/docs/simulator-workflows.md) for the runtime, selection, source boundaries and targeted proof contract.
+### User-authorized manual-only workflow browser coverage
+
+The twelve generated Simulator workflow examples remain registered rendered articles, but the user exempted their slow `workflow-examples` browser suite from automatic CI. `packages/core/src/loop/ui-e2e-scoping.mjs` owns that scheduling policy. Default and broad article Playwright discovery, automatic article-smoke, UI browser-gate requirements and targeted validation recommendations do not select this suite. Model/publication changes retain rendered-artifact and independent Designer review scope; automatic targeted validation selects fast script/model/publication tests instead. Package, documentation and generated-asset checks remain enabled.
+
+Run `bun run test:playwright:workflow-examples` explicitly for local/manual browser proof; its existing `PW_UI_SLICE=workflow-examples` opt-in enables the project. `--list` discovers the suite without executing browsers. The original Detailed and Overview browser suites stay automatic; shared `simulator.html` changes still require original Detailed coverage, with workflow browser proof available manually. Source-supported facts, private/unverified summaries and proposed models keep their existing evidence boundaries. This is a browser scheduling exception, not a review, observed-defect, full-validation or merge-gate waiver. See the [Simulator workflow guide](https://github.com/mfittko/dev-loops/blob/main/docs/simulator-workflows.md) for the runtime and proof contract.
 
 ## Verifying a UI change: render and look, but don't persist ad-hoc checks
 

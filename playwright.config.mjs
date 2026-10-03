@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import { isAutomaticUiE2eSuite } from "@dev-loops/core/loop/ui-e2e-scoping";
 
 import { ARTICLE_REGISTRY, DECK_REGISTRY } from "./test/playwright/harness/deck-fit-harness.mjs";
 import { VIEWER_REGISTRY } from "./test/playwright/harness/inspect-run-viewer-harness.mjs";
@@ -9,7 +10,7 @@ import { normalizeUiStateSegment } from "./test/playwright/harness/webkit-smoke-
 // a distinct outputDir for per-slice artifact separation.
 const sliceIds = [
   ...Object.values(DECK_REGISTRY).map((entry) => entry.sliceId),
-  ...Object.values(ARTICLE_REGISTRY).map((entry) => entry.sliceId),
+  ...Object.values(ARTICLE_REGISTRY).filter((entry) => isAutomaticUiE2eSuite(entry.sliceId) || process.env.PW_UI_SLICE === entry.sliceId).map((entry) => entry.sliceId),
   VIEWER_REGISTRY.sliceId,
 ];
 

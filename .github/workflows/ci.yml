@@ -219,4 +219,3 @@ jobs:
           bun run test:playwright:how-decided-article
           bun run test:playwright:simulator-article
           bun run test:playwright:simulator-overview-article
-          bun run test:playwright:workflow-examples
