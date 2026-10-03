@@ -9,3 +9,4 @@
 - Simulator desktop/mobile UI checks use controlled local fallback fonts instead of live Google Fonts, keeping layout checks and captures independent of external font availability (#2624)
 - Original Detailed and Overview models load from separate native modules; teaching scenarios, defaults, transitions, and runtime controls are preserved (#2624)
 - Original model asset changes select their owning automatic browser suite; published pages and npm packages include both modules (#2624)
+- Overview transitions reuse model-scoped helpers with explicit run state instead of recreating five helper functions per step (#2624)

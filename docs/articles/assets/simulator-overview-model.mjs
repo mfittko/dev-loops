@@ -101,90 +101,90 @@ export function createModel() {
   }
   function defaults(world){ F.forEach(f => world[f.k] = f.type==="bool" ? f.d : f.opts[0]); }
   function fresh(){ return { n:0, st:freshState(), prev:null, out:{}, by:{}, read:[], pending:["startup"], active:[], ran:[], taken:[], trace:[], done:false, title:"Ready", note:"Nothing has run yet. Press Next step.", lens:null, reply:null, h:-1, f:{} }; }
+  function take(S, id){ if (!S.taken.includes(id)) S.taken.push(id); }
+  function mark(S, k){ if (!S.ran.includes(k)) S.ran.push(k); }
+  function out(S, n, t, tone){ S.out[n] = {t, tone}; }
+  function wrote(S, n, keys){ keys.forEach(k => S.by[k] = n); }
+  function newHead(S){ S.h++; return HEADS[S.h] || "Z"; }
   function advance(S, world, previous){
-  const take = id => { if (!S.taken.includes(id)) S.taken.push(id); };
-  const mark = k => { if (!S.ran.includes(k)) S.ran.push(k); };
-  const out = (n, t, tone) => { S.out[n] = {t, tone}; };
-  const wrote = (n, keys) => keys.forEach(k => S.by[k] = n);
-  const newHead = () => { S.h++; return HEADS[S.h] || "Z"; };
-    const s = S.st, f = S.f, node = S.pending[0]; S.active = [node]; S.reply = null; mark(node);
+    const s = S.st, f = S.f, node = S.pending[0]; S.active = [node]; S.reply = null; mark(S, node);
     if (node === "startup"){
-      take("s-start");
+      take(S, "s-start");
       s.config = world.config === "loads" ? "loaded" : "load error: unknown key";
       s.retro = world.retro ? "recorded" : "missing";
       s.matrix = world.matrix ? "present" : "missing";
-      wrote("startup", ["config","retro","matrix"]); S.read = ["config","retro","matrix"];
+      wrote(S, "startup", ["config","retro","matrix"]); S.read = ["config","retro","matrix"];
       S.title = "loop startup"; S.note = "Startup reads the issue, the board, GitHub and the local artifacts, then derives one next action.";
-      if (world.config !== "loads"){ take("st-rec"); S.pending = ["reconcile"]; S.reason = "the .devloops config did not load"; out("startup","config error","no"); S.lens = L.closed; S.trace.push("startup: config load error (unknown key) → needs_reconcile"); }
-      else if (!world.retro){ take("st-rec"); S.pending = ["reconcile"]; S.reason = "the previous merge has no retro checkpoint"; out("startup","no retro","no"); S.lens = L.order; S.trace.push("startup: previous merge has no retro checkpoint → needs_reconcile"); }
-      else if (!world.matrix){ take("st-grill"); S.pending = ["grill"]; out("startup","→ grill","info"); S.lens = L.order; S.trace.push("startup: no AC / DoD matrix → grill first"); }
-      else { take("st-impl"); S.pending = ["implement"]; out("startup","→ implement","info"); S.lens = L.order; S.trace.push("startup: refined issue, retro recorded → implement"); }
+      if (world.config !== "loads"){ take(S, "st-rec"); S.pending = ["reconcile"]; S.reason = "the .devloops config did not load"; out(S, "startup","config error","no"); S.lens = L.closed; S.trace.push("startup: config load error (unknown key) → needs_reconcile"); }
+      else if (!world.retro){ take(S, "st-rec"); S.pending = ["reconcile"]; S.reason = "the previous merge has no retro checkpoint"; out(S, "startup","no retro","no"); S.lens = L.order; S.trace.push("startup: previous merge has no retro checkpoint → needs_reconcile"); }
+      else if (!world.matrix){ take(S, "st-grill"); S.pending = ["grill"]; out(S, "startup","→ grill","info"); S.lens = L.order; S.trace.push("startup: no AC / DoD matrix → grill first"); }
+      else { take(S, "st-impl"); S.pending = ["implement"]; out(S, "startup","→ implement","info"); S.lens = L.order; S.trace.push("startup: refined issue, retro recorded → implement"); }
     }
     else if (node === "reconcile"){
-      s.status = "needs_reconcile"; wrote("reconcile", ["status"]); take("rec-end");
+      s.status = "needs_reconcile"; wrote(S, "reconcile", ["status"]); take(S, "rec-end");
       S.title = "needs_reconcile"; S.note = "No code runs and nothing is pushed. The operator fixes the cause and starts again.";
       S.reply = {cls:"fixed", lbl:"Startup result", txt:"Stopped at needs_reconcile: " + S.reason + ". Nothing was dispatched."};
-      out("reconcile","stopped","no"); S.lens = S.reason.includes("config") ? L.closed : L.order; S.pending = ["END"];
+      out(S, "reconcile","stopped","no"); S.lens = S.reason.includes("config") ? L.closed : L.order; S.pending = ["END"];
       S.trace.push("reconcile: stop and report the reason");
     }
     else if (node === "grill"){
-      take("grill-impl"); s.matrix = "present"; wrote("grill", ["matrix"]); out("grill","matrix recorded","yes");
+      take(S, "grill-impl"); s.matrix = "present"; wrote(S, "grill", ["matrix"]); out(S, "grill","matrix recorded","yes");
       S.title = "grill"; S.note = "The grill writes the acceptance criteria, completion evidence and non-goals into the issue body. Next Up refuses an issue without them.";
       S.lens = L.grill; S.pending = ["implement"]; S.trace.push("grill: AC / DoD matrix and non-goals recorded");
     }
     else if (node === "implement"){
-      take("impl-prepr"); s.head = newHead() + " (local)"; wrote("implement", ["head"]); out("implement","head " + HEADS[S.h],"info");
+      take(S, "impl-prepr"); s.head = newHead(S) + " (local)"; wrote(S, "implement", ["head"]); out(S, "implement","head " + HEADS[S.h],"info");
       S.title = "implement"; S.note = f.prepr ? "The developer addresses the pre-PR findings. Still nothing is pushed." : "The developer writes the change and its tests in a worktree under tmp/worktrees/. Targeted checks run locally.";
       S.lens = L.card; S.pending = ["prepr"]; S.trace.push(`implement: commit ${HEADS[S.h]} in the worktree`);
     }
     else if (node === "prepr"){
-      if (world.prepr === "finds issues" && !f.prepr){ f.prepr = 1; take("prepr-impl"); out("prepr","2 findings","no"); S.pending = ["implement"]; S.trace.push("pre-PR review: 2 findings → back to the developer"); }
-      else { take("prepr-pr"); out("prepr","clean","yes"); S.pending = ["pr"]; S.trace.push("pre-PR review: clean"); }
+      if (world.prepr === "finds issues" && !f.prepr){ f.prepr = 1; take(S, "prepr-impl"); out(S, "prepr","2 findings","no"); S.pending = ["implement"]; S.trace.push("pre-PR review: 2 findings → back to the developer"); }
+      else { take(S, "prepr-pr"); out(S, "prepr","clean","yes"); S.pending = ["pr"]; S.trace.push("pre-PR review: clean"); }
       S.title = "pre-PR review"; S.note = "A fresh reviewer reads the diff before the first push. This step is a must."; S.lens = L.prepr;
     }
     else if (node === "pr"){
-      take("pr-review"); s.head = HEADS[S.h]; s.pr = "#42 draft"; s.gate = "draft_gate"; s.round = 1; wrote("pr", ["head","pr","gate","round"]); out("pr","#42 draft","info");
+      take(S, "pr-review"); s.head = HEADS[S.h]; s.pr = "#42 draft"; s.gate = "draft_gate"; s.round = 1; wrote(S, "pr", ["head","pr","gate","round"]); out(S, "pr","#42 draft","info");
       S.title = "push · draft PR"; S.note = "The branch is pushed and the PR is created as a draft. Its body carries the AC, DoD and non-goals."; S.lens = L.record; S.pending = ["review"];
       S.trace.push(`pr: push ${s.head}, create draft PR #42`);
     }
     else if (node === "review"){
-      take("review-join");
+      take(S, "review-join");
       s.lenses = world.lens === "one never reports" && !f.redispatch ? "3 of 4" : "4 of 4";
       const v = world.validation;
       s.validation = (v === "fails once" && !f.valfixed ? "fail" : v === "incomplete (unknown)" && !f.valretry ? "unknown" : "pass") + " @" + s.head;
-      wrote("review", ["lenses","validation"]); out("review", `${s.lenses} · ${s.validation.split(" ")[0]}`, s.lenses === "4 of 4" && s.validation.startsWith("pass") ? "yes" : "no");
+      wrote(S, "review", ["lenses","validation"]); out(S, "review", `${s.lenses} · ${s.validation.split(" ")[0]}`, s.lenses === "4 of 4" && s.validation.startsWith("pass") ? "yes" : "no");
       S.title = `${s.gate} · round ${s.round}`; S.note = "The gate coordinator dispatches the review lenses for this head and runs full validation once.";
       S.lens = L.fan; S.pending = ["join"]; S.trace.push(`review: ${s.gate} round ${s.round} on ${s.head}: ${s.lenses} lenses, validation ${s.validation}`);
     }
     else if (node === "join"){
       S.read = ["lenses","validation","head"];
       S.title = "fan-in"; S.note = "A script, not a model, checks coverage and validation before the judge runs.";
-      if (s.lenses !== "4 of 4"){ f.redispatch = 1; take("join-review"); out("join","lens missing → re-dispatch","no"); S.lens = L.join; S.pending = ["review"]; S.trace.push("fan-in: 3 of 4 lenses → blocked, re-dispatch the missing lens"); }
-      else if (s.validation.startsWith("unknown")){ f.valretry = 1; take("join-review"); out("join","unknown → re-run","no"); S.lens = L.unknown; S.pending = ["review"]; S.trace.push("fan-in: validation unknown → not a pass, run it again"); }
-      else if (s.validation.startsWith("fail")){ take("join-fix"); s.act_list = "1 failing test"; wrote("join", ["act_list"]); out("join","tests fail","no"); S.lens = L.join; S.pending = ["fix"]; S.trace.push("fan-in: validation failed → the failing test goes to the fixer"); }
-      else { take("join-judge"); out("join","complete","yes"); S.lens = L.join; S.pending = ["judge"]; S.trace.push("fan-in: every lens reported, validation passed"); }
+      if (s.lenses !== "4 of 4"){ f.redispatch = 1; take(S, "join-review"); out(S, "join","lens missing → re-dispatch","no"); S.lens = L.join; S.pending = ["review"]; S.trace.push("fan-in: 3 of 4 lenses → blocked, re-dispatch the missing lens"); }
+      else if (s.validation.startsWith("unknown")){ f.valretry = 1; take(S, "join-review"); out(S, "join","unknown → re-run","no"); S.lens = L.unknown; S.pending = ["review"]; S.trace.push("fan-in: validation unknown → not a pass, run it again"); }
+      else if (s.validation.startsWith("fail")){ take(S, "join-fix"); s.act_list = "1 failing test"; wrote(S, "join", ["act_list"]); out(S, "join","tests fail","no"); S.lens = L.join; S.pending = ["fix"]; S.trace.push("fan-in: validation failed → the failing test goes to the fixer"); }
+      else { take(S, "join-judge"); out(S, "join","complete","yes"); S.lens = L.join; S.pending = ["judge"]; S.trace.push("fan-in: every lens reported, validation passed"); }
     }
     else if (node === "judge"){
       S.read = ["gate","fix_rounds","spec"];
       S.title = "judge"; S.note = "The judge reads the consolidated findings against the issue's AC, DoD and non-goals.";
       const draft = s.gate === "draft_gate";
       const needs = draft ? s.fix_rounds < NEEDED[world.findings] : world.copilot === "comments" && !f.copilot;
-      if (needs && s.fix_rounds >= WINDOW){ take("judge-park"); s.act_list = "3 act · window spent"; out("judge","window spent","no"); S.reason = `the fix window of ${WINDOW} rounds is spent`; S.lens = L.budget; S.pending = ["park"]; S.trace.push(`judge: still 3 act findings after ${WINDOW} fix rounds → park`); }
-      else if (needs){ take("judge-fix"); s.act_list = draft ? "2 act · 1 defer" : "2 act (Copilot)"; out("judge", draft ? "2 act" : "2 act (Copilot)", "no"); S.lens = L.judge; S.pending = ["fix"]; S.trace.push(`judge: ${s.act_list} → fixer`); }
+      if (needs && s.fix_rounds >= WINDOW){ take(S, "judge-park"); s.act_list = "3 act · window spent"; out(S, "judge","window spent","no"); S.reason = `the fix window of ${WINDOW} rounds is spent`; S.lens = L.budget; S.pending = ["park"]; S.trace.push(`judge: still 3 act findings after ${WINDOW} fix rounds → park`); }
+      else if (needs){ take(S, "judge-fix"); s.act_list = draft ? "2 act · 1 defer" : "2 act (Copilot)"; out(S, "judge", draft ? "2 act" : "2 act (Copilot)", "no"); S.lens = L.judge; S.pending = ["fix"]; S.trace.push(`judge: ${s.act_list} → fixer`); }
       else {
         s.act_list = world.findings === "nits only" && draft ? "0 act · 2 defer · 1 reject" : "0 act"; s.verdict_head = s.head + " · spec " + s.spec;
-        wrote("judge", ["verdict_head"]); out("judge","clean","yes"); S.lens = L.judge;
-        if (draft){ take("judge-ready"); S.pending = ["ready"]; S.trace.push(`judge: ${s.act_list} → draft gate clean on ${s.head}`); }
-        else { take("judge-merge"); s.status = "final_approval_ready"; wrote("judge", ["status"]); S.pending = ["merge"]; S.trace.push(`judge: 0 act → pre-approval clean, final_approval_ready on ${s.head}`); }
+        wrote(S, "judge", ["verdict_head"]); out(S, "judge","clean","yes"); S.lens = L.judge;
+        if (draft){ take(S, "judge-ready"); S.pending = ["ready"]; S.trace.push(`judge: ${s.act_list} → draft gate clean on ${s.head}`); }
+        else { take(S, "judge-merge"); s.status = "final_approval_ready"; wrote(S, "judge", ["status"]); S.pending = ["merge"]; S.trace.push(`judge: 0 act → pre-approval clean, final_approval_ready on ${s.head}`); }
       }
-      wrote("judge", ["act_list"]);
+      wrote(S, "judge", ["act_list"]);
     }
     else if (node === "fix"){
-      take("fix-review"); s.fix_rounds++; const hd = newHead(); s.head = hd; s.round++;
+      take(S, "fix-review"); s.fix_rounds++; const hd = newHead(S); s.head = hd; s.round++;
       if (s.act_list.startsWith("1 failing")) f.valfixed = 1;
       if (s.gate === "pre_approval_gate") f.copilot = 1;
       s.verdict_head = s.verdict_head === "—" ? "—" : s.verdict_head.split(" ")[0] + " (stale)";
-      wrote("fix", ["head","fix_rounds","round","verdict_head"]); out("fix","push " + hd,"info");
+      wrote(S, "fix", ["head","fix_rounds","round","verdict_head"]); out(S, "fix","push " + hd,"info");
       S.title = "fixer"; S.note = "The fixer works only the act list, runs the delta pre-push review, pushes and replies on each thread.";
       S.lens = L.fresh; S.pending = ["review"]; S.trace.push(`fixer: round ${s.fix_rounds}, push ${hd} → re-gate`);
     }
@@ -192,19 +192,19 @@ export function createModel() {
       S.read = ["spec","verdict_head"];
       S.title = "ready boundary";
       if (world.acchange && s.spec === "v1"){
-        s.spec = "v2"; s.verdict_head = s.head + " (stale: spec v1)"; s.round++; take("ready-review"); wrote("ready", ["spec","verdict_head","round"]);
-        out("ready","spec v2 → re-gate","no"); S.lens = L.spec; S.pending = ["review"];
+        s.spec = "v2"; s.verdict_head = s.head + " (stale: spec v1)"; s.round++; take(S, "ready-review"); wrote(S, "ready", ["spec","verdict_head","round"]);
+        out(S, "ready","spec v2 → re-gate","no"); S.lens = L.spec; S.pending = ["review"];
         S.note = "The operator approved an AC change in the issue. The same head is reviewed again against v2."; S.trace.push("ready: spec changed to v2 → every v1 clearance is stale, re-gate the same head");
       }
       else if (world.tripwire === "new ADR"){
-        s.tripwire = "new ADR"; take("ready-park"); wrote("ready", ["tripwire"]); out("ready","tripwire","no");
+        s.tripwire = "new ADR"; take(S, "ready-park"); wrote(S, "ready", ["tripwire"]); out(S, "ready","tripwire","no");
         S.reason = "the ADR tripwire fired on a new ADR"; S.lens = L.trip; S.pending = ["park"];
         S.note = "The tripwire runs before the PR leaves draft."; S.trace.push("ready: ADR tripwire fired (new ADR) → park");
       }
       else {
         s.tripwire = world.tripwire === "doc edit, waiver" ? "waived by operator" : "clear";
-        s.pr = "#42 ready"; s.gate = "pre_approval_gate"; s.round = 1; take("ready-review");
-        wrote("ready", ["tripwire","pr","gate","round"]); out("ready","ready · Copilot","info");
+        s.pr = "#42 ready"; s.gate = "pre_approval_gate"; s.round = 1; take(S, "ready-review");
+        wrote(S, "ready", ["tripwire","pr","gate","round"]); out(S, "ready","ready · Copilot","info");
         S.lens = world.tripwire === "doc edit, waiver" ? L.trip : L.record; S.pending = ["review"];
         S.note = "The PR leaves draft and Copilot is asked for a review. The pre-approval gate starts on the same head.";
         S.trace.push(`ready: tripwire ${s.tripwire}; mark ready, request Copilot → pre_approval_gate`);
@@ -214,30 +214,30 @@ export function createModel() {
       S.read = ["head","verdict_head","authorization"];
       S.title = "guarded merge";
       if (world.headmove && !f.moved){
-        f.moved = 1; const hd = newHead(); s.head = hd; s.round++; s.status = "head moved"; take("merge-review");
-        wrote("merge", ["head","round","status"]); out("merge","head mismatch","no"); S.lens = L.race; S.pending = ["review"];
+        f.moved = 1; const hd = newHead(S); s.head = hd; s.round++; s.status = "head moved"; take(S, "merge-review");
+        wrote(S, "merge", ["head","round","status"]); out(S, "merge","head mismatch","no"); S.lens = L.race; S.pending = ["review"];
         S.note = `The verdict names ${s.verdict_head.split(" ")[0]}, but the PR head is now ${hd}. The wrapper refuses.`; S.trace.push(`merge: verdict head ≠ PR head ${hd} → refuse, re-gate`);
       }
       else if (world.auth === "human approval required"){
-        s.authorization = "waiting for the operator"; take("merge-park"); wrote("merge", ["authorization"]); out("merge","needs approval","no");
+        s.authorization = "waiting for the operator"; take(S, "merge-park"); wrote(S, "merge", ["authorization"]); out(S, "merge","needs approval","no");
         S.reason = "the merge needs a human approval"; S.lens = L.auth; S.pending = ["park"];
         S.note = "Preconditions pass. The repo policy still requires a person to approve."; S.trace.push("merge: preconditions pass, human approval required → park");
       }
       else {
-        s.authorization = "standing"; s.status = "merged"; take("merge-retro"); wrote("merge", ["authorization","status"]); out("merge","merged","yes");
+        s.authorization = "standing"; s.status = "merged"; take(S, "merge-retro"); wrote(S, "merge", ["authorization","status"]); out(S, "merge","merged","yes");
         S.lens = L.race; S.pending = ["retro"];
         S.note = `The wrapper checks the verdict head against the PR head and merges pinned to ${s.head}.`; S.trace.push(`merge: head ${s.head} matches, standing authorization → merged`);
         S.reply = {cls:"answer", lbl:"On the PR", txt:`Merged at ${s.head}, pinned to the head the gates checked.`};
       }
     }
     else if (node === "park"){
-      s.status = "parked"; wrote("park", ["status"]); take("park-end"); out("park","parked","no");
+      s.status = "parked"; wrote(S, "park", ["status"]); take(S, "park-end"); out(S, "park","parked","no");
       S.title = "park for the operator"; S.note = "The loop stops at a safe point. The worktree is clean and the record says why.";
       S.reply = {cls:"fixed", lbl:"Hand-back to the operator", txt:"Parked: " + S.reason + ". The operator decides the next step."};
       S.lens = S.reason.includes("window") ? L.budget : S.reason.includes("ADR") ? L.trip : L.auth; S.pending = ["END"]; S.trace.push("park: hand back with the reason");
     }
     else if (node === "retro"){
-      take("retro-end"); s.retro = "recorded for #42"; wrote("retro", ["retro"]); out("retro","recorded","yes");
+      take(S, "retro-end"); s.retro = "recorded for #42"; wrote(S, "retro", ["retro"]); out(S, "retro","recorded","yes");
       S.title = "retro"; S.note = "A fresh agent reads the run's transcripts and the gate artifacts, then records the checkpoint.";
       S.lens = L.retro; S.pending = ["END"]; S.trace.push("retro: findings logged, checkpoint recorded");
       S.reply = previous.reply;
