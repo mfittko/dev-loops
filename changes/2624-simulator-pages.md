@@ -10,3 +10,4 @@
 - Original Detailed and Overview models load from separate native modules; teaching scenarios, defaults, transitions, and runtime controls are preserved (#2624)
 - Original model asset changes select their owning automatic browser suite; published pages and npm packages include both modules (#2624)
 - Overview transitions reuse model-scoped helpers with explicit run state instead of recreating five helper functions per step (#2624)
+- Orphan-entrypoint checks distinguish published browser model metadata from real Node imports and spawns, preserving the standalone-tool ratchet (#2624)
