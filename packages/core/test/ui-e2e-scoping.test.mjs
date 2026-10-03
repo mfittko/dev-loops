@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
-import { evaluateUiDesignerReviewScoping } from "../src/loop/ui-designer-review-scoping.mjs";
 
 import {
   evaluateUiE2eScoping,
@@ -51,28 +50,19 @@ test("non-rendered and near-miss paths classify as null", () => {
   assert.equal(classifyRenderedArtifactPath("docs/articles/sub/nested.html"), null, "glob is single-segment");
   assert.equal(classifyRenderedArtifactPath("README.md"), null);
 });
-test("workflow changes retain rendered review scope without automatic browser requirements", () => {
-  for (const path of ["docs/articles/assets/workflow-models/evalgen.mjs", "scripts/pages/workflow-examples.mjs"]) {
-    const result = evaluateUiE2eScoping([path]);
-    assert.equal(result.required, false);
-    assert.equal(result.satisfied, true);
-    assert.equal(result.artifacts[0].kind, "article");
-    assert.equal(result.artifacts[0].id, "docs/articles/assets/workflow-models");
-    const designer = evaluateUiDesignerReviewScoping([path]);
-    assert.equal(designer.required, true);
-    assert.equal(designer.satisfied, false);
-    assert.deepEqual(resolveTargetedValidation([path]).gateSuites, ["test:scripts"]);
-  }
-});
 
-test("manual workflow coverage cannot exempt a changed original Simulator", () => {
-  const paths = ["docs/articles/assets/workflow-models/evalgen.mjs", "docs/articles/simulator.html"];
-  assert.equal(evaluateUiE2eScoping(paths).required, true);
-  assert.equal(evaluateUiE2eScoping(paths).satisfied, false);
-  assert.equal(evaluateUiE2eScoping(paths, { uiE2ePassed: true }).satisfied, true);
-  const result = resolveTargetedValidation(["docs/articles/simulator.html"]);
-  assert.deepEqual(result.gateSuites, ["test:playwright:simulator-article"]);
-  assert.deepEqual(resolveTargetedValidation(["test/playwright/workflow-examples.spec.mjs"]).gateSuites, ["test:scripts"]);
+test("original Simulator views require registered automatic browser coverage", () => {
+  for (const [path, suite] of [
+    ["docs/articles/simulator.html", "test:playwright:simulator-article"],
+    ["docs/articles/simulator-overview.html", "test:playwright:simulator-overview-article"],
+    ["docs/articles/assets/simulator-model.mjs", "test:playwright:simulator-article"],
+    ["docs/articles/assets/simulator-overview-model.mjs", "test:playwright:simulator-overview-article"],
+  ]) {
+    assert.equal(evaluateUiE2eScoping([path]).required, true);
+    assert.equal(evaluateUiE2eScoping([path]).satisfied, false);
+    assert.equal(evaluateUiE2eScoping([path], { uiE2ePassed: true }).satisfied, true);
+    assert.deepEqual(resolveTargetedValidation([path]).gateSuites, [suite]);
+  }
 });
 
 test("trigger: a rendered-artifact change requires UI e2e", () => {

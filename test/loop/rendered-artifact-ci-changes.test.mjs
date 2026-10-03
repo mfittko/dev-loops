@@ -40,12 +40,19 @@ test("rendered artifact CI classifier normalizes and deduplicates paths", () => 
   assert.deepEqual(result.presentationPaths, ["test/playwright/new-deck.spec.mjs"]);
 });
 
-test("manual workflow-only changes do not schedule automatic browser CI", () => {
-  const manualPaths = ["docs/articles/assets/workflow-models/evalgen.mjs", "scripts/pages/workflow-examples.mjs", "test/playwright/workflow-examples.spec.mjs"];
-  const result = classifyRenderedArtifactCiChanges(manualPaths);
-  assert.equal(result.articles, false);
-  assert.equal(result.presentations, false);
-  const mixed = classifyRenderedArtifactCiChanges([...manualPaths, "docs/articles/simulator-overview.html"]);
-  assert.equal(mixed.articles, true);
-  assert.deepEqual(mixed.articlePaths, ["docs/articles/simulator-overview.html"]);
+test("original Simulator views and their shared harness schedule article browser CI", () => {
+  for (const path of [
+    "docs/articles/simulator.html",
+    "docs/articles/simulator-overview.html",
+    "docs/articles/assets/simulator-model.mjs",
+    "docs/articles/assets/simulator-overview-model.mjs",
+    "test/playwright/harness/simulator-harness.mjs",
+    "test/playwright/simulator-article.spec.mjs",
+    "test/playwright/simulator-overview-article.spec.mjs",
+  ]) {
+    const result = classifyRenderedArtifactCiChanges([path]);
+    assert.equal(result.articles, true);
+    assert.equal(result.presentations, false);
+    assert.deepEqual(result.articlePaths, [path]);
+  }
 });

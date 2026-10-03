@@ -101,6 +101,33 @@ test.skipIf(NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE)("packaged install: every @dev-
       assert.match(helpOutput, /^Usage: dev-loops/);
     }
 
+    // Exercise real native model transitions from the installed npm tree.
+    const simulatorProbe = path.join(installDir, 'simulator-consumer.mjs');
+    writeFileSync(simulatorProbe, `
+      import assert from 'node:assert/strict';
+      import { createModel as detailed } from './node_modules/dev-loops/docs/articles/assets/simulator-model.mjs';
+      import { createModel as overview } from './node_modules/dev-loops/docs/articles/assets/simulator-overview-model.mjs';
+      const d = detailed(), conditions = {};
+      d.defaults(conditions);
+      conditions.findings = 'one medium, not fixed';
+      const state = { gate:'draft_gate', headSha:'A' }, facts = { g:{ draft_gate:{ round:3 } }, gr:{} };
+      assert.equal(d.H.gate.G12(state, conditions, facts).set.actList, '1 medium');
+      facts.g.draft_gate.round = 4;
+      assert.equal(d.H.gate.G12(state, conditions, facts).set.actList, 'empty');
+      const o = overview(), world = {}, run = o.fresh();
+      o.defaults(world);
+      world.headmove = true;
+      for (let i=0; i<100 && !run.done; i++) {
+        const previous = structuredClone(run);
+        run.prev = structuredClone(run.st); run.n++; run.read = [];
+        o.advance(run, world, previous);
+      }
+      assert.equal(run.st.status, 'merged');
+      assert.equal(run.st.head, 'B');
+      assert.equal(run.st.verdict_head, 'B · spec v1');
+    `);
+    execFileSync('node', [simulatorProbe], { cwd:installDir });
+
     // 5. Run the newly-routed `dev-loops` CLI subcommands (issue #1369) from
     // the installed tree — the same deps-less consumer context that broke
     // on raw `node scripts/*.mjs` — and assert exit 0 + `@dev-loops/core`

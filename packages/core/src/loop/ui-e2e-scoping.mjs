@@ -3,8 +3,7 @@
 // Deterministic, path-triggered criterion: a PR that adds or modifies a
 // *rendered* HTML artifact (a presentation deck, an article page, or the
 // inspect-run viewer's served page/component) requires shared UI e2e assertions
-// (mobile + desktop) and suite registration. Explicit manual-only scheduling
-// exceptions retain rendered classification and independent review scope.
+// (mobile + desktop) and suite registration.
 // Inclusion is path-triggered, never a human annotation on the PR.
 //
 // This module is the testable core of that criterion: classify changed paths
@@ -16,6 +15,8 @@
 export const RENDERED_ARTIFACT_GLOBS = Object.freeze([
   "docs/articles/*.html",
   "docs/presentations/*.html",
+  "docs/articles/assets/simulator-model.mjs",
+  "docs/articles/assets/simulator-overview-model.mjs",
 ]);
 
 // The inspect-run viewer is served from a component, not a static .html file,
@@ -44,22 +45,11 @@ export const REGISTERED_ARTIFACT_SUITES = Object.freeze({
   "docs/articles/how-dev-loops-decided-itself.html": "how-decided-article",
   "docs/articles/simulator.html": "simulator-article",
   "docs/articles/simulator-overview.html": "simulator-overview-article",
-  "docs/articles/assets/workflow-models": "workflow-examples",
+  // Model assets require the same browser coverage as their owning page.
+  "docs/articles/assets/simulator-model.mjs": "simulator-article",
+  "docs/articles/assets/simulator-overview-model.mjs": "simulator-overview-article",
 });
 export const REGISTERED_ARTIFACT_PATHS = Object.freeze(Object.keys(REGISTERED_ARTIFACT_SUITES));
-
-// User-authorized scheduling exception, not a rendered-artifact/review exemption.
-const MANUAL_ONLY_UI_E2E_SUITES = Object.freeze(["workflow-examples"]);
-export function isAutomaticUiE2eSuite(suite) {
-  return !MANUAL_ONLY_UI_E2E_SUITES.includes(suite);
-}
-
-export function isManualUiE2ePath(filePath) {
-  const path = normalizePath(filePath);
-  const artifact = classifyRenderedArtifactPath(path);
-  const suite = artifact ? REGISTERED_ARTIFACT_SUITES[artifact.id] : path.match(/^test\/playwright\/([^/]+)\.spec\.mjs$/u)?.[1];
-  return !isAutomaticUiE2eSuite(suite);
-}
 
 export const VIEWER_ARTIFACT_ID = "inspect-run-viewer";
 
@@ -93,9 +83,6 @@ export function classifyRenderedArtifactPath(filePath) {
 
   if (VIEWER_SOURCE_PATHS.includes(normalized)) {
     return { path: normalized, kind: "viewer", id: VIEWER_ARTIFACT_ID, registered: true };
-  }
-  if (normalized === "docs/articles/assets/workflow-models" || normalized === "scripts/pages/workflow-examples.mjs" || normalized.startsWith("docs/articles/assets/workflow-models/")) {
-    return { path: normalized, kind: "article", id: "docs/articles/assets/workflow-models", registered: true };
   }
 
   for (const glob of RENDERED_ARTIFACT_GLOBS) {
@@ -140,15 +127,14 @@ export function evaluateUiE2eScoping(changedPaths = [], { uiE2ePassed = null } =
     }
   }
 
-  const automaticArtifacts = artifacts.filter((artifact) => isAutomaticUiE2eSuite(REGISTERED_ARTIFACT_SUITES[artifact.id]));
-  const required = automaticArtifacts.length > 0;
+  const required = artifacts.length > 0;
   if (!required) {
     return { required: false, artifacts, unregistered: [], satisfied: true, reason: null };
   }
 
   // Fail closed: any touched rendered artifact that is not registered blocks
   // and names itself so the fix is unambiguous (register it in the suite).
-  const unregistered = automaticArtifacts.filter((a) => !a.registered).map((a) => a.id);
+  const unregistered = artifacts.filter((a) => !a.registered).map((a) => a.id);
   if (unregistered.length > 0) {
     return {
       required: true,
@@ -165,9 +151,9 @@ export function evaluateUiE2eScoping(changedPaths = [], { uiE2ePassed = null } =
     };
   }
 
-  // All automatic artifacts are registered — their coverage must have passed.
+  // All touched artifacts are registered — coverage must have actually passed.
   if (uiE2ePassed !== true) {
-    const touched = automaticArtifacts.map((a) => a.id).join(", ");
+    const touched = artifacts.map((a) => a.id).join(", ");
     return {
       required: true,
       artifacts,

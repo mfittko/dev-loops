@@ -230,13 +230,6 @@ body.board-full{overflow:hidden}
 .board.full .fullbar .crumbs{flex:1;min-width:0;flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
 .board.full .bhead{display:none}
 @media (max-width:700px){.board.full .fullbar{flex-wrap:wrap}.board.full .fullbar .crumbs{flex-basis:100%;order:3}}
-body[data-workflow] .about{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-body[data-workflow] .about p{min-width:0;overflow-wrap:anywhere}
-body[data-workflow] #sources{overflow-wrap:anywhere}
-body[data-workflow] .fact .k{overflow-wrap:anywhere}
-body[data-workflow] .fact select{min-width:0;width:180px;flex:0 1 180px;overflow:hidden;text-overflow:ellipsis;white-space:normal}
-body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 150px)}
-@media (max-width:760px){body[data-workflow] .about{grid-template-columns:minmax(0,1fr)}}
 </style>
 </head>
 <body>
@@ -247,24 +240,6 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
   <h1>One unit of work, from startup to merge</h1>
   <p class="sub">A dev-loops run, step by step, including every sub-loop it enters. Pick a scenario or set the starting conditions, then step. When the run enters a sub-loop, the board opens that graph. For the lifecycle without sub-loops, open the Overview. You can open any graph with a <b>sub-loop</b> badge yourself; the run waits until you step again.</p>
 </header>
-<details class="panel box" id="examples">
-  <summary>Agent workflow examples</summary>
-  <p>Curated modeled workflows using these same detailed Simulator controls. Conditions and contributions are hypothetical; no external agents or tools run.</p>
-  <ul>
-    <li><a href="workflow-conveyor-belt.html">Conveyor belt: initiative work</a></li>
-    <li><a href="workflow-collaborative-grilling.html">Collaborative grilling</a></li>
-    <li><a href="workflow-magentic-ui.html">Magentic-UI co-tasking</a></li>
-    <li><a href="workflow-open-swe.html">Open SWE: published 2025</a></li>
-    <li><a href="workflow-qa-wolf-mapping-ai.html">QA Wolf Mapping AI</a></li>
-    <li><a href="workflow-playwright-test-agents.html">Playwright test agents</a></li>
-    <li><a href="workflow-meta-ach.html">Meta ACH</a></li>
-    <li><a href="workflow-evalgen.html">EvalGen</a></li>
-    <li><a href="workflow-uxagent.html">UXAgent</a></li>
-    <li><a href="workflow-conversational-ux-coanalysis.html">Conversational UX co-analysis</a></li>
-    <li><a href="workflow-product-design-frontend.html">Mobile checkout improvement</a></li>
-    <li><a href="workflow-incident-response.html">Production incident response</a></li>
-  </ul>
-</details>
 
 <section class="panel scen" aria-label="Scenarios">
   <p class="lbl">Scenarios</p>
@@ -328,7 +303,6 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
       <p class="lbl" id="trace-label">Trace</p>
       <ul class="trace" id="trace" tabindex="0" aria-labelledby="trace-label"></ul>
     </div>
-    <details class="panel box"><summary>Runtime inspection</summary><pre id="runtime-state" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
   </div>
 </div>
 
@@ -362,422 +336,15 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
 <footer>A teaching model built from a sourced state model of the dev-loops repo at commit c00aa769f (2026-10-02). It is not a port of the code. Issue #101, PR #42 and the head letters A, B, C are illustrative. A step or edge marked inferred is a conclusion drawn from reading the code, not a stated rule. Source: <a href="https://github.com/mfittko/dev-loops">github.com/mfittko/dev-loops</a>. Deck: <a href="https://mfittko.github.io/dev-loops/finding-the-flow.html">Finding the flow</a>. State atlas: <a href="state-atlas.html">the diagrams generated from the code tables</a>.</footer>
 </main>
 
-<script>
-(async function(){
+<script type="module">
+import { createModel } from "./assets/simulator-model.mjs";
+(function(){
   "use strict";
+  const { I, GR, ORDER, F, SC, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant } = createModel();
   const $ = id => document.getElementById(id);
   const clone = o => JSON.parse(JSON.stringify(o));
   const esc = v => String(v).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-  const slug = document.body.dataset.workflow;
-  const profile = slug ? (await import(`./assets/workflow-models/${slug}.mjs`)).createModel() : null;
 
-  // ---------- loop ideas, with the Finding the flow slide where they fit ----------
-  let I = {
-    contract:["A transition is a small contract",5], rules:["The arrows are rules",3], facts:["The graph remembers facts",4],
-    goal:["Make the goal testable",7], check:["Check and approve",8], back:["A failed check sends it back",10],
-    unknown:["Unknown takes another arrow",11], criteria:["Changed criteria require fresh clearance",12],
-    evidence:["Advancement requires evidence",13], retry:["“Try again” needs a reason",14],
-    choose:["Define where the agent can choose",15], join:["Parallel work still needs a join",16],
-    missing:["Two passes and a missing check",17], router:["What does the router know?",19],
-    onestate:["One state, one next action",20], jobcard:["Give the worker a job card",21],
-    nested:["A loop can contain another loop",22], output:["A review round has an output contract",23],
-    render:["Exit on evidence for the current render",26], current:["Each revision needs current evidence",27],
-    wait:["Waiting survives the conversation",28], auth:["Publishing requires separate authorization",29],
-    version:["The merge checks the actual version",30], people:["People own the decisions",31],
-    next:["Choose what the next worker needs",33], question:["Give each review a clear question",34],
-    capability:["Match capability to the step",35], facts2:["Return the facts needed to act",36],
-    budget:["An exhausted budget pauses the work",37], allowed:["Which arrow is allowed?",38],
-    pause:["A pause can be the correct result",39], failclosed:["Fail closed",0], interrupt:["Runtime interrupt",0],
-  };
-
-  // ---------- graphs as data: nodes [id, name, sub, col, row, opts], edges [from, to, label, opts] ----------
-  // opts: k kind (gate | exit | ret | term | aside), a actors, s subgraph, src, L [idea, text], inf, w
-  // edge opts: c conditional, l loop, inf, h / v force tangents, side l|r|b for self or back edges, d explicit path, lx ly anc label
-  let GR = {
-  life:{name:"lifecycle", desc:"The top-level lifecycle of one unit of work. Nodes with a sub-loop badge open their own graph.", vb:[1000,660], w:148, cw:1, rh:1, x0:0, y0:0,
-    nodes:[
-      ["request","request","operator or queue",290,30,{a:"human,code",s:"queue",src:"AGENTS.md; skills/docs/main-agent-contract.md (E0)",L:["people","The operator asks for the work. The main agent only dispatches the dev-loop subagent. It never runs startup and never writes tracked files."]}],
-      ["startup","startup","loop startup",290,120,{a:"code",s:"startup",src:"scripts/loop/resolve-dev-loop-startup.mjs",L:["router","Startup reads GitHub and the local files and builds one canonical state. Every later decision reads that state, not the chat."]}],
-      ["route","routeForState","first match wins",290,210,{a:"code",s:"rules",src:"packages/core/src/loop/public-dev-loop-routing.mjs routeForState",L:["onestate","One canonical state gives one strategy. The dev-loop agent loads only the reads that strategy needs."]}],
-      ["reconcile","needs_reconcile","stop, fix the cause",30,120,{k:"exit",a:"code",src:"public-dev-loop-routing.mjs resolveAuthoritativeStartupResumeBundle; STOP-RECONCILE-001",L:["pause","needs_reconcile is a correct result. Nothing is dispatched, and the record names the cause."]}],
-      ["refine","grill","AC / DoD + Non-goals",30,210,{a:"agent,human",s:"grill",src:"skills/loop-grill/SKILL.md; refinement-grill-state.mjs",L:["goal","The grill turns the issue into testable criteria before any code is written."]}],
-      ["epic","epic tree","refinement only",30,30,{a:"agent,code",s:"epic",src:"skills/docs/sub-issue-tree-contract.md",L:["nested","An umbrella issue is split into a verified tree. Each refined child then takes the normal issue path."]}],
-      ["implement","implement","worktree, test first",290,300,{a:"agent,code",s:"impl",src:"skills/local-implementation/SKILL.md",L:["jobcard","The developer works in its own worktree from the handoff envelope."]}],
-      ["spike","spike","time-boxed question",30,300,{a:"agent,code",s:"spike",src:"spike-intake-contract.mjs; spike-exit-contract.mjs",L:["nested","A spike answers a question. It ends with discard or graduate."]}],
-      ["plan_file","local-planning","plan in docs/phases",30,390,{a:"human,agent,code",s:"plan",src:"skills/docs/local-planning.md",L:["people","A plan file is the spec of record. A person reviews it before promotion."]}],
-      ["pr_create","draft PR","create-pr.mjs",290,390,{a:"code",s:"light",src:"scripts/github/create-pr.mjs buildCreatePrArgs; LOCAL-PR-CREATE-CANONICAL",L:["facts","From here on the PR holds the head SHA, CI, verdicts and threads. Any session can read them."]}],
-      ["draft_gate","draft_gate","gate round on a draft",290,480,{k:"gate",a:"agent,code",s:"gate",src:"skills/docs/gate-review-sub-loop-contract.md",L:["nested","The draft gate is a sub-loop: rounds repeat until one head comes out clean."]}],
-      ["ready","ready","13 ordered checks",290,570,{k:"gate",a:"code",s:"ready",src:"scripts/github/ready-for-review.mjs readyForReview; OPS-DRAFT-FIRST-PR",L:["evidence","The PR leaves draft only when every check passes in order."]}],
-      ["copilot","Copilot","review rounds",560,570,{a:"agent,code",s:"cop",src:"skills/copilot-pr-followup/SKILL.md; copilot-loop-state.mjs",L:["nested","Copilot review is its own loop with a round cap."]}],
-      ["pre_approval_gate","pre_approval_gate","gate round, ready PR",560,480,{k:"gate",a:"agent,code",s:"gate",src:"copilot-pr-followup/SKILL.md \"Pre-approval gate contract\"",L:["nested","The same gate machinery runs again on the ready PR. The acceptance-criteria angle is mandatory here."]}],
-      ["final_approval","final approval","final_approval_ready",560,390,{a:"code,human",src:"pr-gate-coordination.mjs PR_CHECKPOINT.FINAL_APPROVAL_READY; STOP-APPROVAL-001",L:["auth","Clean gates show what was checked. The merge needs a separate authorization."]}],
-      ["merge","merge","merge-pr.mjs",560,300,{k:"gate",a:"code",s:"merge",src:"scripts/github/merge-pr.mjs; merge-approval.mjs",L:["version","The merge is pinned to the head the gates checked."]}],
-      ["post_merge","post-merge","fast-forward, actions",560,210,{a:"code",src:"main-checkout-ff.mjs syncMainCheckout; run-post-merge-actions.mjs",L:["facts","After the merge, scripts sync the main checkout and run the configured actions."]}],
-      ["retro","retro","checkpoint",560,120,{a:"agent,code",s:"retro",src:"skills/docs/retrospective-checkpoint-contract.md; checkpoint-contract.mjs",L:["nested","The retro closes the outer loop. Its checkpoint gates the next unit's startup."]}],
-      ["done","done","",560,30,{k:"term",src:"-",L:["facts","The record now holds everything the next startup needs."]}],
-      ["review_route","review","one round, read-only",830,120,{a:"agent,code",s:"review",src:"skills/review/SKILL.md",L:["question","One review round on any PR, with no lifecycle obligation."]}],
-      ["ui_review","UI review","prove it in the app",830,210,{a:"code",s:"ui",src:"skills/ui-review/SKILL.md",L:["render","The UI review proves the change in the running app."]}],
-      ["stop","stop","human decision",830,390,{k:"exit",a:"human",src:"skills/docs/stop-conditions.md",L:["pause","The loop stops at a safe point and hands the decision to the operator."]}],
-    ],
-    edges:[
-      ["request","startup",""],["startup","route",""],
-      ["route","reconcile","reconcile",{h:1,c:1,ox:-8,oy:-4}],
-      ["route","refine","unrefined",{c:1}],
-      ["route","implement","build",{c:1}],
-      ["route","spike","--spike",{h:1,c:1,ox:-6,oy:16}],
-      ["route","plan_file","--plan-file",{c:1,d:"M290 246 C 245 260, 215 380, 178 410",lx:236,ly:356,anc:"start"}],
-      ["route","review_route","--review",{c:1,d:"M438 224 C 480 216, 500 188, 540 188 L 800 188 C 815 188, 818 150, 830 147",lx:760,ly:183,anc:"middle"}],
-      ["route","ui_review","--ui-review",{c:1,d:"M438 236 C 480 244, 500 268, 540 268 L 800 268 C 815 268, 818 240, 830 238",lx:760,ly:263,anc:"middle"}],
-      ["route","stop","rules 1-3",{c:1,d:"M438 246 C 470 262, 495 286, 530 286 L 790 286 C 830 286, 870 330, 880 390",lx:760,ly:300,anc:"middle"}],
-      ["route","final_approval","approval_ready",{c:1,d:"M438 240 C 500 252, 522 270, 522 300 L 522 395 C 522 410, 535 413, 560 413",lx:515,ly:378,anc:"end"}],
-      ["route","copilot","copilot_pr_followup",{c:1,d:"M438 250 C 470 258, 482 276, 482 306 L 482 530 C 482 552, 560 548, 600 570",lx:488,ly:452,anc:"start"}],
-      ["route","draft_gate","draftStart",{c:1,inf:1,d:"M300 256 C 270 275, 258 300, 258 330 L 258 470 C 258 495, 270 503, 290 503",lx:252,ly:462,anc:"end"}],
-      ["refine","implement","grill_clean",{h:1,lx:182,ly:296,anc:"start"}],
-      ["epic","request","children enqueued",{c:1,oy:-4}],
-      ["spike","plan_file","graduate",{c:1}],
-      ["spike","done","discard",{c:1,d:"M30 323 C 16 323, 14 310, 14 296 L 14 26 C 14 18, 18 14, 26 14 L 615 14 C 625 14, 630 20, 630 30",lx:200,ly:11,anc:"middle"}],
-      ["plan_file","pr_create","promote",{oy:-2}],
-      ["implement","pr_create",""],["pr_create","draft_gate",""],
-      ["draft_gate","draft_gate","new head",{l:1,side:"r",lx:444,ly:478}],
-      ["draft_gate","ready","clean",{c:1}],
-      ["ready","copilot",""],
-      ["copilot","copilot","re-request",{l:1,side:"b"}],
-      ["copilot","pre_approval_gate","converged",{c:1}],
-      ["copilot","stop","cap or blocked",{c:1,d:"M708 593 C 800 593, 900 520, 900 436",lx:812,ly:590,anc:"start"}],
-      ["pre_approval_gate","pre_approval_gate","new head",{l:1,side:"l",lx:552,ly:540,anc:"end"}],
-      ["pre_approval_gate","final_approval","clean",{c:1}],
-      ["final_approval","merge","authorized",{c:1}],
-      ["final_approval","stop","no authorization",{c:1}],
-      ["merge","post_merge","merged",{c:1}],
-      ["post_merge","retro",""],
-      ["retro","request","next unit",{c:1,h:1,oy:-2}],
-      ["retro","done",""],
-      ["review_route","done","",{h:1}],["ui_review","done","",{h:1}],
-    ]},
-
-  startup:{name:"startup", desc:"loop startup: parse, build the canonical input, check ownership, route, then the retro and worktree guards. Source: scripts/loop/resolve-dev-loop-startup.mjs.", vb:[690,540], w:180, cw:240, rh:70, x0:20, y0:30,
-    nodes:[
-      ["E1","parse args","E1 one target flag",0,0,{a:"code",src:"resolve-dev-loop-startup.mjs parseResolveDevLoopStartupCliArgs",L:["contract","Exactly one target flag is allowed. A bad combination exits 1 before anything is read."]}],
-      ["E2","build input","E2 canonical bundle",0,1,{a:"code",src:"resolve-dev-loop-startup.mjs buildAutoResolvedInput, buildPlanFileInput, buildSpikeInput, buildLightweightIssuelessInput",L:["facts","Startup reads GitHub or the local file and builds one in-memory bundle. A failed read throws; it never fabricates a state."]}],
-      ["E3","ownership gate","E3 assignee check",0,2,{k:"gate",a:"code",src:"resolve-dev-loop-startup.mjs enforceOwnershipGate, STRATEGY_OWNERSHIP_GATE",L:["people","Work runs only on an artifact assigned to the operator's own login."]}],
-      ["E4","route","E4 routeForState",0,3,{a:"code",s:"rules",src:"packages/core/src/loop/public-dev-loop-routing.mjs routeForState",L:["router","The router reads only canonical fields and takes the first rule that matches."]}],
-      ["E5","retro gate","E5 checkpoint state",0,4,{k:"gate",a:"code",src:"applyRetrospectiveCheckpointGate; retrospective-checkpoint.mjs evaluateRetrospectiveGate",L:["nested","The outer loop refuses new work while the previous merge lacks its retro checkpoint."]}],
-      ["E6","worktree guard","E6 isolation class",0,5,{k:"gate",a:"code",src:"packages/core/src/loop/worktree-guard.mjs classifyWorktreeIsolation",L:["failclosed","Local implementation must run in an isolated worktree. The main checkout is refused."]}],
-      ["E7","emit result","E7 bundleKind",0,6,{a:"code",src:"buildResolveDevLoopStartupResult, buildAsyncStartRejection",L:["facts2","Startup prints one JSON result: bundleKind, selectedStrategy, requiredReads and the next action."]}],
-      ["E8","board self-heal","E8 best effort, 20 s",1,6,{a:"code",src:"resolve-dev-loop-startup.mjs runCli, shouldRunStartupReconcile (STARTUP_RECONCILE_BUDGET_MS = 20000)",L:["facts","The board is repaired on a best-effort basis within 20 s. A failure here does not block the run."]}],
-      ["E9","required reads","E9 load the strategy",2,6,{a:"agent",src:"STRATEGY_REQUIRED_READS",L:["next","The agent loads only the files the strategy names. Every strategy includes public-dev-loop-contract.md."]}],
-      ["E10","handoff envelope","E10 job card",2,5,{a:"code",src:"packages/core/src/loop/handoff-envelope.mjs buildDevLoopHandoffEnvelope",L:["jobcard","The envelope is the job card: target, current gate, stop rules, cwd, acceptance and budgets."]}],
-      ["ret_ok","resolved","back to the lifecycle",2,4,{k:"ret"}],
-      ["ret_rec","needs_reconcile","back, then stop",1,5,{k:"ret exit"}],
-      ["ret_end","startup ends","throw, exit 1, no route",1,1.5,{k:"ret exit"}],
-    ],
-    edges:[
-      ["E1","E2",""],["E2","E3",""],["E3","E4","owned"],["E4","E5",""],["E5","E6",""],["E6","E7",""],
-      ["E7","E8","resolved",{c:1}],["E8","E9",""],["E9","E10",""],["E10","ret_ok",""],
-      ["E7","ret_rec","needs_reconcile",{c:1,h:1,lx:350,ly:441,anc:"middle"}],
-      ["E2","ret_end","throws or not routed",{c:1,h:1,lx:350,ly:127,anc:"middle"}],
-      ["E3","ret_end","assigned to other",{c:1,h:1,lx:350,ly:199,anc:"middle"}],
-    ]},
-
-  rules:{name:"route rules", desc:"routeForState checks the rows in order and takes the first match. Each row shows the rule, then the result when it matches. Source: public-dev-loop-routing.mjs routeForState.", vb:[900,560], w:210, cw:1, rh:1, x0:0, y0:0,
-    nodes:[
-      ["r0","rule 0","review on non-PR target",20,30,{a:"code"}],["o0","reconcile","needs_reconcile",242,30,{k:"ret exit",w:200}],
-      ["r0b","rule 0b","issue + linkedPr: PR",20,92,{a:"code"}],
-      ["r1","rule 1","blocked or not_authorized",20,154,{a:"code"}],["o1","STOP","stop_blocked_or_not_authorized",242,154,{k:"ret exit",w:200}],
-      ["r2","rule 2","status done",20,216,{a:"code"}],["o2","STOP","stop_done_terminal",242,216,{k:"ret exit",w:200}],
-      ["r3","rule 3","merge_ready, needs_confirmation",20,278,{a:"code"}],["o3","STOP","waiting_for_merge_authorization",242,278,{k:"ret exit",w:200}],
-      ["r4","rule 4","approval_ready or merge_ready",20,340,{a:"code"}],["o4","final_approval","needs clean pre_approval",242,340,{k:"ret",w:200}],
-      ["r5","rule 5","status waiting",20,402,{a:"code"}],["o5","WAIT","wait_watch",242,402,{k:"ret",w:200}],
-      ["r6","rule 6","local_branch or local_phase",20,464,{a:"code"}],["o6","ROUTE","local_implementation",242,464,{k:"ret",w:200}],
-      ["r7","rule 7","issue target",470,30,{a:"code"}],["o7","ROUTE","issue_intake",692,30,{k:"ret",w:190}],
-      ["r8","rule 8","PR + reviewRequested",470,92,{a:"code"}],["o8","ROUTE","review",692,92,{k:"ret",w:190}],
-      ["r9","rule 9","PR + uiReviewRequested",470,154,{a:"code"}],["o9","ROUTE","ui_review",692,154,{k:"ret",w:190}],
-      ["r10","rule 10","PR, external_human",470,216,{a:"code"}],["o10","ROUTE","external_pr_followup",692,216,{k:"ret",w:190}],
-      ["r11","rule 11","PR, reviewer",470,278,{a:"code"}],["o11","ROUTE","reviewer_fixer",692,278,{k:"ret",w:190}],
-      ["r12","rule 12","PR, ownership copilot",470,340,{a:"code"}],["o12","ROUTE","copilot_pr_followup",692,340,{k:"ret",w:190}],
-      ["r13","rule 13","anything else",470,402,{a:"code"}],["o13","reconcile","needs_reconcile",692,402,{k:"ret exit",w:190}],
-    ],
-    edges:[
-      ["r0","r0b",""],["r0b","r1",""],["r1","r2",""],["r2","r3",""],["r3","r4",""],["r4","r5",""],["r5","r6",""],
-      ["r6","r7","no match",{d:"M125 510 L125 524 C125 532,131 534,139 534 L 448 534 C 454 534, 456 528, 456 520 L 456 66 C 456 58, 462 53, 470 53",lx:300,ly:548,anc:"middle"}],
-      ["r7","r8",""],["r8","r9",""],["r9","r10",""],["r10","r11",""],["r11","r12",""],["r12","r13",""],
-      ["r0","o0",""],["r1","o1",""],["r2","o2",""],["r3","o3",""],["r4","o4",""],["r5","o5",""],["r6","o6",""],
-      ["r7","o7",""],["r8","o8",""],["r9","o9",""],["r10","o10",""],["r11","o11",""],["r12","o12",""],["r13","o13",""],
-    ]},
-
-  queue:{name:"queue drain", desc:"The enqueue gate and the queue entry states. One entry is one full issue-to-merge run. Source: queue-driver.mjs, queue-state.mjs, projects-queue-contract.md.", vb:[680,610], w:180, cw:240, rh:70, x0:20, y0:30,
-    nodes:[
-      ["Q1","enqueue gate","Q1 refinement floor",0,0,{k:"gate",a:"code",src:"QUEUE-ENQUEUE-REFINEMENT-GATE; decideEnqueueRefinementGate",L:["evidence","Only a refined issue may enter Next Up. The check is detectIssueRefinementArtifact: an AC / DoD matrix plus Non-goals."]}],
-      ["q_throw","refused","MISSING_REFINEMENT_ARTIFACT",1,0,{k:"ret exit",w:200}],
-      ["q_backlog","parked","Backlog, with a reason",2,0,{k:"ret exit"}],
-      ["Q2","pickup","Q2 Next Up by position",0,1,{a:"code",src:"QUEUE-NEXTUP-SOURCE; QUEUE-NEXTUP-EMPTY-FAIL-CLOSED",L:["onestate","The driver takes the head of Next Up, never Backlog. An empty column fails closed."]}],
-      ["queued","queued","entry waits for deps",0,2,{a:"code",src:"queue-state.mjs VALID_TRANSITIONS"}],
-      ["running","running","Q4 dispatched",0,3,{a:"code",src:"queue-driver.mjs runQueue, nextReadyEntry",L:["jobcard","The injected orchestrator runs one full unit. The board item moves to In Progress."]}],
-      ["q_run","run the unit","to startup",1,3,{k:"ret"}],
-      ["waiting_review","waiting_review","PR open",0,4,{a:"code"}],
-      ["gates_passing","gates_passing","gates clean",0,5,{a:"code"}],
-      ["merging","merging","merge authorized",0,6,{a:"code"}],
-      ["qdone","done","board Done",0,7,{k:"term"}],
-      ["blocked","blocked","auto-files a bug, max 10",1,5,{k:"exit aside"}],
-      ["failed","failed","retry: back to queued",1,6,{k:"exit aside"}],
-    ],
-    edges:[
-      ["Q1","Q2","refined"],["Q1","q_throw","interactive",{c:1,lx:230,ly:44,anc:"middle"}],["Q1","q_backlog","--auto",{c:1,d:"M200 40 C 300 6, 420 6, 500 30",lx:350,ly:12,anc:"middle"}],
-      ["Q2","queued",""],["queued","running","dispatch"],["running","q_run",""],
-      ["running","waiting_review","ok + PR"],["waiting_review","gates_passing",""],["gates_passing","merging","size not block"],["merging","qdone",""],
-      ["running","blocked","error",{c:1,h:1}],["running","failed","recoverable",{c:1,h:1}],
-    ]},
-
-  grill:{name:"grill", desc:"The refinement grill state machine. It iterates to a fixed point or hands off honestly. Source: skills/loop-grill/SKILL.md; refinement-grill-state.mjs GRILL_TRANSITIONS.", vb:[760,440], w:190, cw:1, rh:1, x0:0, y0:0,
-    nodes:[
-      ["load_target","load_target","R2 body + comments",260,30,{a:"agent,code",src:"refinement-grill-state.mjs GRILL_TRANSITIONS; view-issue.mjs",L:["facts","The grill starts from the body and comments on GitHub, not from memory."]}],
-      ["detect_gaps","detect_gaps","R3 gaps + spec-lint",260,114,{k:"gate",a:"agent,code",src:"interpretRefinementGrillState; GRILL-SPEC-LINT; ADR 0084",L:["goal","Each spec-lint finding is a gap. Zero gaps still needs provenance: a recorded results comment."]}],
-      ["await_answers","await_answers","R4 human or --auto",260,198,{a:"human,agent",src:"GRILL-SUBLOOP-HONEST-HANDOFF; SKILL.md Step 3",L:["people","The operator answers. Under --auto the agent self-answers, but only with a citation."]}],
-      ["synthesize","synthesize","R5 write the sections",260,282,{a:"agent",src:"GRILL-SUBLOOP-FULL-REWRITE, GRILL-SUBLOOP-NO-EMBED-SYNTHESIS, GRILL-SUBLOOP-RATIONALE-COMMENT",L:["goal","The agent replaces the AC / DoD matrix and Non-goals sections and posts the results comment. The raw Q&A stays in tmp/."]}],
-      ["re_grill","re_grill","R6 fixed point?",260,366,{a:"agent,code",src:"GRILL-SUBLOOP-ITERATE-TO-CLEAN",L:["retry","The grill runs again on the new body. It stops at a fixed point, with no numeric cap in code."]}],
-      ["blocked","blocked","blocked_needs_user_decision",10,156,{k:"ret exit",w:180}],
-      ["grill_clean","grill_clean","back to the lifecycle",540,114,{k:"ret"}],
-      ["needs_human_handoff","handoff","needs_human_handoff",540,282,{k:"ret exit"}],
-    ],
-    edges:[
-      ["load_target","detect_gaps","loaded"],["load_target","blocked","load failure",{c:1,h:1,ox:-4,oy:-8}],
-      ["detect_gaps","detect_gaps","provenance_missing",{l:1,side:"l"}],
-      ["detect_gaps","await_answers","open gaps",{c:1}],["detect_gaps","grill_clean","0 gaps + provenance",{c:1,lx:520,ly:104,anc:"middle"}],
-      ["detect_gaps","needs_human_handoff","uncitable gap",{c:1,h:1,ox:-8,oy:-18}],
-      ["await_answers","synthesize","answers"],["await_answers","needs_human_handoff","no citation",{c:1,h:1,ox:4,oy:4}],
-      ["synthesize","re_grill",""],["synthesize","blocked","write failure",{c:1,h:1,ox:2,oy:30}],
-      ["re_grill","grill_clean","fixed point",{c:1,d:"M450 380 C 500 380, 505 200, 540 152",lx:510,ly:250,anc:"start"}],
-      ["re_grill","detect_gaps","new gap",{c:1,l:1,side:"l",bulge:48,lx:206,ly:344,anc:"end"}],
-      ["re_grill","needs_human_handoff","unresolved",{c:1,h:1,ox:16,oy:8}],
-    ]},
-
-  gate:{name:"gate round", desc:"One gate round for one head: fan-out, fan-in, judge, post, fix. A new head starts a fresh round from G1. G3 (dispatch the gate-coordinator), G6 (spec context) and G15 (typed result) are folded into neighbours. Source: skills/docs/gate-review-sub-loop-contract.md.", vb:[900,500], w:175, cw:230, rh:76, x0:30, y0:40,
-    nodes:[
-      ["G1","base refresh","G1 merge origin/base",0,0,{a:"agent,code",src:"GATE-EXEC-BASE-REFRESH; scripts/loop/resolve-pr-conflicts.mjs",L:["contract","The round starts from the current base. Only additive CHANGELOG conflicts auto-resolve; anything else stops the round."]}],
-      ["G2","entry check","G2 action allowed?",0,1,{k:"gate",a:"code",src:"GATE-EXEC-REGATE-MANDATORY; pr-gate-coordination.mjs evaluatePrGateCoordinationCore",L:["allowed","The coordination state lists the allowed next actions. The round runs only when run_draft_gate or run_pre_approval_gate is allowed."]}],
-      ["G4","dispatch mode","G4 inline or fan-out",0,2,{a:"code",src:"scripts/loop/resolve-gate-dispatch.mjs; config.mjs resolveGateDispatchMode",L:["capability","A script picks the mode from labels, light mode, tier and diff. A small diff can get one inline pass."]}],
-      ["G5","validation","G5 once per round",0,3,{k:"gate",a:"code",src:"GATE-EXEC-VALIDATION-RESOLUTION; scripts/loop/resolve-validation.mjs",L:["evidence","Validation runs once per round, for this head. Only resolve-validation may launch full-repository validation."]}],
-      ["G7","gate context","G6-G7 spec + context",0,4,{a:"code",src:"scripts/loop/spec-context.mjs; scripts/github/write-gate-context.mjs",L:["criteria","The spec identity (specDigest, headSha, contentDigest) goes to every durable writer. A changed spec makes old clearances stale."]}],
-      ["G8","carry-forward","G8 re-gate only",0,5,{a:"code",src:"scripts/github/resolve-angle-carry-forward.mjs; GATE-EXEC-ANGLE-CARRY-FORWARD",L:["current","On a re-gate only the delta between the heads is new. Mandatory angles never carry."]}],
-      ["G9","emit fan-out","G9 work orders",1,5,{a:"code",src:"scripts/github/emit-fanout-dispatch.mjs; GATE-EXEC-FANOUT-DISPATCH-EMIT",L:["jobcard","Each unit gets a work order of at most 30 KB. The dispatch prompt is at most 499 bytes and only points at it."]}],
-      ["G10","fan-out","G10 one per unit",1,4,{a:"agent",src:"agents/review.agent.md; reviewer-unit-bound.mjs; GATE-EXEC-FIRST-WAVE-RELEASE",L:["question","Each reviewer gets at most 5 angles on one head and writes one artifact: a verdict and findings."]}],
-      ["G11","fan-in","G11 consolidate",1,3,{k:"gate",a:"code",src:"scripts/loop/consolidate-fanin.mjs; gate-fanin.mjs consolidateFanin",L:["missing","Fan-in is a script. It checks that every unit reported for this head before it counts any verdict."]}],
-      ["G12","judge","G12 act, defer, reject",1,2,{a:"agent",src:"agents/judge.agent.md; GATE-EXEC-JUDGE-PHASE",L:["choose","The judge weighs each finding against the AC, DoD and Non-goals. This is where a model chooses; scripts check its output."]}],
-      ["G13","ledger","G13 durable findings",1,1,{a:"code",src:"write-gate-findings-log.mjs; GATE-EXEC-DISPOSITION-LEDGER, GATE-EXEC-ANGLE-COVERAGE",L:["facts","The ledger is the durable record of the round. It refuses a verdict that contradicts its findings."]}],
-      ["G14","judge-pass","G14 act list",1,0,{k:"gate",a:"code",src:"scripts/loop/judge-pass.mjs; GATE-EXEC-DEFERRAL-RECORD",L:["output","judge-pass turns the judge verdict into the act list and one batched deferral comment."]}],
-      ["G16","post verdict","G16 one COMMENT review",2,0,{a:"agent,code",src:"scripts/github/upsert-checkpoint-verdict.mjs; GATE-COMMENT-SINGLE-SURFACE; ADR 0089",L:["output","One COMMENT review per round: inline threads for locatable findings, the rest in the body."]}],
-      ["G17","fixer","G17 act list only",2,1,{a:"agent",src:"scripts/loop/emit-fixer-work-order.mjs FIXER_PHASES; role-budget-bound.mjs",L:["jobcard","The fixer gets only the act list. Phase commit_only commits without a push."]}],
-      ["G18","delta review","G18 pre-push, max 3",2,2,{k:"gate",a:"agent,code",src:"pre-push-delta-review.mjs decideDeltaNextStep; PRE-PUSH-DELTA-EXIT-BOUND",L:["retry","The delta review checks the fix before the push. It runs at most 3 times."]}],
-      ["G19","reply / resolve","G19 dispositions",2,3,{a:"agent,code",src:"reply-resolve-review-thread.mjs; verify-fixer-disposition.mjs; GATE-EXEC-FIXER-DISPOSITION-BOUNDARY",L:["evidence","Each thread gets a disposition. fixed needs a contained 40-character SHA."]}],
-      ["G20","gate close","G20 close threads",2,4,{k:"gate",a:"code",src:"scripts/github/close-gate-findings.mjs; _gate-finding-surface.mjs isDeferredAtRound",L:["budget","Threads close by severity and round. A medium closes only after the fix window."]}],
-      ["exit_escalate","escalate","stop for a human",3,1,{k:"ret exit",w:150}],
-      ["exit_clean","clean","next boundary",3,4,{k:"ret",w:150}],
-      ["exit_new_head","new head","fresh round from G1",3,5,{k:"ret",w:150}],
-    ],
-    edges:[
-      ["G1","G2",""],["G2","G2","wait_for_ci",{l:1,side:"l"}],["G2","G4","allowed"],["G4","G5",""],["G5","G7",""],
-      ["G7","G8","re-gate",{c:1}],["G7","G9","round 1",{c:1,h:1,lx:228,ly:424,anc:"middle"}],["G8","G9",""],
-      ["G9","G10",""],["G10","G11",""],["G11","G10","re-run reviewer",{c:1,l:1,side:"r",bulge:30}],
-      ["G11","G4","escalated",{c:1,l:1,h:1,ox:0,oy:-14}],
-      ["G11","G12","consolidated"],["G12","G13",""],["G13","G14",""],["G14","G16",""],
-      ["G14","exit_escalate","spec_cannot_decide",{c:1,d:"M290 40 L290 26 C290 20,295 18,301 18 L 780 18 C 790 18, 793 24, 793 30 L 793 116",lx:560,ly:13,anc:"middle"}],
-      ["G2","exit_escalate","CI red",{c:1,d:"M205 139 C 222 139, 228 128, 228 112 L 228 26 C 228 20, 232 18, 238 18 L 290 18",lx:234,ly:96,anc:"start"}],
-      ["G16","G17","findings_present",{c:1}],["G16","G20","clean",{c:1,side:"r",bulge:34}],
-      ["G16","exit_escalate","incomplete",{c:1,inf:1,h:1,lx:740,ly:96,anc:"middle"}],
-      ["G17","G18",""],["G18","G18","needs_fix",{l:1,side:"l",lx:476,ly:186,anc:"end"}],["G18","G19","push"],["G19","G20",""],
-      ["G20","exit_clean","no push",{c:1,lx:684,ly:384,anc:"middle"}],["G20","exit_new_head","pushed",{c:1,h:1,ox:4,oy:16}],
-    ]},
-
-  ready:{name:"ready checks", desc:"ready-for-review runs 13 checks in order; any failure refuses. Size and the ADR tripwire branch. Source: scripts/github/ready-for-review.mjs readyForReview.", vb:[910,540], w:170, cw:200, rh:70, x0:20, y0:30,
-    nodes:[
-      ["c1","1 head","head resolvable",0,0,{a:"code"}],["c2","2 isDraft","PR is a draft",1,0,{a:"code"}],["c3","3 title markers","none on the title",2,0,{a:"code"}],["c4","4 CI","gates.draft.requireCi",3,0,{a:"code"}],
-      ["c5","5 draft evidence","clean, current head",3,1,{a:"code"}],["c6","6 gate threads","unresolved 0, -1 fails",2,1,{a:"code"}],
-      ["c7","7 size budget","check-size-budget",1,1,{k:"gate",a:"code",src:"scripts/loop/check-size-budget.mjs computeSizeBudget",L:["budget","Size is measured, not guessed: logicLoc = (code - commentOnly) + 0.25 * test, for JS and TS files."]}],
-      ["size_block","block","over 1500 or 2000",0,1,{k:"exit"}],["ret_refuse_size","refused","PR stays draft",0,2,{k:"ret exit"}],
-      ["size_pass","pass","at most 400 logic LOC",1,2,{a:"code"}],["size_escalate","escalate","over softLoc 400",2,2,{a:"code"}],
-      ["c8","8 ADR tripwire","check-adr-tripwire",1.5,3,{k:"gate",a:"code",src:"scripts/loop/check-adr-tripwire.mjs computeAdrTripwire; decision-record-contract.md",L:["people","Changing a contract doc needs a decision record or an operator's reasoned marker."]}],
-      ["adr_block","block","trigger, no valid marker",3,3,{k:"exit"}],["ret_refuse_adr","refused","PR stays draft",3,4,{k:"ret exit"}],
-      ["adr_pass","pass","no trigger or ADR added",1,4,{a:"code"}],["adr_waived","allow marker","adr-tripwire:allow <reason>",2,4,{a:"human"}],
-      ["c9","9 comments","comment discipline",1.5,5,{a:"code"}],["c10","10 waiver","waiver comment",2.5,5,{a:"code"}],["c11","11 body spec","tracker-backed PR body",3.5,5,{a:"code"}],
-      ["c12","12 gh pr ready","PR leaves draft",3.5,6,{a:"code"}],["c13","13 board sync","non-fatal",2.5,6,{a:"code"}],["ret_ready","ready","to Copilot",1.5,6,{k:"ret"}],
-    ],
-    edges:[
-      ["c1","c2",""],["c2","c3",""],["c3","c4",""],["c4","c5",""],["c5","c6",""],["c6","c7",""],
-      ["c7","size_block","block",{c:1}],["size_block","ret_refuse_size",""],
-      ["c7","size_pass","pass",{c:1}],["c7","size_escalate","escalate",{c:1,v:1,ox:4,oy:-2}],
-      ["size_pass","c8",""],["size_escalate","c8",""],
-      ["c8","adr_block","trigger",{c:1}],["adr_block","ret_refuse_adr","no marker",{c:1}],
-      ["adr_block","c8","add a reason",{c:1,l:1,d:"M650 240 C 630 220, 500 220, 470 240",lx:560,ly:232,anc:"middle"}],
-      ["c8","adr_pass","pass",{c:1,ox:-40}],["c8","adr_waived","valid marker",{c:1}],
-      ["adr_pass","c9",""],["adr_waived","c9",""],
-      ["c9","c10",""],["c10","c11",""],["c11","c12",""],["c12","c13",""],["c13","ret_ready",""],
-    ]},
-
-  cop:{name:"Copilot follow-up", desc:"The Copilot review loop: request, wait, fix, reply, re-request. A clean review on the same head converges. Faded nodes are states this run does not visit. Source: copilot-loop-state.mjs interpretLoopState; request-copilot-review.mjs.", vb:[880,550], w:220, cw:270, rh:72, x0:90, y0:30,
-    nodes:[
-      ["pr_ready","ready, no feedback","pr_ready_no_feedback",0,0,{a:"code",src:"copilot-loop-state.mjs TRANSITIONS",L:["onestate","The loop state is computed from the PR, reviews, threads and CI each time."]}],
-      ["P5","request review","P5 request helper",0,1,{k:"gate",a:"code",src:"scripts/github/request-copilot-review.mjs; COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY, COPILOT-FOLLOWUP-REQUEST-BRANCHING",L:["allowed","Only the helper may request. It checks draft, @copilot comments, the round cap and same-head clean before it places a request."]}],
-      ["waiting","waiting","waiting_for_copilot_review",0,2,{a:"code",src:"scripts/loop/run-watch-cycle.mjs; probe-copilot-review.mjs; wait-watch-procedure.md",L:["wait","The watch polls every 60 s, for up to 30 min per review-watch boundary."]}],
-      ["unresolved","feedback open","unresolved_feedback_present",0,3,{a:"agent",src:"COPILOT-STATE-UNRESOLVED-PRIORITY",L:["back","Unresolved feedback takes priority. The fixer works the threads."]}],
-      ["fixed","fixed, reply pending","already_fixed_needs_reply_resolve",0,4,{a:"agent,code",src:"COPILOT-STATE-REPLY-BEFORE-REREQUEST, COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE",L:["evidence","Reply before re-request. Verify before resolve."]}],
-      ["rerequest","ready to re-request","ready_to_rerequest_review",0,5,{a:"code",src:"COPILOT-FOLLOWUP-REREQUEST-AFTER-PUSH",L:["current","A new head needs its own Copilot review."]}],
-      ["suppressed","converged","suppressed_same_head_clean",1,0,{a:"code"}],
-      ["requested","requested","request placed",1,1,{a:"code"}],
-      ["fallback","cap, clean","round_cap_clean_fallback",1,2,{a:"code"}],
-      ["cap","round cap","round_cap_reached",1,3,{k:"exit"}],
-      ["blockedc","blocked","blocked_needs_user_decision",1,4,{k:"exit"}],
-      ["unavailable","unavailable","review_request_unavailable",1,5,{k:"exit aside"}],
-      ["ret_pre","pre_approval","gate window",2,0,{k:"ret"}],
-      ["pr_draft","draft","pr_draft",2,1,{k:"aside"}],["no_pr","no PR","no_pr",2,2,{k:"aside"}],
-      ["no_changes","no changes","no_changes_since_last_review",2,3,{k:"exit"}],
-      ["ret_stop","stop","human decision",2,4,{k:"ret exit"}],
-      ["cdone","done","done",2,5,{k:"aside"}],
-      ["waiting_for_ci","CI pending","waiting_for_ci",0,6,{k:"aside"}],["low_signal","low signal","low_signal_converged",1,6,{k:"aside"}],["internal","internal tooling","internal_tooling_direct_gate",2,6,{k:"aside"}],
-    ],
-    edges:[
-      ["pr_ready","P5","request"],
-      ["P5","requested","",{}],["P5","suppressed","same head clean",{c:1,h:1,lx:470,ly:94,anc:"middle"}],["suppressed","ret_pre",""],
-      ["requested","waiting","",{v:1}],
-      ["waiting","waiting","watch",{l:1,side:"l"}],
-      ["waiting","unresolved","comments",{c:1}],
-      ["waiting","rerequest","clean review",{c:1,d:"M310 205 C 330 205, 336 216, 336 236 L 336 395 C 336 410, 326 413, 310 413",lx:332,ly:452,anc:"end"}],
-      ["waiting","fallback","cap, clean",{c:1,lx:366,ly:239}],["waiting","cap","cap, threads open",{c:1,h:1,lx:366,ly:311}],["waiting","blockedc","two error reviews",{c:1,h:1,lx:366,ly:383}],
-      ["unresolved","fixed","fixer pushes"],["fixed","rerequest","reply + resolve"],
-      ["rerequest","P5","re-request",{l:1,side:"l",bulge:30}],
-      ["fallback","ret_pre","",{h:1}],
-      ["cap","no_changes","force, same head",{c:1,lx:636,ly:239}],["cap","ret_stop","no force",{c:1,h:1,lx:636,ly:311}],["no_changes","ret_stop",""],
-      ["blockedc","ret_stop",""],["unavailable","ret_stop","",{h:1}],
-    ]},
-
-  merge:{name:"merge checks", desc:"merge-pr.mjs checks the config, then 8 preconditions in order, then the merge class, then merges pinned to the head SHA. Source: scripts/github/merge-pr.mjs; merge-approval.mjs evaluateMergePreconditions.", vb:[790,390], w:200, cw:250, rh:70, x0:20, y0:30,
-    nodes:[
-      ["M3","config check","M3 humanMergeOnly?",0,0,{k:"gate",a:"code",src:"scripts/github/merge-pr.mjs; resolveHumanMergeOnly",L:["failclosed","A config that does not load cannot answer \"is humanMergeOnly set?\". The wrapper refuses."]}],
-      ["p1","human_approver","M4 1 of 8",0,1,{a:"code"}],["p2","mergeable","M4 2 of 8",0,2,{a:"code"}],["p3","ci_green","M4 3 of 8",0,3,{a:"code"}],["p4","title_markers","M4 4 of 8",0,4,{a:"code"}],
-      ["p5","gate_evidence","M4 5 of 8",1,4,{a:"code"}],["p6","copilot_convergence","M4 6 of 8",1,3,{a:"code"}],["p7","size approval","size_budget_human_approval",1,2,{a:"code"}],["p8","merge_approval","M4 8 of 8",1,1,{k:"gate",a:"code"}],
-      ["M5","merge class","M5 escalated or drain",2,1,{a:"code",src:"merge-approval.mjs resolveMergeClass, resolveMergeApprovalDecision",L:["auth","An escalated merge needs a fresh approval. A drain merge may use a standing authorization."]}],
-      ["M6","merge","M6 --match-head-commit",2,2,{a:"code",src:"merge-pr.mjs; MERGE-POSTMERGE-FULL-SHA-REPORT",L:["version","gh pr merge --match-head-commit pins the merge to the checked head. A moved head fails closed."]}],
-      ["ret_merged","merged","full 40-hex SHA",2,3,{k:"ret"}],
-      ["ret_refuse","refused","no merge",2,0,{k:"ret exit"}],
-    ],
-    edges:[
-      ["M3","p1","loads, false"],["M3","ret_refuse","humanMergeOnly or error",{c:1}],
-      ["p1","p2",""],["p2","p3",""],["p3","p4",""],["p4","p5",""],["p5","p6",""],["p6","p7",""],["p7","p8",""],
-      ["p8","M5",""],["p8","ret_refuse","stale approval",{c:1,h:1,lx:560,ly:92,anc:"end"}],["M5","ret_refuse","needs fresh approval",{c:1,lx:628,ly:92,anc:"start"}],
-      ["M5","M6",""],["M6","ret_merged","MERGED"],["M6","ret_refuse","head moved",{c:1,side:"r",bulge:40}],
-    ]},
-
-  retro:{name:"retro", desc:"The post-merge retro and its checkpoint. The gate binds at the next unit's startup, never at merge. Source: skills/docs/retrospective-checkpoint-contract.md; checkpoint-contract.mjs.", vb:[500,460], w:190, cw:250, rh:70, x0:20, y0:30,
-    nodes:[
-      ["RT1","arm","RT1 state required",0,0,{a:"code",src:".pi/extensions/dev-loop-behavioral-review.ts",L:["nested","Completion arms the checkpoint as required. Until it is recorded, the next startup sees MISSING."]}],
-      ["RT2","retro","RT2 fresh context",0,1,{a:"agent",src:"RETRO-FRESH-CONTEXT-MANDATORY",L:["next","A fresh-context agent reads the full tool-call record and the AC / DoD. An inline retro is rejected."]}],
-      ["RT3","findings scan","RT3 check-retro-tooling",0,2,{a:"code",src:"check-retro-tooling.mjs; RETRO-ADVISORY-NEVER-GATE, RETRO-FINDINGS-ENVELOPE-CARRY",L:["facts2","Findings travel in the next envelope plus one advisory PR comment. They never gate."]}],
-      ["RT4","record","RT4 checkpoint-contract",0,3,{a:"code",src:"scripts/loop/checkpoint-contract.mjs",L:["evidence","complete needs --notes, --retro-context fresh, --record-source, --repo, --pr and a 40-hex --merge-commit."]}],
-      ["RT5","gate","RT5 at next startup",0,4,{k:"gate",a:"code",src:"evaluateRetrospectiveGate",L:["nested","The checkpoint is cycle-scoped. A newer merge makes it MISSING again."]}],
-      ["ret_next","next unit","back to the lifecycle",0,5,{k:"ret"}],
-      ["NONE","NONE","file absent: passes",1,0,{a:"code"}],["MISSING","MISSING","required or malformed",1,1,{k:"exit"}],
-      ["COMPLETE","COMPLETE","fresh provenance",1,3,{a:"code"}],["SKIPPED","SKIPPED","reason + same identity",1,4,{a:"code"}],
-    ],
-    edges:[
-      ["RT1","RT2",""],["RT2","RT3",""],["RT3","RT4",""],["RT4","RT5",""],["RT5","ret_next","pass"],
-      ["RT1","MISSING","writes",{c:1,h:1,oy:-2}],["RT4","COMPLETE","complete",{c:1}],["RT4","SKIPPED","skipped",{c:1,h:1,oy:16}],
-    ]},
-
-  review:{name:"standalone review", desc:"One review-gate round on any PR. No judge, no fix, no re-gate, no lifecycle evidence. Source: skills/review/SKILL.md.", vb:[500,390], w:190, cw:250, rh:70, x0:20, y0:30,
-    nodes:[
-      ["V1","context","V1 --gate review",0,0,{a:"code",src:"write-gate-context.mjs --gate review; skills/review/SKILL.md",L:["question","The review gate uses the union of the draft and pre-approval angles."]}],
-      ["V2","fan-out","V2 review agents",0,1,{a:"agent",src:"GATE-EXEC-FIRST-WAVE-RELEASE",L:["join","Reviewers run in waves on the same head."]}],
-      ["V3","fan-in + ledger","V3 no judge",0,2,{k:"gate",a:"code",src:"consolidate-fanin.mjs; ledger --execution-mode fanout_fanin",L:["missing","Fan-in still checks coverage. There is no judge on this route."]}],
-      ["V4","post pending","V4 pending review",0,3,{a:"code",src:"REVIEW-GATE-VERDICT-CANONICAL",L:["output","The verdict goes up as a pending review, never through raw gh pr review."]}],
-      ["V5","submit choice","V5 human or --auto",0,4,{a:"human,code",src:"GATE-REVIEW-SUBMIT-MODES",L:["people","The operator chooses the review event. approve, request-changes and discard need --interactive-confirm and are refused under --auto."]}],
-      ["ret_done","done","no lifecycle evidence",1,4,{k:"ret"}],
-    ],
-    edges:[["V1","V2",""],["V2","V3",""],["V3","V4",""],["V4","V5",""],["V5","ret_done",""]]},
-
-  ui:{name:"UI review", desc:"Five CLI stages prove the change in the running app. The route never auto-fixes and never auto-submits. Source: skills/ui-review/SKILL.md; ui-review-*.mjs.", vb:[500,390], w:190, cw:250, rh:70, x0:20, y0:30,
-    nodes:[
-      ["U1","provision","U1 boot the app",0,0,{k:"gate",a:"code",src:"packages/core/src/loop/ui-review-provision.mjs provisionAndBoot",L:["failclosed","Provision needs uiReview.run in .devloops. Each missing piece is a must-fix stop."]}],
-      ["U2","drive","U2 headless WebKit",0,1,{a:"code",src:"ui-review-drive.mjs DEFAULT_DRIVE_CAPS",L:["budget","Caps: 40 screenshots, 12 flows, 20 steps per flow, 0 retries. A project can only tighten them."]}],
-      ["U3","diagnose","U3 anchor findings",0,2,{a:"code",src:"ui-review-diagnose.mjs diagnoseFailures",L:["output","Findings are anchored on added lines and ranked must-fix or note."]}],
-      ["U4","report","U4 pending review",0,3,{k:"gate",a:"code",src:"ui-review-report.mjs; stage-reviewer-draft.mjs",L:["render","If the live head moved past the diagnosed head, the report fails closed and diagnose runs again."]}],
-      ["U5","teardown","U5 side-effect ledger",0,4,{a:"code",src:"ui-review-teardown.mjs",L:["facts","Teardown records what it removed. Destructive cleanup needs --confirm."]}],
-      ["ret_stop","stop","must-fix stop reason",1,0,{k:"ret exit"}],
-      ["ret_done","done","pending review",1,4,{k:"ret"}],
-    ],
-    edges:[["U1","U2","booted"],["U1","ret_stop","run-recipe-missing",{c:1,oy:-2}],["U2","U3",""],["U3","U4",""],["U4","U3","head advanced",{c:1,l:1,side:"r"}],["U4","U5",""],["U5","ret_done",""]]},
-
-  spike:{name:"spike", desc:"A spike file with Question, Approach and Findings. The exit is discard or graduate. Source: spike-intake-contract.mjs SPIKE_INTAKE_STATE; spike-exit-contract.mjs.", vb:[500,390], w:190, cw:250, rh:70, x0:20, y0:30,
-    nodes:[
-      ["S1","start","S1 --spike <path>",0,0,{k:"gate",a:"code",src:"resolve-dev-loop-startup.mjs buildSpikeInput; SPIKE-STARTUP-SCAFFOLD-GATE",L:["contract","An invalid scaffold exits 1. The Recommendation section decides the intake state."]}],
-      ["in_prog","in progress","spike_in_progress",0,1,{a:"code"}],
-      ["S2","explore","S2 fill Findings",0,2,{a:"agent",src:"isSpikeRun; SPIKE-RELAXED-GATE-PROFILE",L:["budget","The time box is prose only. No duration or enforcement code exists."]}],
-      ["ready_exit","ready for exit","spike_ready_for_exit",1,2,{a:"code"}],
-      ["ambiguous","ambiguous","ambiguous_fail_closed",1,0,{k:"aside"}],
-      ["S3","exit","S3 exit-spike.mjs",1,3,{k:"gate",a:"code",src:"scripts/refine/exit-spike.mjs; spike-exit-contract.mjs evaluateSpikeExit",L:["pause","The exit has two dispositions. A spike that is not ready exits 1 with zero mutation."]}],
-      ["discard","discard","zero mutation",0,4,{k:"ret"}],
-      ["graduate","graduate","writes a plan file",1,4,{k:"ret"}],
-    ],
-    edges:[["S1","in_prog","no Recommendation",{c:1}],["S1","ready_exit","Recommendation filled",{c:1,h:1,ox:30,oy:-24}],["in_prog","S2",""],["S2","ready_exit","filled"],["ready_exit","S3",""],["S3","discard","discard",{c:1,h:1}],["S3","graduate","graduate",{c:1}]]},
-
-  plan:{name:"local-planning", desc:"A plan file in docs/phases is the spec of record. It is refined in place, reviewed by a person and promoted to one draft PR. Source: skills/docs/local-planning.md; plan-file-*-contract.mjs.", vb:[500,460], w:190, cw:250, rh:70, x0:20, y0:30,
-    nodes:[
-      ["LP1","validate","LP1 base sections",0,0,{a:"code",src:"scripts/refine/validate-plan-file.mjs",L:["contract","Status, Objective, In scope and Explicit non-goals must exist."]}],
-      ["LP2","start","LP2 planFileIntakeState",0,1,{k:"gate",a:"code",src:"buildPlanFileInput; plan-file-intake-contract.mjs",L:["unknown","AC and DoD both present: ready. Neither: refine. Only one of them is ambiguous and fails closed."]}],
-      ["LP3","refine","LP3 refiner, in place",0,2,{a:"agent",src:"plan-file-refine-contract.mjs refinePlanFileInPlace",L:["goal","The refiner adds AC, DoD, a size estimate and a coverage matrix. It changes nothing on the tracker."]}],
-      ["LP4","human review","LP4 local_human_review",0,3,{a:"human",src:"local-planning.md Stage 4",L:["people","A person reads the refined plan before it becomes a PR."]}],
-      ["LP5","promote","LP5 one draft PR",0,4,{k:"gate",a:"code",src:"plan-file-promote-contract.mjs evaluatePromoteEligibility",L:["facts","Promote commits the plan, opens one draft PR and writes prNumber into the front matter. It never mints an issue."]}],
-      ["ret_pr","draft PR","to draft_gate",0,5,{k:"ret"}],
-      ["ret_amb","not routed","ambiguous_fail_closed",1,1,{k:"ret exit"}],
-      ["ret_nopromo","refused","not ready or promoted",1,4,{k:"ret exit"}],
-    ],
-    edges:[["LP1","LP2",""],["LP2","LP3","neither"],["LP2","ret_amb","only one",{c:1}],["LP2","LP4","AC + DoD",{c:1,side:"r",bulge:44}],["LP3","LP4",""],["LP4","LP5","approve"],["LP5","ret_pr",""],["LP5","ret_nopromo","",{c:1}]]},
-
-  impl:{name:"local implementation", desc:"The local_implementation strategy: pre-flight, plan, test-first work, self-check, retro, exit gate, pre-PR review, finalize. Source: skills/local-implementation/SKILL.md.", vb:[740,390], w:190, cw:250, rh:70, x0:20, y0:30,
-    nodes:[
-      ["L0","pre-flight","L0 pre-flight-gate",0,0,{k:"gate",a:"code",src:"LOCAL-PREFLIGHT-GATE-MANDATORY; scripts/loop/pre-flight-gate.mjs",L:["failclosed","The worktree and branch must match before any write."]}],
-      ["L1","resume point","L1 earliest open phase",0,1,{a:"agent",src:"SKILL.md \"Determine where to resume\"",L:["facts","The agent reads IMPLEMENTATION_STATE.md, the phase doc and tmp/phases/index.json. Docs win on disagreement."]}],
-      ["L2","plan","L2 variants, merged",0,2,{a:"agent",src:"LOCAL-PLAN-REVIEW-GATE, LOCAL-PHASE-ONE-AT-A-TIME",L:["check","The refiner writes 2 or 3 variants and a merged plan. The merged plan passes an adversarial review first."]}],
-      ["L3","implement","L3 test first",0,3,{a:"agent,code",src:"LOCAL-TEST-FIRST-COVERAGE; VALIDATE-TARGETED-FIRST; role-budget-bound.mjs",L:["back","Tests first, then code, then the narrowest targeted check. A failing check sends the work back."]}],
-      ["L4","self-check","L4 one pass",0,4,{a:"agent",src:"LOCAL-DEV-SELF-CHECK-NO-FANOUT",L:["check","Exactly one self-review. It is not gate evidence."]}],
-      ["L5","docs + retro","L5 fresh context",1,4,{a:"agent",src:"LOCAL-RETRO-FRESH-CONTEXT-DISPATCH, LOCAL-RETROSPECTIVE-REQUIRED",L:["nested","A fresh-context subagent writes the summary, the phase retro and the manifest."]}],
-      ["L6","exit gate","L6 clean worktree",1,3,{k:"gate",a:"code",src:"LOCAL-COMMIT-BEFORE-EXIT; hook-decisions.mjs decideSubagentStopGuard",L:["failclosed","A dirty worktree under tmp/worktrees/ blocks SubagentStop with exit 2."]}],
-      ["L7","pre-PR review","L7 max 2 rounds",1,2,{k:"gate",a:"agent",src:"PRE-PR-BEFORE-FIRST-PUSH, PRE-PR-BOUNDED-TWO-ROUNDS, PRE-PR-NOT-GATE-EVIDENCE",L:["retry","One fresh reviewer reads the change before the first push. At most 2 rounds; the gate stays the authority."]}],
-      ["L8","finalize","L8 by spec source",1,1,{a:"agent",src:"LOCAL-PR-CREATE-CANONICAL, LOCAL-TRACKER-NO-DIRECT-MERGE",L:["allowed","A tracker-backed change goes to a draft PR. It may never merge locally."]}],
-      ["ret_pr","draft PR","to create-pr",1,0,{k:"ret"}],
-      ["ret_merge","local merge","phase doc, if allowed",2,0,{k:"ret"}],
-      ["ret_await","awaiting","awaiting-finalization",2,1,{k:"ret exit"}],
-    ],
-    edges:[["L0","L1",""],["L1","L2",""],["L2","L3",""],["L3","L3","check fails",{l:1,side:"l"}],["L3","L4","green"],["L4","L5",""],["L5","L6",""],["L6","L7","clean"],["L7","L7","findings",{l:1,side:"r"}],["L7","L8","push"],["L8","ret_pr","tracker-backed",{c:1}],["L8","ret_merge","phase doc",{c:1,h:1,ox:0,oy:-4}],["L8","ret_await","unauthorized",{c:1}]]},
-
-  light:{name:"lightweight PR body", desc:"On the lightweight path the PR body is the spec of record (canonicalSpecSource pr_body). Source: artifact-authority-contract.md \"Lightweight\"; validate-pr-body-spec.mjs.", vb:[500,390], w:190, cw:250, rh:70, x0:20, y0:30,
-    nodes:[
-      ["lw_entry","entry","--lightweight [--issue n]",0,0,{a:"code",src:"resolve-dev-loop-startup.mjs",L:["contract","--lightweight cannot combine with --plan-file, --pr, --input or --spike."]}],
-      ["lw_elig","eligibility","issue-less only",0,1,{k:"gate",a:"code",src:"resolveIssuelessLightweightEligibility",L:["budget","Alone, --lightweight needs light mode on and a diff within maxFiles and maxLines, unless issueless is true."]}],
-      ["lw_body","body check","validatePrBodySpec",0,2,{k:"gate",a:"code",src:"issue-refinement-artifact.mjs; scripts/loop/validate-pr-body-spec.mjs; ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS",L:["evidence","The body needs Objective, In scope, Explicit non-goals, Open questions, AC and DoD as checkboxes. The same check runs at create-pr, ready-for-review and pre-pr-ready-gate."]}],
-      ["lw_close","Closes rule","required when issue-backed",0,3,{k:"gate",a:"code",src:"ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS",L:["contract","Closes #N is required when issue-backed and must be absent when issue-less."]}],
-      ["lw_board","board","issue-less: auto-enqueue",0,4,{a:"code",src:"create-pr.mjs",L:["facts","With no closing reference the PR is added to the board. A failure here is non-fatal."]}],
-      ["lw_refuse","refused","code from the validator",1,2,{k:"ret exit"}],
-      ["ret_pr","draft PR","to draft_gate",1,4,{k:"ret"}],
-    ],
-    edges:[["lw_entry","lw_elig","alone"],["lw_entry","lw_body","--issue n",{c:1,side:"r",bulge:40}],["lw_elig","lw_body",""],["lw_body","lw_close","valid"],["lw_body","lw_refuse","missing section",{c:1}],["lw_close","lw_board","issue-less",{c:1}],["lw_close","ret_pr","issue-backed",{c:1,h:1,ox:20,oy:-10}],["lw_board","ret_pr",""]]},
-
-  epic:{name:"epic tree", desc:"Epic and tree refinement: decompose, then refine the tree in four phases and verify it. Refinement only, never PRs. Source: epic-tree-refinement-procedure.md; scripts/refine/verify.mjs.", vb:[500,460], w:190, cw:250, rh:70, x0:20, y0:30,
-    nodes:[
-      ["T0","decompose","T0 child issues",0,0,{a:"agent"}],["T1","root refine","T1 Phase A, serial",0,1,{a:"agent,human"}],
-      ["T2","descend","T2 Phase B, per level",0,2,{a:"agent"}],["T3","ascend","T3 Phase C, bottom-up",0,3,{a:"agent"}],
-      ["T4","root reconcile","T4 Phase D",0,4,{k:"gate",a:"agent,code"}],["T5","verify tree","T5 MAX_DEPTH = 3",0,5,{k:"gate",a:"code"}],
-      ["ret","children","to the issue path",1,5,{k:"ret",inf:1}],
-    ],
-    edges:[["T0","T1",""],["T1","T2","confirmed"],["T2","T2","next level",{l:1,side:"r"}],["T2","T3","leaves done"],["T3","T3","depth N-1",{l:1,side:"r"}],["T3","T4",""],["T4","T5","verified true"],["T5","ret","all checkers pass",{c:1,inf:1,oy:-4}]]},
-
-  release:{name:"release", desc:"The release flow is a linear runbook, not a state machine (inferred: no state enum found). No scenario runs it. Source: skills/docs/release-runbook.md.", vb:[500,460], w:190, cw:250, rh:70, x0:20, y0:30,
-    nodes:[
-      ["RL1","bump","RL1 bump-version.mjs",0,0,{a:"agent,human"}],["RL2","release commit","RL2 DEVLOOPS_ALLOW_MAIN=1",0,1,{a:"agent"}],
-      ["RL3","approval","RL3 stable only",0,2,{k:"gate",a:"human"}],["RL4","tag","RL4 git tag, push",0,3,{a:"human"}],
-      ["RL5","release.yml","RL5 CI checks the tag",0,4,{a:"code"}],["RL6","npm publish","RL6 --provenance",0,5,{a:"code"}],
-    ],
-    edges:[["RL1","RL2",""],["RL2","RL3","stable"],["RL2","RL4","prerelease",{c:1,side:"r",bulge:44}],["RL3","RL4","approve release v<version>"],["RL4","RL5",""],["RL5","RL6",""]]},
-  };
-  let ORDER = ["life","startup","rules","queue","grill","epic","impl","spike","plan","light","gate","ready","cop","merge","retro","review","ui","release"];
 
   // ---------- geometry ----------
   function geo(gid){
@@ -816,589 +383,13 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
     return {d, lx: o.lx != null ? o.lx : lx+(o.ox||0), ly: o.ly != null ? o.ly : ly+(o.oy||0), anc: o.anc || anc};
   }
 
-  // ---------- starting conditions ----------
-  let F = [
-    {g:"Entry", k:"entry", lbl:"entry flag", type:"sel", opts:["--issue","--pr","--pr --review","--pr --ui-review","--plan-file","--spike","--lightweight","--lightweight --issue"]},
-    {g:"Entry", k:"start", lbl:"how the unit starts", type:"sel", opts:["loop startup","enqueue, then queue run"]},
-    {g:"Entry", k:"assignee", lbl:"assignee", type:"sel", opts:["self","other","none"]},
-    {g:"Entry", k:"pref", lbl:"target preference", type:"sel", opts:["default","prefer_local"]},
-    {g:"Entry", k:"checkout", lbl:"where the run starts", type:"sel", opts:["worktree under tmp/worktrees","main checkout"]},
-    {g:"Entry", k:"prState", lbl:"PR state at --pr", type:"sel", opts:["draft","ready, no Copilot review yet"]},
-    {g:"Spec", k:"body", lbl:"issue body", type:"sel", opts:["refined + results comment","refined, no results comment","checklist only","empty"]},
-    {g:"Spec", k:"grill", lbl:"run /loop-grill before work", type:"bool", d:false},
-    {g:"Spec", k:"auto", lbl:"--auto flag", type:"bool", d:false},
-    {g:"Spec", k:"citable", lbl:"every gap has a citable answer", type:"bool", d:true},
-    {g:"Spec", k:"plan", lbl:"plan file sections", type:"sel", opts:["AC and DoD","neither","only one of them"]},
-    {g:"Spec", k:"spikeRec", lbl:"spike Recommendation", type:"sel", opts:["filled","empty"]},
-    {g:"Spec", k:"spikeDisp", lbl:"spike disposition", type:"sel", opts:["graduate","discard"]},
-    {g:"Spec", k:"uiRecipe", lbl:"uiReview.run recipe", type:"sel", opts:["present","missing"]},
-    {g:"Config", k:"requireRetro", lbl:"workflow.requireRetrospective (this repo: true)", type:"bool", d:true},
-    {g:"Config", k:"checkpoint", lbl:"retro checkpoint file", type:"sel", opts:["complete with identity","absent","required","complete, stale (newer merge)"]},
-    {g:"Config", k:"humanMergeOnly", lbl:"autonomy.humanMergeOnly", type:"bool", d:false},
-    {g:"Config", k:"configError", lbl:"a .devloops layer fails to load", type:"bool", d:false},
-    {g:"Config", k:"lightMode", lbl:"localImplementation.lightMode", type:"sel", opts:["off (built-in default)","on, diff within limits","on, diff over limits"]},
-    {g:"Config", k:"maxCopilot", lbl:"refinement.maxCopilotRounds", type:"sel", opts:["5","0"]},
-    {g:"Diff", k:"loc", lbl:"logic LOC (whole diff)", type:"sel", opts:["120","600","1600","2100"]},
-    {g:"Diff", k:"contract", lbl:"contract doc in the diff", type:"sel", opts:["not touched","touched, ADR added","touched, no marker","touched, bare marker, then a reason"]},
-    {g:"Diff", k:"fixDelta", lbl:"delta between gate heads", type:"sel", opts:["code change","docs only"]},
-    {g:"Gate round", k:"reviewer", lbl:"reviewer artifacts", type:"sel", opts:["all valid","one angle blocked","one artifact missing","one stale head stamp"]},
-    {g:"Gate round", k:"validation", lbl:"validation", type:"sel", opts:["allPassed","incomplete (dirty worktree)"]},
-    {g:"Gate round", k:"findings", lbl:"draft_gate findings", type:"sel", opts:["none","nits only","one high, judge act","one medium, not fixed"]},
-    {g:"Gate round", k:"judge", lbl:"judge / spec authority", type:"sel", opts:["decides","spec_cannot_decide"]},
-    {g:"Gate round", k:"deltaFix", lbl:"pre-push delta review", type:"sel", opts:["clear on first run","fixer leaves an item"]},
-    {g:"Copilot and CI", k:"copilot", lbl:"Copilot behavior", type:"sel", opts:["clean review","comments, then clean","5 rounds, last clean","5 rounds, threads open","two error reviews","never responds"]},
-    {g:"Copilot and CI", k:"force", lbl:"--force-rerequest-review at the cap", type:"bool", d:false},
-    {g:"Copilot and CI", k:"ci", lbl:"CI on the draft PR", type:"sel", opts:["green","pending, then green","red","stuck"]},
-    {g:"Merge and runtime", k:"auth", lbl:"merge authorization", type:"sel", opts:["fresh approval on the head","approval on an older head","standing authorization","none"]},
-    {g:"Merge and runtime", k:"harness", lbl:"harness", type:"sel", opts:["claude","pi"]},
-    {g:"Merge and runtime", k:"stall", lbl:"the developer goes silent for over 5 min", type:"bool", d:false},
-  ];
   const world = {};
-  function defaults(){ F.forEach(f => world[f.k] = f.type === "bool" ? f.d : f.opts[0]); }
 
-  let SC = [
-    {id:1, g:"Main path", name:"Happy path, tracker-first", about:"A refined issue started with --issue. Every gate is clean, and the operator approves the current head.", shows:"The run enters each sub-loop in turn: startup, route rules, implementation, the draft gate, ready checks, Copilot, the pre-approval gate, merge checks and the retro. Each one returns to the lifecycle.", w:{}},
-    {id:2, g:"Startup and refinement", name:"Unrefined enqueue", about:"The operator enqueues an issue whose body has only a checklist, no AC / DoD matrix.", shows:"The enqueue gate refuses before any change. Turn on --auto under Starting conditions: the issue is parked in Backlog with a reason instead.", w:{start:"enqueue, then queue run", body:"checklist only"}},
-    {id:3, g:"Startup and refinement", name:"Grill zero-iteration", about:"The body is refined and the results comment exists. The operator runs the grill anyway.", shows:"detect_gaps finds zero gaps and recorded provenance. The grill ends at grill_clean with no rewrite and no new comment.", w:{grill:true}},
-    {id:4, g:"Startup and refinement", name:"Grill provenance missing", about:"The body has a hand-written matrix but no results comment.", shows:"Zero gaps is not enough. detect_gaps stays put with provenance_missing until the results comment is recorded (ADR 0084).", w:{grill:true, body:"refined, no results comment"}},
-    {id:5, g:"Startup and refinement", name:"Grill honest handoff", about:"A checklist-only body, grilled with --auto. One gap has no citable answer.", shows:"--auto never fabricates. The uncited answer stays unresolved, and the grill parks at needs_human_handoff.", w:{body:"checklist only", auto:true, citable:false}},
-    {id:6, g:"Startup and refinement", name:"Retro gate blocks next unit", about:"The previous merge left the checkpoint in state required. This repo sets requireRetrospective true.", shows:"Routing picks a strategy, then the retro gate turns the result into needs_reconcile. Nothing is dispatched.", w:{checkpoint:"required"}},
-    {id:7, g:"Startup and refinement", name:"Main-checkout guard", about:"The issue is started locally with prefer_local, from the primary checkout.", shows:"The worktree guard classifies the checkout as main_checkout and startup emits needs_reconcile.", w:{pref:"prefer_local", checkout:"main checkout"}},
-    {id:8, g:"Startup and refinement", name:"Ownership refusal", about:"The issue is assigned to someone else.", shows:"The ownership gate throws before routing. Set the assignee to none to see the throw that names the claim command.", w:{assignee:"other"}},
-    {id:9, g:"Gate round", name:"Medium finding, fix window", about:"The draft gate raises one medium finding, and the fixer does not fix it.", shows:"Rounds 1 to 3 keep the medium thread open. At round 4 it is past mediumFixWindow 3 and gate close defers it.", w:{findings:"one medium, not fixed"}},
-    {id:10, g:"Gate round", name:"High finding, fix and re-gate", about:"The draft gate finds one high finding, and the judge says act.", shows:"Fan-in returns findings_present, the verdict is posted, the fixer commits, the delta review clears, the push makes head B, and a fresh round runs on B.", w:{findings:"one high, judge act"}},
-    {id:11, g:"Gate round", name:"Delta review bounded out", about:"The fixer leaves an item that the pre-push delta review keeps flagging.", shows:"The delta review runs 3 times. The third run is still not clear, so it bounds out and the push goes to the gate anyway.", w:{findings:"one high, judge act", deltaFix:"fixer leaves an item"}},
-    {id:12, g:"Gate round", name:"Carry-forward re-gate", about:"After a fix, the delta between the two heads is docs only.", shows:"On the re-gate, carry-forward carries the non-mandatory angles. Mandatory angles always run again.", w:{findings:"one high, judge act", fixDelta:"docs only"}},
-    {id:13, g:"Gate round", name:"Malformed reviewer artifact", about:"One reviewer writes a blocked artifact.", shows:"Fan-in throws instead of counting it. That reviewer runs again before the judge sees the round. Try the missing and stale-stamp variants too.", w:{reviewer:"one angle blocked"}},
-    {id:14, g:"Gate round", name:"Judge cannot decide", about:"The spec cannot decide between two readings of a finding.", shows:"judge-pass exits 1 with humanDecisionRequired. The round escalates and the run stops for the operator.", w:{judge:"spec_cannot_decide"}},
-    {id:15, g:"Gate round", name:"Validation incomplete", about:"The worktree is dirty when the gate resolves validation.", shows:"The validation artifact says incomplete. Reviewers file a gate-evidence finding and never run the suite themselves.", w:{validation:"incomplete (dirty worktree)"}},
-    {id:16, g:"Ready, Copilot and merge", name:"Size escalate and block", about:"The whole diff has 600 logic LOC, over softLoc 400.", shows:"The ready check escalates, and at merge the size budget needs a human approval. Set logic LOC to 2100 for the unwaivable block over absoluteHardLoc 2000.", w:{loc:"600"}},
-    {id:17, g:"Ready, Copilot and merge", name:"ADR tripwire", about:"The PR changes a contract doc. Its body has a bare adr-tripwire:allow marker.", shows:"A bare marker is no waiver, so the tripwire blocks. The operator then writes adr-tripwire:allow with a reason, and the check passes.", w:{contract:"touched, bare marker, then a reason"}},
-    {id:18, g:"Ready, Copilot and merge", name:"Copilot round cap, clean", about:"Copilot comments for 4 rounds. The fifth review is clean and CI is green.", shows:"At the cap of 5 with clean threads, the state is round_cap_clean_fallback, and the run moves on to the pre-approval gate.", w:{copilot:"5 rounds, last clean"}},
-    {id:19, g:"Ready, Copilot and merge", name:"Copilot round cap, dirty", about:"Copilot comments in all 5 rounds. Then someone forces a re-request on the same head.", shows:"round_cap_reached is a hard stop. The forced request on an unchanged head returns no_changes_since_last_review.", w:{copilot:"5 rounds, threads open", force:true}},
-    {id:20, g:"Ready, Copilot and merge", name:"Merge refusals", about:"The repo sets humanMergeOnly true.", shows:"merge-pr.mjs refuses outright, and the Bash hook denies a raw gh pr merge. Set merge authorization to approval on an older head to see merge_approval fail instead.", w:{humanMergeOnly:true}},
-    {id:22, g:"Other routes", name:"Standalone review", about:"--pr --review with --auto on PR #42.", shows:"One review round with no judge and no fix. --auto submits a comment review. It never counts as lifecycle evidence.", w:{entry:"--pr --review", auto:true}},
-    {id:23, g:"Other routes", name:"UI review, missing recipe", about:"--pr --ui-review on a repo without uiReview.run in .devloops.", shows:"Provision stops at run-recipe-missing, a must-fix stop. Nothing boots.", w:{entry:"--pr --ui-review", uiRecipe:"missing"}},
-    {id:24, g:"Other routes", name:"Spike graduates", about:"A spike file with its Recommendation filled, exited with graduate.", shows:"The spike writes a plan file. The plan enters local-planning at refine, a person reviews it, and promote opens a draft PR.", w:{entry:"--spike"}},
-    {id:21, g:"Runtime", name:"Agent stall and recovery", about:"The developer child goes silent for more than 5 minutes during implementation.", shows:"The stall detector returns stalled. Recovery verifies, bails the child and starts a fresh-context child. The run continues.", w:{stall:true}},
-    {id:25, g:"Runtime", name:"Harness wait difference", about:"A ready PR started with --pr on Pi, waiting for Copilot.", shows:"On Pi the child exits on a pending wait and the main agent re-dispatches it. Switch harness to claude: the child waits inline.", w:{entry:"--pr", prState:"ready, no Copilot review yet", harness:"pi"}},
-  ];
   let scen = 1;
 
-  // ---------- world helpers ----------
-  const isPR = w => w.entry.startsWith("--pr");
-  const issueEntry = w => w.entry === "--issue" || w.entry === "--lightweight --issue";
-  const lightweight = w => w.entry.startsWith("--lightweight");
-  const queueRun = w => w.entry === "--issue" && w.start !== "loop startup";
-  const refinedBody = w => w.body.startsWith("refined");
-  const lightUnder = w => w.lightMode === "on, diff within limits";
-  const capOf = w => w.maxCopilot === "0" ? 0 : lightUnder(w) ? 1 : 5;
-  const HEADS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  function cmd(w){
-    const t = {"--issue":"--issue 101","--pr":"--pr 42","--pr --review":"--pr 42 --review","--pr --ui-review":"--pr 42 --ui-review","--plan-file":"--plan-file docs/phases/phase-x.md","--spike":"--spike <path>","--lightweight":"--lightweight","--lightweight --issue":"--lightweight --issue 101"}[w.entry];
-    return "dev-loops loop startup " + t;
-  }
-  function routeOf(w){
-    if (w.entry === "--pr --review") return {rule:"8", strat:"review", why:"the target is a PR and a review was requested"};
-    if (w.entry === "--pr --ui-review") return {rule:"9", strat:"ui_review", why:"the target is a PR and a UI review was requested"};
-    if (w.entry === "--pr") return {rule:"12", strat:"copilot_pr_followup", why:"--pr hard-codes ownership copilot"};
-    if (w.entry === "--issue") return {rule:"7", strat: w.pref === "prefer_local" ? "local_implementation" : "issue_intake", why: w.pref === "prefer_local" ? "the target is an issue; prefer_local reroutes to local_implementation with local_phase issue-101" : "the target is an issue"};
-    if (w.entry === "--lightweight --issue") return {rule:"7", strat:"issue_intake", why:"the target is an issue; the spec of record is the PR body"};
-    return {rule:"6", strat:"local_implementation", why:"the target is a local phase"};
-  }
-  const CHAIN = ["r0","r0b","r1","r2","r3","r4","r5","r6","r7","r8","r9","r10","r11","r12","r13"];
-
-  function roundFindings(s, w, f){
-    const g = s.gate, rd = f.g[g].round;
-    if (w.validation !== "allPassed") return ["gate-evidence"];
-    if (g !== "draft_gate") return [];
-    if (w.findings === "one high, judge act") return rd === 1 ? ["high"] : [];
-    if (w.findings === "one medium, not fixed") return ["medium"];
-    if (w.findings === "nits only") return rd === 1 ? ["nit","nit"] : [];
-    return [];
-  }
-  const fmtF = a => a.length ? a.map(x => "1 " + x).join(", ").replace("1 nit, 1 nit","2 nit") : "none";
-
-  // ---------- step handlers: one per node, keyed by graph ----------
-  // A handler returns {next, title, note, pill, set, read, tr, L, src, inf, path, also, reply, noEdge, mark}.
-  // next: node id | "END" | {sub, at} to enter a sub-loop | {up, via} to return to the parent node.
-  let H = {
-  life:{
-    request(s,w,f,ret){
-      if (ret === undefined && queueRun(w)) return {next:{sub:"queue",at:"Q1"}, title:"request: enqueue", note:"The operator adds issue #101 to the queue. The queue sub-loop checks it before it may enter Next Up.", pill:["enqueue","info"], tr:"request: enqueue #101"};
-      if (ret === "picked") return {next:"startup", title:"request: picked up", note:"The queue driver dispatched issue #101. The run continues at startup with --issue 101.", pill:["picked up","info"], tr:"request: queue dispatched #101 → startup", L:["nested","The queue is the outer loop. Each entry is one full run of this lifecycle."]};
-      if (ret === "throw") return {next:"END", title:"enqueue refused", note:"The interactive enqueue threw before it changed anything. Run the grill, then enqueue again.", pill:["refused","no"], reply:{cls:"fixed",lbl:"Enqueue result",txt:"MISSING_REFINEMENT_ARTIFACT. No mutation. The rejection names /dev-loops:loop-grill as the next step."}, tr:"request: enqueue refused, run ends", L:["evidence","Next Up only takes refined issues. The gate refuses before any mutation."], src:"QUEUE-ENQUEUE-REFINEMENT-GATE; decideEnqueueRefinementGate"};
-      if (ret === "parked") return {next:"END", title:"parked in Backlog", note:"Under --auto the issue is parked in Backlog (nonSuccessBoardColumn) with a reason. It waits there until it is refined.", pill:["parked","no"], reply:{cls:"fixed",lbl:"Enqueue result",txt:"Parked in Backlog: missing refinement artifact. The pickup never reads Backlog."}, tr:"request: parked in Backlog, run ends", L:["pause","Parking with a reason is a correct result. The queue never picks from Backlog."], src:"QUEUE-ENQUEUE-REFINEMENT-GATE; QUEUE-NEXTUP-SOURCE"};
-      return {next:"startup", title:"operator request", note:`The operator asks for a run: ${cmd(w)}. The main agent dispatches the dev-loop subagent at once.`, pill:["dispatch","info"], tr:"request: " + cmd(w)};
-    },
-    startup(s,w,f,ret){
-      if (ret === undefined) return {next:{sub:"startup",at:"E1"}, title:"startup", note:"Startup resolves one canonical state. The board opens the startup graph.", pill:["resolving","info"], tr:"startup: enter"};
-      if (ret === "end") return {next:"END", title:"startup ends", note:f.endWhy + " Nothing was dispatched.", pill:["no route","no"], reply:{cls:"fixed",lbl:"Startup result",txt:f.endWhy}, tr:"startup: ended without a route", L:["failclosed","Startup refuses instead of guessing. The operator fixes the input and starts again."], inf:f.endInf};
-      const rec = ret === "reconcile";
-      return {next:"route", title:"startup done", note: rec ? "Startup emitted bundleKind needs_reconcile with selectedStrategy none." : "Startup emitted a resolved bundle and the handoff envelope.", pill:[rec ? "needs_reconcile" : "resolved", rec ? "no" : "yes"], read:["bundleKind"], tr:"startup: bundleKind " + s.bundleKind};
-    },
-    route(s,w,f){
-      const rd = ["bundleKind","selectedStrategy"];
-      let nx, why;
-      if (s.bundleKind === "needs_reconcile"){ nx = "reconcile"; why = "bundleKind needs_reconcile"; }
-      else {
-        const st = s.selectedStrategy;
-        if (st === "review"){ nx = "review_route"; why = "strategy review"; }
-        else if (st === "ui_review"){ nx = "ui_review"; why = "strategy ui_review"; }
-        else if (st === "copilot_pr_followup"){ nx = w.prState === "draft" ? "draft_gate" : "copilot"; why = w.prState === "draft" ? "copilot_pr_followup on a draft PR: draftStart sets reviewGate draft_gate" : "copilot_pr_followup on a ready PR"; }
-        else if (w.entry === "--plan-file"){ nx = "plan_file"; why = "local_implementation on a plan file"; }
-        else if (w.entry === "--spike"){ nx = "spike"; why = "local_implementation on a spike file"; }
-        else if (issueEntry(w) && (!refinedBody(w) || w.grill)){ nx = "refine"; why = refinedBody(w) ? "the operator runs the grill first" : "the issue is not refined"; }
-        else { nx = "implement"; why = st + ": build"; }
-      }
-      return {next:nx, title:"dispatch the strategy", note:`The dev-loop agent acts on the startup result: ${why}.`, pill:[s.bundleKind === "needs_reconcile" ? "reconcile" : s.selectedStrategy, s.bundleKind === "needs_reconcile" ? "no" : "info"], read:rd, tr:`route: ${why} → ${nx}`, inf: nx === "draft_gate", L: nx === "draft_gate" ? ["router","draftStart {reviewGate: draft_gate} is attached to a draft PR started with --pr. The lifecycle edge to draft_gate is drawn from that field."] : undefined};
-    },
-    reconcile(s,w,f){
-      return {next:"END", title:"needs_reconcile", note:"No code runs and nothing is pushed. The operator fixes the cause and starts again.", pill:["stopped","no"], set:{routeKind:"needs_reconcile"}, reply:{cls:"fixed",lbl:"Startup result",txt:"Stopped at needs_reconcile: " + f.recon + "."}, tr:"reconcile: stop with the cause"};
-    },
-    refine(s,w,f,ret){
-      if (ret === undefined) return {next:{sub:"grill",at:"load_target"}, title:"grill", note:"The refinement grill runs on issue #101.", pill:["grill","info"], tr:"refine: enter the grill"};
-      if (ret === "clean") return {next:"implement", title:"grill_clean", note:"The issue has an AC / DoD matrix, Non-goals and a recorded results comment.", pill:["grill_clean","yes"], tr:"refine: grill_clean → implement", L:["goal","A refined issue is the floor for Next Up and for draft_gate. The grill guarantees it."]};
-      return {next:"END", title:ret === "handoff" ? "needs_human_handoff" : "blocked_needs_user_decision", note:"The grill parks the issue for the operator with the recorded reason.", pill:[ret, "no"], reply:{cls:"fixed",lbl:"Grill verdict",txt:"1 unresolved item. The gap has no citable answer, so --auto did not invent one."}, tr:"refine: " + ret + ", run ends", L:["pause","An honest handoff is a correct result. The run stops instead of shipping a guess."], src:"GRILL-SUBLOOP-HONEST-HANDOFF"};
-    },
-    implement(s,w,f,ret){
-      if (ret === undefined) return {next:{sub:"impl",at:"L0"}, title:"implement", note:"The local_implementation steps run in the worktree.", pill:["implement","info"], tr:"implement: enter"};
-      return {next:"pr_create", title:"implementation done", note:"The branch is pushed. The next step creates the draft PR.", pill:["pushed","yes"], tr:"implement: done → draft PR"};
-    },
-    spike(s,w,f,ret){
-      if (ret === undefined) return {next:{sub:"spike",at:"S1"}, title:"spike", note:"The spike sub-loop runs on the spike file.", pill:["spike","info"], tr:"spike: enter"};
-      if (ret === "graduate") return {next:"plan_file", title:"spike graduated", note:"The spike wrote a plan file. The plan enters local-planning at refine.", pill:["graduate","yes"], tr:"spike: graduate → local-planning"};
-      return {next:"done", title:"spike discarded", note:"discard changes nothing (SPIKE-DISCARD-ZERO-MUTATION).", pill:["discard","info"], tr:"spike: discard → done"};
-    },
-    plan_file(s,w,f,ret){
-      if (ret === undefined) return {next:{sub:"plan",at: w.entry === "--spike" ? "LP3" : "LP1"}, title:"local-planning", note: w.entry === "--spike" ? "The graduated plan enters local-planning at refine." : "The plan file goes through validate, start, refine, review and promote.", pill:["plan","info"], tr:"plan_file: enter"};
-      return {next:"pr_create", title:"plan promoted", note:"Promote committed the plan and opened one draft PR.", pill:["promoted","yes"], tr:"plan_file: promoted → draft PR"};
-    },
-    pr_create(s,w,f,ret){
-      if (lightweight(w) && ret === undefined) return {next:{sub:"light",at:"lw_body"}, title:"draft PR, lightweight", note:"On the lightweight path the PR body is the spec. Its checks run as a sub-loop.", pill:["pr_body","info"], tr:"pr_create: enter the lightweight checks"};
-      const q = queueRun(w) ? {queueEntryStatus:"waiting_review"} : {};
-      const plan = w.entry === "--plan-file" || w.entry === "--spike";
-      return {next:"draft_gate", title:"draft PR #42", note: plan ? "Promote opened draft PR #42. It never mints an issue and neutralizes closing keywords." : "create-pr.mjs opens PR #42 as a draft, assigned to @me. A tracker-backed body must pass validate-pr-body-spec, and a second linked PR is refused.", pill:["#42 draft","info"], set:Object.assign({prNumber:"#42", isDraft:"yes", closingRef: plan ? "none (neutralized)" : lightweight(w) && w.entry === "--lightweight" ? "none (issue-less)" : "Closes #101", titleMarkers:"none"}, q), mark: queueRun(w) ? [["queue","waiting_review","waiting_review","info"]] : null, tr:"pr_create: draft PR #42", src: plan ? "plan-file-promote-contract.mjs" : undefined};
-    },
-    draft_gate(s,w,f,ret){ return gateParent(s,w,f,ret,"draft_gate","ready"); },
-    pre_approval_gate(s,w,f,ret){ return gateParent(s,w,f,ret,"pre_approval_gate","final_approval"); },
-    ready(s,w,f,ret){
-      if (ret === undefined) return {next:{sub:"ready",at:"c1"}, title:"ready for review", note:"ready-for-review.mjs runs its 13 checks in order.", pill:["checks","info"], tr:"ready: enter the checks"};
-      if (ret === "ready") return {next:"copilot", title:"PR #42 is ready", note:"The PR left draft. The Copilot loop starts from pr_ready_no_feedback.", pill:["ready","yes"], tr:"ready: PR #42 ready → Copilot"};
-      return {next:"END", title:"ready refused", note:"The PR stays a draft. " + f.readyWhy, pill:["refused","no"], reply:{cls:"fixed",lbl:"ready-for-review",txt:f.readyWhy}, tr:"ready: refused, run ends", L:["pause","A refusal at the ready boundary parks the PR. Only the operator can waive what is waivable."]};
-    },
-    copilot(s,w,f,ret){
-      if (ret === undefined && capOf(w) === 0) return {next:"pre_approval_gate", title:"Copilot review off", note:"refinement.maxCopilotRounds is 0, which disables Copilot review. The run goes on to the pre-approval gate.", pill:["disabled","info"], set:{maxCopilotRounds:0}, tr:"copilot: maxCopilotRounds 0 → pre_approval_gate"};
-      if (ret === undefined) return {next:{sub:"cop",at:"pr_ready"}, title:"Copilot follow-up", note:"The Copilot loop runs until it converges, hits the round cap or blocks.", pill:["loop","info"], tr:"copilot: enter"};
-      if (ret === "stop") return {next:"stop", title:"Copilot loop stopped", note:f.copWhy, pill:["stop","no"], tr:"copilot: stop → stop"};
-      return {next:"pre_approval_gate", title:ret === "fallback" ? "round-cap fallback" : "Copilot converged", note: ret === "fallback" ? "round_cap_clean_fallback enters the pre-approval gate with a round-exhaustion note." : "A clean review on the current head. The pre-approval gate window opens.", pill:[ret === "fallback" ? "fallback" : "converged","yes"], tr:"copilot: " + ret + " → pre_approval_gate"};
-    },
-    final_approval(s,w,f){
-      const q = queueRun(w);
-      const base = {gateBoundary:"final_approval_ready", nextAction:"await_final_human_approval"};
-      if (q) base.queueEntryStatus = "gates_passing";
-      const mk = q ? [["queue","gates_passing","gates_passing","info"]] : null;
-      if (w.auth === "none") return {next:"stop", title:"final_approval_ready", note:"Clean current-head pre_approval_gate, clean draft_gate, no title markers, CI not failing. The loop stops at merge by default (autonomy.stopAt [\"merge\"]) and no authorization exists.", pill:["needs approval","no"], set:base, mark:mk, read:["mergeAuthorization"], tr:"final_approval: no authorization → stop", L:["auth","The loop stops here. A bare \"ok\" is not an approval."], src:"STOP-APPROVAL-001; CONFIRM-CORE-EXPLICIT"};
-      const old = w.auth === "approval on an older head";
-      base.mergeAuthorization = w.auth.startsWith("standing") ? "standing" : "fresh";
-      base.approvalHeadSha = w.auth.startsWith("standing") ? "n/a" : old ? "older than " + s.headSha : s.headSha;
-      const note = w.auth.startsWith("standing") ? "A standing authorization record exists (ADR 0050). It needs humanMergeOnly false and the full gate set at the current head." : old ? "The operator approved, but the approval names an older head." : "The operator posts an APPROVED review on head " + s.headSha + ", or a comment line \"approve merge <headSha>\".";
-      return {next:"merge", title:"final approval", note:"final_approval_ready holds. " + note, pill:[base.mergeAuthorization,"info"], set:base, mark:mk, tr:"final_approval: authorization " + base.mergeAuthorization + (old ? " (older head)" : "") + " → merge", src:"merge-approval.mjs verifyFreshHumanApproval; CONFIRM-CORE-EXPLICIT"};
-    },
-    merge(s,w,f,ret){
-      if (ret === undefined) return {next:{sub:"merge",at:"M3"}, title:"merge", note:"The orchestrator runs merge-pr.mjs. It is orchestrator-owned.", pill:["merge-pr","info"], set: queueRun(w) ? {queueEntryStatus:"merging"} : undefined, mark: queueRun(w) ? [["queue","merging","merging","info"]] : null, tr:"merge: enter"};
-      if (ret === "merged") return {next:"post_merge", title:"merged", note:"PR #42 is merged at head " + s.headSha + ".", pill:["merged","yes"], reply:{cls:"answer",lbl:"On the PR",txt:"Merged, pinned to head " + s.headSha + ". The report names the full 40-hex merge SHA."}, tr:"merge: merged → post-merge"};
-      return {next:"END", title:"merge refused", note:f.mergeWhy, pill:["refused","no"], reply:f.mergeReply || {cls:"fixed",lbl:"merge-pr.mjs",txt:f.mergeWhy}, tr:"merge: refused, run ends", L:["auth","Evidence is not authority. The wrapper refuses, and the PR waits for the operator."]};
-    },
-    post_merge(s,w,f){
-      const q = queueRun(w);
-      return {next:"retro", title:"post-merge", note:"The main checkout fast-forwards (fetch and merge 60 s). The worktree is removed. postMerge.actions run in sequence, 120 s each, 900 s in total. Main CI is probed on the merge commit.", pill:["synced","yes"], set: Object.assign({dirty:"n/a (worktree removed)"}, q ? {queueEntryStatus:"done", boardColumn:"Done"} : {}), mark: q ? [["queue","qdone","done","yes"]] : null, tr:"post_merge: fast-forward main, actions, main CI", src:"main-checkout-ff.mjs syncMainCheckout; run-post-merge-actions.mjs; config.mjs POST_MERGE_*"};
-    },
-    retro(s,w,f,ret){
-      if (ret === undefined) return {next:{sub:"retro",at:"RT1"}, title:"retro", note:"The retro sub-loop records the checkpoint for this merge.", pill:["retro","info"], tr:"retro: enter"};
-      return {next:"done", title:"retro recorded", note:"The checkpoint is COMPLETE for this cycle. The next unit's startup will read it.", pill:["COMPLETE","yes"], tr:"retro: checkpoint COMPLETE → done"};
-    },
-    done(s,w,f){ return {next:"END", title:"done", note:"The run is complete. Back steps through it again; Reset or a scenario starts over.", pill:["done","yes"], tr:"done"}; },
-    stop(s,w,f){ return {next:"END", title:"stop", note:"The loop stops at a safe point. The record says why; the operator decides the next step.", pill:["stopped","no"], reply:{cls:"fixed",lbl:"Hand-back to the operator",txt:f.stopWhy || f.copWhy || "Stopped for a human decision."}, tr:"stop: hand back"}; },
-    review_route(s,w,f,ret){
-      if (ret === undefined) return {next:{sub:"review",at:"V1"}, title:"standalone review", note:"One review round on PR #42. No ownership gate and no async dispatch.", pill:["review","info"], tr:"review_route: enter"};
-      return {next:"done", title:"review posted", note:"Stop rules: read-only, one-review-round, no-lifecycle-gate-evidence. Fixing the findings needs a separate instruction.", pill:["posted","yes"], tr:"review_route: done"};
-    },
-    ui_review(s,w,f,ret){
-      if (ret === undefined) return {next:{sub:"ui",at:"U1"}, title:"UI review", note:"Five CLI stages run in order. Each stage's JSON result feeds the next.", pill:["ui-review","info"], tr:"ui_review: enter"};
-      if (ret === "stop") return {next:"END", title:"UI review stopped", note:"Provision stopped with run-recipe-missing. The operator adds uiReview.run to .devloops.", pill:["stopped","no"], reply:{cls:"fixed",lbl:"ui-review-provision",txt:"must-fix stop: run-recipe-missing. Nothing was booted."}, tr:"ui_review: stopped, run ends", L:["pause","A missing recipe is a stop with a reason, not a PR defect."]};
-      return {next:"done", title:"UI review done", note:"A pending review waits on the PR for the operator. There is no automatic fixer handoff (inferred).", pill:["pending","yes"], tr:"ui_review: pending review → done", inf:true};
-    },
-  },
-
-  startup:{
-    E1(s,w,f){ return {next:"E2", title:"E1 parse args", note:"Exactly one of --issue, --pr, --input, --plan-file, --spike, or --lightweight alone. The flags here are valid.", pill:["valid","yes"], set:{harness: w.harness}, tr:"E1: " + w.entry + " parses"}; },
-    E2(s,w,f){
-      const set = {};
-      if (isPR(w)){ Object.assign(set, {targetKind:"pr", ownership:"copilot", intent: w.entry === "--pr" ? "continue_on_pr" : w.entry === "--pr --review" ? "review_pr" : "review_pr_ui", prNumber:"#42", isDraft: w.entry === "--pr" && w.prState !== "draft" ? "no" : "yes", headSha:"A"}); if (w.entry === "--pr" && w.prState !== "draft") set.copilotState = "pr_ready_no_feedback"; f.h = 0; }
-      else if (w.entry === "--plan-file"){ const st = {"AC and DoD":"plan_refined_ready_for_promotion","neither":"new_plan_needs_refinement","only one of them":"ambiguous_fail_closed"}[w.plan]; Object.assign(set, {targetKind:"local_phase", artifactMode:"local-planning", canonicalSpecSource:"phase_doc", planFileIntakeState:st});
-        if (st === "ambiguous_fail_closed"){ f.endWhy = "The plan has only one of AC and DoD: ambiguous_fail_closed, exit 0, not routed."; return {next:{up:"end",via:"ret_end"}, title:"E2 build input", note:f.endWhy, pill:["not routed","no"], set, tr:"E2: plan ambiguous_fail_closed → not routed", L:["unknown","Half a spec is neither ready nor new. It takes its own exit instead of being guessed."], src:"plan-file-intake-contract.mjs; buildPlanFileInput"}; } }
-      else if (w.entry === "--spike") Object.assign(set, {targetKind:"local_phase", intent:"start_issue_locally", spikeIntakeState: w.spikeRec === "filled" ? "spike_ready_for_exit" : "spike_in_progress"});
-      else if (w.entry === "--lightweight"){ Object.assign(set, {targetKind:"local_phase", artifactMode:"lightweight", canonicalSpecSource:"pr_body"});
-        if (!lightUnder(w)){ f.endWhy = "--lightweight alone is not eligible: " + (w.lightMode.startsWith("off") ? "light_mode_disabled" : "over_threshold") + "."; f.endInf = true; return {next:{up:"end",via:"ret_end"}, title:"E2 lightweight eligibility", note:f.endWhy + " The model gives the reason codes, not the exit path; here startup ends (inferred).", pill:["not eligible","no"], set, tr:"E2: lightweight not eligible → startup ends", inf:true, src:"resolveIssuelessLightweightEligibility"}; } }
-      else { Object.assign(set, {targetKind:"issue", artifactMode: lightweight(w) ? "lightweight" : "tracker-first", canonicalSpecSource: lightweight(w) ? "pr_body" : "tracker_issue", refinementFinding: refinedBody(w) ? "null" : w.body === "empty" ? "missing_refinement_artifact" : "missing_ac_dod_matrix"}); }
-      return {next:"E3", title:"E2 build canonical input", note: issueEntry(w) ? "Startup reads issue #101 and looks for a linked PR. None exists. A detection error would throw, never fake resolved_no_open_pr." : isPR(w) ? "Startup reads PR #42. --pr hard-codes ownership copilot." : "Startup reads the local file. A local_phase target from --plan-file or --spike is plan-file exempt.", pill:[set.targetKind, "info"], set, tr:"E2: target " + set.targetKind};
-    },
-    E3(s,w,f){
-      const rt = routeOf(w);
-      const applies = !["review","ui_review"].includes(rt.strat) && (s.targetKind === "issue" || s.targetKind === "pr");
-      if (!applies) return {next:"E4", title:"E3 ownership gate", note: s.targetKind === "local_phase" ? "A local phase has no assignee to check (inferred)." : "The gate does not apply to the " + rt.strat + " strategy.", pill:["not applied","info"], tr:"E3: ownership gate not applied", inf: s.targetKind === "local_phase"};
-      if (w.assignee !== "self"){ f.endWhy = w.assignee === "other" ? "The ownership gate threw: issue #101 is assigned to another login." : "The ownership gate threw: issue #101 is unassigned. The error names the claim command."; return {next:{up:"end",via:"ret_end"}, title:"E3 ownership gate", note:f.endWhy, pill:[w.assignee === "other" ? "assigned to other" : "unassigned","no"], read:["targetKind"], tr:"E3: " + (w.assignee === "other" ? "assigned to other" : "unassigned") + " → throw"}; }
-      return {next:"E4", title:"E3 ownership gate", note:"gh api user matches the assignee. The work is owned by this operator.", pill:["owned","yes"], tr:"E3: assigned to self"};
-    },
-    E4(s,w,f,ret){
-      if (ret === undefined) return {next:{sub:"rules",at:"r0"}, title:"E4 route", note:"routeForState runs its rules in order. The board opens the rule chain.", pill:["routing","info"], tr:"E4: enter routeForState"};
-      return {next:"E5", title:"E4 routed", note:"The strategy is " + ret.strat + ". The retro gate and the worktree guard still run.", pill:[ret.strat,"info"], set:{selectedStrategy:ret.strat, routeKind:"route"}, tr:"E4: selectedStrategy " + ret.strat};
-    },
-    E5(s,w,f){
-      if (!w.requireRetro) return {next:"E6", title:"E5 retro gate", note:"workflow.requireRetrospective is false, so the gate does not run.", pill:["off","info"], tr:"E5: retro gate off"};
-      const cs = {"complete with identity":"COMPLETE","absent":"NONE","required":"MISSING","complete, stale (newer merge)":"MISSING"}[w.checkpoint];
-      const pass = cs !== "MISSING" || s.selectedStrategy === "review";
-      if (!pass) f.recon = w.checkpoint === "required" ? "the previous merge's retro checkpoint is MISSING (state required)" : "the retro checkpoint is stale: a newer PR merged after it (RETRO-CHECKPOINT-CYCLE-SCOPED)";
-      const why = {COMPLETE:"COMPLETE with fresh provenance and no newer merge", NONE:"no checkpoint file: NONE never blocks (RETRO-ABSENT-NEVER-BLOCKS)", MISSING: pass ? "MISSING, but a review result passes through" : (w.checkpoint === "required" ? "state required reads as MISSING" : "a newer merge makes the complete record MISSING")}[cs];
-      return {next:"E6", title:"E5 retro gate", note:"The checkpoint reads " + why + "." + (pass ? "" : " The result becomes needs_reconcile."), pill:[cs, pass ? "yes" : "no"], set:{checkpointState:cs}, read:["selectedStrategy"], tr:"E5: checkpoint " + cs + (pass ? " → pass" : " → needs_reconcile")};
-    },
-    E6(s,w,f){
-      const local = s.selectedStrategy === "local_implementation" && !(w.entry === "--plan-file" || w.entry === "--spike");
-      if (!local) return {next:"E7", title:"E6 worktree guard", note: s.selectedStrategy === "local_implementation" ? "Plan-file and spike targets are exempt." : "The guard applies only to local_implementation.", pill:["not applied","info"], read:["selectedStrategy"], tr:"E6: guard not applied"};
-      if (w.checkout === "main checkout"){ f.recon = f.recon || "the worktree guard classified the checkout as main_checkout"; return {next:"E7", title:"E6 worktree guard", note:"The run would write in the primary checkout. classifyWorktreeIsolation returns main_checkout, so the result becomes needs_reconcile.", pill:["main_checkout","no"], set:{worktreeIsolation:"main_checkout"}, read:["selectedStrategy"], tr:"E6: main_checkout → needs_reconcile"}; }
-      return {next:"E7", title:"E6 worktree guard", note:"The checkout is an isolated worktree under tmp/worktrees/.", pill:["isolated","yes"], set:{worktreeIsolation:"isolated"}, read:["selectedStrategy"], tr:"E6: isolated worktree"};
-    },
-    E7(s,w,f){
-      if (f.recon) return {next:{up:"reconcile",via:"ret_rec"}, title:"E7 emit result", note:"ok:true with bundleKind needs_reconcile, selectedStrategy none and selectedGate fail_closed_reconcile.", pill:["needs_reconcile","no"], set:{bundleKind:"needs_reconcile", selectedStrategy:"none", routeKind:"needs_reconcile"}, tr:"E7: emit needs_reconcile"};
-      return {next:"E8", title:"E7 emit result", note:"ok:true with bundleKind resolved, the strategy, requiredReads and the operator briefing.", pill:["resolved","yes"], set:{bundleKind:"resolved"}, tr:"E7: emit resolved"};
-    },
-    E8(s,w,f){
-      const runs = (w.entry === "--issue" || w.entry === "--lightweight --issue" || w.entry === "--pr" || w.entry === "--pr --ui-review");
-      return {next:"E9", title:"E8 board self-heal", note: runs ? "Best effort, within a 20 s budget. A failure does not block." : "Runs only for --issue and --pr, not for --review or local files.", pill:[runs ? "ran" : "skipped","info"], set: runs && issueEntry(w) ? {boardColumn: queueRun(w) ? "In Progress" : "Next Up"} : undefined, tr:"E8: board self-heal " + (runs ? "ran" : "skipped")};
-    },
-    E9(s,w,f){ return {next:"E10", title:"E9 required reads", note:"The dev-loop agent loads the strategy skill and public-dev-loop-contract.md. Nothing else.", pill:["loaded","yes"], tr:"E9: required reads loaded"}; },
-    E10(s,w,f){
-      const cap = capOf(w);
-      return {next:{up:"resolved",via:"ret_ok"}, title:"E10 handoff envelope", note:"handoffVersion 1, target, currentGate, maxCopilotRounds " + cap + ", stop rules, cwd tmp/worktrees/dev-loops/<kind>-<n> and acceptance." + (w.entry === "--spike" ? " currentGate is spike." : "") + (lightUnder(w) ? " Light mode caps Copilot at min(lightMode.maxCopilotRounds, 5) = 1." : ""), pill:["envelope","yes"], set:{maxCopilotRounds:cap}, tr:"E10: envelope built"};
-    },
-  },
-
-  rules:{
-    r0(s,w,f){
-      const rt = routeOf(w), i = CHAIN.indexOf("r" + rt.rule);
-      return {path:CHAIN.slice(0,i+1), next:{up:rt, via:"o"+rt.rule}, title:"routeForState: rule " + rt.rule, note:(i > 0 ? `Rules 0 to ${CHAIN[i-1].slice(1)} do not match. ` : "") + `Rule ${rt.rule} matches: ${rt.why}. Result: ${rt.strat}.`, pill:["match","info"], read:["targetKind","ownership","intent"], tr:`route rules: rule ${rt.rule} matches → ${rt.strat}`, L:["router","The router knows only canonical fields: target kind, status, authorization, ownership and the review flags. The first matching row decides."], src:"public-dev-loop-routing.mjs routeForState; public-dev-loop-contract.md \"Deterministic routing order\""};
-    },
-  },
-
-  queue:{
-    Q1(s,w,f){
-      if (refinedBody(w)) return {next:"Q2", title:"Q1 enqueue gate", note:"detectIssueRefinementArtifact finds a valid AC / DoD matrix and Non-goals. The issue enters Next Up.", pill:["refined","yes"], set:{refinementFinding:"null", boardColumn:"Next Up"}, tr:"Q1: refined → Next Up"};
-      const code = w.body === "empty" ? "missing_refinement_artifact" : "missing_ac_dod_matrix";
-      if (w.auto) return {next:{up:"parked",via:"q_backlog"}, title:"Q1 enqueue gate", note:"Unrefined under --auto: the item is parked in nonSuccessBoardColumn, Backlog by default, with the reason " + code + ".", pill:[code,"no"], set:{refinementFinding:code, boardColumn:"Backlog"}, tr:"Q1: " + code + ", --auto → park in Backlog"};
-      return {next:{up:"throw",via:"q_throw"}, title:"Q1 enqueue gate", note:"Unrefined and interactive: the gate throws MISSING_REFINEMENT_ARTIFACT. No mutation.", pill:[code,"no"], set:{refinementFinding:code}, tr:"Q1: " + code + ", interactive → throw"};
-    },
-    Q2(s,w,f){ return {next:"queued", title:"Q2 pickup", note:"The driver reads Next Up by position ascending and takes #101 from the head. It never reads Backlog.", pill:["#101","info"], tr:"Q2: pick #101 from Next Up"}; },
-    queued(s,w,f){ return {next:"running", title:"queued", note:"The entry has no dependsOn, so nextReadyEntry returns it.", pill:["ready","info"], set:{queueEntryStatus:"queued", retryCount:0}, tr:"queue: #101 queued"}; },
-    running(s,w,f){ return {next:{up:"picked",via:"q_run"}, title:"Q4 dispatch", note:"The entry runs. The board item moves to In Progress, and the driver re-reads it to confirm.", pill:["running","info"], set:{queueEntryStatus:"running", boardColumn:"In Progress"}, tr:"Q4: dispatch #101, board In Progress", src:"queue-driver.mjs runQueue; QUEUE-BOARD-SYNC-CONTINUOUS"}; },
-  },
-
-  grill:{
-    load_target(s,w,f){ return {next:"detect_gaps", title:"load_target", note:"view-issue.mjs reads the body and comments of #101.", pill:["loaded","yes"], set:{grillState:"load_target"}, tr:"grill: load_target"}; },
-    detect_gaps(s,w,f){
-      if (w.body === "refined + results comment") return {next:{up:"clean",via:"grill_clean"}, title:"detect_gaps: zero gaps", note:"The body passes and the results comment is recorded. This is the zero-iteration path: grill_clean with no rewrite and no new comment.", pill:["0 gaps","yes"], set:{grillState:"grill_clean", provenanceRecorded:"yes (results comment)", unresolvedGapCount:0}, tr:"grill: 0 gaps + provenance → grill_clean", src:"scripts/loop/detect-refinement-grill-state.mjs; interpretRefinementGrillState"};
-      if (w.body === "refined, no results comment"){
-        if (!f.gprov){ f.gprov = 1; return {next:"detect_gaps", title:"detect_gaps: provenance_missing", note:"Zero gaps, but no results comment, plan surface or bypass line. The state stays detect_gaps with reason provenance_missing.", pill:["provenance_missing","no"], set:{grillState:"detect_gaps", provenanceRecorded:"no", unresolvedGapCount:0}, tr:"grill: 0 gaps, no provenance → stay (provenance_missing)", L:["evidence","A hand-written matrix is not proof that a grill happened. Advancement needs the recorded results comment (ADR 0084)."], src:"ADR 0084; interpretRefinementGrillState"}; }
-        return {next:{up:"clean",via:"grill_clean"}, title:"detect_gaps: provenance recorded", note:"The grill posts the results comment. Now the zero-gap body has provenance, and the state is grill_clean.", pill:["provenance","yes"], set:{grillState:"grill_clean", provenanceRecorded:"yes (results comment)"}, tr:"grill: results comment recorded → grill_clean"};
-      }
-      return {next:"await_answers", title:"detect_gaps: open gaps", note:"spec-lint runs offline and each finding is a gap. The body is " + (w.body === "empty" ? "empty" : "a checklist without a matrix") + ", so there are open gaps.", pill:["open gaps","no"], set:{grillState:"detect_gaps"}, read:["refinementFinding"], tr:"grill: open gaps → await_answers"};
-    },
-    await_answers(s,w,f){
-      if (w.auto && !w.citable) return {next:{up:"handoff",via:"needs_human_handoff"}, title:"await_answers: no citation", note:"--auto answers from codebase, docs and CONTEXT.md, in that order. One answer would be inferred only, with no citation. It stays unresolved.", pill:["unresolved","no"], set:{grillState:"needs_human_handoff", unresolvedGapCount:1}, tr:"grill: inferred-only answer → needs_human_handoff", L:["pause","--auto never fabricates. A headless run parks at needs_human_handoff with the recorded reason."]};
-      return {next:"synthesize", title:"await_answers", note: w.auto ? "--auto self-answers each gap with a citation." : "The operator answers the questions.", pill:["answers ready","yes"], set:{grillState:"await_answers"}, tr:"grill: answers ready"};
-    },
-    synthesize(s,w,f){ return {next:"re_grill", title:"synthesize", note:"A replace-section edit writes ## AC / DoD matrix and ## Non-goals. The results comment is posted. The raw Q&A stays in tmp/issues/issue-101/grill/. The body limit is 65,536 chars.", pill:["written","yes"], set:{grillState:"synthesize", refinementFinding:"null", provenanceRecorded:"yes (results comment)"}, tr:"grill: synthesize sections + results comment"}; },
-    re_grill(s,w,f){ return {next:{up:"clean",via:"grill_clean"}, title:"re_grill", note:"The grill runs on the new body and finds nothing new: a fixed point.", pill:["fixed point","yes"], set:{grillState:"grill_clean", unresolvedGapCount:0}, tr:"grill: fixed point → grill_clean"}; },
-  },
-
-  impl:{
-    L0(s,w,f){ return {next:"L1", title:"L0 pre-flight", note:"git fetch origin first. pre-flight-gate.mjs checks the worktree list and the branch. ensure-worktree.mjs created tmp/worktrees/dev-loops/issue-101 and installed the commit-msg and default-branch guards.", pill:["ok","yes"], set:{dirty:"no"}, tr:"L0: pre-flight ok", src:"LOCAL-PREFLIGHT-GATE-MANDATORY; scripts/loop/ensure-worktree.mjs; WORKTREE-CREATE-PROVISION"}; },
-    L1(s,w,f){ return {next:"L2", title:"L1 resume point", note:"The earliest unfinished phase is the first one.", pill:["phase 1","info"], tr:"L1: resume at the first open phase"}; },
-    L2(s,w,f){ return {next:"L3", title:"L2 plan", note:"The refiner writes 2 or 3 variants and a merged plan. The merged plan passes an adversarial review.", pill:["plan ok","yes"], tr:"L2: merged plan reviewed"}; },
-    L3(s,w,f){
-      if (w.stall && !f.stall){ f.stall = 1; return {next:"L3", noEdge:true, title:"interrupt: agent stall", note:"The developer child's last activity is older than the 5 min threshold, and no watch heartbeat is fresh. detectAgentStall returns stalled.", pill:["stalled","no"], set:{stallVerdict:"stalled (stale turn)"}, reply:{cls:"fixed",lbl:"Runtime interrupt",txt:"Agent stall: no activity for more than 5 min."}, tr:"interrupt: developer stalled (> 5 min)", L:["interrupt","Stall detection is an overlay on any agent node, not a step on the main path."], src:"packages/core/src/loop/agent-stall.mjs detectAgentStall; skills/docs/agent-stall-detection.md"}; }
-      if (w.stall && f.stall === 1){ f.stall = 2; return {next:"L3", noEdge:true, title:"stall recovery", note:"Recovery checks status, transcript and process, bails the child and starts a fresh-context child with buildAgentStallRecoveryBrief.", pill:["fresh child","info"], set:{stallVerdict:"recovered: fresh-context child"}, tr:"recovery: bail child, fresh-context child", L:["interrupt","A stalled child is replaced, not nudged. The new child starts from the record, with a recovery brief."], src:"skills/docs/agent-stall-detection.md; buildAgentStallRecoveryBrief"}; }
-      f.h = 0;
-      return {next:"L4", title:"L3 implement", note:"Tests first, then code. The narrowest targeted check passes; an empty check never counts as a pass. The commit-msg guard checks the conventional subject" + (w.harness === "claude" ? " and the Co-Authored-By trailer under CLAUDECODE=1." : "."), pill:["commit A","info"], set:{headSha:"A (local)", dirty:"no", roleBudgets:"coordinator_phase 40 turns / 50 tools / 20k out"}, tr:"L3: test-first change, commit A", src:"LOCAL-TEST-FIRST-COVERAGE; VALIDATE-TARGETED-FIRST; commit-msg-guard.mjs"};
-    },
-    L4(s,w,f){ return {next:"L5", title:"L4 self-check", note:"One self-review, no fan-out. It is not gate evidence.", pill:["done","yes"], tr:"L4: self-check"}; },
-    L5(s,w,f){ return {next:"L6", title:"L5 docs and retro", note:"A fresh-context subagent writes summary.md, retrospective.md, the manifest and IMPLEMENTATION_STATE.md.", pill:["written","yes"], tr:"L5: phase docs and retro"}; },
-    L6(s,w,f){ return {next:"L7", title:"L6 exit gate", note:"git status --porcelain is clean under tmp/worktrees/. SubagentStop is allowed.", pill:["clean","yes"], read:["dirty"], tr:"L6: worktree clean"}; },
-    L7(s,w,f){ return {next:"L8", title:"L7 pre-PR review", note:"One fresh reviewer (role pre-push-reviewer) reads the change. It is clean in round 1 of at most 2. The branch is pushed once.", pill:["clean","yes"], set:{headSha:"A"}, tr:"L7: pre-PR review clean, push A"}; },
-    L8(s,w,f){ return {next:{up:"pr",via:"ret_pr"}, title:"L8 finalize", note: lightweight(w) ? "The spec is the PR body. The next step creates the draft PR." : "Tracker-backed: the next step is a draft PR and draft_gate. A direct local merge is not allowed.", pill:["draft PR","info"], tr:"L8: finalize → draft PR"}; },
-  },
-
-  spike:{
-    S1(s,w,f){ const ready = w.spikeRec === "filled"; return {next: ready ? "ready_exit" : "in_prog", title:"S1 start", note:"The scaffold has ## Question, ## Approach and ## Findings. " + (ready ? "Recommendation is filled." : "Recommendation is empty."), pill:["valid","yes"], read:["spikeIntakeState"], tr:"S1: scaffold valid"}; },
-    in_prog(s,w,f){ return {next:"S2", title:"spike_in_progress", note:"The spike has no Recommendation yet.", pill:["in progress","info"], set:{spikeIntakeState:"spike_in_progress"}, tr:"spike: in progress"}; },
-    S2(s,w,f){ return {next:"ready_exit", title:"S2 explore", note:"The agent explores and fills Findings and the Recommendation. The spike gate profile is relaxed: angles scope and docs, requireCi false.", pill:["filled","yes"], tr:"S2: findings + Recommendation"}; },
-    ready_exit(s,w,f){ return {next:"S3", title:"spike_ready_for_exit", note:"The Recommendation is filled. The spike may exit.", pill:["ready","yes"], set:{spikeIntakeState:"spike_ready_for_exit"}, tr:"spike: ready for exit"}; },
-    S3(s,w,f){
-      if (w.spikeDisp === "discard") return {next:{up:"discard",via:"discard"}, title:"S3 exit: discard", note:"exit-spike.mjs --disposition discard writes nothing.", pill:["discard","info"], tr:"S3: discard"};
-      return {next:{up:"graduate",via:"graduate"}, title:"S3 exit: graduate", note:"exit-spike.mjs --disposition graduate --plan-file writes the plan (SPIKE-GRADUATE-PLAN-FILE-REQUIRED). buildGraduatedPlanBody throws on empty sections.", pill:["graduate","yes"], set:{artifactMode:"local-planning", planFileIntakeState:"new_plan_needs_refinement"}, tr:"S3: graduate → plan file", inf:true, L:["pause","The graduated plan enters local-planning at refine, so its intake state reads as new_plan_needs_refinement here (inferred)."]};
-    },
-  },
-
-  plan:{
-    LP1(s,w,f){ return {next:"LP2", title:"LP1 validate", note:"Status, Objective, In scope and Explicit non-goals are present.", pill:["valid","yes"], tr:"LP1: base sections valid"}; },
-    LP2(s,w,f){ const ready = s.planFileIntakeState === "plan_refined_ready_for_promotion"; return {next: ready ? "LP4" : "LP3", title:"LP2 start", note: ready ? "Both AC and DoD exist: plan_refined_ready_for_promotion." : "Neither AC nor DoD exists: new_plan_needs_refinement.", pill:[ready ? "ready" : "needs refinement","info"], read:["planFileIntakeState"], tr:"LP2: " + s.planFileIntakeState}; },
-    LP3(s,w,f){ return {next:"LP4", title:"LP3 refine", note:"The refiner adds AC, DoD, a size estimate, a coverage matrix and the docs-grill findings. It stops at local_human_review with zero tracker mutation.", pill:["refined","yes"], set:{planFileIntakeState:"plan_refined_ready_for_promotion"}, tr:"LP3: refined in place"}; },
-    LP4(s,w,f){ return {next:"LP5", title:"LP4 human review", note:"The operator reads the plan and approves it.", pill:["approved","yes"], tr:"LP4: operator approves"}; },
-    LP5(s,w,f){ f.h = 0; return {next:{up:"promoted",via:"ret_pr"}, title:"LP5 promote", note:"The plan is refined and has no prNumber yet. Promote commits the plan doc, opens one draft PR and writes prNumber into the front matter.", pill:["#42","info"], set:{prNumber:"#42", isDraft:"yes", headSha:"A", canonicalSpecSource:"phase_doc"}, tr:"LP5: promote → draft PR #42"}; },
-  },
-
-  light:{
-    lw_body(s,w,f){ return {next:"lw_close", title:"validatePrBodySpec", note:"The body has Objective, In scope, Explicit non-goals, Open questions, and AC and DoD as checkboxes.", pill:["valid","yes"], set:{prNumber:"#42", isDraft:"yes", headSha:"A"}, tr:"lightweight: PR body spec valid"}; },
-    lw_close(s,w,f){
-      if (w.entry === "--lightweight --issue") return {next:{up:"pr",via:"ret_pr"}, title:"Closes rule", note:"Issue-backed, so Closes #101 is required, and it is present.", pill:["Closes #101","yes"], set:{closingRef:"Closes #101"}, tr:"lightweight: Closes #101 present"};
-      return {next:"lw_board", title:"Closes rule", note:"Issue-less, so a closing reference must be absent, and it is.", pill:["no ref","yes"], set:{closingRef:"none (issue-less)"}, tr:"lightweight: no closing ref"};
-    },
-    lw_board(s,w,f){ return {next:{up:"pr",via:"ret_pr"}, title:"board auto-enqueue", note:"With no closing reference, create-pr adds the PR to the board. A failure would be non-fatal.", pill:["enqueued","info"], tr:"lightweight: board auto-enqueue"}; },
-  },
-
-  gate:{
-    G1(s,w,f){
-      const gf = f.g[s.gate]; gf.round++; f.gr = {};
-      return {next:"G2", title:`${s.gate} round ${gf.round}: base refresh`, note:"origin/" + "main is an ancestor of head " + s.headSha + ". No merge commit is needed.", pill:["base ok","yes"], set:{roundNumber:gf.round, baseIsAncestor:"yes"}, tr:`${s.gate} round ${gf.round} on ${s.headSha}: base refresh ok`};
-    },
-    G2(s,w,f){
-      const draft = s.gate === "draft_gate", gf = f.g[s.gate];
-      if (draft && gf.round === 1){
-        if (w.ci === "red"){ f.stopWhy = "CI failed on the draft PR. Gate coordination reports blocked."; return {next:{up:"stop",via:"exit_escalate"}, title:"entry check: CI failure", note:"On a draft PR, a CI failure maps to blocked with nextAction report_blocked.", pill:["blocked","no"], set:{ciStatus:"failure", gateBoundary:"blocked", nextAction:"report_blocked"}, tr:"entry: CI failure → blocked"}; }
-        if (w.ci === "stuck"){ f.stopWhy = "CI is stuck: queued with zero jobs for about 5 min."; return {next:{up:"stop",via:"exit_escalate"}, title:"entry check: CI stuck", note:"watch-ci reports stuck: queued with zero jobs for about 5 min. The model does not say who resumes it; here the round stops (inferred).", pill:["stuck","no"], set:{ciStatus:"stuck", nextAction:"wait_for_ci"}, tr:"entry: CI stuck → stop", inf:true, src:"scripts/github/probe-ci-status.mjs (watch-ci)"}; }
-        if (w.ci === "pending, then green" && !f.ciw){ f.ciw = 1; return {next:"G2", title:"entry check: wait for CI", note:"CI is not success yet: draft_review with nextAction wait_for_ci. watch-ci polls every 60 s, for at most 1,800,000 ms.", pill:["wait_for_ci","info"], set:{ciStatus:"pending", gateBoundary:"draft_review", nextAction:"wait_for_ci"}, tr:"entry: CI pending → wait_for_ci", L:["wait","The wait is a recorded state, not a sleeping chat. Any session can resume it."], src:"scripts/github/probe-ci-status.mjs; wait-pr-checks.mjs"}; }
-      }
-      const act = draft ? "run_draft_gate" : "run_pre_approval_gate";
-      return {next:"G4", title:"entry check", note: draft ? "Draft PR, CI success, refinement artifact present, no open clean-marker threads: draft_review with run_draft_gate." : "Ready PR with Copilot converged: pre_approval_gate_window with run_pre_approval_gate. An outstanding Copilot request would refuse entry.", pill:[act,"yes"], set:{ciStatus:"success", gateBoundary: draft ? "draft_review" : "pre_approval_gate_window", nextAction:act}, read:["isDraft","ciStatus"], tr:"entry: " + act + " allowed"};
-    },
-    G4(s,w,f){
-      const gf = f.g[s.gate];
-      let mode, why;
-      if (gf.esc){ mode = "full_fanout"; why = "escalated"; }
-      else if (lightUnder(w)){ mode = "inline"; why = "under_threshold"; }
-      else if (w.lightMode === "on, diff over limits"){ mode = "full_fanout"; why = "over_threshold"; }
-      else { mode = "full_fanout"; why = "light_mode_disabled"; }
-      return {next:"G5", title:"dispatch mode", note:`Mode ${mode}, reason ${why}. Precedence: gate:full label, then lightMode inline, then tier, then dynamic subtractive, then the mandatory floor.`, pill:[mode,"info"], set:{dispatchMode:`${mode} (${why})`}, tr:`dispatch: ${mode} (${why})`, src: why === "escalated" ? "GATE-EXEC-LIGHT-ESCALATION" : undefined};
-    },
-    G5(s,w,f){
-      if (w.validation !== "allPassed") return {next:"G7", title:"validation: incomplete", note:"resolve-validation writes {status incomplete, reason dirty worktree}. It neither passed nor failed.", pill:["incomplete","no"], set:{validation:"incomplete (dirty worktree) @" + s.headSha, dirty:"yes"}, tr:"validation: incomplete (dirty worktree)", L:["unknown","incomplete is its own outcome. Reviewers must not run the suite to fill the gap."]};
-      return {next:"G7", title:"validation", note:"resolve-validation runs the targeted profile once and writes " + s.gate + "-" + s.headSha + ".validation.json with allPassed true.", pill:["allPassed","yes"], set:{validation:"allPassed @" + s.headSha}, tr:"validation: allPassed @" + s.headSha};
-    },
-    G7(s,w,f){
-      const re = f.g[s.gate].round > 1;
-      return {next: re ? "G8" : "G9", title:"spec and gate context", note:"spec-context.mjs stamps specDigest, headSha " + s.headSha + " and contentDigest. write-gate-context.mjs writes the briefing, dispatch plan and filtered diff, and checks the reviewer budget.", pill:["context","yes"], tr:"context: spec identity + gate context for " + s.headSha};
-    },
-    G8(s,w,f){
-      const docs = w.fixDelta === "docs only";
-      return {next:"G9", title:"carry-forward", note:`The delta is (${s.prevHeadSha}..${s.headSha}) ∩ (base..${s.headSha}). ` + (docs ? "It touches docs only, so non-mandatory angles carry from the previous round. Mandatory angles re-run." : "The plan lists carried and mustRerun angles. Mandatory angles never carry; a .devloops change would re-run all."), pill:[docs ? "carried" : "plan written","info"], set:{carriedAngles: docs ? "non-mandatory angles (docs-only delta)" : "per plan; mandatory angles re-run"}, read:["prevHeadSha","headSha"], tr:"carry-forward: " + (docs ? "non-mandatory angles carried" : "plan written")};
-    },
-    G9(s,w,f){
-      const inline = s.dispatchMode && s.dispatchMode.startsWith("inline");
-      return {next:"G10", title:"emit fan-out", note:"A new roundId. " + (inline ? "One inline unit." : "Grouped units of at most 5 angles, at most 5 concurrent per wave.") + (s.gate === "pre_approval_gate" ? " The acceptance-criteria angle is mandatory here." : ""), pill:["work orders","info"], set:{angles: inline ? "one inline pass" : "grouped, at most 5 per unit" + (s.gate === "pre_approval_gate" ? ", incl. acceptance-criteria" : "")}, tr:"emit: work orders for " + s.headSha};
-    },
-    G10(s,w,f){
-      const fs = roundFindings(s,w,f);
-      const bad = w.reviewer !== "all valid" && !f.revDone && !f.gr.rerun;
-      const what = {"one angle blocked":"one artifact has verdict blocked","one artifact missing":"one pulled unit wrote no result","one stale head stamp":"one artifact names another head"}[w.reviewer];
-      const inline = s.dispatchMode && s.dispatchMode.startsWith("inline");
-      return {next:"G11", title: f.gr.rerun ? "fan-out: re-run" : inline ? "inline pass" : "fan-out", note:(f.gr.rerun ? "The reviewer runs again on the same head. " : inline ? "The coordinator runs one inline pass. " : "The first wave is released at once. ") + (bad ? "All units return, but " + what + "." : "Every unit writes its artifact.") + (fs[0] === "gate-evidence" ? " The validation artifact is incomplete, so a reviewer files a gate-evidence finding." : ""), pill:[fmtF(fs), fs.length ? "no" : "yes"], set:{findings:fmtF(fs), roleBudgets:"reviewer floor 45 / 50, cap 95 / 100"}, tr:`fan-out: ${fmtF(fs)}` + (bad ? ", " + what : "")};
-    },
-    G11(s,w,f){
-      const fs = roundFindings(s,w,f), gf = f.g[s.gate];
-      if (w.reviewer !== "all valid" && !f.revDone && !f.gr.rerun){
-        f.gr.rerun = 1; f.revDone = 1;
-        const why = {"one angle blocked":"A blocked artifact makes fan-in throw. Re-run that reviewer.","one artifact missing":"A unit was pulled but wrote no result: \"interrupted reviewer\", exit 1.","one stale head stamp":"The artifact head stamp does not match: exit 1 (GATE-EXEC-ARTIFACT-HEAD-STAMP)."}[w.reviewer];
-        return {next:"G10", title:"fan-in: blocked", note:why + " Fan-in never treats it as clean.", pill:["blocked","no"], set:{fanInVerdict:"blocked"}, tr:"fan-in: malformed artifact → re-run reviewer", L:["missing","A missing or broken result is not a pass. The join waits for real evidence from every unit."]};
-      }
-      const high = fs.includes("high");
-      if (high && s.dispatchMode && s.dispatchMode.startsWith("inline") && !gf.esc){ gf.esc = 1; return {next:"G4", title:"fan-in: escalate", note:"The inline pass found a blocking severity. Dispatch escalates to full_fanout with reason escalated.", pill:["escalate","no"], tr:"fan-in: inline found high → escalate to full_fanout", src:"GATE-EXEC-LIGHT-ESCALATION"}; }
-      const v = fs[0] === "gate-evidence" ? "findings recorded" : high ? "findings_present" : "clean";
-      return {next:"G12", title:"fan-in", note:(high ? "A high finding is in blockCleanOnFindingSeverities [\"high\"]: findings_present. Disposition accepted-for-fix." : fs.length && fs[0] !== "gate-evidence" ? "No blocking severity: clean. Non-blocking findings are deferred at fan-in." : fs[0] === "gate-evidence" ? "Every unit reported. The gate-evidence finding is recorded." : "Every unit reported clean for " + s.headSha + "."), pill:[v, high || fs[0] === "gate-evidence" ? "no" : "yes"], set:{fanInVerdict:v}, read:["findings"], tr:"fan-in: " + v, inf: fs[0] === "gate-evidence"};
-    },
-    G12(s,w,f){
-      const fs = roundFindings(s,w,f), rd = f.g[s.gate].round;
-      if (w.judge === "spec_cannot_decide"){ f.gr.scd = 1; return {next:"G13", title:"judge", note:"The judge cannot pick between two readings of the spec. The spec-authority verdict is spec_cannot_decide.", pill:["spec_cannot_decide","no"], set:{scopeDrift:"within_scope"}, tr:"judge: spec_cannot_decide"}; }
-      let act = [], note;
-      if (fs.includes("high")){ act = ["high"]; note = "The high finding is in scope: act."; }
-      else if (fs.includes("medium")){ if (rd <= 3){ act = ["medium"]; note = `Round ${rd} is inside mediumFixWindow 3, so the medium finding stays in the loop: act.`; } else note = `Round ${rd} is past mediumFixWindow 3. The medium finding is deferred, not acted on.`; }
-      else if (fs.includes("gate-evidence")){ act = ["gate-evidence"]; note = "The gate-evidence finding is in scope: act."; }
-      else if (fs.length) note = "Two nits: one defer with a follow-up draft, one reject with a reason.";
-      else note = "Nothing to judge. The act list is empty.";
-      const medInf = fs.includes("medium");
-      return {next:"G13", title:"judge", note:note + " Scope drift: within_scope.", pill:[act.length ? act.length + " act" : "0 act", act.length ? "no" : "yes"], set:{actList: act.length ? act.map(x => "1 " + x).join(", ") : "empty", scopeDrift:"within_scope"}, read:["findings"], tr:"judge: " + (act.length ? act.length + " act" : "0 act"), inf: medInf || fs.includes("gate-evidence"), L: medInf ? ["budget","The fix window bounds how long a medium finding may hold the loop. How the judge treats it at the window edge is inferred from isDeferredAtRound."] : undefined};
-    },
-    G13(s,w,f){ return {next:"G14", title:"durable ledger", note:"write-gate-findings-log.mjs writes tmp/gate-findings/<slug>/pr-42/" + s.gate + "-" + s.headSha + ".json. It checks mandatory angle coverage and that verdict and ledger agree.", pill:["ledger","yes"], tr:"ledger: written for " + s.headSha}; },
-    G14(s,w,f){
-      if (f.gr.scd){ f.stopWhy = "judge-pass exited 1 with humanDecisionRequired: the spec cannot decide."; return {next:{up:"stop",via:"exit_escalate"}, title:"judge-pass: human decision", note:"spec_cannot_decide makes judge-pass exit 1 with humanDecisionRequired. The round escalates.", pill:["exit 1","no"], tr:"judge-pass: spec_cannot_decide → exit 1, escalate", L:["pause","When the spec cannot decide, a person must. The loop stops instead of letting a model pick."]}; }
-      const defers = w.findings === "nits only" && s.gate === "draft_gate" && f.g.draft_gate.round === 1 || (w.findings === "one medium, not fixed" && f.g[s.gate].round > 3 && s.gate === "draft_gate");
-      return {next:"G16", title:"judge-pass", note:"The act list is " + s.actList + "." + (defers ? " One batched deferral comment records the deferred items." : ""), pill:[s.actList === "empty" ? "act: none" : "act: " + s.actList, s.actList === "empty" ? "yes" : "no"], read:["actList"], tr:"judge-pass: act list " + s.actList};
-    },
-    G16(s,w,f){
-      const fs = roundFindings(s,w,f);
-      if (fs[0] === "gate-evidence"){ f.stopWhy = "Validation was incomplete for head " + s.headSha + ". The verdict carries a gate-evidence finding."; return {next:{up:"stop",via:"exit_escalate"}, title:"post verdict: evidence missing", note:"The verdict is posted with the gate-evidence finding. This round cannot come out clean until validation completes on a clean worktree. The model does not name the recovery path; here the round escalates (inferred).", pill:["gate-evidence","no"], set:{nextAction:"address_review_feedback"}, tr:"post: gate-evidence finding, round escalates", inf:true, L:["unknown","Unknown validation is not a pass. The verdict needs a complete validation artifact."]}; }
-      const threads = fs.filter(x => x === "high" || x === "medium").length;
-      if (s.actList !== "empty") return {next:"G17", title:"post verdict: findings_present", note:"One COMMENT review with an inline thread for the finding. The verdict is posted before any fix (GATE-EXEC-POST-BEFORE-FIX).", pill:["findings_present","no"], set:{unresolvedGateThreadCount:threads, nextAction:"address_review_feedback"}, tr:"post: findings_present, " + threads + " thread(s)"};
-      return {next:"G20", title:"post verdict: clean", note:"One COMMENT review with verdict clean for " + s.headSha + "." + (fs.length ? (fs.includes("medium") ? " The medium thread from earlier rounds is still open." : " Nits are below inlineSeverityFloor medium, so they fold into details.") : ""), pill:["clean","yes"], set:{unresolvedGateThreadCount: fs.includes("medium") ? 1 : 0}, tr:"post: clean verdict for " + s.headSha};
-    },
-    G17(s,w,f){ const med = s.actList.includes("medium"); return {next:"G18", title:"fixer", note:(med ? "The fixer commits, but the medium item is not fixed." : "The fixer fixes the act list item.") + " Phase commit_only: commit, no push yet. Budget 45 turns, 50 tools, 1 push per gate round.", pill:["commit","info"], set:{roleBudgets:"fixer_pass 45 turns / 50 tools / 1 push"}, tr:"fixer: commit_only" + (med ? " (medium not fixed)" : ""), inf: med}; },
-    G18(s,w,f){
-      if (w.deltaFix === "fixer leaves an item" && s.actList.includes("high")){
-        f.gr.delta = (f.gr.delta||0) + 1;
-        if (f.gr.delta < 3) return {next:"G18", title:`delta review ${f.gr.delta} of 3`, note:"needs_fix: an item is still open. Fix and review the delta again.", pill:["needs_fix","no"], set:{deltaInvocations:f.gr.delta}, tr:`delta review ${f.gr.delta}: needs_fix`};
-      }
-      const bounded = f.gr.delta === 3;
-      const hd = HEADS[++f.h];
-      return {next:"G19", title: bounded ? "delta review 3 of 3: bounded out" : "delta review", note: bounded ? "The third invocation is still not clear. bounded_out: push anyway; the gate stays the authority." : "locally_clear. The fixer pushes head " + hd + ".", pill:[bounded ? "bounded_out" : "locally_clear", bounded ? "no" : "yes"], set:{deltaInvocations: f.gr.delta || 1, prevHeadSha:s.headSha, headSha:hd}, tr:(bounded ? "delta review 3: bounded_out" : "delta review: locally_clear") + ", push " + hd, L: bounded ? ["budget","Three delta runs is the bound. After that the push goes to the gate, which decides with full evidence."] : undefined};
-    },
-    G19(s,w,f){
-      f.gr.pushed = 1;
-      const med = s.actList.includes("medium");
-      return {next:"G20", title:"reply and resolve", note: med ? "The fixer replies on the medium thread. It stays open (inferred)." : "The thread gets disposition fixed with the 40-character SHA of head " + s.headSha + ". verify-fixer-disposition passes.", pill:["verified","yes"], set:{fixerDispositionComplete:"yes", unresolvedGateThreadCount: med ? 1 : 0}, tr:"reply/resolve: dispositions verified", inf:med};
-    },
-    G20(s,w,f){
-      const rd = f.g[s.gate].round, med = roundFindings(s,w,f).includes("medium");
-      let note, cnt = s.unresolvedGateThreadCount || 0;
-      if (med && rd >= 4){ note = `Round ${rd} is past the window: the medium thread closes as deferred.`; cnt = 0; }
-      else if (med){ note = `Round ${rd} of mediumFixWindow 3: the medium thread stays open.`; }
-      else note = rd === 1 && w.findings === "nits only" && s.gate === "draft_gate" ? "Nit threads close at round 1." : "No open gate threads.";
-      const set = {unresolvedGateThreadCount:cnt};
-      if (f.gr.pushed) return {next:{up:"new_head",via:"exit_new_head"}, title:"gate close", note:note + " The PR has a new head, so a fresh round must run.", pill:["new head","info"], set, tr:"gate close: " + cnt + " open; new head → re-gate", L:["current","Evidence for the old head is stale. The next round runs from G1 in a new gate coordinator."]};
-      return {next:{up:"clean",via:"exit_clean"}, title:"gate close", note:note + " The round is clean for " + s.headSha + ".", pill:["clean","yes"], set:Object.assign(set, s.gate === "draft_gate" ? {nextAction:"mark_ready_for_review"} : {}), tr:"gate close: clean for " + s.headSha};
-    },
-  },
-
-  ready:{
-    c1(s,w,f){ return {path:["c1","c2","c3","c4","c5","c6"], next:"c7", title:"checks 1 to 6", note:"Head resolvable, PR is a draft, no title markers, CI passed (gates.draft.requireCi), a clean contract-complete draft_gate on head " + s.headSha + ", unresolved gate threads 0.", pill:["pass","yes"], read:["headSha","isDraft","titleMarkers","ciStatus","unresolvedGateThreadCount"], tr:"ready: checks 1-6 pass", L:["evidence","Each check reads the record. A thread count of -1 (unreadable) would fail, not pass."]}; },
-    c7(s,w,f){
-      const loc = +w.loc;
-      if (loc > 2000){ f.readyWhy = "Size budget: whole diff 2100 logic LOC is over absoluteHardLoc 2000. This block is never waivable."; return {path:["c7","size_block"], next:{up:"refused",via:"ret_refuse_size"}, title:"size: unwaivable block", note:f.readyWhy, pill:["block","no"], set:{sizeOutcome:"block (unwaivable)"}, tr:"size: 2100 > 2000 → unwaivable block"}; }
-      if (loc > 1500){ f.readyWhy = "Size budget: whole diff 1600 logic LOC is over waiverLoc 1500. A waiver needs the operator's approval: --waive-size-budget --reason."; return {path:["c7","size_block"], next:{up:"refused",via:"ret_refuse_size"}, title:"size: waivable block", note:f.readyWhy, pill:["block","no"], set:{sizeOutcome:"block (waivable)"}, tr:"size: 1600 > 1500 → block (waivable)"}; }
-      if (loc > 400) return {path:["c7","size_escalate"], next:"c8", title:"size: escalate", note:"Whole diff 600 logic LOC is over softLoc 400. Ready continues, but the merge will need a human approval for size.", pill:["escalate","no"], set:{sizeOutcome:"escalate"}, tr:"size: 600 > 400 → escalate"};
-      return {path:["c7","size_pass"], next:"c8", title:"size: pass", note:"Whole diff " + loc + " logic LOC is within softLoc 400.", pill:["pass","yes"], set:{sizeOutcome:"pass"}, tr:"size: " + loc + " → pass"};
-    },
-    c8(s,w,f){
-      const c = w.contract;
-      if (c === "not touched") return {path:["c8","adr_pass"], next:"c9", title:"ADR tripwire", note:"No trigger fires.", pill:["pass","yes"], set:{adrTripwire:"pass"}, tr:"ADR tripwire: no trigger"};
-      if (c === "touched, ADR added") return {path:["c8","adr_pass"], next:"c9", title:"ADR tripwire", note:"A contract-doc trigger fires. The diff adds docs/decisions/NNNN-*.md, which satisfies it.", pill:["pass","yes"], set:{adrTripwire:"pass (ADR in diff)"}, tr:"ADR tripwire: satisfied by an ADR"};
-      if (c === "touched, no marker"){ f.readyWhy = "ADR tripwire: a contract doc changed, with no decision record and no allow marker."; return {path:["c8","adr_block"], next:{up:"refused",via:"ret_refuse_adr"}, title:"ADR tripwire: block", note:f.readyWhy, pill:["block","no"], set:{adrTripwire:"block"}, tr:"ADR tripwire: block → refused"}; }
-      if (!f.adr){ f.adr = 1; return {path:["c8","adr_block"], next:"c8", title:"ADR tripwire: bare marker", note:"skills/docs/*-contract.md changed. The PR body has a bare adr-tripwire:allow. A bare marker is invalid and cancels later ones. Block.", pill:["block","no"], set:{adrTripwire:"block (bare marker)"}, tr:"ADR tripwire: bare marker → block; operator adds a reason", L:["people","The marker has no author check (inferred: anyone who can edit the body). Here the operator writes the reason."], inf:true}; }
-      return {path:["c8","adr_waived"], next:"c9", title:"ADR tripwire: allow marker", note:"The operator replaced the bare marker with adr-tripwire:allow <reason>. The first marker wins, and it is valid now.", pill:["pass","yes"], set:{adrTripwire:"pass (allow <reason>)"}, tr:"ADR tripwire: reasoned marker → pass"};
-    },
-    c9(s,w,f){ return {path:["c9","c10","c11","c12","c13"], next:{up:"ready",via:"ret_ready"}, title:"checks 9 to 13", note:"Comment discipline, waiver comment, PR body spec for tracker-backed PRs, then gh pr ready. Board sync is non-fatal. The state moves from pr_draft to pr_ready_no_feedback.", pill:["ready","yes"], set:{isDraft:"no", copilotState:"pr_ready_no_feedback"}, tr:"ready: checks 9-13 pass, gh pr ready"}; },
-  },
-
-  cop:{
-    pr_ready(s,w,f){ f.c = f.c || {rounds:0}; return {next:"P5", title:"pr_ready_no_feedback", note:"The PR is ready and Copilot has not reviewed it. Round cap: " + capOf(w) + ".", pill:["ready","info"], set:{copilotState:"pr_ready_no_feedback", copilotRounds:0, maxCopilotRounds:capOf(w)}, tr:"copilot: pr_ready_no_feedback"}; },
-    P5(s,w,f){
-      if (f.c.lastClean) return {path:["P5","suppressed"], next:{up:"converged",via:"ret_pre"}, title:"request: suppressed_same_head_clean", note:"Head " + s.headSha + " already has a clean Copilot review. A request on the same clean head is always suppressed. Copilot has converged.", pill:["converged","yes"], set:{requestStatus:"suppressed_same_head_clean", convergedOnce:"yes"}, read:["headSha","copilotRounds"], tr:"request: same head clean → converged"};
-      return {path:["P5","requested"], next:"waiting", title:"request Copilot review", note:"Not a draft, no @copilot comment, under the cap of " + capOf(w) + ", no same-head clean review. The helper places the request and verifies it (retries at 5, 10 and 15 s).", pill:["requested","info"], set:{requestStatus:"requested"}, read:["copilotRounds","maxCopilotRounds"], tr:"request: placed for head " + s.headSha};
-    },
-    waiting(s,w,f){
-      const c = f.c;
-      if (w.harness === "pi" && !c.piw){ c.piw = 1; return {next:"waiting", title:"waiting: Pi exits", note:"On Pi the child exits on a pending wait. The main agent re-dispatches it later from the recorded state.", pill:["child exits","info"], set:{copilotState:"waiting_for_copilot_review"}, tr:"wait (Pi): child exits; main re-dispatches", L:["wait","The wait survives the conversation: the state is on the PR, so a new child resumes it."], src:"STOP-WAIT-001; wait-watch-procedure.md"}; }
-      if (w.copilot === "never responds"){ f.copWhy = "Copilot never responded. The watch timed out after 30 min, refreshed once and asked for manual attention on PR #42."; return {next:{up:"stop",via:"ret_stop"}, title:"watch timeout", note:"The watch polls every 60 s for 30 min per review-watch boundary. It refreshes once, then reports a timeout that needs manual attention. Extensions need authorization.", pill:["timeout","no"], set:{copilotState:"waiting_for_copilot_review"}, tr:"watch: 30 min timeout → stop", src:"copilot-loop-operations.md; policy-constants.mjs", L:["wait","A bounded wait ends with a reported state, not a silent hang."]}; }
-      if (w.copilot === "two error reviews"){ c.err = (c.err||0) + 1; if (c.err < 2) return {next:"waiting", title:"Copilot error review 1", note:"Copilot posted an error review. One error is not enough to stop.", pill:["error 1","no"], set:{copilotState:"waiting_for_copilot_review"}, tr:"Copilot: error review 1"};
-        f.copWhy = "Two Copilot error reviews on the head and no real review (ADR 0114)."; return {path:["waiting","blockedc"], next:{up:"stop",via:"ret_stop"}, title:"blocked_needs_user_decision", note:f.copWhy, pill:["blocked","no"], set:{copilotState:"blocked_needs_user_decision"}, tr:"Copilot: second error review → blocked"}; }
-      c.rounds++;
-      const cap = capOf(w), ncomm = {"clean review":0,"comments, then clean":1,"5 rounds, last clean":4,"5 rounds, threads open":99}[w.copilot];
-      const comments = c.rounds <= ncomm;
-      const wl = w.harness === "claude" ? " On Claude the child continues the wait inline." : "";
-      const set = {copilotRounds:c.rounds, copilotState:"waiting_for_copilot_review"};
-      if (c.rounds >= cap){
-        if (!comments){ return {path:["waiting","fallback"], next:{up:"fallback",via:"ret_pre"}, title:"round_cap_clean_fallback", note:`Review ${c.rounds} is clean. The cap of ${cap} is reached with clean threads, no body feedback and CI green.` + wl, pill:["fallback","yes"], set:Object.assign(set,{copilotState:"round_cap_clean_fallback"}), read:["copilotRounds","maxCopilotRounds"], tr:`Copilot review ${c.rounds}: clean at the cap → round_cap_clean_fallback`, src:"COPILOT-FOLLOWUP-ROUND-CAP; copilot-loop-state.mjs interpretLoopState", L:["budget","The cap bounds the loop. A clean final round may still go on, with a round-exhaustion note."]}; }
-        f.copWhy = `round_cap_reached after ${c.rounds} reviews with open threads. Deferred threads get "deferred to follow-up" replies.`;
-        return {path:["waiting","cap"], next: w.force ? "no_changes" : {up:"stop",via:"ret_stop"}, title:"round_cap_reached", note:`Review ${c.rounds} has comments. The cap of ${cap} is reached and threads are open: a hard stop.` + (w.force ? " Someone tries --force-rerequest-review." : ""), pill:["cap","no"], set:Object.assign(set,{copilotState:"round_cap_reached"}), read:["copilotRounds","maxCopilotRounds"], tr:`Copilot review ${c.rounds}: threads open at the cap → round_cap_reached`, src:"COPILOT-FOLLOWUP-ROUND-CAP", L:["budget","The round budget is spent. The loop stops for the operator instead of trying forever."]};
-      }
-      if (comments) return {next:"unresolved", title:`Copilot review ${c.rounds}: comments`, note:"Copilot left comments on head " + s.headSha + "." + wl, pill:["comments","no"], set, tr:`Copilot review ${c.rounds}: comments`};
-      c.lastClean = 1;
-      return {next:"rerequest", title:`Copilot review ${c.rounds}: clean`, note:"A clean review on head " + s.headSha + ", CI green. Reviewed before, so the state is ready_to_rerequest_review." + wl, pill:["clean","yes"], set, tr:`Copilot review ${c.rounds}: clean on ${s.headSha}`};
-    },
-    unresolved(s,w,f){ const hd = HEADS[++f.h]; return {next:"fixed", title:"unresolved_feedback_present", note:"Unresolved feedback takes priority. The fixer works the threads and pushes head " + hd + ".", pill:["push " + hd,"info"], set:{copilotState:"unresolved_feedback_present", prevHeadSha:s.headSha, headSha:hd}, tr:"Copilot fix: push " + hd}; },
-    fixed(s,w,f){ return {next:"rerequest", title:"already_fixed_needs_reply_resolve", note:"The fix is on the PR. The fixer replies on each thread before any re-request, and verifies before it resolves.", pill:["replied","yes"], set:{copilotState:"already_fixed_needs_reply_resolve"}, tr:"Copilot: reply + resolve"}; },
-    rerequest(s,w,f){ return {next:"P5", title:"ready_to_rerequest_review", note: f.c.lastClean ? "The last review was clean on this head." : "The head changed since the last review, so a re-request is due.", pill:["re-request","info"], set:{copilotState:"ready_to_rerequest_review"}, tr:"Copilot: ready_to_rerequest_review"}; },
-    no_changes(s,w,f){ f.copWhy = "round_cap_reached, and a forced re-request on the unchanged head returned no_changes_since_last_review."; return {next:{up:"stop",via:"ret_stop"}, title:"no_changes_since_last_review", note:"--force-rerequest-review bypasses the cap only on a changed head. Head " + s.headSha + " is unchanged since the last review.", pill:["refused","no"], set:{requestStatus:"no_changes_since_last_review"}, read:["headSha"], tr:"forced request on unchanged head → no_changes_since_last_review", src:"scripts/github/request-copilot-review.mjs", L:["current","Force needs a new head. A re-request on the same head cannot produce new evidence."]}; },
-  },
-
-  merge:{
-    M3(s,w,f){
-      if (w.configError){ f.mergeWhy = "merge-pr.mjs cannot verify humanMergeOnly: a .devloops layer failed to load."; return {next:{up:"refused",via:"ret_refuse"}, title:"config check: load error", note:"loadDevLoopConfig never throws, but a schema-rejected layer drops whole. The wrapper cannot verify humanMergeOnly, so it refuses.", pill:["refused","no"], set:{configErrors:"1 layer rejected"}, tr:"merge: config error → refuse", src:"config.mjs loadDevLoopConfig; scripts/github/merge-pr.mjs"}; }
-      if (w.humanMergeOnly){ f.mergeWhy = "humanMergeOnly is true. merge-pr.mjs refuses outright; a person merges."; f.mergeReply = {cls:"fixed", lbl:"Hook decision", txt:"A raw gh pr merge is always denied by the Bash hook (RAW-GH-PR-MERGE-BYPASS), and under humanMergeOnly also by STOP-HUMAN-MERGE-001."}; return {next:{up:"refused",via:"ret_refuse"}, title:"config check: humanMergeOnly", note:"resolveHumanMergeOnly forces merge into stopAt and sets effective merge authorization to false. merge-pr.mjs refuses outright.", pill:["refused","no"], set:{humanMergeOnly:"true", mergeAuthorization:"none (forced false)"}, reply:f.mergeReply, tr:"merge: humanMergeOnly → refuse; hook denies gh pr merge", src:"STOP-HUMAN-MERGE-001; merge-pr.mjs; resolve-human-merge-only.mjs"}; }
-      return {next:"p1", title:"config check", note:"The config loads and humanMergeOnly is false.", pill:["ok","yes"], set:{humanMergeOnly:"false"}, tr:"merge: config ok"};
-    },
-    p1(s,w,f){
-      const ids = ["p1","p2","p3","p4","p5","p6","p7","p8"];
-      const sizeReq = s.sizeOutcome && s.sizeOutcome !== "pass";
-      let fail = null;
-      if (sizeReq && w.auth !== "fresh approval on the head") fail = ["p7", "size_budget_human_approval: the size outcome " + s.sizeOutcome + " needs a human approval on the PR."];
-      if (w.auth === "approval on an older head") fail = ["p8", "merge_approval: the approval names an older head, not " + s.headSha + ". verifyFreshHumanApproval fails."];
-      if (fail){ const i = ids.indexOf(fail[0]); f.mergeWhy = fail[1]; return {path:ids.slice(0,i+1), next:{up:"refused",via:"ret_refuse"}, title:"preconditions: " + fail[0].replace("p7","size approval").replace("p8","merge_approval"), note:fail[1], pill:["fail","no"], read:["approvalHeadSha","headSha","sizeOutcome"], tr:"merge preconditions: " + fail[1].split(":")[0] + " fails → refuse", L:["version","An approval counts only for the head it names."], src:"merge-approval.mjs evaluateMergePreconditions, verifyFreshHumanApproval; MERGE-PRECOND-REQUIRED"}; }
-      return {path:ids, next:"M5", title:"8 preconditions", note:"human_approver, mergeable, ci_green, title_markers, gate_evidence, copilot_convergence, size_budget_human_approval and merge_approval all pass for head " + s.headSha + "." + (sizeReq ? " The size approval clears with the fresh approval and 0 CHANGES_REQUESTED." : ""), pill:["pass","yes"], read:["ciStatus","titleMarkers","approvalHeadSha","sizeOutcome"], tr:"merge preconditions: 8 of 8 pass", src:"merge-approval.mjs evaluateMergePreconditions; MERGE-PRECOND-REQUIRED", L:["evidence","Every precondition reads the record at the current head, in a fixed order."]};
-    },
-    M5(s,w,f){
-      const esc = s.sizeOutcome && s.sizeOutcome !== "pass";
-      if (esc && w.auth.startsWith("standing")){ f.mergeWhy = "The merge class is escalated by size. An escalated merge needs a fresh approval; a standing authorization is not enough."; return {next:{up:"refused",via:"ret_refuse"}, title:"merge class: escalated", note:f.mergeWhy, pill:["needs fresh","no"], set:{mergeClass:"escalated"}, read:["sizeOutcome","mergeAuthorization"], tr:"merge class escalated, standing auth → refuse"}; }
-      return {next:"M6", title:"merge class", note: esc ? "Escalated by size. The fresh approval covers it." : "Not escalated. " + (w.auth.startsWith("standing") ? "A drain merge may use the standing authorization." : "The fresh approval covers it."), pill:[esc ? "escalated" : "drain","info"], set:{mergeClass: esc ? "escalated" : "drain"}, read:["sizeOutcome","mergeAuthorization"], tr:"merge class: " + (esc ? "escalated" : "drain")};
-    },
-    M6(s,w,f){ return {next:{up:"merged",via:"ret_merged"}, title:"merge", note:"gh pr merge --match-head-commit " + s.headSha + ". gh exits 0 and the PR state is MERGED.", pill:["MERGED","yes"], read:["headSha"], tr:"merge: --match-head-commit " + s.headSha + " → MERGED"}; },
-  },
-
-  retro:{
-    RT1(s,w,f){ return {next:"RT2", also:[["MISSING","MISSING","no"]], title:"RT1 arm", note:"Completion arms the checkpoint with state required. Until it is recorded, a startup reads MISSING. The model names a Pi extension as the arming actor.", pill:["required","info"], set:{checkpointState:"MISSING"}, tr:"retro: armed (required → MISSING)"}; },
-    RT2(s,w,f){ return {next:"RT3", title:"RT2 retro", note:"A fresh-context subagent reads the full tool-call record and the AC / DoD.", pill:["fresh","yes"], set:{retroProvenance:"fresh"}, tr:"retro: fresh-context retro"}; },
-    RT3(s,w,f){ return {next:"RT4", title:"RT3 findings scan", note:"check-retro-tooling.mjs scans the transcript. Findings go into the next envelope and one advisory PR comment. Exit 1 on violations is advisory only.", pill:["advisory","info"], tr:"retro: findings scan (advisory)"}; },
-    RT4(s,w,f){ return {next:"RT5", also:[["COMPLETE","COMPLETE","yes"]], title:"RT4 record", note:"checkpoint-contract writes complete with --notes, --retro-context fresh, --record-source, --repo, --pr 42 and the 40-hex merge commit.", pill:["complete","yes"], set:{checkpointState:"COMPLETE"}, tr:"retro: checkpoint complete"}; },
-    RT5(s,w,f){ return {next:{up:"next",via:"ret_next"}, title:"RT5 gate", note:"The next startup reads COMPLETE and passes." + (w.requireRetro ? "" : " requireRetrospective is false, so the gate would not bind anyway."), pill:["pass","yes"], read:["checkpointState"], tr:"retro: gate will pass at the next startup"}; },
-  },
-
-  review:{
-    V1(s,w,f){ return {next:"V2", title:"V1 context", note:"write-gate-context.mjs --gate review. The angles are the union of draft and pre-approval angles.", pill:["context","yes"], set:{gate:"review"}, tr:"review: context"}; },
-    V2(s,w,f){ return {next:"V3", title:"V2 fan-out", note:"Review agents work through their work orders. Multiple waves are allowed.", pill:["artifacts","yes"], tr:"review: fan-out"}; },
-    V3(s,w,f){ return {next:"V4", title:"V3 fan-in and ledger", note:"Fan-in consolidates the artifacts. The ledger uses --execution-mode fanout_fanin. There is no judge.", pill:["ledger","yes"], set:{fanInVerdict:"consolidated"}, tr:"review: fan-in + ledger, no judge"}; },
-    V4(s,w,f){ return {next:"V5", title:"V4 post pending", note:"The verdict goes up as a pending review on PR #42. Never raw gh pr review.", pill:["pending","info"], tr:"review: pending review posted"}; },
-    V5(s,w,f){ return {next:{up:"done",via:"ret_done"}, title:"V5 submit", note: w.auto ? "--auto submits a comment review. approve, request-changes and discard are refused under --auto." : "Interactive: the default leaves the review pending for the operator.", pill:[w.auto ? "comment" : "pending","info"], tr:"review: " + (w.auto ? "--auto → comment" : "left pending"), reply:{cls:"answer",lbl:"On the PR",txt:(w.auto ? "Comment review submitted." : "Pending review left for the operator.") + " It is never lifecycle evidence: parseGateReviewCommentFields returns null on a review header."}}; },
-  },
-
-  ui:{
-    U1(s,w,f){
-      if (w.uiRecipe === "missing") return {next:{up:"stop",via:"ret_stop"}, title:"U1 provision: stop", note:"uiReview.run is not in .devloops. Provision stops with run-recipe-missing, a must-fix stop.", pill:["run-recipe-missing","no"], tr:"U1: run-recipe-missing → stop"};
-      return {next:"U2", title:"U1 provision", note:"Worktree at the PR head, deps, migrations, then the app boots. readyUrl answers within readyTimeoutMs 60000.", pill:["booted","yes"], tr:"U1: app booted"};
-    },
-    U2(s,w,f){ return {next:"U3", title:"U2 drive", note:"Headless WebKit drives the flows within the caps and writes screenshots, snapshots, axe and console results.", pill:["driven","yes"], tr:"U2: flows driven"}; },
-    U3(s,w,f){ return {next:"U4", title:"U3 diagnose", note:"Findings get anchors on added lines. Non-anchorable findings stay, with a reason.", pill:["diagnosed","yes"], tr:"U3: findings anchored"}; },
-    U4(s,w,f){ return {next:"U5", title:"U4 report", note:"The live head still equals the diagnosed head. A pending PR review and an HTML artifact are staged" + (w.harness === "claude" ? ", hosted as claude-artifact." : ", hosted as github-gist."), pill:["pending","info"], tr:"U4: pending review staged"}; },
-    U5(s,w,f){ return {next:{up:"done",via:"ret_done"}, title:"U5 teardown", note:"The app stops. Row drops, worktree removal and gist prune need --confirm.", pill:["ledger","yes"], tr:"U5: teardown"}; },
-  },
-  };
-
-  function gateParent(s,w,f,ret,gate,nx){
-    if (ret === undefined) return {next:{sub:"gate",at:"G1"}, title:gate, note:"A gate round runs for head " + s.headSha + ". The board opens the gate round graph.", pill:["round " + (f.g[gate].round+1),"info"], set:{gate:gate}, tr:gate + ": enter round " + (f.g[gate].round+1)};
-    if (ret === "new_head") return {next:gate, title:gate + ": new head", note:"Head " + s.headSha + " is new, so the old verdict is stale. Another round runs.", pill:["re-gate","info"], tr:gate + ": new head " + s.headSha + " → re-gate", L:["current","Every fix is a new head, and every new head needs its own gate round."]};
-    if (ret === "stop") return {next:"END", title:gate + ": escalated", note:f.stopWhy + " The run stops for the operator.", pill:["stop","no"], reply:{cls:"fixed",lbl:"Hand-back to the operator",txt:f.stopWhy}, tr:gate + ": escalated, run ends", L:["pause","An escalation stops at a safe point with the reason on record."]};
-    return {next:nx, title:gate + " clean", note:"The round is clean for head " + s.headSha + "." + (gate === "draft_gate" ? " nextAction is mark_ready_for_review." : ""), pill:["clean","yes"], tr:gate + ": clean on " + s.headSha + " → " + nx};
-  }
-  if (profile) {
-    ({ I, GR, ORDER, F, SC, H } = profile);
-  }
-  function initializeWorld(){
-    if (!profile) { defaults(); return; }
-    profile.defaults();
-    Object.assign(world, profile.world);
-  }
-  const actorsAt = (g, n) => profile ? (geo(g)[n]?.o.a || "").split(",").filter(Boolean) : (ROLE[n] || []);
 
   // ---------- engine ----------
   let S, hist, viewPath = null, showCT = true, deep = true;
-  function fresh(){ return {n:0, st:{}, prev:null, by:{}, read:[], gs:{}, pos:{g:"life",n:"request"}, stack:[], ret:undefined, act:null, crumb:["life"], trace:[], done:false, title:"Ready", note:"Nothing has run yet. Press Next step.", lens:null, reply:null, f:profile ? {} : {h:0, g:{draft_gate:{round:0}, pre_approval_gate:{round:0}}}}; }
   function reset(){ S = fresh(); hist = []; viewPath = null; render(); }
   const gst = g => S.gs[g] || (S.gs[g] = {ran:[], out:{}, taken:[]});
   const edgeOf = (g, a, b) => GR[g].edges.find(e => e[0] === a && e[1] === b);
@@ -1431,10 +422,9 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
     S.lens = {key:lk[0], txt:lk[1], src:r.src || nd.o.src || "", inf:!!(r.inf || nd.o.inf)};
     S.title = r.title; S.note = r.note; S.reply = r.reply || null;
     S.act = {g, n:at};
-    const who = r.who || actorsAt(g, at); (S.whoLog = S.whoLog || []).push({step:S.n, who});
+    const who = ROLE[at] || []; (S.whoLog = S.whoLog || []).push({step:S.n, who});
     if (r.tr) S.trace.push((who[0] ? who[0] + " · " : "") + r.tr);
     const nx = r.next;
-    S.transition = {from:{g,n}, next:clone(nx), consumedReturn:ret ?? null};
     if (nx === "END"){ S.done = true; }
     else if (typeof nx === "string"){ if (!r.noEdge) take(g, at, nx); S.pos = {g, n:nx}; }
     else if (nx.sub){ S.stack.push({g, n:at}); S.gs[nx.sub] = {ran:[], out:{}, taken:[]}; S.pos = {g:nx.sub, n:nx.at}; }
@@ -1443,33 +433,6 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
   function back(){ if (!hist.length) return; S = hist.pop(); viewPath = null; render(); }
 
   // ---------- render ----------
-  function relevant(k){
-    if (profile) return true;
-    const w = world, e = w.entry, pr = isPR(w), rev = e === "--pr --review", ui = e === "--pr --ui-review", sideRoute = rev || ui;
-    const lifecycle = !sideRoute;
-    switch (k){
-      case "entry": case "harness": return true;
-      case "start": case "pref": return e === "--issue";
-      case "assignee": return issueEntry(w) || e === "--pr";
-      case "checkout": return (e === "--issue" && w.pref === "prefer_local") || e === "--lightweight";
-      case "prState": return e === "--pr";
-      case "body": case "grill": return issueEntry(w);
-      case "auto": return rev || (issueEntry(w) && (!refinedBody(w) || w.grill || queueRun(w)));
-      case "citable": return issueEntry(w) && w.auto && !refinedBody(w);
-      case "plan": return e === "--plan-file";
-      case "spikeRec": case "spikeDisp": return e === "--spike";
-      case "uiRecipe": return ui;
-      case "requireRetro": return true;
-      case "checkpoint": return w.requireRetro;
-      case "lightMode": return lifecycle;
-      case "maxCopilot": case "copilot": case "humanMergeOnly": case "configError": case "auth": return lifecycle && !(e === "--spike" && w.spikeDisp === "discard");
-      case "force": return lifecycle && w.copilot === "5 rounds, threads open";
-      case "stall": return lifecycle && !pr && e !== "--plan-file" && e !== "--spike";
-      case "loc": case "contract": case "ci": case "reviewer": case "validation": case "findings": case "judge": return lifecycle && !(e === "--pr" && w.prState !== "draft");
-      case "fixDelta": case "deltaFix": return lifecycle && w.findings === "one high, judge act";
-    }
-    return true;
-  }
 
   function renderChips(){
     const groups = [];
@@ -1514,9 +477,9 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
       if (o2.s) o += `<g class="badge"><rect x="${nd.x+6}" y="${nd.y+nd.h-7}" width="56" height="15" rx="3"/><text x="${nd.x+34}" y="${nd.y+nd.h+4}" text-anchor="middle">sub-loop</text></g>`;
       if (o2.inf) o += `<g class="inftag"><rect x="${nd.x+nd.w-56}" y="${nd.y-8}" width="52" height="14" rx="3"/><text x="${nd.x+nd.w-30}" y="${nd.y+2.5}" text-anchor="middle">inferred</text></g>`;
       o += `</g>`;
-      if (showCT && (profile ? o2.a : (ROLE[id] || o2.a))){
+      if (showCT && (ROLE[id] || o2.a)){
         let tx = nd.x + 6; const ty = nd.y - 8;
-        for (const a of (profile ? actorsAt(gid,id) : (ROLE[id] ? (ROLE[id].length > 2 ? ROLE[id].slice(0,1).concat("+" + (ROLE[id].length-1)) : ROLE[id]) : o2.a.split(",")))){ const c = profile ? (a === "human" ? "human" : a === "agent" ? "llm" : "code") : (RK[a] || (a[0] === "+" ? "code" : a === "agent" ? "llm" : a)), w = a.length*6.4+10; o += `<g class="ct ${c}"><rect x="${tx}" y="${ty}" width="${w}" height="15" rx="3"/><text x="${tx+w/2}" y="${ty+11}" text-anchor="middle">${a}</text></g>`; tx += w + 4; }
+        for (const a of (ROLE[id] ? (ROLE[id].length > 2 ? ROLE[id].slice(0,1).concat("+" + (ROLE[id].length-1)) : ROLE[id]) : o2.a.split(","))){ const c = RK[a] || (a[0] === "+" ? "code" : a === "agent" ? "llm" : a), w = a.length*6.4+10; o += `<g class="ct ${c}"><rect x="${tx}" y="${ty}" width="${w}" height="15" rx="3"/><text x="${tx+w/2}" y="${ty+11}" text-anchor="middle">${a}</text></g>`; tx += w + 4; }
       }
     }
     for (const [id, b] of Object.entries(st.out)){
@@ -1528,55 +491,34 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
     $("nav").innerHTML = `<span class="lbl" style="margin-right:4px">Open any graph</span>` + ORDER.map(x => `<button type="button" class="chip" data-g="${x}" aria-pressed="${x === gid}">${esc(GR[x].name)}</button>`).join("");
   }
 
-  const GROUPS = [
-    ["Target",["targetKind","artifactMode","canonicalSpecSource","planFileIntakeState","spikeIntakeState"]],
-    ["Routing",["intent","ownership","selectedStrategy","routeKind","bundleKind"]],
-    ["Issue",["refinementFinding","grillState","provenanceRecorded","unresolvedGapCount","boardColumn"]],
-    ["Branch",["worktreeIsolation","dirty","headSha","prevHeadSha","baseIsAncestor"]],
-    ["PR",["prNumber","isDraft","titleMarkers","closingRef"]],
-    ["Gate",["gate","gateBoundary","nextAction","roundNumber","dispatchMode","validation","angles","carriedAngles","findings","fanInVerdict","actList","scopeDrift","unresolvedGateThreadCount","deltaInvocations","fixerDispositionComplete"]],
-    ["Copilot",["copilotState","copilotRounds","maxCopilotRounds","requestStatus","convergedOnce"]],
-    ["CI",["ciStatus"]],
-    ["Ready",["sizeOutcome","adrTripwire"]],
-    ["Merge",["humanMergeOnly","mergeAuthorization","approvalHeadSha","mergeClass"]],
-    ["Post",["checkpointState","retroProvenance"]],
-    ["Runtime",["harness","stallVerdict","roleBudgets","configErrors"]],
-    ["Queue",["queueEntryStatus","retryCount"]],
-  ];
   function renderRecord(){
     let out = "";
-    for (const [name, keys] of (profile ? [["Workflow", [...new Set([...profile.MODEL.recordKeys, ...Object.keys(S.st)])]]] : GROUPS)){
+    for (const [name, keys] of GROUPS){
       const ks = keys.filter(k => k in S.st || S.read.includes(k));
       if (!ks.length) continue;
       out += `<div class="rgroup"><p class="lbl">${name}</p><div class="kv">` + ks.map(k => {
         const v = k in S.st ? S.st[k] : "—", pv = S.prev ? S.prev[k] : v;
         const chg = S.prev && JSON.stringify(v) !== JSON.stringify(pv), rd = S.read.includes(k) ? "rd" : "";
-        return `<span class="k ${rd}">${k}</span><span class="v ${chg ? "chg" : ""} ${rd}">${esc(typeof v === "object" ? JSON.stringify(v) : v)}${S.by[k] ? `<span class="w">set by ${esc(S.by[k])}</span>` : ""}</span>`;
+        return `<span class="k ${rd}">${k}</span><span class="v ${chg ? "chg" : ""} ${rd}">${esc(v)}${S.by[k] ? `<span class="w">set by ${esc(S.by[k])}</span>` : ""}</span>`;
       }).join("") + `</div></div>`;
     }
     $("state").innerHTML = out || `<p class="hint">Nothing recorded yet.</p>`;
   }
 
 
-  const ROLE = {"request":["operator","orchestrator"],"startup":["coordinator","script"],"route":["script"],"reconcile":["script"],"refine":["refiner","operator"],"epic":["refiner","script"],"implement":["developer"],"spike":["developer"],"plan_file":["operator","refiner","script"],"pr_create":["coordinator","script"],"draft_gate":["gate-coordinator","reviewer","judge","fixer"],"pre_approval_gate":["gate-coordinator","reviewer","judge","fixer"],"ready":["coordinator","script"],"copilot":["Copilot","fixer","coordinator"],"final_approval":["operator"],"merge":["orchestrator","script"],"post_merge":["script"],"retro":["retro agent","orchestrator"],"review_route":["coordinator","reviewer"],"ui_review":["coordinator","script"],"stop":["operator"],"E1":["script"],"E2":["script"],"E3":["script"],"E4":["script"],"E5":["script"],"E6":["script"],"E7":["script"],"E8":["script"],"E9":["coordinator"],"E10":["script"],"Q1":["orchestrator","script"],"Q2":["orchestrator","script"],"queued":["orchestrator","script"],"running":["orchestrator","script"],"waiting_review":["orchestrator","script"],"gates_passing":["orchestrator","script"],"merging":["orchestrator","script"],"load_target":["refiner","script"],"detect_gaps":["refiner","script"],"await_answers":["operator","refiner"],"synthesize":["refiner"],"re_grill":["refiner","script"],"G1":["gate-coordinator","script"],"G2":["gate-coordinator","script"],"G4":["gate-coordinator","script"],"G5":["gate-coordinator","script"],"G7":["gate-coordinator","script"],"G8":["gate-coordinator","script"],"G9":["gate-coordinator","script"],"G10":["reviewer","gate-coordinator"],"G11":["gate-coordinator","script"],"G12":["judge"],"G13":["gate-coordinator","script"],"G14":["gate-coordinator","script"],"G16":["coordinator","script"],"G17":["fixer","coordinator"],"G18":["reviewer","fixer"],"G19":["fixer","script"],"G20":["coordinator","script"],"c1":["coordinator","script"],"c5":["coordinator","script"],"c7":["coordinator","script"],"size_pass":["coordinator","script"],"c8":["script","operator"],"adr_pass":["coordinator","script"],"c9":["coordinator","script"],"c12":["coordinator","script"],"pr_ready":["coordinator","script"],"P5":["coordinator","script"],"waiting":["script","Copilot"],"unresolved":["fixer","Copilot"],"fixed":["fixer","script"],"rerequest":["coordinator","script"],"suppressed":["script"],"requested":["script","Copilot"],"fallback":["script"],"waiting_for_ci":["script","CI"],"M3":["orchestrator","script"],"p1":["operator","script"],"p5":["orchestrator","script"],"M5":["orchestrator","script"],"M6":["orchestrator","script"],"RT1":["orchestrator","script"],"RT2":["retro agent"],"RT3":["orchestrator","script"],"RT4":["orchestrator","script"],"RT5":["script"],"NONE":["script"],"COMPLETE":["script"],"V1":["coordinator","script"],"V2":["reviewer"],"V3":["coordinator","script"],"V4":["coordinator","script"],"V5":["operator","script"],"U1":["coordinator","script"],"U2":["coordinator","script"],"U3":["coordinator","script"],"U4":["coordinator","script"],"U5":["coordinator","script"],"S1":["coordinator","script"],"in_prog":["script"],"S2":["developer"],"ready_exit":["script"],"S3":["coordinator","script"],"LP1":["script"],"LP2":["script"],"LP3":["refiner"],"LP4":["operator"],"LP5":["script"],"L0":["script"],"L1":["developer"],"L2":["developer"],"L3":["developer"],"L4":["developer"],"L5":["docs","retro agent"],"L6":["script"],"L7":["reviewer"],"L8":["developer"],"lw_entry":["script"],"lw_elig":["script"],"lw_body":["script"],"lw_close":["script"],"lw_board":["script"],"T0":["refiner"],"T2":["refiner"],"T4":["refiner","script"],"RL1":["orchestrator","operator"],"RL3":["operator"],"RL5":["CI"]};
-  const ROLE_INF = new Set(["spike","S2","G1","G16","G20","copilot","U1","U2","U3","U4","U5","RL1","T0","T2","T4","retro"]);
-  const RK = {"operator":"human","orchestrator":"lead","coordinator":"lead","gate-coordinator":"lead","refiner":"llm","developer":"llm","reviewer":"llm","judge":"llm","fixer":"llm","docs":"llm","retro agent":"llm","script":"code","Copilot":"ext","CI":"ext"};
-  const RORDER = ["operator","orchestrator","coordinator","gate-coordinator","refiner","developer","reviewer","judge","fixer","docs","retro agent","script","Copilot","CI"];
-  const RDESC = {"operator":"the person who owns the work: intent, AC, waivers, merge","orchestrator":"main session: dispatches coordinators, merges, runs retros","coordinator":"dev-loop coordinator: drives one unit through its steps","gate-coordinator":"runs one gate round for one head","refiner":"grills and refines specs","developer":"writes the change and its tests","reviewer":"pre-PR, lens and delta reviews","judge":"act, defer or reject per finding","fixer":"works the act list, replies on threads","docs":"keeps docs in line with the change","retro agent":"fresh-context review of the run","script":"deterministic code decides","Copilot":"external PR reviewer","CI":"GitHub Actions checks"};
-  const rchip = r => `<span class="rchip ${profile ? (r === "human" ? "human" : r === "agent" ? "llm" : "code") : (RK[r]||"code")}" title="${RDESC[r]||""}">${r}</span>`;
+  const rchip = r => `<span class="rchip ${RK[r]||"code"}" title="${RDESC[r]||""}">${r}</span>`;
   function renderWho(){
-    const el = $("who"), cur = S.act ? actorsAt(S.act.g,S.act.n) : [];
+    const el = $("who"), cur = S.act ? (ROLE[S.act.n] || []) : [];
     el.hidden = !cur.length;
-    el.innerHTML = cur.length ? "Handled by " + cur.map((r, i) => (i === 1 ? "<span>with</span> " : "") + rchip(r)).join(" ") + (!profile && ROLE_INF.has(S.act.n) ? ' <span class="inftxt">(role inferred)</span>' : "") : "";
+    el.innerHTML = cur.length ? "Handled by " + cur.map((r, i) => (i === 1 ? "<span>with</span> " : "") + rchip(r)).join(" ") + (ROLE_INF.has(S.act.n) ? ' <span class="inftxt">(role inferred)</span>' : "") : "";
   }
   function renderActors(){
     const log = S.whoLog || [], lead = {}, help = {};
-    const displayRole = r => profile && r === "deterministic" ? "code" : r;
-    for (const e of log) e.who.map(displayRole).forEach((r, i) => { (i ? help : lead)[r] = ((i ? help : lead)[r] || 0) + 1; });
-    const cur = new Set(S.act && !S.done ? actorsAt(S.act.g,S.act.n).map(displayRole) : []);
-    $("actors").innerHTML = (profile ? ["human","agent","code"] : RORDER).map(r => {
+    for (const e of log) e.who.forEach((r, i) => { (i ? help : lead)[r] = ((i ? help : lead)[r] || 0) + 1; });
+    const cur = new Set(S.act && !S.done ? (ROLE[S.act.n] || []) : []);
+    $("actors").innerHTML = RORDER.map(r => {
       const a = lead[r] || 0, b = help[r] || 0;
-      return `<div class="arow ${cur.has(r) ? "now" : ""} ${a + b ? "" : "idle"}">${rchip(r)}<span class="d">${profile ? ({human:"Human contribution and authority",agent:"Modeled agent assistance",code:"Deterministic modeled checks"}[r]) : RDESC[r]}</span><span class="c">${a + b ? a + " lead · " + b + " help" : "none yet"}</span></div>`;
+      return `<div class="arow ${cur.has(r) ? "now" : ""} ${a + b ? "" : "idle"}">${rchip(r)}<span class="d">${RDESC[r]}</span><span class="c">${a + b ? a + " lead · " + b + " help" : "none yet"}</span></div>`;
     }).join("");
   }
   function renderStep(){
@@ -1595,29 +537,28 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
   }
 
   function renderFacts(){
-    const locked = !profile && S.n > 0;
+    const locked = S.n > 0;
     let cur = "", h = "";
     for (const f of F){
       if (f.g !== cur){ cur = f.g; h += `<p class="fgroup">${esc(cur)}</p>`; }
-      const off = relevant(f.k) ? "" : "off";
+      const off = relevant(world, f.k) ? "" : "off";
       if (f.type === "bool") h += `<label class="fact ${off}"><input type="checkbox" data-k="${f.k}" ${world[f.k] ? "checked" : ""} ${locked ? "disabled" : ""}><span class="k">${esc(f.lbl)}</span></label>`;
       else h += `<label class="fact ${off}"><span class="k">${esc(f.lbl)}</span><select data-k="${f.k}" ${locked ? "disabled" : ""}>${f.opts.map(v => `<option ${world[f.k] === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>`;
     }
-    $("facts").innerHTML = h + `<p class="hint">${profile ? "Editable hypothetical inputs. Answer the waiting role explicitly, then Next or Run. Back restores execution, not these inputs; Reset keeps current inputs." : locked ? "Conditions lock once the run starts. Reset to change them." : "Dimmed conditions cannot matter with the current choices."}</p>`;
+    $("facts").innerHTML = h + `<p class="hint">${locked ? "Conditions lock once the run starts. Reset to change them." : "Dimmed conditions cannot matter with the current choices."}</p>`;
   }
 
   function renderTrace(){
     $("trace").innerHTML = S.trace.length ? S.trace.map((t, i) => `<li><span class="s">${String(i+1).padStart(2,"0")}</span><span>${esc(t)}</span></li>`).join("") : `<li style="color:var(--mute)">No steps yet.</li>`;
     $("trace").scrollTop = $("trace").scrollHeight;
   }
-  function renderLegend(){ const el = $("rolelegend"); if (el && !el.childNodes.length) el.innerHTML = (profile ? ["human","agent","code"] : RORDER).map(rchip).join(""); }
-  function render(){ renderLegend(); renderChips(); renderBoard(); renderStep(); renderFacts(); renderRecord(); renderTrace(); renderWho(); renderActors(); $("runtime-state").textContent = JSON.stringify({model:profile?.MODEL.slug || "dev-loops",sourceMetadata:profile ? {evidenceStatus:profile.MODEL.evidenceStatus,researchDate:profile.MODEL.researchDate,sourceVersion:profile.MODEL.sourceVersion,sources:profile.MODEL.sources,graphAbstraction:profile.MODEL.graphAbstraction,proposedExtensions:profile.MODEL.proposedExtensions} : null,done:S.done,step:S.n,position:S.pos,stack:S.stack,pendingReturn:S.ret ?? null,lastTransition:S.transition ?? null,conditions:world,budgets:profile ? profile.MODEL.budgets(S.st,S.f) : null,records:S.st,scratch:S.f,execution:S},null,2); }
+  function renderLegend(){ const el = $("rolelegend"); if (el && !el.childNodes.length) el.innerHTML = RORDER.map(rchip).join(""); }
+  function render(){ renderLegend(); renderChips(); renderBoard(); renderStep(); renderFacts(); renderRecord(); renderTrace(); renderWho(); renderActors(); }
 
   // ---------- events ----------
-  const JUMP = {3:"refine",4:"refine",5:"refine",9:"draft_gate",10:"draft_gate",11:"draft_gate",12:"draft_gate",13:"draft_gate",14:"draft_gate",15:"draft_gate",16:"ready",17:"ready",18:"copilot",19:"copilot",20:"merge",21:"implement",24:"spike"};
   function applyScenario(id){
-    scen = id; initializeWorld(); Object.assign(world, SC.find(s => s.id === id).w); reset();
-    const to = profile ? null : JUMP[id]; if (!to) return;
+    scen = id; defaults(world); Object.assign(world, SC.find(s => s.id === id).w); reset();
+    const to = JUMP[id]; if (!to) return;
     // ponytail: fast-forward with normal steps, so Back still walks the skipped part
     let g = 0; while (!S.done && !(S.pos.g === "life" && S.pos.n === to) && g++ < 400) step();
     S.note = "Jumped ahead to " + geo("life")[to].name + ". Back steps through the part before it. " + S.note; render();
@@ -1630,7 +571,7 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
   $("facts").addEventListener("input", e => {
     const el = e.target.closest("[data-k]"); if (!el) return;
     world[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value;
-    scen = "custom"; if (profile) render(); else reset(); $("worldbox").open = true;
+    scen = "custom"; reset(); $("worldbox").open = true;
   });
   function openGraph(gid){ viewPath = (viewPath || S.crumb).concat(gid); renderBoard(); }
   $("g").addEventListener("click", e => { const n = e.target.closest("[data-open]"); if (n) openGraph(n.dataset.open); });
@@ -1645,7 +586,7 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
   $("cttoggle").addEventListener("click", e => { showCT = !showCT; e.currentTarget.textContent = showCT ? "Hide roles" : "Show roles"; e.currentTarget.setAttribute("aria-pressed", String(showCT)); renderBoard(); });
   $("next").addEventListener("click", step);
   $("back").addEventListener("click", back);
-  $("run").addEventListener("click", () => { let g = 0; if (!profile) { while (!S.done && g++ < 400) step(); return; } do { if (S.done) break; step(); } while (!S.done && !S.st.waiting && g++ < 400); });
+  $("run").addEventListener("click", () => { let g = 0; while (!S.done && g++ < 400) step(); });
   $("reset").addEventListener("click", reset);
   document.addEventListener("keydown", e => {
     if (e.target.matches("input,select,textarea") || e.target.closest(".trace")) return;
@@ -1662,8 +603,7 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
     else if (e.key === "Escape" && viewPath){ viewPath = null; renderBoard(); }
   });
 
-  initializeWorld(); applyScenario(1);
-  if (location.hash === "#examples") $("examples").open = true;
+  defaults(world); applyScenario(1);
 })();
 </script>
 <script>
@@ -1693,10 +633,8 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
 <script>
 (function(){
   // ponytail: one clamp for every graph; tune MIN/MAX if node text reads too small or too big
-  const example = !!document.body.dataset.workflow;
-  const MIN = example ? 1 : 0.75, MAX = 1;
+  const MIN = 0.75, MAX = 1;
   const svg = document.querySelector(".board svg"), box = svg.parentElement, board = document.querySelector(".board");
-  let lastCamera = "";
   function size(){
     const vb = svg.viewBox.baseVal; if (!vb || !vb.width) return;
     const full = board.classList.contains("full");
@@ -1704,14 +642,6 @@ body[data-workflow] .board.full .scroller{overflow:auto;max-height:calc(100vh - 
     const k = Math.min(full ? 1.2 : MAX, Math.max(MIN, Math.min(aw / vb.width, ah / vb.height)));
     svg.style.width = Math.round(vb.width * k) + "px"; svg.style.height = Math.round(vb.height * k) + "px";
     svg.style.marginInline = vb.width * k < aw ? "auto" : "0";
-    if (example) {
-      const active = svg.querySelector(".n.act .box") || svg.querySelector(".n .box");
-      const key = `${svg.getAttribute("aria-label")}|${active?.getAttribute("x")}|${active?.getAttribute("y")}|${aw}|${full}`;
-      if (active && key !== lastCamera) {
-        box.scrollLeft = Math.max(0, active.getBBox().x * k + active.getBBox().width * k / 2 - box.clientWidth / 2);
-        lastCamera = key;
-      }
-    }
   }
   new MutationObserver(size).observe(svg, {attributes:true, attributeFilter:["viewBox"]});
   new MutationObserver(size).observe(board, {attributes:true, attributeFilter:["class"]});
