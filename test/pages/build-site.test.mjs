@@ -226,6 +226,12 @@ test('build-site: state atlas is generated from the code tables, navigable, with
   }
 });
 
+test('build-state-atlas: repeated generation produces byte-identical output', async () => {
+  const { buildStateAtlasHtml } = await import('../../scripts/pages/build-state-atlas.mjs');
+  const first = buildStateAtlasHtml();
+  const second = buildStateAtlasHtml();
+  assert.equal(second, first, 'atlas output must not contain per-build randomness or timestamps');
+});
 
 test('injectNav fails closed when a page lacks the expected structure', () => {
   assert.throws(() => injectNav('<html><body>no style block</body></html>', REPO_URL), /missing a <style> block or <body>/);

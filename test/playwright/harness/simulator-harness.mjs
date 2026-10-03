@@ -127,6 +127,48 @@ export function defineSimulatorSuite({
           await page.locator("#reset").click();
         }
 
+        if (sliceId === "simulator-overview-article") {
+          await page.locator("#next").click();
+          const board = page.getByRole("region", { name: "Workflow graph — use arrow keys to scroll", exact: true });
+          const execution = () => page.evaluate(() => ({
+            step: document.getElementById("stepno").textContent,
+            now: document.getElementById("now").textContent,
+            records: document.getElementById("state").textContent,
+            trace: document.getElementById("trace").textContent,
+          }));
+          const frozen = await execution();
+          for (const full of [false, true]) {
+            if (full) await page.keyboard.press("f");
+            for (let tab = 0; tab < 128 && !await board.evaluate(el => el === document.activeElement); tab++) {
+              await page.keyboard.press("Tab");
+            }
+            await expect(board).toBeFocused();
+            const style = await board.getAttribute("style");
+            // Mobile uses the real horizontal overflow; constrain the desktop
+            // fixture and vertical axis to exercise panning in both directions.
+            await board.evaluate((el, mobile) => {
+              if (!mobile) el.style.width = "240px";
+              el.style.height = "180px";
+              el.scrollLeft = 0;
+              el.scrollTop = 0;
+            }, device === "mobile");
+            for (const [forward, backward, offset] of [
+              ["ArrowRight", "ArrowLeft", "scrollLeft"],
+              ["ArrowDown", "ArrowUp", "scrollTop"],
+            ]) {
+              await page.keyboard.press(forward);
+              await expect.poll(() => board.evaluate((el, key) => el[key], offset)).toBeGreaterThan(0);
+              const moved = await board.evaluate((el, key) => el[key], offset);
+              await page.keyboard.press(backward);
+              await expect.poll(() => board.evaluate((el, key) => el[key], offset)).toBeLessThan(moved);
+              expect(await execution()).toEqual(frozen);
+            }
+            await board.evaluate((el, prior) => prior === null ? el.removeAttribute("style") : el.setAttribute("style", prior), style);
+            if (full) await page.keyboard.press("f");
+          }
+          await page.locator("#reset").click();
+        }
+
         const next = page.getByRole("button", { name: "Next step", exact: true });
         const back = page.getByRole("button", { name: "Back", exact: true });
         await expect(next).toBeVisible();

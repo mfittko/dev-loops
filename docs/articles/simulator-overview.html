@@ -70,7 +70,7 @@ code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);paddi
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:500}
 .btn:hover:not(:disabled){border-color:var(--accent)}
 .btn:disabled{opacity:.4;cursor:not-allowed}
-.btn:focus-visible,.chip:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible,.trace:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn:focus-visible,.chip:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible,.trace:focus-visible,.board:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .keys{font-family:var(--mono);font-size:11.5px;color:var(--mute);margin:0}
 kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;padding:0 4px;background:var(--node)}
 
@@ -195,7 +195,7 @@ body.board-full{overflow:hidden}
 </section>
 
 <div class="grid">
-  <div class="panel board"><div class="fullbar"><p class="fstep" id="fstep"></p><span class="fnav"><button class="btn" type="button" id="fback">Back</button><button class="btn primary" type="button" id="fnext">Next step</button></span><button class="btn" type="button" id="fulltoggle" aria-pressed="false" title="Show the graph in the full window (F)">Full window</button></div>
+  <div class="panel board" role="region" aria-label="Workflow graph — use arrow keys to scroll" tabindex="0"><div class="fullbar"><p class="fstep" id="fstep"></p><span class="fnav"><button class="btn" type="button" id="fback">Back</button><button class="btn primary" type="button" id="fnext">Next step</button></span><button class="btn" type="button" id="fulltoggle" aria-pressed="false" title="Show the graph in the full window (F)">Full window</button></div>
     <svg viewBox="0 0 760 790" role="img" aria-label="The dev-loops lifecycle: startup, grill, implement, pre-PR review, draft PR, then a gate round of review lenses, fan-in and judge, with a fixer loop; ready for review, pre-approval gate, guarded merge and retro. Exits: needs_reconcile and park for the operator.">
       <defs>
         <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
@@ -375,6 +375,11 @@ import { createModel } from "./assets/simulator-overview-model.mjs";
   $("reset").addEventListener("click", reset);
   document.addEventListener("keydown", e => {
     if (e.target.matches("input,select,textarea") || e.target.closest(".trace")) return;
+    if (["ArrowRight","ArrowLeft","ArrowDown","ArrowUp"].includes(e.key) && e.target.matches(".board")) {
+      e.preventDefault();
+      e.target.scrollBy({ left: e.key === "ArrowRight" ? 40 : e.key === "ArrowLeft" ? -40 : 0, top: e.key === "ArrowDown" ? 40 : e.key === "ArrowUp" ? -40 : 0 });
+      return;
+    }
     if (e.key === "ArrowRight"){ e.preventDefault(); step(); }
     else if (e.key === "ArrowLeft"){ e.preventDefault(); back(); }
     else if (e.key === "r" || e.key === "R"){ reset(); }
