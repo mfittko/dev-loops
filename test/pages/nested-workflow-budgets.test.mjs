@@ -87,3 +87,32 @@ for(const failure of ['test defect once','persistent test defect']) {
     assert.deepEqual(model.MODEL.budgets(records,scratch).local.healerRepairs,[failure==='test defect once'?1:2,2]);
   });
 }
+
+test('Meta interpretation binds current validated evidence and the script stops after concern two',()=>{
+  const {model,records,scratch,apply,world}=episode(metaModel());
+  for(const version of [1,2,3]) {
+    apply('life','achTestsCall');apply('tests','achGenerateTest');
+    apply('validation','achTestBuild');apply('validation','achOriginalPass');apply('validation','achKillSelected');
+    world.interpretation='new concern once';
+    const scripted=apply('interpretation','achHumanInterpret');
+    assert.equal(scripted.next,version===3?'achHumanInterpret':'achInterpretReturn');
+    if(version<3) {
+      assert.equal(records.interpretationRecord.outcome,version===1?'new concern':'valid relevant tests');
+      apply('life','achRevise');continue;
+    }
+    const budget=structuredClone(model.MODEL.budgets(records,scratch));
+    for(const input of ['pending','concern 1 valid relevant tests','concern 2 valid relevant tests']) {
+      world.interpretation=input;assert.equal(apply('interpretation','achHumanInterpret').next,'achHumanInterpret');
+      assert.equal(records.interpretationRecord,null);assert.equal(records.decisionRecorded,false);
+      assert.equal(records.humanWorkItem.version,3);assert.deepEqual(model.MODEL.budgets(records,scratch),budget);
+    }
+    world.interpretation='concern 3 valid relevant tests';
+    records.validationEvidence.version=2;
+    assert.equal(apply('interpretation','achHumanInterpret').next,'achHumanInterpret');
+    assert.equal(records.interpretationRecord,null);
+    records.validationEvidence.version=3;
+    assert.equal(apply('interpretation','achHumanInterpret').next,'achInterpretReturn');
+    assert.equal(records.interpretationRecord.version,3);assert.equal(records.interpretationRecord.outcome,'valid relevant tests');
+    assert.equal(records.waiting,false);assert.equal(records.decisionRecorded,true);
+  }
+});

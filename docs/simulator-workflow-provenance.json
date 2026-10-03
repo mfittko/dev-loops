@@ -105,12 +105,13 @@
     {
       "slug": "meta-ach",
       "sourceSha256": "a5ceceac42680fbf99eefa72db5b2b4687586ec3a9d2b76af28c7dd233ac0426",
-      "productionSha256": "d6be502a56eb38afd76b3d8b816f72c935cb3d6003b52a98db0b188cd5369cb6",
+      "productionSha256": "19a80ac0f901cf526f4431ac6ef8b3ed9fa6d7bf08b74662d5ad8b486d1acfea",
       "adaptations": [
         "ES-module factory with isolated profile data",
         "Removed prototype-only leading comments",
         "Production labels; all execution/source limitations retained",
-        "Revised concern authorship explicitly names concern 2 or 3; new test CALL initializes shared local candidates without resetting rework, RETURN or global concern rounds"
+        "Revised concern authorship explicitly names concern 2 or 3; new test CALL initializes shared local candidates without resetting rework, RETURN or global concern rounds",
+        "Positive relevance interpretation names current concern 1/2/3 and validated evidence; the explicit new-concern-once fixture covers v1 refinement then v2 validity only, not v3 authority"
       ]
     },
     {
