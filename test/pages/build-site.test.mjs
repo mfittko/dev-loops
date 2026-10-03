@@ -4,8 +4,7 @@ import { join, relative, win32 } from 'node:path';
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 
-import { assertSafeOutputRelationship, assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, LANDING, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
-import { WORKFLOW_EXAMPLES } from '../../scripts/pages/workflow-examples.mjs';
+import { assertSafeOutputRelationship, assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, LANDING, NAV_LINKS, STATE_ATLAS, SIMULATOR_MODELS } from '../../scripts/pages/build-site.mjs';
 
 // A deck publishes under its outFile when set (the deep-dive article and deck
 // share the source basename), else its source file name.
@@ -80,8 +79,8 @@ test('build-site: index is the intro article, all resources published, nav links
         ...ARTICLES.map((a) => a.file),
         ...DECKS.map((d) => deckOut(d)),
         STATE_ATLAS.file,
-        ...WORKFLOW_EXAMPLES.flatMap(example => [example.file, example.asset]),
         'assets/mermaid.min.js',
+        ...SIMULATOR_MODELS.map((file) => `assets/${file}`),
         '.dev-loops-pages-output',
       ].sort(),
     );
@@ -96,6 +95,10 @@ test('build-site: relative repoRoot uses the same default output as its absolute
   try {
     await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ repository: REPO_URL }), 'utf8');
     await mkdir(join(repoRoot, 'docs', 'articles'), { recursive: true });
+    await mkdir(join(repoRoot, 'docs', 'articles', 'assets'), { recursive: true });
+    for (const file of SIMULATOR_MODELS) {
+      await writeFile(join(repoRoot, 'docs', 'articles', 'assets', file), 'export function createModel() {}', 'utf8');
+    }
     await mkdir(join(repoRoot, 'docs', 'presentations'), { recursive: true });
     await mkdir(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor'), { recursive: true });
     await writeFile(join(repoRoot, 'docs', 'articles', LANDING.file), '<style></style><body>landing</body>', 'utf8');
@@ -106,10 +109,6 @@ test('build-site: relative repoRoot uses the same default output as its absolute
       await writeFile(join(repoRoot, 'docs', 'presentations', deck.file), `deck: ${deck.file}`, 'utf8');
     }
     await writeFile(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js'), '', 'utf8');
-    await mkdir(join(repoRoot, 'docs', 'articles', 'assets', 'workflow-models'), { recursive: true });
-    for (const example of WORKFLOW_EXAMPLES) {
-      await writeFile(join(repoRoot, 'docs', 'articles', example.asset), await readFile(join(process.cwd(), 'docs', 'articles', example.asset)));
-    }
 
     const result = await buildSite({ repoRoot: relativeRoot });
 
@@ -153,7 +152,7 @@ test('build-site: incomplete repoRoot with valid package metadata preserves a pr
     await mkdir(join(repoRoot, 'site'));
     await writeFile(sentinel, 'preserve me', 'utf8');
 
-    await assert.rejects(() => buildSite({ repoRoot }), /introducing-dev-loops\.html/);
+    await assert.rejects(() => buildSite({ repoRoot }), { code: 'ENOENT' });
 
     assert.equal(await readFile(sentinel, 'utf8'), 'preserve me');
   } finally {
@@ -167,6 +166,10 @@ test('build-site: complete repoRoot with a malformed article preserves a pre-exi
   try {
     await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ repository: REPO_URL }), 'utf8');
     await mkdir(join(repoRoot, 'docs', 'articles'), { recursive: true });
+    await mkdir(join(repoRoot, 'docs', 'articles', 'assets'), { recursive: true });
+    for (const file of SIMULATOR_MODELS) {
+      await writeFile(join(repoRoot, 'docs', 'articles', 'assets', file), 'export function createModel() {}', 'utf8');
+    }
     await mkdir(join(repoRoot, 'docs', 'presentations'), { recursive: true });
     await mkdir(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor'), { recursive: true });
     await writeFile(join(repoRoot, 'docs', 'articles', LANDING.file), '<style></style><body>landing</body>', 'utf8');

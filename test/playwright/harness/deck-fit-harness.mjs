@@ -13,20 +13,23 @@ import { captureNamedUiState, startFixtureServer, stopFixtureServer } from "./we
 
 export const MOBILE = { width: 390, height: 844 };
 
-// A single-file static server is enough for one self-contained deck: serve the
-// deck only at the root, and 404 everything else so requests stay deterministic.
+// Serve the page and, for the original simulators, its one native model asset.
+// Keep all other routes closed so fixture requests stay deterministic.
 export function makeDeckServer(deckPath) {
   return createServer(async (req, res) => {
     const route = (req.url ?? "/").split("?")[0];
-    if (route !== "/" && route !== "/index.html") {
+    const modelFile = path.basename(deckPath) === "simulator.html" ? "simulator-model.mjs"
+      : path.basename(deckPath) === "simulator-overview.html" ? "simulator-overview-model.mjs" : null;
+    const isModel = modelFile !== null && route === `/assets/${modelFile}`;
+    if (route !== "/" && route !== "/index.html" && !isModel) {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("Not found");
       return;
     }
     try {
-      const html = await readFile(deckPath, "utf8");
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(html);
+      const bytes = await readFile(isModel ? path.join(path.dirname(deckPath), "assets", modelFile) : deckPath);
+      res.writeHead(200, { "content-type": isModel ? "text/javascript; charset=utf-8" : "text/html; charset=utf-8" });
+      res.end(bytes);
     } catch (error) {
       res.writeHead(500, { "content-type": "text/plain" });
       res.end(String(error));
@@ -472,10 +475,6 @@ export const ARTICLE_REGISTRY = {
   "simulator-overview-article": {
     sliceId: "simulator-overview-article",
     file: "simulator-overview.html",
-  },
-  "workflow-examples": {
-    sliceId: "workflow-examples",
-    file: "assets/workflow-models",
   },
 };
 

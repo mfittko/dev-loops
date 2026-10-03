@@ -12,7 +12,6 @@ import { lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:f
 import { dirname, join, posix, relative, resolve, sep, parse as parsePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildStateAtlasHtml } from './build-state-atlas.mjs';
-import { WORKFLOW_EXAMPLES, renderWorkflowExample } from './workflow-examples.mjs';
 
 const REPO_ROOT_DEFAULT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OUTPUT_MARKER = '.dev-loops-pages-output';
@@ -30,6 +29,8 @@ export const ARTICLES = [
   { file: 'simulator.html' },
   { file: 'simulator-overview.html' },
 ];
+
+export const SIMULATOR_MODELS = ['simulator-model.mjs', 'simulator-overview-model.mjs'];
 
 // The decks to publish. file is relative to docs/presentations/; outFile is the
 // published name (defaults to file). The deep-dive article and deck share the
@@ -231,7 +232,7 @@ export function injectNav(html, repoUrl, publishedFile) {
     throw new Error('cannot inject nav: page is missing a <style> block or <body> tag');
   }
   // Simulator --accent-soft is a background tint, not a link foreground.
-  const navCss = publishedFile === 'simulator.html' || publishedFile === 'simulator-overview.html' || publishedFile?.startsWith('workflow-')
+  const navCss = publishedFile === 'simulator.html' || publishedFile === 'simulator-overview.html'
     ? `${NAV_CSS}\n  .site-nav { max-width: var(--simulator-content-width); padding-inline: 0; margin-bottom: 24px; }\n  .site-nav a:hover { color: var(--accent); }\n  @media (max-width: 760px) { .site-nav { margin-bottom: 16px; } }`
     : NAV_CSS;
   return html
@@ -253,8 +254,8 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
     ...ARTICLES.map((a) => a.file),
     ...DECKS.map((d) => deckOut(d)),
     STATE_ATLAS.file,
-    ...WORKFLOW_EXAMPLES.flatMap(example => [example.file, example.asset]),
     'assets/mermaid.min.js',
+    ...SIMULATOR_MODELS.map((file) => `assets/${file}`),
     OUTPUT_MARKER,
   ];
   assertUniquePublishTargets(files);
@@ -269,18 +270,16 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   // or mistyped root cannot delete an unrelated, nonempty site/ directory.
   const repoUrl = await resolveRepoUrl(root);
   const mermaidSrc = join(root, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js');
-  const [landingHtml, articleHtml, deckBytes, mermaidBytes] = await Promise.all([
+  const [landingHtml, articleHtml, deckBytes, mermaidBytes, modelBytes] = await Promise.all([
     readFile(join(articlesDir, LANDING.file), 'utf8'),
     Promise.all(ARTICLES.map((article) => readFile(join(articlesDir, article.file), 'utf8'))),
     Promise.all(DECKS.map((deck) => readFile(join(decksDir, deck.file)))),
     readFile(mermaidSrc),
+    Promise.all(SIMULATOR_MODELS.map((file) => readFile(join(articlesDir, 'assets', file)))),
   ]);
   const landingOutput = injectNav(landingHtml, repoUrl);
   const articleOutput = articleHtml.map((html, index) => injectNav(html, repoUrl, ARTICLES[index].file));
   const stateAtlasOutput = injectNav(buildStateAtlasHtml(), repoUrl);
-  const simulatorTemplate = articleHtml[ARTICLES.findIndex(article => article.file === 'simulator.html')];
-  const workflowOutput = WORKFLOW_EXAMPLES.map(example => injectNav(renderWorkflowExample(simulatorTemplate, example), repoUrl, example.file));
-  const workflowBytes = await Promise.all(WORKFLOW_EXAMPLES.map(example => readFile(join(articlesDir, example.asset))));
 
   await prepareOutputDirectory(root, out);
 
@@ -305,10 +304,8 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   // load it as an external asset rather than inlining ~3MB into the page).
   await mkdir(join(out, 'assets'), { recursive: true });
   await writeFile(join(out, 'assets', 'mermaid.min.js'), mermaidBytes);
-  await mkdir(join(out, 'assets', 'workflow-models'), { recursive: true });
-  for (const [index, example] of WORKFLOW_EXAMPLES.entries()) {
-    await writeFile(join(out, example.file), workflowOutput[index], 'utf8');
-    await writeFile(join(out, example.asset), workflowBytes[index]);
+  for (const [index, file] of SIMULATOR_MODELS.entries()) {
+    await writeFile(join(out, 'assets', file), modelBytes[index]);
   }
 
   return {

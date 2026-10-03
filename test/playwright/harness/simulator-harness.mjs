@@ -81,6 +81,50 @@ export function defineSimulatorSuite({
             await page.getByRole("button", { name: "Back to the run", exact: true }).click();
             await expect(graph).toBeVisible();
           }
+          // Panning a manually opened leaf graph must never step or rewind the run.
+          await page.locator("#next").click();
+          await page.locator('#nav [data-g="impl"]').click();
+          const scroller = page.getByRole("region", { name: "Workflow graph — use arrow keys to scroll", exact: true });
+          const execution = () => page.evaluate(() => ({
+            step: document.getElementById("stepno").textContent,
+            now: document.getElementById("now").textContent,
+            records: document.getElementById("state").textContent,
+            trace: document.getElementById("trace").textContent,
+          }));
+          const frozen = await execution();
+          for (const full of [false, true]) {
+            if (full) await page.keyboard.press("f");
+            for (let tab = 0; tab < 128 && !await scroller.evaluate(el => el === document.activeElement); tab++) {
+              await page.keyboard.press("Tab");
+            }
+            await expect(scroller).toBeFocused();
+            const owner = page.locator(full ? ".board" : "#scroller");
+            const style = await owner.getAttribute("style");
+            // Constrain only the fixture viewport to guarantee both overflow axes.
+            await owner.evaluate((el) => {
+              el.style.width = "240px";
+              el.style.height = "180px";
+              el.style.overflow = "auto";
+              el.scrollLeft = 0;
+              el.scrollTop = 0;
+            });
+            for (const [forward, backward, offset] of [
+              ["ArrowRight", "ArrowLeft", "scrollLeft"],
+              ["ArrowDown", "ArrowUp", "scrollTop"],
+            ]) {
+              const before = await owner.evaluate((el, key) => el[key], offset);
+              await page.keyboard.press(forward);
+              await expect.poll(() => owner.evaluate((el, key) => el[key], offset)).toBeGreaterThan(before);
+              const moved = await owner.evaluate((el, key) => el[key], offset);
+              await page.keyboard.press(backward);
+              await expect.poll(() => owner.evaluate((el, key) => el[key], offset)).toBeLessThan(moved);
+              expect(await execution()).toEqual(frozen);
+            }
+            await owner.evaluate((el, prior) => prior === null ? el.removeAttribute("style") : el.setAttribute("style", prior), style);
+            if (full) await page.keyboard.press("f");
+          }
+          await page.getByRole("button", { name: "Back to the run", exact: true }).click();
+          await page.locator("#reset").click();
         }
 
         const next = page.getByRole("button", { name: "Next step", exact: true });
