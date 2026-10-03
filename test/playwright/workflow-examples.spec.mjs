@@ -90,6 +90,10 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
         expect(proof.result.records.workflowStatus).toBe(smoke.successStatus);
         expect(proof.calls).toBeGreaterThan(1);
         if (retained) expect(proof.result.records).toMatchObject(retained);
+        if(example.slug==='qa-wolf-mapping-ai') {
+          expect(proof.result.execution.trace.filter(t=>t.startsWith('code · '))).toHaveLength(2);
+          expect(await page.locator('#actors .arow').filter({has:page.locator('.rchip.code')}).locator('.c').evaluate(el=>(el.textContent.match(/\d+/g)||[]).map(Number))).toEqual([2,0]);
+        }
         if (example.slug === 'product-design-frontend') {
           expect(proof.result.records.designerInspection.buildRevision).toBe(proof.result.records.buildRevision);
           expect(proof.result.records.checkRecord.buildRevision).toBe(proof.result.records.buildRevision);
@@ -324,7 +328,7 @@ test('original detailed graph arrows scroll the real normal and full-window owne
   await click(page,'next');await page.locator('#scroller').focus();await page.keyboard.press('r');expect((await state(page)).step).toBe(0);
 });
 
-async function resumeConveyor(page,key,value) {
+async function resumeNativeInput(page,key,value) {
   const before=(await state(page)).execution;
   await page.locator(`#facts [data-k="${key}"]`).selectOption(value);
   expect((await state(page)).execution).toEqual(before);
@@ -361,7 +365,7 @@ for(const width of [1280,390]) {
         }
       }
       await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`conveyor-${key}-stale-${width}`,viewport:{width,height:844},fullPage:false});
-      const resumed=await resumeConveyor(page,key,current);
+      const resumed=await resumeNativeInput(page,key,current);
       expect(resumed.records[record]).toBe(2);expect(resumed.records.waiting).toBe(false);
       expect({version:resumed.records.technicalEvidenceVersion,probes:resumed.records.technicalProbes,scratch:resumed.scratch}).toEqual(technical);
       expect(resumed.records.decisionRegister.filter(r=>r.dimension==='design'&&r.version===1)).toEqual(priorDesign);
@@ -369,13 +373,13 @@ for(const width of [1280,390]) {
       await click(page,'run');
       if(key==='designInput') {
         expect((await state(page)).position).toEqual({g:'shaping',n:'cbJoin'});
-        await resumeConveyor(page,'stakeholderKnowledge','direction 2 supplied');await click(page,'run');
+        await resumeNativeInput(page,'stakeholderKnowledge','direction 2 supplied');await click(page,'run');
         expect((await state(page)).position).toEqual({g:'life',n:'cbCommit'});
-        await resumeConveyor(page,'commitment','version 2 committed');await click(page,'run');
+        await resumeNativeInput(page,'commitment','version 2 committed');await click(page,'run');
       }
     }
     expect((await state(page)).position).toEqual({g:'learning',n:'cbInterpret'});
-    await resumeConveyor(page,'interpretation','version 2 interpreted');await click(page,'run');
+    await resumeNativeInput(page,'interpretation','version 2 interpreted');await click(page,'run');
     const complete=await state(page);
     expect(complete.records).toMatchObject({workflowStatus:'outcome interpreted',initiativeVersion:2,designDecisionVersion:2,editorialDecisionVersion:2,sourceSheetVersion:2,importStatus:'validated source version 2'});
     await click(page,'back');await click(page,'next');expect(await state(page)).toEqual(complete);
@@ -426,7 +430,7 @@ for(const width of [1280,390]) {
           cbInterpret:['interpretation',`version ${version} interpreted`,interpretations]
         }[before.position.n];
         expect(input,`explicit current input at ${before.position.n}`).toBeTruthy();
-        const [key,value,versions]=input;await resumeConveyor(page,key,value);versions.push(version);
+        const [key,value,versions]=input;await resumeNativeInput(page,key,value);versions.push(version);
       } else {
         if(before.position.n==='cbValidate'&&before.records.initiativeVersion===4)await page.locator('#facts [data-k="validation"]').selectOption('validated');
         await click(page,'next');const after=await state(page);
@@ -442,5 +446,160 @@ for(const width of [1280,390]) {
     expect(capped.records.decisionRegister.filter(r=>r.owner==='Product + Engineering').map(r=>r.version)).toEqual([1,2,3,4]);
     await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`conveyor-initiative-4-${width}`,viewport:{width,height:844},fullPage:false});
     await click(page,'back');await click(page,'next');expect(await state(page)).toEqual(capped);
+  });
+}
+
+async function advanceTo(page,predicate) {
+  for(let i=0;i<140;i++) {
+    const current=await state(page);
+    if(predicate(current))return current;
+    if(current.done)throw Error('Workflow ended before the requested behavioral boundary');
+    await click(page,'next');
+  }
+  throw Error('Workflow did not reach the requested behavioral boundary');
+}
+
+for(const width of [1280,390]) {
+  test(`meta-ach ${width}px new candidates and concern-three authorship remain independent`,async({page},testInfo)=>{
+    test.setTimeout(180_000);
+    const errors=[];page.on('pageerror',error=>errors.push(String(error)));
+    await page.setViewportSize({width,height:844});await page.goto(`${fixture.url}/workflow-meta-ach.html`);
+    await page.locator('#worldbox > summary').click();await page.locator('#chips [data-s="2"]').click();
+    await page.locator('#facts [data-k="validation"]').selectOption('invalid once');await click(page,'run');
+    const first=await state(page),retained={boundary:first.records.probeRegister.boundary,equivalent:first.records.probeRegister.equivalent,excluded:first.records.probeRegister.excluded};
+    expect(first.records).toMatchObject({concernVersion:2,testCandidates:2,waiting:true});
+    await resumeNativeInput(page,'freshConcern','concern 2 authored');
+    const beforeCall=await advanceTo(page,s=>s.position.n==='achTestsCall'&&s.pendingReturn===null);
+    await click(page,'next');const newCall=await state(page);
+    await click(page,'back');expect((await state(page)).execution).toEqual(beforeCall.execution);
+    await click(page,'next');expect(await state(page)).toEqual(newCall);
+    await click(page,'run');
+    const second=await state(page);
+    expect(second.records).toMatchObject({concernVersion:2,testCandidates:2,stageReady:true});
+    expect(second.records.targetedTests).toMatchObject({version:2,candidate:2});
+    expect(second.budgets.local.testCandidates).toEqual([2,2]);
+    expect({boundary:second.records.probeRegister.boundary,equivalent:second.records.probeRegister.equivalent,excluded:second.records.probeRegister.excluded}).toEqual(retained);
+    await click(page,'back');await click(page,'next');expect(await state(page)).toEqual(second);
+    await page.locator('#chips [data-s="1"]').click();
+    await page.locator('#facts [data-k="mutant"]').selectOption('equivalent mutant');await click(page,'run');
+    await resumeNativeInput(page,'freshConcern','concern 2 authored');await click(page,'run');
+    const stale=await state(page);
+    expect(stale.records).toMatchObject({concernVersion:3,waiting:true,concernDecision:null});
+    expect(stale.conditions.freshConcern).toBe('concern 2 authored');
+    for(const value of ['concern 2 authored','pending']) {
+      await page.locator('#facts [data-k="freshConcern"]').selectOption(value);
+      for(const control of ['next','run']) {
+        await click(page,control);const waiting=await state(page);
+        expect(waiting.records).toEqual(stale.records);expect(waiting.scratch).toEqual(stale.scratch);
+      }
+    }
+    await page.locator('#state .k').filter({hasText:/^concernVersion$/}).scrollIntoViewIfNeeded();
+    await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`meta-concern-3-stale-${width}`,viewport:{width,height:844},fullPage:false});
+    await page.locator('#facts [data-k="mutant"]').selectOption('plausible uncaught mutant');
+    await resumeNativeInput(page,'freshConcern','concern 3 authored');await click(page,'run');
+    const third=await state(page);
+    expect(third.records).toMatchObject({concernVersion:3,revisionRounds:3,stageReady:true,faultClassProven:false});
+    expect(third.records.concernDecision.answer).toBe('concern 3 authored');
+    expect({boundary:third.records.probeRegister.boundary,equivalent:third.records.probeRegister.equivalent,excluded:third.records.probeRegister.excluded}).toEqual(retained);
+    await click(page,'back');await click(page,'next');expect(await state(page)).toEqual(third);
+    await page.locator('#chips [data-s="5"]').click();await click(page,'run');
+    const capped=await state(page);
+    expect(capped.records).toMatchObject({workflowStatus:'capped candidate handoff',testCandidates:2,stageReady:false});
+    expect(capped.budgets.local.testCandidates).toEqual([2,2]);
+    await page.locator('#state .k').filter({hasText:/^testCandidates$/}).scrollIntoViewIfNeeded();
+    await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`meta-candidate-cap-${width}`,viewport:{width,height:844},fullPage:false});
+    expect(errors).toEqual([]);
+  });
+
+  test(`playwright-test-agents ${width}px revised tests cannot inherit prior healer repairs`,async({page},testInfo)=>{
+    test.setTimeout(180_000);
+    const errors=[];page.on('pageerror',error=>errors.push(String(error)));
+    await page.setViewportSize({width,height:844});await page.goto(`${fixture.url}/workflow-playwright-test-agents.html`);
+    await page.locator('#worldbox > summary').click();
+    for(const failure of ['test defect once','persistent test defect']) {
+      await page.locator('#chips [data-s="4"]').click();
+      await advanceTo(page,s=>s.position.n==='pwExecute'&&s.records.healerRepairs===1);
+      await page.locator('#facts [data-k="failure"]').selectOption('changed requirement once');await click(page,'run');
+      const revised=await state(page),retained={signin:revised.records.scenarioRegister.signin,excluded:revised.records.excludedScenarios};
+      expect(revised.records).toMatchObject({intentVersion:2,healerRepairs:1,waiting:true});
+      await resumeNativeInput(page,'freshIntent','revised scenarios and outcomes confirmed');
+      await page.locator('#facts [data-k="failure"]').selectOption(failure);
+      const before=await advanceTo(page,s=>s.position.n==='pwHealCall'&&s.pendingReturn===null);
+      await click(page,'next');const entered=await state(page);
+      await click(page,'back');expect((await state(page)).execution).toEqual(before.execution);
+      await click(page,'next');expect(await state(page)).toEqual(entered);
+      await click(page,'next');const failed=await state(page);
+      expect(failed.position.n).toBe('pwDiagnosisCall');
+      expect(failed.records.executionEvidence).toMatchObject({intentVersion:2,status:'failed',assertionsPreserved:true});
+      expect(failed.records.healerRepairs).toBe(0);expect(failed.budgets.local.healerRepairs).toEqual([0,2]);
+      await click(page,'run');const completed=await state(page);
+      expect(completed.records).toMatchObject({intentVersion:2,revisionRounds:2,healerRepairs:failure==='test defect once'?1:2,stageReady:failure==='test defect once'});
+      expect(completed.records.workflowStatus).toBe(failure==='test defect once'?'intended scenarios validated (simulated)':'unresolved engineering handoff');
+      expect(completed.records.testsArtifact.assertionsPreserved).toBe(true);
+      expect({signin:completed.records.scenarioRegister.signin,excluded:completed.records.excludedScenarios}).toEqual(retained);
+      await page.locator('#state .k').filter({hasText:/^healerRepairs$/}).scrollIntoViewIfNeeded();
+      await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`playwright-intent-2-${failure==='test defect once'?'repaired':'capped'}-${width}`,viewport:{width,height:844},fullPage:false});
+      await click(page,'back');await click(page,'next');expect(await state(page)).toEqual(completed);
+    }
+    expect(errors).toEqual([]);
+  });
+
+  test(`conversational-ux-coanalysis ${width}px new question resets the visible local count not its history`,async({page},testInfo)=>{
+    test.setTimeout(180_000);
+    const errors=[];page.on('pageerror',error=>errors.push(String(error)));
+    await page.setViewportSize({width,height:844});await page.goto(`${fixture.url}/workflow-conversational-ux-coanalysis.html`);
+    await page.locator('#worldbox > summary').click();await page.locator('#chips [data-s="2"]').click();
+    const previous=await advanceTo(page,s=>s.position.n==='uxQuestion'&&s.records.evidenceVersion===2);
+    expect(previous.records.explanationRounds).toBe(2);
+    const history={questions:previous.records.questionRegister,rejected:previous.records.rejectedFindings,excluded:previous.records.excludedClaims};
+    await page.locator('#facts [data-k="evaluatorQuestion"]').selectOption('pending');await click(page,'next');
+    const waiting=await state(page);
+    for(const control of ['next','run']) {
+      await click(page,control);expect((await state(page)).records).toEqual(waiting.records);
+      expect((await state(page)).budgets).toEqual(waiting.budgets);
+    }
+    const newQuestion=await resumeNativeInput(page,'evaluatorQuestion',previous.conditions.evaluatorQuestion);
+    expect(newQuestion.records.explanationRounds).toBe(0);expect(newQuestion.budgets.local.explanationRounds).toEqual([0,2]);
+    const counter=page.locator('#state .k').filter({hasText:/^explanationRounds$/}).locator('xpath=following-sibling::span[1]');
+    expect(await counter.evaluate(el=>el.firstChild.textContent)).toBe('0');
+    expect(newQuestion.records.questionRegister.slice(0,-1)).toEqual(history.questions);
+    expect(newQuestion.records.rejectedFindings).toEqual(history.rejected);expect(newQuestion.records.excludedClaims).toEqual(history.excluded);
+    await counter.scrollIntoViewIfNeeded();
+    await captureNamedUiState({page,testInfo,sliceId:'workflow-examples',stateName:`coanalysis-new-question-zero-${width}`,viewport:{width,height:844},fullPage:false});
+    await click(page,'run');expect((await state(page)).records.explanationRounds).toBe(1);
+    await resumeNativeInput(page,'evaluatorDecision','finding 2 interpreted');await click(page,'run');
+    await resumeNativeInput(page,'designDecision','finding 2 linked');await click(page,'run');
+    expect((await state(page)).records).toMatchObject({workflowStatus:'findings and follow-up recorded',findingVersion:2,outcomeAchieved:false});
+    expect(errors).toEqual([]);
+  });
+}
+
+for(const width of [1280,390])for(const [decision,route] of [['iterate design','reviseDesign'],['reshape product','reshapeProduct']]) {
+  test(`product-design-frontend ${width}px ${route} cap denies a phantom third revision`,async({page})=>{
+    test.setTimeout(180_000);
+    await page.setViewportSize({width,height:844});await page.goto(`${fixture.url}/workflow-product-design-frontend.html`);
+    await page.locator('#worldbox > summary').click();
+    await page.locator('#facts [data-k="learningDecision"]').selectOption(decision);
+    await advanceTo(page,s=>s.position.n===route&&s.records.revisionAttempts===1);
+    await click(page,'next');
+    const metadata=WORKFLOW_EXAMPLES.find(example=>example.slug==='product-design-frontend').metadata;
+    for(const inputs of Object.values(metadata.smoke.reworkResumeAt))for(const {key,value} of inputs) {
+      if(key!=='learningDecision')await page.locator(`#facts [data-k="${key}"]`).selectOption(value);
+    }
+    if(route==='reshapeProduct')for(const key of ['problemEvidence','jointScope']) {
+      const control=page.locator(`#facts [data-k="${key}"]`);
+      await control.selectOption(key==='problemEvidence'?'problem 2 evidence supplied':'scope 2 jointly authored');
+    }
+    const before=await advanceTo(page,s=>s.position.n===route&&s.records.revisionAttempts===2);
+    await click(page,'next');const denied=await state(page);
+    expect(denied.position.n).toBe('checkoutHandoff');
+    expect(denied.budgets.global.artifactRevisions).toEqual([2,2]);
+    for(const key of ['revisionAttempts','scopeRevision','designRevision','buildRevision','designRecord','researchRecord','designerInspection','releaseRecord','measurementRecord','learningRecord','invalidatedEvidence','rememberedBusinessRule','rememberedInstrumentation']) {
+      expect(denied.records[key]).toEqual(before.records[key]);
+    }
+    await click(page,'back');expect((await state(page)).execution).toEqual(before.execution);
+    await click(page,'next');expect(await state(page)).toEqual(denied);
+    await click(page,'run');
+    expect((await state(page)).records).toMatchObject({workflowStatus:'human checkout team handoff',revisionAttempts:2,designRevision:2,stageReady:false,outcomeAchieved:false});
   });
 }
