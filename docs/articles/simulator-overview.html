@@ -160,6 +160,7 @@ footer a{color:var(--accent)}
 .fullbar .fstep small{font-family:var(--mono);font-size:11px;font-weight:400;color:var(--mute);margin-right:8px;letter-spacing:.06em;text-transform:uppercase}
 .fullbar .fnav{display:none;gap:6px}
 .board.full{position:fixed;inset:0;z-index:50;border-radius:0;border:0;margin:0;overflow:auto;background:var(--panel);padding:calc(12px + env(safe-area-inset-top,0px)) 16px calc(12px + env(safe-area-inset-bottom,0px))}
+.board.full:focus-visible{outline-offset:-2px}
 .board.full .fullbar{position:sticky;top:0;z-index:2;background:var(--panel);padding-bottom:8px;border-bottom:1px solid var(--line);margin-bottom:8px}
 .board.full .fullbar .fstep,.board.full .fullbar .fnav{display:flex}
 .board.full svg{max-height:calc(100vh - 120px);width:100%;min-width:0}
