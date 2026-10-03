@@ -226,11 +226,21 @@ test('build-site: state atlas is generated from the code tables, navigable, with
   }
 });
 
-test('build-state-atlas: repeated generation produces byte-identical output', async () => {
-  const { buildStateAtlasHtml } = await import('../../scripts/pages/build-state-atlas.mjs');
-  const first = buildStateAtlasHtml();
-  const second = buildStateAtlasHtml();
-  assert.equal(second, first, 'atlas output must not contain per-build randomness or timestamps');
+test('build-site: fresh builds emit byte-identical atlas output', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pages-atlas-determinism-'));
+  try {
+    const first = join(root, 'first');
+    const second = join(root, 'second');
+    await buildSite({ outDir: first });
+    await buildSite({ outDir: second });
+    assert.deepEqual(
+      await readFile(join(second, STATE_ATLAS.file)),
+      await readFile(join(first, STATE_ATLAS.file)),
+      'published atlas bytes must not depend on output location or per-build randomness',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('injectNav fails closed when a page lacks the expected structure', () => {
