@@ -101,6 +101,9 @@ const STARTUP_CLI_TEST = path.join("test", "loop", "resolve-dev-loop-startup-cli
 const RUN_CONTEXT_GENERATED = path.join(".claude", "hooks", "_run-context.mjs");
 // Commit-msg guard test clears inherited harness session vars from its git env and sets them to cover each harness.
 const COMMIT_MSG_GUARD_TEST = path.join("packages", "core", "test", "commit-msg-guard.test.mjs");
+// The Pi read-only role gate treats an untagged PI_SUBAGENT_CHILD=1 session as a restricted child (#2582).
+const PI_ROLE_GATE = path.join("extension", "readonly-role-gate.ts");
+const PI_ROLE_GATE_TEST = path.join("test", "extension-pi-readonly-role-gate.test.mjs");
 
 /**
  * `PI_*` vars the Pi runtime injects, mapped to the files allowed to read them.
@@ -124,7 +127,7 @@ const HARNESS_RUNTIME_ENV = new Map([
     "PI_SUBAGENT_RUN_ID",
     [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST],
   ],
-  ["PI_SUBAGENT_CHILD", [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST]],
+  ["PI_SUBAGENT_CHILD", [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST, PI_ROLE_GATE, PI_ROLE_GATE_TEST]],
   [
     "PI_SUBAGENT_PARENT_SESSION",
     [RUN_CONTEXT, RUN_CONTEXT_TEST, ASYNC_START, ASYNC_START_TEST, RUN_CONTEXT_GENERATED, STARTUP_CLI_TEST],

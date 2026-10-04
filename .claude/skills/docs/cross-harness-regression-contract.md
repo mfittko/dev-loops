@@ -49,7 +49,20 @@ Symmetrically, for a change targeting the Claude-Code-specific seam that MUST NO
 
 ## Read-only role enforcement on Pi
 
-The judge boundary is enforced on both harnesses. The reviewer boundary is enforced on Pi only. Claude Code enforces the judge boundary in the PreToolUse Bash gate (`decideBashGate`), which gates only the judge. Pi enforces the judge and reviewer boundaries in the `tool_call` handler in `extension/readonly-role-gate.ts`, which reads the dispatch role marker `DEVLOOPS_AGENT_TYPE`. The judge may run only the sanctioned `pull-work-order.mjs` line. The reviewer may also run shell-inert read and search commands. Both are denied test and build commands. A blank marker fails closed. An absent marker is the unrestricted main agent, so real Pi judge and review subagents stay ungated until the Pi dispatch wiring sets the marker (#2582). The `gate-coordinator` role is not restricted on Pi. Known limitation: the reviewer allowlist rejects quotes, braces and pipes, so the quoted `jq '{resolvedAngles, scope}' <path>` and `jq '.allPassed' <path>` forms, the `grep ... | cut -c1-200` form and quoted multi-word search patterns are denied for the reviewer. The Pi dispatch wiring (#2582) must resolve this before it sets the marker. Known limitation: the bash gate does not bound the reviewer's own `write` and `edit` tools, which can author a script that an allowed `dev-loops-run` line then runs. `test/extension-pi-readonly-role-gate.test.mjs` pins the Pi fixtures, the parity of the Pi pull matcher with `parseSanctionedPullLine`, and the agreement of the source agents, generated `.claude` assets and Pi mapping.
+The judge boundary is enforced on both harnesses. The reviewer boundary is enforced on Pi only. Claude Code enforces the judge boundary in the PreToolUse Bash gate (`decideBashGate`), which gates only the judge. Pi enforces the judge and reviewer boundaries in the `tool_call` handler in `extension/readonly-role-gate.ts`. The handler resolves the role on every call from the calling session's own `ctx.getSystemPrompt()`. The role marker is the `<active_agent name="<agent>"/>` tag that pi-subagents writes into each named child's system prompt. The marker value is the `name` frontmatter of `agents/*.agent.md`. dev-loops sets no env marker. Resolution is fail closed:
+
+| Input | Resolved behavior |
+|---|---|
+| No tag, `PI_SUBAGENT_CHILD` not `1` | Main agent, unrestricted |
+| No tag, `PI_SUBAGENT_CHILD=1` | Pull-only |
+| One distinct name `judge` | Pull line only |
+| One distinct name `review` | Pull line plus read and search forms |
+| One distinct name, another roster role | Unrestricted |
+| Blank name, an unknown `dev-loops:` name, or two different names | Pull-only |
+| A bare name outside the roster (`reviewer`, `worker`, `scout`) | Unrestricted, as on Claude Code |
+
+The judge may run only the sanctioned `pull-work-order.mjs` line. The Pi judge reads and searches with the shell-free builtins `read`, `grep`, `find` and `ls`: `TOOL_NAME_MAP_PI` maps `search` to `grep`, `find` and `ls`. The reviewer may also run shell-inert read and search commands. Reviewer words are unquoted, fully single-quoted or fully double-quoted, and one trailing `| cut -c<N>-<M>` is allowed. Both roles are denied test and build commands. The `gate-coordinator` role is not restricted on Pi. Known limitation: the bash gate does not bound the reviewer's own `write` and `edit` tools, which can author a script that an allowed `dev-loops-run` line then runs. `test/extension-pi-readonly-role-gate.test.mjs` pins the Pi fixtures, the parity of the Pi pull matcher with `parseSanctionedPullLine`, and the agreement of the source agents, generated `.claude` assets and Pi mapping.
+
 
 ## Non-goals
 

@@ -26,11 +26,11 @@ const FORBIDDEN_UNDER_PI = ["search", "execute", "agent", "todo"];
 // These are the Pi-accepted tool names reachable from the canonical agent
 // `tools:` vocabulary (builtins + the extension-registered `subagent` and the
 // `review_loop` tool declared in this repo's skill `allowed-tools`).
-const VALID_PI_TOOLS = new Set(["read", "bash", "edit", "write", "subagent", "review_loop"]);
+const VALID_PI_TOOLS = new Set(["read", "bash", "grep", "find", "ls", "edit", "write", "subagent", "review_loop"]);
 
 test("TOOL_NAME_MAP_PI mirrors the Claude map's vocabulary to Pi builtins", () => {
   assert.equal(TOOL_NAME_MAP_PI.read, "read");
-  assert.equal(TOOL_NAME_MAP_PI.search, "bash");
+  assert.deepEqual(TOOL_NAME_MAP_PI.search, ["grep", "find", "ls"]);
   assert.equal(TOOL_NAME_MAP_PI.execute, "bash");
   assert.equal(TOOL_NAME_MAP_PI.bash, "bash");
   assert.equal(TOOL_NAME_MAP_PI.edit, "edit");
@@ -47,10 +47,9 @@ test("every TOOL_NAME_MAP_PI value is a valid Pi tool (non-tautological check)",
   // mapping cannot pass by construction.
   for (const [name, mapped] of Object.entries(TOOL_NAME_MAP_PI)) {
     if (mapped == null) continue; // dropped entries (todo) are intentionally null
-    assert.ok(
-      VALID_PI_TOOLS.has(mapped),
-      `TOOL_NAME_MAP_PI.${name} -> "${mapped}" is not a valid Pi tool`,
-    );
+    for (const tool of [mapped].flat()) {
+      assert.ok(VALID_PI_TOOLS.has(tool), `TOOL_NAME_MAP_PI.${name} -> "${tool}" is not a valid Pi tool`);
+    }
   }
 });
 
@@ -58,13 +57,13 @@ test("mapAgentToolsForPi dedupes and drops todo, preserving first-seen order", (
   // dev-loop agent vocabulary: read, search, execute, bash, agent, todo, subagent
   assert.deepEqual(
     mapAgentToolsForPi(["read", "search", "execute", "bash", "agent", "todo", "subagent"]),
-    ["read", "bash", "subagent"],
+    ["read", "grep", "find", "ls", "bash", "subagent"],
   );
   // developer/docs/fixer/quality/refiner vocabulary: read, search, execute, bash, edit, write
   // (review dropped search/execute per #1659 — see the dedicated test below)
   assert.deepEqual(
     mapAgentToolsForPi(["read", "search", "execute", "bash", "edit", "write"]),
-    ["read", "bash", "edit", "write"],
+    ["read", "grep", "find", "ls", "bash", "edit", "write"],
   );
   assert.deepEqual(mapAgentToolsForPi(["todo"]), []);
   assert.deepEqual(mapAgentToolsForPi([]), []);
@@ -94,7 +93,7 @@ pi-only prose stays in the body
 
   // tools line is remapped (deduped, todo dropped)
   const toolsLine = rendered.match(/^tools:\s*(.*)$/m)[1];
-  assert.deepEqual(toolsLine.split(/,\s*/), ["read", "bash", "subagent"]);
+  assert.deepEqual(toolsLine.split(/,\s*/), ["read", "grep", "find", "ls", "bash", "subagent"]);
   // forbidden names are absent from the whole rendered doc
   for (const forbidden of FORBIDDEN_UNDER_PI) {
     assert.equal(new RegExp(`\\b${forbidden}\\b`).test(rendered), false, `rendered doc must not leak forbidden tool name: ${forbidden}`);
@@ -265,7 +264,7 @@ test("syncPackagedAgents preserves every mappable source tool in the canonical s
       if (srcTool === "todo") continue; // explicitly dropped — no Pi todo builtin
       const mapped = TOOL_NAME_MAP_PI[srcTool];
       assert.ok(mapped != null, `agents/${file} declares "${srcTool}" which is MISSING from TOOL_NAME_MAP_PI — would be silently dropped`);
-      assert.ok(renderedTools.includes(mapped), `agents/${file} source tool "${srcTool}" -> "${mapped}" did not survive in the rendered output`);
+      for (const tool of [mapped].flat()) assert.ok(renderedTools.includes(tool), `agents/${file} source tool "${srcTool}" -> "${tool}" did not survive in the rendered output`);
     }
   }
 });
@@ -295,7 +294,7 @@ body
 `;
   const rendered = renderPiAgent(raw);
   const toolsLine = rendered.match(/^tools:\s*(.*)$/m)[1];
-  assert.deepEqual(toolsLine.split(/,\s*/), ["read", "bash", "edit", "write", "subagent"]);
+  assert.deepEqual(toolsLine.split(/,\s*/), ["read", "grep", "find", "ls", "bash", "edit", "write", "subagent"]);
   for (const forbidden of FORBIDDEN_UNDER_PI) {
     assert.equal(new RegExp(`\\b${forbidden}\\b`).test(rendered), false, `rendered dev-loop must not leak ${forbidden}`);
   }
@@ -385,7 +384,7 @@ fixer body
   const toolsLine = rendered.match(/^tools:\s*(.*)$/m);
   assert.ok(toolsLine, "rendered fixer must have a tools: line");
   const tools = toolsLine[1].split(/[\s,]+/).filter(Boolean);
-  assert.deepEqual(tools, ["read", "bash", "edit", "write"]);
+  assert.deepEqual(tools, ["read", "grep", "find", "ls", "bash", "edit", "write"]);
   for (const forbidden of FORBIDDEN_UNDER_PI) {
     assert.equal(
       new RegExp(`\\b${forbidden}\\b`).test(rendered),
@@ -434,7 +433,7 @@ stale
 
   const rendered = await readFile(path.join(projectAgentsDir, "fixer.agent.md"), "utf8");
   const tools = rendered.match(/^tools:\s*(.*)$/m)[1].split(/[\s,]+/).filter(Boolean);
-  assert.deepEqual(tools, ["read", "bash", "edit", "write"]);
+  assert.deepEqual(tools, ["read", "grep", "find", "ls", "bash", "edit", "write"]);
   for (const forbidden of FORBIDDEN_UNDER_PI) {
     assert.equal(rendered.includes(forbidden), false, `refreshed fixer must not leak ${forbidden}`);
   }
@@ -518,5 +517,5 @@ body
 `;
   const rendered = renderPiAgent(raw);
   assert.match(rendered, /\nexperimental:\n  cacheTtl: 1h\n---\n/);
-  assert.equal(rendered.match(/^tools:\s*(.*)$/m)[1], "read, bash");
+  assert.equal(rendered.match(/^tools:\s*(.*)$/m)[1], "read, grep, find, ls");
 });

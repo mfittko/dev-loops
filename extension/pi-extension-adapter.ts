@@ -36,6 +36,7 @@ export function toHarnessContext(ctx: Partial<ExtensionContext> | undefined): Ha
       setStatus: (key, text) => ui?.setStatus?.(key, text as never),
     },
     sendUserMessage: sender ? (message, options) => sender.call(ctx, message, options) : undefined,
+    getSystemPrompt: typeof ctx?.getSystemPrompt === 'function' ? () => ctx.getSystemPrompt!() : undefined,
   };
 }
 

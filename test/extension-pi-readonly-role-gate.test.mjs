@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { READONLY_SUBAGENT_ROLES } from "@dev-loops/core/claude/hook-decisions";
 import extension from "../extension/index.ts";
 import { mapAgentToolsForPi, renderPiAgent } from "../extension/sync-packaged-agents.ts";
-import { BASH_RESTRICTED_ROLES, AGENT_TYPE_ENV } from "../extension/readonly-role-gate.ts";
+import { BASH_RESTRICTED_ROLES, DEV_LOOPS_ROLES } from "../extension/readonly-role-gate.ts";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const PULL = "dev-loops-run scripts/github/pull-work-order.mjs j1-0123abcd";
@@ -19,16 +19,23 @@ function toolCallHandler() {
   return events.get("tool_call");
 }
 
-async function callAs(role, command, toolName = "bash") {
-  const prior = process.env[AGENT_TYPE_ENV];
-  if (role === undefined) delete process.env[AGENT_TYPE_ENV];
-  else process.env[AGENT_TYPE_ENV] = role;
+async function callWith(prompt, command, toolName = "bash", env = {}) {
+  const prior = process.env.PI_SUBAGENT_CHILD;
+  if (env.PI_SUBAGENT_CHILD === undefined) delete process.env.PI_SUBAGENT_CHILD;
+  else process.env.PI_SUBAGENT_CHILD = env.PI_SUBAGENT_CHILD;
   try {
-    return await toolCallHandler()({ toolName, input: { command } }, {});
+    return await toolCallHandler()({ toolName, input: { command } }, { getSystemPrompt: prompt === undefined ? undefined : () => prompt });
   } finally {
-    if (prior === undefined) delete process.env[AGENT_TYPE_ENV];
-    else process.env[AGENT_TYPE_ENV] = prior;
+    if (prior === undefined) delete process.env.PI_SUBAGENT_CHILD;
+    else process.env.PI_SUBAGENT_CHILD = prior;
   }
+}
+
+const tag = (name) => `<active_agent name="${name}"/>`;
+
+// role undefined = untagged main agent; otherwise a pi-subagents tag for that name.
+async function callAs(role, command, toolName = "bash") {
+  return callWith(role === undefined ? "base prompt" : tag(role), command, toolName);
 }
 
 test("Pi judge runs the sanctioned pull and nothing else (J7)", async () => {
@@ -100,4 +107,90 @@ test("the Pi pull-line matcher agrees with the Claude gate's parseSanctionedPull
   for (const line of lines) {
     assert.equal((await callAs("judge", line)).block, parseSanctionedPullLine(line) === null, line);
   }
+});
+
+test("the role comes from the tag in prefix or appended form, and the env marker is gone", async () => {
+  assert.equal((await callWith(`${tag("judge")}\n\nYou are a judge.`, "cat README.md")).block, true);
+  assert.equal((await callWith(`Base prompt.\n\n${tag("judge")}`, "cat README.md")).block, true);
+  assert.deepEqual(await callWith(`${tag("dev-loops:judge")} x`, PULL), { block: false });
+  const prior = process.env.DEVLOOPS_AGENT_TYPE;
+  process.env.DEVLOOPS_AGENT_TYPE = "judge";
+  try {
+    assert.deepEqual(await callWith("base prompt", "cat README.md"), { block: false });
+  } finally {
+    if (prior === undefined) delete process.env.DEVLOOPS_AGENT_TYPE;
+    else process.env.DEVLOOPS_AGENT_TYPE = prior;
+  }
+  assert.deepEqual(await callWith(undefined, "cat README.md"), { block: false });
+});
+
+test("every roster role resolves to its capability", async () => {
+  const names = fs.readdirSync(path.join(repoRoot, "agents")).filter((n) => n.endsWith(".agent.md"))
+    .map((n) => /^name:\s*"?([^"\n]+)"?/m.exec(fs.readFileSync(path.join(repoRoot, "agents", n), "utf8"))[1]);
+  assert.deepEqual([...names].sort(), [...DEV_LOOPS_ROLES].sort());
+  for (const name of names) {
+    assert.deepEqual(await callAs(name, PULL), { block: false }, name);
+    assert.equal((await callAs(name, "cat README.md")).block, name === "judge", `${name} cat`);
+    assert.equal((await callAs(name, "bun run test")).block, name === "judge" || name === "review", `${name} bun`);
+  }
+});
+
+test("role resolution fails closed per the resolution table", async () => {
+  for (const prompt of [tag(""), tag("  "), tag("dev-loops:"), tag("dev-loops:nope"), `${tag("judge")} ${tag("developer")}`, `${tag("judge")} ${tag("review")}`]) {
+    assert.equal((await callWith(prompt, "ls")).block, true, prompt);
+  }
+  assert.equal((await callWith("base prompt", "ls", "bash", { PI_SUBAGENT_CHILD: "1" })).block, true);
+  assert.deepEqual(await callWith("base prompt", "ls", "bash", { PI_SUBAGENT_CHILD: "1" }).then(() => callWith("base prompt", "ls")), { block: false });
+  assert.deepEqual(await callWith(`${tag("judge")} ${tag("dev-loops:judge")}`, PULL), { block: false });
+  for (const bare of ["reviewer", "worker", "scout"]) assert.deepEqual(await callWith(tag(bare), "bun run test"), { block: false }, bare);
+});
+
+test("parallel children resolve independently", async () => {
+  const handler = toolCallHandler();
+  const judge = { getSystemPrompt: () => tag("judge") };
+  const dev = { getSystemPrompt: () => tag("developer") };
+  const call = (ctx) => handler({ toolName: "bash", input: { command: "cat README.md" } }, ctx);
+  assert.equal((await call(judge)).block, true);
+  assert.equal((await call(dev)).block, false);
+  assert.equal((await call(judge)).block, true);
+});
+
+test("the Pi judge has a shell-free read and search path", () => {
+  const rendered = renderPiAgent(fs.readFileSync(path.join(repoRoot, "agents/judge.agent.md"), "utf8"));
+  const tools = toolsOfText(rendered);
+  for (const t of ["read", "grep", "find", "ls"]) assert.ok(tools.includes(t), t);
+});
+
+const ACCEPT = {
+  A1: `jq '{resolvedAngles, scope}' "tmp/gate-context/o-r/pr-80/draft_gate-abc.json"`,
+  A2: `jq '.allPassed' "/abs/tmp/gate-context/o-r/pr-1/draft_gate-abc.validation.json"`,
+  A3: "grep -rn foo src | cut -c1-200",
+  A4: 'grep -rn "foo bar" src',
+  A5: "rg 'foo bar' src",
+  A6: 'grep -rn "foo bar" src | cut -c1-200',
+};
+const REJECT = {
+  R1: "rg --p're' bun foo",
+  R2: `rg '--pre' bun foo`,
+  R2b: 'git diff "--output=x"',
+  R3: 'grep "$(id)" src',
+  R3b: 'grep "a`id`" src',
+  R3c: 'grep "a\\b" src',
+  R3d: 'grep "a!" src',
+  R4: "grep 'foo src",
+  R5: "grep foo src | sh",
+  R6: "grep foo src | cut -c1-200 | sh",
+  R7: "grep foo src | cut -f1",
+  R8: "'bun' test",
+  R9: "rg foo *",
+};
+for (const [id, cmd] of Object.entries(ACCEPT)) {
+  test(`reviewer accepts ${id}`, async () => assert.deepEqual(await callAs("review", cmd), { block: false }));
+}
+for (const [id, cmd] of Object.entries(REJECT)) {
+  test(`reviewer rejects ${id}`, async () => assert.equal((await callAs("review", cmd)).block, true));
+}
+test("reviewer rejects R10: the judge gains no reviewer form", async () => {
+  for (const cmd of Object.values(ACCEPT)) assert.equal((await callAs("judge", cmd)).block, true, cmd);
+  assert.equal((await callAs("judge", "jq '.allPassed' x.json")).block, true);
 });

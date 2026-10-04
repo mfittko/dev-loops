@@ -26,7 +26,7 @@ const WIDGET_KEY = 'dev-loops.setup';
 // re-export so tests can reach the same binding the session_start handler calls.
 import { syncPackagedAgents } from './sync-packaged-agents.ts';
 export { syncPackagedAgents };
-import { decidePiToolCall, resolvePiAgentType } from './readonly-role-gate.ts';
+import { decidePiToolCall, resolvePiRole } from './readonly-role-gate.ts';
 
 async function dispatchDevLoopIntent(ctx: { sendUserMessage?: (message: string) => unknown }, intent: string) {
   await ctx.sendUserMessage?.(`/skill:dev-loop ${intent}`);
@@ -49,9 +49,9 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
 
   // Read-only role enforcement on Pi (cross-harness-regression-contract.md): block shell for
   // read-only roles; Pi honours `{ block, reason }` from `tool_call`.
-  adapter.on('tool_call', (event) => {
+  adapter.on('tool_call', (event, ctx) => {
     const { toolName, input } = event as { toolName?: string; input?: { command?: unknown } };
-    return decidePiToolCall({ toolName, input, agentType: resolvePiAgentType() });
+    return decidePiToolCall({ toolName, input, agentType: resolvePiRole({ systemPrompt: ctx?.getSystemPrompt?.() }) });
   });
 
   adapter.on('tool_result', async (event, ctx) => {

@@ -30,6 +30,8 @@ export type HarnessContext = {
   hasUI: boolean;
   ui: HarnessUi;
   sendUserMessage?: (message: string, options?: Record<string, unknown>) => unknown;
+  /** The calling session's effective system prompt (Pi only). */
+  getSystemPrompt?: () => string;
 };
 
 export type HarnessLifecycleEvent = 'session_start' | 'tool_result' | 'user_bash' | 'agent_end' | 'tool_call';
