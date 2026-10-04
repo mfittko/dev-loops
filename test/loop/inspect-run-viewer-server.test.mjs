@@ -379,7 +379,6 @@ test("createInspectRunViewerServer serves browser html from adapter snapshot wit
     assert.match(response.body, /owner\/repo/);
     assert.match(response.body, /degraded/);
     assert.doesNotMatch(response.body, /manual reload only/i);
-    assert.doesNotMatch(response.body, /href="\/snapshot\.json\?repo=owner%2Frepo&amp;pr=55"/);
     assert.doesNotMatch(response.body, /"schemaVersion": 1/);
     assert.equal(loadCount, 1);
   } finally {
@@ -494,13 +493,12 @@ test("createInspectRunViewerServer supports selecting another PR from query para
     assert.match(response.body, /aria-label="PR #77"/);
     assert.match(response.body, /<h1>Selected from inbox<\/h1>/);
     assert.match(response.body, /Selected from inbox/);
-    assert.doesNotMatch(response.body, /href="\/snapshot\.json\?repo=owner%2Frepo&amp;pr=77"/);
     assert.ok(seenTargets.some((target) => target.repo === "owner/repo" && target.pr === 77));
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
-test("createInspectRunViewerServer serves the Mermaid browser asset without loading a snapshot", async () => {
+test("createInspectRunViewerServer serves the local graph asset without loading a snapshot", async () => {
   let loadCount = 0;
   const adapter = {
     async loadSnapshot() {
@@ -518,12 +516,11 @@ test("createInspectRunViewerServer serves the Mermaid browser asset without load
 
   try {
     const address = server.address();
-    const response = await requestOnce(`http://127.0.0.1:${address.port}/assets/mermaid.min.js`);
+    const response = await requestOnce(`http://127.0.0.1:${address.port}/assets/inspect-graph.mjs`);
 
     assert.equal(response.statusCode, 200);
     assert.equal(response.headers["content-type"], "application/javascript; charset=utf-8");
     assert.equal(response.headers["cache-control"], "no-store");
-    assert.match(response.body, /mermaid/i);
     assert.equal(loadCount, 0);
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -531,7 +528,7 @@ test("createInspectRunViewerServer serves the Mermaid browser asset without load
 });
 
 
-test("createInspectRunViewerServer keeps Mermaid asset failures generic and path-free", async () => {
+test("createInspectRunViewerServer keeps graph asset failures generic and path-free", async () => {
   let loadCount = 0;
   const loggedErrors = [];
   const adapter = {
@@ -545,8 +542,8 @@ test("createInspectRunViewerServer keeps Mermaid asset failures generic and path
     { repo: "owner/repo", pr: "55", host: "127.0.0.1", port: 0 },
     {
       adapter,
-      loadMermaidBrowserScriptImpl: async () => {
-        throw new Error("ENOENT: open '/Users/tester/project/node_modules/mermaid/dist/mermaid.min.js'");
+      loadInspectionGraphBrowserScriptImpl: async () => {
+        throw new Error("ENOENT: open '/Users/tester/project/scripts/loop/inspect-run-viewer/browser.mjs'");
       },
       logErrorImpl: (error) => {
         loggedErrors.push(error instanceof Error ? error.message : String(error));
@@ -558,15 +555,14 @@ test("createInspectRunViewerServer keeps Mermaid asset failures generic and path
 
   try {
     const address = server.address();
-    const response = await requestOnce(`http://127.0.0.1:${address.port}/assets/mermaid.min.js`);
+    const response = await requestOnce(`http://127.0.0.1:${address.port}/assets/inspect-graph.mjs`);
 
     assert.equal(response.statusCode, 500);
     assert.equal(response.headers["content-type"], "text/plain; charset=utf-8");
     assert.equal(response.headers["cache-control"], "no-store");
-    assert.equal(response.body, "Mermaid browser asset unavailable");
     assert.doesNotMatch(response.body, /Users\/tester/);
     assert.equal(loadCount, 0);
-    assert.deepEqual(loggedErrors, ["ENOENT: open '/Users/tester/project/node_modules/mermaid/dist/mermaid.min.js'"]);
+    assert.deepEqual(loggedErrors, ["ENOENT: open '/Users/tester/project/scripts/loop/inspect-run-viewer/browser.mjs'"]);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -726,7 +722,6 @@ test("createInspectRunViewerServer keeps explicit query targets even when they a
     assert.equal(htmlResponse.statusCode, 200);
     assert.match(htmlResponse.body, /aria-label="PR #77"/);
     assert.match(htmlResponse.body, /<h1>PR #77<\/h1>/);
-    assert.doesNotMatch(htmlResponse.body, /href="\/snapshot\.json\?repo=owner%2Frepo&amp;pr=77"/);
     assert.doesNotMatch(htmlResponse.body, /aria-current="page"/);
     assert.doesNotMatch(htmlResponse.body, /#77<\/span>/);
 
@@ -880,6 +875,10 @@ test("createInspectRunViewerServer keeps favicon, unsupported paths, and unsuppo
     assert.equal(missingResponse.headers["cache-control"], "no-store");
     assert.equal(loadCount, 0);
 
+    const retiredAssetResponse = await requestOnce(`http://127.0.0.1:${address.port}/assets/mermaid.min.js`);
+    assert.equal(retiredAssetResponse.statusCode, 404);
+    assert.equal(loadCount, 0);
+
     const postHtmlResponse = await requestOnce(`http://127.0.0.1:${address.port}/`, { method: "POST" });
     assert.equal(postHtmlResponse.statusCode, 405);
     assert.equal(postHtmlResponse.headers.allow, "GET");
@@ -891,10 +890,10 @@ test("createInspectRunViewerServer keeps favicon, unsupported paths, and unsuppo
     assert.equal(postJsonResponse.headers.allow, "GET");
     assert.equal(postJsonResponse.headers["cache-control"], "no-store");
 
-    const postMermaidResponse = await requestOnce(`http://127.0.0.1:${address.port}/assets/mermaid.min.js`, { method: "POST" });
-    assert.equal(postMermaidResponse.statusCode, 405);
-    assert.equal(postMermaidResponse.headers.allow, "GET");
-    assert.equal(postMermaidResponse.headers["cache-control"], "no-store");
+    const postGraphResponse = await requestOnce(`http://127.0.0.1:${address.port}/assets/inspect-graph.mjs`, { method: "POST" });
+    assert.equal(postGraphResponse.statusCode, 405);
+    assert.equal(postGraphResponse.headers.allow, "GET");
+    assert.equal(postGraphResponse.headers["cache-control"], "no-store");
 
     const postMissingPathResponse = await requestOnce(`http://127.0.0.1:${address.port}/nope`, { method: "POST" });
     assert.equal(postMissingPathResponse.statusCode, 404);
@@ -1148,7 +1147,6 @@ test("createInspectRunViewerServer guards malformed request URLs and undefined s
 
     assert.equal(response.statusCode, 200);
     assert.match(response.body, /Snapshot unavailable/);
-    assert.doesNotMatch(response.body, /href="\/snapshot\.json\?repo=owner%2Frepo&amp;pr=55"/);
     assert.equal(loadCount, 1);
 
     const malformedResponse = await new Promise((resolve) => {

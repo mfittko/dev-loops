@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { createServer } from "node:http";
 import { promisify } from "node:util";
+import { readFile } from "node:fs/promises";
 
 import {
   DEFAULT_INBOX_MODE,
@@ -11,7 +12,8 @@ import {
   INBOX_MODE_FILTER_VALUES,
   INBOX_STATE_FILTER_VALUES,
   MAX_INBOX_RESULT_LIMIT,
-  MERMAID_BROWSER_ASSET_ROUTE,
+  INSPECTION_GRAPH_BROWSER_ASSET_PATH,
+  INSPECTION_GRAPH_BROWSER_ASSET_ROUTE,
 } from "./constants.mjs";
 import { normalizeCliRepoOption } from "./cli.mjs";
 import { renderHandoffEnvelopeSection } from "./handoff-envelope-renderer.mjs";
@@ -19,7 +21,6 @@ import { renderLoopIterationMetrics } from "./status.mjs";
 import { escapeHtml } from "./shared.mjs";
 import {
   deriveInboxSignalFromSnapshot,
-  loadMermaidBrowserScript,
   normalizeInboxSignal,
   renderInspectRunViewerHtml,
   renderTargetKey,
@@ -355,7 +356,8 @@ export async function restartExistingPortListener(
 
 export function createInspectRunViewerServer(options, deps = {}) {
   const adapter = deps.adapter ?? createInspectionViewerAdapter();
-  const loadMermaidBrowserScriptImpl = deps.loadMermaidBrowserScriptImpl ?? loadMermaidBrowserScript;
+  const loadGraphBrowserScriptImpl = deps.loadInspectionGraphBrowserScriptImpl
+    ?? (() => readFile(INSPECTION_GRAPH_BROWSER_ASSET_PATH, "utf8"));
   const logErrorImpl = deps.logErrorImpl ?? (() => {});
   // Seams for the three subprocess-spawning paths. Without them a unit test that
   // walks the rate-limit branch really runs `gh api -i graphql` (one GraphQL
@@ -547,7 +549,7 @@ export function createInspectRunViewerServer(options, deps = {}) {
         return;
       }
 
-      if (requestPath !== "/" && requestPath !== "/snapshot.json" && requestPath !== "/handoff-envelope.json" && requestPath !== "/handoff-envelope.html" && requestPath !== "/round-metrics.html" && requestPath !== MERMAID_BROWSER_ASSET_ROUTE) {
+      if (requestPath !== "/" && requestPath !== "/snapshot.json" && requestPath !== "/handoff-envelope.json" && requestPath !== "/handoff-envelope.html" && requestPath !== "/round-metrics.html" && requestPath !== INSPECTION_GRAPH_BROWSER_ASSET_ROUTE) {
         writeText(response, 404, "Not Found", {
           "content-type": "text/plain; charset=utf-8",
         });
@@ -562,15 +564,15 @@ export function createInspectRunViewerServer(options, deps = {}) {
         return;
       }
 
-      if (requestPath === MERMAID_BROWSER_ASSET_ROUTE) {
+      if (requestPath === INSPECTION_GRAPH_BROWSER_ASSET_ROUTE) {
         try {
-          const mermaidBrowserScript = await loadMermaidBrowserScriptImpl();
-          writeText(response, 200, mermaidBrowserScript, {
+          const graphBrowserScript = await loadGraphBrowserScriptImpl();
+          writeText(response, 200, graphBrowserScript, {
             "content-type": "application/javascript; charset=utf-8",
           });
         } catch (error) {
           logErrorImpl(error);
-          writeText(response, 500, "Mermaid browser asset unavailable", {
+          writeText(response, 500, "Inspection graph browser asset unavailable", {
             "content-type": "text/plain; charset=utf-8",
           });
         }

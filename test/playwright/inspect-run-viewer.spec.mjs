@@ -19,6 +19,25 @@ import {
 // ceiling on a contended hosted runner while the second worker is active.
 test.describe.configure({ mode: "parallel", timeout: 45_000 });
 
+test("initial hidden-tab activation centers the current state", async ({ page }, testInfo) => {
+  const { server, url } = await startViewer();
+  try {
+    await page.goto(url);
+    await expect(page.locator("#tab-overview")).toHaveClass(/active/);
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    const current = graph.locator(".inspection-graph-node.current");
+    const currentBox = await current.boundingBox();
+    const viewportBox = await graph.boundingBox();
+    if (!currentBox || !viewportBox) throw new Error("Current state or graph viewport is not rendered");
+    expect(Math.abs(currentBox.x + currentBox.width / 2 - viewportBox.x - viewportBox.width / 2)).toBeLessThan(1);
+    expect(Math.abs(currentBox.y + currentBox.height / 2 - viewportBox.y - viewportBox.height / 2)).toBeLessThan(1);
+    await captureViewerState(page, testInfo, "default current focus", "Initial known state stays centered at a readable scale after the hidden graph tab opens.", { interactionState: "none" });
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
+
 test("webkit renders overview-first tabs, matches tab panels, and captures a screenshot", async ({ page }, testInfo) => {
   const { server, url } = await startViewer(makeInspectionSnapshot(), [
     { target: { repo: "other/repo", pr: 77 }, title: "Waiting PR", signal: "attention" },
@@ -237,7 +256,9 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
             .toEqual(layer.edges.map((edge) => edge.id).sort());
           await assertSectionIdsAndNoHorizontalScroll(page, VIEWER_REGISTRY.sectionIds);
           await assertA11yClean(await new AxeBuilder({ page }).analyze());
-          await captureViewerState(page, testInfo, `${theme} ${id}`, "Review card labels, persistent summaries, arrow direction and unclipped feedback paths.", { interactionState: "none" });
+          await captureViewerState(page, testInfo, `${theme} ${id}`, "Review readable current-state focus, persistent summaries and nearby directed paths.", { interactionState: "none" });
+          await root.locator("[data-graph-fit]").click();
+          await captureViewerState(page, testInfo, `${theme} ${id} fit overview`, "Review complete topology bounds and unclipped feedback paths; use Focus or zoom to read individual states.", { interactionState: "none" });
         }
         await root.locator('[data-graph-layer="lifecycle_layer"]').click();
         await root.locator("[data-graph-focus]").click();
@@ -274,6 +295,7 @@ test("selection, camera and pointer gestures are read-only and preserve authorit
     const outgoingIds = layer.edges.filter((edge) => edge.from === layer.current.nodeId).map((edge) => layer.nodes.find((node) => node.id === edge.to).stateId);
     for (const state of outgoingIds) await expect(details).toContainText(state);
     const geometry = await graph.locator("[data-node-id]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("transform")));
+    await root.locator("[data-graph-fit]").click();
     const fit = await camera(graph);
     await root.locator("[data-graph-reset]").click();
     await expect(root.locator("[data-graph-zoom-value]")).toHaveText("100%");

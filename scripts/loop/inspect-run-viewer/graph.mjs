@@ -1,757 +1,166 @@
-import { readFile } from "node:fs/promises";
+import { STATE as COPILOT_STATE, TRANSITIONS as COPILOT_TRANSITIONS } from '@dev-loops/core/loop/copilot-loop-state';
+import { OUTER_GRAPH, OUTER_STATE, OUTER_TERMINAL_STATES, OUTER_TRANSITIONS } from '@dev-loops/core/loop/conductor-routing';
+import { REVIEWER_STATE, REVIEWER_TRANSITIONS } from '@dev-loops/core/loop/reviewer-loop-state';
+import { LIFECYCLE_GRAPH, LIFECYCLE_STATE, LIFECYCLE_TERMINAL_STATES, LIFECYCLE_TRANSITIONS } from '@dev-loops/core/loop/lifecycle-state';
+import { escapeHtml, formatStateToken, renderSnapshotStateLabel } from './shared.mjs';
+import { layoutInspectionLayer } from './graph-layout.mjs';
 
-import {
-  MERMAID_BROWSER_ASSET_PATH,
-  MERMAID_BROWSER_ASSET_ROUTE,
-} from "./constants.mjs";
-import {
-  STATE as COPILOT_STATE,
-  TRANSITIONS as COPILOT_TRANSITIONS,
-} from "@dev-loops/core/loop/copilot-loop-state";
-import {
-  OUTER_GRAPH,
-  OUTER_STATE,
-  OUTER_TERMINAL_STATES,
-  OUTER_TRANSITIONS,
-} from "@dev-loops/core/loop/conductor-routing";
-import {
-  REVIEWER_STATE,
-  REVIEWER_TRANSITIONS,
-} from "@dev-loops/core/loop/reviewer-loop-state";
-import {
-  LIFECYCLE_GRAPH,
-  LIFECYCLE_STATE,
-  LIFECYCLE_TERMINAL_STATES,
-  LIFECYCLE_TRANSITIONS,
-} from "@dev-loops/core/loop/lifecycle-state";
-import {
-  escapeHtml,
-  formatStateToken,
-  renderSnapshotStateLabel,
-} from "./shared.mjs";
+const stateId = (layerId, state) => `${layerId}:state:${encodeURIComponent(state)}`;
+const pairId = (layerId, kind, from, to) => `${layerId}:${kind}:${encodeURIComponent(from)}:${encodeURIComponent(to)}`;
+const inferredTerminals = table => Object.keys(table).filter(state => table[state].length === 0);
+const definitions = [
+  { id: 'outer_loop_family', title: 'outer-loop family', states: Object.values(OUTER_STATE), table: OUTER_TRANSITIONS, entries: OUTER_GRAPH.entryStates, terminals: OUTER_TERMINAL_STATES, entryLabel: OUTER_GRAPH.start.label, exitLabel: OUTER_GRAPH.end.label, saturated: true },
+  { id: 'copilot_layer', title: 'copilot layer', states: Object.values(COPILOT_STATE), table: COPILOT_TRANSITIONS, entries: [COPILOT_STATE.PR_DRAFT], terminals: inferredTerminals(COPILOT_TRANSITIONS) },
+  { id: 'reviewer_layer', title: 'reviewer layer', states: Object.values(REVIEWER_STATE), table: REVIEWER_TRANSITIONS, entries: [REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST], terminals: inferredTerminals(REVIEWER_TRANSITIONS) },
+  { id: 'lifecycle_layer', title: 'lifecycle', states: Object.values(LIFECYCLE_STATE), table: LIFECYCLE_TRANSITIONS, entries: LIFECYCLE_GRAPH.entryStates, terminals: LIFECYCLE_TERMINAL_STATES, entryLabel: LIFECYCLE_GRAPH.start.label, exitLabel: LIFECYCLE_GRAPH.end.label },
+];
 
-let mermaidBrowserScriptPromise = null;
-
-function normalizeTransitions(transitions) {
-  if (!Array.isArray(transitions)) {
-    return null;
-  }
-
-  const normalizedTransitions = [];
-  const seenTransitions = new Set();
-
-  for (const transition of transitions) {
-    if (typeof transition !== "string") {
-      continue;
-    }
-
-    const normalizedTransition = transition.trim();
-    if (normalizedTransition.length === 0 || seenTransitions.has(normalizedTransition)) {
-      continue;
-    }
-
-    seenTransitions.add(normalizedTransition);
-    normalizedTransitions.push(normalizedTransition);
-  }
-
-  return normalizedTransitions;
+function normalizedTransitions(value) {
+  if (!Array.isArray(value)) return null;
+  return [...new Set(value.filter(token => typeof token === 'string').map(token => token.trim()).filter(Boolean))];
 }
 
-const COPILOT_TERMINAL_STATES = new Set(
-  Object.entries(COPILOT_TRANSITIONS)
-    .filter(([, nextStates]) => Array.isArray(nextStates) && nextStates.length === 0)
-    .map(([state]) => state),
-);
-const OUTER_TERMINAL_STATE_SET = new Set(OUTER_TERMINAL_STATES);
-const REVIEWER_TERMINAL_STATES = new Set(
-  Object.entries(REVIEWER_TRANSITIONS)
-    .filter(([, nextStates]) => Array.isArray(nextStates) && nextStates.length === 0)
-    .map(([state]) => state),
-);
-
-const LIFECYCLE_TERMINAL_STATE_SET = new Set(LIFECYCLE_TERMINAL_STATES);
-
-function normalizeCurrentStateInfo(currentState, { knownStates = null, terminalStates = null } = {}) {
-  if (typeof currentState === "string" && currentState.length > 0) {
-    const normalized = currentState.trim();
-
-    if (normalized.toLowerCase() === "unknown") {
-      return { label: "current state unavailable", available: false, terminal: false };
-    }
-    if (knownStates instanceof Set && !knownStates.has(normalized)) {
-      return { label: "current state unavailable", available: false, terminal: false };
-    }
-
-    return {
-      label: normalized,
-      available: true,
-      terminal: terminalStates instanceof Set ? terminalStates.has(normalized) : false,
-    };
-  }
-
-  return { label: "current state unavailable", available: false, terminal: false };
+function currentInfo(value, definition) {
+  const suppliedToken = typeof value === 'string' ? value.trim() : null;
+  const reason = value == null ? 'missing'
+    : typeof value !== 'string' ? 'invalid-type'
+      : !suppliedToken ? 'empty'
+        : suppliedToken.toLowerCase() === 'unknown' ? 'unknown-token'
+          : !definition.states.includes(suppliedToken) ? 'unrecognized' : null;
+  return reason === null
+    ? { status: 'known', reason: null, stateId: suppliedToken, nodeId: stateId(definition.id, suppliedToken), label: suppliedToken, suppliedToken }
+    : { status: 'unavailable', reason, stateId: null, nodeId: null, label: 'current state unavailable', suppliedToken };
 }
 
-function summarizeTransitionAvailability(transitions) {
-  const normalizedTransitions = normalizeTransitions(transitions);
-  const unavailable = normalizedTransitions === null;
-  const empty = !unavailable && normalizedTransitions.length === 0;
-  const summary = unavailable
-    ? "transition data unavailable in this snapshot"
-    : empty
-      ? "no allowed transitions"
-      : normalizedTransitions.join(", ");
-
-  return {
-    unavailable,
-    empty,
-    summary,
-    normalizedTransitions: unavailable ? [] : normalizedTransitions,
+function buildLayer(definition, suppliedCurrent, suppliedTransitions) {
+  const current = currentInfo(suppliedCurrent, definition);
+  const normalized = normalizedTransitions(suppliedTransitions);
+  const outgoing = current.status === 'known' ? new Set(definition.table[current.stateId]) : new Set();
+  const allowedNext = new Set((normalized ?? []).filter(state => outgoing.has(state)));
+  const broadNextSet = definition.saturated === true && current.status === 'known' && allowedNext.size === definition.states.length;
+  const next = broadNextSet ? new Set() : allowedNext;
+  const status = normalized === null ? 'unavailable' : normalized.length === 0 ? 'empty' : 'available';
+  const transitionInfo = {
+    status,
+    normalizedTransitions: normalized ?? [],
+    highlightedNextStateIds: [...next].sort(),
+    broadNextSet,
+    summary: status === 'unavailable' ? 'transition data unavailable in this snapshot' : status === 'empty' ? 'no allowed transitions' : normalized.join(', '),
   };
-}
-
-export async function loadMermaidBrowserScript({ readFileImpl = readFile } = {}) {
-  if (mermaidBrowserScriptPromise === null) {
-    mermaidBrowserScriptPromise = Promise.resolve()
-      .then(() => readFileImpl(MERMAID_BROWSER_ASSET_PATH, "utf8"))
-      .catch((error) => {
-        mermaidBrowserScriptPromise = null;
-        throw error;
-      });
-  }
-  return mermaidBrowserScriptPromise;
-}
-
-export function resetMermaidBrowserScriptCache() {
-  mermaidBrowserScriptPromise = null;
-}
-
-function escapeMermaidLabel(value) {
-  return String(value)
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"');
-}
-
-function renderMermaidNode(id, label, shape = "box") {
-  const escapedLabel = escapeMermaidLabel(label);
-
-  if (shape === "pill") {
-    return `${id}(["${escapedLabel}"])`;
-  }
-  if (shape === "circle") {
-    return `${id}(("${escapedLabel}"))`;
-  }
-
-  return `${id}["${escapedLabel}"]`;
-}
-
-function renderMermaidNodeId(laneKey, state) {
-  return `${laneKey}_${String(state).replaceAll(/[^a-zA-Z0-9_]+/g, "_")}`;
-}
-
-function humanizeGraphStateLabel(state) {
-  return String(state).replaceAll("_", " ");
-}
-
-function buildFullStateMachineLane({ laneKey, title, states, transitionTable, currentState, transitions, startStates = [], startLabel = "Start", endLabel = "End", terminalStates = null, displayLabelForState = (state) => state, suppressSaturatedNextHighlights = false }) {
-  const knownStates = new Set(states);
-  const resolvedTerminalStates = terminalStates instanceof Set
-    ? terminalStates
-    : new Set(states.filter((state) => Array.isArray(transitionTable[state]) && transitionTable[state].length === 0));
-  const currentInfo = normalizeCurrentStateInfo(currentState, { knownStates, terminalStates: resolvedTerminalStates });
-  const transitionInfo = summarizeTransitionAvailability(transitions);
-  const authoritativeCurrentNextStates = currentInfo.available
-    ? new Set(Array.isArray(transitionTable[currentInfo.label]) ? transitionTable[currentInfo.label] : [])
-    : new Set();
-  const highlightedNextStates = new Set(
-    transitionInfo.unavailable || !currentInfo.available
-      ? []
-      : transitionInfo.normalizedTransitions.filter((state) => authoritativeCurrentNextStates.has(state)),
-  );
-  const broadNextSet = suppressSaturatedNextHighlights
-    && currentInfo.available
-    && highlightedNextStates.size === knownStates.size;
-  const effectiveHighlightedNextStates = broadNextSet ? new Set() : highlightedNextStates;
-  const classIds = {
-    cue: [],
-    current: [],
-    currentTerminal: [],
-    next: [],
-    nextTerminal: [],
-    terminal: [],
-    inactive: [],
-    unavailable: [],
-    note: [],
-  };
-  const lines = [
-    `  subgraph ${laneKey}["${escapeMermaidLabel(title)}"]`,
-    "    direction LR",
+  const terminalStates = new Set(definition.terminals);
+  const nodes = definition.states.map(state => ({
+    id: stateId(definition.id, state), stateId: state, label: state.replaceAll('_', ' '), terminal: terminalStates.has(state),
+    snapshot: {
+      current: current.stateId === state,
+      allowedNext: allowedNext.has(state),
+      next: next.has(state),
+      emphasis: current.stateId === state ? 'current' : next.has(state) ? 'next' : terminalStates.has(state) ? 'terminal' : 'inactive',
+    },
+  }));
+  const edges = definition.states.flatMap(from => definition.table[from].map(to => ({
+    id: pairId(definition.id, 'transition', from, to), from: stateId(definition.id, from), to: stateId(definition.id, to),
+  })));
+  const entry = { id: `${definition.id}:cue:entry`, kind: 'entry', label: definition.entryLabel ?? 'Start' };
+  const exit = { id: `${definition.id}:cue:exit`, kind: 'exit', label: definition.exitLabel ?? 'End' };
+  const cues = [...(definition.entries.length ? [entry] : []), ...(definition.terminals.length ? [exit] : [])];
+  const cueLinks = [
+    ...definition.entries.map(to => ({ id: pairId(definition.id, 'entry', entry.id, to), kind: 'entry', from: entry.id, to: stateId(definition.id, to) })),
+    ...definition.terminals.map(from => ({ id: pairId(definition.id, 'exit', from, exit.id), kind: 'exit', from: stateId(definition.id, from), to: exit.id })),
   ];
-  const startId = `${laneKey}_start`;
-  const endId = `${laneKey}_end`;
-
-  if (startStates.length > 0) {
-    lines.push(`    ${renderMermaidNode(startId, startLabel, "pill")}`);
-    classIds.cue.push(startId);
+  const annotations = [];
+  if (current.status === 'unavailable') annotations.push({ id: `${definition.id}:annotation:current-unavailable`, kind: 'current-unavailable', text: current.suppliedToken ? `Current state unavailable: unrecognized or unknown identifier ${current.suppliedToken}.` : 'Current state unavailable in this snapshot.', relatedNodeId: null });
+  if (status === 'unavailable') annotations.push({ id: `${definition.id}:annotation:transitions-unavailable`, kind: 'transitions-unavailable', text: 'Snapshot next transitions unavailable; no next-state eligibility is inferred.', relatedNodeId: current.nodeId });
+  if (broadNextSet) annotations.push({ id: `${definition.id}:annotation:broad-next-set`, kind: 'broad-next-set', text: 'Next evaluation may resolve to any shown state; broad outer eligibility is not emphasized as a specific immediate next step.', relatedNodeId: current.nodeId });
+  const topology = { nodes, edges, cues, cueLinks };
+  let geometry;
+  try {
+    geometry = layoutInspectionLayer(topology);
+  } catch (error) {
+    geometry = { status: 'unavailable', reason: error?.code === 'invalid_graph' ? 'invalid_graph' : 'layout_failed' };
   }
-
-  for (const state of states) {
-    const nodeId = renderMermaidNodeId(laneKey, state);
-    const terminal = resolvedTerminalStates.has(state);
-    lines.push(`    ${renderMermaidNode(nodeId, displayLabelForState(state))}`);
-
-    if (currentInfo.available && currentInfo.label === state) {
-      classIds[terminal ? "currentTerminal" : "current"].push(nodeId);
-    } else if (effectiveHighlightedNextStates.has(state)) {
-      classIds[terminal ? "nextTerminal" : "next"].push(nodeId);
-    } else if (terminal) {
-      classIds.terminal.push(nodeId);
-    } else {
-      classIds.inactive.push(nodeId);
-    }
-  }
-
-  let endVisible = false;
-  const ensureEndNode = () => {
-    if (!endVisible) {
-      lines.push(`    ${renderMermaidNode(endId, endLabel, "circle")}`);
-      classIds.cue.push(endId);
-      endVisible = true;
-    }
-    return endId;
-  };
-
-  for (const startState of startStates) {
-    if (knownStates.has(startState)) {
-      lines.push(`    ${startId} --> ${renderMermaidNodeId(laneKey, startState)}`);
-    }
-  }
-
-  for (const state of states) {
-    const fromId = renderMermaidNodeId(laneKey, state);
-    const nextStates = Array.isArray(transitionTable[state]) ? transitionTable[state] : [];
-
-    if (nextStates.length === 0) {
-      lines.push(`    ${fromId} --> ${ensureEndNode()}`);
-      continue;
-    }
-
-    for (const nextState of nextStates) {
-      if (knownStates.has(nextState)) {
-        lines.push(`    ${fromId} --> ${renderMermaidNodeId(laneKey, nextState)}`);
-      }
-    }
-  }
-
-  let currentId = startStates.length > 0 ? startId : renderMermaidNodeId(laneKey, states[0]);
-  if (!currentInfo.available) {
-    const unavailableId = `${laneKey}_current_unavailable`;
-    lines.push(`    ${renderMermaidNode(unavailableId, currentInfo.label)}`);
-    classIds.unavailable.push(unavailableId);
-    currentId = unavailableId;
-  } else {
-    currentId = renderMermaidNodeId(laneKey, currentInfo.label);
-  }
-
-  if (transitionInfo.unavailable) {
-    const noteId = `${laneKey}_transitions_unavailable`;
-    lines.push(`    ${renderMermaidNode(noteId, "snapshot next transitions unavailable")}`);
-    lines.push(`    ${currentId} -.-> ${noteId}`);
-    classIds.note.push(noteId);
-  } else if (broadNextSet) {
-    const noteId = `${laneKey}_broad_next_set`;
-    lines.push(`    ${renderMermaidNode(noteId, "next evaluation may resolve to any shown state")}`);
-    lines.push(`    ${currentId} -.-> ${noteId}`);
-    classIds.note.push(noteId);
-  }
-
-  lines.push("  end");
-
-  return {
-    title,
-    currentLabel: currentInfo.label,
-    transitionInfo,
-    currentId,
-    lines,
-    classIds,
-    summary: `${currentInfo.label}; full authoritative state machine shown`,
-  };
+  return { id: definition.id, title: definition.title, ...topology, annotations, current, transitionInfo, summary: `${current.label}; full authoritative state machine shown`, geometry };
 }
 
-export function buildInspectionMermaidGraph(snapshot) {
-  if (snapshot === null || snapshot === undefined || renderSnapshotStateLabel(snapshot) === "unavailable") {
-    return null;
-  }
-
-  const lanes = [
-    buildFullStateMachineLane({
-      laneKey: "outer_loop_family",
-      title: "outer-loop family",
-      states: Object.values(OUTER_STATE),
-      transitionTable: OUTER_TRANSITIONS,
-      currentState: snapshot.outerState,
-      transitions: snapshot.allowedTransitions,
-      startStates: OUTER_GRAPH.entryStates,
-      startLabel: OUTER_GRAPH.start.label,
-      endLabel: OUTER_GRAPH.end.label,
-      terminalStates: OUTER_TERMINAL_STATE_SET,
-      displayLabelForState: humanizeGraphStateLabel,
-      suppressSaturatedNextHighlights: true,
-    }),
-    buildFullStateMachineLane({
-      laneKey: "copilot_layer",
-      title: "copilot layer",
-      states: Object.values(COPILOT_STATE),
-      transitionTable: COPILOT_TRANSITIONS,
-      currentState: snapshot.layers?.copilot?.currentState,
-      transitions: snapshot.layers?.copilot?.allowedTransitions,
-      startStates: [COPILOT_STATE.PR_DRAFT],
-      terminalStates: COPILOT_TERMINAL_STATES,
-    }),
-    buildFullStateMachineLane({
-      laneKey: "reviewer_layer",
-      title: "reviewer layer",
-      states: Object.values(REVIEWER_STATE),
-      transitionTable: REVIEWER_TRANSITIONS,
-      currentState: snapshot.layers?.reviewer?.currentState,
-      transitions: snapshot.layers?.reviewer?.allowedTransitions,
-      startStates: [REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST],
-      terminalStates: REVIEWER_TERMINAL_STATES,
-    }),
-    buildFullStateMachineLane({
-      laneKey: "lifecycle_layer",
-      title: "lifecycle",
-      states: Object.values(LIFECYCLE_STATE),
-      transitionTable: LIFECYCLE_TRANSITIONS,
-      currentState: snapshot.lifecyclePhase,
-      transitions: snapshot.lifecycleAllowedTransitions,
-      startStates: LIFECYCLE_GRAPH.entryStates,
-      startLabel: LIFECYCLE_GRAPH.start.label,
-      endLabel: LIFECYCLE_GRAPH.end.label,
-      terminalStates: LIFECYCLE_TERMINAL_STATE_SET,
-      displayLabelForState: humanizeGraphStateLabel,
-    }),
+export function buildInspectionGraph(snapshot) {
+  if (snapshot == null || renderSnapshotStateLabel(snapshot) === 'unavailable') return null;
+  const values = [
+    [snapshot.outerState, snapshot.allowedTransitions],
+    [snapshot.layers?.copilot?.currentState, snapshot.layers?.copilot?.allowedTransitions],
+    [snapshot.layers?.reviewer?.currentState, snapshot.layers?.reviewer?.allowedTransitions],
+    [snapshot.lifecyclePhase, snapshot.lifecycleAllowedTransitions],
   ];
-
-  const classIds = {
-    cue: [],
-    current: [],
-    currentTerminal: [],
-    next: [],
-    nextTerminal: [],
-    terminal: [],
-    inactive: [],
-    unavailable: [],
-    note: [],
-  };
-
-  for (const lane of lanes) {
-    for (const [className, ids] of Object.entries(lane.classIds)) {
-      classIds[className].push(...ids);
-    }
-  }
-
-  const orderedLaneLines = [
-    '  subgraph lane_stack[" "]',
-    '    direction TB',
-    ...lanes.flatMap((lane) => lane.lines.map((line) => `    ${line.trimStart()}`)),
-    '  end',
-  ];
-
-  const lines = [
-    "flowchart TB",
-    "  classDef cue fill:#f5f7f9,stroke:#78909c,stroke-width:1.5px,color:#355061,font-weight:bold;",
-    "  classDef current fill:#e3f2fd,stroke:#1565c0,stroke-width:4px,color:#12344d,font-weight:bold;",
-    "  classDef currentTerminal fill:#d9f2df,stroke:#1565c0,stroke-width:4px,color:#12344d,font-weight:800;",
-    "  classDef next fill:#f3f4ff,stroke:#5c6bc0,stroke-width:2px,color:#233242,font-weight:700;",
-    "  classDef nextTerminal fill:#eef7ef,stroke:#5c6bc0,stroke-width:3px,color:#1b5e20,font-weight:700;",
-    "  classDef terminal fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#1b5e20,font-weight:bold;",
-    "  classDef inactive fill:#ffffff,stroke:#b0bec5,stroke-width:1.5px,color:#607d8b;",
-    "  classDef unavailable fill:#f8fafc,stroke:#90a4ae,stroke-width:2px,color:#546e7a,stroke-dasharray: 6 4;",
-    "  classDef note fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#7f4b00;",
-    ...orderedLaneLines,
-    '  outer_loop_family_start ~~~ copilot_layer_start',
-    '  copilot_layer_start ~~~ reviewer_layer_start',
-    '  reviewer_layer_start ~~~ lifecycle_layer_start',
-    '  outer_loop_family_start ~~~ lifecycle_layer_start',
-    `  ${lanes[0].currentId} -. "layer view" .-> ${lanes[1].currentId}`,
-    `  ${lanes[1].currentId} -. "layer view" .-> ${lanes[2].currentId}`,
-    `  ${lanes[2].currentId} -. "layer view" .-> ${lanes[3].currentId}`,
-  ];
-
-  for (const [className, ids] of Object.entries(classIds)) {
-    if (ids.length > 0) {
-      lines.push(`  class ${ids.join(",")} ${className};`);
-    }
-  }
-
-  const outerState = formatStateToken(snapshot.outerState, "unknown");
-  const outerAction = formatStateToken(snapshot.outerAction, "unknown");
-  let focusIds = lanes.map((lane) => lane.currentId);
-  const lifecycleAvailable = snapshot.lifecyclePhase != null
-    && snapshot.lifecyclePhase !== "unknown"
-    && !String(snapshot.lifecyclePhase).toLowerCase().includes("unavailable");
-  if (lifecycleAvailable) {
-    focusIds = [lanes[3].currentId];
-  } else if (outerState === OUTER_STATE.HANDOFF_TO_COPILOT_LOOP || outerAction === "reenter_copilot_loop") {
-    focusIds = [lanes[1].currentId];
-  } else if (outerState === OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP || outerAction === "reenter_reviewer_loop") {
-    focusIds = [lanes[2].currentId];
-  } else {
-    const copilotFocusId = lanes[1].currentId;
-    const copilotAvailable = !copilotFocusId.includes("unavailable");
-    focusIds = copilotAvailable ? [copilotFocusId] : lanes.map((lane) => lane.currentId);
-  }
-
-  return {
-    definition: lines.join("\n"),
-    focusIds,
-    lanes: lanes.map((lane) => ({
-      title: lane.title,
-      currentLabel: lane.currentLabel,
-      transitionInfo: lane.transitionInfo,
-      summary: lane.summary,
-    })),
-  };
+  const layers = definitions.map((definition, index) => buildLayer(definition, ...values[index]));
+  const focus = layer => ({ layerId: layer.id, kind: layer.current.nodeId ? 'state' : 'annotation', id: layer.current.nodeId ?? `${layer.id}:annotation:current-unavailable` });
+  const outerState = formatStateToken(snapshot.outerState, 'unknown');
+  const outerAction = formatStateToken(snapshot.outerAction, 'unknown');
+  let focusTargets;
+  // Preserve the existing raw lifecycle priority independently of identifier validity.
+  const lifecycleAvailable = snapshot.lifecyclePhase != null && snapshot.lifecyclePhase !== 'unknown' && !String(snapshot.lifecyclePhase).toLowerCase().includes('unavailable');
+  if (lifecycleAvailable) focusTargets = [focus(layers[3])];
+  else if (outerState === OUTER_STATE.HANDOFF_TO_COPILOT_LOOP || outerAction === 'reenter_copilot_loop') focusTargets = [focus(layers[1])];
+  else if (outerState === OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP || outerAction === 'reenter_reviewer_loop') focusTargets = [focus(layers[2])];
+  else focusTargets = layers[1].current.nodeId ? [focus(layers[1])] : layers.map(focus);
+  return { layers, focusTargets, initialLayerId: focusTargets[0].layerId };
 }
 
-function renderStateGraphLegend() {
-  return `<div class="state-graph-cues" aria-label="State graph cues">
-    <span class="state-graph-cue"><span class="state-graph-cue-chip state-graph-cue-chip-start">Start</span> lane entry</span>
-    <span class="state-graph-cue"><span class="state-graph-cue-chip state-graph-cue-chip-current">Current</span> snapshot-derived current state</span>
-    <span class="state-graph-cue"><span class="state-graph-cue-chip state-graph-cue-chip-next">Next</span> immediate allowed next state</span>
-    <span class="state-graph-cue"><span class="state-graph-cue-chip state-graph-cue-chip-end">End</span> terminal / no-transition outcome</span>
-    <span class="state-graph-cue"><span class="state-graph-cue-chip state-graph-cue-chip-loop">🔁</span> manual re-inspection cue</span>
-  </div>`;
+function classification(node) {
+  return [node.snapshot.current ? 'Current' : null, node.snapshot.next ? 'Next' : null, node.terminal ? 'Terminal' : null].filter(Boolean).join(' · ') || 'Inactive';
 }
 
-function renderStateGraphHelp() {
-  return `<ul class="state-graph-help">
-    <li><strong>Current:</strong> emphasized nodes show the snapshot-derived current state for each lane when that state is actually known.</li>
-    <li><strong>Next:</strong> purple nodes mark immediate allowed next states from the snapshot. Dimmed nodes are still part of the authoritative state machine; they are simply inactive right now.</li>
-    <li><strong>Start / End:</strong> entry and exit nodes make lane boundaries easier to scan for the full authoritative graph.</li>
-    <li><strong>Orchestrator:</strong> the outer lane comes from the shared authoritative outer-loop graph contract; outerAction remains visible only as a compatibility projection.</li>
-    <li><strong>Lifecycle:</strong> the lifecycle lane shows the sequential dev-loop phases from issue intake to merge; current phase is highlighted from the inspection snapshot.</li>
-    <li><strong>🔁 Loop cue:</strong> this viewer is revisited by manual reload, so the same current state can recur across inspections until evidence changes.</li>
-  </ul>`;
+function layerTransitionSummary(layer) {
+  if (layer.transitionInfo.status === 'unavailable') return 'Transition data unavailable';
+  if (layer.transitionInfo.status === 'empty') return 'No allowed transitions';
+  return `${layer.transitionInfo.normalizedTransitions.length} snapshot transitions${layer.transitionInfo.broadNextSet ? ' · broad next set' : ''}`;
 }
 
-function renderStateGraphSummaries(graph) {
-  return `<ul class="state-graph-summaries">
-    ${graph.lanes.map((lane) => `<li class="state-graph-summary"><strong>${escapeHtml(lane.title)}:</strong> current <code>${escapeHtml(lane.currentLabel)}</code>; ${escapeHtml(lane.summary ?? lane.transitionInfo.summary)}; ${escapeHtml(lane.transitionInfo.summary)}</li>`).join("")}
-  </ul>`;
-}
-
-function renderStateGraphDetails(graph) {
-  return `<details class="state-graph-details">
-    <summary>Graph guide and lane details</summary>
-    ${renderStateGraphHelp()}
-    ${renderStateGraphSummaries(graph)}
+function renderLayerText(layer) {
+  const byId = new Map(layer.nodes.map(node => [node.id, node]));
+  return `<details class="state-graph-layer-details"><summary>${escapeHtml(layer.title)} — all states and authoritative transitions</summary>
+    <p>Snapshot current: <code>${escapeHtml(layer.current.suppliedToken ?? 'unavailable')}</code>. Snapshot allowed transitions: ${escapeHtml(layer.transitionInfo.summary)}.</p><!-- secret-scan:allow suppliedToken is a snapshot state identifier, not an authentication credential -->
+    ${layer.annotations.map(note => `<p>${escapeHtml(note.text)}</p>`).join('')}
+    <ul>${layer.nodes.map(node => {
+      const outgoing = layer.edges.filter(edge => edge.from === node.id).map(edge => byId.get(edge.to)?.stateId ?? edge.to);
+      return `<li><code>${escapeHtml(node.stateId)}</code> — ${escapeHtml(node.label)}; ${escapeHtml(classification(node))}. Authoritative outgoing: ${outgoing.length ? outgoing.map(id => `<code>${escapeHtml(id)}</code>`).join(', ') : 'none (table terminal)'}.</li>`;
+    }).join('')}</ul>
+    <p>Presentation cues only: ${layer.cues.map(cue => escapeHtml(`${cue.label} (${cue.kind})`)).join(', ')}. They are not executable states.</p>
   </details>`;
 }
 
-export function renderMermaidBootScript() {
-  return `<script src="${MERMAID_BROWSER_ASSET_ROUTE}"></script>
-    <script>
-      (() => {
-        const frames = Array.from(document.querySelectorAll(".state-graph-frame"));
-        const graphs = Array.from(document.querySelectorAll(".mermaid-state-graph"));
-        const renderedGraphs = new WeakSet();
-        const clampScale = (value) => Math.max(0.5, Math.min(5, value));
-        const updateFrameScale = (frame, requestedScale) => {
-          const scale = clampScale(requestedScale);
-          frame.dataset.graphScale = String(scale);
-          const zoomValue = frame.querySelector("[data-graph-zoom-value]");
-          if (zoomValue) {
-            zoomValue.textContent = String(Math.round(scale * 100)) + "%";
-          }
-          const graphViewport = frame.querySelector(".mermaid-state-graph");
-          const svg = graphViewport ? graphViewport.querySelector("svg") : null;
-          if (svg && graphViewport) {
-            let wrapper = graphViewport.querySelector(":scope > .mermaid-zoom-inner");
-            if (!wrapper) {
-              const svgRect = svg.getBoundingClientRect();
-              wrapper = document.createElement("div");
-              wrapper.className = "mermaid-zoom-inner";
-              wrapper.style.transformOrigin = "0 0";
-              graphViewport.insertBefore(wrapper, svg);
-              wrapper.appendChild(svg);
-              svg.style.display = "block";
-              svg.style.maxWidth = "none";
-              if (svgRect.width > 0) {
-                frame.dataset.graphNaturalWidth = String(svgRect.width);
-                svg.style.width = svgRect.width + "px";
-              }
-              if (svgRect.height > 0) {
-                frame.dataset.graphNaturalHeight = String(svgRect.height);
-                svg.style.height = svgRect.height + "px";
-              }
-            }
-            const naturalWidth = Number(frame.dataset.graphNaturalWidth) || graphViewport.getBoundingClientRect().width;
-            const naturalHeight = Number(frame.dataset.graphNaturalHeight) || 256;
-            wrapper.style.width = Math.round(naturalWidth * scale) + "px";
-            wrapper.style.height = Math.round(naturalHeight * scale) + "px";
-            svg.style.transform = "scale(" + scale + ")";
-            svg.style.transformOrigin = "0 0";
-            void graphViewport.offsetWidth;
-          }
-          return scale;
-        };
-        const settleGraphViewport = (delayMs = 180) => new Promise((resolve) => {
-          let done = false;
-          const finish = () => {
-            if (done) {
-              return;
-            }
-            done = true;
-            resolve();
-          };
-          requestAnimationFrame(() => {
-            requestAnimationFrame(finish);
-          });
-          window.setTimeout(finish, delayMs);
-        });
-        const zoomGraphViewport = (frame, graphViewport, requestedScale, focusPoint = null) => {
-          const previousScale = Number(frame.dataset.graphScale || 1);
-          const nextScale = updateFrameScale(frame, requestedScale);
-          void frame.offsetWidth;
-          if (!focusPoint) {
-            return settleGraphViewport();
-          }
-          const scaleRatio = nextScale / previousScale;
-          return new Promise((resolve) => {
-            requestAnimationFrame(() => {
-              const newScrollLeft = (focusPoint.contentX * scaleRatio) - focusPoint.viewportX;
-              const newScrollTop = (focusPoint.contentY * scaleRatio) - focusPoint.viewportY;
-              graphViewport.scrollLeft = newScrollLeft;
-              graphViewport.scrollTop = newScrollTop;
-              settleGraphViewport().then(resolve);
-            });
-          });
-        };
-        const fitGraphToCurrentState = (frame, graphViewport) => {
-          return new Promise((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => {
-              const svg = graphViewport.querySelector("svg");
-              if (!svg) {
-                resolve(false);
-                return;
-              }
-              const focusIds = (graphViewport.dataset.graphFocusIds ?? "")
-                .split(",").map((id) => id.trim()).filter(Boolean);
-              const allNodes = Array.from(svg.querySelectorAll(".node"));
-              const focusNodes = focusIds.length === 0
-                ? []
-                : allNodes.filter((node) => focusIds.some((focusId) => node.id.includes(focusId)));
-              const targetNodes = focusNodes.length > 0
-                ? focusNodes
-                : Array.from(svg.querySelectorAll(".node.current, .node.currentTerminal, .node.unavailable"));
-              const viewportRect = graphViewport.getBoundingClientRect();
-              const targetRects = targetNodes
-                .map((node) => node.getBoundingClientRect())
-                .filter((rect) => rect.width > 0 && rect.height > 0);
-              if (targetRects.length === 0) {
-                resolve(false);
-                return;
-              }
-              const [firstRect, ...remainingRects] = targetRects;
-              const unionRect = remainingRects.reduce((combined, rect) => ({
-                left: Math.min(combined.left, rect.left),
-                top: Math.min(combined.top, rect.top),
-                right: Math.max(combined.right, rect.right),
-                bottom: Math.max(combined.bottom, rect.bottom),
-              }), { left: firstRect.left, top: firstRect.top, right: firstRect.right, bottom: firstRect.bottom });
-              const unionWidth = unionRect.right - unionRect.left;
-              zoomGraphViewport(frame, graphViewport, 3, {
-                viewportX: viewportRect.width / 2,
-                viewportY: viewportRect.height / 2,
-                contentX: graphViewport.scrollLeft + ((unionRect.left - viewportRect.left) + (unionWidth / 2)),
-                contentY: graphViewport.scrollTop + ((unionRect.top - viewportRect.top) + ((unionRect.bottom - unionRect.top) / 2)),
-              }).then(() => {
-                resolve(true);
-              });
-            }));
-          });
-        };
-        const renderFallback = (message) => {
-          graphs.forEach((graph) => {
-            const fallback = document.createElement("p");
-            fallback.className = "state-graph-render-error";
-            fallback.textContent = message;
-            graph.replaceWith(fallback);
-          });
-        };
-        const isGraphVisible = (graph) => {
-          if (!(graph instanceof HTMLElement)) {
-            return false;
-          }
-          const panel = graph.closest(".tab-content");
-          if (panel && !panel.classList.contains("active")) {
-            return false;
-          }
-          const rect = graph.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0;
-        };
-        const finalizeRenderedGraph = async (graph) => {
-          graph.dataset.rendered = "settling";
-          const frame = graph.closest(".state-graph-frame");
-          if (!frame) {
-            graph.dataset.rendered = "true";
-            renderedGraphs.add(graph);
-            return;
-          }
-          updateFrameScale(frame, Number(frame.dataset.graphScale || 1));
-          const graphViewport = frame.querySelector(".mermaid-state-graph");
-          if (graphViewport) {
-            const focused = await fitGraphToCurrentState(frame, graphViewport);
-            if (!focused) {
-              await settleGraphViewport();
-            }
-          } else {
-            await settleGraphViewport();
-          }
-          graph.dataset.rendered = "true";
-          renderedGraphs.add(graph);
-        };
-
-        frames.forEach((frame) => {
-          updateFrameScale(frame, Number(frame.dataset.graphScale || 1));
-          frame.querySelector("[data-graph-zoom-in]")?.addEventListener("click", () => {
-            updateFrameScale(frame, Number(frame.dataset.graphScale || 1) + 0.25);
-          });
-          frame.querySelector("[data-graph-zoom-out]")?.addEventListener("click", () => {
-            updateFrameScale(frame, Number(frame.dataset.graphScale || 1) - 0.25);
-          });
-          frame.querySelector("[data-graph-zoom-reset]")?.addEventListener("click", () => {
-            updateFrameScale(frame, 1);
-          });
-          frame.querySelector("[data-graph-fullscreen]")?.addEventListener("click", async () => {
-            if (document.fullscreenElement === frame) {
-              await document.exitFullscreen?.();
-              return;
-            }
-            await frame.requestFullscreen?.();
-          });
-
-          const graphViewport = frame.querySelector(".mermaid-state-graph");
-          if (graphViewport) {
-            let dragState = null;
-            graphViewport.addEventListener("pointerdown", (event) => {
-              if (event.button !== 0) {
-                return;
-              }
-              dragState = {
-                pointerId: event.pointerId,
-                startX: event.clientX,
-                startY: event.clientY,
-                startScrollLeft: graphViewport.scrollLeft,
-                startScrollTop: graphViewport.scrollTop,
-              };
-              graphViewport.dataset.dragging = "true";
-              graphViewport.setPointerCapture?.(event.pointerId);
-              event.preventDefault();
-            });
-            graphViewport.addEventListener("pointermove", (event) => {
-              if (!dragState || dragState.pointerId !== event.pointerId) {
-                return;
-              }
-              graphViewport.scrollLeft = dragState.startScrollLeft - (event.clientX - dragState.startX);
-              graphViewport.scrollTop = dragState.startScrollTop - (event.clientY - dragState.startY);
-            });
-            const stopDragging = (event) => {
-              if (!dragState || dragState.pointerId !== event.pointerId) {
-                return;
-              }
-              graphViewport.dataset.dragging = "false";
-              graphViewport.releasePointerCapture?.(event.pointerId);
-              dragState = null;
-            };
-            graphViewport.addEventListener("pointerup", stopDragging);
-            graphViewport.addEventListener("pointercancel", stopDragging);
-            graphViewport.addEventListener("dblclick", (event) => {
-              const rect = graphViewport.getBoundingClientRect();
-              zoomGraphViewport(
-                frame,
-                graphViewport,
-                Number(frame.dataset.graphScale || 1) + 0.25,
-                {
-                  viewportX: event.clientX - rect.left,
-                  viewportY: event.clientY - rect.top,
-                  contentX: graphViewport.scrollLeft + (event.clientX - rect.left),
-                  contentY: graphViewport.scrollTop + (event.clientY - rect.top),
-                },
-              );
-              event.preventDefault();
-            });
-          }
-        });
-
-        if (graphs.length === 0) {
-          return;
-        }
-        if (typeof window.mermaid === "undefined") {
-          renderFallback("Graph renderer unavailable. Use the details below or open /snapshot.json.");
-          return;
-        }
-
-        window.mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: "strict",
-          theme: "base",
-          flowchart: {
-            useMaxWidth: true,
-            htmlLabels: false,
-            curve: "basis",
-          },
-        });
-
-        let pendingRender = Promise.resolve();
-        const queueVisibleGraphRender = () => {
-          pendingRender = pendingRender.then(async () => {
-            const visibleGraphs = graphs.filter((graph) => !renderedGraphs.has(graph) && isGraphVisible(graph));
-            if (visibleGraphs.length === 0) {
-              return;
-            }
-            await window.mermaid.run({ nodes: visibleGraphs });
-            await Promise.all(visibleGraphs.map((graph) => finalizeRenderedGraph(graph)));
-          }).catch(() => {
-            renderFallback("Could not render graph for this snapshot. Use the details below or open /snapshot.json.");
-          });
-          return pendingRender;
-        };
-
-        document.addEventListener("inspect-run-viewer:tabchange", () => {
-          window.requestAnimationFrame(() => {
-            void queueVisibleGraphRender();
-          });
-        });
-        window.addEventListener("load", () => {
-          void queueVisibleGraphRender();
-        });
-        void queueVisibleGraphRender();
-      })();
-    </script>`;
+function graphJson(graph) {
+  return JSON.stringify(graph).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e').replaceAll('&', '\\u0026').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029');
 }
 
-export function renderStateVisualizationSection(snapshot, graph = buildInspectionMermaidGraph(snapshot)) {
-  if (graph === null) {
-    return `<div class="state-graph-block">
-      <p>Snapshot unavailable, so no state graph can be rendered yet.</p>
-    </div>`;
-  }
-
+export function renderStateVisualizationSection(snapshot, graph = buildInspectionGraph(snapshot), target = snapshot?.target) {
+  const params = new URLSearchParams();
+  if (target?.repo) params.set('repo', target.repo);
+  if (target?.pr != null) params.set('pr', String(target.pr));
+  const snapshotHref = `/snapshot.json${params.size ? `?${params}` : ''}`;
+  if (graph === null) return `<div class="state-graph-block"><p>Snapshot unavailable, so no state graph can be rendered yet.</p><a href="${escapeHtml(snapshotHref)}">Snapshot JSON</a></div>`;
   return `<div class="state-graph-block">
-    <div class="state-graph-frame" data-graph-scale="1">
-      <div class="state-graph-toolbar" aria-label="Graph controls">
-        <button type="button" data-graph-zoom-out aria-label="Zoom out">−</button>
-        <button type="button" data-graph-zoom-in aria-label="Zoom in">+</button>
-        <button type="button" data-graph-zoom-reset aria-label="Reset zoom">100%</button>
-        <span class="state-graph-zoom-value" data-graph-zoom-value>100%</span>
-        <button type="button" data-graph-fullscreen aria-label="Open graph fullscreen">⤢</button>
+    <div class="state-graph-frame" data-inspection-graph-root data-selected-layer="${escapeHtml(graph.initialLayerId)}" role="region" aria-label="Read-only inspection graph">
+      <div class="state-graph-layer-selector" aria-label="Inspection layers">
+        ${graph.layers.map(layer => `<button type="button" data-graph-layer="${escapeHtml(layer.id)}" aria-pressed="${layer.id === graph.initialLayerId}" disabled><strong>${escapeHtml(layer.title)}</strong><span>Current: ${escapeHtml(layer.current.label)}</span><span>${escapeHtml(layerTransitionSummary(layer))}</span></button>`).join('')}
       </div>
-      <div class="mermaid-state-graph mermaid" data-rendered="pending" data-graph-focus-ids="${escapeHtml((graph.focusIds ?? []).join(","))}" aria-label="Mermaid inspection state graph">${escapeHtml(graph.definition)}</div>
+      <div class="state-graph-toolbar" aria-label="Graph controls">
+        <button type="button" data-graph-zoom-out aria-label="Zoom out" disabled>−</button>
+        <button type="button" data-graph-zoom-in aria-label="Zoom in" disabled>+</button>
+        <button type="button" data-graph-fit disabled>Fit graph</button>
+        <button type="button" data-graph-focus disabled>Focus current state</button>
+        <button type="button" data-graph-reset disabled>Reset view</button>
+        <span class="state-graph-zoom-value" data-graph-zoom-value>100%</span>
+        <button type="button" data-graph-fullscreen aria-label="Open graph fullscreen" disabled>Fullscreen</button>
+      </div>
+      <p class="state-graph-status" data-graph-status role="status">Interactive graph unavailable until the local renderer loads. Use the textual layer details below or Snapshot JSON.</p>
+      <div class="inspection-graph-viewport" data-graph-viewport data-rendered="pending" data-graph-scale="1" tabindex="0" role="group" aria-label="Inspection graph viewport"></div>
+      <div class="state-graph-node-details" data-graph-node-details role="status" aria-live="polite"><p>Select a state to inspect its identifier, classification and authoritative outgoing transitions. Selection never executes a transition.</p></div>
+      <p class="state-graph-keyboard-help">Arrow keys pan the focused graph viewport. State nodes support keyboard selection. Zoom, Fit and Focus buttons are keyboard-operable. Current, Next and Terminal are labels, not only colors.</p>
+    <p><a class="viewer-inline-link" href="${escapeHtml(snapshotHref)}">Snapshot JSON</a> — unchanged public inspection data.</p>
+      <script type="application/json" data-inspection-graph-data>${graphJson(graph)}</script>
     </div>
-    ${renderStateGraphLegend()}
-    ${renderStateGraphDetails(graph)}
+    <details class="state-graph-details"><summary>Graph guide and layer details</summary>
+      <ul class="state-graph-help"><li>Current states and allowed next transitions are projected from this snapshot; every shown edge comes from the authoritative transition table, not execution history.</li><li>Next emphasis is the snapshot/table intersection. A broad outer next set is explained rather than highlighting every state.</li><li>Entry and exit cues are presentation annotations. The four layers do not imply a cross-layer call stack.</li><li>This is a read-only view. Use the existing Reload snapshot control for a new inspection; this renderer does not poll or execute transitions.</li></ul>
+      <ul class="state-graph-summaries">${graph.layers.map(layer => `<li><strong>${escapeHtml(layer.title)}:</strong> current <code>${escapeHtml(layer.current.label)}</code>; ${escapeHtml(layer.summary)}; ${escapeHtml(layer.transitionInfo.summary)}</li>`).join('')}</ul>
+      ${graph.layers.map(renderLayerText).join('')}
+    </details>
   </div>`;
 }

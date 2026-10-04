@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import {
-  buildInspectionMermaidGraph,
-  renderInspectRunViewerHtml,
-} from "../../scripts/loop/inspect-run-viewer.mjs";
+import { renderInspectRunViewerHtml } from "../../scripts/loop/inspect-run-viewer.mjs";
 import { renderInboxShellScript } from "../../scripts/loop/inspect-run-viewer/inbox.mjs";
 import { renderCurrentStateBanner } from "../../scripts/loop/inspect-run-viewer/status.mjs";
 import { makeSnapshot } from "./inspect-run-viewer-test-helpers.mjs";
@@ -170,8 +167,6 @@ test("renderInspectRunViewerHtml keeps overview first and tab buttons aligned wi
   assert.match(html, /<button id="tab-btn-overview" class="viewer-tab active"[^>]*aria-controls="tab-overview"[^>]*>Overview<\/button>\s*<button id="tab-btn-graph" class="viewer-tab"[^>]*aria-controls="tab-graph"[^>]*>Graph<\/button>\s*<button id="tab-btn-layers" class="viewer-tab"[^>]*aria-controls="tab-layers"[^>]*>Layers<\/button>\s*<button id="tab-btn-handoff" class="viewer-tab"[^>]*aria-controls="tab-handoff"[^>]*>Agent handoff<\/button>/);
   assert.match(html, /<div class="tab-content active" id="tab-overview" role="tabpanel" aria-labelledby="tab-btn-overview">/);
   assert.match(html, /<div class="tab-content" id="tab-graph" role="tabpanel" aria-labelledby="tab-btn-graph">/);
-  assert.match(html, /document\.dispatchEvent\(new CustomEvent\('inspect-run-viewer:tabchange', \{ detail: \{ tabName \} \}\)\);/);
-  assert.match(html, /document\.addEventListener\("inspect-run-viewer:tabchange", \(\) => \{/);
 });
 
 test("renderInspectRunViewerHtml renders required top-level fields for authoritative snapshot and links to raw JSON", () => {
@@ -249,7 +244,6 @@ test("renderInspectRunViewerHtml renders required top-level fields for authorita
   assert.match(html, /reviewer state/);
   assert.match(html, /reviewer verdict/);
   assert.match(html, /Next action and key metrics/);
-  assert.match(html, /Graph guide and lane details/);
   assert.match(html, /data-tab="graph"/);
   assert.match(html, /data-tab="overview"/);
   assert.match(html, /data-tab="layers"/);
@@ -269,32 +263,6 @@ test("renderInspectRunViewerHtml renders required top-level fields for authorita
   assert.match(html, /markers\.missing/);
   assert.match(html, /markers\.stale/);
   assert.match(html, /markers\.conflicts/);
-  assert.doesNotMatch(html, /authoritative graph view from the current inspection snapshot/i);
-  assert.match(html, /class="state-graph-cues"/);
-  assert.match(html, /class="mermaid-state-graph mermaid"/);
-  assert.match(html, /data-graph-zoom-in/);
-  assert.match(html, /data-graph-zoom-out/);
-  assert.match(html, /data-graph-zoom-reset/);
-  assert.match(html, /data-graph-fullscreen/);
-  assert.match(html, /if \(!svg\) \{\s*resolve\(false\);\s*return;\s*\}/);
-  assert.match(html, /if \(targetRects\.length === 0\) \{\s*resolve\(false\);\s*return;\s*\}/);
-  assert.match(html, /const \[firstRect, \.\.\.remainingRects\] = targetRects;/);
-  assert.match(html, /cursor: grab/);
-  assert.match(html, /data-dragging="true"/);
-  assert.match(html, /\.viewer-card-body,/);
-  assert.match(html, /\.current-pr-state-copy-flow \{ display: grid; gap: 0\.7rem; min-width: 0; \}/);
-  assert.match(html, /pre \{ margin: 0; padding: 0\.95rem 1rem;/);
-  assert.match(html, /assets\/mermaid\.min\.js/);
-  assert.match(html, /Start/);
-  assert.match(html, /End/);
-  assert.match(html, /Next/);
-  assert.match(html, /🔁/);
-  assert.match(html, /outer-loop family:[\s\S]*current <code>continue_current_wait<\/code>; continue_current_wait; full authoritative state machine shown; continue_current_wait, handoff_to_copilot_loop, handoff_to_reviewer_loop, stay_with_current_live_owner, stop_needs_human, done_terminal, needs_reconcile/);
-  assert.match(html, /copilot layer:[\s\S]*full authoritative state machine shown; unresolved_feedback_present, ready_to_rerequest_review, waiting_for_ci/);
-  assert.match(html, /reviewer layer:[\s\S]*full authoritative state machine shown; waiting_for_re_request, waiting_for_review_request/);
-  assert.match(html, /Dimmed nodes are still part of the authoritative state machine/);
-  assert.ok(html.indexOf('class="mermaid-state-graph mermaid"') < html.indexOf('class="state-graph-cues"'));
-  assert.match(html, /outer lane comes from the shared authoritative outer-loop graph contract/);
   assert.match(html, /Outer-loop/);
   assert.match(html, /Copilot loop iterations/);
   assert.match(html, /4 completed, 1 pending/);
@@ -570,38 +538,10 @@ test("renderInspectRunViewerHtml renders checkpoint-only \/ degraded cues and ab
   assert.doesNotMatch(html, /checkpoint-only graph view[\s\S]*current and next highlights are advisory until live inspection is available\./i);
   assert.match(html, /Needs attention/);
   assert.match(html, /The current snapshot is not authoritative enough to collapse to one trusted outer state/);
-  assert.match(html, /class="mermaid-state-graph mermaid"/);
-  assert.match(html, /current state unavailable/);
-  assert.match(html, /not present \/ unavailable/);
-  assert.match(html, /copilot layer:[\s\S]*full authoritative state machine shown; transition data unavailable in this snapshot/);
-  assert.match(html, /reviewer layer:[\s\S]*full authoritative state machine shown; transition data unavailable in this snapshot/);
   assert.match(html, /no_copilot_review_history/);
   assert.match(html, /no_steering_file/);
 });
 
-test("renderInspectRunViewerHtml distinguishes empty transitions from unavailable transition data", () => {
-  const html = renderInspectRunViewerHtml({
-    repo: "owner/repo",
-    target: { repo: "owner/repo", pr: 55 },
-    snapshot: makeSnapshot({
-      layers: {
-        copilot: {
-          currentState: "waiting_for_copilot_review",
-          allowedTransitions: [],
-        },
-        reviewer: {
-          currentState: "waiting_for_author_followup",
-          scope: { mode: "all_reviewers", reviewerLogin: null },
-          allowedTransitions: ["waiting_for_re_request"],
-        },
-        steering: { status: "unavailable", reason: "no_steering_locator" },
-      },
-    }),
-  });
-
-  assert.match(html, /copilot layer:[\s\S]*full authoritative state machine shown; no allowed transitions/);
-  assert.doesNotMatch(html, /copilot layer:[\s\S]*full authoritative state machine shown; transition data unavailable in this snapshot/);
-});
 
 test("renderInspectRunViewerHtml highlights terminal merged states", () => {
   const html = renderInspectRunViewerHtml({
@@ -633,29 +573,6 @@ test("renderInspectRunViewerHtml highlights terminal merged states", () => {
   assert.match(html, /status class[\s\S]*<code>done<\/code>/);
   assert.match(html, /outerAction \(compatibility\)[\s\S]*<code>done<\/code>/);
 
-  const graph = buildInspectionMermaidGraph(makeSnapshot({
-    outerState: "done_terminal",
-    activeFamilyState: "done",
-    outerAction: "done",
-    statusClass: "done",
-    layers: {
-      copilot: {
-        currentState: "done",
-        allowedTransitions: [],
-      },
-      reviewer: {
-        currentState: "waiting_for_review_request",
-        scope: { mode: "all_reviewers", reviewerLogin: null },
-        allowedTransitions: [],
-      },
-      steering: { status: "unavailable", reason: "no_steering_locator" },
-    },
-  }));
-
-  assert.ok(graph);
-  assert.match(graph.definition, /class outer_loop_family_done_terminal,copilot_layer_done currentTerminal;/);
-  assert.match(graph.definition, /copilot_layer_done --> copilot_layer_end/);
-  assert.match(html, /copilot layer:[\s\S]*current <code>done<\/code>; done; full authoritative state machine shown; no allowed transitions/);
 });
 
 test("renderInspectRunViewerHtml keeps stale approved snapshots on waiting until Copilot is re-requested", () => {
@@ -971,46 +888,6 @@ test("renderInspectRunViewerHtml treats undefined snapshots as unavailable", () 
   assert.match(html, /Unable to load inspect-run snapshot/);
 });
 
-test("buildInspectionMermaidGraph suppresses graph rendering for sourceMode unavailable even with conflicting markers", () => {
-  const graph = buildInspectionMermaidGraph(makeSnapshot({
-    sourceMode: "unavailable",
-    trust: "unknown",
-    markers: {
-      missing: [],
-      stale: [],
-      conflicts: ["live and checkpoint disagree"],
-    },
-  }));
-
-  assert.equal(graph, null);
-});
-
-test("renderInspectRunViewerHtml includes deterministic Mermaid asset fallback messaging", () => {
-  const html = renderInspectRunViewerHtml({
-    repo: "owner/repo",
-    target: { repo: "owner/repo", pr: 55 },
-    snapshot: makeSnapshot(),
-  });
-
-  assert.match(html, /Graph renderer unavailable\. Use the details below or open \/snapshot\.json\./);
-});
-test("renderInspectRunViewerHtml fail-closes the graph for unavailable snapshots", () => {
-  const html = renderInspectRunViewerHtml({
-    repo: "owner/repo",
-    target: { repo: "owner/repo", pr: 55 },
-    snapshot: makeSnapshot({
-      sourceMode: "unavailable",
-      trust: "unknown",
-      activeFamilyState: "unknown",
-      layers: {
-        steering: { status: "unavailable", reason: "no_steering_locator" },
-      },
-    }),
-  });
-
-  assert.match(html, /Snapshot unavailable, so no state graph can be rendered yet/);
-  assert.doesNotMatch(html, /class="mermaid-state-graph mermaid"/);
-});
 
 // The sidebar shell script is a string with no DOM behind it in this suite, so
 // it is executed against a minimal stub document instead of being pattern-matched.
