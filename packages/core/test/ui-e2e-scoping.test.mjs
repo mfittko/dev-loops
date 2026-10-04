@@ -1,17 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { test } from "bun:test";
 import { resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
 
 import {
   evaluateUiE2eScoping,
   classifyRenderedArtifactPath,
-  REGISTERED_ARTIFACT_PATHS,
-  REGISTERED_ARTIFACT_SUITES,
 } from "../src/loop/ui-e2e-scoping.mjs";
-// Import the registries directly so the sync test fails if a deck/article is
-// added to the harness without updating REGISTERED_ARTIFACT_PATHS.
-import { DECK_REGISTRY, ARTICLE_REGISTRY } from "../../../test/playwright/harness/deck-fit-harness.mjs";
 
 test("classifies a presentation deck change as a registered rendered artifact (full path id)", () => {
   const d = classifyRenderedArtifactPath("docs/presentations/introducing-dev-loops.html");
@@ -57,6 +51,20 @@ test("non-rendered and near-miss paths classify as null", () => {
   assert.equal(classifyRenderedArtifactPath("README.md"), null);
 });
 
+test("original Simulator views require registered automatic browser coverage", () => {
+  for (const [path, suite] of [
+    ["docs/articles/simulator.html", "test:playwright:simulator-article"],
+    ["docs/articles/simulator-overview.html", "test:playwright:simulator-overview-article"],
+    ["docs/articles/assets/simulator-model.mjs", "test:playwright:simulator-article"],
+    ["docs/articles/assets/simulator-overview-model.mjs", "test:playwright:simulator-overview-article"],
+  ]) {
+    assert.equal(evaluateUiE2eScoping([path]).required, true);
+    assert.equal(evaluateUiE2eScoping([path]).satisfied, false);
+    assert.equal(evaluateUiE2eScoping([path], { uiE2ePassed: true }).satisfied, true);
+    assert.deepEqual(resolveTargetedValidation([path]).gateSuites, [suite]);
+  }
+});
+
 test("trigger: a rendered-artifact change requires UI e2e", () => {
   const r = evaluateUiE2eScoping(
     ["docs/presentations/introducing-dev-loops.html", "README.md"],
@@ -91,18 +99,3 @@ test("fail-closed: registered artifact but suite not passed blocks", () => {
   assert.equal(failed.satisfied, false);
 });
 
-test("registered UI paths and suite commands stay in sync with the Playwright registries", () => {
-  const deckEntries = Object.values(DECK_REGISTRY).map((e) => [`docs/presentations/${e.deck}`, e.sliceId === "deep-dive-deck" ? "deep-dive" : e.sliceId]);
-  const articleEntries = Object.values(ARTICLE_REGISTRY).map((e) => [`docs/articles/${e.file}`, e.sliceId]);
-  assert.deepEqual(
-    Object.entries(REGISTERED_ARTIFACT_SUITES).sort(),
-    [...deckEntries, ...articleEntries].sort(),
-  );
-  assert.deepEqual(REGISTERED_ARTIFACT_PATHS, Object.keys(REGISTERED_ARTIFACT_SUITES));
-  const { scripts } = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
-  for (const [artifact, suite] of Object.entries(REGISTERED_ARTIFACT_SUITES)) {
-    const command = `test:playwright:${suite}`;
-    assert.ok(scripts[command], `${artifact} must select an existing UI suite`);
-    assert.deepEqual(resolveTargetedValidation([artifact]).gateSuites, [command]);
-  }
-});

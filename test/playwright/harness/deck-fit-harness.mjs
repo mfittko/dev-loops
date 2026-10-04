@@ -13,20 +13,23 @@ import { captureNamedUiState, startFixtureServer, stopFixtureServer } from "./we
 
 export const MOBILE = { width: 390, height: 844 };
 
-// A single-file static server is enough for one self-contained deck: serve the
-// deck only at the root, and 404 everything else so requests stay deterministic.
+// Serve the page and, for the original simulators, its one native model asset.
+// Keep all other routes closed so fixture requests stay deterministic.
 export function makeDeckServer(deckPath) {
   return createServer(async (req, res) => {
     const route = (req.url ?? "/").split("?")[0];
-    if (route !== "/" && route !== "/index.html") {
+    const modelFile = path.basename(deckPath) === "simulator.html" ? "simulator-model.mjs"
+      : path.basename(deckPath) === "simulator-overview.html" ? "simulator-overview-model.mjs" : null;
+    const isModel = modelFile !== null && route === `/assets/${modelFile}`;
+    if (route !== "/" && route !== "/index.html" && !isModel) {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("Not found");
       return;
     }
     try {
-      const html = await readFile(deckPath, "utf8");
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(html);
+      const bytes = await readFile(isModel ? path.join(path.dirname(deckPath), "assets", modelFile) : deckPath);
+      res.writeHead(200, { "content-type": isModel ? "text/javascript; charset=utf-8" : "text/html; charset=utf-8" });
+      res.end(bytes);
     } catch (error) {
       res.writeHead(500, { "content-type": "text/plain" });
       res.end(String(error));
@@ -446,10 +449,10 @@ export function deckRegistryEntry(key) {
   return entry;
 }
 
-// The article registry. Articles are self-contained, CSP-locked rendered HTML
-// (the intro article IS the published landing page) — fit-checked like decks
-// but without the deck's named per-section states. Each article is one data
-// entry plus a thin spec that calls defineArticleSuite(ARTICLE_REGISTRY.<key>).
+// The article registry covers long-form articles and interactive simulator
+// pages. Prose uses defineArticleSuite; simulators use a dedicated runner that
+// reuses fit assertions without requiring prose markup or a locked CSP.
+// Each page is one data entry plus a thin spec.
 // `file` is the docs/articles/<file> basename; path keying in
 // ui-e2e-scoping.mjs uses the full repo-relative path so it can't alias a deck.
 export const ARTICLE_REGISTRY = {
@@ -464,6 +467,14 @@ export const ARTICLE_REGISTRY = {
   "how-decided-article": {
     sliceId: "how-decided-article",
     file: "how-dev-loops-decided-itself.html",
+  },
+  "simulator-article": {
+    sliceId: "simulator-article",
+    file: "simulator.html",
+  },
+  "simulator-overview-article": {
+    sliceId: "simulator-overview-article",
+    file: "simulator-overview.html",
   },
 };
 

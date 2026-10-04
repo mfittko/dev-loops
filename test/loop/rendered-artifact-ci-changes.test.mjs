@@ -39,3 +39,20 @@ test("rendered artifact CI classifier normalizes and deduplicates paths", () => 
   const result = classifyRenderedArtifactCiChanges([" ./test/playwright/new-deck.spec.mjs ", "test/playwright/new-deck.spec.mjs"]);
   assert.deepEqual(result.presentationPaths, ["test/playwright/new-deck.spec.mjs"]);
 });
+
+test("original Simulator views and their shared harness schedule article browser CI", () => {
+  for (const path of [
+    "docs/articles/simulator.html",
+    "docs/articles/simulator-overview.html",
+    "docs/articles/assets/simulator-model.mjs",
+    "docs/articles/assets/simulator-overview-model.mjs",
+    "test/playwright/harness/simulator-harness.mjs",
+    "test/playwright/simulator-article.spec.mjs",
+    "test/playwright/simulator-overview-article.spec.mjs",
+  ]) {
+    const result = classifyRenderedArtifactCiChanges([path]);
+    assert.equal(result.articles, true);
+    assert.equal(result.presentations, false);
+    assert.deepEqual(result.articlePaths, [path]);
+  }
+});

@@ -9,8 +9,9 @@ A PR that **adds or modifies a rendered HTML artifact** MUST run the shared UI e
 - a presentation deck: `docs/presentations/*.html` (registered in `DECK_REGISTRY`)
 - an article page: `docs/articles/*.html` (registered in `ARTICLE_REGISTRY`; the intro article is the published landing page)
 - the inspect-run viewer's served page/component: `scripts/loop/inspect-run-viewer.mjs`
+- original Simulator model assets: `docs/articles/assets/simulator-model.mjs` and `docs/articles/assets/simulator-overview-model.mjs` (covered by their owning Detailed/Overview article suite)
 
-The trigger is the PR's **changed-file set** matched against these explicit globs: exact directory + single-segment `*.html` globs (no recursion) and the viewer source path (issue #976 scope).
+The trigger is the PR's **changed-file set** matched against explicit paths: exact directory + single-segment `*.html` globs (no recursion), the viewer source path and the two original Simulator model assets. Other JavaScript assets do not inherit a rendered-artifact exception.
 
 Registration is keyed on the **full repo-relative path**, not the basename. `docs/articles/X.html` and `docs/presentations/X.html` (for example `introducing-dev-loops.html`) are therefore **distinct** artifacts. Editing the article never counts as deck coverage, and the reverse also holds.
 
@@ -20,6 +21,7 @@ Registration is keyed on the **full repo-relative path**, not the basename. `doc
 - `docs/articles/introducing-dev-loops.html` (the landing page) edited → UI e2e **required** (article-smoke CI job runs the article fit specs); it is its own registration, NOT covered by the same-named deck.
 - A new `docs/articles/new-page.html` added → UI e2e **required**. The new page is not yet in `ARTICLE_REGISTRY`, so the gate **fails closed** until it is registered (add an entry + a thin spec calling `defineArticleSuite`).
 - `scripts/loop/inspect-run-viewer.mjs` edited → UI e2e **required** (the viewer is registered in `VIEWER_REGISTRY`).
+- `docs/articles/assets/simulator-model.mjs` or `simulator-overview-model.mjs` edited → the owning original article's mobile + desktop UI e2e is **required**, even without an HTML change.
 
 ### Examples — not required
 
@@ -30,17 +32,18 @@ Registration is keyed on the **full repo-relative path**, not the basename. `doc
 "Registered" means the artifact appears in the shared registries:
 
 - decks → `DECK_REGISTRY` in `test/playwright/harness/deck-fit-harness.mjs` (served from `docs/presentations/<deck>`) with a thin spec calling `defineDeckSuite`.
-- articles → `ARTICLE_REGISTRY` in `test/playwright/harness/deck-fit-harness.mjs` (served from `docs/articles/<file>`) with a thin spec calling `defineArticleSuite` (shared fit/CSP/no-horizontal-scroll assertions, minus the deck's per-section named captures).
+- ordinary prose articles → `ARTICLE_REGISTRY` in `test/playwright/harness/deck-fit-harness.mjs` (served from `docs/articles/<file>`) with a thin spec calling `defineArticleSuite` (shared fit/CSP/no-horizontal-scroll assertions, minus the deck's per-section named captures).
+- original Simulator pages (`simulator.html` and `simulator-overview.html`) → the same `ARTICLE_REGISTRY`, with thin specs calling `defineSimulatorSuite` in `test/playwright/harness/simulator-harness.mjs` (shared fit/no-horizontal-scroll and interaction assertions on desktop and mobile). These preserved teaching pages intentionally retain their inline runtime rather than being CSP-locked prose articles; their runner does not assert CSP.
 - the viewer → `VIEWER_REGISTRY` in `test/playwright/harness/inspect-run-viewer-harness.mjs`.
 
-The gate checks membership against `packages/core/src/loop/ui-e2e-scoping.mjs` (`REGISTERED_ARTIFACT_PATHS`, keyed by full repo-relative path; `VIEWER_ARTIFACT_ID`). A sync test keeps `REGISTERED_ARTIFACT_PATHS` aligned with `DECK_REGISTRY` + `ARTICLE_REGISTRY`. No test checks `VIEWER_ARTIFACT_ID` against `VIEWER_REGISTRY`, so keep the two in sync by hand.
+The gate checks membership against `packages/core/src/loop/ui-e2e-scoping.mjs` (`REGISTERED_ARTIFACT_PATHS`, keyed by full repo-relative path; `VIEWER_ARTIFACT_ID`). Keep HTML paths aligned with the shared registries and the two native model paths mapped to their owning original article suites. Actual Playwright discovery tests protect project selection.
 
 ## Fail-closed semantics
 
 The check is a gate precondition in `evaluatePrGateCoordination` (`packages/core/src/loop/pr-gate-coordination.mjs`), separate from the mergeability (#980) and retrospective (#982) preconditions. It fails closed:
 
 - **Unregistered rendered artifact touched** → gate blocks with `nextAction: run_ui_e2e_suite`, reason naming the artifact and that it needs registration in the suite.
-- **Registered, but UI e2e suite did not pass for this head** (`uiE2ePassed` is `false`/unknown) → gate blocks with the same action, reason that the suite must run and pass first.
+- **Registered artifact, but UI e2e suite did not pass for this head** (`uiE2ePassed` is `false`/unknown) → gate blocks with the same action, reason that the suite must run and pass first.
 - **Non-UI change** → `required: false`, gate passes through untouched.
 
 The detect layer reads the changed-file set from `gh pr view --json files` and derives `uiE2ePassed` from the `statusCheckRollup` UI e2e check(s) (`UI_E2E_CHECK_NAMES`). Every present UI e2e check must be `SUCCESS`. If none is present, the value is unknown and the gate fails closed.
@@ -55,7 +58,7 @@ Each rendered-artifact family has a satisfiable CI job in `.github/workflows/ci.
 
 When you change a rendered artifact's layout, **verify it visually before merging**. Render the built page and inspect real geometry at desktop and mobile widths: `getBoundingClientRect` for edges and widths, and a full-page screenshot to look at it. This intermediary e2e pass is a required *verification strategy*. A layout claim is credible only once it is measured against the rendered page.
 
-Do not persist these checks. The shared fit/CSP suite (`defineArticleSuite`/`defineDeckSuite`) is the registered coverage. Do not grow it with one-off pixel or alignment assertions for a single fix. Use a throwaway script to render, measure and screenshot while iterating, then drop it.
+Do not persist these checks. The shared suites are the registered coverage: `defineArticleSuite`/`defineDeckSuite` retain fit/CSP assertions for ordinary prose articles and decks; the two original Simulator pages use `defineSimulatorSuite` for shared fit/no-horizontal-scroll and interaction coverage, without CSP assertions. Do not grow these suites with one-off pixel or alignment assertions for a single fix. Use a throwaway script to render, measure and screenshot while iterating, then drop it.
 
 ## An assertion must be able to fail on the defect
 

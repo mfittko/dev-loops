@@ -25,7 +25,12 @@ export const LANDING = { file: 'introducing-dev-loops.html' };
 // to docs/articles/; navLabel is how the nav refers to it.
 export const ARTICLES = [
   { file: 'dev-loops-deep-dive.html', navLabel: 'Deep dive' },
+  // The lifecycle overview is the Simulator entrypoint; the detailed route stays directly available.
+  { file: 'simulator.html' },
+  { file: 'simulator-overview.html' },
 ];
+
+export const SIMULATOR_MODELS = ['simulator-model.mjs', 'simulator-overview-model.mjs'];
 
 // The decks to publish. file is relative to docs/presentations/; outFile is the
 // published name (defaults to file). The deep-dive article and deck share the
@@ -161,15 +166,15 @@ async function prepareOutputDirectory(repoRoot, outDir) {
   await writeFile(join(outDir, OUTPUT_MARKER), OUTPUT_MARKER_CONTENT, 'utf8');
 }
 
-// The State atlas: a generated page (site/state-atlas.html) rendering every
+// The State atlas (built, but linked from the simulator footer rather than the nav): a generated page (site/state-atlas.html) rendering every
 // dev-loops state machine as mermaid diagrams straight from the code's tables.
 export const STATE_ATLAS = { file: 'state-atlas.html', label: 'State atlas' };
 
 // The other resources linked from the navigation, in order.
 export const NAV_LINKS = [
-  ...ARTICLES.map((a) => ({ file: a.file, label: a.navLabel })),
+  ...ARTICLES.filter((a) => a.navLabel).map((a) => ({ file: a.file, label: a.navLabel })),
   ...DECKS.map((d) => ({ file: deckOut(d), label: d.navLabel })),
-  { file: STATE_ATLAS.file, label: STATE_ATLAS.label },
+  { file: 'simulator-overview.html', label: 'Simulator' },
 ];
 
 // Nav styling, appended to each article page's own <style> block so it reuses
@@ -177,9 +182,9 @@ export const NAV_LINKS = [
 const NAV_CSS = `
   .site-nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1.1rem; max-width: 48rem; margin: 0 auto; padding: 0.9rem clamp(1.1rem, 5vw, 2rem); border-bottom: 1px solid rgba(148, 163, 184, 0.16); }
   @media (min-width: 900px) { .site-nav { max-width: 56rem; } }
-  .site-nav-brand { font-weight: 700; letter-spacing: -0.01em; color: var(--heading); text-decoration: none; border: 0; margin-right: auto; }
+  .site-nav-brand { font-weight: 700; letter-spacing: -0.01em; color: var(--heading, var(--ink)); text-decoration: none; border: 0; margin-right: auto; }
   .site-nav-links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.1rem; }
-  .site-nav a { color: var(--kicker); text-decoration: none; font-size: 0.9rem; border: 0; }
+  .site-nav a { color: var(--kicker, var(--ink2)); text-decoration: none; font-size: 0.9rem; border: 0; }
   .site-nav a:hover { color: var(--accent-soft); }
   .site-nav-gh { display: inline-flex; align-items: center; }
   .site-nav-gh svg { width: 1.125rem; height: 1.125rem; fill: currentColor; display: block; }`;
@@ -222,12 +227,16 @@ ${links}
 // markup right after <body>. Idempotent enough for assembly (each source file
 // is read once). Throws if the page lacks the expected anchors so a structural
 // drift fails the build rather than publishing an un-navigable page.
-export function injectNav(html, repoUrl) {
+export function injectNav(html, repoUrl, publishedFile) {
   if (!html.includes('</style>') || !/<body[^>]*>/.test(html)) {
     throw new Error('cannot inject nav: page is missing a <style> block or <body> tag');
   }
+  // Simulator --accent-soft is a background tint, not a link foreground.
+  const navCss = publishedFile === 'simulator.html' || publishedFile === 'simulator-overview.html'
+    ? `${NAV_CSS}\n  .site-nav { max-width: var(--simulator-content-width); padding-inline: 0; margin-bottom: 24px; }\n  .site-nav a:hover { color: var(--accent); }\n  @media (max-width: 760px) { .site-nav { margin-bottom: 16px; } }`
+    : NAV_CSS;
   return html
-    .replace('</style>', `${NAV_CSS}\n</style>`)
+    .replace('</style>', `${navCss}\n</style>`)
     .replace(/<body([^>]*)>/, `<body$1>\n    ${navMarkup(repoUrl)}`);
 }
 
@@ -246,6 +255,7 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
     ...DECKS.map((d) => deckOut(d)),
     STATE_ATLAS.file,
     'assets/mermaid.min.js',
+    ...SIMULATOR_MODELS.map((file) => `assets/${file}`),
     OUTPUT_MARKER,
   ];
   assertUniquePublishTargets(files);
@@ -260,14 +270,15 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   // or mistyped root cannot delete an unrelated, nonempty site/ directory.
   const repoUrl = await resolveRepoUrl(root);
   const mermaidSrc = join(root, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js');
-  const [landingHtml, articleHtml, deckBytes, mermaidBytes] = await Promise.all([
+  const [landingHtml, articleHtml, deckBytes, mermaidBytes, modelBytes] = await Promise.all([
     readFile(join(articlesDir, LANDING.file), 'utf8'),
     Promise.all(ARTICLES.map((article) => readFile(join(articlesDir, article.file), 'utf8'))),
     Promise.all(DECKS.map((deck) => readFile(join(decksDir, deck.file)))),
     readFile(mermaidSrc),
+    Promise.all(SIMULATOR_MODELS.map((file) => readFile(join(articlesDir, 'assets', file)))),
   ]);
   const landingOutput = injectNav(landingHtml, repoUrl);
-  const articleOutput = articleHtml.map((html) => injectNav(html, repoUrl));
+  const articleOutput = articleHtml.map((html, index) => injectNav(html, repoUrl, ARTICLES[index].file));
   const stateAtlasOutput = injectNav(buildStateAtlasHtml(), repoUrl);
 
   await prepareOutputDirectory(root, out);
@@ -293,6 +304,9 @@ export async function buildSite({ repoRoot = REPO_ROOT_DEFAULT, outDir } = {}) {
   // load it as an external asset rather than inlining ~3MB into the page).
   await mkdir(join(out, 'assets'), { recursive: true });
   await writeFile(join(out, 'assets', 'mermaid.min.js'), mermaidBytes);
+  for (const [index, file] of SIMULATOR_MODELS.entries()) {
+    await writeFile(join(out, 'assets', file), modelBytes[index]);
+  }
 
   return {
     out,

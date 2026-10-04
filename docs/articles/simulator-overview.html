@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Dev Loops Simulator</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: lifecycle graph left (the thing on the projector), step controls and the PR record right; stacks on narrow screens. */
+:root{
+  --paper:#EEF1F4; --panel:#FFFFFF; --ink:#16212E; --ink2:#4A5767; --mute:#566270; --line:#D3D9E0;
+  --node:#F7F9FB; --node-line:#7A8795;
+  --accent:#2347C9; --accent-ink:#FFFFFF; --accent-soft:#E2E8FA;
+  --guard:#8A5100; --guard-soft:#FBEFD9; --stop:#B3261E; --stop-soft:#F8E1DF; --ok:#1E7A4C; --ok-soft:#DDF1E6;
+  --display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --paper:#0F151C; --panel:#17202A; --ink:#E6ECF2; --ink2:#AAB6C3; --mute:#A0ADBB; --line:#2A3542;
+  --node:#1C2733; --node-line:#7C8B9E;
+  --accent:#7D98FF; --accent-ink:#0D1424; --accent-soft:#1E2A4D;
+  --guard:#F0A93B; --guard-soft:#3A2B12; --stop:#F07A70; --stop-soft:#3D1D1B; --ok:#5FCB92; --ok-soft:#15301F;
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --paper:#0F151C; --panel:#17202A; --ink:#E6ECF2; --ink2:#AAB6C3; --mute:#A0ADBB; --line:#2A3542;
+  --node:#1C2733; --node-line:#7C8B9E;
+  --accent:#7D98FF; --accent-ink:#0D1424; --accent-soft:#1E2A4D;
+  --guard:#F0A93B; --guard-soft:#3A2B12; --stop:#F07A70; --stop-soft:#3D1D1B; --ok:#5FCB92; --ok-soft:#15301F;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{--simulator-content-width:1240px;margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;padding-block:24px 56px;padding-inline:20px}
+.wrap{max-width:var(--simulator-content-width);margin:0 auto;display:flex;flex-direction:column;gap:18px}
+header{display:flex;flex-direction:column;gap:4px}
+h1{font-family:var(--display);font-size:30px;font-weight:600;margin:0;letter-spacing:-.005em;text-wrap:balance}
+h2{font-family:var(--display);font-size:19px;font-weight:600;margin:0;text-wrap:balance}
+.sub{color:var(--ink2);margin:0;max-width:78ch}
+code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);padding:1px 4px;border-radius:3px}
+.lbl{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);margin:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}
+
+.scen{display:flex;flex-direction:column;gap:10px;padding:14px 16px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:inherit;font-size:13.5px;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--node);color:var(--ink2);cursor:pointer}
+.chip:hover{border-color:var(--accent);color:var(--ink)}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.msg{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:15px}
+.msg .who{font-family:var(--mono);font-size:12px;color:var(--mute)}
+.about{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;border-top:1px solid var(--line);padding-top:10px}
+@media (max-width:760px){.about{grid-template-columns:1fr}}
+.about[hidden]{display:none}
+.about p{margin:0;font-size:14px;color:var(--ink2);max-width:70ch;display:flex;flex-direction:column;gap:2px}
+.about .tag{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
+
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 370px;gap:18px;align-items:start}
+@media (max-width:980px){.grid{grid-template-columns:1fr}}
+.board{padding:8px;overflow-x:auto;min-width:0}
+.board svg{display:block;width:100%;height:auto;min-width:540px;max-height:88vh;margin:0 auto}
+.side{display:flex;flex-direction:column;gap:14px;min-width:0}
+.box{padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+
+.now{font-family:var(--display);font-size:22px;font-weight:600;color:var(--accent);margin:0;line-height:1.2}
+.note{font-size:14px;color:var(--ink2);margin:0}
+.lens{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:6px;background:var(--guard-soft)}
+.lens[hidden]{display:none}
+.lens .tag{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--guard);font-weight:500}
+.lens p{margin:0;font-size:14px;color:var(--ink)}
+.lens .slide{font-family:var(--mono);font-size:11.5px;color:var(--ink2)}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.btn{font:inherit;font-size:13.5px;padding:7px 13px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink2);cursor:pointer}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:500}
+.btn:hover:not(:disabled){border-color:var(--accent)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn:focus-visible,.chip:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible,.trace:focus-visible,.board:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.keys{font-family:var(--mono);font-size:11.5px;color:var(--mute);margin:0}
+kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;padding:0 4px;background:var(--node)}
+
+.reply{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border-radius:6px;border:1px solid var(--line);background:var(--node)}
+.reply[hidden]{display:none}
+.reply .txt{font-size:14.5px;margin:0}
+.reply.fixed{border-color:var(--stop);background:var(--stop-soft)}
+.reply.answer{border-color:var(--ok);background:var(--ok-soft)}
+
+details{border-top:1px solid var(--line);padding-top:10px}
+summary{cursor:pointer;font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
+.facts{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.fact{display:flex;align-items:center;gap:10px;font-size:13.5px}
+.fact .k{flex:1;min-width:0}
+.fact select{font:inherit;font-size:13px;padding:3px 6px;border:1px solid var(--line);border-radius:4px;background:var(--node);color:var(--ink);max-width:190px}
+.fact input{accent-color:var(--accent);width:16px;height:16px;margin:0}
+.fact.off{opacity:.85}
+.hint{font-size:12px;color:var(--mute);margin:0}
+
+.kv{font-family:var(--mono);font-size:12.5px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:3px 12px;font-variant-numeric:tabular-nums}
+.kv .k{color:var(--mute)}
+.kv .v{overflow-wrap:anywhere}
+.kv .v.chg{color:var(--accent);font-weight:500}
+.kv .w{color:var(--mute);font-size:11px;text-align:right}
+.kv .rd{background:var(--guard-soft);border-radius:3px}
+.kv .k.rd{color:var(--guard);font-weight:500}
+.ct rect{stroke-width:1.1}
+.ct text{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.04em}
+.ct.human rect{fill:var(--panel);stroke:var(--accent);stroke-dasharray:3 2} .ct.human text{fill:var(--accent)}
+.ct.llm rect{fill:var(--ink2);stroke:var(--ink2)} .ct.llm text{fill:var(--panel)}
+.ct.code rect{fill:var(--panel);stroke:var(--node-line)} .ct.code text{fill:var(--mute)}
+.pill rect{stroke-width:1.2}
+.pill text{font-family:var(--mono);font-size:11px;font-weight:500}
+.pill.yes rect{fill:var(--ok-soft);stroke:var(--ok)} .pill.yes text{fill:var(--ok)}
+.pill.no rect{fill:var(--stop-soft);stroke:var(--stop)} .pill.no text{fill:var(--stop)}
+.pill.info rect{fill:var(--accent-soft);stroke:var(--accent)} .pill.info text{fill:var(--accent)}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--mono);font-size:11.5px;color:var(--ink2);padding:4px 8px 6px}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:5px;border:1.2px solid}
+.trace{list-style:none;margin:0;padding:0;font-size:13px;max-height:230px;overflow:auto}
+.trace li{padding:5px 0;border-bottom:1px solid var(--line);display:flex;gap:8px}
+.trace li:last-child{border-bottom:0}
+.trace .s{font-family:var(--mono);color:var(--mute);font-variant-numeric:tabular-nums}
+
+.two{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+@media (max-width:1180px){.two{grid-template-columns:1fr 1fr}}
+@media (max-width:980px){.two{grid-template-columns:1fr}}
+.two .panel{padding:16px 18px;display:flex;flex-direction:column;gap:8px}
+.two p,.two li{font-size:14.5px;color:var(--ink2);margin:0;max-width:68ch}
+.two ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.two b{color:var(--ink);font-weight:600}
+footer{font-size:12.5px;color:var(--mute)}
+footer a{color:var(--accent)}
+
+.n rect{fill:var(--node);stroke:var(--node-line);stroke-width:1.3}
+.n .name{fill:var(--ink);font-family:var(--display);font-size:16px;font-weight:600}
+.n .sub{fill:var(--mute);font-family:var(--mono);font-size:10.5px}
+.n.gate rect{stroke:var(--guard);stroke-width:2;stroke-dasharray:6 4;fill:var(--guard-soft)}
+.n.exit rect{stroke:var(--stop)}
+.n.ran rect{stroke:var(--accent);stroke-width:2}
+.n.act rect{fill:var(--accent);stroke:var(--accent)}
+.n.act .name,.n.act .sub{fill:var(--accent-ink)}
+.n.dim rect{opacity:.4}
+.e path{fill:none;stroke:var(--node-line);stroke-width:1.4;marker-end:url(#arr)}
+.e.cond path{stroke-dasharray:5 4}
+.e text{fill:var(--ink2);font-family:var(--mono);font-size:11px;paint-order:stroke;stroke:var(--panel);stroke-width:4px;stroke-linejoin:round}
+.e.loop path{stroke:var(--guard)}
+.e.loop text{fill:var(--guard)}
+.e.taken path{stroke:var(--accent);stroke-width:2.6;stroke-dasharray:none;marker-end:url(#arrOn)}
+.e.taken text{fill:var(--accent);font-weight:500}
+.e.dead path{opacity:.28}
+.term circle{fill:none;stroke:var(--ink2);stroke-width:1.6}
+.term circle.in{fill:var(--ink2);stroke:none}
+.term text{fill:var(--mute);font-family:var(--mono);font-size:11px}
+.term.on circle{stroke:var(--accent)} .term.on circle.in{fill:var(--accent)}
+#arr path{fill:var(--node-line)} #arrOn path{fill:var(--accent)}
+@media (prefers-reduced-motion:no-preference){.n rect,.e path{transition:fill .2s,stroke .2s,opacity .2s}}
+
+.views{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.views a{font:500 13px/1 var(--mono);padding:7px 12px;border:1px solid var(--line);border-radius:999px;color:var(--ink2);text-decoration:none;background:var(--panel)}
+.views a[aria-current="page"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.views a:hover{border-color:var(--accent)}
+.views a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ct.lead rect{fill:var(--accent);stroke:var(--accent)} .ct.lead text{fill:var(--accent-ink)}
+
+.fullbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;padding:0 0 6px}
+.fullbar .fstep{display:none;flex:1;min-width:0;font-family:var(--display);font-size:18px;font-weight:600;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fullbar .fstep small{font-family:var(--mono);font-size:11px;font-weight:400;color:var(--mute);margin-right:8px;letter-spacing:.06em;text-transform:uppercase}
+.fullbar .fnav{display:none;gap:6px}
+.board.full{position:fixed;inset:0;z-index:50;border-radius:0;border:0;margin:0;overflow:auto;background:var(--panel);padding:calc(12px + env(safe-area-inset-top,0px)) 16px calc(12px + env(safe-area-inset-bottom,0px))}
+.board.full:focus-visible{outline-offset:-2px}
+.board.full .fullbar{position:sticky;top:0;z-index:2;background:var(--panel);padding-bottom:8px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.board.full .fullbar .fstep,.board.full .fullbar .fnav{display:flex}
+.board.full svg{max-height:calc(100vh - 120px);width:100%;min-width:0}
+body.board-full{overflow:hidden}
+
+.board svg,.scroller svg{min-width:0!important;max-height:none!important}
+.board > svg{margin:0}
+.board{overflow:auto}
+
+.board.full{padding-top:calc(6px + env(safe-area-inset-top,0px))}
+.board.full .fullbar{padding-bottom:6px;margin-bottom:6px;gap:12px;flex-wrap:nowrap}
+.board.full .fullbar .btn{padding:4px 10px;font-size:13px}
+.board.full .fullbar .fstep{flex:0 1 auto;font-size:16px;align-items:baseline}
+.board.full .fullbar .crumbs{flex:1;min-width:0;flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
+.board.full .bhead{display:none}
+@media (max-width:700px){.board.full .fullbar{flex-wrap:wrap}.board.full .fullbar .crumbs{flex-basis:100%;order:3}}
+</style>
+</head>
+<body>
+
+<main class="wrap">
+<header><nav class="views" aria-label="Simulator view"><a href="#" aria-current="page">Overview: the lifecycle</a><a href="simulator.html">Detailed: every sub-loop</a></nav>
+  <p class="lbl">dev-loops · mfittko/dev-loops · simplified lifecycle model</p>
+  <h1>One issue, from startup to merge</h1>
+  <p class="sub">A dev-loops run on one GitHub issue, step by step, on the lifecycle only. The Detailed view opens every sub-loop. Pick a scenario or set the conditions yourself, then step. Each step names the loop-engineering idea it shows and the slide in the <i>Finding the flow</i> deck that covers it.</p>
+</header>
+
+<section class="panel scen" aria-label="Scenario">
+  <p class="lbl">Scenario</p>
+  <div class="chips" id="chips"></div>
+  <div class="msg"><span class="who" id="msgwho">Issue</span><span id="msgtxt"></span></div>
+  <div class="about" id="about"><p><span class="tag">What this is</span><span id="abouttxt"></span></p><p><span class="tag">What to watch for</span><span id="showstxt"></span></p></div>
+</section>
+
+<div class="grid">
+  <div class="panel board" role="region" aria-label="Workflow graph — use arrow keys to scroll" tabindex="0"><div class="fullbar"><p class="fstep" id="fstep"></p><span class="fnav"><button class="btn" type="button" id="fback">Back</button><button class="btn primary" type="button" id="fnext">Next step</button></span><button class="btn" type="button" id="fulltoggle" aria-pressed="false" title="Show the graph in the full window (F)">Full window</button></div>
+    <svg viewBox="0 0 760 790" role="img" aria-label="The dev-loops lifecycle: startup, grill, implement, pre-PR review, draft PR, then a gate round of review lenses, fan-in and judge, with a fixer loop; ready for review, pre-approval gate, guarded merge and retro. Exits: needs_reconcile and park for the operator.">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
+        <marker id="arrOn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
+      </defs>
+      <g id="g"></g>
+    </svg>
+    <div class="legend"><span><i style="background:var(--ok-soft);border-color:var(--ok)"></i>step result: pass / clean</span><span><i style="background:var(--stop-soft);border-color:var(--stop)"></i>fail, missing or stop</span><span><i style="background:var(--accent-soft);border-color:var(--accent)"></i>route taken or value recorded</span></div>
+    <div class="legend"><button type="button" class="btn" id="cttoggle" aria-pressed="true">Hide roles</button><span><i style="background:var(--accent);border-color:var(--accent)"></i>lead: orchestrator, coordinator, gate-coordinator</span><span><i style="background:var(--ink2);border-color:var(--ink2)"></i>worker agent: refiner, developer, reviewer, judge, fixer, retro</span><span><i style="background:var(--panel);border-color:var(--node-line)"></i>script</span><span><i style="background:var(--panel);border-color:var(--accent);border-style:dashed"></i>operator</span></div>
+  </div>
+
+  <div class="side">
+    <div class="panel box">
+      <div class="row">
+        <button class="btn" id="back" type="button">Back</button>
+        <button class="btn primary" id="next" type="button">Next step</button>
+        <button class="btn" id="run" type="button">Run to the end</button>
+        <button class="btn" id="reset" type="button">Reset</button>
+      </div>
+      <p class="keys"><kbd>→</kbd> next · <kbd>←</kbd> back · <kbd>R</kbd> reset · <kbd>F</kbd> full window</p>
+      <p class="lbl" id="stepno">Step 0</p>
+      <p class="now" id="now">Ready</p>
+      <p class="note" id="note"></p>
+      <div class="lens" id="lens" hidden><span class="tag" id="lenstag"></span><p id="lenstxt"></p><span class="slide" id="lensslide"></span></div>
+      <div class="reply" id="reply" hidden><span class="lbl" id="replylbl">On the PR</span><p class="txt" id="replytxt"></p></div>
+      <details id="worldbox">
+        <summary>Starting conditions</summary>
+        <div class="facts" id="facts"></div>
+      </details>
+    </div>
+    <div class="panel box">
+      <p class="lbl">The record: what the loop knows</p>
+      <p class="hint">Right column: the step that set the value. Amber: what the guard read for its decision.</p>
+      <div class="kv" id="state"></div>
+    </div>
+    <div class="panel box">
+      <p class="lbl" id="trace-label">Trace</p>
+      <ul class="trace" id="trace" tabindex="0" aria-labelledby="trace-label"></ul>
+    </div>
+  </div>
+</div>
+
+<div class="two">
+  <div class="panel">
+    <h2>Where the loops are</h2>
+    <ul>
+      <li><b>Pre-PR review.</b> A reviewer reads the change before the first push. Findings go back to the developer while the work is still local.</li>
+      <li><b>The gate round.</b> Review lenses fan out over one head, fan-in checks that every lens reported, and the judge decides per finding: act, defer or reject. Only the act list reaches the fixer.</li>
+      <li><b>Fix and re-gate.</b> Every fix is a new head. Evidence for the old head is stale, so the round runs again. A fix window bounds how often.</li>
+      <li><b>The outer loop.</b> Startup re-reads GitHub and the local artifacts every time. A new unit starts only after the previous merge has its retro checkpoint.</li>
+    </ul>
+  </div>
+  <div class="panel">
+    <h2>What the record holds</h2>
+    <p>The state lives outside any one chat: the issue and its AC / DoD matrix, the pull request and its head SHA, CI, the gate verdicts per head, and the gate artifacts under <code>tmp/</code> in the worktree.</p>
+    <p>Each guard reads that record. A verdict counts only for the head it names. A changed spec makes every clearance from the old spec stale, even when the code did not change.</p>
+    <p>A session can end and a new one can resume. Startup reads the same record and computes the same next step.</p>
+  </div>
+  <div class="panel">
+    <h2>Who decides what</h2>
+    <p>Agents write code, review it and judge findings. Scripts decide whether a step may advance: coverage, validation, head identity, tripwires and merge preconditions. The operator decides intent, acceptance criteria, waivers and, by default, the merge.</p>
+    <ul>
+      <li><b>Agents</b> never write a waiver or an operator marker.</li>
+      <li><b>Scripts</b> fail closed: an unknown result blocks, and a config load error never relaxes a gate.</li>
+      <li><b>The operator</b> can grant a standing authorization to merge on a clean full gate.</li>
+    </ul>
+  </div>
+</div>
+
+<footer>A simplified teaching model of the dev-loops lifecycle, not a port of its code. The real routing has more states, CI waits and harness differences. Round counts, the fix window of 3 and the PR number are illustrative. Source: <a href="https://github.com/mfittko/dev-loops">github.com/mfittko/dev-loops</a>. Deck: <a href="https://mfittko.github.io/dev-loops/finding-the-flow.html">Finding the flow</a>.</footer>
+</main>
+
+<script type="module">
+import { createModel } from "./assets/simulator-overview-model.mjs";
+(function(){
+  "use strict";
+  const { F, SCEN, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant } = createModel();
+  const world = {};
+  let scen = "happy";
+  function applyScenario(id){ scen = id; defaults(world); Object.assign(world, SCEN.find(s=>s.id===id).w); reset(); }
+
+  // ---------- graph drawing ----------
+  let showCT = true;
+
+  // ---------- execution ----------
+  let S, hist;
+  function reset(){
+    S = fresh();
+    hist = []; render();
+  }
+  const clone = o => JSON.parse(JSON.stringify(o));
+
+  function step(){
+    if (S.done) return;
+    hist.push(clone(S));
+    S.prev = clone(S.st); S.n++; S.read = [];
+    advance(S, world, hist[hist.length-1]);
+    render();
+  }
+  function back(){ if (!hist.length) return; S = hist.pop(); render(); }
+
+  // ---------- render ----------
+  const $ = id => document.getElementById(id);
+  const fmt = v => v === "" ? "—" : String(v);
+  function render(){
+    $("chips").innerHTML = SCEN.map(s => `<button type="button" class="chip" data-s="${s.id}" aria-pressed="${s.id===scen}">${s.name}</button>`).join("") + `<button type="button" class="chip" data-s="custom" aria-pressed="${scen==="custom"}">Custom</button>`;
+    const sc = SCEN.find(s => s.id === scen);
+    $("msgwho").textContent = sc ? "Issue" : "Custom conditions";
+    $("msgtxt").textContent = sc ? sc.issue : "Set the starting conditions below the step controls.";
+    $("about").hidden = !sc; if (sc){ $("abouttxt").textContent = sc.about; $("showstxt").textContent = sc.shows; }
+
+    const on = new Set(S.active), ran = new Set(S.ran), taken = new Set(S.taken);
+    let o = "";
+    o += `<g class="term ${S.n===0?"on":""}"><circle class="in" cx="364" cy="24" r="7"/><text x="378" y="28">START</text></g>`;
+    o += `<g class="term ${S.done?"on":""}"><circle cx="364" cy="764" r="9"/><circle class="in" cx="364" cy="764" r="4.5"/><text x="340" y="768" text-anchor="end">END</text></g>`;
+    for (const e of E){
+      const t = taken.has(e.id), dead = S.done && !t;
+      let lab = "";
+      if (e.l){ const [txt,x,y,anc] = e.l; lab = `<text x="${x}" y="${y}" text-anchor="${anc||"start"}">${txt}</text>`; }
+      o += `<g class="e ${e.cond?"cond":""} ${e.loop?"loop":""} ${t?"taken":""} ${dead?"dead":""}"><path d="${e.d}"/>${lab}</g>`;
+    }
+    for (const k of Object.keys(P)){
+      const [x,y] = P[k], cls = ["n", GATE.has(k)?"gate":"", EXIT.has(k)?"exit":"", on.has(k)&&!S.done?"act":"", ran.has(k)&&!(on.has(k)&&!S.done)?"ran":"", S.done&&!ran.has(k)?"dim":""].join(" ");
+      o += `<g class="${cls}"><rect x="${x}" y="${y}" width="${W}" height="${H}" rx="7"/><text class="name" x="${x+W/2}" y="${y+21}" text-anchor="middle">${NAME[k]||k}</text><text class="sub" x="${x+W/2}" y="${y+37}" text-anchor="middle">${SUB[k]}</text></g>`;
+    }
+    if (showCT) for (const [k, tags] of Object.entries(CT)){
+      let tx = P[k][0] + 6; const ty = P[k][1] - 8;
+      for (const [t, c] of tags){ const w = t.length * 6.4 + 10; o += `<g class="ct ${c}"><rect x="${tx}" y="${ty}" width="${w}" height="15" rx="3"/><text x="${tx + w/2}" y="${ty + 11}" text-anchor="middle">${t}</text></g>`; tx += w + 4; }
+    }
+    for (const [k, b] of Object.entries(S.out)){
+      const [x, y] = P[k], w = Math.round(b.t.length * 6.7 + 14), h = 19;
+      const px = x + W - w + 10, py = y + H - 8;
+      o += `<g class="pill ${b.tone}"><rect x="${px}" y="${py}" width="${w}" height="${h}" rx="9.5"/><text x="${px + w/2}" y="${py + 13.5}" text-anchor="middle">${b.t}</text></g>`;
+    }
+    $("g").innerHTML = o;
+
+    $("stepno").textContent = S.done ? `Step ${S.n} · run complete` : `Step ${S.n}`;
+    $("now").textContent = S.title; $("note").textContent = S.note;
+    if (S.lens){ $("lens").hidden = false; $("lenstag").textContent = S.lens.tag; $("lenstxt").textContent = S.lens.txt; $("lensslide").textContent = S.lens.slide; } else $("lens").hidden = true;
+    if (S.reply){ $("reply").hidden = false; $("reply").className = "reply " + S.reply.cls; $("replylbl").textContent = S.reply.lbl; $("replytxt").textContent = S.reply.txt; } else $("reply").hidden = true;
+    $("next").disabled = S.done; $("run").disabled = S.done; $("back").disabled = !hist.length;
+
+    const locked = S.n > 0;
+    $("facts").innerHTML = F.map(f => {
+      const off = relevant(world, f.k) ? "" : "off";
+      if (f.type === "bool") return `<label class="fact ${off}"><input type="checkbox" id="w-${f.k}" data-k="${f.k}" ${world[f.k]?"checked":""} ${locked?"disabled":""}><span class="k">${f.lbl}</span></label>`;
+      return `<label class="fact ${off}"><span class="k">${f.lbl}</span><select id="w-${f.k}" data-k="${f.k}" ${locked?"disabled":""}>${f.opts.map(v=>`<option ${world[f.k]===v?"selected":""}>${v}</option>`).join("")}</select></label>`;
+    }).join("") + `<p class="hint">${locked ? "Conditions lock once the run starts. Reset to change them." : "Dimmed conditions cannot matter with the current choices."}</p>`;
+
+    const keys = Object.keys(freshState());
+    $("state").innerHTML = keys.map(k => {
+      const v = S.st[k], pv = S.prev ? S.prev[k] : v;
+      const chg = S.prev && JSON.stringify(v) !== JSON.stringify(pv);
+      const rd = S.read.includes(k) ? "rd" : "";
+      return `<span class="k ${rd}">${k}</span><span class="v ${chg?"chg":""} ${rd}">${fmt(v)}</span><span class="w">${S.by[k] ? "← " + (NAME[S.by[k]]||S.by[k]) : ""}</span>`;
+    }).join("");
+
+    $("trace").innerHTML = S.trace.length ? S.trace.map((t,i)=>`<li><span class="s">${String(i+1).padStart(2,"0")}</span><span>${t}</span></li>`).join("") : `<li style="color:var(--mute)">No steps yet.</li>`;
+    $("trace").scrollTop = $("trace").scrollHeight;
+  }
+
+  // ---------- events ----------
+  $("chips").addEventListener("click", e => {
+    const b = e.target.closest("[data-s]"); if (!b) return;
+    if (b.dataset.s === "custom"){ scen = "custom"; reset(); $("worldbox").open = true; return; }
+    applyScenario(b.dataset.s);
+  });
+  $("facts").addEventListener("input", e => {
+    const el = e.target.closest("[data-k]"); if (!el) return;
+    world[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value;
+    scen = "custom"; reset();
+  });
+  $("cttoggle").addEventListener("click", e => { showCT = !showCT; e.currentTarget.textContent = showCT ? "Hide roles" : "Show roles"; e.currentTarget.setAttribute("aria-pressed", String(showCT)); render(); });
+  $("next").addEventListener("click", step);
+  $("back").addEventListener("click", back);
+  $("run").addEventListener("click", () => { let g = 0; while (!S.done && g++ < 60) step(); });
+  $("reset").addEventListener("click", reset);
+  document.addEventListener("keydown", e => {
+    if (e.target.matches("input,select,textarea") || e.target.closest(".trace")) return;
+    if (["ArrowRight","ArrowLeft","ArrowDown","ArrowUp"].includes(e.key) && e.target.matches(".board")) {
+      e.preventDefault();
+      e.target.scrollBy({ left: e.key === "ArrowRight" ? 40 : e.key === "ArrowLeft" ? -40 : 0, top: e.key === "ArrowDown" ? 40 : e.key === "ArrowUp" ? -40 : 0 });
+      return;
+    }
+    if (e.key === "ArrowRight"){ e.preventDefault(); step(); }
+    else if (e.key === "ArrowLeft"){ e.preventDefault(); back(); }
+    else if (e.key === "r" || e.key === "R"){ reset(); }
+  });
+
+  defaults(world); applyScenario("happy");
+})();
+</script>
+
+<script>
+(function(){
+  const board = document.querySelector(".board"), btn = document.getElementById("fulltoggle"), fs = document.getElementById("fstep");
+  const now = document.getElementById("now"), no = document.getElementById("stepno");
+  const sync = () => { fs.innerHTML = ""; const s = document.createElement("small"); s.textContent = no ? no.textContent : ""; fs.append(s, now ? now.textContent : ""); };
+  function set(on){
+    board.classList.toggle("full", on); document.body.classList.toggle("board-full", on); const cr = document.getElementById("crumbs"), bh = document.querySelector(".bhead"), nav = document.querySelector(".fullbar .fnav"); if (cr && bh){ if (on) nav.before(cr); else bh.prepend(cr); } const gd = document.getElementById("gdesc"); fs.title = gd ? gd.textContent : "";
+    btn.textContent = on ? "Exit" : "Full window"; btn.title = on ? "Exit full window (Esc or F)" : "Show the graph in the full window (F)"; btn.setAttribute("aria-pressed", String(on));
+    if (on){ sync(); btn.focus(); }
+  }
+  btn.addEventListener("click", () => set(!board.classList.contains("full")));
+  document.getElementById("fnext").addEventListener("click", () => document.getElementById("next").click());
+  document.getElementById("fback").addEventListener("click", () => document.getElementById("back").click());
+  new MutationObserver(sync).observe(now, {childList:true, characterData:true, subtree:true});
+  // Esc leaves the full window before any other Esc handling; F toggles it.
+  document.addEventListener("keydown", e => {
+    if (e.target.matches && e.target.matches("input,select,textarea")) return;
+    if (e.key === "Escape" && board.classList.contains("full")){ e.preventDefault(); e.stopImmediatePropagation(); set(false); }
+    else if ((e.key === "f" || e.key === "F") && !e.metaKey && !e.ctrlKey && !e.altKey){ e.preventDefault(); set(!board.classList.contains("full")); }
+  }, true);
+  const sync2 = () => { const n = document.getElementById("next"), b = document.getElementById("back"); document.getElementById("fnext").disabled = n.disabled; document.getElementById("fback").disabled = b.disabled; };
+  new MutationObserver(sync2).observe(document.getElementById("next"), {attributes:true}); new MutationObserver(sync2).observe(document.getElementById("back"), {attributes:true}); sync2();
+})();
+</script>
+<script>
+(function(){
+  // ponytail: one clamp for every graph; tune MIN/MAX if node text reads too small or too big
+  const MIN = 0.75, MAX = 1;
+  const svg = document.querySelector(".board svg"), box = svg.parentElement, board = document.querySelector(".board");
+  function size(){
+    const vb = svg.viewBox.baseVal; if (!vb || !vb.width) return;
+    const full = board.classList.contains("full");
+    const aw = box.clientWidth - 2, ah = full ? board.clientHeight - (svg.getBoundingClientRect().top - board.getBoundingClientRect().top) - 16 : Math.max(320, innerHeight * 0.84);
+    const k = Math.min(full ? 1.2 : MAX, Math.max(MIN, Math.min(aw / vb.width, ah / vb.height)));
+    svg.style.width = Math.round(vb.width * k) + "px"; svg.style.height = Math.round(vb.height * k) + "px";
+    svg.style.marginInline = vb.width * k < aw ? "auto" : "0";
+  }
+  new MutationObserver(size).observe(svg, {attributes:true, attributeFilter:["viewBox"]});
+  new MutationObserver(size).observe(board, {attributes:true, attributeFilter:["class"]});
+  addEventListener("resize", size); size();
+})();
+</script>
+</body></html>

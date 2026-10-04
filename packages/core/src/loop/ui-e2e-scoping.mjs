@@ -2,10 +2,9 @@
 //
 // Deterministic, path-triggered criterion: a PR that adds or modifies a
 // *rendered* HTML artifact (a presentation deck, an article page, or the
-// inspect-run viewer's served page/component) MUST run the shared UI e2e
-// assertions (mobile + desktop) AND have that artifact registered in the e2e
-// suite (DECK_REGISTRY / ARTICLE_REGISTRY / VIEWER_REGISTRY). Inclusion is
-// triggered by the changed-file set, never by a human annotating the PR.
+// inspect-run viewer's served page/component) requires shared UI e2e assertions
+// (mobile + desktop) and suite registration.
+// Inclusion is path-triggered, never a human annotation on the PR.
 //
 // This module is the testable core of that criterion: classify changed paths
 // → rendered-artifact set → check each is registered → fail closed if a
@@ -16,6 +15,8 @@
 export const RENDERED_ARTIFACT_GLOBS = Object.freeze([
   "docs/articles/*.html",
   "docs/presentations/*.html",
+  "docs/articles/assets/simulator-model.mjs",
+  "docs/articles/assets/simulator-overview-model.mjs",
 ]);
 
 // The inspect-run viewer is served from a component, not a static .html file,
@@ -31,10 +32,8 @@ export const VIEWER_SOURCE_PATHS = Object.freeze([
 // other. Mirrors the registries' actual on-disk locations:
 //   decks   → DECK_REGISTRY served from docs/presentations/<deck>
 //   articles→ ARTICLE_REGISTRY served from docs/articles/<file>
-// Note: kept as an explicit list here rather than importing the harness
-// (which pulls @playwright/test into core); the ui-e2e-scoping.test.mjs sync
-// test fails if a registry entry is added without updating this list, so it
-// can't silently drift.
+// Kept explicit here instead of importing the harness, which pulls
+// @playwright/test into core.
 export const REGISTERED_ARTIFACT_SUITES = Object.freeze({
   "docs/presentations/introducing-dev-loops.html": "intro-deck",
   "docs/presentations/dev-loops-deep-dive.html": "deep-dive",
@@ -44,6 +43,11 @@ export const REGISTERED_ARTIFACT_SUITES = Object.freeze({
   "docs/articles/introducing-dev-loops.html": "intro-article",
   "docs/articles/dev-loops-deep-dive.html": "deep-dive-article",
   "docs/articles/how-dev-loops-decided-itself.html": "how-decided-article",
+  "docs/articles/simulator.html": "simulator-article",
+  "docs/articles/simulator-overview.html": "simulator-overview-article",
+  // Model assets require the same browser coverage as their owning page.
+  "docs/articles/assets/simulator-model.mjs": "simulator-article",
+  "docs/articles/assets/simulator-overview-model.mjs": "simulator-overview-article",
 });
 export const REGISTERED_ARTIFACT_PATHS = Object.freeze(Object.keys(REGISTERED_ARTIFACT_SUITES));
 

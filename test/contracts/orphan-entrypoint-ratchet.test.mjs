@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
@@ -31,6 +32,9 @@ import { test } from "bun:test";
 // code-consumer orphan. Scripts with only doc references but no code/CI wiring are
 // therefore reported as orphans and carried with a `standalone` disposition so
 // they are acknowledged explicitly rather than hidden.
+// Published browser article assets under docs/articles/assets/ are not Node
+// callers: teaching metadata may name scripts without executing or wiring them.
+// Sources elsewhere, including Node/build sources under docs/, remain eligible.
 //
 // ## Ratchet
 // `ORPHAN_ALLOWLIST` records the current orphan set with a one-line disposition
@@ -133,10 +137,11 @@ async function read(f) {
 
 // ── Caller detection ────────────────────────────────────────────────────────
 
-// All non-test .mjs sources in the repo (scripts/, packages/, cli/, lib/, etc.).
-async function nonTestSources() {
-  const all = await walkMjs(REPO_ROOT);
-  return all.filter((f) => !f.split(path.sep).includes("test"));
+// Non-test Node caller sources, excluding published browser article assets.
+async function nonTestSources(repoRoot = REPO_ROOT) {
+  const all = await walkMjs(repoRoot);
+  const browserAssetDir = path.join(repoRoot, "docs", "articles", "assets") + path.sep;
+  return all.filter((f) => !f.split(path.sep).includes("test") && !f.startsWith(browserAssetDir));
 }
 
 // Shared import/export-from statement scraper: returns `{ statement, spec }` for
@@ -203,6 +208,32 @@ async function workflowTexts() {
   for (const f of all) out.push(await read(f));
   return out;
 }
+
+test("browser article metadata is not a CLI caller, but Node imports and spawns outside its asset directory are", async () => {
+  const scriptRel = "scripts/fixture/inspect-outcome.mjs";
+  for (const caller of [
+    { file: "docs/node-tools/runner.mjs", code: 'import "../../scripts/fixture/inspect-outcome.mjs";' },
+    { file: "scripts/runner.mjs", code: `import { spawnSync } from "node:child_process"; spawnSync(process.execPath, [${JSON.stringify(scriptRel)}]);` },
+  ]) {
+    const root = await mkdtemp(path.join(tmpdir(), "orphan-caller-fixture-"));
+    try {
+      const script = path.join(root, scriptRel);
+      const browserModel = path.join(root, "docs/articles/assets/native-model.mjs");
+      await mkdir(path.dirname(script), { recursive: true });
+      await mkdir(path.dirname(browserModel), { recursive: true });
+      await writeFile(script, 'console.log("fixture CLI");\n');
+      await writeFile(browserModel, `export const graph = { nodes: [{ label: "Inspect outcome", src: ${JSON.stringify(scriptRel)} }] };\n`);
+      assert.equal(await hasNonTestCaller(script, scriptRel, path.basename(script), await nonTestSources(root), [], ""), false);
+
+      const source = path.join(root, caller.file);
+      await mkdir(path.dirname(source), { recursive: true });
+      await writeFile(source, caller.code);
+      assert.equal(await hasNonTestCaller(script, scriptRel, path.basename(script), await nonTestSources(root), [], ""), true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
 
 test("every CLI entry point under scripts/ either has a non-test caller or is allowlisted (orphan ratchet)", async () => {
   const sources = await nonTestSources();

@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Dev Loops Simulator</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: graph board left (the thing on the projector), step controls and the record right; stacks on narrow screens. */
+:root{
+  --paper:#EEF1F4; --panel:#FFFFFF; --ink:#16212E; --ink2:#4A5767; --mute:#566270; --line:#D3D9E0;
+  --node:#F7F9FB; --node-line:#7A8795;
+  --accent:#2347C9; --accent-ink:#FFFFFF; --accent-soft:#E2E8FA;
+  --guard:#8A5100; --guard-soft:#FBEFD9; --stop:#B3261E; --stop-soft:#F8E1DF; --ok:#1E7A4C; --ok-soft:#DDF1E6;
+  --display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --paper:#0F151C; --panel:#17202A; --ink:#E6ECF2; --ink2:#AAB6C3; --mute:#A0ADBB; --line:#2A3542;
+  --node:#1C2733; --node-line:#7C8B9E;
+  --accent:#7D98FF; --accent-ink:#0D1424; --accent-soft:#1E2A4D;
+  --guard:#F0A93B; --guard-soft:#3A2B12; --stop:#F07A70; --stop-soft:#3D1D1B; --ok:#5FCB92; --ok-soft:#15301F;
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --paper:#0F151C; --panel:#17202A; --ink:#E6ECF2; --ink2:#AAB6C3; --mute:#A0ADBB; --line:#2A3542;
+  --node:#1C2733; --node-line:#7C8B9E;
+  --accent:#7D98FF; --accent-ink:#0D1424; --accent-soft:#1E2A4D;
+  --guard:#F0A93B; --guard-soft:#3A2B12; --stop:#F07A70; --stop-soft:#3D1D1B; --ok:#5FCB92; --ok-soft:#15301F;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{--simulator-content-width:1280px;margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;padding-block:24px 56px;padding-inline:16px}
+.wrap{max-width:var(--simulator-content-width);margin:0 auto;display:flex;flex-direction:column;gap:18px;min-width:0}
+header{display:flex;flex-direction:column;gap:4px}
+h1{font-family:var(--display);font-size:30px;font-weight:600;margin:0;letter-spacing:-.005em;text-wrap:balance}
+h2{font-family:var(--display);font-size:19px;font-weight:600;margin:0;text-wrap:balance}
+.sub{color:var(--ink2);margin:0;max-width:80ch}
+code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);padding:1px 4px;border-radius:3px;overflow-wrap:anywhere}
+.lbl{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);margin:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;min-width:0}
+
+.scen{display:flex;flex-direction:column;gap:10px;padding:14px 16px}
+.sgroups{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,290px),1fr));gap:10px 18px}
+.sgroup{display:flex;flex-direction:column;gap:6px;min-width:0}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font:inherit;font-size:13px;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--node);color:var(--ink2);cursor:pointer;text-align:left}
+.chip:hover{border-color:var(--accent);color:var(--ink)}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.chip .no{font-family:var(--mono);font-size:11px;opacity:.9;margin-right:4px}
+.msg{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:15px}
+.msg .who{font-family:var(--mono);font-size:12px;color:var(--mute)}
+.about{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;border-top:1px solid var(--line);padding-top:10px}
+@media (max-width:760px){.about{grid-template-columns:1fr}}
+.about[hidden]{display:none}
+.about p{margin:0;font-size:14px;color:var(--ink2);max-width:70ch;display:flex;flex-direction:column;gap:2px}
+.about .tag{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
+
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 370px;gap:18px;align-items:start}
+@media (max-width:980px){.grid{grid-template-columns:minmax(0,1fr)}}
+.board{padding:10px;min-width:0;display:flex;flex-direction:column;gap:8px}
+.bhead{display:flex;flex-direction:column;gap:6px;padding:2px 4px 0}
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-family:var(--mono);font-size:12.5px;color:var(--mute)}
+.crumbs button{font:inherit;color:var(--accent);background:none;border:0;padding:2px 3px;cursor:pointer;border-radius:3px;text-decoration:underline;text-underline-offset:2px}
+.crumbs button[aria-current="true"]{color:var(--ink);text-decoration:none;font-weight:500;cursor:default}
+.crumbs .sep{color:var(--mute)}
+.crumbs .viewing{color:var(--guard);margin-left:6px}
+.crumbs .backrun{font:inherit;font-size:12px;margin-left:auto;padding:3px 9px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--ink2);cursor:pointer;text-decoration:none}
+.gdesc{font-size:13.5px;color:var(--ink2);margin:0;max-width:90ch}
+.scroller{overflow:auto;max-height:84vh;border-radius:6px}
+.scroller svg{display:block;width:100%;height:auto;min-width:560px;margin:0 auto}
+.nav{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.nav .chip{font-size:12px;padding:2px 8px;font-family:var(--mono)}
+.side{display:flex;flex-direction:column;gap:14px;min-width:0}
+.box{padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+
+.now{font-family:var(--display);font-size:22px;font-weight:600;color:var(--accent);margin:0;line-height:1.2;overflow-wrap:anywhere}
+.note{font-size:14px;color:var(--ink2);margin:0}
+.lens{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:6px;background:var(--guard-soft)}
+.lens[hidden]{display:none}
+.lens .tag{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--guard);font-weight:500;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.lens .inf{font-size:10px;letter-spacing:.06em;border:1px dashed var(--guard);border-radius:3px;padding:0 5px;color:var(--guard)}
+.lens .inf[hidden]{display:none}
+.lens p{margin:0;font-size:14px;color:var(--ink)}
+.lens .slide,.lens .src{font-family:var(--mono);font-size:11.5px;color:var(--ink2);overflow-wrap:anywhere}
+.lens .slide[hidden]{display:none}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.btn{font:inherit;font-size:13.5px;padding:7px 13px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink2);cursor:pointer}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:500}
+.btn:hover:not(:disabled){border-color:var(--accent)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn:focus-visible,.chip:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible,.crumbs button:focus-visible,a:focus-visible,.trace:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.n.open:focus-visible rect.box{stroke:var(--accent);stroke-width:3}
+.n.open:focus{outline:none}
+.keys{font-family:var(--mono);font-size:11.5px;color:var(--mute);margin:0}
+kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;padding:0 4px;background:var(--node)}
+
+.reply{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border-radius:6px;border:1px solid var(--line);background:var(--node)}
+.reply[hidden]{display:none}
+.reply .txt{font-size:14.5px;margin:0}
+.reply.fixed{border-color:var(--stop);background:var(--stop-soft)}
+.reply.answer{border-color:var(--ok);background:var(--ok-soft)}
+
+details{border-top:1px solid var(--line);padding-top:10px}
+summary{cursor:pointer;font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
+.facts{display:flex;flex-direction:column;gap:7px;margin-top:10px}
+.fgroup{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink2);margin:6px 0 0;border-bottom:1px solid var(--line);padding-bottom:2px}
+.fact{display:flex;align-items:center;gap:10px;font-size:13px}
+.fact .k{flex:1;min-width:0}
+.fact select{font:inherit;font-size:12.5px;padding:3px 6px;border:1px solid var(--line);border-radius:4px;background:var(--node);color:var(--ink);max-width:180px}
+.fact input{accent-color:var(--accent);width:16px;height:16px;margin:0}
+.fact.off{opacity:.85}
+.hint{font-size:12px;color:var(--mute);margin:0}
+
+.rgroup{display:flex;flex-direction:column;gap:3px}
+.rgroup .lbl{font-size:10.5px;color:var(--ink2);border-bottom:1px solid var(--line);padding-bottom:1px}
+.kv{font-family:var(--mono);font-size:12.5px;display:grid;grid-template-columns:minmax(0,46%) minmax(0,1fr);gap:4px 10px;font-variant-numeric:tabular-nums}
+.kv .k{color:var(--mute);overflow-wrap:anywhere}
+.kv .v{overflow-wrap:anywhere}
+.kv .v.chg{color:var(--accent);font-weight:500}
+.kv .w{display:block;color:var(--mute);font-size:10.5px;font-weight:400}
+.kv .rd{background:var(--guard-soft);border-radius:3px}
+.kv .k.rd{color:var(--guard);font-weight:500}
+.ct rect{stroke-width:1.1}
+.ct text{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.04em}
+.ct.human rect{fill:var(--panel);stroke:var(--accent);stroke-dasharray:3 2} .ct.human text{fill:var(--accent)}
+.ct.llm rect{fill:var(--ink2);stroke:var(--ink2)} .ct.llm text{fill:var(--panel)}
+.ct.code rect{fill:var(--panel);stroke:var(--node-line)} .ct.code text{fill:var(--mute)}
+.badge rect{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.1}
+.badge text{fill:var(--accent);font-family:var(--mono);font-size:10px;font-weight:500}
+.inftag rect{fill:var(--panel);stroke:var(--guard);stroke-dasharray:2 2}
+.inftag text{fill:var(--guard);font-family:var(--mono);font-size:9.5px}
+.pill rect{stroke-width:1.2}
+.pill text{font-family:var(--mono);font-size:11px;font-weight:500}
+.pill.yes rect{fill:var(--ok-soft);stroke:var(--ok)} .pill.yes text{fill:var(--ok)}
+.pill.no rect{fill:var(--stop-soft);stroke:var(--stop)} .pill.no text{fill:var(--stop)}
+.pill.info rect{fill:var(--accent-soft);stroke:var(--accent)} .pill.info text{fill:var(--accent)}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--mono);font-size:11.5px;color:var(--ink2);padding:2px 4px}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:5px;border:1.2px solid}
+.trace{list-style:none;margin:0;padding:0;font-size:13px;max-height:260px;overflow:auto}
+.trace li{padding:5px 0;border-bottom:1px solid var(--line);display:flex;gap:8px;overflow-wrap:anywhere}
+.trace li:last-child{border-bottom:0}
+.trace .s{font-family:var(--mono);color:var(--mute);font-variant-numeric:tabular-nums}
+
+.two{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+@media (max-width:1180px){.two{grid-template-columns:1fr 1fr}}
+@media (max-width:980px){.two{grid-template-columns:minmax(0,1fr)}}
+.two .panel{padding:16px 18px;display:flex;flex-direction:column;gap:8px}
+.two p,.two li{font-size:14.5px;color:var(--ink2);margin:0;max-width:68ch}
+.two ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.two b{color:var(--ink);font-weight:600}
+footer{font-size:12.5px;color:var(--mute)}
+footer a{color:var(--accent)}
+
+.n rect.box{fill:var(--node);stroke:var(--node-line);stroke-width:1.3}
+.n .name{fill:var(--ink);font-family:var(--display);font-size:15.5px;font-weight:600}
+.n .sub{fill:var(--mute);font-family:var(--mono);font-size:10.5px}
+.n.gate rect.box{stroke:var(--guard);stroke-width:2;stroke-dasharray:6 4;fill:var(--guard-soft)}
+.n.exit rect.box{stroke:var(--stop)}
+.n.ret rect.box{fill:var(--panel);stroke:var(--ink2);stroke-dasharray:2 3}
+.n.ret.exit rect.box{stroke:var(--stop)}
+.n.term rect.box{fill:var(--panel);stroke:var(--ink2);stroke-width:2}
+.n.aside rect.box{opacity:.62}
+.n.aside rect.box{stroke-dasharray:3 3}
+.n.inf rect.box{stroke-dasharray:1.5 3}
+.n.open{cursor:pointer}
+.n.open:hover rect.box{stroke:var(--accent)}
+.n.ran rect.box{stroke:var(--accent);stroke-width:2;stroke-dasharray:none}
+.n.act rect.box{fill:var(--accent);stroke:var(--accent);stroke-dasharray:none}
+.n.act .name,.n.act .sub{fill:var(--accent-ink)}
+.n.dim rect.box{opacity:.38}
+.e path{fill:none;stroke:var(--node-line);stroke-width:1.4;marker-end:url(#arr)}
+.e.cond path{stroke-dasharray:5 4}
+.e.inf path{stroke-dasharray:1.5 3.5;stroke-width:1.6}
+.e text{fill:var(--ink2);font-family:var(--mono);font-size:10.5px;paint-order:stroke;stroke:var(--panel);stroke-width:4px;stroke-linejoin:round}
+.e.loop path{stroke:var(--guard)}
+.e.loop text{fill:var(--guard)}
+.e.taken path{stroke:var(--accent);stroke-width:2.6;stroke-dasharray:none;marker-end:url(#arrOn)}
+.e.taken text{fill:var(--accent);font-weight:500}
+.e.dead path{opacity:.28}
+#arr path{fill:var(--node-line)} #arrOn path{fill:var(--accent)}
+@media (prefers-reduced-motion:no-preference){.n rect.box,.e path{transition:fill .2s,stroke .2s,opacity .2s}}
+
+.views{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.views a{font:500 13px/1 var(--mono);padding:7px 12px;border:1px solid var(--line);border-radius:999px;color:var(--ink2);text-decoration:none;background:var(--panel)}
+.views a[aria-current="page"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.views a:hover{border-color:var(--accent)}
+.views a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.ct.lead rect{fill:var(--accent);stroke:var(--accent)} .ct.lead text{fill:var(--accent-ink)}
+.ct.ext rect{fill:var(--guard-soft);stroke:var(--guard)} .ct.ext text{fill:var(--guard)}
+.rchip{display:inline-flex;align-items:center;font:500 11.5px/1 var(--mono);padding:3px 7px;border-radius:4px;border:1.2px solid;white-space:nowrap}
+.rchip.human{color:var(--accent);border-color:var(--accent);border-style:dashed;background:var(--panel)}
+.rchip.lead{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.rchip.llm{background:var(--ink2);border-color:var(--ink2);color:var(--panel)}
+.rchip.code{background:var(--panel);border-color:var(--node-line);color:var(--mute)}
+.rchip.ext{background:var(--guard-soft);border-color:var(--guard);color:var(--guard)}
+.who{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0;font-size:13px;color:var(--ink2)}
+.who[hidden]{display:none}
+.actors{display:flex;flex-direction:column;gap:6px}
+.arow{display:grid;grid-template-columns:8.2rem minmax(0,1fr) auto;gap:8px;align-items:center;font-size:12.5px;color:var(--ink2);padding:3px 4px;border-radius:5px}
+.arow .d{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arow .c{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--mute)}
+.arow.now{background:var(--accent-soft);color:var(--ink)}
+.arow.idle{opacity:.9}
+.rolelegend{display:flex;flex-wrap:wrap;gap:6px}
+.inftxt{font-size:11.5px;color:var(--mute);font-style:italic}
+
+.fullbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;padding:0 0 6px}
+.fullbar .fstep{display:none;flex:1;min-width:0;font-family:var(--display);font-size:18px;font-weight:600;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fullbar .fstep small{font-family:var(--mono);font-size:11px;font-weight:400;color:var(--mute);margin-right:8px;letter-spacing:.06em;text-transform:uppercase}
+.fullbar .fnav{display:none;gap:6px}
+.board.full{position:fixed;inset:0;z-index:50;border-radius:0;border:0;margin:0;overflow:auto;background:var(--panel);padding:calc(12px + env(safe-area-inset-top,0px)) 16px calc(12px + env(safe-area-inset-bottom,0px))}
+.board.full .fullbar{position:sticky;top:0;z-index:2;background:var(--panel);padding-bottom:8px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.board.full .fullbar .fstep,.board.full .fullbar .fnav{display:flex}
+.board.full svg{max-height:calc(100vh - 120px);width:100%;min-width:0}
+.board.full .scroller{max-height:none;overflow:visible}
+
+body.board-full{overflow:hidden}
+
+.board svg,.scroller svg{min-width:0!important;max-height:none!important}
+.board > svg{margin:0}
+.board{overflow:auto}
+
+.board.full{padding-top:calc(6px + env(safe-area-inset-top,0px))}
+.board.full .fullbar{padding-bottom:6px;margin-bottom:6px;gap:12px;flex-wrap:nowrap}
+.board.full .fullbar .btn{padding:4px 10px;font-size:13px}
+.board.full .fullbar .fstep{flex:0 1 auto;font-size:16px;align-items:baseline}
+.board.full .fullbar .crumbs{flex:1;min-width:0;flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
+.board.full .bhead{display:none}
+@media (max-width:700px){.board.full .fullbar{flex-wrap:wrap}.board.full .fullbar .crumbs{flex-basis:100%;order:3}}
+</style>
+</head>
+<body>
+
+<main class="wrap">
+<header><nav class="views" aria-label="Simulator view"><a href="simulator-overview.html">Overview: the lifecycle</a><a href="#" aria-current="page">Detailed: every sub-loop</a></nav>
+  <p class="lbl">dev-loops · mfittko/dev-loops · state model at commit c00aa769f</p>
+  <h1>One unit of work, from startup to merge</h1>
+  <p class="sub">A dev-loops run, step by step, including every sub-loop it enters. Pick a scenario or set the starting conditions, then step. When the run enters a sub-loop, the board opens that graph. For the lifecycle without sub-loops, open the Overview. You can open any graph with a <b>sub-loop</b> badge yourself; the run waits until you step again.</p>
+</header>
+
+<section class="panel scen" aria-label="Scenarios">
+  <p class="lbl">Scenarios</p>
+  <div class="sgroups" id="chips"></div>
+  <div class="msg"><span class="who" id="msgwho">Scenario</span><span id="msgtxt"></span></div>
+  <div class="about" id="about"><p><span class="tag">What this is</span><span id="abouttxt"></span></p><p><span class="tag">What to watch for</span><span id="showstxt"></span></p></div>
+</section>
+
+<div class="grid">
+  <div class="panel board"><div class="fullbar"><p class="fstep" id="fstep"></p><span class="fnav"><button class="btn" type="button" id="fback">Back</button><button class="btn primary" type="button" id="fnext">Next step</button></span><button class="btn" type="button" id="fulltoggle" aria-pressed="false" title="Show the graph in the full window (F)">Full window</button></div>
+    <div class="bhead">
+      <nav class="crumbs" id="crumbs" aria-label="Graph path"></nav>
+      <p class="gdesc" id="gdesc"></p>
+    </div>
+    <div class="scroller" id="scroller" tabindex="0" role="region" aria-label="Workflow graph — use arrow keys to scroll">
+      <svg id="svg" viewBox="0 0 1000 640" role="group" aria-label="">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
+          <marker id="arrOn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
+        </defs>
+        <g id="g"></g>
+      </svg>
+    </div>
+    <div class="legend"><span><i style="background:var(--ok-soft);border-color:var(--ok)"></i>pass / clean</span><span><i style="background:var(--stop-soft);border-color:var(--stop)"></i>fail, refuse or stop</span><span><i style="background:var(--accent-soft);border-color:var(--accent)"></i>route taken or value recorded</span><span><i style="background:var(--guard-soft);border-color:var(--guard);border-style:dashed"></i>guard</span><span><i style="background:var(--panel);border-color:var(--ink2);border-style:dotted"></i>exit to the parent graph</span><span><i style="background:var(--panel);border-color:var(--guard);border-style:dotted"></i>dotted line: inferred</span></div>
+    <div class="legend"><button type="button" class="btn" id="cttoggle" aria-pressed="true">Hide roles</button><span class="rolelegend" id="rolelegend"></span></div>
+    <div class="nav" id="nav" role="group" aria-label="Open any graph"></div>
+  </div>
+
+  <div class="side">
+    <div class="panel box">
+      <div class="row">
+        <button class="btn" id="back" type="button">Back</button>
+        <button class="btn primary" id="next" type="button">Next step</button>
+        <button class="btn" id="run" type="button">Run to the end</button>
+        <button class="btn" id="reset" type="button">Reset</button>
+      </div>
+      
+      <p class="keys"><kbd>→</kbd> next · <kbd>←</kbd> back · <kbd>R</kbd> reset · <kbd>Esc</kbd> back to the run · <kbd>F</kbd> full window</p>
+      <p class="lbl" id="stepno">Step 0</p>
+      <p class="now" id="now">Ready</p>
+      <p class="who" id="who" hidden></p>
+      <p class="note" id="note"></p>
+      <div class="lens" id="lens" hidden><span class="tag"><span id="lenstag"></span><span class="inf" id="lensinf" hidden>inferred</span></span><p id="lenstxt"></p><span class="slide" id="lensslide"></span><span class="src" id="lenssrc"></span></div>
+      <div class="reply" id="reply" hidden><span class="lbl" id="replylbl">On the PR</span><p class="txt" id="replytxt"></p></div>
+      <details id="worldbox">
+        <summary>Starting conditions</summary>
+        <div class="facts" id="facts"></div>
+      </details>
+    </div>
+    <div class="panel box">
+      <p class="lbl">The record: what the loop knows</p>
+      <p class="hint">Only variables that a step has set. Under each value: the step that set it. Amber: what the current step read for its decision.</p>
+      <div id="state" class="facts" style="margin-top:0"></div>
+    </div>
+    <div class="panel box">
+      <p class="lbl">Who acted</p>
+      <p class="hint">Steps led or helped by each role in this run. Highlighted: the role acting now.</p>
+      <div class="actors" id="actors"></div>
+    </div>
+    <div class="panel box">
+      <p class="lbl" id="trace-label">Trace</p>
+      <ul class="trace" id="trace" tabindex="0" aria-labelledby="trace-label"></ul>
+    </div>
+  </div>
+</div>
+
+<div class="two">
+  <div class="panel">
+    <h2>Where the loops are</h2>
+    <ul>
+      <li><b>Refinement.</b> The grill iterates until the issue has an AC / DoD matrix, Non-goals and a recorded results comment, or hands off honestly.</li>
+      <li><b>The gate round.</b> Reviewers fan out over one head. Fan-in checks that every unit reported. The judge decides per finding; only the act list reaches the fixer. A fix makes a new head, and the round runs again.</li>
+      <li><b>Copilot follow-up.</b> Request, wait, fix, reply, re-request, at most 5 rounds by default. A clean review on the same head ends it.</li>
+      <li><b>The outer loop.</b> Every startup re-reads the record. The next unit cannot start while the previous merge lacks its retro checkpoint.</li>
+    </ul>
+  </div>
+  <div class="panel">
+    <h2>What the record holds</h2>
+    <p>The state lives outside any one chat: the issue body and its matrix, the PR and its head SHA, CI, gate verdicts per head, the gate artifacts under <code>tmp/</code>, the board column and the retro checkpoint in <code>.pi/</code>.</p>
+    <p>Each guard reads that record. A verdict counts only for the head it names. A changed spec makes every clearance from the old spec stale.</p>
+    <p>A session can end and a new one can resume. Startup reads the same record and computes the same next step.</p>
+  </div>
+  <div class="panel">
+    <h2>Who decides what</h2>
+    <p>Agents write code, review it and judge findings. Scripts decide whether a step may advance: coverage, validation, head identity, size, tripwires and merge preconditions. The operator decides intent, waivers and the merge authorization.</p>
+    <ul>
+      <li><b>Hooks</b> deny raw <code>gh pr merge</code>, raw <code>gh pr create</code> and inline interpreters.</li>
+      <li><b>Scripts</b> fail closed: an unknown result blocks, and a config error never relaxes a gate.</li>
+      <li><b>The operator</b> can grant a standing authorization to merge on a clean full gate set.</li>
+    </ul>
+  </div>
+</div>
+
+<footer>A teaching model built from a sourced state model of the dev-loops repo at commit c00aa769f (2026-10-02). It is not a port of the code. Issue #101, PR #42 and the head letters A, B, C are illustrative. A step or edge marked inferred is a conclusion drawn from reading the code, not a stated rule. Source: <a href="https://github.com/mfittko/dev-loops">github.com/mfittko/dev-loops</a>. Deck: <a href="https://mfittko.github.io/dev-loops/finding-the-flow.html">Finding the flow</a>. State atlas: <a href="state-atlas.html">the diagrams generated from the code tables</a>.</footer>
+</main>
+
+<script type="module">
+import { createModel } from "./assets/simulator-model.mjs";
+(function(){
+  "use strict";
+  const { I, GR, ORDER, F, SC, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant } = createModel();
+  const $ = id => document.getElementById(id);
+  const clone = o => JSON.parse(JSON.stringify(o));
+  const esc = v => String(v).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+
+  // ---------- geometry ----------
+  function geo(gid){
+    const g = GR[gid]; if (g._m) return g._m;
+    const m = {};
+    for (const [id,name,sub,c,r,o={}] of g.nodes) m[id] = {id,name,sub,o,x:g.x0+c*g.cw,y:g.y0+r*g.rh,w:o.w||g.w,h:46};
+    g._m = m; return m;
+  }
+  const P = (n, s) => s==="t" ? [n.x+n.w/2,n.y] : s==="b" ? [n.x+n.w/2,n.y+n.h] : s==="l" ? [n.x,n.y+n.h/2] : [n.x+n.w,n.y+n.h/2];
+  function path(e, A, B){
+    const o = e[3] || {};
+    let d, lx, ly, anc = "start";
+    if (o.d){ d = o.d; lx = o.lx; ly = o.ly; anc = o.anc || "start"; return {d,lx,ly,anc}; }
+    if (A === B){
+      const {x,y,w,h} = A;
+      if (o.side === "l"){ d = `M${x} ${y+12} C ${x-34} ${y+4}, ${x-34} ${y+h-4}, ${x} ${y+h-12}`; lx = x-28; ly = y+h/2+4; anc = "end"; }
+      else if (o.side === "b"){ const cx = x+w/2; d = `M${cx-20} ${y+h} C ${cx-30} ${y+h+32}, ${cx+30} ${y+h+32}, ${cx+20} ${y+h}`; lx = cx+34; ly = y+h+26; }
+      else { d = `M${x+w} ${y+12} C ${x+w+34} ${y+4}, ${x+w+34} ${y+h-4}, ${x+w} ${y+h-12}`; lx = x+w+28; ly = y+h/2+4; }
+    } else if (o.side === "l" || o.side === "r"){
+      const k = o.bulge || 36, [ax,ay] = P(A,o.side), [bx,by] = P(B,o.side), sg = o.side === "l" ? -1 : 1;
+      d = `M${ax} ${ay} C ${ax+sg*k} ${ay}, ${bx+sg*k} ${by}, ${bx} ${by}`;
+      lx = (sg < 0 ? Math.min(ax,bx) : Math.max(ax,bx)) + sg*(k*0.75+4); ly = (ay+by)/2+4; anc = sg < 0 ? "end" : "start";
+    } else {
+      const ax=A.x+A.w/2, ay=A.y+A.h/2, bx=B.x+B.w/2, by=B.y+B.h/2, dx=bx-ax, dy=by-ay;
+      const vert = o.v ? true : o.h ? false : Math.abs(dy) > Math.abs(dx)*0.6;
+      if (vert){
+        const [sx,sy] = P(A, dy>0?"b":"t"), [ex,ey] = P(B, dy>0?"t":"b"), my = (sy+ey)/2;
+        d = Math.abs(sx-ex) < 1 ? `M${sx} ${sy} L${ex} ${ey}` : `M${sx} ${sy} C ${sx} ${my}, ${ex} ${my}, ${ex} ${ey}`;
+        lx = (sx+ex)/2+6; ly = my+4;
+      } else {
+        const [sx,sy] = P(A, dx>0?"r":"l"), [ex,ey] = P(B, dx>0?"l":"r"), mx = (sx+ex)/2;
+        d = Math.abs(sy-ey) < 1 ? `M${sx} ${sy} L${ex} ${ey}` : `M${sx} ${sy} C ${mx} ${sy}, ${mx} ${ey}, ${ex} ${ey}`;
+        lx = mx; ly = (sy+ey)/2-6; anc = "middle";
+      }
+    }
+    return {d, lx: o.lx != null ? o.lx : lx+(o.ox||0), ly: o.ly != null ? o.ly : ly+(o.oy||0), anc: o.anc || anc};
+  }
+
+  const world = {};
+
+  let scen = 1;
+
+
+  // ---------- engine ----------
+  let S, hist, viewPath = null, showCT = true, deep = true;
+  function reset(){ S = fresh(); hist = []; viewPath = null; render(); }
+  const gst = g => S.gs[g] || (S.gs[g] = {ran:[], out:{}, taken:[]});
+  const edgeOf = (g, a, b) => GR[g].edges.find(e => e[0] === a && e[1] === b);
+  function take(g, a, b){ if (!edgeOf(g,a,b)) return; const k = a + ">" + b, t = gst(g).taken; if (!t.includes(k)) t.push(k); }
+  function ran(g, n){ const r = gst(g).ran; if (!r.includes(n)) r.push(n); }
+  const label = (g, n) => { const nd = geo(g)[n]; return (g === "life" ? "" : GR[g].name + " · ") + (nd ? nd.name : n); };
+
+  function step(){
+    if (S.done) return;
+    hist.push(clone(S)); viewPath = null;
+    // ponytail: top-level mode runs sub-loop steps silently until the next lifecycle step
+    let g = 0; do { micro(); } while (!deep && !S.done && S.act.g !== "life" && g++ < 400);
+    render();
+  }
+  function micro(){
+    S.n++; S.prev = clone(S.st); S.read = []; S.reply = null;
+    const {g, n} = S.pos, ret = S.ret; S.ret = undefined;
+    const r = H[g][n](S.st, world, S.f, ret);
+    S.crumb = S.stack.map(x => x.g).concat(g);
+    const pth = r.path || [n];
+    pth.forEach((p, i) => { ran(g, p); if (i) take(g, pth[i-1], p); });
+    const at = pth[pth.length-1];
+    if (r.pill) gst(g).out[at] = r.pill;
+    (r.also || []).forEach(([node, t, tone]) => { ran(g, node); gst(g).out[node] = [t, tone]; });
+    (r.mark || []).forEach(([mg, node, t, tone]) => { const st = gst(mg); if (!st.ran.includes(node)) st.ran.push(node); st.out[node] = [t, tone]; });
+    if (r.set) for (const [k, v] of Object.entries(r.set)){ S.st[k] = v; S.by[k] = label(g, at); }
+    S.read = r.read || [];
+    const nd = geo(g)[at] || {o:{}};
+    const lk = (r.L || nd.o.L || [null, ""]);
+    S.lens = {key:lk[0], txt:lk[1], src:r.src || nd.o.src || "", inf:!!(r.inf || nd.o.inf)};
+    S.title = r.title; S.note = r.note; S.reply = r.reply || null;
+    S.act = {g, n:at};
+    const who = ROLE[at] || []; (S.whoLog = S.whoLog || []).push({step:S.n, who});
+    if (r.tr) S.trace.push((who[0] ? who[0] + " · " : "") + r.tr);
+    const nx = r.next;
+    if (nx === "END"){ S.done = true; }
+    else if (typeof nx === "string"){ if (!r.noEdge) take(g, at, nx); S.pos = {g, n:nx}; }
+    else if (nx.sub){ S.stack.push({g, n:at}); S.gs[nx.sub] = {ran:[], out:{}, taken:[]}; S.pos = {g:nx.sub, n:nx.at}; }
+    else { if (nx.via){ take(g, at, nx.via); ran(g, nx.via); } const p = S.stack.pop(); S.ret = nx.up; S.pos = p; }
+  }
+  function back(){ if (!hist.length) return; S = hist.pop(); viewPath = null; render(); }
+
+  // ---------- render ----------
+
+  function renderChips(){
+    const groups = [];
+    for (const s of SC){ let gr = groups.find(x => x.g === s.g); if (!gr) groups.push(gr = {g:s.g, items:[]}); gr.items.push(s); }
+    $("chips").innerHTML = groups.map(gr => `<div class="sgroup"><p class="lbl">${esc(gr.g)}</p><div class="chips">${gr.items.map(s => `<button type="button" class="chip" data-s="${s.id}" aria-pressed="${s.id === scen}"><span class="no">${s.id}</span>${esc(s.name)}</button>`).join("")}</div></div>`).join("") + `<div class="sgroup"><p class="lbl">Your own</p><div class="chips"><button type="button" class="chip" data-s="custom" aria-pressed="${scen === "custom"}">Custom conditions</button></div></div>`;
+    const sc = SC.find(s => s.id === scen);
+    $("msgwho").textContent = sc ? "Scenario " + sc.id : "Custom";
+    $("msgtxt").textContent = sc ? sc.name : "Set the starting conditions below the step controls.";
+    $("about").hidden = !sc; if (sc){ $("abouttxt").textContent = sc.about; $("showstxt").textContent = sc.shows; }
+  }
+
+  function renderBoard(){
+    const runG = S.act ? S.act.g : "life";
+    const items = viewPath || S.crumb;
+    const gid = items[items.length-1];
+    const viewing = !!viewPath;
+    const g = GR[gid], m = geo(gid), st = S.gs[gid] || {ran:[], out:{}, taken:[]};
+    const svg = $("svg");
+    svg.setAttribute("viewBox", `0 0 ${g.vb[0]} ${g.vb[1]}`);
+    svg.setAttribute("aria-label", `${g.name} graph. ${g.desc}`);
+    $("scroller").querySelector("svg").style.minWidth = Math.min(g.vb[0], 900) * 0.62 + "px";
+    let cr = items.map((x, i) => i === items.length-1 ? `<button type="button" aria-current="true">${esc(GR[x].name)}</button>` : `<button type="button" data-crumb="${i}">${esc(GR[x].name)}</button><span class="sep" aria-hidden="true">›</span>`).join("");
+    if (viewing) cr += `<span class="viewing">viewing, the run waits</span><button type="button" class="backrun" id="backrun">Back to the run</button>`;
+    $("crumbs").innerHTML = cr;
+    $("gdesc").textContent = g.desc;
+    const here = S.act && S.act.g === gid;
+    const ranS = new Set(st.ran), taken = new Set(st.taken);
+    const dimAll = S.done && here;
+    let o = "";
+    for (const e of g.edges){
+      const A = m[e[0]], B = m[e[1]], op = e[3] || {}, p = path(e, A, B), t = taken.has(e[0] + ">" + e[1]);
+      const lab = e[2] ? `<text x="${p.lx}" y="${p.ly}" text-anchor="${p.anc}">${esc(e[2])}</text>` : "";
+      o += `<g class="e ${op.c ? "cond" : ""} ${op.l ? "loop" : ""} ${op.inf ? "inf" : ""} ${t ? "taken" : ""} ${dimAll && !t ? "dead" : ""}"><path d="${p.d}"/>${lab}</g>`;
+    }
+    for (const id of Object.keys(m)){
+      const nd = m[id], o2 = nd.o, k = (o2.k || "").split(" ");
+      const isAct = here && S.act.n === id;
+      const cls = ["n", ...k, o2.inf ? "inf" : "", o2.s ? "open" : "", isAct ? "act" : "", !isAct && ranS.has(id) ? "ran" : "", dimAll && !ranS.has(id) ? "dim" : ""].join(" ");
+      const rx = k.includes("ret") || k.includes("term") ? 23 : 7;
+      const attrs = o2.s ? ` data-open="${o2.s}" tabindex="0" role="button" aria-label="Open the ${esc(GR[o2.s].name)} sub-loop"` : "";
+      o += `<g class="${cls}"${attrs}><rect class="box" x="${nd.x}" y="${nd.y}" width="${nd.w}" height="${nd.h}" rx="${rx}"/><text class="name" x="${nd.x+nd.w/2}" y="${nd.y+(nd.sub ? 20 : 28)}" text-anchor="middle">${esc(nd.name)}</text>${nd.sub ? `<text class="sub" x="${nd.x+nd.w/2}" y="${nd.y+36}" text-anchor="middle">${esc(nd.sub)}</text>` : ""}`;
+      if (o2.s) o += `<g class="badge"><rect x="${nd.x+6}" y="${nd.y+nd.h-7}" width="56" height="15" rx="3"/><text x="${nd.x+34}" y="${nd.y+nd.h+4}" text-anchor="middle">sub-loop</text></g>`;
+      if (o2.inf) o += `<g class="inftag"><rect x="${nd.x+nd.w-56}" y="${nd.y-8}" width="52" height="14" rx="3"/><text x="${nd.x+nd.w-30}" y="${nd.y+2.5}" text-anchor="middle">inferred</text></g>`;
+      o += `</g>`;
+      if (showCT && (ROLE[id] || o2.a)){
+        let tx = nd.x + 6; const ty = nd.y - 8;
+        for (const a of (ROLE[id] ? (ROLE[id].length > 2 ? ROLE[id].slice(0,1).concat("+" + (ROLE[id].length-1)) : ROLE[id]) : o2.a.split(","))){ const c = RK[a] || (a[0] === "+" ? "code" : a === "agent" ? "llm" : a), w = a.length*6.4+10; o += `<g class="ct ${c}"><rect x="${tx}" y="${ty}" width="${w}" height="15" rx="3"/><text x="${tx+w/2}" y="${ty+11}" text-anchor="middle">${a}</text></g>`; tx += w + 4; }
+      }
+    }
+    for (const [id, b] of Object.entries(st.out)){
+      const nd = m[id]; if (!nd) continue;
+      const w = Math.round(b[0].length*6.7+14), px = nd.x + nd.w - w + 10, py = nd.y + nd.h - 8;
+      o += `<g class="pill ${b[1]}"><rect x="${px}" y="${py}" width="${w}" height="19" rx="9.5"/><text x="${px+w/2}" y="${py+13.5}" text-anchor="middle">${esc(b[0])}</text></g>`;
+    }
+    $("g").innerHTML = o;
+    $("nav").innerHTML = `<span class="lbl" style="margin-right:4px">Open any graph</span>` + ORDER.map(x => `<button type="button" class="chip" data-g="${x}" aria-pressed="${x === gid}">${esc(GR[x].name)}</button>`).join("");
+  }
+
+  function renderRecord(){
+    let out = "";
+    for (const [name, keys] of GROUPS){
+      const ks = keys.filter(k => k in S.st || S.read.includes(k));
+      if (!ks.length) continue;
+      out += `<div class="rgroup"><p class="lbl">${name}</p><div class="kv">` + ks.map(k => {
+        const v = k in S.st ? S.st[k] : "—", pv = S.prev ? S.prev[k] : v;
+        const chg = S.prev && JSON.stringify(v) !== JSON.stringify(pv), rd = S.read.includes(k) ? "rd" : "";
+        return `<span class="k ${rd}">${k}</span><span class="v ${chg ? "chg" : ""} ${rd}">${esc(v)}${S.by[k] ? `<span class="w">set by ${esc(S.by[k])}</span>` : ""}</span>`;
+      }).join("") + `</div></div>`;
+    }
+    $("state").innerHTML = out || `<p class="hint">Nothing recorded yet.</p>`;
+  }
+
+
+  const rchip = r => `<span class="rchip ${RK[r]||"code"}" title="${RDESC[r]||""}">${r}</span>`;
+  function renderWho(){
+    const el = $("who"), cur = S.act ? (ROLE[S.act.n] || []) : [];
+    el.hidden = !cur.length;
+    el.innerHTML = cur.length ? "Handled by " + cur.map((r, i) => (i === 1 ? "<span>with</span> " : "") + rchip(r)).join(" ") + (ROLE_INF.has(S.act.n) ? ' <span class="inftxt">(role inferred)</span>' : "") : "";
+  }
+  function renderActors(){
+    const log = S.whoLog || [], lead = {}, help = {};
+    for (const e of log) e.who.forEach((r, i) => { (i ? help : lead)[r] = ((i ? help : lead)[r] || 0) + 1; });
+    const cur = new Set(S.act && !S.done ? (ROLE[S.act.n] || []) : []);
+    $("actors").innerHTML = RORDER.map(r => {
+      const a = lead[r] || 0, b = help[r] || 0;
+      return `<div class="arow ${cur.has(r) ? "now" : ""} ${a + b ? "" : "idle"}">${rchip(r)}<span class="d">${RDESC[r]}</span><span class="c">${a + b ? a + " lead · " + b + " help" : "none yet"}</span></div>`;
+    }).join("");
+  }
+  function renderStep(){
+    $("stepno").textContent = S.done ? `Step ${S.n} · run complete` : `Step ${S.n}`;
+    $("now").textContent = S.title; $("note").textContent = S.note;
+    const L = S.lens;
+    if (L && (L.txt || L.src)){
+      const idea = I[L.key] || ["Loop idea",0];
+      $("lens").hidden = false; $("lenstag").textContent = idea[0]; $("lenstxt").textContent = L.txt || "";
+      $("lensslide").hidden = !idea[1]; $("lensslide").textContent = idea[1] ? `Finding the flow, slide ${idea[1]}: ${idea[0]}` : "";
+      $("lenssrc").textContent = L.src && L.src !== "-" ? "Source: " + L.src : "";
+      $("lensinf").hidden = !L.inf;
+    } else $("lens").hidden = true;
+    if (S.reply){ $("reply").hidden = false; $("reply").className = "reply " + S.reply.cls; $("replylbl").textContent = S.reply.lbl; $("replytxt").textContent = S.reply.txt; } else $("reply").hidden = true;
+    $("next").disabled = S.done; $("run").disabled = S.done; $("back").disabled = !hist.length;
+  }
+
+  function renderFacts(){
+    const locked = S.n > 0;
+    let cur = "", h = "";
+    for (const f of F){
+      if (f.g !== cur){ cur = f.g; h += `<p class="fgroup">${esc(cur)}</p>`; }
+      const off = relevant(world, f.k) ? "" : "off";
+      if (f.type === "bool") h += `<label class="fact ${off}"><input type="checkbox" data-k="${f.k}" ${world[f.k] ? "checked" : ""} ${locked ? "disabled" : ""}><span class="k">${esc(f.lbl)}</span></label>`;
+      else h += `<label class="fact ${off}"><span class="k">${esc(f.lbl)}</span><select data-k="${f.k}" ${locked ? "disabled" : ""}>${f.opts.map(v => `<option ${world[f.k] === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>`;
+    }
+    $("facts").innerHTML = h + `<p class="hint">${locked ? "Conditions lock once the run starts. Reset to change them." : "Dimmed conditions cannot matter with the current choices."}</p>`;
+  }
+
+  function renderTrace(){
+    $("trace").innerHTML = S.trace.length ? S.trace.map((t, i) => `<li><span class="s">${String(i+1).padStart(2,"0")}</span><span>${esc(t)}</span></li>`).join("") : `<li style="color:var(--mute)">No steps yet.</li>`;
+    $("trace").scrollTop = $("trace").scrollHeight;
+  }
+  function renderLegend(){ const el = $("rolelegend"); if (el && !el.childNodes.length) el.innerHTML = RORDER.map(rchip).join(""); }
+  function render(){ renderLegend(); renderChips(); renderBoard(); renderStep(); renderFacts(); renderRecord(); renderTrace(); renderWho(); renderActors(); }
+
+  // ---------- events ----------
+  function applyScenario(id){
+    scen = id; defaults(world); Object.assign(world, SC.find(s => s.id === id).w); reset();
+    const to = JUMP[id]; if (!to) return;
+    // ponytail: fast-forward with normal steps, so Back still walks the skipped part
+    let g = 0; while (!S.done && !(S.pos.g === "life" && S.pos.n === to) && g++ < 400) step();
+    S.note = "Jumped ahead to " + geo("life")[to].name + ". Back steps through the part before it. " + S.note; render();
+  }
+  $("chips").addEventListener("click", e => {
+    const b = e.target.closest("[data-s]"); if (!b) return;
+    if (b.dataset.s === "custom"){ scen = "custom"; reset(); $("worldbox").open = true; return; }
+    applyScenario(+b.dataset.s);
+  });
+  $("facts").addEventListener("input", e => {
+    const el = e.target.closest("[data-k]"); if (!el) return;
+    world[el.dataset.k] = el.type === "checkbox" ? el.checked : el.value;
+    scen = "custom"; reset(); $("worldbox").open = true;
+  });
+  function openGraph(gid){ viewPath = (viewPath || S.crumb).concat(gid); renderBoard(); }
+  $("g").addEventListener("click", e => { const n = e.target.closest("[data-open]"); if (n) openGraph(n.dataset.open); });
+  $("g").addEventListener("keydown", e => { const n = e.target.closest("[data-open]"); if (n && (e.key === "Enter" || e.key === " ")){ e.preventDefault(); openGraph(n.dataset.open); } });
+  $("crumbs").addEventListener("click", e => {
+    if (e.target.closest("#backrun")){ viewPath = null; renderBoard(); return; }
+    const b = e.target.closest("[data-crumb]"); if (!b) return;
+    const items = viewPath || S.crumb, i = +b.dataset.crumb;
+    viewPath = items.slice(0, i+1); renderBoard();
+  });
+  $("nav").addEventListener("click", e => { const b = e.target.closest("[data-g]"); if (!b) return; const x = b.dataset.g; viewPath = x === "life" ? ["life"] : ["life", x]; renderBoard(); });
+  $("cttoggle").addEventListener("click", e => { showCT = !showCT; e.currentTarget.textContent = showCT ? "Hide roles" : "Show roles"; e.currentTarget.setAttribute("aria-pressed", String(showCT)); renderBoard(); });
+  $("next").addEventListener("click", step);
+  $("back").addEventListener("click", back);
+  $("run").addEventListener("click", () => { let g = 0; while (!S.done && g++ < 400) step(); });
+  $("reset").addEventListener("click", reset);
+  document.addEventListener("keydown", e => {
+    if (e.target.matches("input,select,textarea") || e.target.closest(".trace")) return;
+    if (["ArrowRight","ArrowLeft","ArrowDown","ArrowUp"].includes(e.key) && e.target.closest("#scroller")) {
+      e.preventDefault();
+      const scroller = $("scroller");
+      const scrollOwner = getComputedStyle(scroller).overflowX === "visible" ? document.querySelector(".board") : scroller;
+      scrollOwner.scrollBy({ left: e.key === "ArrowRight" ? 40 : e.key === "ArrowLeft" ? -40 : 0, top: e.key === "ArrowDown" ? 40 : e.key === "ArrowUp" ? -40 : 0 });
+      return;
+    }
+    if (e.key === "ArrowRight"){ e.preventDefault(); step(); }
+    else if (e.key === "ArrowLeft"){ e.preventDefault(); back(); }
+    else if (e.key === "r" || e.key === "R"){ reset(); }
+    else if (e.key === "Escape" && viewPath){ viewPath = null; renderBoard(); }
+  });
+
+  defaults(world); applyScenario(1);
+})();
+</script>
+<script>
+(function(){
+  const board = document.querySelector(".board"), btn = document.getElementById("fulltoggle"), fs = document.getElementById("fstep");
+  const now = document.getElementById("now"), no = document.getElementById("stepno");
+  const sync = () => { fs.innerHTML = ""; const s = document.createElement("small"); s.textContent = no ? no.textContent : ""; fs.append(s, now ? now.textContent : ""); };
+  function set(on){
+    board.classList.toggle("full", on); document.body.classList.toggle("board-full", on); const cr = document.getElementById("crumbs"), bh = document.querySelector(".bhead"), nav = document.querySelector(".fullbar .fnav"); if (cr && bh){ if (on) nav.before(cr); else bh.prepend(cr); } const gd = document.getElementById("gdesc"); fs.title = gd ? gd.textContent : "";
+    btn.textContent = on ? "Exit" : "Full window"; btn.title = on ? "Exit full window (Esc or F)" : "Show the graph in the full window (F)"; btn.setAttribute("aria-pressed", String(on));
+    if (on){ sync(); btn.focus(); }
+  }
+  btn.addEventListener("click", () => set(!board.classList.contains("full")));
+  document.getElementById("fnext").addEventListener("click", () => document.getElementById("next").click());
+  document.getElementById("fback").addEventListener("click", () => document.getElementById("back").click());
+  new MutationObserver(sync).observe(now, {childList:true, characterData:true, subtree:true});
+  // Esc leaves the full window before any other Esc handling; F toggles it.
+  document.addEventListener("keydown", e => {
+    if (e.target.matches && e.target.matches("input,select,textarea")) return;
+    if (e.key === "Escape" && board.classList.contains("full")){ e.preventDefault(); e.stopImmediatePropagation(); set(false); }
+    else if ((e.key === "f" || e.key === "F") && !e.metaKey && !e.ctrlKey && !e.altKey){ e.preventDefault(); set(!board.classList.contains("full")); }
+  }, true);
+  const sync2 = () => { const n = document.getElementById("next"), b = document.getElementById("back"); document.getElementById("fnext").disabled = n.disabled; document.getElementById("fback").disabled = b.disabled; };
+  new MutationObserver(sync2).observe(document.getElementById("next"), {attributes:true}); new MutationObserver(sync2).observe(document.getElementById("back"), {attributes:true}); sync2();
+})();
+</script>
+<script>
+(function(){
+  // ponytail: one clamp for every graph; tune MIN/MAX if node text reads too small or too big
+  const MIN = 0.75, MAX = 1;
+  const svg = document.querySelector(".board svg"), box = svg.parentElement, board = document.querySelector(".board");
+  function size(){
+    const vb = svg.viewBox.baseVal; if (!vb || !vb.width) return;
+    const full = board.classList.contains("full");
+    const aw = box.clientWidth - 2, ah = full ? board.clientHeight - (svg.getBoundingClientRect().top - board.getBoundingClientRect().top) - 16 : Math.max(320, innerHeight * 0.84);
+    const k = Math.min(full ? 1.2 : MAX, Math.max(MIN, Math.min(aw / vb.width, ah / vb.height)));
+    svg.style.width = Math.round(vb.width * k) + "px"; svg.style.height = Math.round(vb.height * k) + "px";
+    svg.style.marginInline = vb.width * k < aw ? "auto" : "0";
+  }
+  new MutationObserver(size).observe(svg, {attributes:true, attributeFilter:["viewBox"]});
+  new MutationObserver(size).observe(board, {attributes:true, attributeFilter:["class"]});
+  addEventListener("resize", size); size();
+})();
+</script>
+</body>
+</html>

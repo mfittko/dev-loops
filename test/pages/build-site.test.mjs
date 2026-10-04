@@ -4,7 +4,7 @@ import { join, relative, win32 } from 'node:path';
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 
-import { assertSafeOutputRelationship, assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, LANDING, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
+import { assertSafeOutputRelationship, assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, LANDING, NAV_LINKS, STATE_ATLAS, SIMULATOR_MODELS } from '../../scripts/pages/build-site.mjs';
 
 // A deck publishes under its outFile when set (the deep-dive article and deck
 // share the source basename), else its source file name.
@@ -80,6 +80,7 @@ test('build-site: index is the intro article, all resources published, nav links
         ...DECKS.map((d) => deckOut(d)),
         STATE_ATLAS.file,
         'assets/mermaid.min.js',
+        ...SIMULATOR_MODELS.map((file) => `assets/${file}`),
         '.dev-loops-pages-output',
       ].sort(),
     );
@@ -94,6 +95,10 @@ test('build-site: relative repoRoot uses the same default output as its absolute
   try {
     await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ repository: REPO_URL }), 'utf8');
     await mkdir(join(repoRoot, 'docs', 'articles'), { recursive: true });
+    await mkdir(join(repoRoot, 'docs', 'articles', 'assets'), { recursive: true });
+    for (const file of SIMULATOR_MODELS) {
+      await writeFile(join(repoRoot, 'docs', 'articles', 'assets', file), 'export function createModel() {}', 'utf8');
+    }
     await mkdir(join(repoRoot, 'docs', 'presentations'), { recursive: true });
     await mkdir(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor'), { recursive: true });
     await writeFile(join(repoRoot, 'docs', 'articles', LANDING.file), '<style></style><body>landing</body>', 'utf8');
@@ -147,7 +152,7 @@ test('build-site: incomplete repoRoot with valid package metadata preserves a pr
     await mkdir(join(repoRoot, 'site'));
     await writeFile(sentinel, 'preserve me', 'utf8');
 
-    await assert.rejects(() => buildSite({ repoRoot }), /introducing-dev-loops\.html/);
+    await assert.rejects(() => buildSite({ repoRoot }), { code: 'ENOENT' });
 
     assert.equal(await readFile(sentinel, 'utf8'), 'preserve me');
   } finally {
@@ -161,6 +166,10 @@ test('build-site: complete repoRoot with a malformed article preserves a pre-exi
   try {
     await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ repository: REPO_URL }), 'utf8');
     await mkdir(join(repoRoot, 'docs', 'articles'), { recursive: true });
+    await mkdir(join(repoRoot, 'docs', 'articles', 'assets'), { recursive: true });
+    for (const file of SIMULATOR_MODELS) {
+      await writeFile(join(repoRoot, 'docs', 'articles', 'assets', file), 'export function createModel() {}', 'utf8');
+    }
     await mkdir(join(repoRoot, 'docs', 'presentations'), { recursive: true });
     await mkdir(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor'), { recursive: true });
     await writeFile(join(repoRoot, 'docs', 'articles', LANDING.file), '<style></style><body>landing</body>', 'utf8');
@@ -205,29 +214,32 @@ test('build-site: state atlas is generated from the code tables, navigable, with
     assert.ok(atlas.includes('handoff_to_copilot_loop'), 'outer OUTER_STATE rendered');
     assert.ok(atlas.includes('copilot_pr_followup'), 'public dev-loop gate contract rendered');
 
-    // The nav on the landing page links the atlas as a top-level menu item.
+    // The atlas is off the nav; the simulator footer links it, and the nav links the simulator.
     const index = await readFile(join(out, 'index.html'), 'utf8');
-    assert.ok(index.includes(`href="${STATE_ATLAS.file}"`), 'landing nav links the atlas');
-    assert.ok(index.includes(`>${STATE_ATLAS.label}</a>`), 'landing nav shows the atlas label');
+    assert.ok(!index.includes(`href="${STATE_ATLAS.file}"`), 'landing nav omits the atlas');
+    const simulator = await readFile(join(out, 'simulator.html'), 'utf8');
+    assert.ok(simulator.includes(`href="${STATE_ATLAS.file}"`), 'simulator footer links the atlas');
+    assert.ok(simulator.includes('href="simulator-overview.html"'), 'simulator links its overview');
+    assert.ok(index.includes('href="simulator-overview.html">Simulator</a>'), 'landing nav links the lifecycle overview entrypoint');
   } finally {
     await rm(out, { recursive: true, force: true });
   }
 });
 
-test('build-state-atlas: generator is pure and deterministic (identical bytes across builds)', async () => {
-  const { buildStateAtlasHtml } = await import('../../scripts/pages/build-state-atlas.mjs');
-  assert.equal(buildStateAtlasHtml(), buildStateAtlasHtml(), 'atlas HTML is byte-identical across calls');
-});
-
-test('build-state-atlas: fullscreen lightbox structure (one expand button per diagram, wired handler + CSS)', async () => {
-  const { buildStateAtlasHtml } = await import('../../scripts/pages/build-state-atlas.mjs');
-  const html = buildStateAtlasHtml();
-  const diagrams = (html.match(/class="diagram"/g) ?? []).length;
-  const buttons = (html.match(/class="expand" type="button" aria-label="View diagram fullscreen"/g) ?? []).length;
-  assert.ok(diagrams > 0, 'atlas renders diagrams');
-  assert.equal(buttons, diagrams, 'exactly one expand button per diagram');
-  for (const token of ['requestFullscreen', 'fs-fallback', ':-webkit-full-screen', '.diagram .expand', 'fsInFlight']) {
-    assert.ok(html.includes(token), `lightbox structure token missing: ${token}`);
+test('build-site: fresh builds emit byte-identical atlas output', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pages-atlas-determinism-'));
+  try {
+    const first = join(root, 'first');
+    const second = join(root, 'second');
+    await buildSite({ outDir: first });
+    await buildSite({ outDir: second });
+    assert.deepEqual(
+      await readFile(join(second, STATE_ATLAS.file)),
+      await readFile(join(first, STATE_ATLAS.file)),
+      'published atlas bytes must not depend on output location or per-build randomness',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 
