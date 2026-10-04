@@ -38,6 +38,33 @@ test("initial hidden-tab activation centers the current state", async ({ page },
   }
 });
 
+test("feedback styling follows horizontal graph direction, not vertical position", async ({ page }) => {
+  const { server, url } = await startViewer();
+  try {
+    await page.goto(url);
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    const layer = (await readGraph(page)).layers.find((entry) => entry.id === "lifecycle_layer");
+    const positions = new Map(layer.geometry.nodes.map((node) => [node.id, node]));
+    const forward = layer.edges.find((edge) => {
+      const from = positions.get(edge.from);
+      const to = positions.get(edge.to);
+      return to.x > from.x && to.y <= from.y;
+    });
+    const backward = layer.edges.find((edge) => {
+      const from = positions.get(edge.from);
+      const to = positions.get(edge.to);
+      return to.x < from.x && to.y > from.y;
+    });
+    expect(forward, "A forward edge rising vertically exercises the direction boundary").toBeDefined();
+    expect(backward, "A feedback edge falling vertically exercises the direction boundary").toBeDefined();
+    await expect(graph.locator(`[data-edge-id="${forward.id}"]`)).not.toHaveClass(/\bfeedback\b/);
+    await expect(graph.locator(`[data-edge-id="${backward.id}"]`)).toHaveClass(/\bfeedback\b/);
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
+
 test("webkit renders overview-first tabs, matches tab panels, and captures a screenshot", async ({ page }, testInfo) => {
   const { server, url } = await startViewer(makeInspectionSnapshot(), [
     { target: { repo: "other/repo", pr: 77 }, title: "Waiting PR", signal: "attention" },

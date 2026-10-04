@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The inspect graph now distinguishes forward and feedback edges along its left-to-right layout direction, rather than mistaking vertical routing for feedback (#2627)
+
 - The inspect viewer's Reload snapshot button now uses `window.URL`, avoiding the inline handler's `document.URL` name collision so `refresh=1` navigation forces a fresh selected-PR snapshot (#2627)
 
 ## 1.0.5

@@ -185,7 +185,7 @@ export function mountInspectionGraph(root, graph) {
         const from = geometry.nodes.get(edge.from);
         const to = geometry.nodes.get(edge.to);
         const cue = layer.cueLinks.some((entry) => entry.id === edge.id);
-        const feedback = !cue && (edge.from === edge.to || to.y <= from.y);
+        const feedback = !cue && (edge.from === edge.to || to.x <= from.x);
         const path = svgElement("path", {
           class: cue ? "inspection-graph-cue-link" : `inspection-graph-edge${feedback ? " feedback" : ""}`,
           d: route.points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" "),
