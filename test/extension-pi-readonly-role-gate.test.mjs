@@ -150,6 +150,10 @@ for (const prompt of FAIL_CLOSED_PROMPTS) {
 test("role resolution fails closed per the resolution table", async () => {
   assert.equal((await callWith("base prompt", "ls", "bash", { PI_SUBAGENT_CHILD: "1" })).block, true);
   assert.deepEqual(await callWith("base prompt", "ls", "bash", { PI_SUBAGENT_CHILD: "1" }).then(() => callWith("base prompt", "ls")), { block: false });
+  const child = { PI_SUBAGENT_CHILD: "1" };
+  assert.deepEqual(await callWith(tag("developer"), "bun run test", "bash", child), { block: false });
+  assert.deepEqual(await callWith(tag("judge"), PULL, "bash", child), { block: false });
+  assert.equal((await callWith(tag("judge"), "cat README.md", "bash", child)).block, true);
   assert.deepEqual(await callWith(`${tag("judge")} ${tag("dev-loops:judge")}`, PULL), { block: false });
   for (const bare of ["reviewer", "worker", "scout"]) assert.deepEqual(await callWith(tag(bare), "bun run test"), { block: false }, bare);
 });
