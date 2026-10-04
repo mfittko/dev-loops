@@ -81,9 +81,14 @@ test("the rule lists the returned fields and keeps reviewer/judge output in the 
     "durable findings-log path", "act-list path", "spec-authority identity path", "judge summary",
   ];
   assertClaims(section, [
-    ...fields.map((field) => ["typed result", field]),
+    ...fields.map((field) => ["returns only", "typed result", field]),
     ["Reviewer", "judge outputs", "never propagate"],
   ], "returned fields");
+  // Negative case: dropping fields from the field-list sentence alone must fail their claims,
+  // even though the review-route sentence also names three of the fields.
+  const broken = collapse(section).replace("the act-list path, the spec-authority identity path, and the judge summary", "");
+  const claims = fields.map((field) => ["returns only", "typed result", field]);
+  assert.equal(missingClaims(broken, claims).length, 3, "dropping three fields from the field-list sentence must fail exactly those claims");
 });
 
 test("the rule pins the reserved-lifecycle-writes sentence", async () => {
