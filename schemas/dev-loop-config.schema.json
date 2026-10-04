@@ -1708,6 +1708,21 @@
       },
       "additionalProperties": false,
       "description": "Post-merge local hook actions (postMerge.actions): consumer-declared commands run sequentially, in order, after a merge succeeds — optionally scoped to changed-file substrings (onlyIfChanged) and polled for readiness (verify)."
+    },
+    "standingAuthorizations": {
+      "type": "object",
+      "properties": {
+        "adrTripwireWaiver": {
+          "description": "Standing authorization for the ADR tripwire waiver writer: { grantedBy (GitHub login), grantedAt (ISO date), expires (ISO date, at most 90 days after grantedAt), reason (non-empty) }. Read only from the default branch's .devloops.",
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        }
+      },
+      "additionalProperties": false,
+      "description": "Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops."
     }
   },
   "required": [

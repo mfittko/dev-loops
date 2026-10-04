@@ -844,6 +844,18 @@ const PostMergeConfig = z.strictObject({
   actions: z.array(PostMergeActionConfig).optional(),
 });
 
+/**
+ * `standingAuthorizations`: operator-recorded standing human authorizations.
+ * `adrTripwireWaiver` is read by waive-adr-tripwire.mjs ONLY from the default
+ * branch's `.devloops` (never the worktree or a PR head). Its fields
+ * (grantedBy, grantedAt, expires, reason) are validated there, fail closed: a
+ * malformed record means no authorization is in force, so the schema here
+ * stays lenient and a malformed record never breaks config load.
+ */
+const StandingAuthorizationsConfig = z.strictObject({
+  adrTripwireWaiver: z.record(z.string(), z.unknown()).optional().describe("Standing authorization for the ADR tripwire waiver writer: { grantedBy (GitHub login), grantedAt (ISO date), expires (ISO date, at most 90 days after grantedAt), reason (non-empty) }. Read only from the default branch's .devloops."),
+});
+
 /** Internal path whitelist for internal-only PR detection — flat array of regex strings */
 const InternalPatternsConfig = z.array(z.string().trim().min(1)).min(1);
 
@@ -893,6 +905,7 @@ export const DevLoopConfigSchema = z.strictObject({
   worktree: WorktreeConfig.optional(),
   uiReview: UiReviewConfig.optional(),
   postMerge: PostMergeConfig.optional(),
+  standingAuthorizations: StandingAuthorizationsConfig.optional(),
 });
 
 // ============================================================================
@@ -968,6 +981,7 @@ export const FileConfigSchema = z.strictObject({
   worktree: WorktreeConfig.partial().describe("Worktree provisioning: gitignored files/dirs copied or symlinked into fresh worktrees.").optional(),
   uiReview: UiReviewConfig.partial().describe("UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps.").optional(),
   postMerge: PostMergeConfig.partial().describe("Post-merge local hook actions (postMerge.actions): consumer-declared commands run sequentially, in order, after a merge succeeds — optionally scoped to changed-file substrings (onlyIfChanged) and polled for readiness (verify).").optional(),
+  standingAuthorizations: StandingAuthorizationsConfig.describe("Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops.").optional(),
   // Unknown keys fail closed like any typo (strictObject).
 });
 
