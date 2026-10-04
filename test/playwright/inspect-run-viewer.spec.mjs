@@ -645,9 +645,11 @@ for (const failure of ["asset", "geometry"]) {
 }
 
 test("snapshot eligibility is distinct from outgoing topology and broad next emphasis", async ({ page }) => {
-  const { server, url } = await startViewer(makeInspectionSnapshot({
+  const snapshot = makeInspectionSnapshot({
     lifecycleAllowedTransitions: ["draft_gate", "not_a_state"],
-  }));
+  });
+  snapshot.layers.copilot.allowedTransitions = ["done"];
+  const { server, url } = await startViewer(snapshot);
   try {
     await page.goto(url);
     await openTab(page, "graph");
@@ -658,6 +660,13 @@ test("snapshot eligibility is distinct from outgoing topology and broad next emp
     const details = root.locator("[data-graph-node-details]");
     await expect(details).toContainText("feedback_resolution");
     await expect(details).toContainText("not_a_state");
+    await root.locator('[data-graph-layer="copilot_layer"]').click();
+    const done = graph.locator('[data-state-id="done"]');
+    await done.focus();
+    await done.press("Enter");
+    await expect(done).not.toHaveClass(/\bnext\b/);
+    const membership = details.locator("dt").filter({ hasText: "Snapshot eligibility for this state" }).locator("+ dd");
+    await expect(membership).toHaveText(/^Included in snapshot allowed transitions$/);
     await root.locator('[data-graph-layer="outer_loop_family"]').click();
     await expect(graph.locator(".inspection-graph-node.next")).toHaveCount(0);
     await expect(details).toContainText(/Broad next set/);

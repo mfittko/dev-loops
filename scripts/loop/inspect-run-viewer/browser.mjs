@@ -177,7 +177,7 @@ export function mountInspectionGraph(root, graph) {
       ...detailRow("Authoritative outgoing transitions", outgoing.join(", ") || "None — no authoritative outgoing transitions"),
       ...detailRow("Snapshot transition availability", `${transitions.status}: ${transitions.summary}`),
       ...detailRow("Snapshot allowed transitions", transitions.status === "unavailable" ? "Unavailable" : transitions.normalizedTransitions.join(", ") || "Explicitly empty — no allowed transitions"),
-      ...detailRow("Snapshot eligibility for this state", transitions.status === "unavailable" ? "Unavailable" : node.snapshot.allowedNext ? "Included in snapshot allowed transitions" : "Not included in snapshot allowed transitions"),
+      ...detailRow("Snapshot eligibility for this state", transitions.status === "unavailable" ? "Unavailable" : transitions.normalizedTransitions.includes(node.stateId) ? "Included in snapshot allowed transitions" : "Not included in snapshot allowed transitions"),
       ...detailRow("Snapshot next-state emphasis", node.snapshot.next ? "Highlighted next state" : transitions.broadNextSet ? "Broad next set; immediate-next emphasis suppressed" : "Not highlighted as next"),
     );
     details.replaceChildren(heading, description);
