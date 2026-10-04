@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, test } from "bun:test";
-import { initGitFixture } from "../_helpers.mjs";
+import { initGitFixture, runIdFreeEnv } from "../_helpers.mjs";
 
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
@@ -48,7 +48,11 @@ describe("a config load error fails closed instead of using defaults", () => {
       const result = spawnSync("node", [path.resolve(script), ...args], {
         cwd: fixture,
         encoding: "utf8",
-        env: { ...process.env, PATH: `${path.join(fixture, "bin")}${path.delimiter}${process.env.PATH}` },
+        // outer-loop rejects without an async context before reaching its config load.
+        env: runIdFreeEnv({
+          PATH: `${path.join(fixture, "bin")}${path.delimiter}${process.env.PATH}`,
+          ...(script.endsWith("outer-loop.mjs") ? { DEVLOOPS_RUN_ID: "run-config-fail-closed" } : {}),
+        }),
       });
       assert.notEqual(result.status, 0, `${result.stdout}${result.stderr}`);
       assert.match(`${result.stdout}${result.stderr}`, /config_load_failed/);
