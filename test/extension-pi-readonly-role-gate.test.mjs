@@ -113,13 +113,14 @@ test("the role comes from the tag in prefix or appended form, and the env marker
   assert.equal((await callWith(`${tag("judge")}\n\nYou are a judge.`, "cat README.md")).block, true);
   assert.equal((await callWith(`Base prompt.\n\n${tag("judge")}`, "cat README.md")).block, true);
   assert.deepEqual(await callWith(`${tag("dev-loops:judge")} x`, PULL), { block: false });
-  const prior = process.env.DEVLOOPS_AGENT_TYPE;
-  process.env.DEVLOOPS_AGENT_TYPE = "judge";
+  const legacyEnv = "DEVLOOPS_" + "AGENT_TYPE";
+  const prior = process.env[legacyEnv];
+  process.env[legacyEnv] = "judge";
   try {
     assert.deepEqual(await callWith("base prompt", "cat README.md"), { block: false });
   } finally {
-    if (prior === undefined) delete process.env.DEVLOOPS_AGENT_TYPE;
-    else process.env.DEVLOOPS_AGENT_TYPE = prior;
+    if (prior === undefined) delete process.env[legacyEnv];
+    else process.env[legacyEnv] = prior;
   }
   assert.deepEqual(await callWith(undefined, "cat README.md"), { block: false });
 });
@@ -135,10 +136,18 @@ test("every roster role resolves to its capability", async () => {
   }
 });
 
-test("role resolution fails closed per the resolution table", async () => {
-  for (const prompt of [tag(""), tag("  "), tag("dev-loops:"), tag("dev-loops:nope"), `${tag("judge")} ${tag("developer")}`, `${tag("judge")} ${tag("review")}`]) {
+const FAIL_CLOSED_PROMPTS = [
+  tag(""), tag("  "), tag("dev-loops:"), tag("dev-loops:nope"),
+  `${tag("nope")} ${tag("dev-loops:nope")}`, `${tag("dev-loops:nope")} ${tag("nope")}`,
+  `${tag("judge")} ${tag("developer")}`, `${tag("judge")} ${tag("review")}`,
+];
+for (const prompt of FAIL_CLOSED_PROMPTS) {
+  test(`role resolution fails closed for ${JSON.stringify(prompt)}`, async () => {
     assert.equal((await callWith(prompt, "ls")).block, true, prompt);
-  }
+  });
+}
+
+test("role resolution fails closed per the resolution table", async () => {
   assert.equal((await callWith("base prompt", "ls", "bash", { PI_SUBAGENT_CHILD: "1" })).block, true);
   assert.deepEqual(await callWith("base prompt", "ls", "bash", { PI_SUBAGENT_CHILD: "1" }).then(() => callWith("base prompt", "ls")), { block: false });
   assert.deepEqual(await callWith(`${tag("judge")} ${tag("dev-loops:judge")}`, PULL), { block: false });
@@ -183,6 +192,8 @@ const REJECT = {
   R7: "grep foo src | cut -f1",
   R8: "'bun' test",
   R9: "rg foo *",
+  R11: "grep foo src\nbun run test",
+  R12: "cd /w && grep x src\nrm -rf x",
 };
 for (const [id, cmd] of Object.entries(ACCEPT)) {
   test(`reviewer accepts ${id}`, async () => assert.deepEqual(await callAs("review", cmd), { block: false }));

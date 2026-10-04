@@ -43,7 +43,7 @@ function tokenize(command: string): Word[] | null {
   const words: Word[] = [];
   let i = 0;
   while (i < command.length) {
-    if (/\s/.test(command[i])) {
+    if (/[ \t]/.test(command[i])) {
       i += 1;
       continue;
     }
@@ -55,10 +55,10 @@ function tokenize(command: string): Word[] | null {
       value = command.slice(i + 1, end);
       if (/[\n\r]/.test(value) || (quote === '"' && /[$`\\!]/.test(value))) return null;
       i = end + 1;
-      if (i < command.length && !/\s/.test(command[i])) return null;
+      if (i < command.length && !/[ \t]/.test(command[i])) return null;
     } else {
       let end = i;
-      while (end < command.length && !/\s/.test(command[end])) end += 1;
+      while (end < command.length && !/[ \t]/.test(command[end])) end += 1;
       value = command.slice(i, end);
       if (value !== '|' && SHELL_ACTIVE_RE.test(value)) return null;
       i = end;
@@ -73,6 +73,7 @@ const CUT_RE = /^-c\d+-\d+$/;
 function isReadSearchCommand(rawCommand: string): boolean {
   // Strip the mandated `cd <path> && ` and `git -C <path> ` forms first; their paths allow safe characters only.
   const command = rawCommand.trim().replace(CD_PREFIX_RE, '').replace(GIT_C_RE, 'git ');
+  if (/[\n\r]/.test(command)) return false;
   if (REVIEWER_SCRIPT_RE.test(command) && !SHELL_ACTIVE_RE.test(command)) return true;
   const words = tokenize(command);
   if (!words) return false;
@@ -124,7 +125,7 @@ export function resolvePiRole({ systemPrompt, env = process.env }: {
   if (names.size !== 1) return '';
   const [name] = names;
   if (name === '') return '';
-  if (raws[0].trim().startsWith('dev-loops:') && !DEV_LOOPS_ROLES.includes(name)) return '';
+  if (raws.some((raw) => raw.trim().startsWith('dev-loops:')) && !DEV_LOOPS_ROLES.includes(name)) return '';
   return name;
 }
 /**
