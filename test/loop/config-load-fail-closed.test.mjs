@@ -24,7 +24,8 @@ const RELAX_TABLE = [
   ["scripts/github/reconcile-draft-gate.mjs", ["--repo", "o/r", "--pr", "1"]],
   ["scripts/loop/emit-judge-work-order.mjs", ["--repo", "o/r", "--pr", "1", "--gate", "draft_gate", "--head-sha", SHA_A, "--findings-file", "f", "--spec-file", "s", "--identity-file", "i"]],
   ["scripts/loop/build-handoff-envelope.mjs", ["--input", "in.json"]],
-  ["scripts/github/ready-for-review.mjs", ["--repo", "o/r", "--pr", "1"]],
+  ["scripts/loop/outer-loop.mjs", ["--repo", "o/r", "--pr", "1", "--copilot-input", "in.json"]],
+  ["scripts/github/ready-for-review.mjs",["--repo", "o/r", "--pr", "1"]],
 ];
 
 let fixture;

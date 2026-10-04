@@ -1268,6 +1268,9 @@ function readCheckoutVersion(repoRoot) {
 
 // Keys an earlier release accepted and a later release renamed. The loader
 // stays strict; this only adds a migration hint to the error text.
+const RAW_ANGLE_KEY = /(^|\.)(mandatoryAngles|excludeAngles)$/;
+const RAW_ANGLE_HINT = "Migrate raw gates.<gate>.mandatoryAngles/excludeAngles to the canonical angle-entry shape (gates.<gate>.angles with { name, mandatory: true } / { name, enabled: false }).";
+
 const RENAMED_KEYS = Object.freeze({
   "queue.board": { to: "tracker.board", release: "1.0.0" },
 });
@@ -1277,7 +1280,9 @@ function unknownKeyGuidance(unknownKeys, repoRoot) {
   const running = RUNNING_VERSION ?? "(unknown version)";
   const parts = [`Unknown key(s) ${unknownKeys.join(", ")} are not recognized by the running dev-loops ${running}.`];
   // A renamed key is an older key, so a newer dev-loops would not help.
-  const unrenamed = unknownKeys.filter((key) => !Object.hasOwn(RENAMED_KEYS, key));
+  // A removed raw angle key is also older, so it gets the migration hint instead.
+  const rawKeys = unknownKeys.filter((key) => RAW_ANGLE_KEY.test(key));
+  const unrenamed = unknownKeys.filter((key) => !Object.hasOwn(RENAMED_KEYS, key) && !RAW_ANGLE_KEY.test(key));
   if (unrenamed.length > 0) parts.push(`${unrenamed.join(", ")} need a newer dev-loops than ${running}.`);
   if (checkoutVersion) {
     // Same version: the operator already runs the checkout code, so a runner switch would not help.
@@ -1288,6 +1293,7 @@ function unknownKeyGuidance(unknownKeys, repoRoot) {
     const renamed = Object.hasOwn(RENAMED_KEYS, key) ? RENAMED_KEYS[key] : null;
     if (renamed) parts.push(`${key} was renamed to ${renamed.to} in dev-loops ${renamed.release}; move the value to ${renamed.to}.`);
   }
+  if (rawKeys.length > 0) parts.push(`${rawKeys.join(", ")} use a removed shape. ${RAW_ANGLE_HINT}`);
   return parts.join(" ");
 }
 

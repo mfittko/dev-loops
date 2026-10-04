@@ -745,8 +745,7 @@ export async function performCopilotReviewRequest(
   // outstanding (the cap site and the below-cap site both sit behind
   // !requested && !pending), so the shared predicate sees status "none".
   // The mode comes from refinement.requireCopilotConvergenceAtLatestHead,
-  // resolved with the round cap below (an unreadable config keeps the default
-  // converged-once mode, as the loop's other readers do).
+  // resolved with the round cap below.
   // Memoized: the cap site and the below-cap site share one evaluation.
   let requireCopilotConvergenceAtLatestHead = false;
   let carriedConvergence = null;

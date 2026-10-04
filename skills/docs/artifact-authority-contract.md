@@ -147,7 +147,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/github/offer-human-handoff.mjs` | Not a gate decision: handoff candidates only |
 | `scripts/github/resolve-handoff-candidates.mjs` | Not a gate decision: handoff candidates only |
 | `scripts/github/resolve-tracker-local-spec.mjs` | Not a gate decision: default tracker adapter |
-| `scripts/loop/_loop-evidence.mjs` | Not a gate decision: refinement display setting |
+| `scripts/loop/_loop-evidence.mjs` | Fail closed: `config_load_failed` |
 | `scripts/loop/check-adr-tripwire.mjs` | Not a gate decision: reads `.devloops` files by path |
 | `scripts/loop/detect-agent-stall.mjs` | Not a gate decision: stall detection setting |
 | `scripts/loop/inspect-run-viewer/server.mjs` | Not a gate decision: read-only viewer |

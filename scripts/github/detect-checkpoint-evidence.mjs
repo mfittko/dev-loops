@@ -434,7 +434,7 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     }
   }
   // Fail-closed fan-out evidence enforcement (gates.requireFanoutEvidence, ON by
-  // default / opt-out). When disabled or config-unavailable, fanoutEnforcement is
+  // default / opt-out). When disabled, fanoutEnforcement is
   // { required: false, gates: [] } so the `.required` guard skips this block.
   if (fanoutEnforcement && fanoutEnforcement.required) {
     for (const gate of fanoutEnforcement.gates) {

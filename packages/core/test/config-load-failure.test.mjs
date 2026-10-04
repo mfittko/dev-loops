@@ -74,6 +74,14 @@ test("an unknown key without a rename record keeps the generic text", async () =
   });
 });
 
+test("a removed raw angle key gets the migration hint, not the upgrade advice", async () => {
+  await withRepo("version: 1\ngates:\n  draft:\n    mandatoryAngles: [security]\n", async (dir) => {
+    const load = await loadDevLoopConfig({ repoRoot: dir });
+    assert.doesNotMatch(load.errors[0].message, /newer dev-loops/);
+    assert.match(load.errors[0].message, /canonical angle-entry shape/);
+  });
+});
+
 test("assertConfigLoaded passes a clean load and throws a typed error otherwise", async () => {
   await withRepo("version: 1\n", async (dir) => {
     const load = await loadDevLoopConfig({ repoRoot: dir });
