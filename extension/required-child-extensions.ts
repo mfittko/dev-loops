@@ -1,5 +1,6 @@
 /**
- * Load the dev-loops extension inside Pi subagent children (#2582).
+ * Load the dev-loops extension inside Pi subagent children
+ * (skills/docs/cross-harness-regression-contract.md, "Read-only role enforcement on Pi").
  *
  * The read-only role gate (`./readonly-role-gate.ts`) is a `tool_call` handler, so it only
  * fires when the dev-loops extension is loaded in the *calling* session. pi-subagents never

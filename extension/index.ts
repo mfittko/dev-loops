@@ -43,9 +43,10 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   // Wrap the Pi harness at the entry boundary; everything below talks to the neutral seam.
   const adapter = createPiExtensionAdapter(pi);
   const postMergeUpdateHook = runtimeOverrides.postMergeUpdateHook ?? createPostMergeUpdateHook({ exec: adapter.exec });
-  // #2582: a foreground (`async: false`) child never loads ambient extensions, so the
-  // read-only role gate stayed inert in dispatched judge/reviewer children. Register the
-  // extension itself as a required child extension so every child loads it.
+  // A foreground (`async: false`) child never loads ambient extensions, so the read-only
+  // role gate stayed inert in dispatched judge/reviewer children. Register the extension
+  // itself as a required child extension so every child loads it; see
+  // skills/docs/cross-harness-regression-contract.md "Read-only role enforcement on Pi".
   const childRoleGate = createChildRoleGateRegistrar({
     // This module is the extension entry (`pi.extensions`), so its own URL is the path a
     // child must load to run the same `tool_call` handler.
