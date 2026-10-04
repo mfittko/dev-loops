@@ -20,7 +20,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildDevLoopHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
-import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
+import { ConfigLoadFailedError, loadDevLoopConfigStrict } from "@dev-loops/core/config";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -134,6 +134,9 @@ export async function buildHandoffEnvelopeCli(
   const inputPath = path.resolve(cwd, options.inputPath);
   const inputText = await readFile(inputPath, "utf8");
   const resolverOutput = parseJsonText(inputText);
+
+  // A startup that already failed its config load stays refused, even if .devloops was fixed since.
+  if (resolverOutput?.bundle?.configError) throw new ConfigLoadFailedError(resolverOutput.bundle.configError);
 
   // Load dev-loop settings from repo config
   const settings = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
