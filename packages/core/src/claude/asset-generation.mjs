@@ -151,8 +151,8 @@ export const BARE_NODE_SCRIPTS_SOURCE = String.raw`\bnode\s+(scripts\/(?:[a-z0-9
 /**
  * Regex source (no flags) matching a bare, unrouted `dev-loops <namespace> <sub>` invocation.
  * Requires an immediate lowercase-starting subcommand (lookahead) so prose (`dev-loops gate.`,
- * `dev-loops gate — …`, `` `dev-loops queue` ``) and the already-pinned `npx dev-loops@<version>`
- * CLI form never match. Exported so the no-bare-invocation guard test can build the identical
+ * `dev-loops gate — …`, `` `dev-loops queue` ``) never match; real invocations render as
+ * `dev-loops-run cli/index.mjs <namespace> <sub>` (ADR 0118). Exported so the no-bare-invocation guard test can build the identical
  * regex from the same `WRAPPER_NS` rather than re-deriving it (single source of truth).
  */
 export const BARE_DEV_LOOPS_NS_SOURCE = String.raw`\bdev-loops (${WRAPPER_NS}) (?=[a-z])`;
@@ -164,8 +164,8 @@ export const BARE_DEV_LOOPS_NS_SOURCE = String.raw`\bdev-loops (${WRAPPER_NS}) (
  *   node scripts/<dir>/<file>.mjs …  → <launcher> scripts/<dir>/<file>.mjs …
  *   dev-loops <namespace> <sub> …    → <launcher> cli/index.mjs <namespace> <sub> …
  * The namespace form requires an immediate lowercase-starting subcommand (lookahead), so prose
- * (`dev-loops gate.`, `dev-loops gate — …`, `` `dev-loops queue` ``) and the already-pinned
- * `npx dev-loops@<version>` CLI form are never touched. Idempotent: the rewritten output never
+ * (`dev-loops gate.`, `dev-loops gate — …`, `` `dev-loops queue` ``) are never touched.
+ * Namespace invocations render as `dev-loops-run cli/index.mjs <namespace> <sub>` (ADR 0118). Idempotent: the rewritten output never
  * re-matches (the launcher name is followed by a path/`cli/index.mjs`, not `scripts/` or a bare
  * namespace token).
  * @param {string} body
