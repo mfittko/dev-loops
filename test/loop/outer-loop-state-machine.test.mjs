@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
+import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
 import { runOuterLoop } from "../../scripts/loop/outer-loop.mjs";
 import {
   MINIMAL_COPILOT_SNAPSHOT,
@@ -759,7 +760,10 @@ test("outer-loop: a config load error keeps asyncStartMode=required and rejects 
       "--copilot-input", copilotInputPath,
       "--checkpoint-dir", tempDir,
     // CLAUDECODE is cleared because Claude relaxes asyncStartMode by design; the pin covers the Pi harness.
-    ], { env: { ...gitEnv, ...ghEnv, CLAUDECODE: "" }, cwd: tempDir });
+    ], {
+      env: Object.fromEntries(Object.entries({ ...gitEnv, ...ghEnv, CLAUDECODE: "" }).filter(([k]) => !ASYNC_CONTEXT_ENV_MARKERS.includes(k))),
+      cwd: tempDir,
+    });
 
     assert.equal(result.code, 1, `stdout=${result.stdout} stderr=${result.stderr}`);
     assert.equal(JSON.parse(result.stderr).asyncStartContract, "rejected");

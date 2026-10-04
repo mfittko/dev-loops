@@ -2040,6 +2040,7 @@ test("request-copilot-review --lightweight with an unloadable config fails close
 
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /config_load_failed/);
+    assert.equal(JSON.parse(result.stderr.trim().split("\n").at(-1)).code, "config_load_failed");
     assert.equal(result.stdout.trim(), "");
   } finally {
     await rm(tempDir, { recursive: true, force: true });

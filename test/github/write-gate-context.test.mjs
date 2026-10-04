@@ -1890,6 +1890,7 @@ test("CLI without --angles + malformed .devloops: fails closed with config_load_
     const stderrText = stderrChunks.join("");
     assert.equal(process.exitCode, 1);
     assert.match(stderrText, /config_load_failed/);
+    assert.equal(JSON.parse(stderrText.trim().split("\n").at(-1)).code, "config_load_failed");
     assert.match(stderrText, /dynamicAngles/, "the error surfaces the actual validation error");
 
     const artifact = await readGateContext({
@@ -6613,6 +6614,7 @@ test("CLI with --angles + malformed .devloops: fails closed with config_load_fai
     const stderrText = stderrChunks.join("");
     assert.equal(process.exitCode, 1);
     assert.match(stderrText, /config_load_failed/, "an explicit --angles override does not skip the config gate");
+    assert.equal(JSON.parse(stderrText.trim().split("\n").at(-1)).code, "config_load_failed");
     assert.match(stderrText, /dynamicAngles/, "the error surfaces the actual validation error");
 
     const artifact = await readGateContext({
