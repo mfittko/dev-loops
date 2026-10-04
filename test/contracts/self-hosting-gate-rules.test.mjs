@@ -29,11 +29,16 @@ test("GATE-SELF-HOST-EXPAND-CONTRACT and GRILL-SELF-HOST-PATH are registered and
 // or modality fails. `assertClaims` also proves both directions on the real block: a reworded copy (filler clause between tokens, sentence order reversed) passes,
 // and removing a claim's last token makes exactly that claim fail.
 const sentences = (text) => collapse(text).split(/(?<=[.!?:])\s+(?=[A-Z`*(|-])/);
-const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => s.includes(t))));
-const reword = (block, claims) => sentences(block).map((s) => (claims.find((tokens) => tokens.every((t) => s.includes(t)))?.slice(0, -1) ?? []).reduce((acc, t) => acc.replace(t, `${t} (as the contract records, without exception)`), s)).reverse().join(" ");
+// Polarity-safe literals: MUST must not match MUST NOT, compliant must not match non-compliant.
+const POLARITY = { MUST: /\bMUST\b(?! NOT)/, compliant: /(?<!non-)\bcompliant\b/ };
+const has = (s, t) => (POLARITY[t] ? POLARITY[t].test(s) : s.includes(t));
+const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => has(s, t))));
+const reword = (block, claims) => sentences(block).map((s) => (claims.find((tokens) => tokens.every((t) => has(s, t)))?.slice(0, -1) ?? []).reduce((acc, t) => acc.replace(t, `${t} (as the contract records, without exception)`), s)).reverse().join(" ");
 function assertClaims(block, claims, label) {
   assert.deepEqual(missingClaims(block, claims), [], `${label}: missing claim`);
   assert.deepEqual(missingClaims(reword(block, claims), claims), [], `${label}: a reworded copy must pass`);
+  const swapped = collapse(block).replace(/\bMUST\b(?! NOT)/g, "MUST NOT");
+  for (const tokens of claims.filter((c) => c.includes("MUST"))) assert.ok(missingClaims(swapped, claims).includes(tokens), `${label}: MUST to MUST NOT must fail ${tokens.join(" + ")}`);
   for (const tokens of claims) {
     const broken = collapse(block).split(tokens.at(-1)).join("");
     assert.ok(missingClaims(broken, claims).includes(tokens), `${label}: dropping ${tokens.at(-1)} must fail ${tokens.join(" + ")}`);

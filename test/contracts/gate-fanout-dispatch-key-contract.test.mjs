@@ -17,7 +17,7 @@ function dispatchKeyRequirement(content) {
 function assertDispatchKeyRequirement(content) {
   const requirement = dispatchKeyRequirement(content);
   for (const token of ["`runs.all`", "`key`"]) assert.ok(requirement.includes(token), `missing dispatch API: ${token}`);
-  for (const constraint of [/\bMUST\b/, /\bunique\b/, /\bnon-empty\b/, /\beach item\b/]) {
+  for (const constraint of [/\bMUST\b(?! NOT)/, /\bunique\b/, /\bnon-empty\b/, /\beach item\b/]) {
     assert.match(requirement, constraint, "each dispatch item requires a unique, non-empty key");
   }
 }
@@ -48,6 +48,7 @@ test("dispatch-key requirement accepts reflow but cannot borrow a sibling's payl
     ["unique", "repeated"],
     ["each item", "the batch"],
     ["MUST", "MAY"],
+    ["MUST", "MUST NOT"],
     ["`key`", "`dispatchId`"],
     ["`key`", "field"],
   ]) {

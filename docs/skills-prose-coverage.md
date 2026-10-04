@@ -23,7 +23,7 @@ Slice 1 of the v1.0.6 prose cleanup condenses the three files the gate coordinat
 | Coordinator bundle (both files) | 227,803 / 30,120 | 193,456 / 25,230 | -34,347 bytes (-15.1%) |
 | `agents/review.agent.md` (reviewer bundle) | 21,413 / 2,952 | 19,269 / 2,631 | -2,144 bytes (-10.0%) |
 
-Targets: contract at most 191,500, coordinator bundle at most 193,600, reviewer bundle at most 19,270. All three hold. The Claude projections regenerate byte-identically for the contract (191,303) and shrink for the two agents (`.claude/agents/gate-coordinator.md` 2,460 to 2,093, `.claude/agents/review.md` 21,379 to 19,235).
+Targets: contract at most 191,500, coordinator bundle at most 193,600, reviewer bundle at most 19,270. All three hold. The Claude projections regenerate byte-identically for the contract (191,416) and shrink for the two agents (`.claude/agents/gate-coordinator.md` 2,460 to 2,093, `.claude/agents/review.md` 21,379 to 19,235).
 
 ### v1.0.6 slice 1 duplicate-table trace
 
@@ -65,7 +65,7 @@ Targets: contract at most 191,500, coordinator bundle at most 193,600, reviewer 
 - Phase 4 `GATE-EXEC-BLOCKING-ONLY-FIX`: dropped the restated low, question and nit semantics and the duplicated gate-close detail (owner: `GATE-EXEC-THREAD-DISPOSITION`). The window rule, the two-layer rule and ADR 0089 composition stay.
 - `GATE-EXEC-THREAD-DISPOSITION`: restructured into per-severity bullets and removed the repeated low-triage, judge-`act` and nit sentences (each rule now appears once). The round-1 low-defer allowance now appears once, with the judge-acted-low exception in the same sentence.
 - `GATE-EXEC-DEFERRAL-RECORD`: dropped the restated stamp rules for nits, questions and unstamped lows (owner: `GATE-EXEC-THREAD-DISPOSITION`). The three record places, comment-target rule, never-creates-an-issue rule, marker format and idempotency stay.
-- `GATE-EXEC-FINDING-THREADS`: dropped the aggregate-line, sanitizer and per-angle-breakdown detail (owner: `GATE-COMMENT-SINGLE-SURFACE` and `GATE-COMMENT-INLINE-LAYOUT` in `gate-review-comment-contract.md`, cited by ID). The two-track split, one-carrier rule and marker stay. Close paragraph: shortened the known-findings snapshot restatement (owners: Phase 1, Sentinel lifecycle and the Copilot follow-up fan-out procedure).
+- `GATE-EXEC-FINDING-THREADS`: dropped the aggregate-line and per-angle-breakdown detail (owner: `GATE-COMMENT-SINGLE-SURFACE` and `GATE-COMMENT-INLINE-LAYOUT` in `gate-review-comment-contract.md`, cited by ID). The two-track split, one-carrier rule and marker stay. Close paragraph: shortened the known-findings snapshot restatement (owners: Phase 1, Sentinel lifecycle and the Copilot follow-up fan-out procedure).
 - `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`: shortened the helper-behavior prose. The ordered boundary, containment rule and forbidden-action rule stay.
 - Carry-forward: shortened the Phase 5 retry bullet, the eligibility paragraph, `GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED`, the delta basis, the same-rebuild disposition-memory paragraph, the config-source and rename explanations and the provenance paragraph. Dropped the `GIT_DIR`/`GIT_WORK_TREE` scrub note (owner: `scripts/lib/git-delta.mjs`) and the parenthetical "honest attribution" aside. The fail-closed defaults, the CLI refusal list and the review-surface mapping stay.
 - Copilot round-cap interplay: shortened the strict-mode seam. The `suppressed_post_convergence` results, `converged_once` grant and the fail-closed decision stay. Owners: `COPILOT-FOLLOWUP-ROUND-CAP`, `COPILOT-STATE-CARRIED-CONVERGENCE`.
