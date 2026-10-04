@@ -110,7 +110,7 @@ test("per-harness delivery: Pi and Claude relay only the compact work-order refe
   for (const row of [piRow, claudeRow]) {
     assert.ok(row, "delivery row present");
     assert.match(row, /`dispatchPrompt`/);
-    assertClaims(row, [["pulls", "evidence"]], "delivery row");
+    assertClaims(row, [["pulls", "work order", "evidence"]], "delivery row");
   }
 });
 

@@ -90,7 +90,7 @@ test("the judge `defer` bullets file a new issue only for a blocker, never via c
     assert.notEqual(start, -1, `${file}: the judge defer bullet must exist`);
     const bullet = text.slice(start, text.indexOf("- `reject` — ", start));
     assertClaims(bullet, [
-      ["deferral comment"],
+      ["batched", "deferral comment"],
       ["new issue", "only when", "blocker", "`MAIN-AGENT-FILING-BLOCKER-ONLY`"],
     ], file);
     assert.doesNotMatch(bullet, /create-issue\.mjs|files it by hand|new issue is warranted/, `${file}`);

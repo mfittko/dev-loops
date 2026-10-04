@@ -140,7 +140,7 @@ subject. It auto-resolves only additive CHANGELOG conflicts and otherwise fails 
 fail-closed result the coordinator stops and reports, and it dispatches no round. The
 coordinator MUST push the merge before it dispatches the round, so the round reviews the pushed
 head. On a ready PR, the `pre_approval_gate` re-runs on the new head per
-`GATE-EXEC-REGATE-MANDATORY`. An integrate-only base move keeps carry-forward eligibility (`deltaComplete`). ADR 0096 records this rule.
+`GATE-EXEC-REGATE-MANDATORY`. An integrate-only base move keeps carry-forward eligibility per `GATE-EXEC-ANGLE-CARRY-FORWARD` (`deltaComplete`). ADR 0096 records this rule.
 
 ### Phase 1 — Preamble: context-builder
 
@@ -467,14 +467,14 @@ retrying the same unit can never double-write or corrupt fan-in. The pure helper
 (`@dev-loops/core/loop/gate-fanin`) returns the same 30s/60s/120s decision for a 429 or any 5xx,
 and the conductor MUST consult it rather than reinvent the schedule. Only after ~3 failed
 attempts on a unit (`planDispatchRetry`'s `reduceConcurrency: true`) does the conductor reduce
-concurrency (halve the active batch via `backoffMaxConcurrent`, above) rather than keep retrying
-at full concurrency — the round MUST NOT be aborted on a transient failure. A hard 4xx (e.g.
+concurrency (halve the active batch via `backoffMaxConcurrent`, recompute the waves, then fall back to foreground one-at-a-time dispatch)
+— the round MUST NOT be aborted on a transient failure. A hard 4xx (e.g.
 `402 Insufficient Balance`) is never transient (`planDispatchRetry` returns
 `{ retry: false, escalate: true }`): the conductor MUST escalate to the supervisor/operator
-immediately instead of retrying into the same wall. Provider choice for the retry (or any later
+immediately. Provider choice for the retry (or any later
 dispatch) is a PER-DISPATCH decision — `STICKY-PROVIDER-PIN` in
 [Anti-patterns](./anti-patterns.md) forbids pinning later dispatches to a fallback provider once
-a transient failure's cap window has passed.
+the cap window has passed.
 
 <!-- rule: GATE-EXEC-END-OF-RUN-CONTRACT -->
 `GATE-EXEC-END-OF-RUN-CONTRACT`: Once a PR has merged, the ONLY remaining steps are the
@@ -576,7 +576,7 @@ newly blocked.
 
 <!-- rule: GATE-EXEC-EMIT-PLAN-KEY -->
 `GATE-EXEC-EMIT-PLAN-KEY`: when `consolidate-fanin.mjs` is invoked with the
-`--emit-plan <path>` (required once the head has dispatch-prompt records; the keyed `<gate>-<headSha>.emit-plan.json`
+`--emit-plan <path>` (required once the head has dispatch-prompt records, else fan-in fails closed; the keyed `<gate>-<headSha>.emit-plan.json`
 artifact from `GATE-EXEC-FANOUT-DISPATCH-EMIT` above), the plan's embedded
 round key (`gate`, `headSha`) MUST match the round being consolidated — checked
 with `GATE-EXEC-ARTIFACT-HEAD-STAMP`'s own trim+lowercase head compare — and a
