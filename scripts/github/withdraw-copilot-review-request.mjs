@@ -242,7 +242,7 @@ async function collectState(args, { env, runChild }) {
   };
 }
 
-async function main(args, { env = process.env, runChild = defaultRunChild, checkpointDir, delayImpl = delay } = {}) {
+async function main(args, { env = process.env, runChild = defaultRunChild, checkpointDir, delayImpl = delay, repoRoot = process.cwd() } = {}) {
   const state = await collectState(args, { env, runChild });
 
   if (!state.copilotRequested) {
@@ -287,7 +287,7 @@ async function main(args, { env = process.env, runChild = defaultRunChild, check
       };
     }
     deltaClassification = await classifyDeltaSinceLastReview(
-      { repo: args.repo, base: lastReviewedHeadSha, head: state.currentHeadSha, rules: resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot: process.cwd() })).config) },
+      { repo: args.repo, base: lastReviewedHeadSha, head: state.currentHeadSha, rules: resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot })).config) },
       { env, runChild },
     );
     if (!deltaClassification.carryForward) {

@@ -202,7 +202,7 @@ const GateTierMatchKind = z.enum(FILE_KIND_NAMES);
 // valid angle/tier kind (see FILE_KIND_NAMES).
 const CLASSIFY_KIND_NAMES = Object.freeze(["code", "docs", "config", "test", "ci", "asset"]);
 
-const ClassifyExtension = z.string().regex(/^\.[^./\\]+$/, "extension must start with '.' and contain no '/', '\\' or further '.'");
+const ClassifyExtension = z.string().regex(/^\.[^./\\\s]+$/, "extension must start with '.' and contain no whitespace, '/', '\\' or further '.'");
 
 const ClassifyConfig = z
   .strictObject({
@@ -228,9 +228,9 @@ const ClassifyConfig = z
           .refine((v) => {
             const n = v.replaceAll("\\", "/");
             return n === n.trim() && !n.startsWith("./") && !n.startsWith("/") && !n.endsWith("/")
-              && n.split("/").every((seg) => seg !== "" && seg !== "..");
-          }, "pattern must be repo-relative: no surrounding whitespace, no leading './' or '/', no trailing '/', and no empty or '..' segments")
-          .describe("Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive."),
+              && n.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
+          }, "pattern must be repo-relative: no surrounding whitespace, no leading './' or '/', no trailing '/', and no empty, '.' or '..' segments")
+          .describe("Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive. Must be repo-relative: no surrounding whitespace, no leading `./` or `/`, no trailing `/`, and no empty, `.` or `..` segments."),
         kind: z.enum(CLASSIFY_KIND_NAMES).describe("Kind assigned to files matching the pattern."),
       }))
       .describe("Path rules; the first matching entry wins and beats `extensions` and the built-in tables.")

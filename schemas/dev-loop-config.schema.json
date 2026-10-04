@@ -1726,7 +1726,7 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^\\.[^./\\\\]+$"
+                "pattern": "^\\.[^./\\\\\\s]+$"
               }
             },
             "docs": {
@@ -1734,7 +1734,7 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^\\.[^./\\\\]+$"
+                "pattern": "^\\.[^./\\\\\\s]+$"
               }
             },
             "config": {
@@ -1742,7 +1742,7 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^\\.[^./\\\\]+$"
+                "pattern": "^\\.[^./\\\\\\s]+$"
               }
             },
             "test": {
@@ -1750,7 +1750,7 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^\\.[^./\\\\]+$"
+                "pattern": "^\\.[^./\\\\\\s]+$"
               }
             },
             "ci": {
@@ -1758,7 +1758,7 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^\\.[^./\\\\]+$"
+                "pattern": "^\\.[^./\\\\\\s]+$"
               }
             },
             "asset": {
@@ -1766,7 +1766,7 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^\\.[^./\\\\]+$"
+                "pattern": "^\\.[^./\\\\\\s]+$"
               }
             }
           },
@@ -1781,7 +1781,7 @@
               "pattern": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive."
+                "description": "Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive. Must be repo-relative: no surrounding whitespace, no leading `./` or `/`, no trailing `/`, and no empty, `.` or `..` segments."
               },
               "kind": {
                 "type": "string",

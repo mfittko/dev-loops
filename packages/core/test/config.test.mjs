@@ -7511,13 +7511,13 @@ describe("classify config", () => {
   });
 
   test("rejects malformed extensions", () => {
-    for (const ext of ["svg", ".a.b", ".a/b", ".a\\b", "."]) {
+    for (const ext of ["svg", ".a.b", ".a/b", ".a\\b", ".", ".vue ", ". vue"]) {
       assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { extensions: { asset: [ext] } } }).success, ext);
     }
   });
 
   test("rejects path patterns that are not repo-relative", () => {
-    for (const pattern of ["./a/**", "/a/**", "a/", " a/**", "a/** ", "a//b", "a/../b", "..", ".\\a", "a\\"]) {
+    for (const pattern of ["./a/**", "/a/**", "a/", " a/**", "a/** ", "a//b", "a/../b", "a/./b", "..", ".\\a", "a\\"]) {
       assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { paths: [{ pattern, kind: "code" }] } }).success, pattern);
     }
   });

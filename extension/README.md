@@ -219,8 +219,8 @@ classify:
 ```
 
 - Allowed kinds are `code`, `docs`, `config`, `test`, `ci` and `asset`. `unknown` and any other name fail config validation.
-- An extension starts with `.` and has no `/`, `\` or further `.`. Matching is case-insensitive on the file's last extension. The same extension under two kinds fails validation.
-- A path pattern uses the `**/`, `**` and `*` glob subset (`*` stays within one segment, everything else is literal). It is anchored to the whole repo-relative path, normalizes `\` to `/` and is case-sensitive.
+- An extension starts with `.` and has no whitespace, `/`, `\` or further `.`. Matching is case-insensitive on the file's last extension. The same extension under two kinds fails validation.
+- A path pattern uses the `**/`, `**` and `*` glob subset (`*` stays within one segment, everything else is literal). It is anchored to the whole repo-relative path, normalizes `\` to `/` and is case-sensitive. A pattern is repo-relative: no surrounding whitespace, no leading `./` or `/`, no trailing `/`, and no empty, `.` or `..` segments. Other shapes fail config validation.
 - Precedence: the first matching `paths` entry in listed order, then `extensions`, then the built-in tables. Paths under `.github/` stay `ci`. Dev-loop config sources (`.devloops`, `.devloops.yaml`, `.devloops.yml`, `.devloops.json`, `.pi/dev-loop/settings.*`, `.pi/dev-loop/defaults.*` and the shipped defaults file) stay `config`. An `extensions` entry overrides the built-in test-file conventions for that extension; use a `paths` entry for finer control.
 - A later config layer replaces `classify.extensions` and `classify.paths` as whole values.
 - `gates.<gate>.angles[].kinds` and `gates.<gate>.tiers[].match.kinds` accept `asset`.

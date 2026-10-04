@@ -182,7 +182,7 @@ test("classifyFile: images and fonts are assets outside docs/", () => {
   assert.equal(classifyFile("docs/img/x.png"), "docs");
 });
 
-test("classifyFile: .md stays docs everywhere and non-JS source stays unknown", () => {
+test("classifyFile: .md stays docs everywhere and non-JS source and unrecognized extensions stay unknown", () => {
   assert.equal(classifyFile("site/readme.md"), "docs");
   assert.equal(classifyFile("vendor/blob.bin"), "unknown");
 });
@@ -237,6 +237,14 @@ test("analyzeDiff: rules reclassify a custom extension as code", () => {
   assert.deepEqual(analyzeDiff({ nameStatusOutput, diffOutput: "" }).t1.changeCategories, []);
   const rules = compileClassifyRules({ extensions: { code: [".vue"] } });
   assert.deepEqual(analyzeDiff({ nameStatusOutput, diffOutput: "", rules }).t1.changeCategories, ["LOGIC_CHANGE"]);
+});
+
+test("analyzeDiff: rules-mapped code file keeps the security seam", () => {
+  const nameStatusOutput = "M\tsrc/App.vue\n";
+  const diffOutput = "--- a/src/App.vue\n+++ b/src/App.vue\n@@ -1,1 +1,2 @@\n+child_process.exec(x);\n";
+  const rules = compileClassifyRules({ extensions: { code: [".vue"] } });
+  assert.ok(analyzeDiff({ nameStatusOutput, diffOutput, rules }).t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+  assert.ok(!analyzeDiff({ nameStatusOutput, diffOutput }).t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
 });
 
 test("classifyFile: docs for .markdown files", () => {
