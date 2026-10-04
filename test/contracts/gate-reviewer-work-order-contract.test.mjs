@@ -34,7 +34,7 @@ const collapse = (text) => text.replace(/\s+/g, " ");
 // and removing a claim's last token makes exactly that claim fail.
 const sentences = (text) => collapse(text).split(/(?<=[.!?:])\s+(?=[A-Z`*(|-])/);
 // Polarity-safe literals: MUST must not match MUST NOT, compliant must not match non-compliant.
-const POLARITY = { MUST: /\bMUST\b(?! NOT)/, compliant: /(?<!non-)\bcompliant\b/ };
+const POLARITY = { MUST: /\bMUST\b(?! NOT)/, compliant: /(?<!non-)\bcompliant\b/, optional: /(?<!not |never |non-)\boptional\b/ };
 const has = (s, t) => (POLARITY[t] ? POLARITY[t].test(s) : s.includes(t));
 const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => has(s, t))));
 const reword = (block, claims) => sentences(block).map((s) => (claims.find((tokens) => tokens.every((t) => has(s, t)))?.slice(0, -1) ?? []).reduce((acc, t) => acc.replace(t, `${t} (as the contract records, without exception)`), s)).reverse().join(" ");

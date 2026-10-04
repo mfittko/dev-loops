@@ -18,12 +18,12 @@ Slice 1 of the v1.0.6 prose cleanup condenses the three files the gate coordinat
 
 | File or bundle | Before bytes / words | After bytes / words | Change |
 | --- | --- | --- | --- |
-| `skills/docs/gate-review-sub-loop-contract.md` | 225,283 / 29,755 | 191,442 / 24,944 | -33,841 bytes (-15.0%) |
+| `skills/docs/gate-review-sub-loop-contract.md` | 225,283 / 29,755 | 191,489 / 24,944 | -33,841 bytes (-15.0%) |
 | `agents/gate-coordinator.agent.md` | 2,520 / 365 | 2,153 / 306 | -367 bytes |
 | Coordinator bundle (both files) | 227,803 / 30,120 | 193,595 / 25,250 | -34,208 bytes (-15.0%) |
 | `agents/review.agent.md` (reviewer bundle) | 21,413 / 2,952 | 19,258 / 2,627 | -2,155 bytes (-10.1%) |
 
-Targets: contract at most 191,500, coordinator bundle at most 193,600, reviewer bundle at most 19,270. All three hold. The Claude projections regenerate byte-identically for the contract (191,442) and shrink for the two agents (`.claude/agents/gate-coordinator.md` 2,460 to 2,093, `.claude/agents/review.md` 21,379 to 19,224).
+Targets: contract at most 191,500, coordinator bundle at most 193,600, reviewer bundle at most 19,270. All three hold. The Claude projections regenerate byte-identically for the contract (191,489) and shrink for the two agents (`.claude/agents/gate-coordinator.md` 2,460 to 2,093, `.claude/agents/review.md` 21,379 to 19,268).
 
 ### v1.0.6 slice 1 duplicate-table trace
 
@@ -76,7 +76,7 @@ Targets: contract at most 191,500, coordinator bundle at most 193,600, reviewer 
 
 `agents/gate-coordinator.agent.md`: dropped the typed-result field list (owner: `GATE-EXEC-GATE-COORDINATOR`, cited). The join line keeps both rule citations. Dispatch relay, boundary and file-ops citation stay.
 
-`agents/review.agent.md`: shortened the work-order description, the required-reads bullet, the build-once citation bullet, the bounded-unit bullet, the grouped-dispatch paragraph, the severity and `contextWidened` clauses of the findings-shape text, the `defectKey` paragraph (the location condition "on one file and line, or one file with no line" and "findings without a key merge only on identical summaries" stay), the full-PR blocked-angle clause and the Tool strategy section (dropped the `Grep`/`Glob` allowlist sentence, the `tools:` rationale and the "reads the diff, the plan, and the source" clause; the `tools:` frontmatter stays) and the "(ADR 0115)" aside. The adversarial defect-class parenthetical (edge cases, input validation, numeric coercion, null/undefined, boundary conditions, caller/callee contracts, dedup/identity bugs) stays, because `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING` owns the behavior but the work order does not carry the class list. Shortened the `question` clause to "An unanswered `question` blocks gate-close like a defect" and dropped the downstream nit treatment (owner: `GATE-EXEC-THREAD-DISPOSITION`). Dropped the "`42` is a placeholder value, not literal example syntax" clause: the reviewer bundle sits 12 bytes under its cap, so it is not restored, and `line` keeps "an integer with no quotes". Every other reviewer rule the work order does not deliver stays.
+`agents/review.agent.md`: shortened the work-order description, the required-reads bullet, the build-once citation bullet, the bounded-unit bullet, the grouped-dispatch paragraph, the severity and `contextWidened` clauses of the findings-shape text, the `defectKey` paragraph (the location condition "on one file and line, or one file with no line" and "findings without a key merge only on identical summaries" stay), the full-PR blocked-angle clause and the Tool strategy section (dropped the `Grep`/`Glob` allowlist sentence, the `tools:` rationale and the "reads the diff, the plan, and the source" clause; the `tools:` frontmatter stays) and the "(ADR 0115)" aside. The adversarial defect-class parenthetical (edge cases, input validation, numeric coercion, null/undefined, boundary conditions, caller/callee contracts, dedup/identity bugs) stays, because `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING` owns the behavior but the work order does not carry the class list. Shortened the `question` clause to "An unanswered `question` blocks gate-close like a defect" and dropped the downstream nit treatment (owner: `GATE-EXEC-THREAD-DISPOSITION`). Shortened the "`42` is a placeholder value, not literal example syntax" clause to "`42` is a placeholder, not syntax to copy"; the obligation stays. Every other reviewer rule the work order does not deliver stays.
 
 ### v1.0.6 slice 1 test changes
 

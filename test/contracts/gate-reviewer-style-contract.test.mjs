@@ -68,8 +68,10 @@ test("the inline layout rule states the key-based same-defect rule and the carri
 // or modality fails. `assertClaims` also proves both directions on the real block: a reworded copy (filler clause between tokens, sentence order reversed) passes,
 // and removing a claim's last token makes exactly that claim fail.
 const sentences = (text) => collapse(text).split(/(?<=[.!?:])\s+(?=[A-Z`*(|-])/);
-const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => s.includes(t))));
-const reword = (block, claims) => sentences(block).map((s) => (claims.find((tokens) => tokens.every((t) => s.includes(t)))?.slice(0, -1) ?? []).reduce((acc, t) => acc.replace(t, `${t} (as the contract records, without exception)`), s)).reverse().join(" ");
+const POLARITY = { optional: /(?<!not |never |non-)\boptional\b/ };
+const has = (s, t) => (POLARITY[t] ? POLARITY[t].test(s) : s.includes(t));
+const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => has(s, t))));
+const reword = (block, claims) => sentences(block).map((s) => (claims.find((tokens) => tokens.every((t) => has(s, t)))?.slice(0, -1) ?? []).reduce((acc, t) => acc.replace(t, `${t} (as the contract records, without exception)`), s)).reverse().join(" ");
 function assertClaims(block, claims, label) {
   assert.deepEqual(missingClaims(block, claims), [], `${label}: missing claim`);
   assert.deepEqual(missingClaims(reword(block, claims), claims), [], `${label}: a reworded copy must pass`);

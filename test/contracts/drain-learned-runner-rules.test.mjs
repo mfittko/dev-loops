@@ -92,7 +92,7 @@ test("COPILOT-FOLLOWUP-REQUEST-BRANCHING stops on an unchanged head and names no
 // name the judge act list (ADR 0089). Chunks are found by their literals, not by named opening phrases.
 const chunksOf = (content) => content.split(/\n(?=\s*- |\| )|\n\n/);
 // A flag-requirement statement (`--findings-severity-counts`) mentions `clean` without defining it.
-const definesCleanBySeverity = (chunk) => chunk.includes("`clean`") && /blockCleanOnFindingSeverities|blocking severity/.test(chunk) && !chunk.includes("--findings-severity-counts");
+const definesCleanBySeverity = (chunk) => /`clean`|\bclean pass\b/.test(chunk) && /blockCleanOnFindingSeverities|blocking severity/.test(chunk) && !chunk.includes("--findings-severity-counts");
 const severityOnlyCleanChunks = (content) => chunksOf(content).filter((chunk) => definesCleanBySeverity(chunk) && !/act list/.test(chunk));
 
 test("no clean definition in the gate contract is severity-only (ADR 0089)", async () => {
