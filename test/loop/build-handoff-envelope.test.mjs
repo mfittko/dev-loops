@@ -374,3 +374,17 @@ test("build-handoff-envelope auto-detects repo slug from git remote origin", asy
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("build-handoff-envelope refuses a startup output carrying bundle.configError", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "build-handoff-envelope-"));
+  try {
+    const configError = { reason: "config_load_failed", errors: ["bad key"], unknownKeys: [], runningVersion: null, checkoutVersion: null };
+    const input = makeResolverOutput({ bundle: { repoSlug: "owner/repo", configError } });
+    await writeFile(path.join(tempDir, "resolver.json"), `${JSON.stringify(input)}\n`, "utf8");
+    const result = await runNode(["--input", path.join(tempDir, "resolver.json"), "--repo", "owner/repo"]);
+    assert.equal(result.code, 1);
+    assert.equal(JSON.parse(result.stderr.trim()).code, "config_load_failed");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

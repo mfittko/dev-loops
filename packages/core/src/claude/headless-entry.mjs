@@ -129,7 +129,7 @@ export function buildHeadlessClaudeInvocation({ prompt, runId, claudeBin = DEFAU
 }
 
 /**
- * Build the interactive `claude` invocation for `dev-loops loop claude-launch`.
+ * Build the interactive `claude` invocation for `dev-loops-run cli/index.mjs loop claude-launch`.
  * With no `extraTools` entry the argv is the passthrough args only and no env is added.
  *
  * @param {Object} params

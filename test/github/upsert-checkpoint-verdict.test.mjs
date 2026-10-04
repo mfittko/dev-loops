@@ -63,7 +63,7 @@ let fanoutDisabledRepoRoot = null;
 before(async () => {
   gitStubDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gitstub-"));
   const gitStubPath = path.join(gitStubDir, "git");
-  await writeFile(gitStubPath, "#!/bin/sh\nexit 0\n", "utf8");
+  await writeFile(gitStubPath, "#!/bin/sh\n[ \"$1\" = cat-file ] && exit 1\nexit 0\n", "utf8");
   await chmod(gitStubPath, 0o755);
   originalPath = process.env.PATH;
   process.env.PATH = [gitStubDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter);

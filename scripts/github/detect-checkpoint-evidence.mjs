@@ -26,7 +26,7 @@ import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, isSizeOutcomeT1Clean, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance, touchesRiskPath } from "@dev-loops/core/config";
+import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, assertConfigLoaded, isSizeOutcomeT1Clean, loadDevLoopConfig, loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance, touchesRiskPath } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, ledgerAngleNames, listOpenActItems, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseChangedFiles, detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
@@ -434,7 +434,7 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     }
   }
   // Fail-closed fan-out evidence enforcement (gates.requireFanoutEvidence, ON by
-  // default / opt-out). When disabled or config-unavailable, fanoutEnforcement is
+  // default / opt-out). When disabled, fanoutEnforcement is
   // { required: false, gates: [] } so the `.required` guard skips this block.
   if (fanoutEnforcement && fanoutEnforcement.required) {
     for (const gate of fanoutEnforcement.gates) {
@@ -821,9 +821,8 @@ function readHeadDevloopsSource(repoRoot, headSha) {
  *
  * extensionDefaults and `.pi/dev-loop/defaults` still come from `repoRoot` on
  * disk — only the `.devloops` primary-override layer is re-sourced from the
- * head commit. Falls back to `invokingConfig` (today's behavior, never
- * looser, never a silent enforcement skip) when the head commit isn't
- * resolvable locally or its `.devloops` fails to parse/validate.
+ * head commit. Falls back to `invokingConfig` only when the head commit is not
+ * resolvable locally; an invalid head `.devloops` throws config_load_failed.
  */
 async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
   if (typeof headSha !== "string" || headSha.trim().length === 0) {
@@ -833,31 +832,26 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
   if (!source.ok) {
     return invokingConfig; // head commit unresolvable locally -> fall back.
   }
-  const { config: headConfig, errors } = await loadDevLoopConfig({
+  const loaded = await loadDevLoopConfig({
     repoRoot,
     devloopsOverride: { raw: source.raw, path: source.path },
   });
-  // Only fall back on a HEAD-ATTRIBUTABLE error: the `devloops` layer is the
-  // head override itself, and `merged` is the final validation, which can
-  // fail BECAUSE of the head override's content — both must still trigger
-  // the fallback. `extensionDefaults`/`defaults` errors are read from this
-  // same repoRoot's disk in both the head-resolved and invoking config, so a
-  // broken base layer there cannot be fixed by falling back and must not
-  // discard an otherwise-valid head override.
+  // A HEAD-ATTRIBUTABLE error (the head override itself, or the final merged
+  // validation it can break) fails closed with config_load_failed; never fall
+  // back to the older invoking config. Base-layer errors read from this same
+  // repoRoot are the invoking strict load's concern, not the head's.
   const headAttributable = (error) => error.layer === "devloops" || error.layer === "merged";
-  if (Array.isArray(errors) && errors.some(headAttributable)) {
-    return invokingConfig; // head .devloops present but unparseable/invalid -> fall back.
-  }
-  return headConfig;
+  assertConfigLoaded({ ...loaded, errors: (loaded.errors ?? []).filter(headAttributable) });
+  return loaded.config;
 }
 
 /**
  * Build the fan-out evidence enforcement descriptor.
  *
  * Enforcement is ON by default (opt-out via gates.requireFanoutEvidence: false).
- * Returns { required: false } when disabled OR config is unavailable
- * (config == null after a failed load) — config-unavailable must fail open
- * and never enable enforcement. When enabled, returns
+ * Returns { required: false } when disabled. Both callers strict-load the
+ * config and fail closed on a load error before reaching here; the
+ * `config == null` branch is only a defensive guard. When enabled, returns
  * { required: true, requireProvenance, lightMode, hasFullLabel, gates } where
  * each per-required-gate entry records executionMode, inlineReason,
  * scopeUnderThreshold, and whether the deterministic findings-log ledger exists
@@ -880,9 +874,8 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
 export { isSizeOutcomeT1Clean };
 
 export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd, hasFullLabel = false, baseRef = null }) {
-  // Fail open when config could not be loaded/validated. `== null` covers both
-  // null and undefined; the loader only ever yields null on failure, but the
-  // loose check defensively treats an absent config as unavailable.
+  // Defensive only: callers strict-load and fail closed before this point, so a
+  // null/undefined config never arrives here in practice.
   const checkouts = resolveLedgerCheckouts(cwd);
   // The act list is read independently of requireFanoutEvidence; `actList` is
   // only added when the current-head pre_approval_gate ledger exists.
@@ -1115,13 +1108,9 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });
   const draftGateMarker = normalizeGateMarkerSummary(markerSummary.draft_gate);
   const preApprovalGateMarker = normalizeGateMarkerSummary(markerSummary.pre_approval_gate);
-  // loadDevLoopConfig never throws: it returns { config, warnings, errors }.
-  // A non-empty errors array means the config could not be loaded/validated, so
-  // treat it as config-unavailable and leave fan-out enforcement disabled
-  // (preserves default behavior). Other gate checks remain unaffected.
-  let config = null;
-  const { config: loadedConfig, errors: configErrors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
-  config = Array.isArray(configErrors) && configErrors.length > 0 ? null : loadedConfig;
+  // A config load error throws config_load_failed: fan-out evidence
+  // enforcement is never disabled by an unreadable config.
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(cwd) });
   // Light-mode pre-merge facts: the base commit for the merge-base scope
   // re-derivation and whether the PR forces full fan-out via the gate:full label.
   // Fetched LAZILY — only when fan-out enforcement is active AND lightMode is on
@@ -1367,7 +1356,7 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
+    process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   }
 }

@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveGateConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { zeroSeverityCounts } from "@dev-loops/core/loop/gate-fanin";
 import { detectCheckpointEvidence } from "./detect-checkpoint-evidence.mjs";
@@ -205,7 +205,7 @@ function withFanoutRefusalGuidance(error, { repo, pr, headSha } = {}) {
   );
 }
 export async function reconcileDraftGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
-  const { config } = await loadDevLoopConfig({ repoRoot });
+  const { config } = await loadDevLoopConfigStrict({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const initialEvidence = await detectCheckpointEvidence(
     { repo: options.repo, pr: options.pr },
@@ -305,9 +305,7 @@ async function main() {
     const result = await reconcileDraftGate(options);
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
-    process.stderr.write(
-      `${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`
-    );
+    process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   }
 }

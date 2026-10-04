@@ -5,7 +5,7 @@ import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.m
 import { fetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
-import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveGateConfig } from "@dev-loops/core/config";
 import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers";
 import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
@@ -194,7 +194,7 @@ async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reas
 // restore-ready.mjs calls readyForReview() directly with it set, so the CI
 // precondition can never be skipped through this script's own CLI surface.
 export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline, skipCiPrecondition = false } = {}) {
-  const { config } = await loadDevLoopConfig({ repoRoot });
+  const { config } = await loadDevLoopConfigStrict({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const requireCi = draftGateConfig?.requireCi !== false && skipCiPrecondition !== true;
   const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild: runChildImpl });

@@ -127,7 +127,7 @@ export const isFixerPullAttempt = (command) => typeof command === "string" && co
  *
  * Gated commands on the target repo (each rationale sits inline at its check):
  *   - `gh pr create` — blocked outright; PR creation must flow through the canonical wrapper
- *     (`scripts/github/create-pr.mjs` / `dev-loops pr create`), which always drafts and self-assigns.
+ *     (`scripts/github/create-pr.mjs` / `dev-loops-run cli/index.mjs pr create`), which always drafts and self-assigns.
  *   - `gh pr ready` — blocked without clean draft_gate evidence.
  *   - `gh pr merge` — blocked outright; use scripts/github/merge-pr.mjs. Its gate evidence check
  *     requires a clean draft_gate transition record + current-head pre_approval_gate
@@ -207,13 +207,13 @@ export function decideBashGate({
     // A gate coordinator dispatches no worker (decideAgentDispatch), so its reason names its own path.
     const reason = normalizeAgentType(agentType) === GATE_COORDINATOR_AGENT_TYPE
       ? "COORDINATOR-VERIFY-BOUNDARY: the gate coordinator must not run code-verification/build " +
-        "commands inline. Run the round's full validation through `dev-loops gate resolve-validation`; " +
+        "commands inline. Run the round's full validation through `dev-loops-run cli/index.mjs gate resolve-validation`; " +
         "for any other check, stop and return a typed observation to the dev-loop coordinator " +
         "(GATE-EXEC-GATE-COORDINATOR). See skills/docs/main-agent-contract.md."
       : "COORDINATOR-VERIFY-BOUNDARY: the dev-loop coordinator must not run code-verification/build " +
         "commands inline. Delegate targeted checks to a fresh worker subagent (developer/fixer/" +
         "quality), which reports back a compact pass/fail plus any failing-test names. " +
-        "Request local full-repository validation through `dev-loops gate resolve-validation` on a clean commit; when " +
+        "Request local full-repository validation through `dev-loops-run cli/index.mjs gate resolve-validation` on a clean commit; when " +
         "checking a pushed commit, prefer CI's structured conclusion (`gh pr checks` / " +
         "scripts/github/detect-checkpoint-evidence.mjs) over a local run. See skills/docs/main-agent-contract.md.";
     return { decision: "deny", reason };
@@ -257,7 +257,7 @@ export function decideBashGate({
       reason:
         "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/" +
         "probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout/" +
-        "--timeout-ms; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops loop watch-cycle; " +
+        "--timeout-ms; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops-run cli/index.mjs loop watch-cycle; " +
         "gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` " +
         "backgrounding of a probe/wait script are barred for the coordinator and every subagent (a " +
         "backgrounded wait orphans under Claude Code, which has no async wake to join it).",
@@ -402,7 +402,7 @@ export function decideBashGate({
         decision: "deny",
         reason:
           "gh pr create blocked: open PRs via the canonical wrapper `node scripts/github/create-pr.mjs` " +
-          "(a.k.a. `dev-loops pr create`), which always creates a draft and self-assigns. Raw `gh pr create` " +
+          "(a.k.a. `dev-loops-run cli/index.mjs pr create`), which always creates a draft and self-assigns. Raw `gh pr create` " +
           "defaults to ready-for-review and bypasses the draft-first contract (workflow.requireDraftFirst).",
       };
     }
@@ -940,7 +940,7 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
       return {
         decision: "deny",
         reason:
-          `AGENT_OVERRIDE_NAMESPACED_DISPATCH: \`dev-loops loop claude-launch\` rendered \`${bare}\` with extraTools for this session. ` +
+          `AGENT_OVERRIDE_NAMESPACED_DISPATCH: \`dev-loops-run cli/index.mjs loop claude-launch\` rendered \`${bare}\` with extraTools for this session. ` +
           `Dispatch the bare agent type \`${bare}\` instead of \`${targetAgentType}\`.`,
       };
     }

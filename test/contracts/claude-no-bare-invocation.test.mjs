@@ -84,6 +84,27 @@ test("no residual unrouted `dev-loops <ns> <sub>` invocation in generated agent/
   assert.deepEqual(violations, [], `unrouted dev-loops <ns> invocation found in:\n${violations.join("\n")}`);
 });
 
+// A pinned `npx dev-loops@<version>` resolves the global PATH binary inside a dev-loops checkout
+// whose package.json carries the same version, so a generated form must route through the
+// launcher instead (`dev-loops-run` resolves the checkout, else the plugin's pinned package).
+const PINNED_NPX_RE = /npx\s+dev-loops@/;
+
+test("no pinned `npx dev-loops@<version>` form in generated agent/command/skill bodies", () => {
+  const violations = scanAll().filter(({ body }) => PINNED_NPX_RE.test(body)).map(({ file }) => file);
+  assert.deepEqual(violations, [], `pinned npx form found in:\n${violations.join("\n")}`);
+});
+
+// The deny texts the Claude hooks print steer an agent to a command. They must name the launcher
+// form, in the core source and in the vendored hook copy.
+test("hook deny texts name no bare `dev-loops <ns> <sub>` and no pinned npx form", () => {
+  const violations = [];
+  for (const file of ["packages/core/src/claude/hook-decisions.mjs", ".claude/hooks/_hook-decisions.mjs"]) {
+    const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    if (BARE_DEV_LOOPS_NS_RE.test(source) || PINNED_NPX_RE.test(source)) violations.push(file);
+  }
+  assert.deepEqual(violations, [], `bare or pinned dev-loops form found in:\n${violations.join("\n")}`);
+});
+
 test("scanned tree is non-empty (the guard actually covers files)", () => {
   assert.ok(scanAll().length > 0, "expected at least one generated agent/command/skill file");
 });

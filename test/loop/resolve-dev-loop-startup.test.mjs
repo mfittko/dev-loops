@@ -2594,15 +2594,46 @@ test("runCli --lightweight ALONE (no --issue): DIRTY-TREE above-threshold change
   }, { prefix: "resolve-dev-loop-issueless-" });
 });
 
-test("runCli --lightweight ALONE (no --issue): invalid config fails closed naming the config failure, not light_mode_disabled", async () => {
+test("runCli --lightweight ALONE (no --issue): invalid config returns needs_reconcile naming the config failure", async () => {
   await withTempDir(async (tempDir) => {
     await initFeatureBranchRepo(tempDir);
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\nnot_a_real_key: true\n", "utf8");
     const result = await runNode(["--lightweight"], { cwd: tempDir });
-    assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /config loading failed/);
-    assert.doesNotMatch(result.stderr, /lightMode\.enabled/);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.bundleKind, "needs_reconcile");
+    assert.equal(parsed.bundle.configError.reason, "config_load_failed");
+    assert.doesNotMatch(result.stdout, /lightMode\.enabled/);
   }, { prefix: "resolve-dev-loop-issueless-" });
+});
+
+for (const claudeCode of [undefined, "1"]) test(`runCli with an unknown .devloops key (CLAUDECODE=${claudeCode ?? "unset"}) returns needs_reconcile with configError and never resolves requireRetrospective from defaults`, async () => {
+  await withTempDir(async (tempDir) => {
+    await initFeatureBranchRepo(tempDir);
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\nworkflow:\n  requireRetrospective: true\nfutureKnob: true\n",
+      "utf8",
+    );
+    const ghStub = await writeGhStubHelper(tempDir, []);
+    const env = { ...ghStub.env, ...resolverTestEnv(), CLAUDECODE: claudeCode };
+    if (claudeCode === undefined) delete env.CLAUDECODE;
+    const result = await runNode(["--issue", "511"], { cwd: tempDir, env });
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.bundleKind, "needs_reconcile");
+    assert.equal(parsed.selectedStrategy, "none");
+    assert.equal(parsed.bundle.selectedStrategy, null);
+    assert.equal(parsed.bundle.loopState, "unknown");
+    assert.equal(parsed.bundle.executionMode, "bounded_handoff");
+    assert.equal(parsed.bundle.configError.reason, "config_load_failed");
+    assert.deepEqual(parsed.bundle.configError.unknownKeys, ["futureKnob"]);
+    assert.equal(typeof parsed.bundle.configError.runningVersion, "string");
+    assert.match(parsed.nextAction, /futureKnob/);
+    assert.match(parsed.nextAction, /config_load_failed/);
+    // Resolving requireRetrospective from defaults would route through the retrospective checkpoint gate.
+    assert.doesNotMatch(JSON.stringify(parsed), /retrospective/i);
+    assertOperatorBriefing(parsed);
+  }, { prefix: "resolve-dev-loop-config-fail-closed-" });
 });
 
 test("runCli --lightweight ALONE (no --issue): under-threshold change resolves issue-less PR-first (AC-adjacent success path)", async () => {

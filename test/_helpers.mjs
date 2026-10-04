@@ -269,7 +269,7 @@ const GIT_FIXTURE_ENV = {
   GIT_WORK_TREE: undefined,
 };
 
-function runGitFixture(cwd, args) {
+export function runGitFixture(cwd, args) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });
   if (result.status !== 0) {
     throw new Error(`git ${args.join(" ")} failed (${result.status}): ${result.stderr}`);
