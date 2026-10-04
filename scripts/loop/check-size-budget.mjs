@@ -273,7 +273,7 @@ export function computeSizeBudget({
 
   const tierLoc = { default: 0, t1: 0, t3: 0 };
   // Denominator for the unclassified-ratio fail-closed check: source-like
-  // changed lines only (code + test + unknown). docs/config/ci are
+  // changed lines only (code + test + unknown). docs/config/ci/asset are
   // legitimately-zero-LOC categories the classifier already excludes from
   // logicLoc; counting them here would let padding a non-JS-source PR with
   // docs/config dilute the unclassified fraction below the block threshold
