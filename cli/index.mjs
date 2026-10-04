@@ -322,6 +322,7 @@ export const SUBCOMMAND_ROUTES = {
   pr: {
     create:             "scripts/github/create-pr.mjs",
     edit:               "scripts/github/edit-pr.mjs",
+    "waive-adr-tripwire": "scripts/github/waive-adr-tripwire.mjs",
     "ready-for-review": "scripts/github/ready-for-review.mjs",
     "reconcile-draft":  "scripts/github/reconcile-draft-gate.mjs",
     "convert-to-draft": "scripts/github/convert-to-draft.mjs",
@@ -437,6 +438,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
   pr: {
     create: "Create PR (always draft, self-assigned by default)",
     edit: "Edit PR title/body/assignees/milestone/base (refuses adr-tripwire:allow line changes)",
+    "waive-adr-tripwire": "Write the head-pinned ADR tripwire waiver under a standing authorization",
     "ready-for-review": "Mark PR ready for review",
     "reconcile-draft": "Reconcile non-draft PR",
     "convert-to-draft": "Convert a ready PR to draft (idempotent)",
