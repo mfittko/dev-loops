@@ -182,7 +182,7 @@ test("classifyFile: images and fonts are assets outside docs/", () => {
   assert.equal(classifyFile("docs/img/x.png"), "docs");
 });
 
-test("classifyFile: .md stays docs everywhere and non-JS source and unrecognized extensions stay unknown", () => {
+test("classifyFile: .md stays docs everywhere and unrecognized extensions stay unknown", () => {
   assert.equal(classifyFile("site/readme.md"), "docs");
   assert.equal(classifyFile("vendor/blob.bin"), "unknown");
 });

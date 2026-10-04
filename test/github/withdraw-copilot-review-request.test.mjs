@@ -2,7 +2,7 @@ import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import { Writable } from "node:stream";
 import { mkdtempSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { main, parseCliArgs, runCli } from "../../scripts/github/withdraw-copilot-review-request.mjs";
@@ -451,6 +451,27 @@ describe("withdraw-copilot-review-request", () => {
         assert.equal(marker.headSha, "newsha");
         assert.equal(marker.lastReviewedHeadSha, "oldsha");
         assert.equal(marker.operatorReason, "Copilot declined a converged reword on the new head");
+      });
+    });
+
+    it("withdraws when the target repo's classify config maps the changed extension to docs", async () => {
+      await withTempCheckpointDir(async (checkpointDir) => {
+        const repoRoot = await mkdtemp(path.join(os.tmpdir(), "withdraw-classify-"));
+        try {
+          await writeFile(path.join(repoRoot, ".devloops.json"), JSON.stringify({ version: 1, classify: { extensions: { docs: [".foo"] } } }), "utf8");
+          const gh = ghStub({
+            copilotRequested: true,
+            headRefOid: "newsha",
+            reviews: SUBMITTED_COPILOT_REVIEW_OLD_HEAD,
+            threads: [],
+            compare: { status: "ahead", files: [{ filename: "src/a.foo", status: "modified" }] },
+          });
+          const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot, runChild: gh.runChild, checkpointDir });
+          assert.equal(result.withdrawn, true);
+          assert.equal(gh.requested, false);
+        } finally {
+          await rm(repoRoot, { recursive: true, force: true });
+        }
       });
     });
 
