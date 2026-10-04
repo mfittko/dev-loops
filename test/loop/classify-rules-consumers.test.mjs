@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
+import { classifyFile, compileClassifyRules } from "@dev-loops/core/analysis/diff-analyzer";
 import {
   loadDevLoopConfig,
   resolveClassifyRules,
   resolveGateAnglesDynamic,
   resolveGateTier,
 } from "@dev-loops/core/config";
-import { resolveAngleCarryForward, resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
+import { resolveAngleCarryForward, resolveCarryForwardAngles, resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
 
 import { computeSizeBudget } from "../../scripts/loop/check-size-budget.mjs";
 import { isNotableChange } from "../../scripts/docs/validate-changelog-completeness.mjs";
@@ -135,4 +135,61 @@ test("asset handling in the size budget: zero logic LOC, tier pattern still bloc
   });
   assert.equal(tiered.outcome, "block");
   assert.ok(tiered.reasons.some((r) => /would silently drop to 0/.test(r)));
+});
+
+test("rules decide post-convergence triviality exactly as classifyFile does", () => {
+  const rules = compileClassifyRules({ paths: [{ pattern: "notes/**", kind: "code" }, { pattern: "docs/App/**", kind: "code" }] });
+  assert.equal(isTrivialDocumentationOnlyPath("notes/x.md", rules), false);
+  assert.equal(isTrivialDocumentationOnlyPath("docs/App/x.md", rules), false);
+  assert.equal(isTrivialDocumentationOnlyPath("docs/app/x.md", rules), true);
+});
+
+test("resolveCarryForwardAngles threads classify rules", () => {
+  const rules = compileClassifyRules({ extensions: { docs: [".foo"] } });
+  const run = (r) => resolveCarryForwardAngles({ prevAngles: ["correctness"], changedFiles: ["a.foo"], rules: r });
+  assert.equal(run(rules).carried.length, 1);
+  assert.equal(run(undefined).mustRerun.length, 1);
+});
+
+test("an asset-only diff with no tier selects the mandatory floor angles", async () => {
+  const config = {
+    version: 1,
+    gates: { draft: { angles: [{ name: "scope", mandatory: true }, { name: "correctness", kinds: ["code"] }] } },
+  };
+  const rules = compileClassifyRules({ extensions: { asset: [".avif"] } });
+  assert.ok(rules);
+  const result = await resolveGateAnglesDynamic(
+    { ...config, classify: { extensions: { asset: [".avif"] } } },
+    "draft",
+    { diff: { nameStatusOutput: "M\tpics/a.avif\n", diffOutput: "" } },
+  );
+  assert.ok(result.recommendedAngles.includes("scope"));
+  assert.ok(!result.recommendedAngles.includes("correctness"));
+});
+
+test("a later config layer replaces classify extensions and paths as whole values", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "classify-layers-"));
+  try {
+    await mkdir(path.join(dir, ".pi", "dev-loop"), { recursive: true });
+    await writeFile(path.join(dir, ".pi", "dev-loop", "defaults.yaml"), `version: 1
+classify:
+  extensions:
+    code: [".vue"]
+  paths:
+    - { pattern: "a/**", kind: asset }
+`, "utf8");
+    await writeFile(path.join(dir, ".devloops"), `version: 1
+classify:
+  extensions:
+    asset: [".avif"]
+  paths:
+    - { pattern: "b/**", kind: docs }
+`, "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: dir });
+    assert.deepEqual(errors, []);
+    assert.deepEqual(config.classify.extensions, { asset: [".avif"] });
+    assert.deepEqual(config.classify.paths, [{ pattern: "b/**", kind: "docs" }]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

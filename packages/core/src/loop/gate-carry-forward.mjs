@@ -258,7 +258,7 @@ export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, pr
  * @param {{ alwaysRerun?: Iterable<string> }} [input.options]
  * @returns {{ carried: Array<{ angle: string, reason: string }>, mustRerun: Array<{ angle: string, reason: string }> }}
  */
-export function resolveCarryForwardAngles({ prevAngles, changedFiles, options = {} }) {
+export function resolveCarryForwardAngles({ prevAngles, changedFiles, options = {}, rules }) {
   const carried = [];
   const mustRerun = [];
   for (const angle of Array.isArray(prevAngles) ? prevAngles : []) {
@@ -267,6 +267,7 @@ export function resolveCarryForwardAngles({ prevAngles, changedFiles, options = 
       angleSurface: angleReviewSurface(angle, options),
       changedFiles,
       prevVerdict: "clean",
+      rules,
     });
     (decision.carryForward ? carried : mustRerun).push({ angle, reason: decision.reason });
   }

@@ -19,8 +19,8 @@ const DOTFILE_CONFIG_BASENAMES = new Set([".devloops"]);
 // Generic classifier tables. Files are classified by principle (broad extension
 // tables + directory/basename conventions), not by a bespoke per-language rule.
 // A new mainstream language is covered by adding its extension here, not by a new
-// branch. Deliberate fail-closed exceptions (`.ruby-version`, `.nvmrc`) are simply absent from every table, so they fall through to
-// "unknown".
+// branch. Deliberate fail-closed exceptions (`.ruby-version`, `.nvmrc`) are
+// absent from every table, so they fall through to "unknown".
 
 // Source extensions across the common languages. A file with one of these is
 // executable/product logic → "code".

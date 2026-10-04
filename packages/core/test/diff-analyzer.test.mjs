@@ -204,7 +204,7 @@ test("classifyFile: rules take precedence path, then extension, then built-ins",
   assert.equal(classifyFile("src/a.css", rules), "docs");
   assert.equal(classifyFile("src/a.png", rules), "asset");
   assert.equal(classifyFile("src/a.mjs", rules), "code");
-  assert.equal(classifyFile("Site/assets/x.png", rules), "asset");
+  assert.equal(classifyFile("Site/assets/x.bin", rules), "unknown");
   assert.equal(classifyFile("Site/other.vue", rules), "code");
 });
 

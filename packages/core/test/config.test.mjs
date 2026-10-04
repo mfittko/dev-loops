@@ -7516,6 +7516,12 @@ describe("classify config", () => {
     }
   });
 
+  test("rejects path patterns that are not repo-relative", () => {
+    for (const pattern of ["./a/**", "/a/**", "a/"]) {
+      assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { paths: [{ pattern, kind: "code" }] } }).success, pattern);
+    }
+  });
+
   test("rejects the same extension under two kinds, case-insensitively", () => {
     assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { extensions: { code: [".vue"], asset: [".VUE"] } } }).success);
     assert.ok(FileConfigSchema.safeParse({ version: 1, classify: { extensions: { code: [".vue", ".VUE"] } } }).success);

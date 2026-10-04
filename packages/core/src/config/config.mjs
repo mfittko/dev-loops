@@ -224,7 +224,9 @@ const ClassifyConfig = z
       .optional(),
     paths: z
       .array(z.strictObject({
-        pattern: z.string().min(1).describe("Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive."),
+        pattern: z.string().min(1)
+          .refine((v) => !v.startsWith("./") && !v.startsWith("/") && !v.endsWith("/"), "pattern must be repo-relative: no leading './' or '/' and no trailing '/'")
+          .describe("Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive."),
         kind: z.enum(CLASSIFY_KIND_NAMES).describe("Kind assigned to files matching the pattern."),
       }))
       .describe("Path rules; the first matching entry wins and beats `extensions` and the built-in tables.")
