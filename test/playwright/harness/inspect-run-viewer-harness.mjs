@@ -22,7 +22,7 @@ export async function startViewer(snapshot = makeInspectionSnapshot(), assignedP
     {
       adapter: {
         async loadSnapshot() {
-          return snapshot;
+          return typeof snapshot === "function" ? snapshot() : snapshot;
         },
         async loadHandoffEnvelope() {
           return {
@@ -62,10 +62,10 @@ export async function openTab(page, tabName) {
   await page.locator(`.viewer-tab[data-tab="${tabName}"]`).click();
 }
 
-export async function waitForMermaidGraph(page) {
+export async function waitForInspectionGraph(page) {
   const graphPanel = page.locator("#tab-graph");
   await expect(graphPanel).toHaveClass(/active/);
-  const graph = graphPanel.locator(".mermaid-state-graph");
+  const graph = graphPanel.locator("[data-graph-viewport]");
   await expect(graph).toHaveAttribute("data-rendered", "true");
   await expect(graph.locator("svg")).toBeVisible();
   return graph;
@@ -73,12 +73,14 @@ export async function waitForMermaidGraph(page) {
 
 // One capture helper so the viewer's repeated capture block isn't copy-pasted
 // across its tests — the registry's sliceId and a per-state name/hint feed it.
-export function captureViewerState(page, testInfo, stateName, reviewHint) {
+export function captureViewerState(page, testInfo, stateName, reviewHint, options = {}) {
   return captureNamedUiState({
     page,
     testInfo,
     sliceId: VIEWER_REGISTRY.sliceId,
     stateName,
+    viewport: page.viewportSize(),
+    ...options,
     metadata: { fixture: "makeInspectionSnapshot", route: "/", reviewHint },
   });
 }

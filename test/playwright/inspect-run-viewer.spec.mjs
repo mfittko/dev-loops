@@ -1,15 +1,16 @@
 import { test, expect } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 
 import { createInspectRunViewerServer } from "../../scripts/loop/inspect-run-viewer.mjs";
 import { startFixtureServer, stopFixtureServer } from "./harness/webkit-smoke-harness.mjs";
-import { assertSectionIdsAndNoHorizontalScroll } from "./harness/deck-fit-harness.mjs";
+import { assertA11yClean, assertSectionIdsAndNoHorizontalScroll } from "./harness/deck-fit-harness.mjs";
 import {
   VIEWER_REGISTRY,
   captureViewerState,
   makeInspectionSnapshot,
   openTab,
   startViewer,
-  waitForMermaidGraph,
+  waitForInspectionGraph,
 } from "./harness/inspect-run-viewer-harness.mjs";
 
 // Each case owns its browser page, binds its fixture server to an ephemeral
@@ -41,7 +42,6 @@ test("webkit renders overview-first tabs, matches tab panels, and captures a scr
     await expect(currentStateBanner).toBeVisible();
     await expect(currentStateBanner.getByTitle("Waiting state")).toBeVisible();
     await expect(currentStateBanner.getByText("Waiting for Copilot review")).toBeVisible();
-    await expect(page.locator(".state-graph-intro")).toHaveCount(0);
     const tabs = await page.locator('.viewer-tab').evaluateAll((nodes) => nodes.map((node) => ({
       text: node.textContent?.trim() ?? '',
       id: node.id,
@@ -108,98 +108,14 @@ test("webkit renders overview-first tabs, matches tab panels, and captures a scr
     await expect(page.locator("[data-inbox-empty]")).toBeHidden();
     await expect(inboxList.getByRole("link", { name: /Current PR/ })).toBeVisible();
 
-    await openTab(page, 'graph');
-    const graphGuide = page.getByText(/Graph guide and lane details/);
-    await expect(graphGuide).toBeVisible();
-    await graphGuide.click();
-    const graphBox = page.locator("#tab-graph .viewer-graph-body");
-    await expect(graphBox.getByRole("button", { name: "Zoom in" })).toBeVisible();
-    await expect(graphBox.getByRole("button", { name: "Zoom out" })).toBeVisible();
-    await expect(graphBox.getByRole("button", { name: "Reset zoom" })).toBeVisible();
-    await expect(graphBox.getByRole("button", { name: "Open graph fullscreen" })).toBeVisible();
-    const graph = await waitForMermaidGraph(page);
-    await expect(graphBox.locator('[data-graph-zoom-value]')).toHaveText('300%');
-    await expect(graph).toHaveCSS("cursor", "grab");
-    await expect(graph).toContainText(/Start/);
-    await expect(graph).toContainText(/continue current wait/);
-    await expect(graph).toContainText(/waiting_for_copilot_review/);
-    await expect(graph).toContainText(/review_requested/);
-    await expect(page.getByText(/outer-loop family:\s*current\s*continue_current_wait; continue_current_wait; full authoritative state machine shown; continue_current_wait, handoff_to_copilot_loop, handoff_to_reviewer_loop, stay_with_current_live_owner, stop_needs_human, done_terminal, needs_reconcile/i)).toBeVisible();
-    await expect(page.getByText(/copilot layer:\s*current\s*waiting_for_copilot_review; waiting_for_copilot_review; full authoritative state machine shown; unresolved_feedback_present, ready_to_rerequest_review, waiting_for_ci/i)).toBeVisible();
-    const lifecycleLaneRender = await graph.evaluate((node) => {
-      const svg = node.querySelector('svg');
-      const laneTitles = [...svg.querySelectorAll('g.cluster text')]
-        .map((entry) => ({ text: entry.textContent?.trim() ?? '', y: entry.getBoundingClientRect().y }))
-        .filter((entry) => entry.text.length > 0)
-        .sort((a, b) => a.y - b.y)
-        .map((entry) => entry.text);
-      const currentLifecycle = svg.querySelector('g.node.current[id*="flowchart-lifecycle_layer_implementation"]');
-      const nextLifecycleNodes = [...svg.querySelectorAll('g.node.next[id*="flowchart-lifecycle_layer_"]')]
-        .map((entry) => entry.textContent?.replace(/\s+/g, ' ').trim())
-        .filter(Boolean)
-        .sort();
-      return {
-        laneTitles,
-        currentLifecycleClass: currentLifecycle?.getAttribute('class') ?? null,
-        nextLifecycleNodes,
-      };
-    });
-    expect(lifecycleLaneRender.laneTitles).toEqual([
-      'outer-loop family',
-      'copilot layer',
-      'reviewer layer',
-      'lifecycle',
-    ]);
-    expect(lifecycleLaneRender.currentLifecycleClass).toContain('current');
-    expect(lifecycleLaneRender.nextLifecycleNodes).toEqual(['draft gate', 'feedback resolution']);
-
-    await graphBox.getByRole("button", { name: "Zoom in" }).click();
-    await graphBox.getByRole("button", { name: "Zoom in" }).click();
-    const scroller = page.locator(".mermaid-state-graph");
-    const scrollRoom = await scroller.evaluate((node) => ({
-      maxLeft: Math.max(0, node.scrollWidth - node.clientWidth),
-      maxTop: Math.max(0, node.scrollHeight - node.clientHeight),
-    }));
-    expect(scrollRoom.maxLeft > 0 || scrollRoom.maxTop > 0).toBeTruthy();
-    await scroller.evaluate((node) => {
-      node.scrollLeft = 0;
-      node.scrollTop = 0;
-    });
-    const beforeScroll = await scroller.evaluate((node) => ({ left: node.scrollLeft, top: node.scrollTop }));
-    // Dispatch pointer events directly to bypass Playwright mouse routing
-    // issues with the nested zoom wrapper in WebKit.
-    await scroller.evaluate((node) => {
-      const rect = node.getBoundingClientRect();
-      const startX = rect.left + rect.width * 0.7;
-      const startY = rect.top + rect.height * 0.5;
-      const endX = rect.left + rect.width * 0.3;
-      const endY = rect.top + rect.height * 0.5;
-      node.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1, button: 0, clientX: startX, clientY: startY }));
-      node.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientX: endX, clientY: endY }));
-      node.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1, clientX: endX, clientY: endY }));
-    });
-    const afterScroll = await scroller.evaluate((node) => ({ left: node.scrollLeft, top: node.scrollTop }));
-    expect(afterScroll.left !== beforeScroll.left || afterScroll.top !== beforeScroll.top).toBeTruthy();
-
-    await graphBox.getByRole("button", { name: "Reset zoom" }).click();
-    await expect(graphBox.locator("[data-graph-zoom-value]")).toHaveText("100%");
-    await scroller.evaluate((node) => {
-      node.scrollLeft = 0;
-      node.scrollTop = 0;
-    });
-    await scroller.evaluate((node) => {
-      const rect = node.getBoundingClientRect();
-      const clientX = rect.left + (rect.width * 0.8);
-      const clientY = rect.top + (rect.height * 0.75);
-      node.dispatchEvent(new MouseEvent("dblclick", {
-        bubbles: true,
-        cancelable: true,
-        clientX,
-        clientY,
-      }));
-    });
-    await expect(graphBox.locator("[data-graph-zoom-value]")).toHaveText("125%");
-
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    const root = page.locator("[data-inspection-graph-root]");
+    await expect(root).toHaveAttribute("data-selected-layer", "lifecycle_layer");
+    await expect(root.locator("[data-graph-layer]")).toHaveCount(4);
+    await expect(graph.locator('[data-state-id="implementation"]')).toHaveClass(/current/);
+    await expect(graph.locator(".inspection-graph-node.next")).toHaveCount(2);
+    await expect(root.locator("[data-graph-node-details]")).toContainText("implementation");
     await openTab(page, 'layers');
     await expect(page.locator('#tab-layers')).toHaveClass(/active/);
     await expect(page.locator('#tab-layers')).toContainText(/Outer-loop/);
@@ -220,118 +136,413 @@ test("webkit renders overview-first tabs, matches tab panels, and captures a scr
   }
 });
 
-test("webkit shows checkpoint-only graph uncertainty without guessing missing transitions", async ({ page }, testInfo) => {
+test("unknown current identifiers stay unavailable rather than selecting a known state", async ({ page }, testInfo) => {
   const { server, url } = await startViewer(makeInspectionSnapshot({
-    sourceMode: "checkpoint-only",
-    trust: "checkpoint",
-    needsAttention: true,
-    statusClass: "unknown",
-    outerState: "unknown",
-    allowedTransitions: undefined,
-    outerAction: "unknown",
-    layers: {
-      steering: { status: "unavailable", reason: "no_steering_file" },
-    },
+    lifecyclePhase: "unrecognized_state",
+    lifecycleAllowedTransitions: undefined,
   }));
-
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded" });
-
-    await expect(page.getByRole("heading", { name: "Current PR" })).toBeVisible();
-    await expect(page.locator(".current-pr-state-summary-headline")).toContainText(/Needs attention/);
-    await expect(page.locator(".state-graph-intro")).toHaveCount(0);
-    await openTab(page, 'graph');
-    await page.getByText(/Graph guide and lane details/).click();
-    const graph = await waitForMermaidGraph(page);
-    await expect(graph).toContainText(/current state unavailable/);
-    await expect(page.getByText(/copilot layer:\s*current\s*current state unavailable; current state unavailable; full authoritative state machine shown; transition data unavailable in this snapshot/i)).toBeVisible();
-    await expect(page.getByText(/reviewer layer:\s*current\s*current state unavailable; current state unavailable; full authoritative state machine shown; transition data unavailable in this snapshot/i)).toBeVisible();
-
-    await captureViewerState(page, testInfo, "Checkpoint only graph uncertainty", "Confirms the harness can capture an uncertainty state without inferred transitions.");
+    await page.goto(url);
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    const root = page.locator("[data-inspection-graph-root]");
+    await expect(root).toHaveAttribute("data-selected-layer", "lifecycle_layer");
+    await expect(graph.locator(".inspection-graph-node.current")).toHaveCount(0);
+    await expect(root.locator("[data-graph-focus]")).toBeDisabled();
+    await expect(root.locator("[data-graph-status]")).toContainText(/unavailable|unknown/i);
+    await expect(root).toContainText("unrecognized_state");
+    await assertA11yClean(await new AxeBuilder({ page }).analyze());
+    await captureViewerState(page, testInfo, "Unknown current state", "No executable node is invented or selected as current.");
   } finally {
     await stopFixtureServer(server);
   }
 });
 
-test("webkit shows degraded graph messaging when snapshot trust is partial", async ({ page }, testInfo) => {
+test("terminal current and snapshot availability remain independent", async ({ page }, testInfo) => {
   const { server, url } = await startViewer(makeInspectionSnapshot({
-    sourceMode: "partial",
-    trust: "degraded",
+    outerState: "done_terminal", statusClass: "done", outerAction: "done",
+    layers: { copilot: { currentState: "done", allowedTransitions: [] } },
   }));
-
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded" });
-
-    await expect(page.locator(".state-graph-intro")).toHaveCount(0);
-    await openTab(page, 'graph');
-    await waitForMermaidGraph(page);
-
-    await captureViewerState(page, testInfo, "Degraded graph messaging", "Demonstrates the partial-trust path for reusable smoke coverage.");
+    await page.goto(url);
+    await expect(page.locator('section[aria-label="PR #55"]')).toContainText("PR complete");
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    const root = page.locator("[data-inspection-graph-root]");
+    await root.locator('[data-graph-layer="copilot_layer"]').click();
+    const done = graph.locator('[data-state-id="done"]');
+    await expect(done).toHaveClass(/current/);
+    await expect(done).toHaveClass(/terminal/);
+    await done.focus();
+    await done.press("Enter");
+    await expect(root.locator("[data-graph-node-details]")).toContainText(/Current/);
+    await expect(root.locator("[data-graph-node-details]")).toContainText(/Terminal/);
+    await expect(root.locator("[data-graph-node-details]")).toContainText(/empty|no allowed/i);
+    await captureViewerState(page, testInfo, "Terminal current state", "Current and terminal are both visible, independent of empty eligibility.");
   } finally {
     await stopFixtureServer(server);
   }
 });
 
-test("webkit shows terminal merged states clearly in the Mermaid graph", async ({ page }, testInfo) => {
-  const { server, url } = await startViewer(makeInspectionSnapshot({
-    outerState: "done_terminal",
-    activeFamilyState: "done",
-    outerAction: "done",
-    statusClass: "done",
-    layers: {
-      copilot: {
-        currentState: "done",
-        allowedTransitions: [],
-      },
-      reviewer: {
-        currentState: "waiting_for_review_request",
-        scope: { mode: "all_reviewers", reviewerLogin: null },
-        allowedTransitions: [],
-      },
-      steering: { status: "unavailable", reason: "no_steering_locator" },
-    },
-  }));
-
+test("unavailable snapshots preserve the raw snapshot escape hatch", async ({ page }, testInfo) => {
+  const { server, url } = await startViewer(makeInspectionSnapshot({ sourceMode: "unavailable", trust: "unknown" }));
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded" });
-
-    const currentStateBanner = page.locator('section[aria-label="PR #55"]');
-    await expect(currentStateBanner.getByRole("heading", { name: "Current PR" })).toBeVisible();
-    await expect(currentStateBanner.getByText("PR complete")).toBeVisible();
-    await openTab(page, 'overview');
-    await expect(page.locator('#tab-overview')).toContainText(/status class/);
-    await expect(page.locator('#tab-overview')).toContainText(/done/);
-    await openTab(page, 'graph');
-    await page.getByText(/Graph guide and lane details/).click();
-    const graph = await waitForMermaidGraph(page);
-    await expect(graph).toContainText(/End/);
-    await expect(graph).toContainText(/done/);
-    await expect(page.getByText(/copilot layer:\s*current\s*done; done; full authoritative state machine shown; no allowed transitions/i)).toBeVisible();
-
-    await captureViewerState(page, testInfo, "Terminal merged state", "Confirms the terminal merged state remains reviewable in WebKit.");
+    await page.goto(url);
+    await openTab(page, "graph");
+    await expect(page.locator("#tab-graph svg")).toHaveCount(0);
+    await expect(page.locator("#tab-graph")).toContainText(/unavailable/i);
+    await expect(page.locator('#tab-graph a[href*="/snapshot.json"]')).toBeVisible();
+    await assertA11yClean(await new AxeBuilder({ page }).analyze());
+    await captureViewerState(page, testInfo, "Unavailable snapshot fallback", "Text and raw snapshot access remain available without a graph.");
   } finally {
     await stopFixtureServer(server);
   }
 });
 
-test("webkit shows the unavailable-state fallback for unavailable snapshots", async ({ page }, testInfo) => {
-  const { server, url } = await startViewer(makeInspectionSnapshot({
-    sourceMode: "unavailable",
-    trust: "unknown",
-    activeFamilyState: "unknown",
-    layers: {
-      steering: { status: "unavailable", reason: "no_steering_locator" },
-    },
-  }));
+const LAYERS = ["outer_loop_family", "copilot_layer", "reviewer_layer", "lifecycle_layer"];
 
+async function readGraph(page) {
+  return page.locator("[data-inspection-graph-data]").evaluate((node) => JSON.parse(node.textContent));
+}
+
+async function camera(graph) {
+  return graph.locator(".inspection-graph-world").getAttribute("transform");
+}
+
+for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+  for (const theme of ["light", "dark"]) {
+    test(`all layers remain readable at ${viewport.width}px in ${theme}`, async ({ page }, testInfo) => {
+      const { server, url } = await startViewer();
+      try {
+        await page.setViewportSize(viewport);
+        await page.emulateMedia({ colorScheme: theme });
+        const asset = page.waitForResponse((response) => response.url().endsWith("/assets/inspect-graph.mjs"));
+        await page.goto(url);
+        const response = await asset;
+        expect(response.ok()).toBe(true);
+        expect(response.headers()["content-type"]).toMatch(/javascript/);
+        expect(response.headers()["cache-control"]).toContain("no-store");
+        await openTab(page, "graph");
+        const graph = await waitForInspectionGraph(page);
+        const root = page.locator("[data-inspection-graph-root]");
+        const model = await readGraph(page);
+        for (const id of LAYERS) {
+          await root.locator(`[data-graph-layer="${id}"]`).click();
+          await expect(root).toHaveAttribute("data-selected-layer", id);
+          for (const layerId of LAYERS) await expect(root.locator(`[data-graph-layer="${layerId}"]`)).toBeVisible();
+          const layer = model.layers.find((entry) => entry.id === id);
+          expect(await graph.locator("[data-node-id]").evaluateAll((nodes) => nodes.map((node) => node.dataset.nodeId).sort()))
+            .toEqual(layer.nodes.map((node) => node.id).sort());
+          expect(await graph.locator("[data-edge-id]").evaluateAll((nodes) => nodes.map((node) => node.dataset.edgeId).sort()))
+            .toEqual(layer.edges.map((edge) => edge.id).sort());
+          await assertSectionIdsAndNoHorizontalScroll(page, VIEWER_REGISTRY.sectionIds);
+          await assertA11yClean(await new AxeBuilder({ page }).analyze());
+          await captureViewerState(page, testInfo, `${theme} ${id}`, "Review card labels, persistent summaries, arrow direction and unclipped feedback paths.", { interactionState: "none" });
+        }
+        await root.locator('[data-graph-layer="lifecycle_layer"]').click();
+        await root.locator("[data-graph-focus]").click();
+        const current = graph.locator('[data-state-id="implementation"]');
+        await current.focus();
+        await expect(current).toBeFocused();
+        await current.press("Space");
+        await expect(current).toHaveAttribute("aria-pressed", "true");
+        await captureViewerState(page, testInfo, `${theme} keyboard node focus`, "Review visible focus, current chip and readable state details.", { interactionState: "focus" });
+      } finally {
+        await stopFixtureServer(server);
+      }
+    });
+  }
+}
+
+test("selection, camera and pointer gestures are read-only and preserve authoritative geometry", async ({ page }, testInfo) => {
+  const { server, url } = await startViewer();
+  const requests = [];
+  page.on("request", (request) => requests.push({ method: request.method(), url: request.url() }));
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.goto(url);
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    const root = page.locator("[data-inspection-graph-root]");
+    const model = await readGraph(page);
+    const layer = model.layers.find((entry) => entry.id === "lifecycle_layer");
+    const current = graph.locator('[data-state-id="implementation"]');
+    await current.focus();
+    await current.press("Enter");
+    const details = root.locator("[data-graph-node-details]");
+    await expect(details).toContainText(/Authoritative outgoing transitions/);
+    await expect(details).toContainText(/Snapshot/);
+    const outgoingIds = layer.edges.filter((edge) => edge.from === layer.current.nodeId).map((edge) => layer.nodes.find((node) => node.id === edge.to).stateId);
+    for (const state of outgoingIds) await expect(details).toContainText(state);
+    const geometry = await graph.locator("[data-node-id]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("transform")));
+    const fit = await camera(graph);
+    await root.locator("[data-graph-reset]").click();
+    await expect(root.locator("[data-graph-zoom-value]")).toHaveText("100%");
+    expect(await camera(graph)).not.toBe(fit);
+    await expect(current).toHaveAttribute("aria-pressed", "true");
+    await root.locator("[data-graph-zoom-in]").click();
+    expect(Number(await graph.getAttribute("data-graph-scale"))).toBeGreaterThan(1);
+    await root.locator("[data-graph-zoom-out]").click();
+    await graph.focus();
+    const beforePan = await camera(graph);
+    await graph.press("ArrowRight");
+    expect(await camera(graph)).not.toBe(beforePan);
+    const beforeTabs = await camera(graph);
+    await openTab(page, "layers");
+    await openTab(page, "graph");
+    await page.evaluate(() => {
+      document.dispatchEvent(new CustomEvent("inspect-run-viewer:tabchange", { detail: { tabName: "overview" } }));
+      document.dispatchEvent(new CustomEvent("inspect-run-viewer:tabchange", { detail: { tabName: "graph" } }));
+    });
+    expect(await camera(graph)).toBe(beforeTabs);
+    const selection = await details.textContent();
+    await graph.evaluate((node) => {
+      const fire = (type, pointerId, button, x) => node.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId, button, clientX: x, clientY: 100 }));
+      fire("pointerdown", 4, 2, 100);
+      fire("pointermove", 4, 2, 160);
+      fire("pointerup", 4, 2, 160);
+      fire("pointerdown", 5, 0, 100);
+      fire("pointermove", 5, 0, 102);
+      fire("pointerup", 5, 0, 102);
+    });
+    expect(await camera(graph)).toBe(beforeTabs);
+    await graph.evaluate((node) => {
+      const fire = (type, pointerId, x, y) => node.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId, button: 0, clientX: x, clientY: y }));
+      fire("pointerdown", 7, 100, 100);
+      fire("pointermove", 8, 160, 140);
+      fire("pointerup", 8, 160, 140);
+    });
+    expect(await camera(graph)).toBe(beforeTabs);
+    await graph.evaluate((node) => {
+      node.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: 7 }));
+      node.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 7, clientX: 200, clientY: 200 }));
+    });
+    expect(await camera(graph)).toBe(beforeTabs);
+    await graph.evaluate((node) => {
+      const fire = (type, x, y) => node.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 9, button: 0, clientX: x, clientY: y }));
+      fire("pointerdown", 100, 100);
+      fire("pointermove", 145, 120);
+      fire("pointerup", 145, 120);
+      node.querySelector('[data-state-id="draft_gate"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(await camera(graph)).not.toBe(beforeTabs);
+    expect(await details.textContent()).toBe(selection);
+    const box = await graph.boundingBox();
+    await page.mouse.move(box.x + box.width - 10, box.y + box.height - 10);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width - 80, box.y + box.height - 50, { steps: 5 });
+    await page.mouse.up();
+    await root.locator("[data-graph-focus]").click();
+    expect(await graph.locator("[data-node-id]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("transform")))).toEqual(geometry);
+    await root.locator("[data-graph-fit]").click();
+    expect(await camera(graph)).toBe(fit);
+    expect(requests.filter((request) => request.method !== "GET")).toEqual([]);
+    expect(requests.filter((request) => new URL(request.url).pathname === "/snapshot.json")).toEqual([]);
+    expect(requests.filter((request) => new URL(request.url).pathname.startsWith("/assets/"))).toEqual([
+      { method: "GET", url: `${url}/assets/inspect-graph.mjs` },
+    ]);
+    await captureViewerState(page, testInfo, "Read only camera interaction", "Fit restored without changing topology, selection or runtime.");
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
 
-    await openTab(page, 'graph');
-    await expect(page.locator(".mermaid-state-graph")).toHaveCount(0);
-    await expect(page.locator('#tab-graph')).toContainText(/Snapshot unavailable, so no state graph can be rendered yet/i);
+for (const fullscreenMode of ["native", "unsupported", "rejected"]) {
+  test(`fullscreen ${fullscreenMode} has visible exit and restores focus`, async ({ page }, testInfo) => {
+    const { server, url } = await startViewer();
+    try {
+      if (fullscreenMode !== "native") await page.addInitScript((mode) => {
+        Object.defineProperty(Element.prototype, "requestFullscreen", { configurable: true, value: mode === "unsupported" ? undefined : () => Promise.reject(new Error("denied")) });
+      }, fullscreenMode);
+      await page.goto(url);
+      await openTab(page, "graph");
+      await waitForInspectionGraph(page);
+      const root = page.locator("[data-inspection-graph-root]");
+      const toggle = root.locator("[data-graph-fullscreen]");
+      await toggle.click();
+      await expect(toggle).toHaveAccessibleName(/Exit (fullscreen|expanded)/i);
+      if (fullscreenMode !== "native") {
+        await expect(root).toHaveClass(/expanded-graph-view/);
+        await expect(toggle).toHaveAccessibleName(/expanded/i);
+        expect(await page.evaluate(() => Boolean(document.fullscreenElement))).toBe(false);
+      }
+      await expect(toggle).toBeVisible();
+      await captureViewerState(page, testInfo, `${fullscreenMode} full graph view`, "Exit and layer summaries stay usable; fallback never claims native fullscreen.");
+      await page.keyboard.press("Escape");
+      await expect(toggle).toHaveAccessibleName(/Open graph fullscreen/i);
+      await expect(toggle).toBeFocused();
+      await expect(root.locator("[data-graph-status]")).not.toContainText(/Expanded graph view/);
+      await toggle.click();
+      await toggle.click();
+      await expect(toggle).toHaveAccessibleName(/Open graph fullscreen/i);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+}
 
-    await captureViewerState(page, testInfo, "Unavailable snapshot fallback", "Captures the no-graph fallback for unavailable snapshots.");
+test("manual reload projects changed snapshot without moving the authoritative layout", async ({ page }, testInfo) => {
+  let snapshot = makeInspectionSnapshot();
+  const { server, url } = await startViewer(() => snapshot);
+  try {
+    await page.goto(url);
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    const before = (await readGraph(page)).layers.map((layer) => layer.geometry);
+    snapshot = makeInspectionSnapshot({ lifecyclePhase: "draft_gate", lifecycleAllowedTransitions: [] });
+    await expect(graph.locator('[data-state-id="implementation"]')).toHaveClass(/current/);
+    const reload = page.getByRole("button", { name: /Reload snapshot/i });
+    const [refreshResponse] = await Promise.all([
+      page.waitForResponse((response) => response.request().isNavigationRequest()
+        && new URL(response.url()).pathname === "/" && new URL(response.url()).searchParams.get("refresh") === "1"),
+      page.waitForEvent("domcontentloaded"),
+      reload.click(),
+    ]);
+    expect(refreshResponse.ok()).toBe(true);
+    await openTab(page, "graph");
+    await waitForInspectionGraph(page);
+    await expect(page.locator('[data-state-id="draft_gate"]')).toHaveClass(/current/);
+    expect((await readGraph(page)).layers.map((layer) => layer.geometry)).toEqual(before);
+    const response = await page.request.get(`${url}/snapshot.json?repo=owner%2Frepo&pr=55`);
+    expect((await response.json()).lifecyclePhase).toBe("draft_gate");
+    await captureViewerState(page, testInfo, "Manual changed snapshot reload", "New snapshot classification, unchanged layout and selected target.");
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
+
+test("snapshot strings are inert text, not markup or requests", async ({ page }, testInfo) => {
+  const hostile = '</script><script>window.inspectAttack=true</script><img src="/attack" onerror="window.inspectAttack=true">';
+  const { server, url } = await startViewer(makeInspectionSnapshot({ lifecyclePhase: hostile }));
+  const attacks = [];
+  page.on("request", (request) => { if (request.url().includes("/attack")) attacks.push(request.url()); });
+  try {
+    await page.goto(url);
+    await openTab(page, "graph");
+    await waitForInspectionGraph(page);
+    await expect(page.locator("[data-inspection-graph-root]")).toContainText(hostile);
+    expect(await page.evaluate(() => window.inspectAttack)).toBeUndefined();
+    expect(attacks).toEqual([]);
+    await expect(page.locator("#tab-graph img, #tab-graph foreignObject")).toHaveCount(0);
+    await captureViewerState(page, testInfo, "Inert hostile snapshot text", "Unknown token is displayed literally and cannot escape the JSON payload.");
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
+
+for (const failure of ["asset", "geometry"]) {
+  test(`${failure} failure retains text and disables ineffective graph controls`, async ({ page }, testInfo) => {
+    const { server, url } = await startViewer();
+    try {
+      if (failure === "geometry") await page.addInitScript(() => {
+        Object.defineProperty(Element.prototype, "requestFullscreen", { configurable: true, value: undefined });
+      });
+      if (failure === "asset") await page.route("**/assets/inspect-graph.mjs", (route) => route.abort());
+      else await page.route(`${url}/`, async (route) => {
+        const response = await route.fetch();
+        const html = await response.text();
+        const body = html.replace(/(<script\b[^>]*data-inspection-graph-data[^>]*>)([\s\S]*?)(<\/script>)/, (_, start, json, end) => {
+          const model = JSON.parse(json);
+          const layer = model.layers.find((entry) => entry.id === "copilot_layer");
+          layer.geometry.nodes.pop();
+          return start + JSON.stringify(model).replaceAll("<", "\\u003c") + end;
+        });
+        await route.fulfill({ response, body });
+      });
+      await page.goto(url);
+      await openTab(page, "graph");
+      const root = page.locator("[data-inspection-graph-root]");
+      if (failure === "asset") {
+        for (const id of LAYERS) await expect(root.locator(`[data-graph-layer="${id}"]`)).toBeDisabled();
+      }
+      if (failure === "geometry") {
+        await waitForInspectionGraph(page);
+        await root.locator("[data-graph-fullscreen]").click();
+        await root.locator('[data-graph-layer="copilot_layer"]').click();
+      }
+      await expect(root.locator("svg")).toHaveCount(0);
+      await expect(root.locator("[data-graph-status]")).toContainText(/unavailable|failed/i);
+      for (const name of ["zoom-in", "zoom-out", "fit", "reset", "focus"]) await expect(root.locator(`[data-graph-${name}]`)).toBeDisabled();
+      await expect(root.locator('a[href*="/snapshot.json"]')).toBeVisible();
+      if (failure === "geometry") {
+        await expect(root.locator("[data-graph-fullscreen]")).toBeEnabled();
+        await root.locator("[data-graph-fullscreen]").click();
+        await expect(root).not.toHaveClass(/expanded-graph-view/);
+      }
+      await expect(root).toContainText("implementation");
+      await assertA11yClean(await new AxeBuilder({ page }).analyze());
+      await captureViewerState(page, testInfo, `${failure} fallback`, "Authoritative text and snapshot link survive renderer failure.");
+      if (failure === "geometry") {
+        await root.locator('[data-graph-layer="lifecycle_layer"]').click();
+        const graph = await waitForInspectionGraph(page);
+        await expect(graph.locator('[data-state-id="implementation"]')).toHaveClass(/current/);
+        await expect(root.locator("[data-graph-fit]")).toBeEnabled();
+      }
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+}
+
+test("snapshot eligibility is distinct from outgoing topology and broad next emphasis", async ({ page }) => {
+  const { server, url } = await startViewer(makeInspectionSnapshot({
+    lifecycleAllowedTransitions: ["draft_gate", "not_a_state"],
+  }));
+  try {
+    await page.goto(url);
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    const root = page.locator("[data-inspection-graph-root]");
+    await expect(graph.locator(".inspection-graph-node.next")).toHaveCount(1);
+    await expect(graph.locator('[data-state-id="draft_gate"]')).toHaveClass(/next/);
+    const details = root.locator("[data-graph-node-details]");
+    await expect(details).toContainText("feedback_resolution");
+    await expect(details).toContainText("not_a_state");
+    await root.locator('[data-graph-layer="outer_loop_family"]').click();
+    await expect(graph.locator(".inspection-graph-node.next")).toHaveCount(0);
+    await expect(details).toContainText(/Broad next set/);
+    await root.locator('[data-graph-layer="reviewer_layer"]').click();
+    await graph.locator('[data-state-id="waiting_for_author_followup"]').focus();
+    await graph.locator('[data-state-id="waiting_for_author_followup"]').press("Enter");
+    await expect(details).toContainText(/Authoritative outgoing transitions/);
+    await expect(details).toContainText("waiting_for_author_followup");
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
+
+test("missing transitions are unavailable rather than an explicitly empty list", async ({ page }) => {
+  const { server, url } = await startViewer(makeInspectionSnapshot({ lifecycleAllowedTransitions: undefined }));
+  try {
+    await page.goto(url);
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    await expect(graph.locator(".inspection-graph-node.next")).toHaveCount(0);
+    await expect(page.locator("[data-graph-node-details]")).toContainText(/Snapshot transition availability.*unavailable/s);
+    await expect(page.locator("[data-graph-node-details]")).not.toContainText(/Explicitly empty/);
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
+
+test("existing shell auto-reload remains opt-in, persisted and independently stoppable", async ({ page }) => {
+  const { server, url } = await startViewer();
+  try {
+    await page.goto(url);
+    const period = page.getByRole("combobox", { name: "Auto-reload period" });
+    const manual = page.getByRole("button", { name: "Reload snapshot" });
+    await expect(period).toHaveValue("off");
+    await expect(manual).toBeVisible();
+    await period.selectOption({ label: "1 minute" });
+    await expect(manual).toBeHidden();
+    await page.reload();
+    await expect(period).toHaveValue("60000");
+    await period.selectOption({ label: "Off" });
+    await expect(manual).toBeVisible();
+    await page.reload();
+    await expect(period).toHaveValue("off");
+    await openTab(page, "graph");
+    await waitForInspectionGraph(page);
+    await expect(manual).toBeVisible();
   } finally {
     await stopFixtureServer(server);
   }
