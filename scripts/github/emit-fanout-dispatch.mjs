@@ -15,7 +15,7 @@ import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
-import { loadDevLoopConfigStrict, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, isPackedUnitName, normalizeUnitAngles, sanitizeScopeSegment, unitScopeSegment } from "./_dispatch-units.mjs";
 
@@ -354,12 +354,13 @@ function resolveUnitScopedReads(artifact, angles) {
  * because the docs-only briefing tells the reviewer to check those too. No diff
  * means the floor.
  * @param {ReturnType<typeof parseDiffFileBlocks>|null} diffBlocks the parsed filtered diff, or null when none
+ * @param {import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null} [rules] repository `classify` rules
  * @returns {{ scope: "none"|"docs-only"|"full", files: number, changedLines: number }}
  */
-export function unitBudgetBasis(artifact, angles, diffBlocks) {
+export function unitBudgetBasis(artifact, angles, diffBlocks, rules = null) {
   if (diffBlocks === null) return { scope: "none", files: 0, changedLines: 0 };
   const docsOnly = angles.every((angle) => artifact?.angleScopes?.[angle] === "docs-only");
-  const blocks = docsOnly ? diffBlocks.filter((block) => block.path === null || classifyFile(block.path) === "docs") : diffBlocks;
+  const blocks = docsOnly ? diffBlocks.filter((block) => block.path === null || classifyFile(block.path, rules) === "docs") : diffBlocks;
   let changedLines = 0;
   for (const block of blocks) {
     for (const hunk of block.hunks) {
@@ -711,7 +712,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       angleInstructions.push({ angle, persona: role.persona, prompt: role.prompt });
     }
     const unitReads = resolveUnitScopedReads(artifact, angles);
-    const budgetBasis = unitBudgetBasis(artifact, angles, diffBlocks);
+    const budgetBasis = unitBudgetBasis(artifact, angles, diffBlocks, resolveClassifyRules(config));
     const budget = computeReviewerUnitBudget(budgetBasis);
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {

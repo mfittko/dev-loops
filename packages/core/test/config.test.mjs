@@ -6590,7 +6590,7 @@ describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {
 
   test("unclassifiable_file: an unknown-kind changed file fails closed", () => {
     const config = draftConfigWithTiers([{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }]);
-    const result = resolveGateTier(config, "draft", { changedFiles: ["assets/logo.png"], filesChanged: 1, linesChanged: 5 });
+    const result = resolveGateTier(config, "draft", { changedFiles: ["vendor/blob.bin"], filesChanged: 1, linesChanged: 5 });
     assert.equal(result.reason, "unclassifiable_file");
   });
 
@@ -7484,4 +7484,50 @@ test("resolveRequireCopilotConvergenceAtLatestHead: true only for an explicit tr
   assert.equal(resolveRequireCopilotConvergenceAtLatestHead({ version: 1, refinement: { requireCopilotConvergenceAtLatestHead: false } }), false);
   assert.equal(resolveRequireCopilotConvergenceAtLatestHead({ version: 1, refinement: { requireCopilotConvergenceAtLatestHead: "true" } }), false);
   assert.equal(resolveRequireCopilotConvergenceAtLatestHead({ version: 1, refinement: { requireCopilotConvergenceAtLatestHead: true } }), true);
+});
+
+describe("classify config", () => {
+  const valid = {
+    version: 1,
+    classify: {
+      extensions: { code: [".vue", ".svelte"], asset: [".avif"] },
+      paths: [{ pattern: "site/assets/**", kind: "asset" }],
+    },
+  };
+
+  test("accepts extensions and paths, and both keys are optional", () => {
+    assert.ok(DevLoopConfigSchema.safeParse(valid).success);
+    assert.ok(FileConfigSchema.safeParse(valid).success);
+    assert.ok(DevLoopConfigSchema.safeParse({ version: 1, classify: {} }).success);
+    assert.ok(DevLoopConfigSchema.safeParse({ version: 1, classify: { paths: valid.classify.paths } }).success);
+  });
+
+  test("rejects unknown and bogus kinds in extensions and paths", () => {
+    assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { extensions: { unknown: [".x"] } } }).success);
+    assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { extensions: { bogus: [".x"] } } }).success);
+    assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { paths: [{ pattern: "a/**", kind: "unknown" }] } }).success);
+    assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { paths: [{ pattern: "a/**", kind: "bogus" }] } }).success);
+    assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { other: 1 } }).success);
+  });
+
+  test("rejects malformed extensions", () => {
+    for (const ext of ["svg", ".a.b", ".a/b", ".a\\b", "."]) {
+      assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { extensions: { asset: [ext] } } }).success, ext);
+    }
+  });
+
+  test("rejects the same extension under two kinds, case-insensitively", () => {
+    assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { extensions: { code: [".vue"], asset: [".VUE"] } } }).success);
+    assert.ok(FileConfigSchema.safeParse({ version: 1, classify: { extensions: { code: [".vue", ".VUE"] } } }).success);
+  });
+
+  test("asset is accepted as an angle kind and a tier match kind", () => {
+    const gates = {
+      draft: {
+        angles: [{ name: "assets-check", kinds: ["asset"] }],
+        tiers: [{ name: "assets", match: { kinds: ["asset"] }, angles: ["assets-check"] }],
+      },
+    };
+    assert.ok(FileConfigSchema.safeParse({ version: 1, gates }).success);
+  });
 });

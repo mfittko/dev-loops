@@ -11,7 +11,7 @@
  * `logicLoc = (code - commentOnly) + testDiscount * test`, summed from the
  * existing diff classifier's per-file category
  * (@dev-loops/core/analysis/diff-analyzer): only files that classify as `code`
- * or `test` contribute — a file classifying as `config`/`docs`/`ci`/`unknown`
+ * or `test` contribute — a file classifying as `config`/`docs`/`ci`/`asset`/`unknown`
  * (which already covers lockfiles and other generated/non-review-worthy
  * content) contributes 0, reusing the classifier's own signal rather than
  * re-deriving one. `commentOnly` is the count of a code file's changed lines
@@ -34,8 +34,8 @@
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 
-import { analyzeDiff, classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
-import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { analyzeDiff, classifyFile, matchesGlob } from "@dev-loops/core/analysis/diff-analyzer";
+import { loadDevLoopConfig, resolveClassifyRules } from "@dev-loops/core/config";
 
 import { isCommentLine } from "./check-comment-discipline.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -92,66 +92,8 @@ Exit codes:
 
 const parseError = buildParseError(USAGE);
 
-// ---------------------------------------------------------------------------
-// Glob-style path-pattern matching (gates.size.tiers.{t1,t3}.patterns).
-// A minimal shell-glob subset, standard globstar semantics: a "**/" sequence
-// matches zero-or-more whole path segments (so "src/**/foo.js" matches both
-// "src/foo.js" and "src/a/b/foo.js"), a lone "**" (not followed by "/")
-// matches any suffix including "/", a single "*" matches within one path
-// segment only, everything else is literal. This is deliberately not a full
-// glob library — the config's own examples ("app/models/subscription*",
-// "config/routes.rb") only need this subset, and no glob dependency is
-// installed in this repo.
-//
-// Git can report backslash-separated paths on Windows; both the pattern
-// (written with "/") and the candidate path are separator-normalized before
-// matching so a tier pattern still resolves regardless of platform.
-//
-// Compiled patterns are cached by (normalized) pattern string — a large PR
-// with many changed files re-tests the same handful of configured patterns
-// per file, so recompiling the regex per file would be wasted work.
-// ---------------------------------------------------------------------------
-
-function escapeGlobLiteral(ch) {
-  return /[.*+?^${}()|[\]\\]/.test(ch) ? `\\${ch}` : ch;
-}
-
-function normalizePathSeparators(value) {
-  return value.replace(/\\/g, "/");
-}
-
-const globPatternCache = new Map();
-
-function globToRegExp(pattern) {
-  const normalizedPattern = normalizePathSeparators(pattern);
-  const cached = globPatternCache.get(normalizedPattern);
-  if (cached) return cached;
-  let re = "";
-  for (let i = 0; i < normalizedPattern.length; i += 1) {
-    const ch = normalizedPattern[i];
-    if (ch === "*" && normalizedPattern[i + 1] === "*") {
-      if (normalizedPattern[i + 2] === "/") {
-        re += "(?:.*/)?"; // "**/" — zero or more whole path segments
-        i += 2; // consume the second "*" and the "/"
-      } else {
-        re += ".*"; // lone "**" — any suffix, including "/"
-        i += 1; // consume the second "*"
-      }
-    } else if (ch === "*") {
-      re += "[^/]*"; // single "*" — within one path segment only
-    } else {
-      re += escapeGlobLiteral(ch);
-    }
-  }
-  const compiled = new RegExp(`^${re}$`);
-  globPatternCache.set(normalizedPattern, compiled);
-  return compiled;
-}
-
-export function matchesGlob(filePath, pattern) {
-  if (typeof filePath !== "string" || typeof pattern !== "string" || pattern.length === 0) return false;
-  return globToRegExp(pattern).test(normalizePathSeparators(filePath));
-}
+// Re-exported so the tier-pattern callers keep one glob definition (core owns it).
+export { matchesGlob };
 
 function matchesAnyPattern(filePath, patterns) {
   return Array.isArray(patterns) && patterns.some((p) => matchesGlob(filePath, p));
@@ -307,6 +249,7 @@ const UNCLASSIFIED_BLOCK_RATIO = 0.5;
  *   surface itself is a later phase; this is the computation-facing input)
  * @param {string|null} [input.approvedBy] — named human approver; required
  *   for a valid T1-slice waiver
+ * @param {import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null} [input.rules] — repository `classify` rules from resolveClassifyRules
  */
 export function computeSizeBudget({
   nameStatusOutput = "",
@@ -316,6 +259,7 @@ export function computeSizeBudget({
   configErrors = [],
   waived = false,
   approvedBy = null,
+  rules = null,
 } = {}) {
   const testDiscount = typeof sizeConfig?.testDiscount === "number" ? sizeConfig.testDiscount : DEFAULT_TEST_DISCOUNT;
   const absoluteHardLoc = typeof sizeConfig?.absoluteHardLoc === "number" ? sizeConfig.absoluteHardLoc : DEFAULT_ABSOLUTE_HARD_LOC;
@@ -323,7 +267,7 @@ export function computeSizeBudget({
   const defaultTier = { ...DEFAULT_TIER_DEFAULTS, ...(tiers.default ?? {}) };
   const t1Tier = tiers.t1 ?? null;
 
-  const diffAnalysis = analyzeDiff({ nameStatusOutput, diffOutput });
+  const diffAnalysis = analyzeDiff({ nameStatusOutput, diffOutput, rules });
   const files = parseNumstatZ(numstatOutput);
   const commentChangedLines = countCommentChangedLinesByFile(diffOutput);
 
@@ -344,7 +288,7 @@ export function computeSizeBudget({
   let tierPatternDroppedToZero = false;
   const tierPatterns = [...(tiers.t1?.patterns ?? []), ...(tiers.t3?.patterns ?? [])];
   for (const file of files) {
-    const category = classifyFile(file.path);
+    const category = classifyFile(file.path, rules);
     const changedLines = file.added + file.deleted;
     if (category === "unknown") {
       sourceChangedLines += changedLines;
@@ -552,7 +496,7 @@ export async function evaluatePrSizeBudget({
   const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
   const sizeConfig = config?.gates?.size ?? {};
   const { nameStatusOutput, diffOutput, numstatOutput } = captureSizeBudgetDiff({ base, head, repoRoot });
-  return computeSizeBudget({ nameStatusOutput, diffOutput, numstatOutput, sizeConfig, configErrors, waived, approvedBy });
+  return computeSizeBudget({ nameStatusOutput, diffOutput, numstatOutput, sizeConfig, configErrors, waived, approvedBy, rules: resolveClassifyRules(config) });
 }
 
 function assertPlausibleRef(ref, label, onError) {
@@ -620,6 +564,7 @@ export async function runCli(argv = process.argv.slice(2), { repoRoot = process.
     configErrors,
     waived: options.waived,
     approvedBy: options.approvedBy,
+    rules: resolveClassifyRules(config),
   });
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   return result;

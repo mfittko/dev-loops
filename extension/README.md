@@ -202,6 +202,30 @@ extraTools:
 - A session started without the launcher needs the same entries in `.claude/settings.local.json` under `permissions.allow`. In auto mode the classifier may still deny an allowed MCP call.
 - Worktree freshness limit: a code-graph index is rooted at the main checkout, while loop work runs in `tmp/worktrees/<slug>/`. A graph answer describes the main checkout at its last index. Confirm the answer with Read or Grep in the worktree before you edit.
 
+### File classification (`classify`)
+
+The diff classifier assigns every changed file one kind: `code`, `docs`, `config`, `test`, `ci`, `asset` or `unknown`. The size budget, angle selection, tier matching and carry-forward all read this kind. Outside `docs/`, `.html`, `.htm`, `.css`, `.scss`, `.sass` and `.less` are `code`. The `asset` kind covers `.svg`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.ico`, `.woff`, `.woff2`, `.ttf`, `.otf` and `.eot`. Under `docs/` these files stay `docs`. An `asset` file counts as zero logic lines, stays out of the unclassified ratio and is never carried forward across a head bump. A size tier pattern that matches an `asset` file blocks. `.md` is `docs` everywhere.
+
+The top-level `classify` key extends these tables. Both sub-keys are optional.
+
+```yaml
+classify:
+  extensions:
+    code: [".vue", ".svelte"]
+    asset: [".avif"]
+  paths:
+    - pattern: "site/assets/**"
+      kind: asset
+```
+
+- Allowed kinds are `code`, `docs`, `config`, `test`, `ci` and `asset`. `unknown` and any other name fail config validation.
+- An extension starts with `.` and has no `/`, `\` or further `.`. Matching is case-insensitive on the file's last extension. The same extension under two kinds fails validation.
+- A path pattern uses the `**/`, `**` and `*` glob subset (`*` stays within one segment, everything else is literal). It is anchored to the whole repo-relative path, normalizes `\` to `/` and is case-sensitive.
+- Precedence: the first matching `paths` entry in listed order, then `extensions`, then the built-in tables. Paths under `.github/` stay `ci`. Dev-loop config sources (`.devloops*`, `.pi/dev-loop/*`, the shipped defaults file) stay `config`.
+- A later config layer replaces `classify.extensions` and `classify.paths` as whole values.
+- `gates.<gate>.angles[].kinds` and `gates.<gate>.tiers[].match.kinds` accept `asset`.
+- Requires dev-loops 1.0.6 or later. An older CLI rejects the `classify` key as unknown.
+
 ### Available review angles
 
 The shipped defaults activate these angles. Additional angles are available as opt-in — add them to your `gates.draft.angles` or `gates.preApproval.angles` and they'll use the prompts defined in the personas registry. Opt-in prompts are generic and can be overridden in consumer repos through `personas.<angle>.prompt` without depending on this repository's audit examples.

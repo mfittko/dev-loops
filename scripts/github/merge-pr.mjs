@@ -8,7 +8,7 @@ import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun } from 
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { ghJson as defaultGhJson } from "@dev-loops/core/github/gh";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { resolveMainWorktreeRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { cleanupWorktree } from "../loop/cleanup-worktree.mjs";
@@ -254,7 +254,7 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
   // The request status is checked separately, with merge-side fail-closed reads.
   const carriedDisposition = async (kind) => {
     const carried = await resolveCarriedConvergence(
-      { repo, pr, currentHeadSha, prData: { reviews }, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead },
+      { repo, pr, currentHeadSha, prData: { reviews }, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead, rules: resolveClassifyRules(config) },
       runtime,
     );
     if (!carried.carried || (await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))) return null;
@@ -277,7 +277,7 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
   // new cycle regardless of the spent cap. A fix pushed after a findings review
   // keeps the fallback.
   if (completedCopilotReviewRounds >= cap
-    && (!lastReviewConverged || !(await hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, reviews }, runtime)))) {
+    && (!lastReviewConverged || !(await hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, reviews, rules: resolveClassifyRules(config) }, runtime)))) {
     return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.ROUND_CAP_CLEAN_FALLBACK);
   }
   // Strict mode, below the cap or at the cap after the raw significance probe
@@ -295,12 +295,12 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
 // review exists but the latest submitted Copilot review sits on an earlier
 // commit and is not converged by the shared predicate, or is converged while a
 // Copilot review is outstanding on the current head; null otherwise.
-async function resolveLaterCopilotReviewRefusal({ repo, pr, currentHeadSha, rawReviews, rawConvergenceState }, runtime) {
+async function resolveLaterCopilotReviewRefusal({ repo, pr, currentHeadSha, rawReviews, rawConvergenceState, rules }, runtime) {
   if (rawConvergenceState === null || rawConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW) return null;
   const prData = { reviews: toSharedReviewShape(rawReviews) };
   const latestHead = getLastCopilotReviewHeadSha(prData);
   if (latestHead === null || latestHead === currentHeadSha) return null;
-  const carried = await resolveCarriedConvergence({ repo, pr, currentHeadSha, prData, copilotReviewRequestStatus: "none" }, runtime);
+  const carried = await resolveCarriedConvergence({ repo, pr, currentHeadSha, prData, copilotReviewRequestStatus: "none", rules }, runtime);
   const later = `a later Copilot review ${getLastCopilotReview(prData)?.id ?? "(unknown id)"} on an earlier commit (${latestHead})`;
   if (!carried.carried) return `${later} is not converged and supersedes the current-head review: ${carried.reason}`;
   // The carry reads the request status as "none"; check it here with the fail-closed reads.
@@ -321,7 +321,7 @@ function toSharedReviewShape(rawReviews) {
 // contract of fetchDeltaChangedFiles (linear "ahead", no rename/copy, below the
 // files page cap, a files array whose every entry names a file), replayed
 // over the helper's own compare result.
-async function hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, reviews }, { env, ghCommand, runChild }) {
+async function hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, reviews, rules }, { env, ghCommand, runChild }) {
   let compareReadable = false;
   const probe = async (cmd, args, childEnv) => {
     const result = await runChild(cmd, args, childEnv);
@@ -331,7 +331,7 @@ async function hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, r
   try {
     const significant = await detectPostConvergenceSignificantChange(
       // ponytail: changedFiles only feeds the helper's "PR has files" guard; a PR at merge has files.
-      { repo, pr, currentHeadSha, reviews, changedFiles: [currentHeadSha], roundCapReached: true, regularCopilotRounds: true },
+      { repo, pr, currentHeadSha, reviews, changedFiles: [currentHeadSha], roundCapReached: true, regularCopilotRounds: true, rules },
       { env, ghCommand, runChild: probe },
     );
     return significant || !compareReadable;
@@ -590,7 +590,7 @@ export async function mergePr(options, runtime = {}) {
   // shared predicate, as the loop does. The converged-once form applies in
   // both modes: the current head has its own review, so no delta is carried.
   const copilotLaterReviewRefusal = await resolveLaterCopilotReviewRefusal(
-    { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, rawConvergenceState },
+    { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, rawConvergenceState, rules: resolveClassifyRules(configLoad?.config) },
     { env, ghCommand, runChild, ghJson },
   );
 

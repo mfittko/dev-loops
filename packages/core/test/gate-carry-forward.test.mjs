@@ -234,7 +234,7 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
   test("findings-present angle: unclassifiable file in delta -> false (fail-closed)", () => {
     const decision = resolveAngleCarryForward({
       angle: "correctness",
-      changedFiles: ["assets/logo.png"],
+      changedFiles: ["vendor/blob.bin"],
       prevVerdict: "findings_present",
     });
     assert.equal(decision.carryForward, false);
@@ -307,7 +307,7 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
   test("unclassifiable file in delta -> false (fail-closed)", () => {
     const decision = resolveAngleCarryForward({
       angle: "correctness",
-      changedFiles: ["assets/logo.png"],
+      changedFiles: ["vendor/blob.bin"],
       prevVerdict: "clean",
     });
     assert.equal(decision.carryForward, false);
@@ -390,7 +390,7 @@ describe("resolveConvergenceCarryForward — AC2 fail-closed Copilot convergence
 
   test("empty delta / unclassifiable file -> false (fail-closed)", () => {
     assert.equal(resolveConvergenceCarryForward({ changedFiles: [] }).carryForward, false);
-    assert.equal(resolveConvergenceCarryForward({ changedFiles: ["assets/logo.png"] }).carryForward, false);
+    assert.equal(resolveConvergenceCarryForward({ changedFiles: ["vendor/blob.bin"] }).carryForward, false);
   });
 
   test("non-array changedFiles -> false (fail-closed)", () => {

@@ -19,8 +19,7 @@ const DOTFILE_CONFIG_BASENAMES = new Set([".devloops"]);
 // Generic classifier tables. Files are classified by principle (broad extension
 // tables + directory/basename conventions), not by a bespoke per-language rule.
 // A new mainstream language is covered by adding its extension here, not by a new
-// branch. Deliberate fail-closed exceptions (`.ruby-version`, `.nvmrc`,
-// stylesheets) are simply absent from every table, so they fall through to
+// branch. Deliberate fail-closed exceptions (`.ruby-version`, `.nvmrc`) are simply absent from every table, so they fall through to
 // "unknown".
 
 // Source extensions across the common languages. A file with one of these is
@@ -44,6 +43,13 @@ const CODE_EXTENSIONS = new Set([
   ".php", ".swift", ".ex", ".exs", ".lua", ".dart",
   // Shell
   ".sh", ".bash", ".zsh", ".fish",
+]);
+// Hand-written web source. Code outside docs/ only: under docs/ these are
+// rendered articles/presentations and stay docs.
+const WEB_CODE_EXTENSIONS = new Set([".html", ".htm", ".css", ".scss", ".sass", ".less"]);
+// Binary/vector assets: zero logic LOC, never carried forward. Outside docs/ only.
+const ASSET_EXTENSIONS = new Set([
+  ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".eot",
 ]);
 // Basename-only source files (no discriminating extension).
 const CODE_BASENAMES = new Set(["Rakefile"]);
@@ -122,7 +128,96 @@ function normalizeSep(filePath) {
   return filePath.replaceAll("\\", "/");
 }
 
-export function analyzeT0(nameStatusOutput) {
+// ---------------------------------------------------------------------------
+// Glob-style path-pattern matching (shared by gates.size tier patterns and
+// `classify.paths`). A minimal shell-glob subset: "**/" matches zero-or-more
+// whole path segments, a lone "**" matches any suffix including "/", a single
+// "*" matches within one path segment, everything else is literal. Pattern and
+// candidate are separator-normalized; matching is anchored to the whole path
+// and case-sensitive. Compiled patterns are cached.
+// ---------------------------------------------------------------------------
+
+function escapeGlobLiteral(ch) {
+  return /[.*+?^${}()|[\]\\]/.test(ch) ? `\\${ch}` : ch;
+}
+
+const globPatternCache = new Map();
+
+function globToRegExp(pattern) {
+  const normalizedPattern = normalizeSep(pattern);
+  const cached = globPatternCache.get(normalizedPattern);
+  if (cached) return cached;
+  let re = "";
+  for (let i = 0; i < normalizedPattern.length; i += 1) {
+    const ch = normalizedPattern[i];
+    if (ch === "*" && normalizedPattern[i + 1] === "*") {
+      if (normalizedPattern[i + 2] === "/") {
+        re += "(?:.*/)?"; // "**/" — zero or more whole path segments
+        i += 2;
+      } else {
+        re += ".*"; // lone "**" — any suffix, including "/"
+        i += 1;
+      }
+    } else if (ch === "*") {
+      re += "[^/]*"; // single "*" — within one path segment only
+    } else {
+      re += escapeGlobLiteral(ch);
+    }
+  }
+  const compiled = new RegExp(`^${re}$`);
+  globPatternCache.set(normalizedPattern, compiled);
+  return compiled;
+}
+
+export function matchesGlob(filePath, pattern) {
+  if (typeof filePath !== "string" || typeof pattern !== "string" || pattern.length === 0) return false;
+  return globToRegExp(pattern).test(normalizeSep(filePath));
+}
+
+// ---------------------------------------------------------------------------
+// Repository classification rules (the `.devloops` `classify` key)
+// ---------------------------------------------------------------------------
+
+// Dev-loop config sources: reviewer pool/prompts and shipped defaults. A change
+// there rewrites the review system itself, so no repository rule may
+// reclassify them.
+const DEV_LOOP_CONFIG_SOURCE_RE = /(^|\/)(\.devloops(\.(ya?ml|json))?|\.pi\/dev-loop\/(settings|defaults)\.[^/]+|packages\/core\/src\/config\/extension-defaults\.yaml)$/;
+
+/**
+ * Whether a path is a dev-loop config source. Separators are normalized so
+ * Windows paths match.
+ * @param {string} filePath
+ * @returns {boolean}
+ */
+export function isDevLoopConfigSourcePath(filePath) {
+  if (typeof filePath !== "string") return false;
+  return DEV_LOOP_CONFIG_SOURCE_RE.test(filePath.trim().replace(/\\/g, "/"));
+}
+
+/**
+ * @typedef {object} ClassifyRules
+ * @property {ReadonlyMap<string, string>} extensions — lowercase `.ext` to kind
+ * @property {ReadonlyArray<{ pattern: string, kind: string }>} paths — in listed order
+ */
+
+/**
+ * Compile validated `classify` config into a rule set for {@link classifyFile}.
+ * Pure. Returns null when the config carries no rules.
+ * @param {{ extensions?: Record<string, string[]>, paths?: Array<{ pattern: string, kind: string }> }|null|undefined} classifyConfig
+ * @returns {ClassifyRules|null}
+ */
+export function compileClassifyRules(classifyConfig) {
+  if (!classifyConfig || typeof classifyConfig !== "object") return null;
+  const extensions = new Map();
+  for (const [kind, list] of Object.entries(classifyConfig.extensions ?? {})) {
+    for (const ext of list ?? []) extensions.set(String(ext).toLowerCase(), kind);
+  }
+  const paths = (classifyConfig.paths ?? []).map(({ pattern, kind }) => ({ pattern, kind }));
+  if (extensions.size === 0 && paths.length === 0) return null;
+  return Object.freeze({ extensions, paths: Object.freeze(paths) });
+}
+
+export function analyzeT0(nameStatusOutput, rules) {
   const lines = nameStatusOutput.trim().split("\n").filter(Boolean);
   const files = [];
   const extensions = new Set();
@@ -162,7 +257,7 @@ export function analyzeT0(nameStatusOutput) {
   // Derive from the shared classifier so this predicate can't drift: a code/
   // config/test file under docs/ is not docs, so a mixed diff including one is
   // not docs-only.
-  const allDocs = lines.length > 0 && files.every((f) => classifyFile(f) === "docs");
+  const allDocs = lines.length > 0 && files.every((f) => classifyFile(f, rules) === "docs");
 
   return {
     files,
@@ -175,16 +270,19 @@ export function analyzeT0(nameStatusOutput) {
 }
 
 /**
- * @typedef {"code" | "docs" | "config" | "test" | "ci" | "unknown"} FileCategory
+ * @typedef {"code" | "docs" | "config" | "test" | "ci" | "asset" | "unknown"} FileCategory
  */
 
 /**
  * Classify a single file path into a high-level category.
  *
  * @param {string} filePath
+ * @param {ClassifyRules|null} [rules] — repository rules: first matching `paths`
+ *   entry, then `extensions`, then the built-in tables. `.github/` paths and
+ *   dev-loop config sources ignore the rules.
  * @returns {FileCategory}
  */
-export function classifyFile(filePath) {
+export function classifyFile(filePath, rules) {
   const fp = normalizeSep(filePath);
   const base = fp.split("/").pop();
   // Extension excludes a leading-dot dotfile (`.nvmrc` → "", not ".nvmrc"), so
@@ -195,6 +293,14 @@ export function classifyFile(filePath) {
 
   if (fp.startsWith(".github/")) {
     return "ci";
+  }
+  if (rules) {
+    if (isDevLoopConfigSourcePath(fp)) return "config";
+    for (const rule of rules.paths) {
+      if (matchesGlob(fp, rule.pattern)) return rule.kind;
+    }
+    const ruleKind = rules.extensions.get(ext);
+    if (ruleKind) return ruleKind;
   }
   // Config wins over every later surface: a manifest/data file (even one hosted
   // under docs/, or a build.gradle.kts that also has a code extension) is config,
@@ -230,10 +336,13 @@ export function classifyFile(filePath) {
     return "test";
   }
   // Broad source table: a file in any covered language is code, not prose, even
-  // under docs/. Stylesheets (`.scss`/`.sass`) are deliberately absent — a
-  // style/asset kind is out of scope.
-  if (CODE_EXTENSIONS.has(ext) || CODE_BASENAMES.has(base)) {
+  // under docs/. Web source and assets apply outside docs/ only.
+  const underDocs = fp.startsWith("docs/");
+  if (CODE_EXTENSIONS.has(ext) || CODE_BASENAMES.has(base) || (!underDocs && WEB_CODE_EXTENSIONS.has(ext))) {
     return "code";
+  }
+  if (!underDocs && ASSET_EXTENSIONS.has(ext)) {
+    return "asset";
   }
   if (fp.startsWith("docs/") || DOCS_EXTENSIONS.has(ext)) {
     return "docs";
@@ -309,7 +418,7 @@ function isSecuritySensitiveSeamLine(content) {
  * @param {string} diffOutput
  * @returns {boolean}
  */
-export function diffHasSecuritySeam(diffOutput) {
+export function diffHasSecuritySeam(diffOutput, rules) {
   if (!diffOutput) return false;
   let inHunk = false;
   // Only CODE files can carry an executable seam: a YAML/markdown/JSON line
@@ -328,7 +437,7 @@ export function diffHasSecuritySeam(diffOutput) {
     if (line.startsWith("+++ ")) {
       const p = line.slice(4).trim().replace(/^b\//, "");
       const effective = p === "/dev/null" ? fromPath : p;
-      currentFileIsCode = effective != null && classifyFile(effective) === "code";
+      currentFileIsCode = effective != null && classifyFile(effective, rules) === "code";
       inHunk = false;
       continue;
     }
@@ -359,7 +468,7 @@ export function diffHasSecuritySeam(diffOutput) {
  * @param {T0Result} t0 — T0 result for context
  * @returns {T1Result}
  */
-export function analyzeT1(diffOutput, t0) {
+export function analyzeT1(diffOutput, t0, rules) {
   const lines = diffOutput.split("\n");
   let hunkCount = 0;
   let added = 0;
@@ -411,16 +520,16 @@ export function analyzeT1(diffOutput, t0) {
   }
 
   // Build categories from T0 (shared with inferCategoriesFromT0) + hunk analysis.
-  for (const c of t0FileCategories(t0)) categories.add(c);
+  for (const c of t0FileCategories(t0, rules)) categories.add(c);
   if (hasLogicChange) categories.add("LOGIC_CHANGE");
   // a diff touching a security-sensitive seam gets an up-front adversarial
   // threat-model angle, batched at draft time instead of drip-fed via Copilot.
-  if (diffHasSecuritySeam(diffOutput)) categories.add("SECURITY_SENSITIVE_SEAM");
+  if (diffHasSecuritySeam(diffOutput, rules)) categories.add("SECURITY_SENSITIVE_SEAM");
   // Mixed diffs never satisfy the exclusive `_ONLY` checks (some files are code),
   // so union each peripheral surface by PRESENCE (e.g. code+workflow pulls
   // ci-guard alongside LOGIC_CHANGE). The single-surface path keeps exclusive
   // semantics.
-  for (const c of t0PresentSurfaceCategories(t0)) categories.add(c);
+  for (const c of t0PresentSurfaceCategories(t0, rules)) categories.add(c);
 
   // COMMENT_ONLY: real diff, all changed lines non-logic, not a rename.
   if (hunkCount > 0 && hasAnyChangedLine && allChangedLinesAreNonLogic && !t0.renameOnly) {
@@ -456,15 +565,15 @@ export function analyzeT1(diffOutput, t0) {
  * @param {T0Result} t0
  * @returns {string[]}
  */
-function t0FileCategories(t0) {
+function t0FileCategories(t0, rules) {
   if (t0.files.length === 0) return [];
   const categories = [];
   if (t0.renameOnly) categories.push("RENAME_ONLY");
   if (t0.allDocs) categories.push("DOCS_ONLY");
   if (t0.prosePresent) categories.push("PROSE_PRESENT");
-  if (t0.files.every((f) => classifyFile(f) === "config")) categories.push("CONFIG_ONLY");
-  if (t0.files.every((f) => classifyFile(f) === "test")) categories.push("TEST_ONLY");
-  if (t0.files.every((f) => classifyFile(f) === "ci")) categories.push("CI_ONLY");
+  if (t0.files.every((f) => classifyFile(f, rules) === "config")) categories.push("CONFIG_ONLY");
+  if (t0.files.every((f) => classifyFile(f, rules) === "test")) categories.push("TEST_ONLY");
+  if (t0.files.every((f) => classifyFile(f, rules) === "ci")) categories.push("CI_ONLY");
   return categories;
 }
 
@@ -476,9 +585,9 @@ function t0FileCategories(t0) {
  * @param {T0Result} t0
  * @returns {string[]}
  */
-function t0PresentSurfaceCategories(t0) {
+function t0PresentSurfaceCategories(t0, rules) {
   const categories = [];
-  const cats = new Set(t0.files.map(classifyFile));
+  const cats = new Set(t0.files.map((f) => classifyFile(f, rules)));
   if (cats.has("docs")) categories.push("DOCS_ONLY");
   if (t0.prosePresent) categories.push("PROSE_PRESENT");
   if (cats.has("config")) categories.push("CONFIG_ONLY");
@@ -495,12 +604,12 @@ function t0PresentSurfaceCategories(t0) {
  * @param {T0Result} t0
  * @returns {string[]}
  */
-function inferCategoriesFromT0(t0) {
-  const categories = t0FileCategories(t0);
+function inferCategoriesFromT0(t0, rules) {
+  const categories = t0FileCategories(t0, rules);
   // Pure code-only change (all files classify as code, not a rename) is a
   // LOGIC_CHANGE. Without this an all-code diff yields no category and loses
   // the justified code-review core from best-effort selection.
-  if (!t0.renameOnly && t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "code")) {
+  if (!t0.renameOnly && t0.files.length > 0 && t0.files.every((f) => classifyFile(f, rules) === "code")) {
     categories.push("LOGIC_CHANGE");
   }
   return categories;
@@ -516,13 +625,13 @@ function inferCategoriesFromT0(t0) {
  * @param {{ nameStatusOutput: string, diffOutput?: string }} input
  * @returns {DiffAnalysis}
  */
-export function analyzeDiff({ nameStatusOutput, diffOutput }) {
-  const t0 = analyzeT0(nameStatusOutput);
+export function analyzeDiff({ nameStatusOutput, diffOutput, rules }) {
+  const t0 = analyzeT0(nameStatusOutput, rules);
   let t1 = null;
 
   // T0 is unambiguous when: renameOnly, allDocs, or single clear category
   const t0Ambiguous = !t0.renameOnly && !t0.allDocs && t0.files.length > 1 &&
-    new Set(t0.files.map(classifyFile)).size > 1;
+    new Set(t0.files.map((f) => classifyFile(f, rules))).size > 1;
 
   // A full-diff capture is usable evidence only when it carries non-whitespace
   // content. A whitespace-only capture (e.g. "   \n") must take the SAME
@@ -532,7 +641,7 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
   const hasDiffText = typeof diffOutput === "string" && diffOutput.trim().length > 0;
 
   if (t0Ambiguous && hasDiffText) {
-    t1 = analyzeT1(diffOutput, t0);
+    t1 = analyzeT1(diffOutput, t0, rules);
   }
 
   // When t1 is null (unambiguous diff), infer categories from t0
@@ -545,10 +654,10 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
     // the full pool.
     const changeCategories = t0Ambiguous
       ? [
-          ...t0PresentSurfaceCategories(t0),
-          ...(t0.files.some((f) => classifyFile(f) === "code") ? ["LOGIC_CHANGE"] : []),
+          ...t0PresentSurfaceCategories(t0, rules),
+          ...(t0.files.some((f) => classifyFile(f, rules) === "code") ? ["LOGIC_CHANGE"] : []),
         ]
-      : inferCategoriesFromT0(t0);
+      : inferCategoriesFromT0(t0, rules);
     t1 = {
       changeCategories,
       hunkCount: 0,
@@ -559,7 +668,7 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
   // Seam detection runs on the raw diff regardless of the T0/T1 path, so a
   // pure-code diff (T1 skipped) editing a browser/exec/fetch/fs-mutation driver
   // still triggers the threat-model angle.
-  if (!t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM") && diffHasSecuritySeam(diffOutput)) {
+  if (!t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM") && diffHasSecuritySeam(diffOutput, rules)) {
     t1.changeCategories.push("SECURITY_SENSITIVE_SEAM");
   }
 

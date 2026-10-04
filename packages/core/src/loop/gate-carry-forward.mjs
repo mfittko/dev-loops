@@ -39,8 +39,10 @@
  * This module is intentionally pure and side-effect free.
  */
 
-import { classifyFile } from "../analysis/diff-analyzer.mjs";
+import { classifyFile, isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 import { ALWAYS_INCLUDE, CATEGORY_ANGLE_MAP } from "../analysis/change-classifier.mjs";
+
+export { isDevLoopConfigSourcePath };
 
 /**
  * File surface kind (classifyFile output) -> the change categories a change of
@@ -199,24 +201,7 @@ export function angleReviewSurface(angle, { alwaysRerun } = {}) {
 // undefined, a typo) fails closed to must-re-run.
 const CARRY_FORWARD_ELIGIBLE_VERDICTS = new Set(["clean", "findings_present"]);
 
-// A path whose change rewrites the dev-loop review system itself — the angle
-// pool, mandatory floor, and reviewer personas/prompts — rather than a
-// reviewed surface. A clean verdict produced under the OLD config cannot
-// carry across such a delta, and a converged Copilot round cannot be treated
-// as still-converged either. classifyFile correctly reports these as
-// "config"; this predicate is the carry-forward-specific override. The
-// shipped defaults file is in this class too: it is the layer that ships the
-// angle pool and reviewer prompts, so a delta touching it must never be
-// carried across or reviewed under a reduced diff-class tier.
-const DEV_LOOP_CONFIG_SOURCE_RE = /(^|\/)(\.devloops(\.(ya?ml|json))?|\.pi\/dev-loop\/(settings|defaults)\.[^/]+|packages\/core\/src\/config\/extension-defaults\.yaml)$/;
-export function isDevLoopConfigSourcePath(filePath) {
-  if (typeof filePath !== "string") return false;
-  // Normalize Windows separators like classifyFile does, so a
-  // ".pi\\dev-loop\\settings.yaml" delta is still detected on Windows.
-  return DEV_LOOP_CONFIG_SOURCE_RE.test(filePath.trim().replace(/\\/g, "/"));
-}
-
-export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict, deltaComplete = false }) {
+export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict, deltaComplete = false, rules }) {
   if (!CARRY_FORWARD_ELIGIBLE_VERDICTS.has(prevVerdict)) {
     return {
       carryForward: false,
@@ -246,9 +231,9 @@ export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, pr
     if (isDevLoopConfigSourcePath(file)) {
       return { carryForward: false, reason: `delta rewrites the dev-loop config source (reviewer pool/prompts): ${file}` };
     }
-    const kind = classifyFile(file);
-    if (kind === "unknown") {
-      return { carryForward: false, reason: `delta contains an unclassifiable file (fail-closed): ${file}` };
+    const kind = classifyFile(file, rules);
+    if (kind === "unknown" || kind === "asset") {
+      return { carryForward: false, reason: `delta contains an ${kind === "asset" ? "asset" : "unclassifiable"} file (fail-closed): ${file}` };
     }
     if (surface.kinds.has(kind)) {
       return { carryForward: false, reason: `delta touches the angle's review surface (${kind}): ${file}` };
@@ -316,7 +301,7 @@ const COPILOT_REVIEW_SURFACE_KINDS = new Set(["code", "test", "config", "ci"]);
  *   "nothing PR-own changed", not an unavailable delta
  * @returns {{ carryForward: boolean, reason: string }}
  */
-export function resolveConvergenceCarryForward({ changedFiles, deltaComplete = false }) {
+export function resolveConvergenceCarryForward({ changedFiles, deltaComplete = false, rules }) {
   if (!Array.isArray(changedFiles)) {
     return { carryForward: false, reason: "delta is unavailable (fail-closed)" };
   }
@@ -324,9 +309,9 @@ export function resolveConvergenceCarryForward({ changedFiles, deltaComplete = f
     return { carryForward: false, reason: "delta is empty or unavailable (fail-closed)" };
   }
   for (const file of changedFiles) {
-    const kind = classifyFile(file);
-    if (kind === "unknown") {
-      return { carryForward: false, reason: `delta contains an unclassifiable file (fail-closed): ${file}` };
+    const kind = classifyFile(file, rules);
+    if (kind === "unknown" || kind === "asset") {
+      return { carryForward: false, reason: `delta contains an ${kind === "asset" ? "asset" : "unclassifiable"} file (fail-closed): ${file}` };
     }
     if (COPILOT_REVIEW_SURFACE_KINDS.has(kind)) {
       return { carryForward: false, reason: `delta touches Copilot's review surface (${kind}): ${file}` };

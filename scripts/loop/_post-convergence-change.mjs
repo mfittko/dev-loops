@@ -20,7 +20,7 @@ export function getLatestSubmittedCopilotReviewHeadSha(reviews) {
   return typeof sha === "string" && sha.trim().length > 0 ? sha.trim() : null;
 }
 
-export function isTrivialDocumentationOnlyPath(filePath) {
+export function isTrivialDocumentationOnlyPath(filePath, rules) {
   if (typeof filePath !== "string") return true;
   const normalized = filePath.trim().toLowerCase();
   if (normalized.length === 0) return true;
@@ -29,7 +29,7 @@ export function isTrivialDocumentationOnlyPath(filePath) {
   // change must re-open a post-convergence Copilot round, not be suppressed.
   // Pass the SAME trim+lowercased value the prefix check used: classifyFile is
   // case/whitespace-sensitive, so classifying the raw input could disagree.
-  if (normalized.startsWith("docs/")) return classifyFile(normalized) === "docs";
+  if (normalized.startsWith("docs/")) return classifyFile(normalized, rules) === "docs";
   return normalized.endsWith(".md")
     || normalized.endsWith(".markdown")
     || normalized.endsWith(".mdx")
@@ -136,7 +136,7 @@ export function isCommentOnlyFileChange(file) {
 }
 
 export async function detectPostConvergenceSignificantChange(
-  { repo, pr, currentHeadSha, reviews, changedFiles, roundCapReached, regularCopilotRounds },
+  { repo, pr, currentHeadSha, reviews, changedFiles, roundCapReached, regularCopilotRounds, rules },
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
 ) {
   if (!roundCapReached || !regularCopilotRounds) {
@@ -181,7 +181,7 @@ export async function detectPostConvergenceSignificantChange(
   if (files.length === 0) {
     return false;
   }
-  const hasNonDocChanges = files.some((file) => !isTrivialDocumentationOnlyPath(file?.filename));
+  const hasNonDocChanges = files.some((file) => !isTrivialDocumentationOnlyPath(file?.filename, rules));
   if (!hasNonDocChanges) {
     return false;
   }

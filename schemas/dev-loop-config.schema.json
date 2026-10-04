@@ -256,7 +256,7 @@
                         }
                       },
                       "kinds": {
-                        "description": "File kinds (code/config/test/ci/docs/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed.",
+                        "description": "File kinds (code/config/test/ci/docs/asset/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed.",
                         "minItems": 1,
                         "type": "array",
                         "items": {
@@ -267,6 +267,7 @@
                             "config",
                             "test",
                             "ci",
+                            "asset",
                             "unknown"
                           ]
                         }
@@ -371,6 +372,7 @@
                             "config",
                             "test",
                             "ci",
+                            "asset",
                             "unknown"
                           ]
                         },
@@ -489,7 +491,7 @@
                         }
                       },
                       "kinds": {
-                        "description": "File kinds (code/config/test/ci/docs/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed.",
+                        "description": "File kinds (code/config/test/ci/docs/asset/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed.",
                         "minItems": 1,
                         "type": "array",
                         "items": {
@@ -500,6 +502,7 @@
                             "config",
                             "test",
                             "ci",
+                            "asset",
                             "unknown"
                           ]
                         }
@@ -604,6 +607,7 @@
                             "config",
                             "test",
                             "ci",
+                            "asset",
                             "unknown"
                           ]
                         },
@@ -722,7 +726,7 @@
                         }
                       },
                       "kinds": {
-                        "description": "File kinds (code/config/test/ci/docs/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed.",
+                        "description": "File kinds (code/config/test/ci/docs/asset/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed.",
                         "minItems": 1,
                         "type": "array",
                         "items": {
@@ -733,6 +737,7 @@
                             "config",
                             "test",
                             "ci",
+                            "asset",
                             "unknown"
                           ]
                         }
@@ -837,6 +842,7 @@
                             "config",
                             "test",
                             "ci",
+                            "asset",
                             "unknown"
                           ]
                         },
@@ -1708,6 +1714,99 @@
       },
       "additionalProperties": false,
       "description": "Post-merge local hook actions (postMerge.actions): consumer-declared commands run sequentially, in order, after a merge succeeds — optionally scoped to changed-file substrings (onlyIfChanged) and polled for readiness (verify)."
+    },
+    "classify": {
+      "type": "object",
+      "properties": {
+        "extensions": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\.[^./\\\\]+$"
+              }
+            },
+            "docs": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\.[^./\\\\]+$"
+              }
+            },
+            "config": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\.[^./\\\\]+$"
+              }
+            },
+            "test": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\.[^./\\\\]+$"
+              }
+            },
+            "ci": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\.[^./\\\\]+$"
+              }
+            },
+            "asset": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\.[^./\\\\]+$"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "description": "File extensions mapped to a kind (code, docs, config, test, ci, asset). Matched case-insensitively on the file's last extension; the same extension under two kinds is rejected."
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "code",
+                  "docs",
+                  "config",
+                  "test",
+                  "ci",
+                  "asset"
+                ],
+                "description": "Kind assigned to files matching the pattern."
+              }
+            },
+            "required": [
+              "pattern",
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Path rules; the first matching entry wins and beats `extensions` and the built-in tables."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Repository file-classification rules. Precedence: first matching `paths` entry, then `extensions`, then built-in tables. `.github/` paths stay ci and dev-loop config sources stay config. A later config layer replaces `extensions` and `paths` as whole values. Requires a dev-loops CLI that knows the `classify` key."
     }
   },
   "required": [
