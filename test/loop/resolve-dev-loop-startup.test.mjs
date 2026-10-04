@@ -2621,6 +2621,8 @@ test("runCli with an unknown .devloops key returns needs_reconcile with configEr
     assert.equal(parsed.bundleKind, "needs_reconcile");
     assert.equal(parsed.selectedStrategy, "none");
     assert.equal(parsed.bundle.selectedStrategy, null);
+    assert.equal(parsed.bundle.loopState, "unknown");
+    assert.equal(parsed.bundle.executionMode, "bounded_handoff");
     assert.equal(parsed.bundle.configError.reason, "config_load_failed");
     assert.deepEqual(parsed.bundle.configError.unknownKeys, ["futureKnob"]);
     assert.equal(typeof parsed.bundle.configError.runningVersion, "string");

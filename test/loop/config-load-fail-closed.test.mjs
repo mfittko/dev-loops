@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, test } from "bun:test";
+import { initGitFixture } from "../_helpers.mjs";
 
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
@@ -36,7 +37,7 @@ beforeAll(() => {
   chmodSync(path.join(fixture, "bin", "gh"), 0o755);
   writeFileSync(path.join(fixture, ".devloops"), "version: 1\nfutureKnob: true\n");
   writeFileSync(path.join(fixture, "in.json"), "{}");
-  spawnSync("git", ["init", "-q"], { cwd: fixture });
+  initGitFixture(fixture);
 });
 afterAll(() => rmSync(fixture, { recursive: true, force: true }));
 
