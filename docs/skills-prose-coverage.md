@@ -18,12 +18,12 @@ Slice 1 of the v1.0.6 prose cleanup condenses the three files the gate coordinat
 
 | File or bundle | Before bytes / words | After bytes / words | Change |
 | --- | --- | --- | --- |
-| `skills/docs/gate-review-sub-loop-contract.md` | 225,283 / 29,755 | 191,434 / 24,943 | -33,849 bytes (-15.0%) |
+| `skills/docs/gate-review-sub-loop-contract.md` | 225,283 / 29,755 | 191,402 / 24,934 | -33,881 bytes (-15.0%) |
 | `agents/gate-coordinator.agent.md` | 2,520 / 365 | 2,153 / 306 | -367 bytes |
-| Coordinator bundle (both files) | 227,803 / 30,120 | 193,587 / 25,249 | -34,216 bytes (-15.0%) |
+| Coordinator bundle (both files) | 227,803 / 30,120 | 193,555 / 25,240 | -34,248 bytes (-15.0%) |
 | `agents/review.agent.md` (reviewer bundle) | 21,413 / 2,952 | 19,225 / 2,625 | -2,188 bytes (-10.2%) |
 
-Targets: contract at most 191,500, coordinator bundle at most 193,600, reviewer bundle at most 19,270. All three hold. The Claude projections regenerate byte-identically for the contract (191,434) and shrink for the two agents (`.claude/agents/gate-coordinator.md` 2,460 to 2,093, `.claude/agents/review.md` 21,379 to 19,191).
+Targets: contract at most 191,500, coordinator bundle at most 193,600, reviewer bundle at most 19,270. All three hold. The Claude projections regenerate byte-identically for the contract (191,402) and shrink for the two agents (`.claude/agents/gate-coordinator.md` 2,460 to 2,093, `.claude/agents/review.md` 21,379 to 19,191).
 
 ### v1.0.6 slice 1 duplicate-table trace
 
