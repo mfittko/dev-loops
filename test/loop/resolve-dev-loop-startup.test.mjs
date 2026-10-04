@@ -2606,7 +2606,7 @@ test("runCli --lightweight ALONE (no --issue): invalid config returns needs_reco
   }, { prefix: "resolve-dev-loop-issueless-" });
 });
 
-test("runCli with an unknown .devloops key returns needs_reconcile with configError and never resolves requireRetrospective from defaults", async () => {
+for (const claudeCode of [undefined, "1"]) test(`runCli with an unknown .devloops key (CLAUDECODE=${claudeCode ?? "unset"}) returns needs_reconcile with configError and never resolves requireRetrospective from defaults`, async () => {
   await withTempDir(async (tempDir) => {
     await initFeatureBranchRepo(tempDir);
     await writeFile(
@@ -2615,7 +2615,9 @@ test("runCli with an unknown .devloops key returns needs_reconcile with configEr
       "utf8",
     );
     const ghStub = await writeGhStubHelper(tempDir, []);
-    const result = await runNode(["--issue", "511"], { cwd: tempDir, env: { ...ghStub.env, ...resolverTestEnv() } });
+    const env = { ...ghStub.env, ...resolverTestEnv(), CLAUDECODE: claudeCode };
+    if (claudeCode === undefined) delete env.CLAUDECODE;
+    const result = await runNode(["--issue", "511"], { cwd: tempDir, env });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.bundleKind, "needs_reconcile");
