@@ -212,9 +212,11 @@ worktree). The config that defines a valid fan-out (the angle pool,
 reads it via `git show <headSha>:.devloops` (same bare/`.yaml`/`.yml`/`.json` precedence as
 the disk loader) and re-parses it with `loadDevLoopConfig`'s `devloopsOverride` option.
 Extension defaults and `.pi/dev-loop/defaults` still come from the invoking checkout's disk.
-When the head commit is not resolvable locally or its `.devloops` fails to parse/validate,
-resolution falls back to the invoking checkout's own config, never to a looser or skipped
-check. A non-conformant fan-out fails closed under either config.
+When the head commit is not resolvable locally, resolution falls back to the invoking
+checkout's own config, never to a looser or skipped check. When the head `.devloops` fails
+to parse/validate, `detect-checkpoint-evidence` and `merge-pr` fail closed with
+`config_load_failed` (`CONFIG-LOAD-FAIL-CLOSED`) and use no fallback. A non-conformant
+fan-out fails closed under either config.
 
 ### Evidence writes and `gh pr merge` MUST be separate tool calls (#1172)
 
