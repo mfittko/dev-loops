@@ -27,6 +27,7 @@ import type {
 export function toHarnessContext(ctx: Partial<ExtensionContext> | undefined): HarnessContext {
   const ui = ctx?.ui;
   const sender = (ctx as { sendUserMessage?: (message: string, options?: Record<string, unknown>) => unknown } | undefined)?.sendUserMessage;
+  const sessionManager = (ctx as { sessionManager?: { getSessionId?: () => string } } | undefined)?.sessionManager;
   return {
     cwd: (ctx?.cwd as string) ?? process.cwd(),
     hasUI: Boolean(ctx?.hasUI),
@@ -37,6 +38,7 @@ export function toHarnessContext(ctx: Partial<ExtensionContext> | undefined): Ha
     },
     sendUserMessage: sender ? (message, options) => sender.call(ctx, message, options) : undefined,
     getSystemPrompt: typeof ctx?.getSystemPrompt === 'function' ? () => ctx.getSystemPrompt!() : undefined,
+    getSessionId: typeof sessionManager?.getSessionId === 'function' ? () => sessionManager.getSessionId!() : undefined,
   };
 }
 

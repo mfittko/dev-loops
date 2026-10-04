@@ -1,7 +1,12 @@
 import { executeDevLoopsCommand, inspectResultSeverity } from '../lib/dev-loops-core.mjs';
+import { fileURLToPath } from 'node:url';
 import { createExtensionCoreRuntime } from './checks.ts';
 import { createPostMergeUpdateHook } from './post-merge-update.ts';
 import { createPiExtensionAdapter, type ExtensionAPI } from './pi-extension-adapter.ts';
+import {
+  createChildRoleGateRegistrar,
+  loadRegisterRequiredChildExtensions,
+} from './required-child-extensions.ts';
 import {
   buildEntrypointLines,
   buildHelpLines,
@@ -15,6 +20,8 @@ import {
 
 type ExtensionRuntimeOverrides = NonNullable<Parameters<typeof createExtensionCoreRuntime>[1]> & {
   postMergeUpdateHook?: ReturnType<typeof createPostMergeUpdateHook>;
+  /** Test seam: override the `pi-subagents` required-child-extension loader. */
+  loadRegisterRequiredChildExtensions?: typeof loadRegisterRequiredChildExtensions;
 };
 
 const STATUS_KEY = 'dev-loops';
@@ -36,6 +43,15 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   // Wrap the Pi harness at the entry boundary; everything below talks to the neutral seam.
   const adapter = createPiExtensionAdapter(pi);
   const postMergeUpdateHook = runtimeOverrides.postMergeUpdateHook ?? createPostMergeUpdateHook({ exec: adapter.exec });
+  // #2582: a foreground (`async: false`) child never loads ambient extensions, so the
+  // read-only role gate stayed inert in dispatched judge/reviewer children. Register the
+  // extension itself as a required child extension so every child loads it.
+  const childRoleGate = createChildRoleGateRegistrar({
+    // This module is the extension entry (`pi.extensions`), so its own URL is the path a
+    // child must load to run the same `tool_call` handler.
+    extensionPath: fileURLToPath(import.meta.url),
+    load: runtimeOverrides.loadRegisterRequiredChildExtensions ?? loadRegisterRequiredChildExtensions,
+  });
 
   adapter.on('session_start', async (_event, ctx) => {
     postMergeUpdateHook.onSessionStart();
@@ -44,7 +60,16 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
     } catch {
       // Best-effort agent sync — do not break session start
     }
+    try {
+      await childRoleGate.register(ctx.getSessionId?.());
+    } catch {
+      // Best-effort child-extension registration — never break session start
+    }
     ctx.ui.setStatus(STATUS_KEY, undefined);
+  });
+
+  adapter.on('session_shutdown', () => {
+    childRoleGate.disposeAll();
   });
 
   // Read-only role enforcement on Pi (cross-harness-regression-contract.md): block shell for
