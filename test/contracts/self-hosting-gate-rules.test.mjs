@@ -24,12 +24,29 @@ test("GATE-SELF-HOST-EXPAND-CONTRACT and GRILL-SELF-HOST-PATH are registered and
   }
 });
 
+// Structural claim check. A claim is a list of literal tokens (rule IDs, flags, fields, RFC-2119 modalities)
+// that must co-occur in ONE sentence of the located block, so rewording keeps passing and a dropped literal
+// or modality fails. `assertClaims` also proves both directions on the real block: a reflowed copy passes,
+// and removing a claim's last token makes exactly that claim fail.
+const sentences = (text) => collapse(text).split(/(?<=[.!?:])\s+(?=[A-Z`*(|-])/);
+const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => s.includes(t))));
+function assertClaims(block, claims, label) {
+  assert.deepEqual(missingClaims(block, claims), [], `${label}: missing claim`);
+  assert.deepEqual(missingClaims(block.replace(/[ \t]+/g, "\n"), claims), [], `${label}: a reflowed copy must pass`);
+  for (const tokens of claims) {
+    const broken = collapse(block).split(tokens.at(-1)).join("");
+    assert.ok(missingClaims(broken, claims).includes(tokens), `${label}: dropping ${tokens.at(-1)} must fail ${tokens.join(" + ")}`);
+  }
+}
+
 test("GATE-SELF-HOST-EXPAND-CONTRACT names step 1, step 2 and the session hooks", async () => {
   const rule = ruleParagraph(await readRepo("skills/docs/gate-review-sub-loop-contract.md"), "GATE-SELF-HOST-EXPAND-CONTRACT");
-  assert.match(rule, /a change to a shape that a session hook or a main-checkout script consumes MUST land in two steps/);
-  assert.match(rule, /Step 1 makes every consumer accept both the old and the new shape/);
-  assert.match(rule, /Step 2 switches the producer and drops the old shape/);
-  assert.match(rule, /The session hooks always load from the main checkout/);
+  assertClaims(rule, [
+    ["session hook", "main-checkout script", "MUST", "two steps"],
+    ["Step 1", "consumer", "old", "new shape"],
+    ["Step 2", "producer", "old shape"],
+    ["session hooks", "main checkout"],
+  ], "GATE-SELF-HOST-EXPAND-CONTRACT");
 });
 
 test("GRILL-SELF-HOST-PATH asks both self-gate questions and records a hard cut", async () => {

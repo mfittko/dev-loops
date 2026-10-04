@@ -10,6 +10,91 @@ Dispositions: `pending`, `in progress`, `changed`, `unchanged`, `generated`, `no
 
 Previous-run phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other routed entrypoints and their workflow contracts; 3 = remaining shared documentation, references, templates and script comments/help. The previous run's cross-phase contradiction pass has a final disposition for every decision row in its section.
 
+## v1.0.6 slice 1 — gate-round contract surface (issue 2603)
+
+Slice 1 of the v1.0.6 prose cleanup condenses the three files the gate coordinator and the gate reviewer load: `skills/docs/gate-review-sub-loop-contract.md`, `agents/gate-coordinator.agent.md` and `agents/review.agent.md`. Start revision: `410eccba0` (contract bytes equal to `d8252e39`). No rule ID, rule marker, heading slug, flag, script name or modality is removed or weakened. `skills/docs/required-rules.json` and `FORWARD_RULE_REFERENCES` are unchanged. The contract keeps the same 42 `<!-- rule: ... -->` markers (sorted `git grep -o` list identical before and after) and every heading, so the 11 inbound anchors resolve.
+
+### v1.0.6 slice 1 measurements
+
+| File or bundle | Before bytes / words | After bytes / words | Change |
+| --- | --- | --- | --- |
+| `skills/docs/gate-review-sub-loop-contract.md` | 225,283 / 29,755 | 191,402 / 24,946 | -33,881 bytes (-15.0%) |
+| `agents/gate-coordinator.agent.md` | 2,520 / 365 | 2,153 / 306 | -367 bytes |
+| Coordinator bundle (both files) | 227,803 / 30,120 | 193,555 / 25,252 | -34,248 bytes (-15.0%) |
+| `agents/review.agent.md` (reviewer bundle) | 21,413 / 2,952 | 19,262 / 2,640 | -2,151 bytes (-10.0%) |
+
+Targets: contract at most 191,500, coordinator bundle at most 193,600, reviewer bundle at most 19,270. All three hold. The Claude projections regenerate byte-identically for the contract (191,402) and shrink for the two agents (`.claude/agents/gate-coordinator.md` 2,460 to 2,093, `.claude/agents/review.md` 21,379 to 19,228).
+
+### v1.0.6 slice 1 duplicate-table trace
+
+- Reviewer reads every required read in full (`GATE-EXEC-BUILD-ONCE-SEED`): authoritative home is the rule's step 2 (MUST read in full, MUST NOT clip, a summary never replaces the read). The "Each reviewer" bullet now cites the rule ID. `agents/review.agent.md` keeps one shortened point-of-use bullet (required reads in full, blocked result on a missing, unreadable or hash-mismatched read, never judge from a summary). The work order prefix from `write-gate-context.mjs` carries the same instruction.
+- `contextWidened` lists only reads that moved judgment (absence means "not consulted"): authoritative home is the Phase 2 "Each reviewer" bullet. The `GATE-EXEC-FANOUT-DISPATCH-EMIT` copy now cites it. `agents/review.agent.md` keeps the field definition once (the Required-reads copy became a pointer). The work order execution rules in `emit-fanout-dispatch.mjs` and `write-gate-context.mjs` deliver it too.
+- Severity calibration (reachable correctness or fail-open gaps are at least `medium`): authoritative home is the Phase 3 classification bullet. `agents/review.agent.md` keeps one short point-of-use clause, because the work order does not deliver it. The question and nit semantics left that bullet for `GATE-EXEC-THREAD-DISPOSITION`.
+- Worktree isolation is prohibited for gate reviewers: authoritative home is the Phase 1 bullet (#1135). The Phase 2 reviewer bullet keeps a one-line cross-reference. The `worktreeIsolationProhibited` field row now reads "See Phase 1 (#1135)". `agents/review.agent.md` keeps a short clause (not delivered by the work order).
+- Typed round result field list (`GATE-EXEC-GATE-COORDINATOR`): authoritative home is the rule. The review-route omission sentence stays in the contract (a distinct obligation). `agents/gate-coordinator.agent.md` dropped its eight-item list and cites the rule ("leaving out the fields it omits on a `review` round").
+- Coordinator never posts the verdict, flips ready, pushes or merges: authoritative home is the rule. The agent keeps its Boundary section (the agent's only statement of its write limits), which also names the fixer dispatch.
+- Blocking join of children (`GATE-EXEC-HARNESS-JOIN`, `END-TURN-AND-AWAIT-WAKE`): contract text unchanged. The agent line shrank to the two citations and dropped the restated "blocking dispatch or one `bg_wait` subscription" clause. Owner: `END-TURN-AND-AWAIT-WAKE` in `anti-patterns.md`, and the `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK` paragraph that names the `bg_wait` alternative.
+
+### v1.0.6 slice 1 obligation trace
+
+`skills/docs/gate-review-sub-loop-contract.md`:
+
+- Build-once rule: dropped the "Build-once avoids repeated discovery" sentence and the "Widen only when ... never inherit the conductor's conversation" sentence (duplicates of the MUST NOT fork clause and the Phase 2 widening rule). The three-step list, the MUSTs and the ADR 0086 citation stay.
+- Standalone `review` gate paragraph: merged the `GATE_CONFIG_KEY` clarification into "so it never satisfies lifecycle evidence". Owner: `@dev-loops/core/github/copilot-helpers` and `_gate-names.mjs`.
+- Phase 1 sentinel bullet: dropped the per-flag purpose explanation. The full command, the gate-prefixed `--scope`, `--context-path` and the prefix hash stay.
+- Phase 1 threat-model bullet: shortened the checklist enumeration to one clause. The `SECURITY_SENSITIVE_SEAM` trigger and "never dropped for such a diff" stay.
+- Phase 1 neutral-bundle bullet: dropped the "build-once, work-deduped seed" restatement. Owner: the build-once rule.
+- Phase 1 `scope.diffSource`, partial `"base"` and spec-resolution bullets: shortened wording; dropped the umbrella-issue label and `closingIssuesReferences` repository detail. Owner: `write-gate-context.mjs`. The `--base` fail-closed rule, the thin-briefing fallback, the `scope.diffPath` keying MUST and the Source-value table stay.
+- Phase 1 rebuild paragraph: merged two overlapping refusal sentences. The MUST NOT rebuild while reviewers run, the live-sentinel refusal and "retire THEN rebuild" stay. The pi-subagents technique bullet is one line (still `MAY`).
+- Request-plan section: shortened the schema, writer-ownership and shipped-limits prose; dropped the trailing "proves request-shape identity only" duplicate, the `sharedPrefixHash` hex-format note and the `toolDefinitions`/`instructions`/`settings` note. Owners: `@dev-loops/core/loop/review-dispatch-plan` and `write-gate-context.mjs`. The write-ordering MUSTs (invalidate marker first, marker last, failed required write removes the marker, report both errors) stay.
+- First-wave release: merged the priming and raw-API paragraphs; shortened the telemetry helper list to the module path. The immediate-release MUST, "MUST NOT depend on a provider cache hit" and `cacheReuseVerified: false` stay.
+- `GATE-EXEC-FANOUT-CAPACITY`: replaced the JSON-serialization rationale with "the fixed-width digest keeps the name within `NAME_MAX`"; dropped the "packed list is recorded" and "packing never splits a base unit" sentences (owner: `resolveFanoutDispatch`; the pack, name, refuse and opt-out rules stay). Wave paragraph: shortened repo-config guidance.
+- Phase 2 "Each reviewer" bullets: shortened the "fresh" definition, the composer bullet (now cites `GATE-EXEC-FANOUT-DISPATCH-EMIT`) and the `--scope` rationale; the 429 paragraph now cites `GATE-EXEC-DISPATCH-RETRY-BACKOFF` instead of restating the schedule. Grouped-dispatch paragraph: dropped the "emitter shares every multi-angle unit" repeat (owner: the emit rule bullet).
+- `GATE-EXEC-SOURCE-READ-WORKTREE`, `GATE-EXEC-NO-CWD-DEPENDENCE`, `GATE-EXEC-ARTIFACT-HEAD-STAMP`: dropped one rationale sentence each (stale installed copies, wrong-tree reads, "distinguishable from a fresh verdict"). Every MUST, the `git show HEAD:<path>` check and both exemptions stay.
+- `GATE-EXEC-BRIEFING-PREFIX`: shortened the findings-write-path rationale, the cache-alignment paragraph and the composer paragraph. Byte identity, the angle-only-in-suffix MUST, the ledger `--tmp-root` MUST NOT and "reference seeding ... is compliant" stay.
+- `GATE-EXEC-FANOUT-DISPATCH-EMIT`: dropped the "merged-config sha256 (informational)" aside and the internal repeat of the wave bound; shortened the persona and shared-reviewer bullets and dropped the "angle list is normalized once" sentence. Owners: `emit-fanout-dispatch.mjs`, `resolveReviewerRole`, `fanoutReviewerPairingError`. Pull-refusal codes, the 30 KB ceiling and the keyed emit plan stay.
+- Content inlining, filtered-diff and scoped-variant paragraphs: merged and shortened; dropped the hunk-collapse paragraph and the per-mode bullets (kept as one sentence about the recorded mode), and the excluded-path listing detail. Owners: `collapsePureSubstitutionRuns`, `filterDiffForInline`, `renderScopedBriefingVariant`. The required `diff` read, `raw-diff` widening read, config-source exclusion guard and variant retention MUSTs stay.
+- Records-floor: shortened. The plan-is-authority and fail-closed rules stay. `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: dropped the repo-config parenthetical. Re-run rule: replaced by a pointer to `GATE-EXEC-ANGLE-CARRY-FORWARD` (duplicate of Phase 5).
+- `GATE-EXEC-DISPATCH-RETRY-BACKOFF`: dropped the "encoded, testable policy" sentence. `planDispatchRetry` and the schedule stay.
+- `GATE-EXEC-CACHE-TELEMETRY`, `GATE-EXEC-EXECUTION-RECORD`: dropped the "Section D honesty invariant" restatements, the pre-slice-4 example and the live-producer pointer. The fail-closed conditions and the optional-telemetry carve-out stay.
+- Sentinel lifecycle: shortened. The same-head retry and `GATE-EXEC-ROUND-RETIREMENT` rules are unchanged in substance.
+- Phase 3 fan-in: shortened the CLI, `--carried-angles`, coverage-table, withheld-round and ledger paragraphs. Dropped "no improvised `--jq` extraction" asides. The pair-required fail-closed rule, exit codes and render-budget table stay.
+- Classification bullet: moved the question, reject-close and nit detail to `GATE-EXEC-THREAD-DISPOSITION` (the owner). The calibration rule and the `Examined on merits:` MUST stay here.
+- Post-before-fix: shortened the opt-in comment paragraph and the slot explanation. `GATE-EXEC-POST-BEFORE-FIX` MUSTs stay.
+- Phase 3.5: shortened disposition memory (dropped "checked in both prefix directions", "each ledger is checked on its own" and the carried-reviewer aside), the AC1 paragraph (the four writer-plus-flag pairs stay verbatim), the judge-not-fresh rationale and the merge-seam purpose sentence.
+- Phase 4 `GATE-EXEC-BLOCKING-ONLY-FIX`: dropped the restated low, question and nit semantics and the duplicated gate-close detail (owner: `GATE-EXEC-THREAD-DISPOSITION`). The window rule, the two-layer rule and ADR 0089 composition stay.
+- `GATE-EXEC-THREAD-DISPOSITION`: restructured into per-severity bullets and removed the repeated low-triage, judge-`act` and nit sentences (each rule now appears once). The round-1 low-defer allowance now appears once, with the judge-acted-low exception in the same sentence.
+- `GATE-EXEC-DEFERRAL-RECORD`: dropped the restated stamp rules for nits, questions and unstamped lows (owner: `GATE-EXEC-THREAD-DISPOSITION`). The three record places, comment-target rule, never-creates-an-issue rule, marker format and idempotency stay.
+- `GATE-EXEC-FINDING-THREADS`: dropped the aggregate-line, sanitizer and per-angle-breakdown detail (owner: `GATE-COMMENT-SINGLE-SURFACE` and `GATE-COMMENT-INLINE-LAYOUT` in `gate-review-comment-contract.md`, cited by ID). The two-track split, one-carrier rule and marker stay. Close paragraph: shortened the known-findings snapshot restatement (owners: Phase 1, Sentinel lifecycle and the Copilot follow-up fan-out procedure).
+- `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`: shortened the helper-behavior prose. The ordered boundary, containment rule and forbidden-action rule stay.
+- Carry-forward: shortened the Phase 5 retry bullet, the eligibility paragraph, `GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED`, the delta basis, the same-rebuild disposition-memory paragraph, the config-source and rename explanations and the provenance paragraph. Dropped the `GIT_DIR`/`GIT_WORK_TREE` scrub note (owner: `scripts/lib/git-delta.mjs`) and the parenthetical "honest attribution" aside. The fail-closed defaults, the CLI refusal list and the review-surface mapping stay.
+- Copilot round-cap interplay: shortened the strict-mode seam. The `suppressed_post_convergence` results, `converged_once` grant and the fail-closed decision stay. Owners: `COPILOT-FOLLOWUP-ROUND-CAP`, `COPILOT-STATE-CARRIED-CONVERGENCE`.
+- Execution-mode paragraph: dropped the epic #867 sentence. Light-mode, proportionality and diff-class tier sections: shortened wording (dropped one-clause rationales and the repeated degenerate-pool fallback); every floor, the precedence order and the merge-time re-verify stay. ADR paths shortened to ADR numbers.
+- Fan-out provenance and angle coverage: shortened the one-reviewer-per-unit, `distinctReviewers` floor, caveat and CI paragraphs; dropped the `#1601` repeat and the "may additionally be pool-configured" aside. The pairing check, grouped exception, `gates.requireFanoutProvenance` floor and fan-in-synthetic-angle rule stay.
+- Fail-closed fan-out-unavailable section: dropped the Pi-bridge driving-command sentence. The quoted `FANOUT_UNAVAILABLE_MESSAGE` string and the routing to the conductor stay.
+- Additive review-lineage section: reduced to a summary that points at `review-lineage.mjs` and its tests (artifact shapes, append-only composition, compaction policy). The runtime-chain boundary, carry-forward non-ownership and the three non-goals stay. The sub-headings other than "Non-goals preserved" were folded into the summary (no inbound link targeted them).
+
+`agents/gate-coordinator.agent.md`: dropped the typed-result field list (owner: `GATE-EXEC-GATE-COORDINATOR`, cited). The join line keeps both rule citations. Dispatch relay, boundary and file-ops citation stay.
+
+`agents/review.agent.md`: shortened the work-order description, the required-reads bullet, the build-once citation bullet, the bounded-unit bullet, the grouped-dispatch paragraph, the severity and `contextWidened` clauses of the findings-shape text, the `defectKey` paragraph, the adversarial-checklist parenthetical (owner: `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`), the full-PR blocked-angle clause and the Tool strategy section. Dropped the downstream question and nit treatment from the severity clause (owner: `GATE-EXEC-THREAD-DISPOSITION`). Every reviewer rule the work order does not deliver stays.
+
+### v1.0.6 slice 1 test changes
+
+Each replaced pin becomes a structural claim: a list of literal tokens (rule IDs, flags, fields, RFC-2119 modalities) that must co-occur in one sentence of a block located by rule marker or literal. `assertClaims` also proves, on the real block, that a reflowed copy passes (positive case) and that removing a claim's last token fails exactly that claim (negative case). Exact assertions for rule IDs, markers, flags, script names, frontmatter, slugs, verbatim payloads and the `doesNotMatch` guards stay.
+
+- `drain-learned-runner-rules.test.mjs` (28): `GATE-EXEC-BASE-REFRESH` claims (ancestor check, `git merge --no-edit`, MUST push, regate rule ID); clean-definition check by chunk literals instead of four named opening phrases; `GATE-EXEC-VALIDATION-RESOLUTION` claims (eleven, replacing whole-sentence matches); dispatch guidance located by the verbatim spec pointer and its bullet list, with role bullets found by rule ID.
+- `gate-reviewer-work-order-contract.test.mjs` (17): reference-seeding, read-in-full and no-clip claims, first-wave release claims, delivery-row claims, review-agent required-read claims, `.adjacentCode` optional claim.
+- `gate-deferral-comment-target-contract.test.mjs` (16): `GATE-EXEC-DEFERRAL-RECORD` and `GATE-EXEC-THREAD-DISPOSITION` claims; the judge-pass paragraph is found by its literals, not its opening sentence; the judge `defer` bullet claims.
+- `gate-coordinator-contract.test.mjs` (14): scope, light-mode, typed-result field, reserved-writes, typed-observation and fail-closed claims; gate-coordinator agent claims (relay, rule citation, boundary).
+- `gate-judge-merit-disposition-contract.test.mjs` (10): Phase 3.5 merit claims, calibration claims in the contract and the review agent, and a per-sentence check that every round-1 low-defer allowance carries the judge-acted-low exception (replaces the "three restatements" count).
+- `gate-fanout-dispatch-key-contract.test.mjs` (5): the dispatch-key requirement is extracted by marker; variants are built from its protected tokens (no exact contract text, no line-break dependence).
+- `self-hosting-gate-rules.test.mjs` (4): `GATE-SELF-HOST-EXPAND-CONTRACT` claims.
+- `review-doc-contracts.test.mjs` (3): review-agent gate phrasing, `defaultContext: fresh` frontmatter and the limitation claim.
+- `acceptance-criteria-verification-doc.test.mjs` (2): the exit table is parsed into cells and the routing is asserted on the result cell.
+- `gate-reviewer-style-contract.test.mjs` (1): the `defectKey` optionality claim.
+
+No script, hook, schema or config changed. Because no producer and consumer pair crosses checkouts, the slice needs no expand-contract split (`GATE-SELF-HOST-EXPAND-CONTRACT`).
+
 ## Current run — 2026-09-27 (issue 2454)
 
 Start revision: `6202c2ed70b5cd438051a90bee9aae89e56326f3` (origin/main). Inventory: 80 tracked files under `skills/` (`git ls-files skills`), including 70 Markdown files and ten code/registry files.

@@ -63,9 +63,24 @@ test("the inline layout rule states the key-based same-defect rule and the carri
   assert.ok(collapse(content).includes("a same-defect merged comment or bullet carries its members together and renders each distinct summary once"));
 });
 
+// Structural claim check. A claim is a list of literal tokens (rule IDs, flags, fields, RFC-2119 modalities)
+// that must co-occur in ONE sentence of the located block, so rewording keeps passing and a dropped literal
+// or modality fails. `assertClaims` also proves both directions on the real block: a reflowed copy passes,
+// and removing a claim's last token makes exactly that claim fail.
+const sentences = (text) => collapse(text).split(/(?<=[.!?:])\s+(?=[A-Z`*(|-])/);
+const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => s.includes(t))));
+function assertClaims(block, claims, label) {
+  assert.deepEqual(missingClaims(block, claims), [], `${label}: missing claim`);
+  assert.deepEqual(missingClaims(block.replace(/[ \t]+/g, "\n"), claims), [], `${label}: a reflowed copy must pass`);
+  for (const tokens of claims) {
+    const broken = collapse(block).split(tokens.at(-1)).join("");
+    assert.ok(missingClaims(broken, claims).includes(tokens), `${label}: dropping ${tokens.at(-1)} must fail ${tokens.join(" + ")}`);
+  }
+}
+
 test("the reviewer agent's findings shape carries the optional defectKey and when to set it", () => {
   const agent = collapse(read("agents/review.agent.md"));
   assert.match(agent, /"defectKey": "<rule ID or AC row label>"/);
-  assert.match(agent, /`defectKey` is optional/);
+  assertClaims(agent, [["`defectKey`", "optional"]], "reviewer agent defectKey");
   assert.match(agent, /\^\[A-Za-z0-9\._:-\]\{1,64\}\$/);
 });

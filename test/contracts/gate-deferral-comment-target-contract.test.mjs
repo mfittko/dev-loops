@@ -20,40 +20,56 @@ function ruleSection(text, id) {
   return text.slice(start, next === -1 ? undefined : next);
 }
 
+// Structural claim check. A claim is a list of literal tokens (rule IDs, flags, fields, RFC-2119 modalities)
+// that must co-occur in ONE sentence of the located block, so rewording keeps passing and a dropped literal
+// or modality fails. `assertClaims` also proves both directions on the real block: a reflowed copy passes,
+// and removing a claim's last token makes exactly that claim fail.
+const collapse = (text) => text.replace(/\s+/g, " ");
+const sentences = (text) => collapse(text).split(/(?<=[.!?:])\s+(?=[A-Z`*(|-])/);
+const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => s.includes(t))));
+function assertClaims(block, claims, label) {
+  assert.deepEqual(missingClaims(block, claims), [], `${label}: missing claim`);
+  assert.deepEqual(missingClaims(block.replace(/[ \t]+/g, "\n"), claims), [], `${label}: a reflowed copy must pass`);
+  for (const tokens of claims) {
+    const broken = collapse(block).split(tokens.at(-1)).join("");
+    assert.ok(missingClaims(broken, claims).includes(tokens), `${label}: dropping ${tokens.at(-1)} must fail ${tokens.join(" + ")}`);
+  }
+}
+
 test("GATE-EXEC-DEFERRAL-RECORD names the comment target and states no tool creates an issue", async () => {
   const section = ruleSection(await readFile(`${repoRoot}${CONTRACT}`, "utf8"), "GATE-EXEC-DEFERRAL-RECORD");
-  assert.match(section, /never\s+creates\s+an\s+issue/);
-  assert.match(section, /linked spec issue when `tracker\.provider` resolves to\s+`github`[\s\S]{0,120}exactly one closing issue reference/);
-  assert.match(section, /otherwise it is the PR itself/);
-  assert.match(section, /ONE batched\s+comment/);
-  assert.match(section, /never selects a thread whose finding the judge disposed `act` in the current\s+or a prior round/);
+  assertClaims(section, [
+    ["`judge-pass.mjs`", "`close-gate-findings.mjs`", "never creates an issue"],
+    ["`tracker.provider`", "`github`", "exactly one closing issue reference"],
+    ["otherwise", "the PR itself"],
+    ["ONE batched", "deferral comment"],
+    ["never selects", "`act`", "prior round"],
+  ], "GATE-EXEC-DEFERRAL-RECORD");
   assert.doesNotMatch(section, /ONE tracked (GitHub )?follow-up issue/, "the old one-follow-up-issue wording must not return");
 });
 
 test("GATE-EXEC-THREAD-DISPOSITION states the act-thread exclusion and the fixer reply-and-resolve sentence", async () => {
   const section = ruleSection(await readFile(`${repoRoot}${CONTRACT}`, "utf8"), "GATE-EXEC-THREAD-DISPOSITION");
-  assert.match(section, /never selects a\s+thread whose finding the judge disposed `act`, whatever its severity and round/);
-  assert.match(section, /current round's ledger decides first[\s\S]{0,200}prior local ledgers decide, then the\s+thread's rendered ` — judge: <disposition>` suffix/);
-  assert.match(section, /no stamp,\s+no reply, no resolve, and no deferral comment entry/);
-  assert.match(
-    section,
-    /The fixer\s+replies to every gate thread whose finding it fixed or declined on reproduction grounds, of any severity and including a judge `act`\s+item past the medium fix window, with the fixing commit or a decline reason, and resolves it before\s+`close-gate-findings\.mjs` runs\./,
-  );
-  assert.match(section, /closes it\s+with a fixing commit or a decline reason, or a judge rerun/);
+  assertClaims(section, [
+    ["never selects", "`act`", "severity", "round"],
+    ["current round's ledger", "decides first"],
+    ["prior local ledgers", "judge: <disposition>"],
+    ["`act`", "no stamp", "no reply", "no resolve", "no deferral comment entry", "fixing commit", "decline reason", "judge rerun"],
+    ["fixer", "replies", "`act`", "decline reason", "resolves it", "`close-gate-findings.mjs`"],
+  ], "GATE-EXEC-THREAD-DISPOSITION");
   assert.doesNotMatch(section, /PR's tracked follow-up issue/);
 });
 
 test("the judge-pass paragraph names the comment target, the act-thread exclusion, and states judge-pass never creates an issue", async () => {
   const text = await readFile(`${repoRoot}${CONTRACT}`, "utf8");
-  const start = text.indexOf("`judge-pass` is also where a judge `defer` is recorded");
-  assert.notEqual(start, -1, "the judge-pass deferral paragraph must exist");
-  const paragraph = text.slice(start, text.indexOf("\n\n", start));
-  assert.match(paragraph, /`judge-pass` never\s+creates\s+an\s+issue/);
-  assert.match(paragraph, /linked spec issue[\s\S]{0,120}otherwise it is the PR itself/);
-  assert.match(
-    paragraph,
-    /A thread whose finding the judge disposes\s+`act` is never defer-closed[\s\S]{0,160}fixer replies with the fixing commit or a\s+decline reason and resolves it \(see `GATE-EXEC-THREAD-DISPOSITION`\)/,
-  );
+  // Located by its literals (the `judge-pass` bridge and the deferral writer), not by an opening sentence.
+  const paragraph = text.split("\n\n").find((p) => p.includes("`judge-pass`") && p.includes("`commentDeferredFindings`"));
+  assert.ok(paragraph, "the judge-pass deferral paragraph must exist");
+  assertClaims(paragraph, [
+    ["`judge-pass`", "never creates an issue"],
+    ["linked spec issue", "the PR itself"],
+    ["`act`", "never defer-closed", "fixer", "decline reason", "`GATE-EXEC-THREAD-DISPOSITION`"],
+  ], "judge-pass deferral paragraph");
   assert.doesNotMatch(paragraph, /ensureFollowUpIssue|createIssue/);
 });
 
@@ -72,9 +88,10 @@ test("the judge `defer` bullets file a new issue only for a blocker, never via c
     const start = text.indexOf("- `defer` — ");
     assert.notEqual(start, -1, `${file}: the judge defer bullet must exist`);
     const bullet = text.slice(start, text.indexOf("- `reject` — ", start));
-    assert.match(bullet, /batched deferral comment/, `${file}`);
-    assert.match(bullet, /only when the finding is a blocker/, `${file}`);
-    assert.match(bullet, /MAIN-AGENT-FILING-BLOCKER-ONLY/, `${file}`);
+    assertClaims(bullet, [
+      ["deferral comment"],
+      ["new issue", "only when", "blocker", "`MAIN-AGENT-FILING-BLOCKER-ONLY`"],
+    ], file);
     assert.doesNotMatch(bullet, /create-issue\.mjs|files it by hand|new issue is warranted/, `${file}`);
   }
 });

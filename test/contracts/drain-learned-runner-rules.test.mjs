@@ -29,6 +29,22 @@ function passageWith(content, needle) {
   return content.slice(before === -1 ? 0 : before, after === -1 ? content.length : after);
 }
 
+// Structural claim check. A claim is a list of literal tokens (rule IDs, flags, fields, RFC-2119 modalities)
+// that must co-occur in ONE sentence of the located block, so rewording keeps passing and a dropped literal
+// or modality fails. `assertClaims` also proves both directions on the real block: a reflowed copy passes,
+// and removing a claim's last token makes exactly that claim fail.
+const flatten = (text) => text.replace(/\s+/g, " ");
+const sentences = (text) => flatten(text).split(/(?<=[.!?:])\s+(?=[A-Z`*(|-])/);
+const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => s.includes(t))));
+function assertClaims(block, claims, label) {
+  assert.deepEqual(missingClaims(block, claims), [], `${label}: missing claim`);
+  assert.deepEqual(missingClaims(block.replace(/[ \t]+/g, "\n"), claims), [], `${label}: a reflowed copy must pass`);
+  for (const tokens of claims) {
+    const broken = flatten(block).split(tokens.at(-1)).join("");
+    assert.ok(missingClaims(broken, claims).includes(tokens), `${label}: dropping ${tokens.at(-1)} must fail ${tokens.join(" + ")}`);
+  }
+}
+
 test("GATE-EXEC-BASE-REFRESH is registered and owned by the gate-review sub-loop contract", async () => {
   assertRulePresent("GATE-EXEC-BASE-REFRESH");
   assertRuleOwned("GATE-EXEC-BASE-REFRESH", GATE_DOC);
@@ -39,11 +55,12 @@ test("GATE-EXEC-BASE-REFRESH is registered and owned by the gate-review sub-loop
 test("GATE-EXEC-BASE-REFRESH integrates the base through the sanctioned tool before the round", async () => {
   const section = sectionFrom(await readRepo(GATE_DOC), "<!-- rule: GATE-EXEC-BASE-REFRESH -->");
   assert.match(section, /resolve-pr-conflicts\.mjs/);
-  assert.match(section, /`origin\/<base>` is not an ancestor\s+of the PR head/);
-  assert.match(section, /git merge --no-edit origin\/<base>/);
-  assert.match(section, /git's default merge\s+subject/);
-  assert.match(section, /MUST push the merge before it dispatches the round/);
-  assert.match(section, /re-runs on the new head per\s+`GATE-EXEC-REGATE-MANDATORY`/);
+  assertClaims(section, [
+    ["`origin/<base>`", "ancestor", "PR head"],
+    ["`git merge --no-edit origin/<base>`", "default"],
+    ["MUST push", "merge", "before"],
+    ["`pre_approval_gate`", "new head", "`GATE-EXEC-REGATE-MANDATORY`"],
+  ], "GATE-EXEC-BASE-REFRESH");
 });
 
 test("ADR 0096 records GATE-EXEC-BASE-REFRESH and amends ADR 0066", async () => {
@@ -70,23 +87,22 @@ test("COPILOT-FOLLOWUP-REQUEST-BRANCHING stops on an unchanged head and names no
   assert.doesNotMatch(sameHead, /--force-rerequest-review/);
 });
 
+// A chunk (paragraph, bullet or table row) that defines `clean` through the blocking severity set must also
+// name the judge act list (ADR 0089). Chunks are found by their literals, not by named opening phrases.
+const chunksOf = (content) => content.split(/\n(?=\s*- |\| )|\n\n/);
+// A flag-requirement statement (`--findings-severity-counts`) mentions `clean` without defining it.
+const definesCleanBySeverity = (chunk) => chunk.includes("`clean`") && /blockCleanOnFindingSeverities|blocking severity/.test(chunk) && !chunk.includes("--findings-severity-counts");
+const severityOnlyCleanChunks = (content) => chunksOf(content).filter((chunk) => definesCleanBySeverity(chunk) && !/act list/.test(chunk));
+
 test("no clean definition in the gate contract is severity-only (ADR 0089)", async () => {
   const content = await readRepo(GATE_DOC);
-  const named = [
-    "- determine the overall gate verdict",
-    "Two layers\n  govern this",
-    "- a clean pass means",
-    "| Posted review verdict is `clean`",
-  ];
-  for (const needle of named) {
-    assert.match(passageWith(content, needle), /act list/, `expected the act-list composition near: ${needle}`);
-  }
-  // Every chunk that defines `clean` through the blocking severity set also names the act list.
-  const chunks = content.split(/\n(?=\s*- |\| )|\n\n/);
-  const offenders = chunks.filter((chunk) => /`clean`:|clean pass means|verdict is `clean` whenever|verdict is `clean` \(/.test(chunk)
-    && /blockCleanOnFindingSeverities|blocking severity/.test(chunk)
-    && !/act list/.test(chunk));
-  assert.deepEqual(offenders, []);
+  assert.deepEqual(severityOnlyCleanChunks(content), []);
+  // Presence floor: the verdict bullet, the clean-pass bullets/rule and the exit-table row all define clean by severity.
+  assert.ok(chunksOf(content).filter(definesCleanBySeverity).length >= 3, "expected the clean definitions to be found");
+  // Reworded positive: any phrasing that names the act list passes.
+  assert.deepEqual(severityOnlyCleanChunks("- `clean`: nothing at a blocking severity remains and the judge act list is empty."), []);
+  // Broken negative: a severity-only definition is reported.
+  assert.equal(severityOnlyCleanChunks("- `clean`: no finding at a blocking severity remains.").length, 1);
 });
 
 test("copilot-pr-followup Phase 5 composes the medium fix window with the judge act list", async () => {
@@ -97,19 +113,20 @@ test("copilot-pr-followup Phase 5 composes the medium fix window with the judge 
 
 test("GATE-EXEC-VALIDATION-RESOLUTION names the verdict writer as its enforcement point", async () => {
   const section = passageWith(await readRepo(GATE_DOC), "<!-- rule: GATE-EXEC-VALIDATION-RESOLUTION -->");
-  assert.match(section, /`upsert-checkpoint-verdict\.mjs` refuses a `fanout_fanin` verdict post/);
   assert.match(section, /`run-gate-validation\.mjs`/);
-  const flat = collapse(section);
-  assert.match(flat, /An `incomplete` resolution of a request whose arguments parsed writes a typed incomplete artifact at the same path, stamped with the requested head/);
-  assert.match(flat, /It is incomplete evidence, never a pass\./);
-  assert.match(flat, /A request that fails argument parsing, runs in a worktree whose HEAD is not the requested head before or after the suites or after the artifact write, or cannot confirm the worktree HEAD, removes the artifact and writes none, so the verdict writer refuses the post as absent\./);
-  assert.match(flat, /The argument-parsing cleanup deletes only an artifact inside the checkout: a parse failure under a `--tmp-root` that resolves outside the checkout leaves that root's prior artifact in place\./);
-  assert.match(flat, /An exception writes the typed incomplete artifact only when a head check at that point confirms the requested head\./);
-  assert.match(flat, /absent, unreadable, incomplete, or stamped with a different head SHA MUST report a gate-evidence finding/);
-  assert.match(flat, /A typed incomplete artifact satisfies this check\./);
-  assert.match(flat, /The verdict writer checks only the artifact's presence, readability and head stamp\./);
-  assert.match(flat, /The reviewer gate-evidence finding path, not the verdict writer, prevents a `clean` verdict over an incomplete artifact\./);
-  assert.match(flat, /pass that same path as `upsert-checkpoint-verdict\.mjs --context-tmp-root <path>`/);
+  assertClaims(section, [
+    ["`upsert-checkpoint-verdict.mjs`", "refuses", "`fanout_fanin`"],
+    ["`incomplete`", "typed incomplete artifact", "requested head", "`status: \"incomplete\"`", "`allPassed: false`"],
+    ["incomplete evidence", "never a pass"],
+    ["fails argument parsing", "removes the artifact", "writes none", "verdict writer refuses"],
+    ["argument-parsing cleanup", "inside the checkout", "`--tmp-root`", "outside the checkout", "prior artifact"],
+    ["exception", "typed incomplete artifact", "head check", "confirms the requested head"],
+    ["absent, unreadable, incomplete", "different head SHA", "MUST report a gate-evidence finding", "MUST NOT"],
+    ["typed incomplete artifact", "satisfies this check"],
+    ["verdict writer checks only", "presence", "readability", "head stamp"],
+    ["gate-evidence finding path", "not the verdict writer", "prevents a `clean` verdict", "incomplete artifact"],
+    ["`--tmp-root`", "`upsert-checkpoint-verdict.mjs --context-tmp-root <path>`"],
+  ], "GATE-EXEC-VALIDATION-RESOLUTION");
 });
 
 test("GATE-EXEC-NO-CWD-DEPENDENCE cites WORKTREE-SCRIPT-LAUNCHER-CWD by ID", async () => {
@@ -117,35 +134,37 @@ test("GATE-EXEC-NO-CWD-DEPENDENCE cites WORKTREE-SCRIPT-LAUNCHER-CWD by ID", asy
   assert.match(section, /`WORKTREE-SCRIPT-LAUNCHER-CWD`/);
 });
 
+// The dispatch guidance is the rule section's paragraphs from the one that carries the verbatim spec pointer
+// through the role bullet list and its trailer, located by that payload and the bullet list, not by opening words.
 function dispatchGuidance(content) {
-  return sectionFrom(content, "Dispatch guidance.", "\nThe standalone `review` gate");
+  const paragraphs = sectionFrom(content, "<!-- rule: GATE-EXEC-GATE-COORDINATOR -->").split("\n\n");
+  const start = paragraphs.findIndex((p) => p.includes("The issue body is the spec; read it."));
+  assert.notEqual(start, -1, "expected the dispatch guidance paragraph");
+  const bullets = paragraphs.findIndex((p, i) => i > start && p.startsWith("- "));
+  assert.notEqual(bullets, -1, "expected the role bullet list");
+  return paragraphs.slice(start, bullets + 2).join("\n\n");
 }
 
 test("GATE-EXEC-GATE-COORDINATOR dispatch guidance points to the issue body and cites rules by role", async () => {
-  const content = await readRepo(GATE_DOC);
-  assert.ok(sectionFrom(content, "<!-- rule: GATE-EXEC-GATE-COORDINATOR -->").includes("Dispatch guidance."));
-  const guidance = dispatchGuidance(content);
-  assert.match(guidance, /A reviewer or judge dispatch is exactly the emitted `dispatchPrompt`/);
-  assert.match(guidance, /A worker or fixer dispatch names the\s+linked issue/);
-  assert.match(guidance, /"The issue body is the spec; read it\."/);
-  assert.match(guidance, /`pr_body` path\s+the PR body is the\s+spec/);
-  assert.match(guidance, /never restates issue-specific spec/);
-  assert.match(guidance, /cites rules by rule ID, never by copied text/);
-  const bullet = (label) => {
-    const idx = guidance.indexOf(`- ${label}`);
-    assert.ok(idx !== -1, `expected a role bullet for ${label}`);
-    const next = guidance.indexOf("\n- ", idx + 1);
-    return guidance.slice(idx, next === -1 ? guidance.indexOf("\n\n", idx) : next);
+  const guidance = dispatchGuidance(await readRepo(GATE_DOC));
+  assertClaims(guidance, [
+    ["reviewer or judge dispatch", "exactly", "`dispatchPrompt`"],
+    ["worker or fixer dispatch", "linked issue", "The issue body is the spec; read it."],
+    ["`pr_body`", "PR body", "spec"],
+    ["never restates", "issue-specific spec"],
+    ["cites rules by rule ID", "never by copied text"],
+    ["dispatches no children", "no join rule"],
+  ], "dispatch guidance");
+  const bulletWith = (id) => {
+    const found = guidance.split("\n- ").filter((b) => b.includes(`\`${id}\``));
+    assert.equal(found.length, 1, `expected exactly one role bullet citing ${id}`);
+    return found[0];
   };
-  assert.match(bullet("agents that dispatch children"), /`GATE-EXEC-HARNESS-JOIN`/);
-  const editing = bullet("editing workers");
-  assert.match(editing, /`WORKTREE-NONINTERACTIVE-FILE-OPS`/);
+  assert.doesNotMatch(bulletWith("GATE-EXEC-HARNESS-JOIN"), /WORKTREE-/);
+  const editing = bulletWith("WORKTREE-NONINTERACTIVE-FILE-OPS");
   assert.match(editing, /`OPS-NO-INLINE-INTERPRETER`/);
   assert.doesNotMatch(editing, /HARNESS-JOIN/);
-  const runners = bullet("script runners");
-  assert.match(runners, /`WORKTREE-SCRIPT-LAUNCHER-CWD`/);
-  assert.doesNotMatch(runners, /HARNESS-JOIN/);
-  assert.match(guidance, /dispatches no children and receives no join rule/);
+  assert.doesNotMatch(bulletWith("WORKTREE-SCRIPT-LAUNCHER-CWD"), /HARNESS-JOIN/);
 });
 
 test("GATE-EXEC-GATE-COORDINATOR dispatch guidance embeds no rule body defined in another doc", async () => {
@@ -263,7 +282,6 @@ test("WORKTREE-COMMIT-MSG-GUARD states the default merge subject and the agent n
   assert.match(rule, /A merge commit uses git's default subject\./);
   assert.match(rule, /The waiver is operator-only: an agent-authored commit never carries the waiver line\./);
 });
-
 
 test("WORKTREE-SCRIPT-LAUNCHER-CWD pins the compound launcher form", async () => {
   const rule = sectionFrom(await readRepo(WORKTREE_DOC), "<!-- rule: WORKTREE-SCRIPT-LAUNCHER-CWD -->", "\n## ");

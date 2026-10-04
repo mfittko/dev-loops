@@ -3,14 +3,19 @@ import { evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint
 import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
 import { assertRuleOwned } from "./_rule-helpers.mjs";
 
-function assertDispatchKeyRequirement(content) {
+// The requirement is the owner rule's first sentence, located by the rule marker.
+function dispatchKeyRequirement(content) {
   const marker = "<!-- rule: GATE-EXEC-FANOUT-DISPATCH-KEY -->";
   const lines = parseMarkdownSections(content).find(({ bodyLines }) => bodyLines.includes(marker))?.bodyLines;
   assert.ok(lines, "dispatch-key owner section must exist");
   const tail = lines.slice(lines.indexOf(marker) + 1);
   const boundary = tail.findIndex((line) => !line.trim() || /^<!-- rule:/.test(line));
-  const requirement = tail.slice(0, boundary < 0 ? undefined : boundary).join(" ")
+  return tail.slice(0, boundary < 0 ? undefined : boundary).join(" ")
     .split(/\.(?=\s|$)/, 1)[0].replace(/\s+/g, " ");
+}
+
+function assertDispatchKeyRequirement(content) {
+  const requirement = dispatchKeyRequirement(content);
   for (const token of ["`runs.all`", "`key`"]) assert.ok(requirement.includes(token), `missing dispatch API: ${token}`);
   for (const constraint of [/\bMUST\b/, /\bunique\b/, /\bnon-empty\b/, /\beach item\b/]) {
     assert.match(requirement, constraint, "each dispatch item requires a unique, non-empty key");
@@ -27,21 +32,30 @@ test("batch dispatch keys and collectable fan-out have one canonical owner", asy
   // stop-on-failure instructions also require semantic review.
 });
 
+// Synthetic owner documents: variants are built from the located requirement's protected tokens, so the
+// checks never depend on the contract's surrounding wording or line breaks.
+const ownerDoc = (requirement, trailer = "") => `## Owner\n\n<!-- rule: GATE-EXEC-FANOUT-DISPATCH-KEY -->\n${requirement}.\n${trailer}`;
+
 test("dispatch-key requirement accepts reflow but cannot borrow a sibling's payload", async () => {
-  const owner = await readRepo("skills/docs/gate-review-sub-loop-contract.md");
-  assertDispatchKeyRequirement(owner.replace("Every `runs.all` / batch reviewer dispatch", "Every batch reviewer dispatch through `runs.all`")
-    .replace("a unique\nnon-empty `key` on each item", "a unique non-empty\n`key` on each\nitem"));
-  for (const changed of [
-    owner.replace("non-empty `key`", "non-empty field"),
-    owner.replace("non-empty `key`", "non-empty ``"),
-    owner.replace("non-empty `key`", "non-empty `dispatchId`"),
-    owner.replace("a unique\nnon-empty", "a repeated\nnon-empty"),
-    owner.replace("non-empty `key`", "optional `key`"),
-    owner.replace("`key` on each item", "`key` on the batch"),
-    owner.replace("MUST carry a unique", "MAY carry a unique"),
-    owner.replace("non-empty `key`", "non-empty field")
-      + "\n## Sibling\nEvery `runs.all` dispatch MUST carry a unique non-empty `key` on each item.\n",
-  ]) assert.throws(() => assertDispatchKeyRequirement(changed));
+  const real = dispatchKeyRequirement(await readRepo("skills/docs/gate-review-sub-loop-contract.md"));
+  // Reworded positives: reflowed, and reordered around the same protected tokens.
+  assertDispatchKeyRequirement(ownerDoc(real.replace(/ /g, "\n")));
+  assertDispatchKeyRequirement(ownerDoc("A batch reviewer dispatch through `runs.all` MUST carry on each item a unique,\nnon-empty `key`"));
+  // Broken negatives: each protected token replaced in turn.
+  const sibling = "\n## Sibling\nEvery `runs.all` dispatch MUST carry a unique non-empty `key` on each item.\n";
+  for (const [token, replacement] of [
+    ["non-empty", "optional"],
+    ["unique", "repeated"],
+    ["each item", "the batch"],
+    ["MUST", "MAY"],
+    ["`key`", "`dispatchId`"],
+    ["`key`", "field"],
+  ]) {
+    assert.ok(real.includes(token), `real requirement carries ${token}`);
+    assert.throws(() => assertDispatchKeyRequirement(ownerDoc(real.replace(token, replacement))), token);
+  }
+  // A sibling section's payload cannot satisfy the owner rule's own requirement.
+  assert.throws(() => assertDispatchKeyRequirement(ownerDoc(real.replace("non-empty", "optional"), sibling)));
 });
 
 test("a dispatch failure cannot qualify an inline verdict outside the light carve-out", () => {

@@ -69,8 +69,42 @@ test("step 8 composes the review verdict with deterministic gate blockers (#2389
   assert.match(noAc, /`missing_acceptance_criteria`/);
 });
 
+// The exit table is parsed into cells: the routing is asserted on each row's result cell (keyed by the
+// verdict literals in its condition cell), never on whole-row text.
+function exitRow(doc, conditionToken) {
+  const section = doc.slice(doc.indexOf("## Exit conditions")).split("\n## ").find((_, i) => i === 0);
+  const row = section.split("\n").find((line) => line.startsWith("|") && line.includes(conditionToken));
+  assert.ok(row, `missing exit row: ${conditionToken}`);
+  const cells = row.split("|").slice(1, -1).map((cell) => cell.trim());
+  return { condition: cells[0], result: cells[1] };
+}
+
+function assertExitRouting(doc) {
+  const composed = exitRow(doc, "composed from a deterministic AC/DoD blocker");
+  for (const literal of ["`pre_approval_gate`", "`blocked`"]) assert.ok(composed.condition.includes(literal), `composed row names ${literal}`);
+  assert.match(composed.result, /rerun/i, "a composed AC/DoD blocked routes to a gate rerun");
+  assert.doesNotMatch(composed.result, /escalate/i, "a composed AC/DoD blocked is not an escalation");
+  const failed = exitRow(doc, "from the review/fan-in itself");
+  assert.ok(failed.condition.includes("`blocked`"), "fan-in row names `blocked`");
+  assert.match(failed.result, /escalate/i, "a fan-in blocked routes to operator escalation");
+  assert.doesNotMatch(failed.result, /rerun/i, "a fan-in blocked is not a gate rerun");
+}
+
 test("gate-chain exit table routes a composed AC/DoD blocked to rerun, fan-in blocked to escalation (#2389)", async () => {
   const doc = await readRepo("skills/docs/gate-review-sub-loop-contract.md");
-  assert.match(doc, /\| `pre_approval_gate` checkpoint `blocked` composed from a deterministic AC\/DoD blocker[^\n]*\| [^\n]*rerun the gate[^\n]*\|/);
-  assert.match(doc, /\| `blocked` verdict from the review\/fan-in itself \(gate could not complete\) \| Stop; escalate to operator \|/);
+  assertExitRouting(doc);
+  // Reworded positive: different wording, same literals and routing.
+  assertExitRouting([
+    "## Exit conditions",
+    "| Condition | Result |",
+    "|---|---|",
+    "| A `pre_approval_gate` checkpoint `blocked`, composed from a deterministic AC/DoD blocker | Fix the blockers, then rerun the gate |",
+    "| A `blocked` verdict from the review/fan-in itself | Escalate to the operator |",
+  ].join("\n"));
+  // Broken negatives: swapped routing.
+  assert.throws(() => assertExitRouting([
+    "## Exit conditions",
+    "| `pre_approval_gate` checkpoint `blocked` composed from a deterministic AC/DoD blocker | Stop; escalate to operator |",
+    "| `blocked` verdict from the review/fan-in itself | rerun the gate |",
+  ].join("\n")));
 });
