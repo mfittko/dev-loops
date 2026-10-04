@@ -47,6 +47,20 @@ test("inside a dev-loops checkout the error also names the checkout version", as
   }, { packageJson: { name: "dev-loops", version: "9.9.9" } });
 });
 
+test("equal checkout and running versions still advise the checkout runner when the running package is outside it", async () => {
+  await withRepo("version: 1\nfutureKnob: true\n", async (dir) => {
+    const load = await loadDevLoopConfig({ repoRoot: dir });
+    assert.match(load.errors[0].message, new RegExp(`checkout is ${pkg.version.replaceAll(".", "\\.")}; run the checkout's cli/index\\.mjs`));
+  }, { packageJson: { name: "dev-loops", version: pkg.version } });
+});
+
+test("no checkout-runner advice when the running package lives inside repoRoot", async () => {
+  const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
+  const load = await loadDevLoopConfig({ repoRoot, devloopsOverride: { raw: "version: 1\nfutureKnob: true\n" } });
+  assert.match(load.errors[0].message, /This dev-loops checkout is /);
+  assert.doesNotMatch(load.errors[0].message, /cli\/index\.mjs/);
+});
+
 test("an Object.prototype key name keeps the generic text", async () => {
   await withRepo("version: 1\nconstructor: 1\n", async (dir) => {
     const load = await loadDevLoopConfig({ repoRoot: dir });

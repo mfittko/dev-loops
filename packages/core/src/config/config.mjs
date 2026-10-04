@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { normalizeSeverity } from "../loop/gate-fanin.mjs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -1266,6 +1266,16 @@ function readCheckoutVersion(repoRoot) {
   }
 }
 
+/** True when the running package resolves (through symlinks) inside `repoRoot`. */
+function runningInsideCheckout(repoRoot) {
+  try {
+    const rel = path.relative(realpathSync(repoRoot), realpathSync(fileURLToPath(OWN_PACKAGE_JSON)));
+    return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  } catch {
+    return false;
+  }
+}
+
 // Keys an earlier release accepted and a later release renamed. The loader
 // stays strict; this only adds a migration hint to the error text.
 const RAW_ANGLE_KEY = /(^|\.)(mandatoryAngles|excludeAngles)$/;
@@ -1285,8 +1295,8 @@ function unknownKeyGuidance(unknownKeys, repoRoot) {
   const unrenamed = unknownKeys.filter((key) => !Object.hasOwn(RENAMED_KEYS, key) && !RAW_ANGLE_KEY.test(key));
   if (unrenamed.length > 0) parts.push(`${unrenamed.join(", ")} need a newer dev-loops than ${running}.`);
   if (checkoutVersion) {
-    // Same version: the operator already runs the checkout code, so a runner switch would not help.
-    const advice = checkoutVersion === RUNNING_VERSION ? "" : "; run the checkout's cli/index.mjs";
+    // Running from inside the checkout: a runner switch would not help.
+    const advice = runningInsideCheckout(repoRoot) ? "" : "; run the checkout's cli/index.mjs";
     parts.push(`This dev-loops checkout is ${checkoutVersion}${advice}.`);
   }
   for (const key of unknownKeys) {

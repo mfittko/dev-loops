@@ -2628,7 +2628,8 @@ test("runCli with an unknown .devloops key returns needs_reconcile with configEr
     assert.equal(typeof parsed.bundle.configError.runningVersion, "string");
     assert.match(parsed.nextAction, /futureKnob/);
     assert.match(parsed.nextAction, /config_load_failed/);
-    assert.ok(!("requireRetrospective" in parsed.bundle));
+    // Resolving requireRetrospective from defaults would route through the retrospective checkpoint gate.
+    assert.doesNotMatch(JSON.stringify(parsed), /retrospective/i);
     assertOperatorBriefing(parsed);
   }, { prefix: "resolve-dev-loop-config-fail-closed-" });
 });
