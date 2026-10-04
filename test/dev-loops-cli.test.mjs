@@ -413,11 +413,20 @@ test("queue category help lists run plus management subcommands (issue #912)", a
   assert.equal(exitCode, 0);
   const help = stdout.read();
   assert.match(help, /dev-loops queue <subcommand>/);
-  for (const sub of ["run", "add", "list", "reorder", "move", "sync-status", "archive-done"]) {
+  for (const sub of ["run", "add", "list", "reorder", "move", "remove", "sync-status", "archive-done"]) {
     assert.match(help, new RegExp(`\\b${sub.replace("-", "\\-")}\\b`), `queue --help should list ${sub}`);
   }
   assert.match(help, /add\s+Add issue\/PR to queue board/);
   assert.equal(stderr.read(), "");
+});
+
+test("pr category help lists edit and `pr edit` routes to edit-pr.mjs (issue #2463)", () => {
+  const help = spawnSync("node", ["./cli/index.mjs", "pr", "--help"], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /\bedit\b/);
+  const edit = spawnSync("node", ["./cli/index.mjs", "pr", "edit", "--help"], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(edit.status, 0);
+  assert.match(edit.stdout, /Usage: edit-pr\.mjs/);
 });
 
 test("project routes are exactly queue routes minus run (issue #1090)", async () => {
