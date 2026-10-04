@@ -74,11 +74,11 @@ test("every classifyFile consumer agrees on a kind under the same classify rules
     assert.equal(withRules.wholeLogicLoc, 2);
 
     // resolveGateTier and resolveGateAnglesDynamic read the rules from config.
-    const facts = { changedFiles: ["site/assets/hero.jpg"], filesChanged: 1, linesChanged: 0 };
+    const facts = { changedFiles: ["pics/a.avif"], filesChanged: 1, linesChanged: 0 };
     const tier = resolveGateTier(config, "draft", facts);
     assert.equal(tier.tier, "assets");
     const dynamic = await resolveGateAnglesDynamic(config, "draft", {
-      diff: { nameStatusOutput: "M\tsite/assets/hero.jpg\n", diffOutput: "diff --git a/site/assets/hero.jpg b/site/assets/hero.jpg\n--- a/site/assets/hero.jpg\n+++ b/site/assets/hero.jpg\n@@ -1 +1 @@\n-a\n+b\n" },
+      diff: { nameStatusOutput: "M\tpics/a.avif\n", diffOutput: "diff --git a/pics/a.avif b/pics/a.avif\n--- a/pics/a.avif\n+++ b/pics/a.avif\n@@ -1 +1 @@\n-a\n+b\n" },
     });
     assert.ok(dynamic.recommendedAngles.includes("asset-check"));
     assert.ok(!dynamic.recommendedAngles.includes("correctness"));
