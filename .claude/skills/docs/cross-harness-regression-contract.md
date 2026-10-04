@@ -49,7 +49,7 @@ Symmetrically, for a change targeting the Claude-Code-specific seam that MUST NO
 
 ## Read-only role enforcement on Pi
 
-The judge boundary is enforced on both harnesses. The reviewer boundary is enforced on Pi only. Claude Code enforces the judge boundary in the PreToolUse Bash gate (`decideBashGate`), which gates only the judge. Pi enforces the judge and reviewer boundaries in the `tool_call` handler in `extension/readonly-role-gate.ts`. The handler resolves the role on every call from the calling session's own `ctx.getSystemPrompt()`. The role marker is the `<active_agent name="<agent>"/>` tag that pi-subagents writes into each named child's system prompt. The marker value is the `name` frontmatter of `agents/*.agent.md`. dev-loops sets no env marker. Resolution is fail closed:
+The judge boundary is enforced on both harnesses. The reviewer boundary is enforced on Pi only. Claude Code enforces the judge boundary in the PreToolUse Bash gate (`decideBashGate`), which gates only the judge. Pi enforces the judge and reviewer boundaries in the `tool_call` handler in `extension/readonly-role-gate.ts`. The handler resolves the role on every call from the calling session's own `ctx.getSystemPrompt()`. The role marker is the `active_agent` tag with a `name` attribute that pi-subagents writes into each named child's system prompt. The marker value is the `name` frontmatter of `agents/*.agent.md`. dev-loops sets no env marker. Resolution is fail closed:
 
 | Input | Resolved behavior |
 |---|---|
