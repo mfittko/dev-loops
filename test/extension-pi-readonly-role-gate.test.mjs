@@ -192,6 +192,11 @@ const REJECT = {
   R7: "grep foo src | cut -f1",
   R8: "'bun' test",
   R9: "rg foo *",
+  R5b: "grep foo src |",
+  R5c: "grep foo src | cut",
+  R5d: "| cut -c1-200",
+  R9b: `cd abc" && grep '"; touch PWN; #' src`,
+  R9c: `git -C abc" grep '"; touch PWN2; #' src`,
   R11: "grep foo src\nbun run test",
   R12: "cd /w && grep x src\nrm -rf x",
 };

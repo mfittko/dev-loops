@@ -28,8 +28,8 @@ const SHELL_ACTIVE_RE = /[;&|<>`$\n\r(){}\\'"*?[\]]/;
 
 // The reviewer contract's mandated sentinel and bound-escape scripts, and its `cd <worktree> && ...` prefix.
 const REVIEWER_SCRIPT_RE = /^dev-loops-run scripts\/github\/(?:verify-fresh-review-context|emit-reviewer-blocked)\.mjs(?: .*)?$/;
-const CD_PREFIX_RE = /^cd "?[\w./-]+"? && /;
-const GIT_C_RE = /^git -C "?[\w./-]+"? /;
+const CD_PREFIX_RE = /^cd (?:"[\w./-]+"|[\w./-]+) && /;
+const GIT_C_RE = /^git -C (?:"[\w./-]+"|[\w./-]+) /;
 // Flags that make an allowed program execute another program or write a file. Git accepts unique prefixes, so match prefixes.
 const EXEC_FLAG_RE = /^(?:-[^-\s]*O|--op|--out|--ext|--tex)/;
 const RG_PRE_RE = /^--pre(?:-glob)?(?:=|$)/;
@@ -130,8 +130,9 @@ export function resolvePiRole({ systemPrompt, env = process.env }: {
 }
 /**
  * Decide a Pi `tool_call`. A restricted role runs only the sanctioned pull line (plus
- * read and search commands for the reviewer). A set but blank marker fails closed: it is
- * treated as a restricted role that may pull only.
+ * read and search commands for the reviewer). An unresolved role ('' from a blank tag, an
+ * unknown dev-loops: name, conflicting tags or an untagged PI_SUBAGENT_CHILD=1 session) fails
+ * closed: it is treated as a restricted role that may pull only.
  */
 export function decidePiToolCall({ toolName, input, agentType }: {
   toolName?: string;
@@ -146,7 +147,7 @@ export function decidePiToolCall({ toolName, input, agentType }: {
   return {
     block: true,
     reason:
-      `Read-only role boundary (#2509): role "${agentType || '(blank marker)'}" may run only its dispatched ` +
+      `Read-only role boundary (#2509): role "${agentType || '(unresolved role: fail closed)'}" may run only its dispatched ` +
       '`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line' +
       (READ_SEARCH_ROLES.has(agentType) ? ' and shell-inert read or search commands' : '') +
       '. Never run shell, test or build commands.',
