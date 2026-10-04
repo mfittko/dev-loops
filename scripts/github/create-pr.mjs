@@ -16,6 +16,7 @@ import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-b
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
 import { evaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
+import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
 Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
@@ -470,6 +471,11 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     return 0;
   }
   const body = await resolveBody(forwardedArgv);
+  // ADR-TRIPWIRE-STANDING-WAIVER: a new PR starts with no waiver line.
+  const waiverRefusal = waiverLineChangeRefusal({ currentBody: "", nextBody: body ?? "", action: "create" });
+  if (waiverRefusal) {
+    throw parseError(waiverRefusal);
+  }
   // With --issue <n> the closing reference is a MUST. A warning is
   // invisible under --jq (which the repo's token-discipline contract
   // mandates), so a missing or mismatched reference is refused before gh is

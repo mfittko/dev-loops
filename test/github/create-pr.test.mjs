@@ -1716,3 +1716,26 @@ test("create-pr fails closed when the resolvability probe errors for a reason ot
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("create-pr refuses any adr-tripwire:allow line in the body before invoking gh and names the sanctioned writer", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-"));
+  try {
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Body\n\nadr-tripwire:allow contract doc edit\n",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /ADR-TRIPWIRE-STANDING-WAIVER/);
+    assert.match(stderrPayload.error, /dev-loops pr waive-adr-tripwire/);
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
