@@ -242,7 +242,9 @@ export async function inspectRunLoopIterations(options, { env = process.env, ghC
   let copilotEvidence = null;
   try {
     copilotEvidence = await loadCopilotEvidence({ repo, pr, copilotInputPath }, { env, ghCommand });
-  } catch {
+  } catch (error) {
+    // Name a config error; never fall back to a default (matches inspectRun).
+    if (error?.code === "config_load_failed") return { available: false, source: "github_pr_timeline", reason: "config_load_failed" };
   }
   return resolveLoopIterationMetrics({ repo, pr, copilotInputPath, copilotEvidence }, { env, ghCommand });
 }

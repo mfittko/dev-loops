@@ -1044,6 +1044,8 @@ test("inspectRun names config_load_failed instead of a fetch failure when .devlo
       const snapshot = await inspectRun({ repo: "owner/repo", pr: 55, copilotInputPath: copilotPath, includeLoopIterations: false }, { ghCommand: path.join(tempDir, "gh-must-not-run") });
       assert.equal(snapshot.copilotEvidence, undefined);
       assert.ok(snapshot.markers.missing.includes("live Copilot loop state (config_load_failed)"), JSON.stringify(snapshot.markers));
+      const deferred = await inspectRunLoopIterations({ repo: "owner/repo", pr: 55, copilotInputPath: copilotPath }, { ghCommand: path.join(tempDir, "gh-must-not-run") });
+      assert.equal(deferred.reason, "config_load_failed");
     } finally {
       process.chdir(originalCwd);
     }
