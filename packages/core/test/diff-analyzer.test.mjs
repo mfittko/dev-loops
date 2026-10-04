@@ -93,6 +93,12 @@ test("classifyFile: code for the broad language table", () => {
   }
 });
 
+test("classifyFile: asset wins over test dir outside docs; html in a test dir stays test; docs wins", () => {
+  assert.equal(classifyFile("test/fixtures/logo.png"), "asset");
+  assert.equal(classifyFile("tests/page.html"), "test");
+  assert.equal(classifyFile("docs/x.png"), "docs");
+});
+
 test("classifyFile: generic test convention (dir segments + name tokens)", () => {
   // Directory segments.
   assert.equal(classifyFile("tests/unit/foo.py"), "test");

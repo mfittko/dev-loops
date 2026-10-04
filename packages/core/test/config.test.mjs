@@ -7533,6 +7533,12 @@ describe("classify config", () => {
     assert.ok(FileConfigSchema.safeParse({ version: 1, classify: { extensions: { code: [".vue", ".VUE"] } } }).success);
   });
 
+  test("lowercases extensions at load", () => {
+    const r = FileConfigSchema.safeParse({ version: 1, classify: { extensions: { code: [".VUE"] } } });
+    assert.ok(r.success);
+    assert.deepEqual(r.data.classify.extensions.code, [".vue"]);
+  });
+
   test("asset is accepted as an angle kind and a tier match kind", () => {
     const gates = {
       draft: {
