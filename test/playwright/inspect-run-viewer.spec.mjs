@@ -397,6 +397,16 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
         await current.press("Space");
         await expect(current).toHaveAttribute("aria-pressed", "true");
         await captureViewerState(page, testInfo, `${theme} keyboard node focus`, "Review visible focus, current chip and readable state details.", { interactionState: "focus" });
+        await root.locator("[data-graph-fit]").click();
+        const lifecycle = model.layers.find((entry) => entry.id === "lifecycle_layer");
+        const pointerIndex = lifecycle.nodes.findIndex((node) => node.stateId === "draft_gate");
+        const pointerTarget = graph.locator('[data-state-id="draft_gate"]');
+        await current.focus();
+        await pointerTarget.click();
+        await expect(pointerTarget).toBeFocused();
+        await page.keyboard.press("ArrowRight");
+        await expect(graph.locator(".inspection-graph-node.selected")).toHaveAttribute("data-node-id", lifecycle.nodes[(pointerIndex + 1) % lifecycle.nodes.length].id);
+        await captureViewerState(page, testInfo, `${theme} pointer keyboard transition`, "Pointer selection and subsequent arrow-key navigation stay on the selected card.", { interactionState: "focus" });
       } finally {
         await stopFixtureServer(server);
       }

@@ -235,7 +235,7 @@ export function mountInspectionGraph(root, graph) {
         const stateTop = 16 + card.labelLines.length * 20 + 8;
         card.stateIdLines.forEach((line, index) => group.append(svgElement("text", { class: "inspection-graph-state-id", x: 16, y: stateTop + 13 + index * 16 }, line)));
         group.append(svgElement("text", { class: "inspection-graph-chip", x: 16, y: stateTop + card.stateIdLines.length * 16 + 27 }, flags.join(" · ")));
-        group.addEventListener("click", () => { if (!suppressClick) selectNode(node.id); });
+        group.addEventListener("click", () => { if (!suppressClick) { selectNode(node.id); group.focus({ preventScroll: true }); } });
         group.addEventListener("keydown", (event) => {
           if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectNode(node.id); }
           if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) {
