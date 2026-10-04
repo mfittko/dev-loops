@@ -315,6 +315,10 @@ export function classifyFile(filePath, rules) {
   ) {
     return "config";
   }
+  // Assets win over the test conventions: `test/fixtures/logo.png` is an asset.
+  if (!fp.startsWith("docs/") && ASSET_EXTENSIONS.has(ext)) {
+    return "asset";
+  }
   // Generic test convention, part 1: a basename carrying a test/spec token
   // (`*_test.*`, `*_spec.*`, `test_*`, `*.test.*`, `*.spec.*`) is a test wherever
   // it lives — a strong per-file signal that subsumes the old `.test.` and Ruby
@@ -340,9 +344,6 @@ export function classifyFile(filePath, rules) {
   const underDocs = fp.startsWith("docs/");
   if (CODE_EXTENSIONS.has(ext) || CODE_BASENAMES.has(base) || (!underDocs && WEB_CODE_EXTENSIONS.has(ext))) {
     return "code";
-  }
-  if (!underDocs && ASSET_EXTENSIONS.has(ext)) {
-    return "asset";
   }
   if (fp.startsWith("docs/") || DOCS_EXTENSIONS.has(ext)) {
     return "docs";

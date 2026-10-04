@@ -10,6 +10,8 @@
 // → rendered-artifact set → check each is registered → fail closed if a
 // rendered artifact changed with no registered/passing coverage.
 
+import { matchesGlob } from "../analysis/diff-analyzer.mjs";
+
 // Explicit path globs for rendered artifacts. Kept conservative and explicit
 // (issue #976 scope discipline): only artifacts that render to a page/component.
 export const RENDERED_ARTIFACT_GLOBS = Object.freeze([
@@ -62,16 +64,6 @@ export const UI_E2E_CHECK_NAMES = Object.freeze(["viewer-smoke", "deck-smoke", "
 
 function normalizePath(filePath) {
   return String(filePath ?? "").trim().replace(/^\.\/+/u, "");
-}
-
-// Match a single explicit "dir/*.ext" glob (one path segment, no recursion).
-function matchesGlob(normalizedPath, glob) {
-  const [dir, file] = [glob.slice(0, glob.lastIndexOf("/")), glob.slice(glob.lastIndexOf("/") + 1)];
-  if (!file.startsWith("*.")) return normalizedPath === glob;
-  const ext = file.slice(1); // ".html"
-  if (!normalizedPath.startsWith(`${dir}/`)) return false;
-  const rest = normalizedPath.slice(dir.length + 1);
-  return rest.length > 0 && !rest.includes("/") && rest.endsWith(ext);
 }
 
 // Classify one changed path into a rendered-artifact descriptor, or null.

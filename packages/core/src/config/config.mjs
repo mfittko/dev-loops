@@ -202,7 +202,7 @@ const GateTierMatchKind = z.enum(FILE_KIND_NAMES);
 // valid angle/tier kind (see FILE_KIND_NAMES).
 const CLASSIFY_KIND_NAMES = Object.freeze(["code", "docs", "config", "test", "ci", "asset"]);
 
-const ClassifyExtension = z.string().regex(/^\.[^./\\\s]+$/, "extension must start with '.' and contain no whitespace, '/', '\\' or further '.'");
+const ClassifyExtension = z.string().regex(/^\.[^./\\\s]+$/, "extension must start with '.' and contain no whitespace, '/', '\\' or further '.'").transform((v) => v.toLowerCase());
 
 const ClassifyConfig = z
   .strictObject({

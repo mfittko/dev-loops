@@ -1,7 +1,7 @@
-import { describe, it } from "bun:test";
+import { afterAll, describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import { Writable } from "node:stream";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copi
 
 // Empty repo root: classification rules never depend on the runner cwd .devloops.
 const REPO_ROOT = mkdtempSync(path.join(os.tmpdir(), "withdraw-repo-"));
+afterAll(() => rmSync(REPO_ROOT, { recursive: true, force: true }));
 
 function collectingStream() {
   const chunks = [];
