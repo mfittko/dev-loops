@@ -16,6 +16,10 @@ const usageError = Object.assign(new Error("bad flag"), { usage: "USAGE: ..." })
 const CASES = [
   new Error("plain failure"),
   usageError,
+  Object.assign(new Error("config_load_failed: x"), {
+    code: "config_load_failed",
+    configError: { reason: "config_load_failed", errors: ["x"], unknownKeys: ["k"], runningVersion: "1", checkoutVersion: null },
+  }),
   "a bare string error",
   { toString: () => "objecty" },
 ];

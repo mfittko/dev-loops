@@ -1362,7 +1362,7 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    process.stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
+    process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   }
 }

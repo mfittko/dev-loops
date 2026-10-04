@@ -542,7 +542,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
         // Best-effort only — the original refusal below is authoritative.
       }
     }
-    process.stderr.write(JSON.stringify({ ok: false, error: message }) + "\n");
+    process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   }
 }

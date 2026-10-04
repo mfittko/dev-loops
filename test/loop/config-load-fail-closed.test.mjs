@@ -51,7 +51,10 @@ describe("a config load error fails closed instead of using defaults", () => {
       });
       assert.notEqual(result.status, 0, `${result.stdout}${result.stderr}`);
       assert.match(`${result.stdout}${result.stderr}`, /config_load_failed/);
-      assert.match(`${result.stdout}${result.stderr}`, /futureKnob/);
+      const jsonLines = `${result.stdout}\n${result.stderr}`.split("\n").filter((l) => l.startsWith("{"));
+      const payload = JSON.parse(jsonLines.at(-1));
+      assert.equal(payload.code, "config_load_failed");
+      assert.ok(payload.configError.unknownKeys.includes("futureKnob"));
     });
   }
 });

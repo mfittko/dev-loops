@@ -1279,7 +1279,11 @@ function unknownKeyGuidance(unknownKeys, repoRoot) {
   // A renamed key is an older key, so a newer dev-loops would not help.
   const unrenamed = unknownKeys.filter((key) => !Object.hasOwn(RENAMED_KEYS, key));
   if (unrenamed.length > 0) parts.push(`${unrenamed.join(", ")} need a newer dev-loops than ${running}.`);
-  if (checkoutVersion) parts.push(`This dev-loops checkout is ${checkoutVersion}; run it through dev-loops-run cli/index.mjs.`);
+  if (checkoutVersion) {
+    // Same version: the operator already runs the checkout code, so a runner switch would not help.
+    const advice = checkoutVersion === RUNNING_VERSION ? "" : "; run the checkout's cli/index.mjs";
+    parts.push(`This dev-loops checkout is ${checkoutVersion}${advice}.`);
+  }
   for (const key of unknownKeys) {
     const renamed = Object.hasOwn(RENAMED_KEYS, key) ? RENAMED_KEYS[key] : null;
     if (renamed) parts.push(`${key} was renamed to ${renamed.to} in dev-loops ${renamed.release}; move the value to ${renamed.to}.`);
