@@ -7517,8 +7517,14 @@ describe("classify config", () => {
   });
 
   test("rejects path patterns that are not repo-relative", () => {
-    for (const pattern of ["./a/**", "/a/**", "a/"]) {
+    for (const pattern of ["./a/**", "/a/**", "a/", " a/**", "a/** ", "a//b", "a/../b", "..", ".\\a", "a\\"]) {
       assert.ok(!FileConfigSchema.safeParse({ version: 1, classify: { paths: [{ pattern, kind: "code" }] } }).success, pattern);
+    }
+  });
+
+  test("accepts repo-relative path patterns", () => {
+    for (const pattern of ["**/foo", "site/assets/**", "**", "a/*.png"]) {
+      assert.ok(FileConfigSchema.safeParse({ version: 1, classify: { paths: [{ pattern, kind: "code" }] } }).success, pattern);
     }
   });
 

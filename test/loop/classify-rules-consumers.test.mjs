@@ -156,8 +156,6 @@ test("an asset-only diff with no tier selects the mandatory floor angles", async
     version: 1,
     gates: { draft: { angles: [{ name: "scope", mandatory: true }, { name: "correctness", kinds: ["code"] }] } },
   };
-  const rules = compileClassifyRules({ extensions: { asset: [".avif"] } });
-  assert.ok(rules);
   const result = await resolveGateAnglesDynamic(
     { ...config, classify: { extensions: { asset: [".avif"] } } },
     "draft",

@@ -225,7 +225,11 @@ const ClassifyConfig = z
     paths: z
       .array(z.strictObject({
         pattern: z.string().min(1)
-          .refine((v) => !v.startsWith("./") && !v.startsWith("/") && !v.endsWith("/"), "pattern must be repo-relative: no leading './' or '/' and no trailing '/'")
+          .refine((v) => {
+            const n = v.replaceAll("\\", "/");
+            return n === n.trim() && !n.startsWith("./") && !n.startsWith("/") && !n.endsWith("/")
+              && n.split("/").every((seg) => seg !== "" && seg !== "..");
+          }, "pattern must be repo-relative: no surrounding whitespace, no leading './' or '/', no trailing '/', and no empty or '..' segments")
           .describe("Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive."),
         kind: z.enum(CLASSIFY_KIND_NAMES).describe("Kind assigned to files matching the pattern."),
       }))
