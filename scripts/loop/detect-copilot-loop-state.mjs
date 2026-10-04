@@ -393,6 +393,8 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return;
   }
+  // Load config first so a GitHub read failure cannot mask config_load_failed.
+  const config = await loadDevLoopConfigStrict({ repoRoot });
   let snapshot;
   let interpretationInput;
   if (options.inputPath !== undefined) {
@@ -410,7 +412,6 @@ export async function runCli(
     interpretationInput = snapshot;
   }
   let interpretation;
-  const config = await loadDevLoopConfigStrict({ repoRoot });
   const refinementConfig = resolveRefinement(config.config);
   if (options.lightweight) {
     // Compose (not replace) the round cap for light-dispatched PRs:

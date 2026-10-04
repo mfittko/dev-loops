@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
-const CALLER = /\bloadDevLoopConfig(Strict)?\b/;
+// An invocation, or a default-injection reference (`= loadDevLoopConfig`, `?? loadDevLoopConfig`); comment lines and imports do not count.
+const CALLER = /^(?!\s*(?:\/\/|\*)).*(?:\bloadDevLoopConfig(?:Strict)?\s*\(|(?:=|\?\?)\s*loadDevLoopConfig(?:Strict)?\b)/m;
 
 function walk(dir) {
   const out = [];

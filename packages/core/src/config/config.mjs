@@ -1574,7 +1574,7 @@ function configError(message, code, filePath) {
  * @param {"extensionDefaults"|"defaults"|"devloops"} layer - Layer name
  * @param {string[]} warnings
  * @param {ConfigLoadError[]} errors
- * @param {{ warnOnMissing?: boolean }} [options]
+ * @param {{ warnOnMissing?: boolean, repoRoot?: string }} [options]
  * @returns {Promise<Record<string, unknown>>}
  */
 async function applyLayer(merged, basePaths, layer, warnings, errors, options = {}) {
@@ -1733,11 +1733,12 @@ export async function loadDevLoopConfig(options = {}) {
   const checkoutVersion = readCheckoutVersion(repoRoot);
 
   let merged = { ...BUILT_IN_DEFAULTS };
-  merged = await applyLayer(merged, resolveExtensionDefaultsPath(options), "extensionDefaults", warnings, errors, { warnOnMissing: true });
+  merged = await applyLayer(merged, resolveExtensionDefaultsPath(options), "extensionDefaults", warnings, errors, { warnOnMissing: true, repoRoot });
 
 
   merged = await applyLayer(merged, defaultsPath, "defaults", warnings, errors, {
     warnOnMissing: true,
+    repoRoot,
   });
 
   // `devloopsOverride` sources the devloops (primary override) layer's

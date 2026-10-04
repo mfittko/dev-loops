@@ -3171,7 +3171,7 @@ test("buildFanoutEnforcement (#1972, AC4): angle-layer config falls back to the 
   }
 });
 
-test("buildFanoutEnforcement (#1972, AC4): angle-layer config falls back to the invoking checkout when the PR head's .devloops fails to parse", async () => {
+test("buildFanoutEnforcement (#1972, AC4): angle-layer config fails closed with config_load_failed when the PR head's .devloops fails to parse", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-fallback-parse-"));
   try {
     const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
@@ -3222,16 +3222,16 @@ test("buildFanoutEnforcement (#1972, AC4): angle-layer config falls back to the 
 
     const { config } = await loadDevLoopConfig({ repoRoot: dir });
     const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
-    const enforcement = await buildFanoutEnforcement({
-      repo: "owner/repo", pr: 1975, currentHeadSha: headSha,
-      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
-      config, cwd: dir, hasFullLabel: false,
-    });
-    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
-    // Fell back to the invoking checkout's config — the head's malformed
-    // .devloops never gets to silently widen or drop the mandatory-angle set.
-    assert.ok(gate.mandatoryAngles.includes("invoking-mandatory"), JSON.stringify(gate.mandatoryAngles));
-    assert.ok(gate.provenance, "a ledger conformant with the fallback (invoking) config still validates");
+    // The head's malformed .devloops fails closed; it is never accepted
+    // against the older invoking angle set.
+    await assert.rejects(
+      buildFanoutEnforcement({
+        repo: "owner/repo", pr: 1975, currentHeadSha: headSha,
+        draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+        config, cwd: dir, hasFullLabel: false,
+      }),
+      (error) => error.code === "config_load_failed",
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
