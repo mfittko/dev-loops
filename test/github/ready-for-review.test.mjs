@@ -21,6 +21,7 @@ function passingCommentDiscipline() {
 }
 
 import { describeUnresolvedGateThreadReasons, parseReadyForReviewCliArgs, readyForReview } from "../../scripts/github/ready-for-review.mjs";
+import { verifyPolicyChangeApproval as realVerifyPolicyChangeApproval } from "../../scripts/github/_policy-change-approval.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 const scriptPath = path.resolve("scripts/github/ready-for-review.mjs");
@@ -868,4 +869,54 @@ test("parseReadyForReviewCliArgs requires --reason when --waive-size-budget is s
     () => parseReadyForReviewCliArgs(["--repo", "owner/repo", "--pr", "1", "--waive-size-budget"]),
     /--waive-size-budget requires --reason/,
   );
+});
+
+// --- ADR-TRIPWIRE-STANDING-WAIVER: a standingAuthorizations change needs a fresh owner approval ---
+
+function policyChangeTripwire() {
+  return {
+    ...passingAdrTripwire(),
+    satisfiedBy: "adr",
+    triggers: [{ type: "standing-authorizations-change", path: ".devloops" }],
+    adrFiles: ["docs/decisions/0999-standing-authorization-policy.md"],
+  };
+}
+
+function approvalReadsRunChild(comments) {
+  return async (_cmd, args) => {
+    const apiPath = args.find((a) => typeof a === "string" && a.startsWith("repos/")) ?? "";
+    return { code: 0, stdout: JSON.stringify([apiPath.includes("/reviews") ? [] : comments]), stderr: "" };
+  };
+}
+
+async function readyWithPolicyChange(comments) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-policy-"));
+  try {
+    const { env } = await preReadyGhStub(tempDir);
+    return await readyForReview(
+      { repo: "owner/repo", pr: 17 },
+      {
+        env,
+        repoRoot: tempDir,
+        runChild: env[GH_RUNNER],
+        syncBoardStatus: async () => ({ ok: true, skipped: true }),
+        evaluatePrSizeBudget: passingSizeBudget,
+        evaluateAdrTripwire: policyChangeTripwire,
+        evaluateCommentDiscipline: passingCommentDiscipline,
+        verifyPolicyChangeApproval: (a, rt) => realVerifyPolicyChangeApproval(a, { ...rt, runChild: approvalReadsRunChild(comments) }),
+      },
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("a standingAuthorizations change cannot be marked ready without a fresh owner approval at the current head", async () => {
+  await assert.rejects(() => readyWithPolicyChange([]), /standingAuthorizations.*fresh human approval/s);
+});
+
+test("a standingAuthorizations change is marked ready with an approve merge <headSha> comment from the repo owner", async () => {
+  const result = await readyWithPolicyChange([{ user: { login: "owner", type: "User" }, body: "approve merge abc123def456" }]);
+  assert.equal(result.ok, true);
+  assert.equal(result.action, "marked_ready");
 });

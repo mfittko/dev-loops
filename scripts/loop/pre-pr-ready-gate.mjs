@@ -12,6 +12,7 @@ import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "./check-size-budget.mjs";
 import { evaluateAdrTripwire as realEvaluateAdrTripwire } from "./check-adr-tripwire.mjs";
+import { verifyPolicyChangeApproval as realVerifyPolicyChangeApproval, policyChangeApprovalRefusal } from "../github/_policy-change-approval.mjs";
 import { evaluateCommentDiscipline as realEvaluateCommentDiscipline } from "./check-comment-discipline.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -125,7 +126,7 @@ async function fetchPrState({ repo, pr }, { env, ghCommand, runChild }) {
   };
 }
 
-export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire = realEvaluateAdrTripwire, evaluateCommentDiscipline = realEvaluateCommentDiscipline } = {}) {
+export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire = realEvaluateAdrTripwire, verifyPolicyChangeApproval = realVerifyPolicyChangeApproval, evaluateCommentDiscipline = realEvaluateCommentDiscipline } = {}) {
   const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve PR head SHA`);
@@ -229,6 +230,29 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
       draftGateMarker: gate.draftGateMarker,
       sizeBudget,
       adrTripwire,
+    };
+  }
+
+  // A PR that changes the .devloops standingAuthorizations block also needs a
+  // fresh head-pinned human approval (same check readyForReview() runs).
+  const policyApproval = await verifyPolicyChangeApproval(
+    { repo: options.repo, pr: options.pr, headSha, adrTripwire },
+    { env, ghCommand, runChild },
+  );
+  if (!policyApproval.satisfied) {
+    return {
+      ok: false,
+      error: policyChangeApprovalRefusal({ pr: options.pr, headSha, approval: policyApproval }),
+      repo: options.repo,
+      pr: options.pr,
+      currentHeadSha: headSha,
+      draftGateSatisfied: true,
+      unresolvedGateThreadCount: gate.unresolvedGateThreadCount,
+      draftGate: gate.draftGate,
+      draftGateMarker: gate.draftGateMarker,
+      sizeBudget,
+      adrTripwire,
+      policyApproval,
     };
   }
 

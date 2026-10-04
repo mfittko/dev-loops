@@ -774,3 +774,94 @@ test("evaluateAdrTripwire (#2605): a real key-less .devloops shadowing an unchan
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// ADR-TRIPWIRE-STANDING-WAIVER: head-pinned standing lines and the
+// standingAuthorizations policy trigger
+// ---------------------------------------------------------------------------
+
+const HEAD_A = "a".repeat(40);
+const HEAD_B = "b".repeat(40);
+const standingLine = (head) => `adr-tripwire:allow standing-authorization head=${head} issue=7 granted-by=operator expires=2026-12-01 paths=${CONTRACT_DOC}`;
+const contractTouch = (prBody, headSha) => computeAdrTripwire({
+  nameStatusOutput: ns(["M\t" + CONTRACT_DOC]),
+  baseContents: { [CONTRACT_DOC]: BASE_CONTRACT },
+  headContents: { [CONTRACT_DOC]: HEAD_CONTRACT_PROSE_ONLY },
+  prBody,
+  headSha,
+});
+
+test("a standing-authorization waiver passes at the head it names", () => {
+  const r = contractTouch(`Body\n\n${standingLine(HEAD_A)}\n`, HEAD_A);
+  assert.equal(r.outcome, "pass");
+  assert.equal(r.satisfiedBy, "waiver");
+  assert.equal(r.waiver.standing, true);
+});
+
+test("a standing-authorization waiver blocks at a different head (a later push makes it stale)", () => {
+  const r = contractTouch(`Body\n\n${standingLine(HEAD_A)}\n`, HEAD_B);
+  assert.equal(r.outcome, "block");
+  assert.equal(r.waiver.stale, true);
+  assert.ok(r.reasons.some((x) => /waive-adr-tripwire/.test(x)));
+});
+
+test("a standing-authorization line with no well-formed head, or no evaluated head, blocks (fail closed)", () => {
+  assert.equal(contractTouch("adr-tripwire:allow standing-authorization issue=7\n", HEAD_A).outcome, "block");
+  assert.equal(contractTouch(`${standingLine(HEAD_A)}\n`, null).outcome, "block");
+  assert.equal(contractTouch(`${standingLine(HEAD_A)}\n`, undefined).outcome, "block");
+});
+
+test("a hand-written adr-tripwire:allow <reason> line keeps today's semantics at any head", () => {
+  const r = contractTouch("adr-tripwire:allow operator reviewed this contract edit\n", HEAD_B);
+  assert.equal(r.outcome, "pass");
+  assert.equal(r.satisfiedBy, "waiver");
+  assert.deepEqual(r.waiver, { requested: true, valid: true, reason: "operator reviewed this contract edit" });
+});
+
+const POLICY_HEAD = "version: 1\nstandingAuthorizations:\n  adrTripwireWaiver:\n    grantedBy: operator\n    grantedAt: '2026-10-01'\n    expires: '2026-12-01'\n    reason: contract edits\n";
+const policyChange = (prBody, adr) => computeAdrTripwire({
+  nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH, ...(adr ? ["A\t" + ADR_FILE] : [])]),
+  baseContents: { [DEVLOOPS_CONFIG_PATH]: "version: 1\n" },
+  headContents: { [DEVLOOPS_CONFIG_PATH]: POLICY_HEAD },
+  prBody,
+  headSha: HEAD_A,
+});
+
+test("a standingAuthorizations change is a trigger only a decision record satisfies", () => {
+  const blocked = policyChange("adr-tripwire:allow operator waiver\n", false);
+  assert.equal(blocked.outcome, "block");
+  assert.ok(blocked.triggers.some((t) => t.type === "standing-authorizations-change"));
+  assert.equal(policyChange(`${standingLine(HEAD_A)}\n`, false).outcome, "block");
+  const satisfied = policyChange("", true);
+  assert.equal(satisfied.outcome, "pass");
+  assert.equal(satisfied.satisfiedBy, "adr");
+});
+
+test("a .devloops change that leaves the standingAuthorizations block untouched does not trigger the policy gate", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: POLICY_HEAD },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: POLICY_HEAD + "autonomy:\n  humanMergeOnly: true\n" },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "pass");
+  assert.deepEqual(r.triggers, []);
+});
+
+test("evaluateAdrTripwire resolves the head ref to its full SHA for the standing-line pin", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "adr-standing-"));
+  try {
+    const fixture = path.join(tmp, "repo");
+    await mkdir(path.join(fixture, "skills/docs"), { recursive: true });
+    execSync("git init -q -b main && git config user.email t@t && git config user.name t && echo base > base.md && git add . && git commit -qm base && git branch base", { cwd: fixture, stdio: "ignore" });
+    await writeFile(path.join(fixture, "skills/docs/new-contract.md"), "# New contract\n\nProse.\n");
+    execSync("git add . && git commit -qm head", { cwd: fixture, stdio: "ignore" });
+    const sha = execSync("git rev-parse HEAD", { cwd: fixture }).toString().trim();
+    const atHead = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture, prBody: `${standingLine(sha)}\n` });
+    assert.equal(atHead.outcome, "pass");
+    const stale = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture, prBody: `${standingLine(HEAD_B)}\n` });
+    assert.equal(stale.outcome, "block");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});

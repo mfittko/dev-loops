@@ -53,6 +53,7 @@ import { parse as parseYaml } from "yaml";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
+import { classifyWaiverReason } from "./adr-waiver-markers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: check-adr-tripwire.mjs --base <ref> [--head <ref>] [--pr-body-file <path>]
@@ -86,7 +87,7 @@ Output (stdout, JSON):
                                // 0 on pass, 2 on a usage error (fail-closed)
     "outcome": "pass"|"block",
     "satisfiedBy": "adr"|"waiver"|null,
-    "triggers": [{ "type": "contract-doc"|"gate-config"|"rule-modality-reversal"|"unresolvable-rule-scan"|"devloops-proportionality"|"commit-msg-guard-loosening"|"unresolvable-devloops-scan", "path": "...", ... }],
+    "triggers": [{ "type": "contract-doc"|"gate-config"|"rule-modality-reversal"|"unresolvable-rule-scan"|"devloops-proportionality"|"commit-msg-guard-loosening"|"standing-authorizations-change"|"unresolvable-devloops-scan", "path": "...", ... }],
     "adrFiles": ["docs/decisions/0052-..."],
     "waiver": { "requested": false, "valid": false, "reason": null },
     "reasons": []
@@ -268,12 +269,15 @@ export function unquoteGitPath(p) {
  * @param {Object<string,string>} [input.baseContents] — path → file content at base
  * @param {Object<string,string>} [input.headContents] — path → file content at head
  * @param {string} [input.prBody] — PR body text (the waiver surface)
+ * @param {string|null} [input.headSha] — full head SHA a standing-authorization
+ *   waiver line must name; null makes every such line stale (fail closed)
  */
 export function computeAdrTripwire({
   nameStatusOutput = "",
   baseContents = {},
   headContents = {},
   prBody = "",
+  headSha = null,
 } = {}) {
   const files = parseNameStatus(nameStatusOutput);
   const triggers = [];
@@ -310,6 +314,11 @@ export function computeAdrTripwire({
     if (unresolvable) {
       triggers.push({ type: "unresolvable-devloops-scan", path: file.path });
       continue;
+    }
+    // standingAuthorizations: any change to the block is decision-shaped and
+    // satisfied only by a decision record (never by any waiver line).
+    if (JSON.stringify(baseParsed?.standingAuthorizations ?? null) !== JSON.stringify(headParsed?.standingAuthorizations ?? null)) {
+      triggers.push({ type: "standing-authorizations-change", path: file.path });
     }
     const baseFields = extractProportionalityFields(baseParsed);
     const headFields = extractProportionalityFields(headParsed);
@@ -405,7 +414,15 @@ export function computeAdrTripwire({
       const m = WAIVER_RE.exec(line);
       if (bare || m) {
         const reason = m ? m[1].trim() : "";
-        waiver = { requested: true, valid: reason.length > 0, reason: reason.length > 0 ? reason : null };
+        const kind = classifyWaiverReason(reason);
+        if (kind.standing) {
+          // A standing-authorization line is valid only at the head it names;
+          // a later push makes it stale until the sanctioned writer re-runs.
+          const atHead = kind.head !== null && typeof headSha === "string" && kind.head === headSha.toLowerCase();
+          waiver = { requested: true, valid: atHead, reason, standing: true, ...(atHead ? {} : { stale: true }) };
+        } else {
+          waiver = { requested: true, valid: reason.length > 0, reason: reason.length > 0 ? reason : null };
+        }
         break;
       }
     }
@@ -419,11 +436,14 @@ export function computeAdrTripwire({
     return { ok: true, outcome: "pass", satisfiedBy: "adr", triggers, adrFiles, waiver, reasons: [] };
   }
 
-  if (waiver.valid) {
+  // A change to the standingAuthorizations block is satisfied only by a record.
+  const policyChange = triggers.some((t) => t.type === "standing-authorizations-change");
+  if (waiver.valid && !policyChange) {
     return { ok: true, outcome: "pass", satisfiedBy: "waiver", triggers, adrFiles, waiver, reasons: [] };
   }
 
   const reasons = triggers.map((t) => {
+    if (t.type === "standing-authorizations-change") return `${t.path}: standingAuthorizations block changed (only a docs/decisions record satisfies; no waiver applies)`;
     if (t.type === "rule-modality-reversal") return `${t.path}: rule ${t.ruleId} modality reversed ${t.from}→${t.to}`;
     if (t.type === "gate-config") return `${t.path}: shared gate config touched`;
     if (t.type === "unresolvable-rule-scan") return `${t.path}: rule-bearing doc changed but base+head content not both readable (fail-closed)`;
@@ -432,6 +452,9 @@ export function computeAdrTripwire({
     if (t.type === "unresolvable-devloops-scan") return `${t.path}: changed but base+head content not both parsable as YAML (fail-closed)`;
     return `${t.path}: decision-shaped contract doc touched`;
   });
+  if (waiver.standing && waiver.stale) {
+    reasons.push(`The standing-authorization waiver line does not name the evaluated head${headSha ? ` ${headSha}` : ""}; re-run \`dev-loops pr waive-adr-tripwire\` for the current head.`);
+  }
   reasons.push(
     "ADR tripwire: a decision-shaped surface was touched without adding/updating a docs/decisions/NNNN-*.md record and without a valid `adr-tripwire:allow <reason>` waiver in the PR body.",
   );
@@ -501,7 +524,9 @@ export async function evaluateAdrTripwire({
       }
     }
   }
-  return computeAdrTripwire({ nameStatusOutput, baseContents, headContents, prBody });
+  let headSha = null;
+  try { headSha = runGit(["rev-parse", "--verify", `${head}^{commit}`], { repoRoot, env: gitEnv }).trim().toLowerCase(); } catch { /* unresolvable head: standing lines stay stale */ }
+  return computeAdrTripwire({ nameStatusOutput, baseContents, headContents, prBody, headSha });
 }
 
 // ---------------------------------------------------------------------------
