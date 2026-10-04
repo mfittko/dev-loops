@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, test } from "bun:test";
 
 // Scripts that keep a listed default on a config load error because the default
 // cannot relax a gate. provision-worktree, post-gate-findings, refine-plan-file,
-// close-gate-findings and outer-loop pin theirs next to their own suites.
+// close-gate-findings pin theirs next to their own suites.
 let fixture;
 beforeAll(() => {
   fixture = mkdtempSync(path.join(os.tmpdir(), "config-degrade-"));
