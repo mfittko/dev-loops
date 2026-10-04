@@ -214,8 +214,9 @@ the disk loader) and re-parses it with `loadDevLoopConfig`'s `devloopsOverride` 
 Extension defaults and `.pi/dev-loop/defaults` still come from the invoking checkout's disk.
 When the head commit is not resolvable locally, resolution falls back to the invoking
 checkout's own config, never to a looser or skipped check. When the head `.devloops` fails
-to parse/validate, `detect-checkpoint-evidence` and `merge-pr` fail closed with
-`config_load_failed` (`CONFIG-LOAD-FAIL-CLOSED`) and use no fallback. A non-conformant
+to parse/validate, `detect-checkpoint-evidence` fails closed with `config_load_failed`
+(`CONFIG-LOAD-FAIL-CLOSED`) and `merge-pr` refuses through its `gate_evidence` precondition
+with a refusal message that names `config_load_failed`. Neither uses a fallback. A non-conformant
 fan-out fails closed under either config.
 
 ### Evidence writes and `gh pr merge` MUST be separate tool calls (#1172)
