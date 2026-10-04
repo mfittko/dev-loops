@@ -75,7 +75,7 @@ test("the Phase 3.5 judge contract states no severity auto-defer and adjudicates
 
 // A sentence that grants a low finding a defer "from round 1" must carry the judge-acted-low exception
 // (a judge `act` low is declinable on reproduction grounds only), so no allowance site re-defers it downstream.
-const lowDeferGrants = (text) => sentences(text).filter((s) => s.includes("from round 1") && s.includes("low") && /defer/.test(s));
+const lowDeferGrants = (text) => sentences(text).filter((s) => /from round 1/i.test(s) && /\blow\b/i.test(s) && /defer/i.test(s));
 const unexemptedGrants = (text) => lowDeferGrants(text).filter((s) => !(s.includes("`act`") && s.includes("reproduction")));
 
 test("EVERY round-1 low-defer allowance in the sub-loop contract exempts a judge-acted low (no downstream re-defer)", async () => {
@@ -86,6 +86,8 @@ test("EVERY round-1 low-defer allowance in the sub-loop contract exempts a judge
   assert.deepEqual(unexemptedGrants("A low may be deferred from round 1, unless the judge marked it `act`; the fixer then declines only on reproduction grounds."), []);
   // Broken negative: an allowance without the exception is reported.
   assert.equal(unexemptedGrants("A low may be deferred from round 1 with no fix window.").length, 1);
+  // Case-insensitive: a capitalized grant is still caught.
+  assert.equal(unexemptedGrants("Defer is permitted From Round 1 for Low findings.").length, 1);
 });
 
 test("the operational fixer instructions exempt a judge-acted low from the round-1 defer allowance", async () => {
