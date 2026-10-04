@@ -65,6 +65,88 @@ test("feedback styling follows horizontal graph direction, not vertical position
   }
 });
 
+test("wide graph text stays inside cards without losing labels or identifiers", async ({ page }, testInfo) => {
+  const { server, url } = await startViewer();
+  try {
+    await page.route(`${url}/`, async (route) => {
+      const response = await route.fetch();
+      const { layoutInspectionLayer } = await import("../../scripts/loop/inspect-run-viewer/graph-layout.mjs");
+      const body = (await response.text()).replace(/(<script\b[^>]*data-inspection-graph-data[^>]*>)([\s\S]*?)(<\/script>)/, (_, start, json, end) => {
+        const model = JSON.parse(json);
+        const layer = model.layers.find((entry) => entry.id === "lifecycle_layer");
+        ["W", "長", "😀"].forEach((character, index) => {
+          layer.nodes[index].label = character.repeat(90);
+          layer.nodes[index].stateId = character.repeat(90);
+        });
+        layer.cues[0].label = "W".repeat(32);
+        layer.geometry = layoutInspectionLayer(layer);
+        return start + JSON.stringify(model).replaceAll("<", "\\u003c") + end;
+      });
+      await route.fulfill({ response, body });
+    });
+    await page.goto(url);
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    const textBounds = await graph.locator(".inspection-graph-node, .inspection-graph-cue").evaluateAll((cards) => cards.flatMap((card) => {
+      const width = card.querySelector("rect").width.baseVal.value;
+      return [...card.querySelectorAll("text")].map((text) => {
+        const bounds = text.getBBox();
+        return { text: text.textContent, left: bounds.x, right: bounds.x + bounds.width, availableRight: width - 16 };
+      });
+    }));
+    expect(textBounds.filter((text) => text.left < 15.5 || text.right > text.availableRight + 0.5)).toEqual([]);
+    for (const character of ["W", "長", "😀"]) {
+      const card = graph.locator(`[data-state-id="${character.repeat(90)}"]`);
+      expect((await card.locator(".inspection-graph-label").allTextContents()).join("")).toBe(character.repeat(90));
+      expect((await card.locator(".inspection-graph-state-id").allTextContents()).join("")).toBe(character.repeat(90));
+    }
+    await captureViewerState(page, testInfo, "Wide graph text boundary", "Wide Latin, CJK and emoji text wraps losslessly within state and presentation-cue cards.");
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
+
+test("resizing preserves current focus, fitted bounds and deliberate camera pan", async ({ page }, testInfo) => {
+  const { server, url } = await startViewer();
+  try {
+    await page.goto(url);
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    const root = page.locator("[data-inspection-graph-root]");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect.poll(async () => {
+      const current = await graph.locator(".inspection-graph-node.current").boundingBox();
+      const viewport = await graph.boundingBox();
+      return Math.abs(current.x + current.width / 2 - viewport.x - viewport.width / 2);
+    }).toBeLessThan(1);
+    await root.locator("[data-graph-fit]").click();
+    await page.setViewportSize({ width: 640, height: 720 });
+    const bounds = (await readGraph(page)).layers.find((entry) => entry.id === "lifecycle_layer").geometry.bounds;
+    await expect.poll(() => graph.evaluate((viewport, bounds) => {
+      const matrix = viewport.querySelector(".inspection-graph-world").transform.baseVal.consolidate().matrix;
+      return Math.max(
+        Math.abs((bounds.x + bounds.width / 2) * matrix.a + matrix.e - viewport.clientWidth / 2),
+        Math.abs((bounds.y + bounds.height / 2) * matrix.d + matrix.f - viewport.clientHeight / 2),
+      );
+    }, bounds)).toBeLessThan(1);
+    await graph.focus();
+    await graph.press("ArrowRight");
+    const cameraCenter = () => graph.evaluate((viewport) => {
+      const matrix = viewport.querySelector(".inspection-graph-world").transform.baseVal.consolidate().matrix;
+      return { x: (viewport.clientWidth / 2 - matrix.e) / matrix.a, y: (viewport.clientHeight / 2 - matrix.f) / matrix.d, scale: matrix.a };
+    });
+    const panned = await cameraCenter();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect.poll(async () => {
+      const resized = await cameraCenter();
+      return Math.max(Math.abs(resized.x - panned.x), Math.abs(resized.y - panned.y), Math.abs(resized.scale - panned.scale));
+    }).toBeLessThan(0.001);
+    await captureViewerState(page, testInfo, "Resized camera with deliberate pan", "Viewport changes preserve the active focus/fit intent or the deliberately panned world-space center.");
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
+
 test("webkit renders overview-first tabs, matches tab panels, and captures a screenshot", async ({ page }, testInfo) => {
   const { server, url } = await startViewer(makeInspectionSnapshot(), [
     { target: { repo: "other/repo", pr: 77 }, title: "Waiting PR", signal: "attention" },

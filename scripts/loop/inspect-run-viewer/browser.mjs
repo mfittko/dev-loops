@@ -68,6 +68,9 @@ export function mountInspectionGraph(root, graph) {
   let geometry;
   let world;
   let pendingCamera = null;
+  let activeCamera = null;
+  let viewportWidth = 0;
+  let viewportHeight = 0;
   let camera = { x: 0, y: 0, scale: 1 };
   let drag = null;
   let suppressClick = false;
@@ -79,6 +82,8 @@ export function mountInspectionGraph(root, graph) {
     world = null;
     geometry = null;
     pendingCamera = null;
+    activeCamera = null;
+    viewportWidth = viewportHeight = 0;
     drag = null;
     viewport?.replaceChildren();
     viewport?.removeAttribute("data-rendered");
@@ -95,6 +100,10 @@ export function mountInspectionGraph(root, graph) {
     world.setAttribute("transform", `translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
     viewport.dataset.graphScale = String(camera.scale);
     zoomValue.textContent = `${Math.round(camera.scale * 100)}%`;
+    if (viewport.clientWidth && viewport.clientHeight) {
+      viewportWidth = viewport.clientWidth;
+      viewportHeight = viewport.clientHeight;
+    }
   }
 
   function center(x, y, scale) {
@@ -104,6 +113,7 @@ export function mountInspectionGraph(root, graph) {
 
   function fit() {
     if (!world) return;
+    activeCamera = fit;
     if (!viewport.clientWidth || !viewport.clientHeight) { pendingCamera = fit; return; }
     pendingCamera = null;
     const bounds = layer.geometry.bounds;
@@ -114,14 +124,25 @@ export function mountInspectionGraph(root, graph) {
   function focusNode(id, readable = false) {
     const node = geometry?.nodes.get(id);
     if (!node || !world) return;
+    activeCamera = () => focusNode(id, readable);
     if (!viewport.clientWidth || !viewport.clientHeight) { pendingCamera = () => focusNode(id, readable); return; }
     pendingCamera = null;
     const scale = readable ? Math.min(Math.max(1, camera.scale), Math.max(1, viewport.clientWidth - 32) / node.width, Math.max(1, viewport.clientHeight - 32) / node.height) : camera.scale;
     center(node.x + node.width / 2, node.y + node.height / 2, scale);
   }
 
+  function resizeCamera() {
+    if (!world || !viewport.clientWidth || !viewport.clientHeight) return;
+    if (pendingCamera) { pendingCamera(); return; }
+    if (activeCamera) { activeCamera(); return; }
+    camera.x += (viewport.clientWidth - viewportWidth) / 2;
+    camera.y += (viewport.clientHeight - viewportHeight) / 2;
+    applyCamera();
+  }
+
   function zoom(delta) {
     if (!world) return;
+    pendingCamera = activeCamera = null;
     const scale = Math.max(0.05, Math.min(5, camera.scale + delta));
     const x = (viewport.clientWidth / 2 - camera.x) / camera.scale;
     const y = (viewport.clientHeight / 2 - camera.y) / camera.scale;
@@ -265,13 +286,14 @@ export function mountInspectionGraph(root, graph) {
     if (!world) return;
     const bounds = layer.geometry.bounds;
     pendingCamera = null;
+    activeCamera = null;
     center(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2, 1);
   });
   controls.focus.addEventListener("click", () => focusNode(layer.current.nodeId, true));
   viewport.addEventListener("keydown", (event) => {
     if (event.target !== viewport || !world) return;
     const delta = { ArrowLeft: [48, 0], ArrowRight: [-48, 0], ArrowUp: [0, 48], ArrowDown: [0, -48] }[event.key];
-    if (delta) { event.preventDefault(); camera.x += delta[0]; camera.y += delta[1]; applyCamera(); }
+    if (delta) { event.preventDefault(); activeCamera = null; camera.x += delta[0]; camera.y += delta[1]; applyCamera(); }
   });
   viewport.addEventListener("pointerdown", (event) => {
     if (!world || event.button !== 0 || drag) return;
@@ -286,6 +308,7 @@ export function mountInspectionGraph(root, graph) {
     const dy = event.clientY - drag.y;
     if (!drag.moved && Math.hypot(dx, dy) < 5) return;
     drag.moved = true;
+    activeCamera = null;
     event.preventDefault();
     camera.x = drag.cameraX + dx;
     camera.y = drag.cameraY + dy;
@@ -348,8 +371,8 @@ export function mountInspectionGraph(root, graph) {
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
   });
-  document.addEventListener("inspect-run-viewer:tabchange", (event) => { if (event.detail?.tabName === "graph") pendingCamera?.(); });
-  if (typeof ResizeObserver === "function") new ResizeObserver(() => pendingCamera?.()).observe(viewport);
+  document.addEventListener("inspect-run-viewer:tabchange", (event) => { if (event.detail?.tabName === "graph") resizeCamera(); });
+  if (typeof ResizeObserver === "function") new ResizeObserver(resizeCamera).observe(viewport);
   if (graph.layers.some((entry) => entry.id === graph.initialLayerId)) renderLayer(graph.initialLayerId);
   else failure(new Error("Initial inspection layer unavailable"));
 }

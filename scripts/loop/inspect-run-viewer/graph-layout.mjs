@@ -2,6 +2,9 @@ import dagre from "@dagrejs/dagre";
 
 const ARROW_PADDING = 16;
 const BOUNDARY_EPSILON = 0.000001;
+// Reserve one em for ASCII and two for fallback glyphs at the renderer's 16px/14px fonts.
+const STATE_TEXT_COLUMNS = 18;
+const CUE_TEXT_COLUMNS = 8;
 const compareIds = (a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 
 function fail(code, message, cause) {
@@ -16,7 +19,14 @@ function wrapText(text, budget) {
   const lines = [];
   let start = 0;
   while (start < characters.length) {
-    let end = Math.min(start + budget, characters.length);
+    let end = start;
+    let columns = 0;
+    while (end < characters.length) {
+      const width = characters[end] <= "\u007f" ? 1 : 2;
+      if (columns + width > budget) break;
+      columns += width;
+      end += 1;
+    }
     if (end < characters.length) {
       for (let index = end - 1; index >= start; index -= 1) {
         if (/\s|_/.test(characters[index])) {
@@ -102,13 +112,13 @@ export function layoutInspectionLayer(topology) {
   try {
     const vertices = [
       ...topology.nodes.map((node) => {
-        const labelLines = wrapText(node.label, 30);
-        const stateIdLines = wrapText(node.stateId, 30);
+        const labelLines = wrapText(node.label, STATE_TEXT_COLUMNS);
+        const stateIdLines = wrapText(node.stateId, STATE_TEXT_COLUMNS);
         // 16px padding, 20/16px text rows, two 8px gaps and a fixed 28px badge row.
         return { id: node.id, width: 320, height: 76 + 20 * labelLines.length + 16 * stateIdLines.length, labelLines, stateIdLines };
       }),
       ...topology.cues.map((cue) => {
-        const labelLines = wrapText(cue.label, 16);
+        const labelLines = wrapText(cue.label, CUE_TEXT_COLUMNS);
         return { id: cue.id, width: 160, height: 32 + 20 * labelLines.length, labelLines, stateIdLines: [] };
       }),
     ].sort(compareIds);
