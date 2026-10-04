@@ -11,7 +11,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - The inspect graph now distinguishes forward and feedback edges along its left-to-right layout direction, rather than mistaking vertical routing for feedback (#2627)
-- Wide inspect-graph labels and identifiers wrap within their cards without losing Unicode text. Resizing retains Fit/Focus intent or the operator's deliberately panned/zoomed camera (#2627)
+- Wide inspect-graph labels and identifiers wrap losslessly with extra platform-font headroom. Resizing retains Fit/Focus intent or the operator's deliberately panned/zoomed camera (#2627)
 - The inspect graph shares the shell's light theme even under a dark OS preference; native controls also remain light instead of mixing independent light/dark palettes (#2627)
 - Pointer selection explicitly focuses the chosen inspect-graph state, keeping subsequent keyboard navigation aligned with the selection across browsers (#2627)
 

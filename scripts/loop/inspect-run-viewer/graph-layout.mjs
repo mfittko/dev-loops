@@ -2,8 +2,8 @@ import dagre from "@dagrejs/dagre";
 
 const ARROW_PADDING = 16;
 const BOUNDARY_EPSILON = 0.000001;
-// Reserve one em for ASCII and two for fallback glyphs at the renderer's 16px/14px fonts.
-const STATE_TEXT_COLUMNS = 18;
+// Leave fallback-font headroom beyond one em for ASCII; non-ASCII reserves two columns.
+const STATE_TEXT_COLUMNS = 16;
 const CUE_TEXT_COLUMNS = 8;
 const compareIds = (a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 
