@@ -16,7 +16,7 @@ Everything after the tag is hands-off.
    ```
 
    `<version>` is a bare full semver token including any prerelease suffix
-   (`1.0.2`, `1.0.2-slim.0`, `1.0.0-rc.7`). One invocation sets all six
+   (`1.0.2`, `1.0.2-slim.0`, `1.0.0-rc.7`). One invocation sets all seven
    surfaces in lockstep — root `package.json` `version`,
    `packages/core/package.json` `version`, the root `@dev-loops/core` range
    (`^<version>`), `bun.lock` (`bun install --lockfile-only`, proven with
