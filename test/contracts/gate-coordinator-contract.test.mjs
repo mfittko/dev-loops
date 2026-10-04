@@ -26,31 +26,43 @@ test("GATE-EXEC-GATE-COORDINATOR is defined once, owned by the gate-review sub-l
   assertRuleOwned("GATE-EXEC-GATE-COORDINATOR", CONTRACT_DOC);
 });
 
+// Structural claim check. A claim is a list of literal tokens (rule IDs, flags, fields, RFC-2119 modalities)
+// that must co-occur in ONE sentence of the located block, so rewording keeps passing and a dropped literal
+// or modality fails. `assertClaims` also proves both directions on the real block: a reworded copy (filler clause between tokens, sentence order reversed) passes,
+// and removing a claim's last token makes exactly that claim fail.
+const collapse = (text) => text.replace(/\s+/g, " ");
+const sentences = (text) => collapse(text).split(/(?<=[.!?:])\s+(?=[A-Z`*(|-])/);
+// Polarity-safe literals: MUST must not match MUST NOT, compliant must not match non-compliant.
+const POLARITY = { MUST: /\bMUST\b(?! NOT)/, compliant: /(?<!non-)\bcompliant\b/ };
+const has = (s, t) => (POLARITY[t] ? POLARITY[t].test(s) : s.includes(t));
+const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => has(s, t))));
+const reword = (block, claims) => sentences(block).map((s) => (claims.find((tokens) => tokens.every((t) => has(s, t)))?.slice(0, -1) ?? []).reduce((acc, t) => acc.replace(t, `${t} (as the contract records, without exception)`), s)).reverse().join(" ");
+function assertClaims(block, claims, label) {
+  assert.deepEqual(missingClaims(block, claims), [], `${label}: missing claim`);
+  assert.deepEqual(missingClaims(reword(block, claims), claims), [], `${label}: a reworded copy must pass`);
+  const swapped = collapse(block).replace(/\bMUST\b(?! NOT)/g, "MUST NOT");
+  for (const tokens of claims.filter((c) => c.includes("MUST"))) assert.ok(missingClaims(swapped, claims).includes(tokens), `${label}: MUST to MUST NOT must fail ${tokens.join(" + ")}`);
+  for (const tokens of claims) {
+    const broken = collapse(block).split(tokens.at(-1)).join("");
+    assert.ok(missingClaims(broken, claims).includes(tokens), `${label}: dropping ${tokens.at(-1)} must fail ${tokens.join(" + ")}`);
+  }
+}
+
 test("the rule states it is the only sanctioned round shape", async () => {
   const content = await readRepo(CONTRACT_DOC);
   const section = ruleSection(content);
   assert.match(section, /GATE-EXEC-GATE-COORDINATOR/, "expected the rule id restated in its own prose");
-  assert.match(section, /only sanctioned round\s+shape/, "expected the rule to name itself as the only sanctioned round shape");
+  assertClaims(section, [["only sanctioned", "shape"]], "round shape");
 });
 
 test("the rule scopes to draft_gate and pre_approval_gate lifecycle rounds", async () => {
   const content = await readRepo(CONTRACT_DOC);
-  const section = ruleSection(content);
-  assert.match(
-    section,
-    /Every `draft_gate` and `pre_approval_gate` review round MUST run/,
-    "expected the rule to scope itself to the two lifecycle gates",
-  );
+  assertClaims(ruleSection(content), [["`draft_gate`", "`pre_approval_gate`", "MUST", "gate coordinator"]], "lifecycle scope");
 });
 
 test("the rule covers the light-mode inline_single_agent round", async () => {
   const content = await readRepo(CONTRACT_DOC);
-  const section = ruleSection(content);
-  assert.match(
-    section,
-    /A light-mode\s+`inline_single_agent` round also runs inside the gate coordinator/,
-    "expected the rule to state the light-mode round also runs inside the gate coordinator",
-  );
+  assertClaims(ruleSection(content), [["light-mode", "`inline_single_agent`", "gate coordinator"]], "light-mode round");
 });
 
 test("skills/docs/required-rules.json registers GATE-EXEC-GATE-COORDINATOR", async () => {
@@ -63,57 +75,39 @@ test("skills/docs/required-rules.json registers GATE-EXEC-GATE-COORDINATOR", asy
 test("the rule lists the returned fields and keeps reviewer/judge output in the gate coordinator's context", async () => {
   const content = await readRepo(CONTRACT_DOC);
   const section = ruleSection(content);
-  for (const field of [
-    "verdict",
-    "the execution mode",
-    "inline reason and findings summary",
-    "severity counts",
-    "fan-in\noutput path",
-    "durable findings-log path",
-    "act-list path",
-    "spec-authority identity path",
-    "judge summary",
-  ]) {
-    const pattern = new RegExp(field.replace(/\s+/g, "\\s+"));
-    assert.match(section, pattern, `expected the returned-result field "${field}" in the rule`);
-  }
-  assert.match(
-    section,
-    /[Rr]eviewer\s+and judge outputs stay in the gate coordinator's context/,
-    "expected the rule to state reviewer/judge outputs never propagate to the dev-loop coordinator",
-  );
+  // One claim per returned field, all anchored to the typed-result sentence.
+  const fields = [
+    "verdict", "execution mode", "inline reason", "findings summary", "severity counts", "fan-in output path",
+    "durable findings-log path", "act-list path", "spec-authority identity path", "judge summary",
+  ];
+  assertClaims(section, [
+    ...fields.map((field) => ["returns only", "typed result", field]),
+    ["Reviewer", "judge outputs", "never propagate"],
+  ], "returned fields");
+  // Negative case: dropping fields from the field-list sentence alone must fail their claims,
+  // even though the review-route sentence also names three of the fields.
+  const broken = collapse(section).replace("the act-list path, the spec-authority identity path, and the judge summary", "");
+  const claims = fields.map((field) => ["returns only", "typed result", field]);
+  assert.equal(missingClaims(broken, claims).length, 3, "dropping three fields from the field-list sentence must fail exactly those claims");
 });
 
 test("the rule pins the reserved-lifecycle-writes sentence", async () => {
   const content = await readRepo(CONTRACT_DOC);
-  const section = ruleSection(content);
-  assert.match(
-    section,
-    /never posts the verdict comment, flips ready, pushes, or\s+merges/,
-    "expected the rule to pin that the gate coordinator never performs these reserved lifecycle writes",
-  );
+  assertClaims(ruleSection(content), [["never posts", "verdict comment", "flips ready", "pushes", "merges"]], "reserved lifecycle writes");
 });
 
 test("the rule states the typed-observation stop on head change, unrecovered dispatch failure, fan-in failure, or a failed Phase 3.5 judge rerun", async () => {
   const content = await readRepo(CONTRACT_DOC);
-  const section = ruleSection(content);
-  assert.match(
-    section,
-    /On a head change, a\s+dispatch failure that `GATE-EXEC-DISPATCH-RETRY-BACKOFF` does not recover, or a fan-in\s+failure,\s+the gate coordinator stops and returns a typed observation instead of choosing the next step/,
-    "expected the rule to state the head-change/dispatch/fan-in typed-observation stop condition",
-  );
-  assert.match(
-    section,
-    /If\s+the Phase 3\.5 judge rerun at the current head also fails, the gate coordinator stops and returns\s+a typed observation/,
-    "expected the rule to state the Phase 3.5 judge-rerun-failure typed-observation stop condition",
-  );
+  assertClaims(ruleSection(content), [
+    ["head change", "`GATE-EXEC-DISPATCH-RETRY-BACKOFF`", "fan-in", "typed observation"],
+    ["Phase 3.5", "judge rerun", "typed observation"],
+  ], "typed-observation stops");
 });
 
 test("the rule states the fail-closed fan-out-unavailable path and never degrading to inline review", async () => {
   const content = await readRepo(CONTRACT_DOC);
   const section = ruleSection(content);
-  assert.match(section, /FANOUT_UNAVAILABLE_MESSAGE/, "expected the rule to name the fail-closed signal");
-  assert.match(section, /never degrades to inline review/, "expected the rule to forbid inline-review degradation");
+  assertClaims(section, [["`FANOUT_UNAVAILABLE_MESSAGE`", "fails closed", "never degrades", "inline"]], "fail-closed signal");
 
   const failClosedIdx = content.indexOf("### Fail-closed: fan-out unavailable");
   assert.ok(failClosedIdx !== -1, "expected the fail-closed fan-out-unavailable section");
@@ -129,11 +123,7 @@ test("the rule states the fail-closed fan-out-unavailable path and never degradi
     FANOUT_UNAVAILABLE_MESSAGE,
     "the contract's quoted fail-closed string must equal the exported FANOUT_UNAVAILABLE_MESSAGE",
   );
-  assert.match(
-    failClosedSection,
-    /Under `GATE-EXEC-GATE-COORDINATOR`, the gate coordinator returns this signal to the dev-loop\s+coordinator as the round's result/,
-    "expected the fail-closed section to route the signal through the gate coordinator to the dev-loop coordinator",
-  );
+  assertClaims(failClosedSection, [["`GATE-EXEC-GATE-COORDINATOR`", "returns this signal", "dev-loop coordinator"]], "fail-closed routing");
 });
 
 test("agents/dev-loop.agent.md's sub-loop bullet names the gate coordinator and the rule, and drops the ambiguous phrase", async () => {
@@ -213,22 +203,18 @@ test("the Pi surface (package.json's pi manifest and the rendered agent) carries
 
 // ADR 0112: the gate coordinator is a dedicated agent definition.
 const GATE_COORDINATOR_AGENT = "agents/gate-coordinator.agent.md";
-const TYPED_RESULT_FIELDS = [
-  "verdict", "execution mode", "inline reason", "findings summary", "severity counts", "fan-in output path",
-  "durable findings-log path", "act-list path", "spec-authority identity path", "judge summary",
-];
 
-test("the gate-coordinator agent names the rule, the verbatim relay and every typed round result field", async () => {
+test("the gate-coordinator agent names the rule, the verbatim relay and defers the typed round result to the rule", async () => {
   const body = await readRepo(GATE_COORDINATOR_AGENT);
   assert.match(body, /^name: "gate-coordinator"$/m);
   assert.match(body, /GATE-EXEC-GATE-COORDINATOR/);
-  assert.match(body, /relays? each emitted `dispatchPrompt` byte for byte/);
-  for (const field of TYPED_RESULT_FIELDS) {
-    assert.match(body, new RegExp(field.replace(/\s+/g, "\\s+")), `expected the typed result field "${field}"`);
-  }
-  for (const boundary of ["tracked-file edits", "verdict comment", "ready flip", "push", "merge", "fixer dispatch"]) {
-    assert.ok(body.includes(boundary), `expected the boundary "${boundary}"`);
-  }
+  // The agent cites the rule for the typed result; the contract owns the field list (asserted against the rule above).
+  assertClaims(body, [
+    ["relay", "`dispatchPrompt`", "byte for byte"],
+    ["typed round result", "`GATE-EXEC-GATE-COORDINATOR`"],
+  ], "gate-coordinator agent");
+  const boundary = body.slice(body.indexOf("## Boundary"));
+  assertClaims(boundary, [["tracked-file edits", "verdict comment", "ready flip", "push", "merge", "fixer dispatch"]], "agent boundary");
 });
 
 test("renderPiAgent maps the gate-coordinator subagent tool to the Pi subagent tool", async () => {

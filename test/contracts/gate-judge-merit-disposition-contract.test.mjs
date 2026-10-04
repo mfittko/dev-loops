@@ -24,6 +24,23 @@ const read = (rel) => readFile(`${repoRoot}${rel}`, "utf8");
 // regression this issue exists to prevent.
 const OLD_AUTODEFER_RE = /`low`\s+(?:is|MUST be)\s+deferred only when/;
 
+// Structural claim check. A claim is a list of literal tokens (rule IDs, flags, fields, RFC-2119 modalities)
+// that must co-occur in ONE sentence of the located block, so rewording keeps passing and a dropped literal
+// or modality fails. `assertClaims` also proves both directions on the real block: a reworded copy (filler clause between tokens, sentence order reversed) passes,
+// and removing a claim's last token makes exactly that claim fail.
+const collapse = (text) => text.replace(/\s+/g, " ");
+const sentences = (text) => collapse(text).split(/(?<=[.!?:])\s+(?=[A-Z`*(|-])/);
+const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => s.includes(t))));
+const reword = (block, claims) => sentences(block).map((s) => (claims.find((tokens) => tokens.every((t) => s.includes(t)))?.slice(0, -1) ?? []).reduce((acc, t) => acc.replace(t, `${t} (as the contract records, without exception)`), s)).reverse().join(" ");
+function assertClaims(block, claims, label) {
+  assert.deepEqual(missingClaims(block, claims), [], `${label}: missing claim`);
+  assert.deepEqual(missingClaims(reword(block, claims), claims), [], `${label}: a reworded copy must pass`);
+  for (const tokens of claims) {
+    const broken = collapse(block).split(tokens.at(-1)).join("");
+    assert.ok(missingClaims(broken, claims).includes(tokens), `${label}: dropping ${tokens.at(-1)} must fail ${tokens.join(" + ")}`);
+  }
+}
+
 // --- Disposition half (AC1/AC2): severity is an input, not an auto-gate ---
 
 test("agents/judge.agent.md states severity is an INPUT and a real defect (incl. a low) is act regardless of its label", async () => {
@@ -47,29 +64,30 @@ test("the Phase 3.5 judge contract states no severity auto-defer and adjudicates
     bodyLines.includes("<!-- rule: GATE-EXEC-JUDGE-PHASE -->"));
   assert.ok(section, "expected the GATE-EXEC-JUDGE-PHASE section");
   const body = section.bodyLines.join("\n");
-  assert.match(body, /Severity is an INPUT[\s\S]{0,40}never an auto-gate/, "Phase 3.5 must state severity is an input, never an auto-gate");
-  assert.match(body, /EVERY finding[\s\S]{0,40}`low`[\s\S]{0,40}merits/, "Phase 3.5 must state every finding incl. lows is adjudicated on merits");
-  assert.match(body, /real defect[\s\S]{0,20}`act` regardless of its severity label/, "Phase 3.5 must state a real defect is act regardless of severity label");
-  // AC2 preserved in the same contract.
-  assert.match(body, /cosmetic `low`[\s\S]{0,40}defaults to[\s\S]{0,4}`reject`/, "Phase 3.5 must keep a cosmetic low defaulting to reject");
+  assertClaims(body, [
+    ["Severity is an INPUT", "never an auto-gate"],
+    ["EVERY finding", "`low`", "merits"],
+    ["real defect", "`act`", "severity label"],
+    ["cosmetic `low`", "defaults to", "`reject`"],
+  ], "Phase 3.5 merit disposition");
   assert.doesNotMatch(body, OLD_AUTODEFER_RE, "Phase 3.5 must NOT re-introduce the severity-based auto-defer sentence for lows");
 });
 
+// A sentence that grants a low finding a defer "from round 1" must carry the judge-acted-low exception
+// (a judge `act` low is declinable on reproduction grounds only), so no allowance site re-defers it downstream.
+const lowDeferGrants = (text) => sentences(text).filter((s) => /from round 1/i.test(s) && /\blow\b/i.test(s) && /defer/i.test(s));
+const unexemptedGrants = (text) => lowDeferGrants(text).filter((s) => !(s.includes("`act`") && s.includes("reproduction")));
+
 test("EVERY round-1 low-defer allowance in the sub-loop contract exempts a judge-acted low (no downstream re-defer)", async () => {
-  // Without this, the judge acts a real low but the fixer may still triage-defer
-  // it on cheapness at any un-exempted allowance site — moving the severity-label
-  // defer one stage downstream. The invariant is robust to how many times the
-  // allowance is restated: every "permitted from round 1 ... for low" statement
-  // must be matched by a judge-acted-low exception, so adding a 4th allowance
-  // site without its exception fails closed here.
   const text = await read("skills/docs/gate-review-sub-loop-contract.md");
-  const allowances = text.match(/permitted from round 1 on for\s+low findings/g) ?? [];
-  const exceptions = text.match(/low the (?:JUDGE|judge)[\s\S]{0,80}disposed `act`[\s\S]{0,160}reproduction grounds/g) ?? [];
-  assert.ok(allowances.length >= 3, `expected the three known round-1 low-defer allowance restatements (found ${allowances.length})`);
-  assert.ok(
-    exceptions.length >= allowances.length,
-    `every round-1 low-defer allowance must carry the judge-acted-low exception: ${allowances.length} allowance(s) but only ${exceptions.length} exception(s)`,
-  );
+  assert.ok(lowDeferGrants(text).length >= 1, "expected at least one round-1 low-defer allowance");
+  assert.deepEqual(unexemptedGrants(text), []);
+  // Reworded positive: the exception travels with the allowance in any phrasing.
+  assert.deepEqual(unexemptedGrants("A low may be deferred from round 1, unless the judge marked it `act`; the fixer then declines only on reproduction grounds."), []);
+  // Broken negative: an allowance without the exception is reported.
+  assert.equal(unexemptedGrants("A low may be deferred from round 1 with no fix window.").length, 1);
+  // Case-insensitive: a capitalized grant is still caught.
+  assert.equal(unexemptedGrants("Defer is permitted From Round 1 for Low findings.").length, 1);
 });
 
 test("the operational fixer instructions exempt a judge-acted low from the round-1 defer allowance", async () => {
@@ -85,14 +103,15 @@ test("the operational fixer instructions exempt a judge-acted low from the round
 
 test("the sub-loop contract severity classification calibrates a real correctness/fail-open defect to at least medium", async () => {
   const text = await read("skills/docs/gate-review-sub-loop-contract.md");
-  assert.match(text, /Calibrate severity to[\s\S]{0,20}CONSEQUENCE/, "the classification bullet must carry the consequence-not-size calibration rule");
-  assert.match(text, /correctness on a reachable path[\s\S]{0,80}at least `medium`[\s\S]{0,12}never `low`/, "the calibration must rate a correctness/fail-open defect at least medium, never low");
+  assertClaims(text, [["CONSEQUENCE", "correctness", "reachable path", "at least `medium`", "never `low`"]], "contract severity calibration");
 });
 
 test("agents/review.agent.md applies the severity calibration so reviewers do not under-label a real defect as low", async () => {
   const text = await read("agents/review.agent.md");
-  assert.match(text, /Calibrate the label to consequence/, "the reviewer agent must apply the calibration at point-of-action");
-  assert.match(text, /at least `medium`, never `low`[\s\S]{0,80}no operator-visible consequence/, "the reviewer agent must reserve low for a defect with no operator-visible consequence");
+  assertClaims(text, [
+    ["consequence", "correctness break", "at least `medium`", "never `low`"],
+    ["`low`", "no operator-visible consequence"],
+  ], "reviewer agent severity calibration");
 });
 
 // --- ADR provenance: the amendment is recorded, 0051's body is untouched ---

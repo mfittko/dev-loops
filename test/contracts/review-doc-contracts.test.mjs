@@ -140,7 +140,6 @@ test("review agent does not hardcode reviewer identity or stale plan path", asyn
   assert.doesNotMatch(content, /docs\/plans\//);
 });
 
-
 test("docs agent supports docs-correctness review posture without becoming a public workflow entrypoint", async () => {
   const content = await readRepo("agents/docs.agent.md");
   const frontmatter = parseFrontmatter(content);
@@ -152,6 +151,23 @@ test("docs agent supports docs-correctness review posture without becoming a pub
   // rules); loose token check instead of the exact sentence (#1159).
   assert.match(content, /acting as reviewer/i);
 });
+
+// Structural claim check. A claim is a list of literal tokens (rule IDs, flags, fields, RFC-2119 modalities)
+// that must co-occur in ONE sentence of the located block, so rewording keeps passing and a dropped literal
+// or modality fails. `assertClaims` also proves both directions on the real block: a reworded copy (filler clause between tokens, sentence order reversed) passes,
+// and removing a claim's last token makes exactly that claim fail.
+const collapse = (text) => text.replace(/\s+/g, " ");
+const sentences = (text) => collapse(text).split(/(?<=[.!?:])\s+(?=[A-Z`*(|-])/);
+const missingClaims = (block, claims) => claims.filter((tokens) => !sentences(block).some((s) => tokens.every((t) => s.includes(t))));
+const reword = (block, claims) => sentences(block).map((s) => (claims.find((tokens) => tokens.every((t) => s.includes(t)))?.slice(0, -1) ?? []).reduce((acc, t) => acc.replace(t, `${t} (as the contract records, without exception)`), s)).reverse().join(" ");
+function assertClaims(block, claims, label) {
+  assert.deepEqual(missingClaims(block, claims), [], `${label}: missing claim`);
+  assert.deepEqual(missingClaims(reword(block, claims), claims), [], `${label}: a reworded copy must pass`);
+  for (const tokens of claims) {
+    const broken = collapse(block).split(tokens.at(-1)).join("");
+    assert.ok(missingClaims(broken, claims).includes(tokens), `${label}: dropping ${tokens.at(-1)} must fail ${tokens.join(" + ")}`);
+  }
+}
 
 test("review workflow resolves pre-approval gate angles from config with explicit fallback requirement", async () => {
   const [copilotFollowupSkill, subLoopContract, reviewAgent, reviewTemplate, reviewerGraph] = await Promise.all([
@@ -167,7 +183,6 @@ test("review workflow resolves pre-approval gate angles from config with explici
   // prescribe it (per LOCAL-DEV-SELF-CHECK-NO-FANOUT); the fan-out sites are
   // the copilot-pr-followup / review surfaces below.
   const gateDocuments = [
-    ["agents/review.agent.md", reviewAgent, /default pre-approval gate contract:[\s\S]{0,200}resolveGateAngles/i],
     ["skills/dev-loop/templates/review.md", reviewTemplate, /Default pre-approval gate/i],
     ["skills/docs/reviewer-loop-state-graph.md", reviewerGraph, /default pre-approval gate[\s\S]{0,200}resolveGateAngles/i],
   ];
@@ -195,8 +210,15 @@ test("review workflow resolves pre-approval gate angles from config with explici
   // The review agent's fresh-context + sequential-fallback sentences point at
   // GATE-EXEC-BUILD-ONCE-SEED / GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK (owned
   // above); loose token checks on the agent surface, not exact sentences (#1159).
-  assert.match(reviewAgent, /fresh context/i);
-  assert.match(reviewAgent, /record the limitation/i);
+  // The review agent's gate phrasing, fresh-context and limitation duties are checked structurally: the
+  // angle resolver literal, the `defaultContext` frontmatter field, and the parallel-limitation claim.
+  assert.equal(parseFrontmatter(reviewAgent).defaultContext, "fresh");
+  const focus = reviewAgent.slice(reviewAgent.indexOf("## Review Focus")).split("\n## ")[0];
+  assertClaims(focus, [
+    ["pre-approval gate", "`resolveGateAngles(config, \"preApproval\")`"],
+    ["configured angle", "fresh context", "parallel"],
+    ["parallel", "impractical", "limitation", "verdict"],
+  ], "review agent angle duties");
   assertRuleOwned("REVIEWER-STATE-GATE-ANGLE-MAPPING", "skills/docs/reviewer-loop-state-graph.md");
   assert.match(reviewerGraph, /REVIEWER-STATE-GATE-ANGLE-MAPPING/);
 });
@@ -247,7 +269,6 @@ test("local-implementation skill documents the auto-scoped rendered-artifact UI 
   assert.match(localImplementationSkill, /Playwright WebKit plus screenshot capture/i);
   assert.match(localImplementationSkill, /ui-e2e-scoping-step\.md/i);
 });
-
 
 test("CI gates the Playwright WebKit smoke behind inspect-run viewer change detection and uses Node24-ready first-party actions", async () => {
   const [ciWorkflow, playwrightWebkitAction] = await Promise.all([
