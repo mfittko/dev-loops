@@ -282,10 +282,13 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
   }
   let copilotEvidence = null;
   let copilotLiveStatus = "failed";
+  let copilotFailureReason = null;
   try {
     copilotEvidence = await loadCopilotEvidence({ repo, pr, copilotInputPath }, { env, ghCommand });
     copilotLiveStatus = "ok";
-  } catch {
+  } catch (error) {
+    // A config error is not a GitHub fetch failure: name it and keep the evidence dropped (no default refinement).
+    if (error?.code === "config_load_failed") copilotFailureReason = "config_load_failed";
   }
   let reviewerEvidence = null;
   let reviewerLiveStatus = "failed";
@@ -374,7 +377,7 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
       }
     }
   }
-  return composeRunInspectionSnapshot({
+  const snapshot = composeRunInspectionSnapshot({
     target: { repo, pr },
     inspectedAt,
     outerState,
@@ -395,6 +398,11 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
     steeringReadback,
     loopIterations,
   });
+  if (copilotFailureReason !== null) {
+    snapshot.markers.missing = snapshot.markers.missing.map((marker) =>
+      marker === "live Copilot loop state (detection failed)" ? `live Copilot loop state (${copilotFailureReason})` : marker);
+  }
+  return snapshot;
 }
 export async function runCli(
   argv = process.argv.slice(2),

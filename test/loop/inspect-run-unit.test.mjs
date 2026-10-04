@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 
@@ -1029,5 +1030,22 @@ test("inspectRun honors includeLoopIterations:false and keeps the full fan-out o
 
     const full = await inspectRun(options, context);
     assert.notEqual(full.loopIterations.reason, "deferred_by_caller");
+  });
+});
+
+test("inspectRun names config_load_failed instead of a fetch failure when .devloops has an unknown key", async () => {
+  await withTempDir(async (tempDir) => {
+    const copilotPath = path.join(tempDir, "copilot.json");
+    await writeJson(copilotPath, { prExists: true, prNumber: 55, prDraft: false, copilotReviewRequestStatus: "requested", unresolvedThreadCount: 0, ciStatus: "success" });
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nnot_a_real_key: true\n", "utf8");
+    const originalCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const snapshot = await inspectRun({ repo: "owner/repo", pr: 55, copilotInputPath: copilotPath, includeLoopIterations: false }, { ghCommand: path.join(tempDir, "gh-must-not-run") });
+      assert.equal(snapshot.copilotEvidence, undefined);
+      assert.ok(snapshot.markers.missing.includes("live Copilot loop state (config_load_failed)"), JSON.stringify(snapshot.markers));
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 });
