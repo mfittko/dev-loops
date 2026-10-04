@@ -138,10 +138,10 @@ export function renderStateVisualizationSection(snapshot, graph = buildInspectio
   if (graph === null) return `<div class="state-graph-block"><p>Snapshot unavailable, so no state graph can be rendered yet.</p><a href="${escapeHtml(snapshotHref)}">Snapshot JSON</a></div>`;
   return `<div class="state-graph-block">
     <div class="state-graph-frame" data-inspection-graph-root data-selected-layer="${escapeHtml(graph.initialLayerId)}" role="region" aria-label="Read-only inspection graph">
-      <div class="state-graph-layer-selector" aria-label="Inspection layers">
+      <div class="state-graph-layer-selector" role="group" aria-label="Inspection layers">
         ${graph.layers.map(layer => `<button type="button" data-graph-layer="${escapeHtml(layer.id)}" aria-pressed="${layer.id === graph.initialLayerId}" disabled><strong>${escapeHtml(layer.title)}</strong><span>Current: ${escapeHtml(layer.current.label)}</span><span>${escapeHtml(layerTransitionSummary(layer))}</span></button>`).join('')}
       </div>
-      <div class="state-graph-toolbar" aria-label="Graph controls">
+      <div class="state-graph-toolbar" role="group" aria-label="Graph controls">
         <button type="button" data-graph-zoom-out aria-label="Zoom out" disabled>−</button>
         <button type="button" data-graph-zoom-in aria-label="Zoom in" disabled>+</button>
         <button type="button" data-graph-fit disabled>Fit graph</button>
