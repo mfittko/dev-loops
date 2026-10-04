@@ -3,7 +3,7 @@ import process from "node:process";
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import {
-  loadDevLoopConfig,
+  loadDevLoopConfigStrict,
   resolveReviewProportionality,
   resolveLightMode,
   GATE_FULL_LABEL,
@@ -133,7 +133,7 @@ export async function run(argv) {
     return;
   }
   try {
-    const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+    const { config } = await loadDevLoopConfigStrict({ repoRoot: process.cwd() });
     const scope = detectScope({ base: opts.base, head: opts.head });
     // Fail CLOSED on unmeasurable scope: a broken/failed diff must route to the
     // full gate, never silently collapse to inline (which would bypass review).

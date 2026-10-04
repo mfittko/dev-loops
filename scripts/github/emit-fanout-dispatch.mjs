@@ -15,7 +15,7 @@ import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
-import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, isPackedUnitName, normalizeUnitAngles, sanitizeScopeSegment, unitScopeSegment } from "./_dispatch-units.mjs";
 
@@ -463,6 +463,16 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const silent = argv.includes("--silent") || argv.includes("-s");
   const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
 
+  // The same config write-gate-context resolved against (this step runs in that
+  // worktree). A config load error refuses before any artifact is read.
+  let config;
+  try {
+    ({ config } = await loadDevLoopConfigStrict({ repoRoot: process.cwd() }));
+  } catch (err) {
+    process.stderr.write(`${formatCliError(err)}\n`);
+    return 2;
+  }
+
   let artifact;
   try {
     artifact = JSON.parse(await readFile(contextPath, "utf8"));
@@ -585,13 +595,10 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
 
   // Every multi-angle resolveFanoutGroups unit shares one reviewer, configured
   // group or auto-chunk bundle alike (see expandDispatchUnits); configuredGroupNames
-  // is passed through only for split sub-unit name disambiguation. Load the same
-  // config write-gate-context resolved against (this step runs in that worktree).
+  // is passed through only for split sub-unit name disambiguation.
   let configuredGroupNames;
-  let config;
   let maxConcurrent;
   try {
-    ({ config } = await loadDevLoopConfig({ repoRoot: process.cwd() }));
     if (carryProof !== undefined) {
       const alwaysRerun = resolveGateAngleContract(config, mapGateToConfigKey(gate)).mandatoryAngles;
       if (carryProof.some(({ angle }) => angleReviewSurface(angle, { alwaysRerun }).kind !== "kinds")) {

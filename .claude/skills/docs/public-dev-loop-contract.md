@@ -128,6 +128,7 @@ Resolved bundle output shape:
 ```json
 {
   "bundleKind": "resolved | needs_reconcile",
+  "configError": "optional; only on a config_load_failed needs_reconcile bundle: { reason, errors, unknownKeys, runningVersion, checkoutVersion }",
   "activeArtifact": {
     "kind": "issue | pr | local_branch | local_phase",
     "issue": 111,
@@ -203,6 +204,7 @@ Fail-closed semantics:
   - `loopState = unknown`
   - `nextAction` must instruct reconciliation before routing/status answers
 - `loop build-envelope` MUST accept that intentional null strategy and emit an actionable terminal reconciliation envelope; it MUST NOT coerce the result into a routed strategy
+  - exception: a `config_load_failed` startup (`bundle.configError` present) stops at its `nextAction`, and `loop build-envelope` refuses it with `config_load_failed` (`CONFIG-LOAD-FAIL-CLOSED` in [Artifact authority contract](artifact-authority-contract.md))
 - `executionMode=durable_auto` must fail closed unless a visible Pi-managed async run is already registered
 - a detached watcher/background pid is never acceptable evidence of async `dev-loop` startup success
 - invalid explicit `intent` also fails closed

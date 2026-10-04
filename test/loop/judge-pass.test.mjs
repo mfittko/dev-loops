@@ -510,28 +510,32 @@ test("judgePassCli fails closed when the gate config cannot be loaded (#2246)", 
   // loadDevLoopConfig return a non-empty errors[]; resolveBlockingSeverities
   // must throw rather than fall back.
   await writeFile(
-    path.join(tmpDir, ".devloops"),
-    "version: 1\ngates:\n  draft:\n    blockCleanOnFindingSeverities: [bogus-severity]\n",
-  );
-  await writeFile(
     path.join(tmpDir, "ledger.json"),
     JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "low", summary: "x" })] }),
   );
+  const options = {
+    repo: "mfittko/dev-loops",
+    pr: "1",
+    gate: "draft_gate",
+    headSha: HEAD,
+    findingsFile: "./ledger.json",
+  };
+  // Deliver the judge work order under a valid config, then break the config so
+  // only judge-pass's own resolveGateSettings guard can refuse.
+  const sources = await seedJudgeSources(tmpDir, { ...options, pr: Number(options.pr) });
+  const { plan, receiptTmpRoot } = await deliverJudge(tmpDir, sources);
+  await writeVerdictAfterPull(
+    plan.workOrder.outputRefs[0],
+    Buffer.from(JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "y" }] }))),
+  );
   await writeFile(
-    path.join(tmpDir, "judge-verdict.json"),
-    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "y" }] })),
+    path.join(tmpDir, ".devloops"),
+    "version: 1\ngates:\n  draft:\n    blockCleanOnFindingSeverities: [bogus-severity]\n",
   );
   await assert.rejects(
-    judgePassCli(
-      {
-        repo: "mfittko/dev-loops",
-        pr: "1",
-        gate: "draft_gate",
-        headSha: HEAD,
-        findingsFile: "./ledger.json",
-        judgeVerdict: "./judge-verdict.json",
-      },
-      { repoRoot: tmpDir },
+    judgePassCliRaw(
+      { judgePlan: plan.planPath, ...options, judgeVerdict: plan.workOrder.outputRefs[0] },
+      { repoRoot: tmpDir, receiptTmpRoot },
     ),
     /could not be fully loaded\/validated/,
   );

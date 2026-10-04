@@ -27,8 +27,8 @@ import { toolchainRootMismatch } from "../loop/_repo-root-resolver.mjs";
 export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
   const assets = [];
 
-  // The dev-loops package version pins the Claude `npx dev-loops@<version>` CLI invocation so the
-  // generated plugin tree cannot drift against the published version. Read it once here.
+  // The dev-loops package version stamps the plugin manifest so the generated plugin tree cannot
+  // drift against the published version. Read it once here.
   // Falls back to `latest` when no repo-root package.json is present (e.g. a consumer/fixture tree
   // that mirrors only agents/skills).
   let version = "latest";

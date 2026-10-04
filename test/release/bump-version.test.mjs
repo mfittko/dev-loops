@@ -62,7 +62,6 @@ function makeFixture(from) {
   const dir = mkdtempSync(path.join(tmpdir(), "bump-version-fixture-"));
   mkdirSync(path.join(dir, "packages/core"), { recursive: true });
   mkdirSync(path.join(dir, ".claude/.claude-plugin"), { recursive: true });
-  mkdirSync(path.join(dir, ".claude/agents"), { recursive: true });
   writeJson(path.join(dir, "package.json"), {
     name: "dev-loops",
     version: from,
@@ -70,7 +69,6 @@ function makeFixture(from) {
   });
   writeJson(path.join(dir, "packages/core/package.json"), { name: CORE_DEP, version: from });
   writeJson(path.join(dir, ".claude/.claude-plugin/plugin.json"), { name: "dev-loops", version: from });
-  writeFileSync(path.join(dir, ".claude/agents/x.md"), `Run \`npx dev-loops@${from} loop startup\`.\n`);
   writeJson(path.join(dir, ".claude/package.json"), { name: "dev-loops-plugin", private: true, dependencies: { "dev-loops": from } });
   writeJson(path.join(dir, ".claude/package-lock.json"), claudePluginLock(from));
   writeFileSync(path.join(dir, "bun.lock"), lockfile(from));
@@ -100,7 +98,7 @@ test("inspectSurfaces confirms all five surfaces when in lockstep and flags each
   try {
     const clean = inspectSurfaces(dir, PRERELEASE);
     assert.ok(clean.every((s) => s.ok), `expected all surfaces ok, got ${JSON.stringify(clean)}`);
-    assert.equal(clean.length, 9); // 7 surfaces; the generated-.claude and plugin-pin surfaces each report multiple rows
+    assert.equal(clean.length, 8); // 7 surfaces; the plugin-pin surface reports multiple rows
 
     // Drift one surface (the plugin manifest) and confirm exactly it fails closed.
     writeJson(path.join(dir, ".claude/.claude-plugin/plugin.json"), { name: "dev-loops", version: "9.9.9" });
@@ -108,12 +106,13 @@ test("inspectSurfaces confirms all five surfaces when in lockstep and flags each
     const failed = drifted.filter((s) => !s.ok).map((s) => s.name);
     assert.deepEqual(failed, ["plugin.json version"]);
 
-    // The pinned-npx-call-site surface is the exact drift class this PR targets:
-    // confirm a stale pin is caught too.
+    // A stale plugin dependency pin is caught too. No npx call-site surface exists: the
+    // generated forms resolve through the launcher, not a pinned npx spec.
     writeJson(path.join(dir, ".claude/.claude-plugin/plugin.json"), { name: "dev-loops", version: PRERELEASE });
-    writeFileSync(path.join(dir, ".claude/agents/x.md"), `Run \`npx dev-loops@1.0.0-pre.0 loop startup\`.\n`);
+    writeJson(path.join(dir, ".claude/package.json"), { name: "dev-loops-plugin", private: true, dependencies: { "dev-loops": "1.0.0-pre.0" } });
     const pinDrift = inspectSurfaces(dir, PRERELEASE);
-    assert.deepEqual(pinDrift.filter((s) => !s.ok).map((s) => s.name), ["pinned npx call-sites"]);
+    assert.deepEqual(pinDrift.filter((s) => !s.ok).map((s) => s.name), [".claude plugin dev-loops pin"]);
+    assert.equal(pinDrift.some((s) => /npx/.test(s.name)), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -144,7 +143,6 @@ function makeRegenRunner(dir, version, { regenPlugin = true } = {}) {
     if (command === "node" && args.some((a) => a.endsWith("generate-claude-assets.mjs")) && !args.includes("--check")) {
       if (regenPlugin) {
         writeJson(path.join(dir, ".claude/.claude-plugin/plugin.json"), { name: "dev-loops", version });
-        writeFileSync(path.join(dir, ".claude/agents/x.md"), `Run \`npx dev-loops@${version} loop startup\`.\n`);
       }
     }
   };

@@ -213,6 +213,7 @@ async function fetchCopilotLoopIterations({ repo, pr, snapshot }, { env, ghComma
     degradedReasons,
   });
 }
+const CONFIG_LOAD_FAILED_LOOP_ITERATIONS = { available: false, source: "github_pr_timeline", reason: "config_load_failed" };
 // Round metrics from already-loaded copilot evidence, and nothing else. The one
 // place that decides what `loopIterations` is, so the viewer's round-metrics
 // fragment and a full `inspectRun` cannot answer differently.
@@ -242,7 +243,9 @@ export async function inspectRunLoopIterations(options, { env = process.env, ghC
   let copilotEvidence = null;
   try {
     copilotEvidence = await loadCopilotEvidence({ repo, pr, copilotInputPath }, { env, ghCommand });
-  } catch {
+  } catch (error) {
+    // Name a config error; never fall back to a default (matches inspectRun).
+    if (error?.code === "config_load_failed") return CONFIG_LOAD_FAILED_LOOP_ITERATIONS;
   }
   return resolveLoopIterationMetrics({ repo, pr, copilotInputPath, copilotEvidence }, { env, ghCommand });
 }
@@ -282,10 +285,13 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
   }
   let copilotEvidence = null;
   let copilotLiveStatus = "failed";
+  let copilotFailureReason = null;
   try {
     copilotEvidence = await loadCopilotEvidence({ repo, pr, copilotInputPath }, { env, ghCommand });
     copilotLiveStatus = "ok";
-  } catch {
+  } catch (error) {
+    // A config error is not a GitHub fetch failure: name it and keep the evidence dropped (no default refinement).
+    if (error?.code === "config_load_failed") copilotFailureReason = "config_load_failed";
   }
   let reviewerEvidence = null;
   let reviewerLiveStatus = "failed";
@@ -294,7 +300,9 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
     reviewerLiveStatus = "ok";
   } catch {
   }
-  const loopIterations = includeLoopIterations === false && copilotEvidence?.snapshot?.prExists !== false
+  const loopIterations = copilotFailureReason === "config_load_failed" && includeLoopIterations !== false
+    ? CONFIG_LOAD_FAILED_LOOP_ITERATIONS
+    : includeLoopIterations === false && copilotEvidence?.snapshot?.prExists !== false
     ? { available: false, source: "github_pr_timeline", reason: "deferred_by_caller" }
     : await resolveLoopIterationMetrics({ repo, pr, copilotInputPath, copilotEvidence }, { env, ghCommand });
   const { checkpoint: existingCheckpoint, filePath: checkpointEvidencePath } = await readExistingCheckpoint(repo, pr, { failSilently: true });
@@ -374,7 +382,7 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
       }
     }
   }
-  return composeRunInspectionSnapshot({
+  const snapshot = composeRunInspectionSnapshot({
     target: { repo, pr },
     inspectedAt,
     outerState,
@@ -395,6 +403,11 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
     steeringReadback,
     loopIterations,
   });
+  if (copilotFailureReason !== null) {
+    snapshot.markers.missing = snapshot.markers.missing.map((marker) =>
+      marker === "live Copilot loop state (detection failed)" ? `live Copilot loop state (${copilotFailureReason})` : marker);
+  }
+  return snapshot;
 }
 export async function runCli(
   argv = process.argv.slice(2),

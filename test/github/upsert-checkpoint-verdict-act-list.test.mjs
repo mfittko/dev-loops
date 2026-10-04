@@ -17,7 +17,7 @@ let repoRoot = null;
 before(async () => {
   // Shadow git on PATH so the cascade's execFileSync git reads stay hermetic.
   gitStubDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-act-list-gitstub-"));
-  await writeFile(path.join(gitStubDir, "git"), "#!/bin/sh\nexit 0\n", "utf8");
+  await writeFile(path.join(gitStubDir, "git"), "#!/bin/sh\n[ \"$1\" = cat-file ] && exit 1\nexit 0\n", "utf8");
   await chmod(path.join(gitStubDir, "git"), 0o755);
   originalPath = process.env.PATH;
   process.env.PATH = [gitStubDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter);
