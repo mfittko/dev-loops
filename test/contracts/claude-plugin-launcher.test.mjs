@@ -97,6 +97,42 @@ test("checkout-wins: a live checkout runs over a NEWER installed package, no rei
   }
 });
 
+// The generated startup form is `dev-loops-run cli/index.mjs loop startup`. Inside a checkout it
+// must run the checkout's CLI even when an installed package carries the same version; outside a
+// checkout it must run the plugin's installed package.
+function writeCli(file, label) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, `console.log(${JSON.stringify(label)} + " " + process.argv.slice(2).join(" "));\n`);
+}
+
+test("generated startup form: a checkout runs its own cli/index.mjs, a consumer runs the installed package", () => {
+  const { dir, pluginRoot, launcher } = makeFixtureRoot();
+  try {
+    writeInstalledManifest(pluginRoot, "1.0.5");
+    writeCli(path.join(pluginRoot, "node_modules/dev-loops/cli/index.mjs"), "INSTALLED_CLI");
+
+    const checkout = path.join(dir, "checkout");
+    mkdirSync(path.join(checkout, "scripts"), { recursive: true });
+    writeFileSync(path.join(checkout, "package.json"), JSON.stringify({ name: "dev-loops", version: "1.0.5" }));
+    writeCli(path.join(checkout, "cli/index.mjs"), "CHECKOUT_CLI");
+
+    const inCheckout = runLauncher(launcher, ["cli/index.mjs", "loop", "startup", "--issue", "7"], checkout);
+    assert.equal(inCheckout.status, 0, inCheckout.stderr);
+    assert.equal(inCheckout.stdout.trim(), "CHECKOUT_CLI loop startup --issue 7");
+
+    const consumerCwd = mkdtempSync(path.join(tmpdir(), "dev-loops-run-consumer-"));
+    try {
+      const outside = runLauncher(launcher, ["cli/index.mjs", "loop", "startup", "--issue", "7"], consumerCwd);
+      assert.equal(outside.status, 0, outside.stderr);
+      assert.equal(outside.stdout.trim(), "INSTALLED_CLI loop startup --issue 7");
+    } finally {
+      rmSync(consumerCwd, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("binary-location: a source-checkout binary invoked via a PATH symlink from an unrelated cwd resolves the checkout it lives in", () => {
   const root = mkdtempSync(path.join(tmpdir(), "dev-loops-run-binloc-"));
   try {

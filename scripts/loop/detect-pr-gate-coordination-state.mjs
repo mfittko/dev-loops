@@ -11,7 +11,7 @@ import {
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -951,21 +951,18 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // keeps the gate-coordination interpretation consistent with the standalone
   // detect-copilot-loop-state path and with request-copilot-review's cap logic.
   const interpreterRepoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
-  const interpreterConfigResult = await loadDevLoopConfig({ repoRoot: interpreterRepoRoot });
-  const interpreterConfigHasErrors = Array.isArray(interpreterConfigResult.errors) && interpreterConfigResult.errors.length > 0;
+  const interpreterConfigResult = await loadDevLoopConfigStrict({ repoRoot: interpreterRepoRoot });
   // preApprovalRequireCi is resolved centrally inside resolveRefinement, so
   // the interpreter honors gates.preApproval.requireCi:false here (shared by
   // detect and upsert via this context builder) without a separate threading step.
-  const interpreterRefinementConfig = interpreterConfigHasErrors
-    ? resolveRefinement({ version: 1 })
-    : resolveRefinement(interpreterConfigResult.config ?? { version: 1 });
+  const interpreterRefinementConfig = resolveRefinement(interpreterConfigResult.config ?? { version: 1 });
   if (options.lightweight) {
     // Compose (not replace) the round cap for light-dispatched PRs:
     // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds), so
     // maxCopilotRounds: 0 still disables Copilot rounds everywhere. Shared with
     // the maxCopilotRounds resolution below (the two must agree).
     interpreterRefinementConfig.maxCopilotRounds = resolveEffectiveCopilotRoundCap(
-      interpreterConfigHasErrors ? { version: 1 } : (interpreterConfigResult.config ?? { version: 1 }),
+      interpreterConfigResult.config ?? { version: 1 },
       { lightweight: true },
     );
   }
@@ -997,11 +994,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     copilotReviewRequestStatus: snapshot.copilotReviewRequestStatus,
     unresolvedThreadCount: snapshot.unresolvedThreadCount,
     reviewThreads: parsedThreads.threads,
-    // Same resolver and fallback as the interpreter config above: an
-    // unreadable config keeps the default converged-once mode.
-    requireCopilotConvergenceAtLatestHead: interpreterConfigHasErrors
-      ? false
-      : resolveRequireCopilotConvergenceAtLatestHead(interpreterConfigResult.config),
+    requireCopilotConvergenceAtLatestHead: resolveRequireCopilotConvergenceAtLatestHead(interpreterConfigResult.config),
   };
   // ponytail: the carry predicate re-reads the disposition comment stream the
   // body-feedback resolver above already read; share the result if gh call
@@ -1155,11 +1148,10 @@ export function buildGateCoordinationEvaluatorInput({
 }
 
 export async function detectPrGateCoordinationState(options, runtime = {}) {
-  const context = await loadPrGateCoordinationContext(options, runtime);
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
-  const configLoadResult = await loadDevLoopConfig({ repoRoot });
-  const hasConfigErrors = Array.isArray(configLoadResult.errors) && configLoadResult.errors.length > 0;
-  const config = hasConfigErrors ? {} : (configLoadResult.config ?? {});
+  // The config loads first: a config load error refuses before any gh read.
+  const config = (await loadDevLoopConfigStrict({ repoRoot })).config ?? {};
+  const context = await loadPrGateCoordinationContext(options, runtime);
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   // Shared with interpreterRefinementConfig.maxCopilotRounds in

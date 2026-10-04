@@ -3171,7 +3171,7 @@ test("buildFanoutEnforcement (#1972, AC4): angle-layer config falls back to the 
   }
 });
 
-test("buildFanoutEnforcement (#1972, AC4): angle-layer config falls back to the invoking checkout when the PR head's .devloops fails to parse", async () => {
+test("buildFanoutEnforcement (#1972, AC4): angle-layer config fails closed with config_load_failed when the PR head's .devloops fails to parse", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-fallback-parse-"));
   try {
     const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
@@ -3222,16 +3222,16 @@ test("buildFanoutEnforcement (#1972, AC4): angle-layer config falls back to the 
 
     const { config } = await loadDevLoopConfig({ repoRoot: dir });
     const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
-    const enforcement = await buildFanoutEnforcement({
-      repo: "owner/repo", pr: 1975, currentHeadSha: headSha,
-      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
-      config, cwd: dir, hasFullLabel: false,
-    });
-    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
-    // Fell back to the invoking checkout's config — the head's malformed
-    // .devloops never gets to silently widen or drop the mandatory-angle set.
-    assert.ok(gate.mandatoryAngles.includes("invoking-mandatory"), JSON.stringify(gate.mandatoryAngles));
-    assert.ok(gate.provenance, "a ledger conformant with the fallback (invoking) config still validates");
+    // The head's malformed .devloops fails closed; it is never accepted
+    // against the older invoking angle set.
+    await assert.rejects(
+      buildFanoutEnforcement({
+        repo: "owner/repo", pr: 1975, currentHeadSha: headSha,
+        draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+        config, cwd: dir, hasFullLabel: false,
+      }),
+      (error) => error.code === "config_load_failed",
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -4307,21 +4307,19 @@ test("detect-checkpoint-evidence requireFanoutEvidence=true fails closed when th
   }
 });
 
-test("detect-checkpoint-evidence disables fan-out enforcement (non-fatal) when config fails to load", async () => {
-  // FIX C: loadDevLoopConfig never throws; it returns { config, warnings, errors }.
-  // A config that fails schema validation produces a non-empty errors array, which
-  // must be treated as config-unavailable => enforcement disabled, NOT a crash.
+test("detect-checkpoint-evidence fails closed with config_load_failed when config fails to load", async () => {
+  // A config that fails schema validation must never disable fan-out
+  // enforcement; the detector refuses instead.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-badconfig-"));
   try {
     // requireFanoutEvidence must be a boolean; a string value fails validation.
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: \"yes\"\n", "utf8");
     const env = await writeGhStub(tempDir, fanoutEvidenceGhEntries("inline_single_agent"));
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-    // Enforcement disabled => the gate evidence is otherwise clean => exit 0.
-    assert.equal(result.code, 0, result.stderr);
-    const payload = JSON.parse(result.stdout);
-    assert.equal(payload.fanoutEnforcement.required, false);
-    assert.deepEqual(payload.preMergeGateCheck.failures, []);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /config_load_failed/);
+    assert.equal(JSON.parse(result.stderr.trim().split("\n").at(-1)).code, "config_load_failed");
+    assert.equal(result.stdout.trim(), "");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

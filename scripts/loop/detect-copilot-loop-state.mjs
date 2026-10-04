@@ -14,7 +14,7 @@ import {
 } from "../_core-helpers.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveEffectiveCopilotRoundCap, resolveRefinement } from "@dev-loops/core/config";
 import {
   buildSnapshotFromPrFacts,
   interpretLoopState,
@@ -393,6 +393,8 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return;
   }
+  // Load config first so a GitHub read failure cannot mask config_load_failed.
+  const config = await loadDevLoopConfigStrict({ repoRoot });
   let snapshot;
   let interpretationInput;
   if (options.inputPath !== undefined) {
@@ -410,16 +412,13 @@ export async function runCli(
     interpretationInput = snapshot;
   }
   let interpretation;
-  const config = await loadDevLoopConfig({ repoRoot });
-  const refinementConfig = config.errors.length > 0
-    ? resolveRefinement({ version: 1 })
-    : resolveRefinement(config.config);
+  const refinementConfig = resolveRefinement(config.config);
   if (options.lightweight) {
     // Compose (not replace) the round cap for light-dispatched PRs:
     // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds), so
     // maxCopilotRounds: 0 still disables Copilot rounds everywhere.
     refinementConfig.maxCopilotRounds = resolveEffectiveCopilotRoundCap(
-      config.errors.length > 0 ? { version: 1 } : config.config,
+      config.config,
       { lightweight: true },
     );
   }

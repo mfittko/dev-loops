@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
+import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
 import { runOuterLoop } from "../../scripts/loop/outer-loop.mjs";
 import {
   MINIMAL_COPILOT_SNAPSHOT,
@@ -735,6 +736,37 @@ test("outer-loop: maintainer-controlled asyncStartMode=allowed permits non-snaps
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
     assert.ok(parsed.outerAction);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("outer-loop: a config load error keeps asyncStartMode=required and rejects non-snapshot startup", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "outer-loop-async-start-"));
+  try {
+    const copilotInputPath = path.join(tempDir, "copilot.json");
+    await writeJson(copilotInputPath, MINIMAL_COPILOT_SNAPSHOT);
+    const gitEnv = await writeGitStub(tempDir);
+    const ghEnv = await writeGhStub(tempDir, { repo: "owner/repo", pr: 47 });
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\nfutureKnob: true\nworkflow:\n  asyncStartMode: allowed\n",
+      "utf8",
+    );
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "47",
+      "--copilot-input", copilotInputPath,
+      "--checkpoint-dir", tempDir,
+    // CLAUDECODE is cleared because Claude relaxes asyncStartMode by design; the pin covers the Pi harness.
+    ], {
+      env: Object.fromEntries(Object.entries({ ...gitEnv, ...ghEnv, CLAUDECODE: "" }).filter(([k]) => !ASYNC_CONTEXT_ENV_MARKERS.includes(k))),
+      cwd: tempDir,
+    });
+
+    assert.equal(result.code, 1, `stdout=${result.stdout} stderr=${result.stderr}`);
+    assert.equal(JSON.parse(result.stderr).asyncStartContract, "rejected");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

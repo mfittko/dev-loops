@@ -16,13 +16,14 @@ Everything after the tag is hands-off.
    ```
 
    `<version>` is a bare full semver token including any prerelease suffix
-   (`1.0.2`, `1.0.2-slim.0`, `1.0.0-rc.7`). One invocation sets all six
+   (`1.0.2`, `1.0.2-slim.0`, `1.0.0-rc.7`). One invocation sets all seven
    surfaces in lockstep — root `package.json` `version`,
    `packages/core/package.json` `version`, the root `@dev-loops/core` range
    (`^<version>`), `bun.lock` (`bun install --lockfile-only`, proven with
    `bun install --frozen-lockfile`), the generated `.claude` tree (the
-   plugin manifest `version` plus every pinned `npx dev-loops@<version>`
-   call-site, via `generate-claude-assets.mjs`), and `CHANGELOG.md` (pending
+   plugin manifest `version`, via `generate-claude-assets.mjs`), the Claude
+   plugin dependency pin (`.claude/package.json` and the two first-party
+   entries in `.claude/package-lock.json`), and `CHANGELOG.md` (pending
    changeset fragments under `changes/` are first assembled into
    `## Unreleased` and the consumed fragment files removed, via
    `assemble-changelog-fragments.mjs`; the `## Unreleased` heading is then
@@ -33,6 +34,13 @@ Everything after the tag is hands-off.
    --check`), fails closed on any residual drift, and stages exactly those
    release files (never `git add -A`). It is idempotent and bump-only — it
    never commits, tags, pushes, or publishes.
+
+   The generated forms carry no version pin: they run `dev-loops-run
+   cli/index.mjs <ns> <sub>`, which resolves a live dev-loops checkout and
+   otherwise the plugin's installed package (see
+   ADR 0118).
+   The remaining release pins are the plugin manifest `version` and the
+   `.claude/package.json` dependency pin with its lockfile entries.
 
    Each merged PR records its note as a `changes/<slug>.md` fragment (see
    `changes/README.md`). The bump fails closed if there is no Unreleased

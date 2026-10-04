@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { readFileSync, realpathSync } from "node:fs";
 import { normalizeSeverity } from "../loop/gate-fanin.mjs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -1238,7 +1239,111 @@ export function resolveRoleModel(config, { role, harness, kind } = {}) {
  * @property {string} path - Human-readable file path or layer name
  * @property {string} message - Error description
  * @property {"extensionDefaults"|"defaults"|"devloops"|"merged"} layer - Which config layer failed
+ * @property {string[]} [unknownKeys] - Dotted paths of keys the running schema does not recognize
  */
+
+const OWN_PACKAGE_JSON = new URL("../../package.json", import.meta.url);
+
+function readPackageVersion(url) {
+  try {
+    const version = JSON.parse(readFileSync(url, "utf8")).version;
+    return typeof version === "string" ? version : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Version of the running dev-loops (this package ships in lockstep with it). */
+export const RUNNING_VERSION = readPackageVersion(OWN_PACKAGE_JSON);
+
+/** Version of the dev-loops source checkout at `repoRoot`, or null when it is not one. */
+function readCheckoutVersion(repoRoot) {
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+    return pkg.name === "dev-loops" && typeof pkg.version === "string" ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when the running package resolves (through symlinks) inside `repoRoot`. */
+function runningInsideCheckout(repoRoot) {
+  try {
+    const rel = path.relative(realpathSync(repoRoot), realpathSync(fileURLToPath(OWN_PACKAGE_JSON)));
+    return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  } catch {
+    return false;
+  }
+}
+
+// Keys an earlier release accepted and a later release renamed. The loader
+// stays strict; this only adds a migration hint to the error text.
+const RAW_ANGLE_KEY = /(^|\.)(mandatoryAngles|excludeAngles)$/;
+const RAW_ANGLE_HINT = "Migrate raw gates.<gate>.mandatoryAngles/excludeAngles to the canonical angle-entry shape (gates.<gate>.angles with { name, mandatory: true } / { name, enabled: false }).";
+
+const RENAMED_KEYS = Object.freeze({
+  "queue.board": { to: "tracker.board", release: "1.0.0" },
+});
+
+function unknownKeyGuidance(unknownKeys, repoRoot) {
+  const checkoutVersion = readCheckoutVersion(repoRoot);
+  const running = RUNNING_VERSION ?? "(unknown version)";
+  const parts = [`Unknown key(s) ${unknownKeys.join(", ")} are not recognized by the running dev-loops ${running}.`];
+  // A renamed key is an older key, so a newer dev-loops would not help.
+  // A removed raw angle key is also older, so it gets the migration hint instead.
+  const rawKeys = unknownKeys.filter((key) => RAW_ANGLE_KEY.test(key));
+  const unrenamed = unknownKeys.filter((key) => !Object.hasOwn(RENAMED_KEYS, key) && !RAW_ANGLE_KEY.test(key));
+  if (unrenamed.length > 0) parts.push(`${unrenamed.join(", ")} need a newer dev-loops than ${running}.`);
+  if (checkoutVersion) {
+    // Running from inside the checkout: a runner switch would not help.
+    const advice = runningInsideCheckout(repoRoot) ? "" : "; run the checkout's cli/index.mjs";
+    parts.push(`This dev-loops checkout is ${checkoutVersion}${advice}.`);
+  }
+  for (const key of unknownKeys) {
+    const renamed = Object.hasOwn(RENAMED_KEYS, key) ? RENAMED_KEYS[key] : null;
+    if (renamed) parts.push(`${key} was renamed to ${renamed.to} in dev-loops ${renamed.release}; move the value to ${renamed.to}.`);
+  }
+  if (rawKeys.length > 0) parts.push(`${rawKeys.join(", ")} use a removed shape. ${RAW_ANGLE_HINT}`);
+  return parts.join(" ");
+}
+
+/**
+ * Shared fail-closed outcome for a config load. Returns null for a clean load.
+ * @param {{ errors?: ConfigLoadError[], checkoutVersion?: string|null }|null|undefined} loadResult
+ * @returns {null|{ reason: "config_load_failed", errors: string[], unknownKeys: string[], runningVersion: string|null, checkoutVersion: string|null }}
+ */
+export function configLoadFailure(loadResult) {
+  const errors = loadResult?.errors ?? [];
+  if (errors.length === 0) return null;
+  return {
+    reason: "config_load_failed",
+    errors: errors.map((e) => e?.message ?? String(e)),
+    unknownKeys: errors.flatMap((e) => e?.unknownKeys ?? []),
+    runningVersion: RUNNING_VERSION,
+    checkoutVersion: loadResult.checkoutVersion ?? null,
+  };
+}
+
+export class ConfigLoadFailedError extends Error {
+  constructor(configError) {
+    super(`config_load_failed: invalid dev-loops config: ${configError.errors.join("; ")} (CONFIG-LOAD-FAIL-CLOSED)`);
+    this.name = "ConfigLoadFailedError";
+    this.code = "config_load_failed";
+    this.configError = configError;
+  }
+}
+
+/** Returns `loadResult` when it is clean, else throws {@link ConfigLoadFailedError}. */
+export function assertConfigLoaded(loadResult) {
+  const failure = configLoadFailure(loadResult);
+  if (failure) throw new ConfigLoadFailedError(failure);
+  return loadResult;
+}
+
+/** `loadDevLoopConfig` that throws {@link ConfigLoadFailedError} on any config error. */
+export async function loadDevLoopConfigStrict(options = {}) {
+  return assertConfigLoaded(await loadDevLoopConfig(options));
+}
 
 // ============================================================================
 // Helpers
@@ -1469,7 +1574,7 @@ function configError(message, code, filePath) {
  * @param {"extensionDefaults"|"defaults"|"devloops"} layer - Layer name
  * @param {string[]} warnings
  * @param {ConfigLoadError[]} errors
- * @param {{ warnOnMissing?: boolean }} [options]
+ * @param {{ warnOnMissing?: boolean, repoRoot?: string }} [options]
  * @returns {Promise<Record<string, unknown>>}
  */
 async function applyLayer(merged, basePaths, layer, warnings, errors, options = {}) {
@@ -1496,7 +1601,7 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
     return merged;
   }
 
-  return applyParsedLayer(merged, filePath, data, layer, warnings, errors);
+  return applyParsedLayer(merged, filePath, data, layer, warnings, errors, options.repoRoot);
 }
 
 /**
@@ -1511,9 +1616,10 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
  * @param {"extensionDefaults"|"defaults"|"devloops"} layer
  * @param {string[]} warnings
  * @param {ConfigLoadError[]} errors
+ * @param {string} [repoRoot] - names a source-checkout version in unknown-key errors
  * @returns {Record<string, unknown>}
  */
-function applyParsedLayer(merged, filePath, data, layer, warnings, errors) {
+function applyParsedLayer(merged, filePath, data, layer, warnings, errors, repoRoot) {
   // Deprecated `strategy: "github-first"` alias: normalized to
   // "tracker-first" BEFORE this layer's FileConfigSchema validation (the enum
   // only accepts the canonical value, else the whole layer drops as invalid).
@@ -1568,10 +1674,16 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors) {
       `Offending key(s): ${offendingKeys.length ? offendingKeys.join(", ") : "(unknown)"}.` +
       migrationHint
     );
+    const unknownKeys = validation.error.issues.flatMap((i) =>
+      i.code === "unrecognized_keys" && Array.isArray(i.keys)
+        ? i.keys.map((k) => (i.path.length ? `${i.path.join(".")}.${k}` : k))
+        : []);
+    const guidance = unknownKeys.length ? ` ${unknownKeyGuidance(unknownKeys, repoRoot)}` : "";
     errors.push({
       path: filePath,
-      message: `${path.basename(filePath)}: Schema validation failed: ${validation.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+      message: `${path.basename(filePath)}: Schema validation failed: ${validation.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ")}.${guidance}`,
       layer,
+      ...(unknownKeys.length ? { unknownKeys } : {}),
     });
     return merged;
   }
@@ -1588,6 +1700,7 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors) {
  * @property {DevLoopConfig} config
  * @property {string[]} warnings
  * @property {ConfigLoadError[]} errors
+ * @property {string|null} checkoutVersion - version of the dev-loops source checkout at repoRoot, or null
  */
 
 /**
@@ -1617,13 +1730,15 @@ export async function loadDevLoopConfig(options = {}) {
   const warnings = [];
   /** @type {ConfigLoadError[]} */
   const errors = [];
+  const checkoutVersion = readCheckoutVersion(repoRoot);
 
   let merged = { ...BUILT_IN_DEFAULTS };
-  merged = await applyLayer(merged, resolveExtensionDefaultsPath(options), "extensionDefaults", warnings, errors, { warnOnMissing: true });
+  merged = await applyLayer(merged, resolveExtensionDefaultsPath(options), "extensionDefaults", warnings, errors, { warnOnMissing: true, repoRoot });
 
 
   merged = await applyLayer(merged, defaultsPath, "defaults", warnings, errors, {
     warnOnMissing: true,
+    repoRoot,
   });
 
   // `devloopsOverride` sources the devloops (primary override) layer's
@@ -1638,7 +1753,7 @@ export async function loadDevLoopConfig(options = {}) {
     if (typeof raw === "string") {
       try {
         const data = parseConfigContent(raw, overridePath);
-        merged = applyParsedLayer(merged, overridePath, data, "devloops", warnings, errors);
+        merged = applyParsedLayer(merged, overridePath, data, "devloops", warnings, errors, repoRoot);
       } catch (err) {
         errors.push({
           path: overridePath,
@@ -1670,7 +1785,7 @@ export async function loadDevLoopConfig(options = {}) {
     }
 
     if (primaryExists) {
-      merged = await applyLayer(merged, devloopsPath, "devloops", warnings, errors);
+      merged = await applyLayer(merged, devloopsPath, "devloops", warnings, errors, { repoRoot });
     }
   }
 
@@ -1683,10 +1798,10 @@ export async function loadDevLoopConfig(options = {}) {
       layer: "merged",
     });
     // Return merged as-is — caller gets validation errors but still has config with all layers applied
-    return { config: /** @type {*} */ (merged), warnings, errors };
+    return { config: /** @type {*} */ (merged), warnings, errors, checkoutVersion };
   }
 
-  return { config: result.data, warnings, errors };
+  return { config: result.data, warnings, errors, checkoutVersion };
 }
 
 /**

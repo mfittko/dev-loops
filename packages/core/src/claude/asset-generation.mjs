@@ -78,19 +78,19 @@ export function stripPiOnlyBlocks(body) {
 }
 
 /**
- * Rewrite the Pi package-local CLI invocation into the Claude version-pinned `npx` form.
+ * Rewrite the Pi package-local CLI invocation into the Claude launcher form.
  * The Pi runtime sources invoke the CLI as `node <dev-loops-package-root>/cli/index.mjs`
  * (resolves unambiguously from the installed package). The Claude plugin does NOT bundle `cli/`,
- * so for the generated tree those tokens become `npx dev-loops@<version>` — pinning the version
- * keeps the CLI from drifting against the published plugin version. The Pi-only
+ * so for the generated tree those tokens become `dev-loops-run cli/index.mjs`. The launcher
+ * resolves a live dev-loops checkout first and otherwise the plugin's pinned installed package
+ * (`.claude/package.json`), so the generator stays repository-agnostic. The Pi-only
  * package-root resolution note is removed separately by `stripPiOnlyBlocks`.
  *
  * @param {string} body
- * @param {string} version dev-loops package version to pin (e.g. "0.2.6").
  * @returns {string}
  */
-export function rewriteCliInvocation(body, version) {
-  return String(body).split("node <dev-loops-package-root>/cli/index.mjs").join(`npx dev-loops@${version}`);
+export function rewriteCliInvocation(body) {
+  return String(body).split("node <dev-loops-package-root>/cli/index.mjs").join("dev-loops-run cli/index.mjs");
 }
 
 /**
@@ -151,8 +151,8 @@ export const BARE_NODE_SCRIPTS_SOURCE = String.raw`\bnode\s+(scripts\/(?:[a-z0-9
 /**
  * Regex source (no flags) matching a bare, unrouted `dev-loops <namespace> <sub>` invocation.
  * Requires an immediate lowercase-starting subcommand (lookahead) so prose (`dev-loops gate.`,
- * `dev-loops gate — …`, `` `dev-loops queue` ``) and the already-pinned `npx dev-loops@<version>`
- * CLI form never match. Exported so the no-bare-invocation guard test can build the identical
+ * `dev-loops gate — …`, `` `dev-loops queue` ``) never match; real invocations render as
+ * `dev-loops-run cli/index.mjs <namespace> <sub>` (ADR 0118). Exported so the no-bare-invocation guard test can build the identical
  * regex from the same `WRAPPER_NS` rather than re-deriving it (single source of truth).
  */
 export const BARE_DEV_LOOPS_NS_SOURCE = String.raw`\bdev-loops (${WRAPPER_NS}) (?=[a-z])`;
@@ -164,8 +164,8 @@ export const BARE_DEV_LOOPS_NS_SOURCE = String.raw`\bdev-loops (${WRAPPER_NS}) (
  *   node scripts/<dir>/<file>.mjs …  → <launcher> scripts/<dir>/<file>.mjs …
  *   dev-loops <namespace> <sub> …    → <launcher> cli/index.mjs <namespace> <sub> …
  * The namespace form requires an immediate lowercase-starting subcommand (lookahead), so prose
- * (`dev-loops gate.`, `dev-loops gate — …`, `` `dev-loops queue` ``) and the already-pinned
- * `npx dev-loops@<version>` CLI form are never touched. Idempotent: the rewritten output never
+ * (`dev-loops gate.`, `dev-loops gate — …`, `` `dev-loops queue` ``) are never touched.
+ * Namespace invocations render as `dev-loops-run cli/index.mjs <namespace> <sub>` (ADR 0118). Idempotent: the rewritten output never
  * re-matches (the launcher name is followed by a path/`cli/index.mjs`, not `scripts/` or a bare
  * namespace token).
  * @param {string} body
@@ -250,7 +250,7 @@ function normalizeToolList(value) {
  */
 export function transformAgent({ source, raw, version = "latest", config = {} }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version)));
+  const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody))));
   const tools = mapTools(normalizeToolList(frontmatter.tools));
   const model = resolveRoleModel(config, { role: String(frontmatter.name ?? ""), harness: "claude" }) ?? frontmatter.claudeModel;
 
@@ -296,7 +296,7 @@ export function transformAgent({ source, raw, version = "latest", config = {} })
  */
 export function transformCommand({ source, raw, version = "latest" }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version)));
+  const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody))));
 
   const lines = ["---"];
   if (frontmatter.description != null) {
@@ -350,7 +350,7 @@ export function isSkillExcludedFromClaude(frontmatter) {
  */
 export function transformSkill({ source, raw, version = "latest" }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteWrapperInvocation(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version));
+  const body = rewriteWrapperInvocation(rewriteCliInvocation(stripPiOnlyBlocks(rawBody)));
   const tools = mapTools(normalizeToolList(frontmatter["allowed-tools"]));
 
   const lines = ["---"];

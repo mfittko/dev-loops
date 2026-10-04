@@ -72,6 +72,9 @@
       "enforcement": "runtime"
     },
     {
+      "id": "CONFIG-LOAD-FAIL-CLOSED"
+    },
+    {
       "id": "CONFIRM-CORE-EXPLICIT",
       "enforcement": "agent",
       "enforcementNote": "Seeking explicit confirmation is agent judgment; no script can require it."

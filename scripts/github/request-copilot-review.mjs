@@ -18,7 +18,7 @@ import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveCopilotReviewRequestStatus } from "../loop/_copilot-review-request-status.mjs";
 import { getLastCopilotReviewHeadSha, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../loop/_copilot-convergence-carry.mjs";
@@ -72,9 +72,7 @@ Debug:
 Output (stdout, JSON):
   { "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence"|"suppressed_post_convergence_docs_only"|"suppressed_draft",
     "repo": "...", "pr": N, "reviewer": "Copilot", "detail"?: "...",
-    "sameHeadCleanConverged"?: true, "violationCommentIds"?: [N], "completedRounds"?: N, "maxRounds"?: N,
-    "configWarning"?: "..." (present only when --lightweight and dev-loop config failed to load/validate;
-                             the lightweight default cap of 1 was applied instead of the full-PR default) }
+    "sameHeadCleanConverged"?: true, "violationCommentIds"?: [N], "completedRounds"?: N, "maxRounds"?: N }
 Request statuses:
   requested                     Copilot review was successfully requested
   already-requested             Copilot review was already observably in progress; no new request needed
@@ -731,12 +729,8 @@ export async function performCopilotReviewRequest(
       { ...runtime, checkpointDir: options.checkpointDir },
     );
     if (markerCarry.carried) {
-      // The status names the mode, as carriedStatus below does. An unreadable
-      // config keeps the default converged-once mode.
-      const strict = await loadDevLoopConfig({ repoRoot }).then(
-        ({ config, errors }) => (!errors || errors.length === 0) && resolveRequireCopilotConvergenceAtLatestHead(config),
-        () => false,
-      );
+      // The status names the mode, as carriedStatus below does.
+      const strict = resolveRequireCopilotConvergenceAtLatestHead((await loadDevLoopConfigStrict({ repoRoot })).config);
       return {
         ok: true,
         status: strict ? SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS : SUPPRESSED_POST_CONVERGENCE_STATUS,
@@ -751,8 +745,7 @@ export async function performCopilotReviewRequest(
   // outstanding (the cap site and the below-cap site both sit behind
   // !requested && !pending), so the shared predicate sees status "none".
   // The mode comes from refinement.requireCopilotConvergenceAtLatestHead,
-  // resolved with the round cap below (an unreadable config keeps the default
-  // converged-once mode, as the loop's other readers do).
+  // resolved with the round cap below.
   // Memoized: the cap site and the below-cap site share one evaluation.
   let requireCopilotConvergenceAtLatestHead = false;
   let carriedConvergence = null;
@@ -775,49 +768,27 @@ export async function performCopilotReviewRequest(
       detail: `Post-convergence head bump is provably outside Copilot's review surface (${convergence.reason}); no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
     });
   let refinementConfig = { maxCopilotRounds: 5 };
-  let maxRounds = 5; // Built-in default; overridden by config when loadable
-  // Lightweight fallback when config is unreadable/invalid: fail toward the
-  // SAFE (smaller) lightweight cap instead of silently inheriting the
-  // full-PR default of 5 above, which would let a light-dispatched PR run
-  // far more review rounds than intended whenever the config can't be read.
-  const LIGHTWEIGHT_DEFAULT_CAP = 1;
-  let configWarning = null;
-  try {
-    const { config, errors } = await loadDevLoopConfig({ repoRoot });
-    if (!errors || errors.length === 0) {
-      refinementConfig = resolveRefinement(config);
-      requireCopilotConvergenceAtLatestHead = resolveRequireCopilotConvergenceAtLatestHead(config);
-      // Light-dispatched PRs enforce the COMPOSED cap —
-      // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds) — so
-      // this enforcement backstop cannot permit rounds beyond the lightweight cap.
-      const effectiveCap = options.lightweight
-        ? resolveEffectiveCopilotRoundCap(config, { lightweight: true })
-        : refinementConfig.maxCopilotRounds;
-      // >= 0 (not > 0): maxCopilotRounds: 0 is documented as "disable Copilot
-      // rounds"; it must be honored as an immediate refusal, not silently
-      // ignored in favor of the built-in default of 5.
-      if (Number.isFinite(effectiveCap) && effectiveCap >= 0) {
-        maxRounds = effectiveCap;
-      }
-      if (options.lightweight) {
-        refinementConfig = { ...refinementConfig, maxCopilotRounds: effectiveCap };
-      }
-    } else if (options.lightweight) {
-      maxRounds = LIGHTWEIGHT_DEFAULT_CAP;
-      refinementConfig = { ...refinementConfig, maxCopilotRounds: LIGHTWEIGHT_DEFAULT_CAP };
-      configWarning = `dev-loop config could not be validated; using the lightweight default cap of ${LIGHTWEIGHT_DEFAULT_CAP} instead of the full-PR default. errors=${JSON.stringify(errors)}`;
-    }
-  } catch (err) {
-    if (options.lightweight) {
-      maxRounds = LIGHTWEIGHT_DEFAULT_CAP;
-      refinementConfig = { ...refinementConfig, maxCopilotRounds: LIGHTWEIGHT_DEFAULT_CAP };
-      configWarning = `dev-loop config could not be loaded; using the lightweight default cap of ${LIGHTWEIGHT_DEFAULT_CAP} instead of the full-PR default. error=${err instanceof Error ? err.message : String(err)}`;
-    }
+  let maxRounds = 5; // Built-in default; overridden by config when it carries a valid cap
+  // A config load error throws config_load_failed: the round cap never
+  // falls back to a default.
+  const { config } = await loadDevLoopConfigStrict({ repoRoot });
+  refinementConfig = resolveRefinement(config);
+  requireCopilotConvergenceAtLatestHead = resolveRequireCopilotConvergenceAtLatestHead(config);
+  // Light-dispatched PRs enforce the COMPOSED cap —
+  // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds) — so
+  // this enforcement backstop cannot permit rounds beyond the lightweight cap.
+  const effectiveCap = options.lightweight
+    ? resolveEffectiveCopilotRoundCap(config, { lightweight: true })
+    : refinementConfig.maxCopilotRounds;
+  // >= 0 (not > 0): maxCopilotRounds: 0 is documented as "disable Copilot
+  // rounds"; it must be honored as an immediate refusal, not silently
+  // ignored in favor of the built-in default of 5.
+  if (Number.isFinite(effectiveCap) && effectiveCap >= 0) {
+    maxRounds = effectiveCap;
   }
-  // Every remaining return in this function is config-dependent (round-cap
-  // decisions, the request itself); surface a config-load fallback on all of
-  // them rather than just the path a given test happens to exercise.
-  const withConfigWarning = (result) => (configWarning ? { ...result, configWarning } : result);
+  if (options.lightweight) {
+    refinementConfig = { ...refinementConfig, maxCopilotRounds: effectiveCap };
+  }
   // Reconcile the completed-round count with detect-pr-gate-coordination-state:
   // when the raw count has reached the cap, re-derive it with the draft-gate round
   // reset applied. A clean draft_gate re-pass on an earlier head resets the count, so
@@ -853,7 +824,7 @@ export async function performCopilotReviewRequest(
     if (!requireCopilotConvergenceAtLatestHead) {
       const convergence = await resolveCarried();
       if (convergence.carried) {
-        return withConfigWarning({
+        return ({
           ok: true,
           ...carriedStatus(convergence),
           repo: options.repo,
@@ -872,7 +843,7 @@ export async function performCopilotReviewRequest(
         refinementConfig,
       );
       if (!roundCapAutoRerequest.eligible) {
-        return withConfigWarning({
+        return ({
           ok: true,
           status: ROUND_CAP_REACHED_STATUS,
           repo: options.repo,
@@ -889,7 +860,7 @@ export async function performCopilotReviewRequest(
     const canCompare = currentHeadSha !== null && lastReviewSha !== null;
     const hasNewCommits = canCompare && currentHeadSha !== lastReviewSha;
     if (!canCompare) {
-      return withConfigWarning({
+      return ({
         ok: true,
         status: ROUND_CAP_REACHED_STATUS,
         repo: options.repo,
@@ -901,7 +872,7 @@ export async function performCopilotReviewRequest(
       });
     }
     if (!hasNewCommits) {
-      return withConfigWarning({
+      return ({
         ok: true,
         status: NO_CHANGES_SINCE_LAST_REVIEW_STATUS,
         repo: options.repo,
@@ -918,7 +889,7 @@ export async function performCopilotReviewRequest(
     // memoized above.
     const convergence = await resolveCarried();
     if (convergence.carried) {
-      return withConfigWarning({
+      return ({
         ok: true,
         ...carriedStatus(convergence),
         repo: options.repo,
@@ -938,7 +909,7 @@ export async function performCopilotReviewRequest(
     refinementConfig,
   );
   if (sameHeadCleanConverged) {
-    return withConfigWarning({
+    return ({
       ok: true,
       status: SUPPRESSED_SAME_HEAD_CLEAN_STATUS,
       repo: options.repo,
@@ -949,7 +920,7 @@ export async function performCopilotReviewRequest(
     });
   }
   if (requestOutstanding || before.hasPendingReviewOnCurrentHead) {
-    return withConfigWarning({
+    return ({
       ok: true,
       status: "already-requested",
       repo: options.repo,
@@ -965,7 +936,7 @@ export async function performCopilotReviewRequest(
   if (!convergenceCarryEvaluated) {
     const convergence = await resolveCarried();
     if (convergence.carried) {
-      return withConfigWarning({
+      return ({
         ok: true,
         ...carriedStatus(convergence),
         repo: options.repo,
@@ -981,7 +952,7 @@ export async function performCopilotReviewRequest(
   if (requestResult.status === "unavailable") {
     const after = await fetchCopilotReviewState(options, runtime);
     if (after.requested || after.hasPendingReviewOnCurrentHead || after.hasSubmittedReviewOnCurrentHead) {
-      return withConfigWarning({
+      return ({
         ok: true,
         status: "already-requested",
         repo: options.repo,
@@ -989,12 +960,12 @@ export async function performCopilotReviewRequest(
         reviewer: "Copilot",
       });
     }
-    return withConfigWarning({
+    return ({
       ...requestResult,
     });
   }
   if (requestResult.status === "already-requested") {
-    return withConfigWarning(requestResult);
+    return (requestResult);
   }
   // Bounded retry against the read-after-write race documented above: only the
   // verification READ repeats here, never the requested_reviewers POST itself. A
@@ -1047,12 +1018,12 @@ export async function performCopilotReviewRequest(
     // Treat this as eventually consistent instead of a hard failure; a truly
     // unavailable Copilot reviewer is already classified `unavailable` above
     // via the 422 path and never reaches here.
-    return withConfigWarning({
+    return ({
       ...requestResult,
       detail: "Copilot review request POST succeeded but was not yet observable via requested_reviewers/reviews or GraphQL within the verification window; treating as eventually consistent rather than failing.",
     });
   }
-  return withConfigWarning({
+  return ({
     ...requestResult,
   });
 }

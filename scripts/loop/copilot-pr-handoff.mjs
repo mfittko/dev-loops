@@ -6,7 +6,7 @@ import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } fro
 import { resolvePrConflicts } from "./resolve-pr-conflicts.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
-import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import { performCopilotReviewRequest } from "../github/request-copilot-review.mjs";
 import { detectInternalOnly as detectPrInternalOnly } from "./detect-internal-only-pr.mjs";
@@ -474,6 +474,8 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   // Defaults to the checkout's git toplevel (production); an injected repoRoot
   // keeps the whole cascade hermetic when driven in-process.
   const resolvedRepoRoot = repoRoot ?? resolveRepoRoot(process.cwd());
+  // A config load error refuses before any ownership claim or gh read.
+  const config = await loadDevLoopConfigStrict({ repoRoot: resolvedRepoRoot });
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
@@ -564,27 +566,17 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       { env, ghCommand, runChild },
     );
   }
-  const config = await loadDevLoopConfig({ repoRoot: resolvedRepoRoot });
-  if (config.errors?.length > 0) {
-    console.error("[copilot-pr-handoff] config warnings:", JSON.stringify(config.errors));
-  }
-  const refinementConfig = config.errors?.length > 0
-    ? resolveRefinement({ version: 1 })
-    : resolveRefinement(config.config);
+  const refinementConfig = resolveRefinement(config.config);
   if (options.lightweight) {
     // Compose (not replace) the round cap for light-dispatched PRs:
     // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds), so
     // maxCopilotRounds: 0 still disables Copilot rounds everywhere.
     refinementConfig.maxCopilotRounds = resolveEffectiveCopilotRoundCap(
-      config.errors?.length > 0 ? { version: 1 } : config.config,
+      config.config,
       { lightweight: true },
     );
   }
-  // The Copilot convergence mode, read like the round cap above: an unreadable
-  // config keeps the default converged-once mode.
-  const requireCopilotConvergenceAtLatestHead = config.errors?.length > 0
-    ? false
-    : resolveRequireCopilotConvergenceAtLatestHead(config.config);
+  const requireCopilotConvergenceAtLatestHead = resolveRequireCopilotConvergenceAtLatestHead(config.config);
   let interpretation = interpretLoopState(snapshot, refinementConfig);
 
   // Check for human comments since last subagent action

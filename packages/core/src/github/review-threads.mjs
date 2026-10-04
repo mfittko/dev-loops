@@ -351,6 +351,10 @@ export function parseJsonText(text) {
 // through this function).
 export function formatCliError(error, { usage } = {}) {
   const payload = { ok: false, error: error instanceof Error ? error.message : String(error) };
+  if (error instanceof Error && error.code === "config_load_failed") {
+    payload.code = error.code;
+    payload.configError = error.configError;
+  }
   const hasUsage = (error instanceof Error && typeof error.usage === "string") || typeof usage === "string";
   if (hasUsage) {
     payload.hint = "run with --help for usage";

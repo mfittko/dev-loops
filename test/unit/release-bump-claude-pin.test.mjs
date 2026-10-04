@@ -32,11 +32,9 @@ function makeFixture(from) {
   const dir = mkdtempSync(path.join(tmpdir(), "bump-claude-pin-fixture-"));
   mkdirSync(path.join(dir, "packages/core"), { recursive: true });
   mkdirSync(path.join(dir, ".claude/.claude-plugin"), { recursive: true });
-  mkdirSync(path.join(dir, ".claude/agents"), { recursive: true });
   writeJson(path.join(dir, "package.json"), { name: "dev-loops", version: from, dependencies: { [CORE_DEP]: `^${from}` } });
   writeJson(path.join(dir, "packages/core/package.json"), { name: CORE_DEP, version: from });
   writeJson(path.join(dir, ".claude/.claude-plugin/plugin.json"), { name: "dev-loops", version: from });
-  writeFileSync(path.join(dir, ".claude/agents/x.md"), `Run \`npx dev-loops@${from} loop startup\`.\n`);
   writeFileSync(path.join(dir, "bun.lock"), lockfile(from));
 
   writeJson(path.join(dir, ".claude/package.json"), { name: "dev-loops-plugin", private: true, dependencies: { "dev-loops": from } });
