@@ -42,8 +42,6 @@
 import { classifyFile, isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 import { ALWAYS_INCLUDE, CATEGORY_ANGLE_MAP } from "../analysis/change-classifier.mjs";
 
-export { isDevLoopConfigSourcePath };
-
 /**
  * File surface kind (classifyFile output) -> the change categories a change of
  * that kind can produce. A code file can be either a logic change or a

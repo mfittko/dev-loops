@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
 
 import { CATEGORY_ANGLE_MAP } from "../src/analysis/change-classifier.mjs";
+import { isDevLoopConfigSourcePath } from "../src/analysis/diff-analyzer.mjs";
 import {
   RENAME_ONLY_ANGLES,
   angleReviewSurface,
-  isDevLoopConfigSourcePath,
   resolveAngleCarryForward,
   resolveCarryForwardAngles,
   resolveConvergenceCarryForward,

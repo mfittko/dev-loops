@@ -204,7 +204,7 @@ extraTools:
 
 ### File classification (`classify`)
 
-The diff classifier assigns every changed file one kind: `code`, `docs`, `config`, `test`, `ci`, `asset` or `unknown`. The size budget, angle selection, tier matching and carry-forward all read this kind. Outside `docs/`, `.html`, `.htm`, `.css`, `.scss`, `.sass` and `.less` are `code`. The `asset` kind covers `.svg`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.ico`, `.woff`, `.woff2`, `.ttf`, `.otf` and `.eot`. Under `docs/` these files stay `docs`. An `asset` file counts as zero logic lines, stays out of the unclassified ratio and is never carried forward across a head bump. A size tier pattern that matches an `asset` file blocks. `.md` is `docs` everywhere.
+The diff classifier assigns every changed file one kind: `code`, `docs`, `config`, `test`, `ci`, `asset` or `unknown`. The size budget, angle selection, tier matching and carry-forward all read this kind. Outside `docs/`, `.html`, `.htm`, `.css`, `.scss`, `.sass` and `.less` are `code`. The `asset` kind covers `.svg`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.ico`, `.woff`, `.woff2`, `.ttf`, `.otf` and `.eot`. Under `docs/` these files stay `docs`. An `asset` file counts as zero logic lines, stays out of the unclassified ratio and is never carried forward across a head bump. A size tier pattern that matches an `asset` file with changed text lines, such as `.svg`, blocks. A binary asset such as `.png` has no numstat lines and never blocks. `.md` is `docs` everywhere.
 
 The top-level `classify` key extends these tables. Both sub-keys are optional.
 
