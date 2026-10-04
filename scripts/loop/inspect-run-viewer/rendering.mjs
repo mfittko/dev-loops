@@ -133,6 +133,7 @@ export function renderInspectRunViewerHtml({
     <title>${escapeHtml(title)}</title>
     <style>
       *, *::before, *::after { box-sizing: border-box; }
+      html { color-scheme: light; }
       body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 1.25rem; max-width: none; line-height: 1.55; color: #20384f; background: #fff; }
       code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
       code { padding: 0.12rem 0.38rem; border-radius: 0.42rem; background: #f4f8fd; color: #20496f; font-size: 0.94em; line-height: 1.45; overflow-wrap: anywhere; }
@@ -296,7 +297,6 @@ export function renderInspectRunViewerHtml({
       @media (max-width: 1100px) { .state-graph-layer-selector { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
       @media (max-width: 640px) { .state-graph-node-details dl { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; } .state-graph-node-details dt { margin-top: 0.65rem; } }
       @media (max-width: 440px) { .state-graph-layer-selector { grid-template-columns: 1fr; } }
-      @media (prefers-color-scheme: dark) { .state-graph-frame { --graph-panel: #17202a; --graph-ink: #e6ecf2; --graph-muted: #a0adbb; --graph-line: #2a3542; --graph-node: #1c2733; --graph-node-line: #7c8b9e; --graph-accent: #7d98ff; --graph-accent-ink: #0d1424; --graph-accent-soft: #1e2a4d; --graph-guard: #f0a93b; --graph-guard-soft: #3a2b12; --graph-ok: #5fcb92; --graph-ok-soft: #15301f; color-scheme: dark; } }
       dl { display: grid; grid-template-columns: 14rem 1fr; gap: 0.5rem 0.95rem; }
       dt { font-weight: 600; line-height: 1.4; }
       dd { margin: 0; line-height: 1.55; overflow-wrap: anywhere; }

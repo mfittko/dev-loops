@@ -147,6 +147,26 @@ test("resizing preserves current focus, fitted bounds and deliberate camera pan"
   }
 });
 
+test("viewer keeps a consistent light theme under a dark system preference", async ({ page }, testInfo) => {
+  const { server, url } = await startViewer();
+  try {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.goto(url);
+    await openTab(page, "graph");
+    await waitForInspectionGraph(page);
+    const surfaces = await page.locator("body, .state-graph-frame, [data-graph-viewport], [data-graph-layer][aria-pressed='true']").evaluateAll((elements) => elements.map((element) => {
+      const channels = getComputedStyle(element).backgroundColor.match(/[\d.]+/g).slice(0, 3).map((channel) => Number(channel) / 255);
+      const linear = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+      return { surface: element.tagName, luminance: 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2] };
+    }));
+    expect(surfaces.filter((surface) => surface.luminance < 0.75)).toEqual([]);
+    expect(await page.locator(".assigned-pr-select").first().evaluate((control) => getComputedStyle(control).colorScheme)).toBe("light");
+    await captureViewerState(page, testInfo, "Light theme with dark system preference", "Shell, graph, selected layer and native controls use the same light theme despite a dark OS preference.");
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
+
 test("webkit renders overview-first tabs, matches tab panels, and captures a screenshot", async ({ page }, testInfo) => {
   const { server, url } = await startViewer(makeInspectionSnapshot(), [
     { target: { repo: "other/repo", pr: 77 }, title: "Waiting PR", signal: "attention" },
