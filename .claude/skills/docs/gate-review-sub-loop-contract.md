@@ -350,8 +350,8 @@ same gate pass and MUST carry, at minimum: the repo, PR number, head SHA, and wo
 `write-gate-context.mjs` gate-context artifact path (`GATE-EXEC-BUILD-ONCE-SEED`); the
 mandatory `verify-fresh-review-context.mjs` instruction above; and the **findings write-path
 invariant** — the WORKTREE-ABSOLUTE per-angle findings directory (`<worktree>/tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/`)
-a reviewer MUST write into (`GATE-EXEC-FINDINGS-WRITE-PATH`, #1978). A cwd-relative `tmp/...` write can land in the primary checkout, where fan-in never looks, so pinning the absolute dir in the byte-identical prefix prevents a late "missing evidence" failure at dispatch; `consolidate-fanin.mjs` also names a findings artifact stranded in the primary checkout in its missing-evidence diagnostic. The consolidated findings-log **ledger** is the exception:
-it is anchored at the MAIN worktree automatically (#2315 — so the merge, running from the main
+a reviewer MUST write into (`GATE-EXEC-FINDINGS-WRITE-PATH`). A cwd-relative `tmp/...` write can land in the primary checkout, where fan-in never looks, so pinning the absolute dir in the byte-identical prefix prevents a late "missing evidence" failure at dispatch; `consolidate-fanin.mjs` also names a findings artifact stranded in the primary checkout in its missing-evidence diagnostic. The consolidated findings-log **ledger** is the exception:
+it is anchored at the MAIN worktree automatically (so the merge, running from the main
 checkout, can read it and it survives linked-worktree pruning), so the `write-gate-findings-log.mjs`
 ledger writer MUST NOT be `--tmp-root`-pinned to the linked worktree (pinning it loses the ledger
 on prune and refuses the merge for missing provenance). If the context bundle was relocated with `--tmp-root`, pass that same root as `--context-tmp-root` on the ledger write: the ledger writer's `--tmp-root` controls only the ledger destination, not where it reads recorded dispatch membership. Angle identity MUST appear
@@ -820,7 +820,7 @@ node scripts/loop/spec-context.mjs changed-paths --base <prior_approved_head_sha
 
 **AC1 — one identity stamp, every durable record writer (issue 2008 / ADR 0061).** The SAME `spec-context.mjs` call also writes the round's revision-identity stamp once via `--identity-out <identity-path>` (`{ specDigest, headSha, contentDigest, checkedCriteria }`, `buildRevisionIdentity` + `specCriterionIds`; see `packages/core/src/loop/spec-authority.mjs`). The conductor passes `--spec-authority <identity-path>` to every durable record writer this round invokes, by default, on every round: `consolidate-fanin --spec-authority <identity-path>` (Phase 3's fan-in ledger), `write-gate-findings-log.mjs --spec-authority <identity-path>`, `upsert-checkpoint-verdict.mjs --spec-authority <identity-path>` (the posted verdict record), and, on a carry-forward round, `resolve-angle-carry-forward.mjs --spec-authority <identity-path>` (the carry-forward plan). Each writer threads the identity through the ONE shared `stampSpecAuthorityIdentity`/`stampOptionalSpecAuthority` helper (`scripts/lib/spec-authority-stamp.mjs`), never recomputing it, so every gate/fixer/carry-forward record pins both revision identities and the checked criteria (judge-pass's own `--ledger-out`/`--approvals-out` carry the identities natively via its `--spec-file`/`--content-digest`/`--spec-authority-verdict` flags below).
 
-**Dispatch bridge (runtime wiring, #1658).** After the judge agent writes its verdict
+**Dispatch bridge (runtime wiring).** After the judge agent writes its verdict
 artifacts and the durable ledger is written with `--judge-verdict`, the conductor runs the
 deterministic bridge `scripts/loop/judge-pass.mjs` (`dev-loops gate judge-pass`) to derive
 the fixer's **act list** for Phase 4: given `--findings-file` (the consolidated ledger) and
@@ -927,7 +927,7 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   `GATE-EXEC-THREAD-DISPOSITION` instead. A NON-LOCATABLE medium finding (body-filed, so it never
   gets a thread to fix through) is outside this round window entirely: it is deferred by
   construction at post time, at any round, per `GATE-EXEC-DEFERRAL-RECORD`. The fixer receives
-  every gate-authored finding (high, medium, AND low) as a fix/triage target (#1585);
+  every gate-authored finding (high, medium, AND low) as a fix/triage target;
   `GATE-EXEC-THREAD-DISPOSITION` owns the per-severity triage, question and nit semantics. Two layers
   govern this, and they stay distinct: the LEDGER verdict is `clean` whenever
   no finding at a blocking severity remains, computed from `blockCleanOnFindingSeverities` alone
@@ -1035,7 +1035,7 @@ The sub-loop execution shape can be referenced programmatically via these fields
 |---|---|---|
 | `subLoopPhases` | `[preamble, fanout, fanin, fix, repeat]` | Ordered sub-loop phases |
 | `contextBuilderRequired` | `true` | Preamble phase must include fresh-context context-builder |
-| `worktreeIsolationProhibited` | `true` | See Phase 1 (#1135) |
+| `worktreeIsolationProhibited` | `true` | See Phase 1 |
 | `fixRetryUntilClean` | `true` | Blocking-severity findings trigger fix → retry until synthesis is clean |
 | `separateChains` | `true` | Each gate runs an independent chain with its own disposition ledger |
 
@@ -1166,7 +1166,7 @@ Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_a
 
 ### Light-mode inline acceptance (under-threshold micro-PRs)
 
-`lightMode` (`localImplementation.lightMode`, #1043) collapses the gate fan-out to a single `inline_single_agent` check for genuinely small changes. Because `requireFanoutEvidence` otherwise rejects any non-`fanout_fanin` verdict, both enforcement boundaries are **light-mode-aware** (#1174) through the one shared predicate: they accept a required gate's `inline_single_agent` verdict **only** when **all** of the following hold, and **fail closed** on any one that does not:
+`lightMode` (`localImplementation.lightMode`) collapses the gate fan-out to a single `inline_single_agent` check for genuinely small changes. Because `requireFanoutEvidence` otherwise rejects any non-`fanout_fanin` verdict, both enforcement boundaries are **light-mode-aware** through the one shared predicate: they accept a required gate's `inline_single_agent` verdict **only** when **all** of the following hold, and **fail closed** on any one that does not:
 
 - `localImplementation.lightMode.enabled` is `true` in config;
 - the reviewed head's scope is **re-derived fail-closed**, at post time against the PR's current base ref and again at merge time, via `detectMergeBaseScope` (the three-dot merge-base diff, `git diff <base>...<head>`), and is genuinely under the configured `maxFiles`/`maxLines`. This is deliberately NOT the two-dot `detectScope` that `resolve-gate-dispatch` uses at dispatch time: re-deriving against the merge base means a non-fast-forward advance cannot understate scope. If scope cannot be derived (missing base ref, git failure), the inline verdict is rejected;

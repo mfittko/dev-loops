@@ -18,19 +18,19 @@ Slice 1 of the v1.0.6 prose cleanup condenses the three files the gate coordinat
 
 | File or bundle | Before bytes / words | After bytes / words | Change |
 | --- | --- | --- | --- |
-| `skills/docs/gate-review-sub-loop-contract.md` | 225,283 / 29,755 | 191,489 / 24,944 | -33,841 bytes (-15.0%) |
+| `skills/docs/gate-review-sub-loop-contract.md` | 225,283 / 29,755 | 191,434 / 24,943 | -33,849 bytes (-15.0%) |
 | `agents/gate-coordinator.agent.md` | 2,520 / 365 | 2,153 / 306 | -367 bytes |
-| Coordinator bundle (both files) | 227,803 / 30,120 | 193,595 / 25,250 | -34,208 bytes (-15.0%) |
-| `agents/review.agent.md` (reviewer bundle) | 21,413 / 2,952 | 19,258 / 2,627 | -2,155 bytes (-10.1%) |
+| Coordinator bundle (both files) | 227,803 / 30,120 | 193,587 / 25,249 | -34,216 bytes (-15.0%) |
+| `agents/review.agent.md` (reviewer bundle) | 21,413 / 2,952 | 19,225 / 2,625 | -2,188 bytes (-10.2%) |
 
-Targets: contract at most 191,500, coordinator bundle at most 193,600, reviewer bundle at most 19,270. All three hold. The Claude projections regenerate byte-identically for the contract (191,489) and shrink for the two agents (`.claude/agents/gate-coordinator.md` 2,460 to 2,093, `.claude/agents/review.md` 21,379 to 19,268).
+Targets: contract at most 191,500, coordinator bundle at most 193,600, reviewer bundle at most 19,270. All three hold. The Claude projections regenerate byte-identically for the contract (191,434) and shrink for the two agents (`.claude/agents/gate-coordinator.md` 2,460 to 2,093, `.claude/agents/review.md` 21,379 to 19,191).
 
 ### v1.0.6 slice 1 duplicate-table trace
 
 - Reviewer reads every required read in full (`GATE-EXEC-BUILD-ONCE-SEED`): authoritative home is the rule's step 2 (MUST read in full, MUST NOT clip, a summary never replaces the read). The "Each reviewer" bullet now cites the rule ID. `agents/review.agent.md` keeps one shortened point-of-use bullet (required reads in full, blocked result on a missing, unreadable or hash-mismatched read, never judge from a summary). The work order prefix from `write-gate-context.mjs` carries the same instruction.
 - `contextWidened` lists only reads that moved judgment (absence means "not consulted"): authoritative home is the Phase 2 "Each reviewer" bullet. The `GATE-EXEC-FANOUT-DISPATCH-EMIT` copy now cites it. `agents/review.agent.md` keeps the field definition once (the Required-reads copy became a pointer). The work order execution rules in `emit-fanout-dispatch.mjs` and `write-gate-context.mjs` deliver it too.
 - Severity calibration (reachable correctness or fail-open gaps are at least `medium`): authoritative home is the Phase 3 classification bullet. `agents/review.agent.md` keeps one short point-of-use clause, because the work order does not deliver it. The question and nit semantics left that bullet for `GATE-EXEC-THREAD-DISPOSITION`.
-- Worktree isolation is prohibited for gate reviewers: authoritative home is the Phase 1 bullet (#1135). The Phase 2 reviewer bullet keeps a one-line cross-reference. The `worktreeIsolationProhibited` field row now reads "See Phase 1 (#1135)". `agents/review.agent.md` keeps a short clause (not delivered by the work order).
+- Worktree isolation is prohibited for gate reviewers: authoritative home is the Phase 1 bullet. The Phase 2 reviewer bullet keeps a one-line cross-reference. The `worktreeIsolationProhibited` field row now reads "See Phase 1". `agents/review.agent.md` keeps a short clause (not delivered by the work order).
 - Typed round result field list (`GATE-EXEC-GATE-COORDINATOR`): authoritative home is the rule. The review-route omission sentence stays in the contract (a distinct obligation). `agents/gate-coordinator.agent.md` dropped its eight-item list and cites the rule ("leaving out the fields it omits on a `review` round").
 - Coordinator never posts the verdict, flips ready, pushes or merges: authoritative home is the rule. The agent keeps its Boundary section (the agent's only statement of its write limits), which also names the fixer dispatch.
 - Blocking join of children (`GATE-EXEC-HARNESS-JOIN`, `END-TURN-AND-AWAIT-WAKE`): contract text unchanged. The agent line shrank to the two citations and dropped the restated "blocking dispatch or one `bg_wait` subscription" clause. Owner: `END-TURN-AND-AWAIT-WAKE` in `anti-patterns.md`, and the `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK` paragraph that names the `bg_wait` alternative.
