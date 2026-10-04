@@ -24,10 +24,14 @@ function ruleRows() {
   const rest = doc.slice(start);
   const end = rest.search(/\n## /u);
   const rows = new Map();
+  const dupes = [];
   for (const line of rest.slice(0, end === -1 ? undefined : end).split("\n")) {
     const match = /^\| `([^`]+)` \| (.+) \|$/u.exec(line);
-    if (match) rows.set(match[1], match[2]);
+    if (!match) continue;
+    if (rows.has(match[1])) dupes.push(match[1]);
+    rows.set(match[1], match[2]);
   }
+  assert.deepEqual(dupes, [], `duplicate CONFIG-LOAD-FAIL-CLOSED rows: ${dupes.join(", ")}`);
   return rows;
 }
 

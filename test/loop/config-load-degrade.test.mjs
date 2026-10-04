@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 import { afterAll, beforeAll, describe, test } from "bun:test";
 
 // Scripts that keep a listed default on a config load error because the default
@@ -12,10 +13,8 @@ let fixture;
 beforeAll(() => {
   fixture = mkdtempSync(path.join(os.tmpdir(), "config-degrade-"));
   writeFileSync(path.join(fixture, ".devloops"), "version: 1\nfutureKnob: true\nautonomy:\n  humanMergeOnly: false\n");
-  spawnSync("git", ["init", "-q"], { cwd: fixture });
-  for (const msg of ["a", "b"]) {
-    spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", msg], { cwd: fixture });
-  }
+  initGitFixture(fixture, { commit: "a" });
+  runGitFixture(fixture, ["commit", "-q", "--allow-empty", "-m", "b"]);
 });
 afterAll(() => rmSync(fixture, { recursive: true, force: true }));
 

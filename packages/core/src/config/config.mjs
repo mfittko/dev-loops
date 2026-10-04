@@ -1269,7 +1269,7 @@ function readCheckoutVersion(repoRoot) {
 // Keys an earlier release accepted and a later release renamed. The loader
 // stays strict; this only adds a migration hint to the error text.
 const RENAMED_KEYS = Object.freeze({
-  "queue.board": { to: "tracker.board", release: "1.0.2" },
+  "queue.board": { to: "tracker.board", release: "1.0.0" },
 });
 
 function unknownKeyGuidance(unknownKeys, repoRoot) {
@@ -1277,11 +1277,11 @@ function unknownKeyGuidance(unknownKeys, repoRoot) {
   const running = RUNNING_VERSION ?? "(unknown version)";
   const parts = [`Unknown key(s) ${unknownKeys.join(", ")} are not recognized by the running dev-loops ${running}.`];
   // A renamed key is an older key, so a newer dev-loops would not help.
-  const unrenamed = unknownKeys.filter((key) => !RENAMED_KEYS[key]);
+  const unrenamed = unknownKeys.filter((key) => !Object.hasOwn(RENAMED_KEYS, key));
   if (unrenamed.length > 0) parts.push(`${unrenamed.join(", ")} need a newer dev-loops than ${running}.`);
   if (checkoutVersion) parts.push(`This dev-loops checkout is ${checkoutVersion}; run it through dev-loops-run cli/index.mjs.`);
   for (const key of unknownKeys) {
-    const renamed = RENAMED_KEYS[key];
+    const renamed = Object.hasOwn(RENAMED_KEYS, key) ? RENAMED_KEYS[key] : null;
     if (renamed) parts.push(`${key} was renamed to ${renamed.to} in dev-loops ${renamed.release}; move the value to ${renamed.to}.`);
   }
   return parts.join(" ");

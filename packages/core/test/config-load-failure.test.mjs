@@ -47,12 +47,20 @@ test("inside a dev-loops checkout the error also names the checkout version", as
   }, { packageJson: { name: "dev-loops", version: "9.9.9" } });
 });
 
+test("an Object.prototype key name keeps the generic text", async () => {
+  await withRepo("version: 1\nconstructor: 1\n", async (dir) => {
+    const load = await loadDevLoopConfig({ repoRoot: dir });
+    assert.match(load.errors[0].message, /constructor need a newer dev-loops/);
+    assert.doesNotMatch(load.errors[0].message, /undefined|renamed/);
+  });
+});
+
 test("a renamed key gets a migration hint naming the new key and the renaming release", async () => {
   await withRepo("version: 1\nqueue:\n  board: https://example.test/board\n", async (dir) => {
     const load = await loadDevLoopConfig({ repoRoot: dir });
     assert.match(load.errors[0].message, /queue\.board/);
     assert.match(load.errors[0].message, /tracker\.board/);
-    assert.match(load.errors[0].message, /1\.0\.2/);
+    assert.match(load.errors[0].message, /in dev-loops 1\.0\.0;/);
     assert.doesNotMatch(load.errors[0].message, /newer dev-loops/);
   });
 });
@@ -82,4 +90,12 @@ test("assertConfigLoaded passes a clean load and throws a typed error otherwise"
       return true;
     });
   });
+});
+
+test("formatCliError carries code and configError for a ConfigLoadFailedError", async () => {
+  const { formatCliError } = await import("../src/github/review-threads.mjs");
+  const configError = { reason: "config_load_failed", errors: ["x"], unknownKeys: ["k"], runningVersion: "1", checkoutVersion: null };
+  const payload = JSON.parse(formatCliError(new ConfigLoadFailedError(configError)));
+  assert.equal(payload.code, "config_load_failed");
+  assert.deepEqual(payload.configError, configError);
 });

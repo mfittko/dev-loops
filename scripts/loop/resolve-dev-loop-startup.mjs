@@ -1410,7 +1410,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   if (configError) {
     const unknown = configError.unknownKeys.length ? ` Unknown key(s): ${configError.unknownKeys.join(", ")}.` : "";
     const nextAction = `Stop. dev-loops ${configError.runningVersion ?? "(unknown version)"} could not load .devloops (config_load_failed).${unknown} ${configError.errors.join("; ")} Fix .devloops or run a dev-loops that supports it, then rerun startup.`;
-    const result = buildNeedsReconcileStartupResult({ configError }, nextAction);
+    const result = buildNeedsReconcileStartupResult({ configError, loopState: "unknown", executionMode: "bounded_handoff" }, nextAction);
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
     return;
   }
