@@ -76,7 +76,7 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  No violations
   1  One or more violations found
-  2  Argument/runtime error, or invalid --jq filter`;
+  2  Argument/runtime error, unreadable or empty input, or invalid --jq filter`;
 
 /**
  * Write-ops recorded distinctly (as allowedWriteOps, not violations) so the gate
@@ -213,15 +213,17 @@ function parseCliArgs(argv) {
   return values;
 }
 
-function readStdin() {
+async function readStdin(stdin) {
   try {
-    return readFileSync(0, "utf8");
-  } catch {
-    return "";
+    const chunks = [];
+    for await (const chunk of stdin) chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    return Buffer.concat(chunks).toString("utf8");
+  } catch (err) {
+    throw new Error(`failed to read stdin: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
   }
 }
 
-async function run(argv, { stdout, stderr }) {
+export async function run(argv, { stdout, stderr, stdin = process.stdin }) {
   const values = parseCliArgs(argv);
   if (values.help) {
     stdout.write(`${USAGE}\n`);
@@ -229,7 +231,8 @@ async function run(argv, { stdout, stderr }) {
   }
   const transcript = values.transcript
     ? readFileSync(values.transcript, "utf8")
-    : readStdin();
+    : await readStdin(stdin);
+  if (transcript.trim().length === 0) throw new Error("empty transcript");
 
   const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript(transcript);
 

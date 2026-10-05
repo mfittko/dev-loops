@@ -45,7 +45,7 @@ import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import {
   buildCarryForwardPlanPath,
@@ -69,6 +69,7 @@ Optional:
   --tmp-root <path>             Root tmp directory. Omitted, the prior findings-log ledger is read
                                  from the MAIN worktree's tmp/ (the stable per-repo ledger location)
                                  while the carry-forward plan stays worktree-local; an explicit path pins both.
+                                 An explicit path inside a linked worktree is refused (exit 1).
   --spec-authority <path>       JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                  (issue 2008 / ADR 0061 AC1). When supplied, stamps the plan's
                                  durable record with the pinned revision identity via the ONE
@@ -406,6 +407,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     return;
   }
   try {
+    if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
     // Remove any stale plan artifact for this exact (repo, pr, gate, headSha)
     // BEFORE doing any work, so EVERY invocation's outcome is authoritative and
     // a run that fails operationally (or on an integrity error) leaves NO plan
