@@ -21,7 +21,7 @@ import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWo
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
-import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
@@ -30,7 +30,7 @@ optional pre-push delta result (dev-loops loop pre-push-delta). The mutation aut
 the PR's own head branch (gh pr view headRefName) and the --allowed-path selectors
 (default "." = the whole repository). A PR head other than --head-sha refuses.
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
-(default: the main checkout's tmp/) and prints
+(default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath }.
 Each run supersedes the previous emission for this PR. Dispatch the printed
 dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
@@ -331,6 +331,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   }
   const jqSyntaxError = preflightJqFilter(values.jq);
   if (jqSyntaxError !== undefined) return jqSyntaxError;
+  if (values["tmp-root"]) assertTmpRootOutsideLinkedWorktree(path.resolve(cwd, values["tmp-root"]), resolveRepoRoot(cwd));
   const emit = (payload) => emitResult(payload, { jq: values.jq, silent: values.silent, fields: values.fields });
   try {
     buildFixerDispatchPayload({ harness: values.harness, plan: {} }); // refuse an unknown harness before emitting
