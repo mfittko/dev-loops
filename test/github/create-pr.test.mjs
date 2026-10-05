@@ -1785,6 +1785,19 @@ test("create-pr refuses --fill and --template (body sourced outside the wrapper)
   }
 });
 
+test("create-pr refuses --recover even with --body (the saved body is never checked)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-recover-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", "--recover", "r.json"], { env });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER.*--recover/);
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("create-pr refuses --body together with --body-file", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-both-"));
   try {

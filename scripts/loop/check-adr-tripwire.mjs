@@ -38,7 +38,8 @@
  *
  * Standing-authorization waiver lines (`adr-tripwire:allow standing-
  * authorization head=<sha> ... expires=<YYYY-MM-DD> ...`) are valid only when
- * `head=` equals the evaluated head and `expires=` has not passed (UTC).
+ * `head=` equals the evaluated head, `expires=` has not passed (UTC) and every current
+ * trigger is a contract-doc listed in `paths=`.
  *
  * Satisfaction: the diff adds or updates a `docs/decisions/NNNN-*.md` record,
  * or the PR body carries a one-line waiver marker
@@ -102,7 +103,7 @@ Output (stdout, JSON):
     "waiver": { "requested": false, "valid": false, "reason": null },
                                // a standing-authorization line also sets
                                // "standing": true, and "stale": true when it
-                               // misses the evaluated head or has expired
+                               // misses the evaluated head, has expired, or does not list every current trigger in paths=
     "reasons": []
   }
 
@@ -480,7 +481,7 @@ export function computeAdrTripwire({
     return `${t.path}: decision-shaped contract doc touched`;
   });
   if (waiver.standing && waiver.stale) {
-    reasons.push(`The standing-authorization waiver line does not name the evaluated head or has expired${headSha ? ` ${headSha}` : ""}; re-run \`dev-loops pr waive-adr-tripwire\` for the current head.`);
+    reasons.push(`The standing-authorization waiver line does not name the evaluated head, has expired, or does not list every current trigger as a contract-doc in its paths=${headSha ? ` ${headSha}` : ""}; re-run \`dev-loops pr waive-adr-tripwire\` for the current head.`);
   }
   reasons.push(
     "ADR tripwire: a decision-shaped surface was touched without adding/updating a docs/decisions/NNNN-*.md record and without a valid `adr-tripwire:allow <reason>` waiver in the PR body. Do not hand-write the waiver: run `dev-loops pr waive-adr-tripwire` (an operator can still add one in the GitHub UI).",

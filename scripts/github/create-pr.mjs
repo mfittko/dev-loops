@@ -526,6 +526,9 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     throw parseError("--body and --body-file are mutually exclusive; pass only one");
   }
   const body = await resolveBody(forwardedArgv);
+  if (forwardedArgv.some((token) => token === "--recover" || token.startsWith("--recover="))) {
+    throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --recover loads a saved body that this wrapper cannot check, even with --body or --body-file; remove --recover");
+  }
   if (body === null && sources.sourced) {
     throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --fill/--fill-verbose/--fill-first/--template/--recover/--editor/--web source the body outside this wrapper, so a waiver line cannot be ruled out; pass --body or --body-file instead");
   }

@@ -306,6 +306,16 @@ test("editPr: fails closed when the PR context cannot be resolved", async () => 
   );
 });
 
+test("editPr: refuses a waiver-baseline-less edit when the current body cannot be read", async () => {
+  const { run, calls } = stubGh();
+  const fetchPrContext = async () => null;
+  await assert.rejects(
+    () => editPr(editOpts({ body: "plain" }), { run, fetchPrContext }),
+    /ADR-TRIPWIRE-STANDING-WAIVER.*cannot read the current body/s,
+  );
+  assert.equal(calls.length, 0);
+});
+
 test("editPr: a body with no closing reference edits normally after one context read", async () => {
   const { run, calls } = stubGh();
   let fetches = 0;
