@@ -367,9 +367,9 @@ test("decideBashGate denies raw gh issue edit from a subagent on the target repo
   );
 });
 
-test("decideBashGate ALLOWS a non-body raw gh issue edit from the MAIN agent (agentType null)", () => {
+test("decideBashGate ALLOWS raw gh issue edit from the MAIN agent (agentType null)", () => {
   assert.equal(
-    decideBashGate({ command: "gh issue edit 5 --add-label bug", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision,
+    decideBashGate({ command: "gh issue edit 5 --body-file x", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision,
     "allow",
   );
 });
@@ -1720,14 +1720,13 @@ test("decideBashGate denies hardened raw body-write forms in launcher-only wordi
   const gate = (command) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
   for (const command of [
     `gh -R ${TARGET} pr edit 5 --body-file pr.md`,
-    "gh issue edit 5 --body-file i.md",
     `gh api -X PATCH repos/${TARGET}/issues/5 -f body=x`,
+    `gh api repos/${TARGET}/pulls/5 -f body=x`,
     `gh api -X PATCH repos/${TARGET}/pulls/5 --input p.json`,
     "gh api -X PATCH repos/{owner}/{repo}/pulls/5 -f body=x",
     "gh api -X PATCH pulls/5?x=1 -f body=x",
     `gh api graphql -f query='mutation { updatePullRequest(input:{pullRequestId:"X", body:"b"}) { clientMutationId } }'`,
     `bash -c "gh pr edit 5 --body x"`,
-    "echo 5 | xargs -I{} gh issue edit {} --body-file i.md",
   ]) {
     const d = gate(command);
     assert.equal(d.decision, "deny", command);

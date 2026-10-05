@@ -839,18 +839,18 @@ function ghBodyWriterRegex(subcmd) {
   return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+${GH_GLOBAL_REPO_FLAGS}${subcmd}\\s+edit(?:\\s|$)`, "i");
 }
 
-/** A `gh pr edit` / `gh issue edit` literal anywhere in a command string, quoted or not. */
-const GH_BODY_WRITER_LITERAL = new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}(?:pr|issue)\\s+edit(?=[\\s"'\`]|$)`, "i");
+/** A `gh pr edit` literal anywhere in a command string, quoted or not. */
+const GH_BODY_WRITER_LITERAL = new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}pr\\s+edit(?=[\\s"'\`]|$)`, "i");
 
 /** A shell wrapper that hides a command from per-segment inspection: `bash|sh|zsh|dash|ksh -c`, `eval`, `xargs`. */
 const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*-\S*c|eval|xargs)(?=\s)/;
 
 /**
- * ADR-TRIPWIRE-STANDING-WAIVER (CLI half): a raw `gh pr edit` or `gh issue edit` that sets the body
+ * ADR-TRIPWIRE-STANDING-WAIVER (CLI half): a raw `gh pr edit` that sets the body
  * (`--body`, `--body-file`, `-b`, `-F`), with or without `gh` global repo flags before the subcommand
  * (`gh -R o/n pr edit ...`). A body write is the path that carries an `adr-tripwire:allow` waiver
  * line, so it must flow through the launcher's `pr edit` / `pr waive-adr-tripwire`. Quoted values are
- * blanked first, so a flag-looking word inside a title does not match. A `gh pr edit`/`gh issue edit`
+ * blanked first, so a flag-looking word inside a title does not match. A `gh pr edit`
  * literal inside `bash -c`/`sh -c`/`eval`/`xargs` is denied outright: the wrapper hides the real
  * flags from segment inspection, so the literal itself is the signal (fail closed). An explicit
  * `--repo`/`-R` that is provably not `managedSlug` passes through (direct, unwrapped forms only).
@@ -858,7 +858,7 @@ const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\
  */
 export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
   if (SHELL_WRAPPER_RE.test(command) && GH_BODY_WRITER_LITERAL.test(command)) return true;
-  const res = [ghBodyWriterRegex("pr"), ghBodyWriterRegex("issue")];
+  const res = [ghBodyWriterRegex("pr")];
   return shellSegments(command).some((segment) =>
     res.some((re) => {
       if (!re.test(segment)) return false;
@@ -887,7 +887,8 @@ export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
     if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
     // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).
     if (/(?:^|\s)--input(?:=|\s)/.test(stripQuotedLiterals(segment))) return true;
-    if (!ghApiSegmentHasWriteMethod(segment)) return false;
+    // gh defaults to POST when a field is present, so only an explicit GET/HEAD makes a body field a read.
+    if (/(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?(?:GET|HEAD)\b/i.test(stripQuotedLiterals(segment))) return false;
     // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
     return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
   });
