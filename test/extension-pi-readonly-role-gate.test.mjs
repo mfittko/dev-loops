@@ -5,9 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { READONLY_SUBAGENT_ROLES } from "@dev-loops/core/claude/hook-decisions";
+import { NATIVE_PI_PARENT_SESSION_MARKER } from "@dev-loops/core/loop/run-context";
 import extension from "../extension/index.ts";
 import { mapAgentToolsForPi, renderPiAgent } from "../extension/sync-packaged-agents.ts";
-import { BASH_RESTRICTED_ROLES, AGENT_TYPE_ENV } from "../extension/readonly-role-gate.ts";
+import { BASH_RESTRICTED_ROLES, DEV_LOOPS_ROLES } from "../extension/readonly-role-gate.ts";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const PULL = "dev-loops-run scripts/github/pull-work-order.mjs j1-0123abcd";
@@ -19,16 +20,35 @@ function toolCallHandler() {
   return events.get("tool_call");
 }
 
-async function callAs(role, command, toolName = "bash") {
-  const prior = process.env[AGENT_TYPE_ENV];
-  if (role === undefined) delete process.env[AGENT_TYPE_ENV];
-  else process.env[AGENT_TYPE_ENV] = role;
-  try {
-    return await toolCallHandler()({ toolName, input: { command } }, {});
-  } finally {
-    if (prior === undefined) delete process.env[AGENT_TYPE_ENV];
-    else process.env[AGENT_TYPE_ENV] = prior;
+// The native async markers the runner sets in-process, alongside the calling session id the ctx
+// supplies. Both are snapshotted/restored so a test never leaks a marker into a sibling test.
+const NATIVE_ENV_MARKERS = ["PI_SUBAGENT_CHILD", NATIVE_PI_PARENT_SESSION_MARKER];
+
+async function callWith(prompt, command, toolName = "bash", env = {}, sessionId) {
+  const priors = NATIVE_ENV_MARKERS.map((name) => [name, process.env[name]]);
+  for (const name of NATIVE_ENV_MARKERS) {
+    if (env[name] === undefined) delete process.env[name];
+    else process.env[name] = env[name];
   }
+  try {
+    const ctx = {
+      getSystemPrompt: prompt === undefined ? undefined : () => prompt,
+      ...(sessionId === undefined ? {} : { sessionManager: { getSessionId: () => sessionId } }),
+    };
+    return await toolCallHandler()({ toolName, input: { command } }, ctx);
+  } finally {
+    for (const [name, prior] of priors) {
+      if (prior === undefined) delete process.env[name];
+      else process.env[name] = prior;
+    }
+  }
+}
+
+const tag = (name) => `<active_agent name="${name}"/>`;
+
+// role undefined = untagged main agent; otherwise a pi-subagents tag for that name.
+async function callAs(role, command, toolName = "bash") {
+  return callWith(role === undefined ? "base prompt" : tag(role), command, toolName);
 }
 
 test("Pi judge runs the sanctioned pull and nothing else (J7)", async () => {
@@ -99,5 +119,201 @@ test("the Pi pull-line matcher agrees with the Claude gate's parseSanctionedPull
   ];
   for (const line of lines) {
     assert.equal((await callAs("judge", line)).block, parseSanctionedPullLine(line) === null, line);
+  }
+});
+
+test("the role comes from the tag in prefix or appended form, and the env marker is gone", async () => {
+  assert.equal((await callWith(`${tag("judge")}\n\nYou are a judge.`, "cat README.md")).block, true);
+  assert.equal((await callWith(`Base prompt.\n\n${tag("judge")}`, "cat README.md")).block, true);
+  assert.deepEqual(await callWith(`${tag("dev-loops:judge")} x`, PULL), { block: false });
+  const legacyEnv = "DEVLOOPS_" + "AGENT_TYPE";
+  const prior = process.env[legacyEnv];
+  process.env[legacyEnv] = "judge";
+  try {
+    assert.deepEqual(await callWith("base prompt", "cat README.md"), { block: false });
+  } finally {
+    if (prior === undefined) delete process.env[legacyEnv];
+    else process.env[legacyEnv] = prior;
+  }
+  assert.deepEqual(await callWith(undefined, "cat README.md"), { block: false });
+});
+
+test("every roster role resolves to its capability", async () => {
+  const names = fs.readdirSync(path.join(repoRoot, "agents")).filter((n) => n.endsWith(".agent.md"))
+    .map((n) => /^name:\s*"?([^"\n]+)"?/m.exec(fs.readFileSync(path.join(repoRoot, "agents", n), "utf8"))[1]);
+  assert.deepEqual([...names].sort(), [...DEV_LOOPS_ROLES].sort());
+  for (const name of names) {
+    assert.deepEqual(await callAs(name, PULL), { block: false }, name);
+    assert.equal((await callAs(name, "cat README.md")).block, name === "judge", `${name} cat`);
+    assert.equal((await callAs(name, "bun run test")).block, name === "judge" || name === "review", `${name} bun`);
+  }
+});
+
+const FAIL_CLOSED_PROMPTS = [
+  tag(""), tag("  "), tag("dev-loops:"), tag("dev-loops:nope"),
+  tag("dev-loops :nope"), tag("dev-loops : nope"),
+  `${tag("nope")} ${tag("dev-loops:nope")}`, `${tag("dev-loops:nope")} ${tag("nope")}`,
+  `${tag("judge")} ${tag("developer")}`, `${tag("judge")} ${tag("review")}`,
+];
+for (const prompt of FAIL_CLOSED_PROMPTS) {
+  test(`role resolution fails closed for ${JSON.stringify(prompt)}`, async () => {
+    assert.equal((await callWith(prompt, "ls")).block, true, prompt);
+  });
+}
+
+test("role resolution fails closed per the resolution table", async () => {
+  // A native async child: the runner's in-process child flag plus a non-blank parent session.
+  const childEnv = { PI_SUBAGENT_CHILD: "1", [NATIVE_PI_PARENT_SESSION_MARKER]: "parent-1" };
+  // The child's own session id differs from the recorded parent: fail closed to the pull line.
+  assert.equal((await callWith("base prompt", "ls", "bash", childEnv, "child-1")).block, true);
+  // Same shared process env, but the calling session is the recorded parent: unrestricted.
+  assert.deepEqual(await callWith("base prompt", "ls", "bash", childEnv, "parent-1"), { block: false });
+  // A lone child flag without the parent marker is not native-async evidence: unrestricted.
+  assert.deepEqual(await callWith("base prompt", "ls", "bash", { PI_SUBAGENT_CHILD: "1" }), { block: false });
+  assert.deepEqual(await callWith("base prompt", "ls"), { block: false });
+  assert.deepEqual(await callWith(tag("developer"), "bun run test", "bash", childEnv, "child-1"), { block: false });
+  assert.deepEqual(await callWith(tag("judge"), PULL, "bash", childEnv, "child-1"), { block: false });
+  assert.equal((await callWith(tag("judge"), "cat README.md", "bash", childEnv, "child-1")).block, true);
+  assert.deepEqual(await callWith(`${tag("judge")} ${tag("dev-loops:judge")}`, PULL), { block: false });
+  for (const bare of ["reviewer", "worker", "scout"]) assert.deepEqual(await callWith(tag(bare), "bun run test"), { block: false }, bare);
+});
+
+test("the untagged fail-closed row scopes to the calling session, not the shared process env", async () => {
+  // Model the real native-child lifetime: the runner sets PI_SUBAGENT_CHILD=1 and the parent
+  // session marker in the shared process env once and leaves them set. The gate must then decide
+  // per calling session from ctx.sessionManager.getSessionId() rather than the process-global flag
+  // alone, so an untagged main agent in the same process is not locked to the pull line.
+  const handler = toolCallHandler();
+  const priors = NATIVE_ENV_MARKERS.map((name) => [name, process.env[name]]);
+  process.env.PI_SUBAGENT_CHILD = "1";
+  process.env[NATIVE_PI_PARENT_SESSION_MARKER] = "parent-session";
+  try {
+    const call = (sessionId, command) =>
+      handler({ toolName: "bash", input: { command } }, { getSystemPrompt: () => "base prompt", sessionManager: { getSessionId: () => sessionId } });
+    // The parent's own session id equals the recorded parent marker: unrestricted.
+    assert.deepEqual(await call("parent-session", "bun run test"), { block: false });
+    // A child's session id differs from the parent marker: fail closed.
+    assert.equal((await call("child-session", "bun run test")).block, true);
+    // The shared env markers are unchanged across both calls, so the decision cannot come from them.
+    assert.equal(process.env.PI_SUBAGENT_CHILD, "1");
+    assert.equal(process.env[NATIVE_PI_PARENT_SESSION_MARKER], "parent-session");
+  } finally {
+    for (const [name, prior] of priors) {
+      if (prior === undefined) delete process.env[name];
+      else process.env[name] = prior;
+    }
+  }
+});
+
+test("parallel children resolve independently", async () => {
+  const handler = toolCallHandler();
+  const judge = { getSystemPrompt: () => tag("judge") };
+  const dev = { getSystemPrompt: () => tag("developer") };
+  const call = (ctx) => handler({ toolName: "bash", input: { command: "cat README.md" } }, ctx);
+  assert.equal((await call(judge)).block, true);
+  assert.equal((await call(dev)).block, false);
+  assert.equal((await call(judge)).block, true);
+});
+
+test("the Pi judge has a shell-free read and search path", () => {
+  const rendered = renderPiAgent(fs.readFileSync(path.join(repoRoot, "agents/judge.agent.md"), "utf8"));
+  const tools = toolsOfText(rendered);
+  for (const t of ["read", "grep", "find", "ls"]) assert.ok(tools.includes(t), t);
+});
+
+const ACCEPT = {
+  A1: `jq '{resolvedAngles, scope}' "tmp/gate-context/o-r/pr-80/draft_gate-abc.json"`,
+  A2: `jq '.allPassed' "/abs/tmp/gate-context/o-r/pr-1/draft_gate-abc.validation.json"`,
+  A3: "grep -rn foo src | cut -c1-200",
+  A4: 'grep -rn "foo bar" src',
+  A5: "rg 'foo bar' src",
+  A6: 'grep -rn "foo bar" src | cut -c1-200',
+};
+const REJECT = {
+  R1: "rg --p're' bun foo",
+  R2: `rg '--pre' bun foo`,
+  R2b: 'git diff "--output=x"',
+  R3: 'grep "$(id)" src',
+  R3b: 'grep "a`id`" src',
+  R3c: 'grep "a\\b" src',
+  R3d: 'grep "a!" src',
+  R4: "grep 'foo src",
+  R5: "grep foo src | sh",
+  R6: "grep foo src | cut -c1-200 | sh",
+  R7: "grep foo src | cut -f1",
+  R8: "'bun' test",
+  R9: "rg foo *",
+  R5b: "grep foo src |",
+  R5c: "grep foo src | cut",
+  R5d: "| cut -c1-200",
+  R9b: `cd abc" && grep '"; touch PWN; #' src`,
+  R9c: `git -C abc" grep '"; touch PWN2; #' src`,
+  R11: "grep foo src\nbun run test",
+  R12: "cd /w && grep x src\nrm -rf x",
+  R13: "dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope x && rm -rf y",
+  R13b: "dev-loops-run scripts/github/emit-reviewer-blocked.mjs --head abc; rm -rf y",
+};
+for (const [id, cmd] of Object.entries(ACCEPT)) {
+  test(`reviewer accepts ${id}`, async () => assert.deepEqual(await callAs("review", cmd), { block: false }));
+}
+for (const [id, cmd] of Object.entries(REJECT)) {
+  test(`reviewer rejects ${id}`, async () => assert.equal((await callAs("review", cmd)).block, true));
+}
+test("reviewer rejects R10: the judge gains no reviewer form", async () => {
+  for (const cmd of Object.values(ACCEPT)) assert.equal((await callAs("judge", cmd)).block, true, cmd);
+  assert.equal((await callAs("judge", "jq '.allPassed' x.json")).block, true);
+});
+
+// A read-only child loads the whole extension, so the mutation-capable post-merge hooks must stay
+// inert there: `isMergeCapableCommand` splits shell segments without quote awareness, so the
+// reviewer's allowed read form below is misread as a merge. Without the guard `onToolResult` marks
+// pending post-merge work and `onAgentEnd` runs pi update, checkout sync and cleanup (#2634).
+test("a read-only Pi session never runs the mutation-capable post-merge hooks", async () => {
+  const calls = [];
+  const events = new Map();
+  extension(
+    { on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) },
+    {
+      postMergeUpdateHook: {
+        getState: () => ({}),
+        onSessionStart: () => {},
+        onToolResult: async (event, ctx) => { calls.push(["tool_result", event, ctx]); },
+        onUserBash: async (event, ctx) => { calls.push(["user_bash", event, ctx]); return undefined; },
+        onAgentEnd: async (event, ctx) => { calls.push(["agent_end", event, ctx]); },
+      },
+    },
+  );
+  const piContext = (prompt, sessionId) => ({
+    cwd: process.cwd(),
+    getSystemPrompt: prompt === undefined ? undefined : () => prompt,
+    ...(sessionId === undefined ? {} : { sessionManager: { getSessionId: () => sessionId } }),
+  });
+  const quotedMergeSearch = "grep '; gh pr merge 42 ;' README.md";
+  // The native async markers are process-global; snapshot and clear them so the untagged main-agent
+  // case below resolves unrestricted even when the test runner is itself a native child.
+  const priors = NATIVE_ENV_MARKERS.map((name) => [name, process.env[name]]);
+  for (const name of NATIVE_ENV_MARKERS) delete process.env[name];
+  try {
+    for (const [label, ctx] of [
+      ["reviewer", piContext(tag("review"), "child-review")],
+      ["judge", piContext(tag("judge"), "child-judge")],
+      ["unresolved fail-closed child", piContext(tag(""), "child-blank")],
+    ]) {
+      await events.get("tool_result")({ toolName: "bash", input: { command: quotedMergeSearch } }, ctx);
+      await events.get("user_bash")({ command: "gh pr merge 42", cwd: process.cwd() }, ctx);
+      await events.get("agent_end")({}, ctx);
+      assert.deepEqual(calls, [], `${label} must not reach the post-merge hooks`);
+    }
+
+    // An unrestricted session (the main agent, or a fixer/developer child) still runs them.
+    const main = piContext(undefined, "main-session");
+    await events.get("tool_result")({ toolName: "bash", input: { command: "gh pr merge 42 --squash" } }, main);
+    await events.get("agent_end")({}, main);
+    assert.deepEqual(calls.map(([name]) => name), ["tool_result", "agent_end"]);
+  } finally {
+    for (const [name, prior] of priors) {
+      if (prior === undefined) delete process.env[name];
+      else process.env[name] = prior;
+    }
   }
 });

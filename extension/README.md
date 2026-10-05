@@ -296,6 +296,7 @@ Current Phase 3+ contract:
 - the package exposes `skills` through `package.json` `pi.skills` for install-based global skill loading
 - the shell CLI is exposed through `package.json` `bin.dev-loops`
 - the extension syncs packaged agent files (`agents/*.agent.md`) into `~/.agents/` on `session_start` so user-level agents are available outside this repo
+- on `session_start` the extension also registers itself as a required child extension for that session (via `pi-subagents/required-child-extensions`), so a foreground (`async: false`) child loads the same `tool_call` read-only role gate; the registration is disposed on `session_shutdown` and is a guarded optional import when pi-subagents is absent
 - package install/update happens through `pi install` / `pi update`
 - this phase does not yet claim a specific supported `gh` version; it only checks `gh` presence and authentication state
 - this phase does not require a separate compiled build or `dist/` pipeline

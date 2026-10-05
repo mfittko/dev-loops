@@ -220,7 +220,7 @@ test("the gate-coordinator agent names the rule, the verbatim relay and defers t
 test("renderPiAgent maps the gate-coordinator subagent tool to the Pi subagent tool", async () => {
   const rendered = renderPiAgent(await readRepo(GATE_COORDINATOR_AGENT));
   const toolsLine = rendered.split("\n").find((line) => line.startsWith("tools:"));
-  assert.deepEqual(toolsLine.slice("tools:".length).split(",").map((t) => t.trim()), ["read", "bash", "write", "subagent"]);
+  assert.deepEqual(toolsLine.slice("tools:".length).split(",").map((t) => t.trim()), ["read", "grep", "find", "ls", "bash", "write", "subagent"]);
 });
 
 test("every gate-coordinator dispatch site names the gate-coordinator agent", async () => {

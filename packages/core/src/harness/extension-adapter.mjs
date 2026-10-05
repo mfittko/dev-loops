@@ -31,8 +31,10 @@
  * @property {boolean} hasUI - Whether an interactive UI surface is attached.
  * @property {HarnessUi} ui - UI operations for this invocation.
  * @property {((message: string, options?: Record<string, unknown>) => unknown) | undefined} sendUserMessage - Optional: send a user-turn message into the harness (Pi extension only; absent in other harnesses).
+ * @property {(() => string) | undefined} getSystemPrompt - Optional: the calling session's effective system prompt (Pi extension only).
+ * @property {(() => string) | undefined} getSessionId - Optional: the calling session's own id (Pi extension only).
  *
- * @typedef {'session_start'|'tool_result'|'user_bash'|'agent_end'|'tool_call'} HarnessLifecycleEvent
+ * @typedef {'session_start'|'session_shutdown'|'tool_result'|'user_bash'|'agent_end'|'tool_call'} HarnessLifecycleEvent
  *
  * @typedef {Object} HarnessCommandConfig
  * @property {string} description
