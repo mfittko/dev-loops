@@ -35,6 +35,8 @@ import {
   commandContainsGraphqlResolveReviewThread,
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
+  commandContainsRawPrBodyEdit,
+  commandContainsRawPrBodyApiWrite,
   commandContainsDetachedWaitTool,
   commandIsSleepPollLoop,
   commandIsFileMarkerPollLoop,
@@ -1219,5 +1221,57 @@ test("decideBashGate denies the env -C forms (#2550)", () => {
     const result = decideBashGate({ ...ctx, ...extra });
     assert.equal(result.decision, "deny", extra.command);
     assert.match(result.reason, reason, extra.command);
+  }
+});
+
+test("commandContainsRawPrBodyEdit detects gh pr edit body writes (--body, --body-file, -b, -F)", () => {
+  for (const cmd of [
+    "gh pr edit 5 --body-file pr.md",
+    "gh pr edit 5 --body 'text'",
+    "gh pr edit 5 --body='text'",
+    "gh pr edit 5 --repo o/n -b 'text'",
+    "gh pr edit 5 -F pr.md",
+    "echo ok && gh pr edit 5 --body-file -",
+  ]) {
+    assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
+  }
+});
+
+test("commandContainsRawPrBodyEdit passes non-body edits, other verbs and flag-looking words in quotes", () => {
+  for (const cmd of [
+    "gh pr edit 5 --add-assignee me",
+    "gh pr edit 5 --title 'fix -b handling'",
+    "gh pr edit 5 --base main",
+    "gh pr view 5 --json body",
+    "gh pr edit --help",
+    "node scripts/github/edit-pr.mjs --repo o/n --pr 5 --body-file pr.md",
+    "dev-loops-run cli/index.mjs pr edit --repo o/n --pr 5 --body-file pr.md",
+  ]) {
+    assert.equal(commandContainsRawPrBodyEdit(cmd), false, cmd);
+  }
+});
+
+test("commandContainsRawPrBodyApiWrite detects a gh api write of a body field to pulls/<n>", () => {
+  for (const cmd of [
+    "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body='text'",
+    "gh api --method PATCH repos/mfittko/dev-loops/pulls/5 -F body=@pr.md",
+    "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 --raw-field body=text",
+    "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 --field body=@pr.md",
+    "gh api -X PATCH https://api.github.com/repos/mfittko/dev-loops/pulls/5 -f 'body=text'",
+    "gh api -X PATCH pulls/5 -f body=text",
+  ]) {
+    assert.equal(commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), true, cmd);
+  }
+});
+
+test("commandContainsRawPrBodyApiWrite passes reads, non-body fields, sub-paths and another repo", () => {
+  for (const cmd of [
+    "gh api repos/mfittko/dev-loops/pulls/5",
+    "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f title=new",
+    "gh api -X POST repos/mfittko/dev-loops/pulls/5/comments -f body=text",
+    "gh api -X PATCH repos/other/repo/pulls/5 -f body=text",
+    "gh api -X POST repos/mfittko/dev-loops/issues/5/comments -f body=text",
+  ]) {
+    assert.equal(commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), false, cmd);
   }
 });

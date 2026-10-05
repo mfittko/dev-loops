@@ -1691,3 +1691,27 @@ test("the gate coordinator keeps the dev-loop coordinator boundaries under stric
     assert.match(d.reason, /COORDINATOR-VERIFY-BOUNDARY/);
   }
 });
+
+test("decideBashGate denies raw PR-body writes naming the sanctioned writers (ADR-TRIPWIRE-STANDING-WAIVER)", () => {
+  const gate = (command) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
+  for (const command of [
+    "gh pr edit 5 --body-file pr.md",
+    "gh pr edit 5 --repo mfittko/dev-loops --body 'adr-tripwire:allow because'",
+    `gh api -X PATCH repos/${TARGET}/pulls/5 -f body=@pr.md`,
+    `gh api --method PATCH repos/${TARGET}/pulls/5 -F body=@pr.md`,
+  ]) {
+    const d = gate(command);
+    assert.equal(d.decision, "deny", command);
+    assert.match(d.reason, /ADR-TRIPWIRE-STANDING-WAIVER/);
+    assert.match(d.reason, /dev-loops pr edit/);
+    assert.match(d.reason, /dev-loops pr waive-adr-tripwire/);
+  }
+});
+
+test("decideBashGate lets non-body PR edits, the sanctioned CLI and other repos through the PR-body deny", () => {
+  const gate = (command, repoSlug = TARGET) => decideBashGate({ command, repoSlug, inManagedContext: true, managedRepoSlug: TARGET });
+  assert.equal(gate("gh pr edit 5 --add-assignee me").decision, "allow");
+  assert.equal(gate(`gh api -X PATCH repos/${TARGET}/pulls/5 -f title=new`).decision, "allow");
+  assert.equal(gate("dev-loops-run cli/index.mjs pr edit --repo mfittko/dev-loops --pr 5 --body-file pr.md").decision, "allow");
+  assert.equal(gate("gh pr edit 5 --body-file pr.md", "someone/else").decision, "allow");
+});

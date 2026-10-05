@@ -32,6 +32,8 @@ import {
   commandContainsGraphqlResolveReviewThread,
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
+  commandContainsRawPrBodyEdit,
+  commandContainsRawPrBodyApiWrite,
   commandContainsDetachedWaitTool,
   commandContainsInlineInterpreter,
   commandContainsCodeVerificationEntrypoint,
@@ -302,6 +304,21 @@ export function decideBashGate({
         "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY: ad-hoc Copilot review requests are blocked. Request Copilot " +
         "via scripts/github/request-copilot-review.mjs — do not write requested_reviewers or post a literal " +
         "/copilot comment.",
+    };
+  }
+
+  // ADR-TRIPWIRE-STANDING-WAIVER: raw PR-body writes (`gh pr edit --body`/`--body-file`, or a `gh api`
+  // write of a `body` field to pulls/<n>) are the path that carries an `adr-tripwire:allow` waiver
+  // line. Actor-independent defense in depth: the agent and the operator share one GitHub credential,
+  // so the sanctioned writers (which refuse a hand-written waiver line) are the only body route.
+  if (inManagedRepo && (commandContainsRawPrBodyEdit(command) || commandContainsRawPrBodyApiWrite(command, managedSlug))) {
+    return {
+      decision: "deny",
+      reason:
+        "ADR-TRIPWIRE-STANDING-WAIVER: raw PR-body writes are blocked. Edit a PR body through `dev-loops pr edit` " +
+        "(`dev-loops-run cli/index.mjs pr edit`), which refuses a hand-written adr-tripwire:allow line. Write the ADR " +
+        "tripwire waiver only through `dev-loops pr waive-adr-tripwire` (`dev-loops-run cli/index.mjs pr waive-adr-tripwire`), " +
+        "which needs a standing authorization on the default branch.",
     };
   }
 

@@ -830,6 +830,38 @@ export function commandContainsCopilotRequestBypass(command, managedSlug = null)
 }
 
 /**
+ * ADR-TRIPWIRE-STANDING-WAIVER (CLI half): a raw `gh pr edit` that sets the body (`--body`,
+ * `--body-file`, `-b`, `-F`). A body write is the path that carries an `adr-tripwire:allow` waiver
+ * line, so it must flow through `dev-loops pr edit` / `dev-loops pr waive-adr-tripwire`. Quoted
+ * values are blanked first, so a flag-looking word inside a title does not match.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsRawPrBodyEdit(command) {
+  const re = ghSubcmdVerbRegex("pr", "edit");
+  return shellSegments(command).some((segment) => {
+    if (!re.test(segment)) return false;
+    const flags = stripQuotedLiterals(segment.replace(re, " "));
+    return /(?:^|\s)(?:--body(?:-file)?(?=[=\s]|$)|-[bF](?=[=\s]|\S|$))/.test(flags);
+  });
+}
+
+/**
+ * ADR-TRIPWIRE-STANDING-WAIVER (API half): raw `gh api` write to `.../pulls/<n>` on the managed repo
+ * that carries a `body` field (`-f`/`-F`/`--field`/`--raw-field body=...`) — the PATCH that rewrites
+ * a PR body. A write to a sub-path (`pulls/<n>/comments`, `.../reviews`) or without a body field
+ * passes through.
+ * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
+ */
+export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
+  const re = managedGhApiPathRegex(`pulls/\\d+(?:\\s|$)`, managedSlug);
+  return extractGhApiEndpointSegments(command).some(({ segment, endpoint }) => {
+    if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint)) || !ghApiSegmentHasWriteMethod(segment)) return false;
+    // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
+    return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
+  });
+}
+
+/**
  * COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY (comment-summon half): a raw `gh pr comment` body carrying a
  * bare Copilot summon (`/copilot` or `/copilot re-review`). The agent MUST request Copilot via
  * `request-copilot-review.mjs`, never by posting a literal `/copilot` comment. Actor-independent: even
