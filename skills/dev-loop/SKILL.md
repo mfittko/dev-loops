@@ -282,7 +282,7 @@ Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/a
 `DEV-LOOP-RUNNER-STOP-CONDITIONS`: the dev-loop coordinator MUST stop and report, and never self-waives, when any of these occurs:
 
 - a size-budget `escalate` or `block` outcome;
-- an ADR tripwire trip (`check-adr-tripwire.mjs`), except that on `nextAction: resolve_adr_tripwire` the coordinator stops and reports, and the orchestrator runs `dev-loops pr waive-adr-tripwire` (orchestrator-owned) per `ADR-TRIPWIRE-STANDING-WAIVER` in [Decision record contract](../docs/decision-record-contract.md), quoting the typed refusal reason if the writer refuses;
+- an ADR tripwire trip (`check-adr-tripwire.mjs`), except that on `nextAction: resolve_adr_tripwire` the coordinator stops and reports, and the orchestrator runs `node <dev-loops-package-root>/cli/index.mjs pr waive-adr-tripwire` (orchestrator-owned) per `ADR-TRIPWIRE-STANDING-WAIVER` in [Decision record contract](../docs/decision-record-contract.md), quoting the typed refusal reason if the writer refuses;
 - a harness permission or classifier denial, or an interruption.
 
 On a denial the coordinator quotes the denial text verbatim in its report and does not retry the denied call in any command form.

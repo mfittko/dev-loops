@@ -25,11 +25,11 @@ test("on resolve_adr_tripwire the orchestrator runs the writer before asking the
   const row = ruleRow();
   const order = /resolve_adr_tripwire[\s\S]*MUST run it before asking the operator[\s\S]*MUST quote the typed refusal reason/u;
   assert.match(row, order);
-  assert.ok(row.includes("`dev-loops pr waive-adr-tripwire`"));
+  assert.ok(row.includes("`node <dev-loops-package-root>/cli/index.mjs pr waive-adr-tripwire`"));
 });
 
 test("the dev-loop SKILL stop-condition names the orchestrator as the writer's actor", () => {
-  assert.match(read("skills/dev-loop/SKILL.md"), /resolve_adr_tripwire` the coordinator stops and reports, and the orchestrator runs `dev-loops pr waive-adr-tripwire`/u);
+  assert.match(read("skills/dev-loop/SKILL.md"), /resolve_adr_tripwire` the coordinator stops and reports, and the orchestrator runs `node <dev-loops-package-root>/cli/index.mjs pr waive-adr-tripwire`/u);
   assert.match(read("scripts/loop/sanctioned-commands.mjs"), /orchestratorOwned[\s\S]*waive-adr-tripwire\.mjs/u);
 });
 
