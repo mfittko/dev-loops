@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, open, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
+import { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER } from "@dev-loops/core/loop/run-context";
 
 const DEFAULT_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const FAILURE_ONLY_FLAG = "--only-failures";
@@ -503,11 +503,12 @@ export async function runBunTest(args, {
   progress.start();
   try {
     capture = await captureFactory();
-    // Tests never inherit run-id markers from the invoking shell, so a test that
-    // depends on their absence behaves the same locally as in CI. The caller's
-    // env object is left untouched.
+    // Tests never inherit async-context markers (run-id and native async carriers)
+    // or the Claude harness marker from the invoking shell, so a test that depends
+    // on their absence behaves the same locally as in CI. The caller's env object
+    // is left untouched.
     const childEnv = { ...env };
-    for (const marker of RUN_ID_MARKERS) delete childEnv[marker];
+    for (const marker of [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER]) delete childEnv[marker];
     const child = spawnImpl(command, buildBunTestArgs(await resolveBunTestFiles(args), env), {
       env: childEnv, stdio: ["ignore", capture.fd, capture.fd],
     });
