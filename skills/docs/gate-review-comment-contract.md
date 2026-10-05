@@ -354,7 +354,7 @@ finding's record.
 `GATE-COMMENT-VALIDATION-REPORTING`: Keep the visible verdict body compact, deterministic, and
 slightly human-friendly (labels like `Gate review`, `Reviewed head SHA`, `Verdict`,
 `Blocking severities`, `Findings summary`, `Next action`); gate name and reviewed head SHA
-MUST stay deterministically parseable even if label wording changes. Validation reporting
+MUST appear on labeled field lines from the recognized label set (`Gate review` / `Gate` / `Gate name`; `Reviewed head SHA` / `Head SHA` / `Head SHA reviewed`). Validation reporting
 MUST stay concise by default — command names plus pass/fail status, aggregate counts, and
 current-head CI/check status, never raw passing log streams. Any included command output
 MUST be truncated to a deterministic retained-prefix length (a short truncation marker
