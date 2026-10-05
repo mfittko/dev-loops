@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { createGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
+import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import {
   FRAGMENTS_DIR,
   fragmentBodyClosesSection,
@@ -91,14 +92,14 @@ export function extractUnreleasedItems(changelog) {
  * classifies as code (`classifyFile()` from the diff analyzer — covers
  * packages/core and scripts source, excludes docs/config/test-only diffs).
  *
- * @param {{ commitSubjects: string[], files: string[] }} input
+ * @param {{ commitSubjects: string[], files: string[], rules?: import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null }} input
  * @returns {boolean}
  */
-export function isNotableChange({ commitSubjects, files }) {
+export function isNotableChange({ commitSubjects, files, rules }) {
   const subjects = Array.isArray(commitSubjects) ? commitSubjects : [];
   const paths = Array.isArray(files) ? files : [];
   if (subjects.some((s) => NOTABLE_COMMIT_TYPES.has(parseConventionalType(s)))) return true;
-  return paths.some((f) => classifyFile(f) === "code");
+  return paths.some((f) => classifyFile(f, rules) === "code");
 }
 
 /**
@@ -125,6 +126,7 @@ export function isNotableChange({ commitSubjects, files }) {
  *   commitSubjects: string[],
  *   files: string[],
  *   addedFiles?: string[],
+ *   rules?: import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null,
  * }} input
  * @returns {{ notable: boolean, addedItems: string[], addedFragment: boolean, errors: string[] }}
  */
@@ -134,8 +136,9 @@ export function validateChangelogCompleteness({
   commitSubjects,
   files,
   addedFiles,
+  rules,
 }) {
-  const notable = isNotableChange({ commitSubjects, files });
+  const notable = isNotableChange({ commitSubjects, files, rules });
   if (!notable) return { notable, addedItems: [], addedFragment: false, errors: [] };
 
   const addedPaths = Array.isArray(addedFiles)
@@ -212,12 +215,14 @@ export async function main({ root, env = process.env, log = console, git = creat
     addedFilesWithNotes.push(f);
   }
 
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: root });
   const { errors } = validateChangelogCompleteness({
     baseChangelog,
     addedFiles: addedFilesWithNotes,
     headChangelog,
     commitSubjects,
     files,
+    rules: resolveClassifyRules(config),
   });
 
   // A direct `## Unreleased` edit uses the same line format assembly groups by.

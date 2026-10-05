@@ -10,7 +10,7 @@
  * this module never claims a verified cache hit it cannot prove.
  */
 import { createHash } from "node:crypto";
-import { isDevLoopConfigSourcePath } from "./gate-carry-forward.mjs";
+import { isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 
 /* ------------------------------------------------------------------ *
  * 1. Harness capability model

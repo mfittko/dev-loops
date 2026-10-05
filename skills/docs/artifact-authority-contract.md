@@ -130,6 +130,8 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/loop/consolidate-fanin.mjs` | Fail closed: throws with `--gate` |
 | `scripts/github/upsert-checkpoint-verdict.mjs` | Fail closed: throws |
 | `scripts/github/merge-pr.mjs` | Fail closed: refuses with `configError` |
+| `scripts/docs/validate-changelog-completeness.mjs` | Fail closed: throws |
+| `scripts/github/withdraw-copilot-review-request.mjs` | Fail closed: throws |
 | `scripts/loop/check-size-budget.mjs` | Fail closed: outcome `block`, no waiver |
 | `scripts/loop/emit-fixer-work-order.mjs` | Fail closed: refusal |
 | `scripts/loop/claude-launch.mjs` | Fail closed: `fail()` |

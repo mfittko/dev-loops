@@ -28,7 +28,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { loadDevLoopConfigStrict, resolveBaseBranch, resolveGateAngleContract } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveBaseBranch, resolveClassifyRules, resolveGateAngleContract } from "@dev-loops/core/config";
 import {
   angleReviewSurface,
   RENAME_ONLY_ANGLES,
@@ -203,9 +203,10 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  * @param {boolean} [input.deltaComplete=false] — proof the main-relative reduction
  *   ran, so an EMPTY delta carries every eligible angle (integrate-only base-move)
  *   instead of failing closed. Threaded to {@link resolveAngleCarryForward}.
+ * @param {import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null} [input.rules] — repository `classify` rules from resolveClassifyRules
  * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, dispatchId?: string, model?: string, prevVerdict: "clean"|"findings_present", findings: Array<object>, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
  */
-export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [], deltaComplete = false }) {
+export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [], deltaComplete = false, rules = null }) {
   if (!log || typeof log !== "object") {
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
@@ -334,7 +335,7 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [], del
     const priorFindings = priorFindingsByAngle.get(angle);
     const prevVerdict = priorFindings ? "findings_present" : "clean";
     const angleSurface = angleReviewSurface(angle, { alwaysRerun });
-    const decision = resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict, deltaComplete });
+    const decision = resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict, deltaComplete, rules });
     if (decision.carryForward) {
       carried.push({
         angle,
@@ -427,6 +428,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // plan behind.
     const { config } = await loadDevLoopConfigStrict({ repoRoot });
     const { mandatoryAngles } = resolveGateAngleContract(config, mapGateToConfigKey(options.gate));
+    const rules = resolveClassifyRules(config);
     // The prior findings-log ledger is written under the MAIN worktree tmp
     //; resolve the read there too so a re-gate running inside a linked
     // worktree still finds the prior round's ledger to carry forward from
@@ -488,7 +490,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // findings, duplicate angle) throws UNTAGGED and is treated like an
     // operational failure below: no marker, emitter refuses. So the catch never
     // blanket-tags — it trusts the tag the pure seam set.
-    const rawPlan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun, deltaComplete: reduced });
+    const rawPlan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun, deltaComplete: reduced, rules });
     // AC1 (ADR 0061): optional --spec-authority stamps the pinned revision
     // identity onto the plan via the ONE shared helper. Pure no-op when absent.
     // Resolved against `repoRoot` (default process.cwd()) — matching every
@@ -498,7 +500,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       parseError,
     );
     const plan = stampOptionalSpecAuthority(rawPlan, specAuthorityIdentity);
-    const copilotConvergence = resolveConvergenceCarryForward({ changedFiles, deltaComplete: reduced });
+    const copilotConvergence = resolveConvergenceCarryForward({ changedFiles, deltaComplete: reduced, rules });
     const result = {
       ok: true,
       repo: options.repo,

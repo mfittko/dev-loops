@@ -18,7 +18,7 @@ import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
-import { loadDevLoopConfigStrict, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveCopilotReviewRequestStatus } from "../loop/_copilot-review-request-status.mjs";
 import { getLastCopilotReviewHeadSha, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../loop/_copilot-convergence-carry.mjs";
@@ -725,7 +725,7 @@ export async function performCopilotReviewRequest(
     : null;
   if (currentHeadSha && !before.requested && !before.hasPendingReviewOnCurrentHead && !before.hasSubmittedReviewOnCurrentHead) {
     const markerCarry = await resolvePostConvergenceReviewSuppressed(
-      { repo: options.repo, pr: options.pr, currentHeadSha, prData: before.prData, copilotReviewRequestStatus: "none" },
+      { repo: options.repo, pr: options.pr, currentHeadSha, prData: before.prData, copilotReviewRequestStatus: "none", rules: resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot })).config) },
       { ...runtime, checkpointDir: options.checkpointDir },
     );
     if (markerCarry.carried) {
@@ -751,7 +751,7 @@ export async function performCopilotReviewRequest(
   let carriedConvergence = null;
   const resolveCarried = async () => {
     carriedConvergence ??= await resolveCarriedConvergence(
-      { repo: options.repo, pr: options.pr, currentHeadSha, prData: before.prData, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead },
+      { repo: options.repo, pr: options.pr, currentHeadSha, prData: before.prData, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead, rules: resolveClassifyRules(config) },
       runtime,
     );
     return carriedConvergence;

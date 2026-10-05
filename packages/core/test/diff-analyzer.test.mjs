@@ -4,6 +4,7 @@ import { test } from "bun:test";
 import {
   analyzeT0,
   classifyFile,
+  compileClassifyRules,
   analyzeT1,
   analyzeDiff,
   diffHasSecuritySeam,
@@ -73,13 +74,6 @@ test("classifyFile: config for Ruby manifests (Gemfile/.gemspec/config.ru)", () 
   assert.equal(classifyFile("config/production.ru"), "config");
 });
 
-test("classifyFile: unknown for stylesheets and .ruby-version (explicit non-goals)", () => {
-  // Non-goal: stylesheets are NOT code (no correctness/determinism lens on CSS).
-  assert.equal(classifyFile("app/assets/stylesheets/app.scss"), "unknown");
-  assert.equal(classifyFile("app/assets/stylesheets/app.sass"), "unknown");
-  // Non-goal: .ruby-version stays unknown (fail-closed, like .nvmrc).
-  assert.equal(classifyFile(".ruby-version"), "unknown");
-});
 
 test("classifyFile: code for the broad language table", () => {
   // Layer 1 of agnostic classification: a source file in any common language is
@@ -97,6 +91,12 @@ test("classifyFile: code for the broad language table", () => {
   ]) {
     assert.equal(classifyFile(path), "code", path);
   }
+});
+
+test("classifyFile: asset wins over test dir outside docs; html in a test dir stays test; docs wins", () => {
+  assert.equal(classifyFile("test/fixtures/logo.png"), "asset");
+  assert.equal(classifyFile("tests/page.html"), "test");
+  assert.equal(classifyFile("docs/x.png"), "docs");
 });
 
 test("classifyFile: generic test convention (dir segments + name tokens)", () => {
@@ -168,7 +168,89 @@ test("classifyFile: prose extensions under docs/ stay docs", () => {
 });
 
 test("classifyFile: unknown for unrecognized", () => {
-  assert.equal(classifyFile("assets/logo.png"), "unknown");
+  assert.equal(classifyFile(".ruby-version"), "unknown");
+  assert.equal(classifyFile("vendor/blob.bin"), "unknown");
+});
+
+test("classifyFile: web source is code outside docs/, case-insensitively", () => {
+  for (const p of ["site/index.html", "site/page.htm", "site/a.css", "app/a.scss", "app/a.sass", "app/a.less", "site/A.HTML"]) {
+    assert.equal(classifyFile(p), "code", p);
+  }
+  assert.equal(classifyFile("docs/foo.css"), "docs");
+  assert.equal(classifyFile("docs/foo.html"), "docs");
+});
+
+test("classifyFile: images and fonts are assets outside docs/", () => {
+  for (const ext of ["svg", "png", "jpg", "jpeg", "gif", "webp", "ico", "woff", "woff2", "ttf", "otf", "eot"]) {
+    assert.equal(classifyFile(`assets/x.${ext}`), "asset", ext);
+  }
+  assert.equal(classifyFile("assets/logo.png"), "asset");
+  assert.equal(classifyFile("docs/img/x.png"), "docs");
+});
+
+test("classifyFile: .md stays docs everywhere and unrecognized extensions stay unknown", () => {
+  assert.equal(classifyFile("site/readme.md"), "docs");
+  assert.equal(classifyFile("vendor/blob.bin"), "unknown");
+});
+
+test("classifyFile: rules take precedence path, then extension, then built-ins", () => {
+  const rules = compileClassifyRules({
+    extensions: { code: [".vue", ".SVELTE"], asset: [".png"], docs: [".css"] },
+    paths: [
+      { pattern: "site/assets/**", kind: "asset" },
+      { pattern: "site/**", kind: "docs" },
+      { pattern: "app/generated/*.vue", kind: "config" },
+    ],
+  });
+  assert.equal(classifyFile("src/App.vue", rules), "code");
+  assert.equal(classifyFile("src/App.Svelte", rules), "code");
+  assert.equal(classifyFile("site/assets/x.vue", rules), "asset");
+  assert.equal(classifyFile("site/other.vue", rules), "docs");
+  assert.equal(classifyFile("app/generated/a.vue", rules), "config");
+  assert.equal(classifyFile("src/a.css", rules), "docs");
+  assert.equal(classifyFile("src/a.png", rules), "asset");
+  assert.equal(classifyFile("src/a.mjs", rules), "code");
+  assert.equal(classifyFile("Site/assets/x.bin", rules), "unknown");
+  assert.equal(classifyFile("Site/other.vue", rules), "code");
+});
+
+test("classifyFile: .github and dev-loop config sources ignore rules", () => {
+  const rules = compileClassifyRules({
+    extensions: { asset: [".svg", ".yml"] },
+    paths: [{ pattern: "**", kind: "code" }],
+  });
+  assert.equal(classifyFile(".github/x.svg", rules), "ci");
+  assert.equal(classifyFile(".github/workflows/v.yml", rules), "ci");
+  assert.equal(classifyFile(".devloops", rules), "config");
+  assert.equal(classifyFile(".devloops.yaml", rules), "config");
+  assert.equal(classifyFile(".pi/dev-loop/settings.yaml", rules), "config");
+  assert.equal(classifyFile("packages/core/src/config/extension-defaults.yaml", rules), "config");
+});
+
+test("compileClassifyRules: empty or missing config yields no rules", () => {
+  assert.equal(compileClassifyRules(undefined), null);
+  assert.equal(compileClassifyRules({}), null);
+  assert.equal(compileClassifyRules({ extensions: {}, paths: [] }), null);
+});
+
+test("analyzeDiff: an asset-only diff yields no change category", () => {
+  const analysis = analyzeDiff({ nameStatusOutput: "M\tassets/logo.svg\nA\tassets/x.png\n", diffOutput: "" });
+  assert.deepEqual(analysis.t1.changeCategories, []);
+});
+
+test("analyzeDiff: rules reclassify a custom extension as code", () => {
+  const nameStatusOutput = "M\tsrc/App.vue\n";
+  assert.deepEqual(analyzeDiff({ nameStatusOutput, diffOutput: "" }).t1.changeCategories, []);
+  const rules = compileClassifyRules({ extensions: { code: [".vue"] } });
+  assert.deepEqual(analyzeDiff({ nameStatusOutput, diffOutput: "", rules }).t1.changeCategories, ["LOGIC_CHANGE"]);
+});
+
+test("analyzeDiff: rules-mapped code file keeps the security seam", () => {
+  const nameStatusOutput = "M\tsrc/App.vue\n";
+  const diffOutput = "--- a/src/App.vue\n+++ b/src/App.vue\n@@ -1,1 +1,2 @@\n+child_process.exec(x);\n";
+  const rules = compileClassifyRules({ extensions: { code: [".vue"] } });
+  assert.ok(analyzeDiff({ nameStatusOutput, diffOutput, rules }).t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
+  assert.ok(!analyzeDiff({ nameStatusOutput, diffOutput }).t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM"));
 });
 
 test("classifyFile: docs for .markdown files", () => {
