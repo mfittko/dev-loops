@@ -224,7 +224,9 @@ function scanBodySources(args) {
   for (const token of tokens) {
     if (token.kind !== "option") continue;
     if (["fill", "fill-verbose", "fill-first", "template"].includes(token.name)) found.sourced = true;
-    const value = typeof token.value === "string" ? token.value : null;
+    let value = typeof token.value === "string" ? token.value : null;
+    // pflag strips one leading "=" from an inline short value (`-b=x`); parseArgs keeps it.
+    if (value !== null && token.inlineValue && /^-[^-]/u.test(token.rawName) && value.startsWith("=")) value = value.slice(1);
     if (token.name === "body") found.body = value;
     else if (token.name === "body-file") found.bodyFile = value;
   }

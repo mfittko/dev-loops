@@ -1743,6 +1743,7 @@ test("create-pr refuses any adr-tripwire:allow line in the body before invoking 
 for (const [label, bodyArgs, useFile] of [
   ["-b (space form)", ["-b", "x\nadr-tripwire:allow because\n"], false],
   ["-b= (inline form)", ["-b=x\nadr-tripwire:allow because\n"], false],
+  ["-b= (inline form, marker on line 1)", ["-b=adr-tripwire:allow because"], false],
   ["-F (body file)", ["-F"], true],
   ["-b attached form", ["-bx\nadr-tripwire:allow because\n"], false],
   ["a -db shorthand bundle", ["-db", "x\nadr-tripwire:allow because\n"], false],
