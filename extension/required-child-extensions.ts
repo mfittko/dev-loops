@@ -108,9 +108,14 @@ export async function loadRegisterRequiredChildExtensions({
  *
  * `requireForAllRunners` is requested first so a placement that cannot load the extension
  * (an external CLI/job runner or a remote machine) is refused instead of running ungated.
- * pi-subagents < 0.75 has no such flag and rejects the unknown key, so the non-mandatory
- * form is retried; it still gates every native child, which is the only placement dev-loops
- * declares for its role agents.
+ * That flag exists from pi-subagents 0.75; on 0.68–0.74 it rejects the unknown key, so the
+ * non-mandatory form is retried, which still gates every native child — the only placement
+ * dev-loops declares for its role agents.
+ *
+ * The registration API (`pi-subagents/required-child-extensions`) exists only from
+ * pi-subagents 0.68. Below that floor `require.resolve` of the subpath throws,
+ * `loadRegisterRequiredChildExtensions` returns null and `register` no-ops, so the child
+ * never loads the `tool_call` gate and runs ungated.
  */
 export function registerDevLoopsRequiredChildExtension({
   register,
