@@ -88,6 +88,7 @@
   },
   "dependencies": {
     "@dev-loops/core": "^1.0.5",
+    "brace-expansion": "5.0.12",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
