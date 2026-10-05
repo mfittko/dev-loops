@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { analyzeTranscript } from "../../scripts/loop/check-retro-tooling.mjs";
+import { spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PassThrough } from "node:stream";
+
+import { analyzeTranscript, run } from "../../scripts/loop/check-retro-tooling.mjs";
 
 test("clean transcript: dev-loops tooling + node scripts only — no violations", () => {
   const transcript = [
@@ -145,4 +151,78 @@ test("env prefix before an allowed node script stays clean", () => {
 test("comments and blank lines are ignored", () => {
   const { violations } = analyzeTranscript("# this mentions gh api but is a comment\n\n   \n");
   assert.deepEqual(violations, []);
+});
+
+const SCRIPT = new URL("../../scripts/loop/check-retro-tooling.mjs", import.meta.url).pathname;
+
+function runCli(args, stdinText) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("node", [SCRIPT, ...args], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => { stdout += d; });
+    child.stderr.on("data", (d) => { stderr += d; });
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
+    // Chunked async writes with gaps let the child drain the pipe before EOF, which
+    // is when a non-blocking stdin read fails; a synchronous 200KB write would deadlock.
+    child.stdin.on("error", () => {});
+    const text = stdinText ?? "";
+    let closed = false;
+    child.on("close", () => { closed = true; });
+    (async () => {
+      for (let i = 0; i < text.length && !closed; i += 16384) {
+        if (!child.stdin.write(text.slice(i, i + 16384))) await new Promise((r) => child.stdin.once("drain", r).once("close", r));
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      child.stdin.end();
+    })();
+  });
+}
+
+function tmpFile(content) {
+  const file = join(mkdtempSync(join(tmpdir(), "retro-tooling-")), "transcript.txt");
+  writeFileSync(file, content);
+  return file;
+}
+
+test("piped stdin over 64KB matches --transcript output", async () => {
+  const transcript = Array.from({ length: 6000 }, (_, i) => `gh api repos/o/r/pulls/${i}/comments`).join("\n");
+  assert.ok(transcript.length >= 200 * 1024);
+  const viaFile = await runCli(["--json", "--transcript", tmpFile(transcript)]);
+  const viaPipe = await runCli(["--json"], transcript);
+  assert.equal(viaFile.status, 1);
+  assert.equal(viaPipe.status, 1);
+  assert.equal(viaPipe.stdout, viaFile.stdout);
+  assert.equal(JSON.parse(viaPipe.stdout).rawCallViolations.length, 6000);
+});
+
+test("stdin read error rejects naming stdin and the cause, with no output", async () => {
+  const stdin = new PassThrough();
+  const out = [];
+  const sink = { write: (s) => out.push(s) };
+  const pending = run(["--json"], { stdout: sink, stderr: sink, stdin });
+  stdin.destroy(new Error("boom"));
+  await assert.rejects(pending, /stdin.*boom/);
+  assert.deepEqual(out, []);
+});
+
+test("empty stdin exits 2 with 'empty transcript' and no clean result", async () => {
+  const r = await runCli(["--json"], "  \n");
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /empty transcript/);
+  assert.doesNotMatch(r.stdout, /"ok":true/);
+});
+
+test("empty --transcript file exits 2 with 'empty transcript' and no clean result", async () => {
+  const r = await runCli(["--json", "--transcript", tmpFile("\n \n")]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /empty transcript/);
+  assert.doesNotMatch(r.stdout, /"ok":true/);
+});
+
+test("comment-only transcript is analyzed normally", async () => {
+  const r = await runCli(["--json"], "# only a comment\n");
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).internalToolingOnly, true);
 });

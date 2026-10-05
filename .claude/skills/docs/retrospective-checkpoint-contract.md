@@ -185,7 +185,8 @@ its JSON output (`{ ok, internalToolingOnly, rawCallViolations, allowedWriteOps 
 is returned to the conductor via the envelope's `retrospectiveFindings` field (normalized
 to `{ internalToolingOnly, rawCallViolations, allowedWriteOps }`). It is **not** written to a
 checkpoint and **not** a gate. Exit code `1` when violations
-are found, `0` when clean. The pure `analyzeTranscript(transcript)` export returns
+are found, `0` when clean, `2` for unreadable (stdin read error) or empty input
+(`empty transcript`), which never reports clean. The pure `analyzeTranscript(transcript)` export returns
 `{ violations, allowedWriteOps, internalToolingOnly }`.
 
 Matching rules: a tool name at the start of a command segment (start of line, or after
