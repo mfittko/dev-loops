@@ -894,3 +894,21 @@ test("deleting a shadowing .devloops that exposes a shadowed standingAuthorizati
   assert.equal(r.outcome, "block");
   assert.ok(r.triggers.some((t) => t.type === "standing-authorizations-change"));
 });
+
+test("evaluateAdrTripwire: base contents are read at the merge base, not the base tip", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "adr-mergebase-"));
+  try {
+    const run = (c) => execSync(c, { cwd: tmp, stdio: "ignore" });
+    run("git init -q -b main && git config user.email t@t && git config user.name t");
+    await writeFile(path.join(tmp, DEVLOOPS_CONFIG_PATH), "version: 1\n");
+    run("git add . && git commit -qm base && git checkout -qb feature");
+    await writeFile(path.join(tmp, DEVLOOPS_CONFIG_PATH), "version: 1\nautonomy: x\n");
+    run("git add . && git commit -qm head && git checkout -q main");
+    await writeFile(path.join(tmp, DEVLOOPS_CONFIG_PATH), POLICY_HEAD);
+    run("git add . && git commit -qm grant && git checkout -q feature");
+    const r = await evaluateAdrTripwire({ base: "main", head: "feature", repoRoot: tmp });
+    assert.ok(!r.triggers.some((t) => t.type === "standing-authorizations-change"));
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});

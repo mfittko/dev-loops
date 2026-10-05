@@ -29,7 +29,7 @@ The block clears when the same diff adds or updates a `docs/decisions/NNNN-*.md`
 
 ## Standing waiver for contract-doc triggers
 
-The operator records a standing authorization in `.devloops` under `standingAuthorizations.adrTripwireWaiver` with four required fields: `grantedBy` (GitHub login), `grantedAt` (ISO date), `expires` (ISO date, at most 90 days after `grantedAt`) and `reason` (non-empty). The record has no scope field. The writer reads it only from `origin/<defaultBranch>:.devloops`, never from the worktree, the PR head, the PR body, an environment variable or a CLI argument. A missing, malformed, over-long or expired record (expiry compared with the current UTC date) means no authorization is in force, and the writer refuses.
+The operator records a standing authorization in `.devloops` under `standingAuthorizations.adrTripwireWaiver` with four required fields: `grantedBy` (GitHub login), `grantedAt` (ISO date), `expires` (ISO date, at most 90 days after `grantedAt`) and `reason` (non-empty). The record has no scope field. The writer reads it only from the effective `.devloops` config file on `origin/<defaultBranch>` (the first existing of `.devloops`, `.devloops.yaml`, `.devloops.yml`, `.devloops.json`, in loader order), never from the worktree, the PR head, the PR body, an environment variable or a CLI argument. A missing, malformed, over-long or expired record (expiry compared with the current UTC date) means no authorization is in force, and the writer refuses.
 
 `dev-loops pr waive-adr-tripwire --repo <owner/name> --pr <n>` writes the waiver only when every check passes, and otherwise refuses with a typed reason and leaves the body unchanged:
 - a standing authorization is in force;

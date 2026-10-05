@@ -477,7 +477,7 @@ export function computeAdrTripwire({
     reasons.push(`The standing-authorization waiver line does not name the evaluated head or has expired${headSha ? ` ${headSha}` : ""}; re-run \`dev-loops pr waive-adr-tripwire\` for the current head.`);
   }
   reasons.push(
-    "ADR tripwire: a decision-shaped surface was touched without adding/updating a docs/decisions/NNNN-*.md record and without a valid `adr-tripwire:allow <reason>` waiver in the PR body.",
+    "ADR tripwire: a decision-shaped surface was touched without adding/updating a docs/decisions/NNNN-*.md record and without a valid `adr-tripwire:allow <reason>` waiver in the PR body. Do not hand-write the waiver: run `dev-loops pr waive-adr-tripwire` (an operator can still add one in the GitHub UI).",
   );
   return { ok: false, outcome: "block", satisfiedBy: null, triggers, adrFiles, waiver, reasons };
 }
@@ -522,6 +522,9 @@ export async function evaluateAdrTripwire({
   const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
   const nameStatusOutput = runGit(["diff", "--name-status", `${base}...${head}`], { repoRoot, env: gitEnv });
   const files = parseNameStatus(nameStatusOutput);
+  // Read base contents at the merge base so they match the three-dot diff above.
+  let baseRef = base;
+  try { baseRef = runGit(["merge-base", base, head], { repoRoot, env: gitEnv }).trim() || base; } catch { /* keep base tip */ }
   const baseContents = {};
   const headContents = {};
   for (const file of files) {
@@ -529,9 +532,9 @@ export async function evaluateAdrTripwire({
       || DEVLOOPS_CONFIG_PATHS_SET.has(file.path) || (file.origPath && DEVLOOPS_CONFIG_PATHS_SET.has(file.origPath));
     if (!isScannedSurface) continue;
     if (file.origPath) {
-      try { baseContents[file.origPath] = runGit(["show", `${base}:${file.origPath}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
+      try { baseContents[file.origPath] = runGit(["show", `${baseRef}:${file.origPath}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
     } else {
-      try { baseContents[file.path] = runGit(["show", `${base}:${file.path}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
+      try { baseContents[file.path] = runGit(["show", `${baseRef}:${file.path}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
     }
     try { headContents[file.path] = runGit(["show", `${head}:${file.path}`], { repoRoot, env: gitEnv }); } catch { /* absent at head */ }
   }
@@ -539,7 +542,7 @@ export async function evaluateAdrTripwire({
     // The loosening check needs the whole family, changed or not.
     for (const name of DEVLOOPS_CONFIG_PATHS) {
       if (baseContents[name] === undefined) {
-        try { baseContents[name] = runGit(["show", `${base}:${name}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
+        try { baseContents[name] = runGit(["show", `${baseRef}:${name}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
       }
       if (headContents[name] === undefined) {
         try { headContents[name] = runGit(["show", `${head}:${name}`], { repoRoot, env: gitEnv }); } catch { /* absent at head */ }

@@ -920,3 +920,24 @@ test("a standingAuthorizations change is marked ready with an approve merge <hea
   assert.equal(result.ok, true);
   assert.equal(result.action, "marked_ready");
 });
+
+test("a differently cased --repo owner resolves the canonical owner login for the approval check", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-policy-case-"));
+  try {
+    const { env } = await preReadyGhStub(tempDir);
+    const comments = [{ user: { login: "owner", type: "User" }, body: "approve merge abc123def4561234567890abcdef1234567890ab" }];
+    const runChild = async (_cmd, args) => {
+      const apiPath = args.find((a) => typeof a === "string" && a.startsWith("repos/")) ?? "";
+      if (/^repos\/[^/]+\/[^/]+$/.test(apiPath)) return { code: 0, stdout: JSON.stringify({ owner: { login: "owner" } }), stderr: "" };
+      return { code: 0, stdout: JSON.stringify([apiPath.includes("/reviews") ? [] : comments]), stderr: "" };
+    };
+    const approval = await realVerifyPolicyChangeApproval(
+      { repo: "OWNER/repo", pr: 17, headSha: "abc123def4561234567890abcdef1234567890ab", adrTripwire: policyChangeTripwire() },
+      { env, runChild },
+    );
+    assert.equal(approval.satisfied, true);
+    assert.equal(approval.approvedBy, "owner");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

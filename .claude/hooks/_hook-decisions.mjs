@@ -315,7 +315,7 @@ export function decideBashGate({
     return {
       decision: "deny",
       reason:
-        "ADR-TRIPWIRE-STANDING-WAIVER: raw PR and issue body writes are blocked. Edit a PR body through the launcher " +
+        "ADR-TRIPWIRE-STANDING-WAIVER: raw `gh pr edit` body writes and `gh api` body writes to pulls/<n> or issues/<n> are blocked. Edit a PR body through the launcher " +
         "(`dev-loops-run cli/index.mjs pr edit`), which refuses a hand-written adr-tripwire:allow line. Edit an issue body " +
         "through `dev-loops-run cli/index.mjs issue edit`. Write the ADR " +
         "tripwire waiver only through the launcher (`dev-loops-run cli/index.mjs pr waive-adr-tripwire`), " +

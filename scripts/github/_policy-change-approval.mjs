@@ -18,8 +18,9 @@ export const policyChangeApprovalRequired = (adrTripwire) =>
  */
 export async function verifyPolicyChangeApproval({ repo, pr, headSha, adrTripwire }, { env, ghCommand = "gh", runChild } = {}) {
   if (!policyChangeApprovalRequired(adrTripwire)) return { required: false, satisfied: true };
-  const approvedBy = repo.split("/")[0];
   const read = (suffix) => ghJson(["api", "--paginate", "--slurp", `repos/${repo}/${suffix}?per_page=100`], { env, ghCommand, runChild });
+  // GitHub logins are case-insensitive: take the canonical owner login from the API, not the --repo spelling.
+  const approvedBy = (await ghJson(["api", `repos/${repo}`], { env, ghCommand, runChild }))?.owner?.login ?? repo.split("/")[0];
   const reviews = flattenPaginatedSlurp(await read(`pulls/${pr}/reviews`));
   const comments = flattenPaginatedSlurp(await read(`issues/${pr}/comments`));
   const result = verifyFreshHumanApproval({ approvedBy, currentHeadSha: headSha, reviews, comments });

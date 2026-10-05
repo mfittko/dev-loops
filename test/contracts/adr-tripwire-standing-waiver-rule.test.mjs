@@ -37,7 +37,7 @@ test("the rule pins the refusal surfaces, the sole writer and the fixed exclusio
     assert.ok(doc.includes(exclusion), `the standing waiver section must name ${exclusion}`);
   }
   assert.match(doc, /at most 90 days after `grantedAt`/u);
-  assert.match(doc, /origin\/<defaultBranch>:\.devloops/u);
+  assert.match(doc, /effective `\.devloops` config file on `origin\/<defaultBranch>`/u);
 });
 
 test("ADR 0119 amends ADR 0052 and leaves it unedited", () => {
