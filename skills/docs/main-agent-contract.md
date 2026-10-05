@@ -195,7 +195,7 @@ the full run.
   MUST delegate targeted runs to a fresh worker subagent (`developer`/`fixer`/`quality`) and request any local full-repository run through `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation` instead. Enforced by the
   `PreToolUse` Bash gate hook (`.claude/hooks/pre-tool-use-bash-gate.mjs`), which denies the
   command when the caller's `agent_type` is a coordinator's own (`dev-loop` or `gate-coordinator`).
-  For a `gate-coordinator` caller, the deny reason names `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation` for the
+  For a `gate-coordinator` caller, the deny reason names `gate resolve-validation` for the
   round's validation and a typed observation to the dev-loop coordinator for anything else, because a
   gate coordinator dispatches no worker subagent. Gated by the SAME
   `DEVLOOPS_COORDINATOR_READONLY=1` flag as the write-guard boundary above (default fail-open); a

@@ -64,7 +64,7 @@ test("SKILL.md verdict step verifies the write-back contract and fails closed", 
 });
 
 test("command doc documents the deterministic edit-then-comment split and its fail-closed verification", () => {
-  assert.match(commandDoc, /dev-loops issue edit --repo <owner\/repo> --issue <n> --body-file <tmp-body-path>/);
+  assert.match(commandDoc, /node <dev-loops-package-root>\/cli\/index\.mjs issue edit --repo <owner\/repo> --issue <n> --body-file <tmp-body-path>/);
   assert.match(commandDoc, /node scripts\/github\/comment-issue\.mjs --repo <owner\/repo> --issue <n> --body-file <tmp-rationale-path>/);
   assert.match(commandDoc, /🔬 Grill \/ refinement results/);
   assert.match(commandDoc, /fails closed/i);
@@ -404,8 +404,8 @@ test("GRILL-SPEC-LINT: Step 2 runs spec-lint and Step 5 refuses grill-clean over
   const step2 = skill.split("## Step 2 — Detect gaps")[1]?.split("## Step 3")[0] ?? "";
   const step5 = skill.split("## Step 5 — Emit verdict")[1]?.split("## Idempotency")[0] ?? "";
   assert.match(step2, /<!-- rule: GRILL-SPEC-LINT -->/);
-  assert.match(step2, /`dev-loops loop spec-lint --body-file <path>`/);
-  assert.match(step5, /refuses `grill-clean` while a `dev-loops loop spec-lint` finding is neither corrected in the body nor disposed/);
+  assert.match(step2, /`node <dev-loops-package-root>\/cli\/index\.mjs loop spec-lint --body-file <path>`/);
+  assert.match(step5, /refuses `grill-clean` while a `node <dev-loops-package-root>\/cli\/index\.mjs loop spec-lint` finding is neither corrected in the body nor disposed/);
   const registry = JSON.parse(readFileSync(fileURLToPath(new URL("../../skills/docs/required-rules.json", import.meta.url)), "utf8"));
   assert.ok(registry.requiredRules.some((entry) => (entry.id ?? entry) === "GRILL-SPEC-LINT"));
 });

@@ -107,6 +107,9 @@ test("hook deny texts name no bare `dev-loops <ns> <sub>` and no pinned npx form
 
 test("scanned tree is non-empty (the guard actually covers files)", () => {
   assert.ok(scanAll().length > 0, "expected at least one generated agent/command/skill file");
+  assert.ok(bodiesOf([".claude/agents"]).length > 0, "expected generated agents");
+  assert.ok(bodiesOf([".claude/commands"]).length > 0, "expected generated commands");
+  assert.ok(skillBodies().length > 0, "expected generated skills");
 });
 
 test("self-check: an injected bare invocation is flagged by both regexes", () => {
@@ -182,6 +185,19 @@ test("source skills/agents/commands carry no bare `dev-loops <ns> <sub>` and no 
   }
   assert.deepEqual(bare, [], `bare dev-loops <ns> invocation in source:\n${bare.join("\n")}`);
   assert.deepEqual(launcher, [], `Claude-only launcher form in source:\n${launcher.join("\n")}`);
+});
+
+test("generated agents/commands/skills carry the Pi token in neither frontmatter nor body", () => {
+  const files = [
+    ...listMarkdown(".claude/agents", ".md"),
+    ...listMarkdown(".claude/commands", ".md"),
+    ...listMarkdown(".claude/skills", "SKILL.md").filter((f) => f.split("/").length === 4),
+  ];
+  assert.ok(files.length > 0, "expected generated files to scan");
+  const violations = files.filter((file) =>
+    fs.readFileSync(path.join(repoRoot, file), "utf8").includes("<dev-loops-package-root>/cli/index.mjs"),
+  );
+  assert.deepEqual(violations, [], `Pi token in generated files:\n${violations.join("\n")}`);
 });
 
 test("generated bundled docs and templates carry neither a bare invocation nor the Pi token", () => {
