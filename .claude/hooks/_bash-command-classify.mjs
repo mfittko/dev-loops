@@ -852,7 +852,7 @@ const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\
  * @param {string} segment @returns {string}
  */
 function unquoteFlagTokens(segment) {
-  return segment.replace(/(['"])(-{1,2}[A-Za-z][\w-]*)\1/g, "$2").replace(/(['"])body\1(?==)/g, "body");
+  return segment.replace(/(['"])(-{1,2}[A-Za-z][\w-]*(?:=(?:(?!\1).)*)?)\1/g, "$2").replace(/(['"])body\1(?==)/g, "body");
 }
 
 /**
