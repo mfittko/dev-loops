@@ -207,7 +207,7 @@ async function resolveBody(args) {
 // `--body-file`, `-b`, `-F` (space, `=`, attached `-bx` and shorthand-bundle
 // `-db x` forms) only in flag position, so a flag VALUE that merely starts
 // with `-b`/`-F` (for example `--title -bump`) is never read as the body.
-// `sourced` is true when gh sources the body itself (--fill*, --template, -f, -T),
+// `sourced` is true when gh sources the body itself (--fill*, --template, --editor, --web, -f, -T, -e, -w),
 // so its marker lines cannot be checked here.
 const VALUE_FLAGS = {
   assignee: "a", base: "B", body: "b", "body-file": "F", head: "H", label: "l", milestone: "m",
@@ -218,13 +218,15 @@ const SCAN_OPTIONS = {
   fill: { type: "boolean", short: "f" },
   "fill-verbose": { type: "boolean" },
   "fill-first": { type: "boolean" },
+  editor: { type: "boolean", short: "e" },
+  web: { type: "boolean", short: "w" },
 };
 function scanBodySources(args) {
   const found = { body: null, bodyFile: null, sourced: false };
   const { tokens } = parseArgs({ args, options: SCAN_OPTIONS, strict: false, allowPositionals: true, tokens: true });
   for (const token of tokens) {
     if (token.kind !== "option") continue;
-    if (["fill", "fill-verbose", "fill-first", "template", "recover"].includes(token.name)) found.sourced = true;
+    if (["fill", "fill-verbose", "fill-first", "template", "recover", "editor", "web"].includes(token.name)) found.sourced = true;
     let value = typeof token.value === "string" ? token.value : null;
     // pflag strips one leading "=" from an inline short value (`-b=x`); parseArgs keeps it.
     if (value !== null && token.inlineValue && /^-[^-]/u.test(token.rawName) && value.startsWith("=")) value = value.slice(1);

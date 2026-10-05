@@ -893,7 +893,7 @@ const PostMergeConfig = z.strictObject({
  * stays lenient and a malformed record never breaks config load.
  */
 const StandingAuthorizationsConfig = z.strictObject({
-  adrTripwireWaiver: z.record(z.string(), z.unknown()).optional().describe("Standing authorization for the ADR tripwire waiver writer: { grantedBy (GitHub login), grantedAt (ISO date), expires (ISO date, at most 90 days after grantedAt), reason (non-empty) }. Read only from the default branch's .devloops."),
+  adrTripwireWaiver: z.unknown().optional().describe("Standing authorization for the ADR tripwire waiver writer: { grantedBy (GitHub login), grantedAt (ISO date), expires (ISO date, at most 90 days after grantedAt), reason (non-empty) }. Read only from the default branch's .devloops."),
 });
 
 /** Internal path whitelist for internal-only PR detection — flat array of regex strings */

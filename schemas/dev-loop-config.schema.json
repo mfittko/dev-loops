@@ -1719,12 +1719,7 @@
       "type": "object",
       "properties": {
         "adrTripwireWaiver": {
-          "description": "Standing authorization for the ADR tripwire waiver writer: { grantedBy (GitHub login), grantedAt (ISO date), expires (ISO date, at most 90 days after grantedAt), reason (non-empty) }. Read only from the default branch's .devloops.",
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {}
+          "description": "Standing authorization for the ADR tripwire waiver writer: { grantedBy (GitHub login), grantedAt (ISO date), expires (ISO date, at most 90 days after grantedAt), reason (non-empty) }. Read only from the default branch's .devloops."
         }
       },
       "additionalProperties": false,
