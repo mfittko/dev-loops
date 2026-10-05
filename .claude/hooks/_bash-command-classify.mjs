@@ -890,6 +890,10 @@ export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
  * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
  */
 export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
+  // A `gh api` literal inside `bash -c`/`eval`/`xargs` hides its flags from segment inspection: mirror the
+  // CLI half and deny the literal when it names a pull/issue path with a body field or `--input`, or `updatePullRequest`.
+  if (SHELL_WRAPPER_RE.test(command) && /\bgh\s+api\b/.test(command)
+    && (/updatePullRequest/.test(command) || (/(?:pulls|issues)\/(?:\d+|\{\})/.test(command) && /body=|--input/.test(command)))) return true;
   const owner = managedSlug ? `(?:${managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}|\\{owner\\}/\\{repo\\})` : "[^/]+/[^/]+";
   const re = new RegExp(`^(?:repos/${owner}/)?(?:pulls|issues)/\\d+$`, "i");
   return extractGhApiEndpointSegments(command).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
