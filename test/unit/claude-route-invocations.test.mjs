@@ -19,6 +19,10 @@ test("rewrites the `node scripts/…mjs` form to `dev-loops-run scripts/…mjs`,
   assert.equal(out, "Run `dev-loops-run scripts/loop/watch-cycle.mjs --pr 5 --strict`.");
 });
 
+test("rewrites a line-wrapped `dev-loops <ns> <sub>` form, collapsing the wrap to one space", () => {
+  assert.equal(rewriteWrapperInvocation("Run dev-loops gate\n  judge-pass now."), "Run dev-loops-run cli/index.mjs gate judge-pass now.");
+});
+
 test("rewrites the `dev-loops <ns> <sub>` CLI form to `dev-loops-run cli/index.mjs <ns> <sub>`, args byte-identical", () => {
   const body = "Run `dev-loops gate judge-pass --pr 5` then `dev-loops queue ensure`.";
   const out = rewriteWrapperInvocation(body);

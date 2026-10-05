@@ -130,7 +130,7 @@ test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledg
 function assertJudgeBridge(step) {
   const commands = [...step.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
   const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs "));
-  const bridge = commands.find((command) => command.startsWith("dev-loops gate judge-pass "));
+  const bridge = commands.find((command) => command.startsWith("node <dev-loops-package-root>/cli/index.mjs gate judge-pass "));
   assert.ok(writer && bridge, "fan-in must write judged findings and run the judge bridge");
   assert.match(writer, /--judge-verdict\s+<judge-verdict-path>/);
   for (const [flag, value] of [

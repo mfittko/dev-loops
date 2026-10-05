@@ -15,7 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { transformAgent, transformSkill, transformCommand, stripPiOnlyBlocks, splitFrontmatter, isSkillExcludedFromClaude } from "@dev-loops/core/claude/asset-generation";
+import { transformAgent, transformSkill, transformCommand, stripPiOnlyBlocks, rewriteCliInvocation, splitFrontmatter, isSkillExcludedFromClaude } from "@dev-loops/core/claude/asset-generation";
 import { isDirectCliRun } from "../lib/direct-run.mjs";
 import { toolchainRootMismatch } from "../loop/_repo-root-resolver.mjs";
 
@@ -162,7 +162,7 @@ function collectHookBundle(repoRoot) {
 
 /**
  * Recursively collect `*.md` files under a source dir as {target, content} bundle assets.
- * Bodies are passed through `stripPiOnlyBlocks` so bundled contract docs can scope Pi-runtime
+ * Bodies are passed through `stripPiOnlyBlocks` and `rewriteCliInvocation` (the Pi source token becomes the `dev-loops-run` launcher form, ADR 0118) so bundled contract docs can scope Pi-runtime
  * prose out of the Claude copies via `<!-- pi-only -->` markers (a no-op for marker-free docs,
  * so the existing verbatim bundle is unchanged).
  */
@@ -176,7 +176,7 @@ function collectBundle(repoRoot, srcRel, targetRel) {
     } else if (entry.name.endsWith(".md")) {
       out.push({
         target: `${targetRel}/${entry.name}`,
-        content: stripPiOnlyBlocks(fs.readFileSync(path.join(absDir, entry.name), "utf8")),
+        content: rewriteCliInvocation(stripPiOnlyBlocks(fs.readFileSync(path.join(absDir, entry.name), "utf8"))),
       });
     }
   }

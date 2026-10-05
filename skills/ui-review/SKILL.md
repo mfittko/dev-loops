@@ -4,7 +4,7 @@ description: >-
   Internal routed strategy behind `dev-loop` for the UI-review route — the
   "prove it in the running app" review sibling of reviewer/fixer. Drives the PR
   through five CLI stages (provision, drive, diagnose, report, teardown), each
-  routed as a `dev-loops loop ui-review-*` subcommand.
+  routed as a `loop ui-review-*` CLI subcommand.
 compatibility: Pi skill for git+GitHub repositories. Requires gh auth.
 allowed-tools: read bash
 user-invocable: false
@@ -12,7 +12,7 @@ user-invocable: false
 
 # UI Review
 
-`dev-loops loop startup --pr <n> --ui-review` selects `ui_review` to review the
+`node <dev-loops-package-root>/cli/index.mjs loop startup --pr <n> --ui-review` selects `ui_review` to review the
 running app from an isolated PR worktree. Orchestrate the five CLI stages below
 in order, threading each result JSON into the next; there is no chaining helper.
 
@@ -37,7 +37,7 @@ must be acknowledged before they run.
 ## Provision + boot
 
 Provision an isolated worktree for the PR head and boot the branch's app via
-`dev-loops loop ui-review-provision --repo-root <p> --pr <n>`
+`node <dev-loops-package-root>/cli/index.mjs loop ui-review-provision --repo-root <p> --pr <n>`
 (source-repo fallback: `node scripts/loop/ui-review-provision.mjs --repo-root <p> --pr <n>`; pure orchestration in
 `packages/core/src/loop/ui-review-provision.mjs`). It refuses the primary
 checkout, installs the dependency-lock delta, runs pending dev-DB migrations,
@@ -64,7 +64,7 @@ trusted-branch input.
 ## Drive
 
 Drive the changed UI flows against the handed-off app URL via
-`dev-loops loop ui-review-drive --repo-root <p> --app-url <url> --output-dir <p> [--changed-path <p> ...]`
+`node <dev-loops-package-root>/cli/index.mjs loop ui-review-drive --repo-root <p> --app-url <url> --output-dir <p> [--changed-path <p> ...]`
 (source-repo fallback: `node scripts/loop/ui-review-drive.mjs ...`; pure
 orchestration in `packages/core/src/loop/ui-review-drive.mjs`). It authenticates
 as the change's target role through the project's dev-login recipe, dismisses
@@ -97,7 +97,7 @@ same threat boundary as the run recipe.
 ## Diagnose + anchor
 
 Map each captured failure to a source line and then to a PR diff anchor via
-`dev-loops loop ui-review-diagnose --pr <n> --drive-result <p> [--repo <slug>]`
+`node <dev-loops-package-root>/cli/index.mjs loop ui-review-diagnose --pr <n> --drive-result <p> [--repo <slug>]`
 (source-repo fallback: `node scripts/loop/ui-review-diagnose.mjs ...`; pure
 mapping in `packages/core/src/loop/ui-review-diagnose.mjs`). It reuses PR
 state from `loop info --pr`, parses the top in-repo stack frame (skipping
@@ -118,7 +118,7 @@ finding.
 ## Report
 
 Produce a head-pinned PENDING PR review and self-contained screenshot artifact via
-`dev-loops loop ui-review-report --pr <n> --diagnose-result <p> --html-output <p> [--repo <slug>]`
+`node <dev-loops-package-root>/cli/index.mjs loop ui-review-report --pr <n> --diagnose-result <p> --html-output <p> [--repo <slug>]`
 (source-repo fallback: `node scripts/loop/ui-review-report.mjs ...`; pure
 decisions in `packages/core/src/loop/ui-review-report.mjs`). It reuses the
 shared pending-review poster (`scripts/github/stage-reviewer-draft.mjs` +
@@ -149,7 +149,7 @@ blocks on hosting. Every bounded cap is logged.
 ## Teardown + side-effect ledger
 
 Teardown consumes prior-stage results and ALWAYS emits a side-effect ledger. Invoke
-`dev-loops loop ui-review-teardown --repo-root <p> --provision-result <p> [--drive-result <p>] [--report-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
+`node <dev-loops-package-root>/cli/index.mjs loop ui-review-teardown --repo-root <p> --provision-result <p> [--drive-result <p>] [--report-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
 (source-repo fallback: `node scripts/loop/ui-review-teardown.mjs ...`; pure
 decisions in `packages/core/src/loop/ui-review-teardown.mjs`). When Stage 4
 published a gist, pass its report result as `--report-result`. The gist id comes

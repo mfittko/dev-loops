@@ -215,12 +215,12 @@ test("DEV-LOOP-PROBE-TIMEOUT-CEILING pins the 600000 ms ceiling in the bounded w
   const rule = collapse(passageWith(skill, "<!-- rule: DEV-LOOP-PROBE-TIMEOUT-CEILING -->"));
   assert.match(rule, /`--timeout-ms` .*MUST stay below 600000 ms, the harness tool-call limit/);
   assert.match(rule, /`wait-pr-checks\.mjs --timeout <seconds>` MUST stay below 600 seconds/);
-  assert.match(rule, /`probe-copilot-review\.mjs`, `wait-pr-checks\.mjs`, and `dev-loops loop watch-ci` \/ `probe-ci-status\.mjs` all default to 1800 s, so every call MUST pass an explicit timeout below the limit/);
+  assert.match(rule, /`probe-copilot-review\.mjs`, `wait-pr-checks\.mjs`, and `node <dev-loops-package-root>\/cli\/index\.mjs loop watch-ci` \/ `probe-ci-status\.mjs` all default to 1800 s, so every call MUST pass an explicit timeout below the limit/);
   assert.match(rule, /`--timeout-ms` below 600000 for `probe-copilot-review\.mjs` and `watch-ci`, `--timeout` below 600 seconds for `wait-pr-checks\.mjs`/);
   // The owner rule's watch-ci example carries an explicit timeout below the limit.
   const followup = await readRepo("skills/copilot-pr-followup/SKILL.md");
   const waitTools = collapse(passageWith(followup, "<!-- rule: COPILOT-FOLLOWUP-WAIT-TOOLS -->"));
-  assert.match(waitTools, /`dev-loops loop watch-ci --repo <owner\/name> --pr <number> --timeout-ms 540000`/);
+  assert.match(waitTools, /`node <dev-loops-package-root>\/cli\/index\.mjs loop watch-ci --repo <owner\/name> --pr <number> --timeout-ms 540000`/);
   assert.match(rule, /a longer wait loops in separate foreground calls/);
   // Every `timeout <seconds>` wrapper in the watch rule stays below the 600 s limit.
   const watchLine = skill.slice(watch, skill.indexOf("\n", watch));

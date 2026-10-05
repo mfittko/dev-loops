@@ -3,7 +3,7 @@ Canonical conformant PR-body skeleton for a TRACKER-BACKED PR.
 
 Copy the sections below into the PR description. The body must pass
 `validate-pr-body-spec` (the shared `validateTrackerBackedPrBodySpec`) at BOTH
-`dev-loops pr create` and `gh pr ready`.
+`node <dev-loops-package-root>/cli/index.mjs pr create` and `gh pr ready`.
 
 Required sections (each must be present and non-empty):
   - Objective / Why (any of: Objective, Why, Goals, Summary, Problem)
