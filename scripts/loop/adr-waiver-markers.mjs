@@ -16,6 +16,7 @@ const MARKER_LINE_RE = /^\s*adr-tripwire:allow(?:\s|$)/u;
 const STANDING_REASON_RE = /^standing-authorization(?:\s|$)/u;
 const HEAD_FIELD_RE = /(?:^|\s)head=([0-9a-f]{40})(?=\s|$)/u;
 const EXPIRES_FIELD_RE = /(?:^|\s)expires=(\S+)(?=\s|$)/u;
+const PATHS_FIELD_RE = /(?:^|\s)paths=(\S+)(?=\s|$)/u;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/u;
 
 /** The text when it is a real calendar day written YYYY-MM-DD (rejects 2026-02-30), else null. */
@@ -63,7 +64,8 @@ export function classifyWaiverReason(reason) {
   if (typeof reason !== "string" || !STANDING_REASON_RE.test(reason)) return { standing: false };
   const m = HEAD_FIELD_RE.exec(reason);
   const e = EXPIRES_FIELD_RE.exec(reason);
-  return { standing: true, head: m ? m[1] : null, expires: e ? strictIsoDay(e[1]) : null };
+  const p = PATHS_FIELD_RE.exec(reason);
+  return { standing: true, head: m ? m[1] : null, expires: e ? strictIsoDay(e[1]) : null, paths: p ? p[1].split(",") : [] };
 }
 
 /** Body with every standing-authorization waiver line dropped, every other line kept. */

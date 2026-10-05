@@ -442,7 +442,10 @@ export function computeAdrTripwire({
           // A standing-authorization line is valid only at the head it names;
           // a later push makes it stale until the sanctioned writer re-runs.
           const unexpired = kind.expires !== null && kind.expires >= now.toISOString().slice(0, 10);
-          const atHead = unexpired && kind.head !== null && typeof headSha === "string" && kind.head === headSha.toLowerCase();
+          // The line pins the head, not the base: a base retarget at the same head can add
+          // triggers the writer never saw, so every current trigger must be a listed contract-doc.
+          const inScope = triggers.every((t) => t.type === "contract-doc" && kind.paths.includes(t.path));
+          const atHead = unexpired && inScope && kind.head !== null && typeof headSha === "string" && kind.head === headSha.toLowerCase();
           waiver = { requested: true, valid: atHead, reason, standing: true, ...(atHead ? {} : { stale: true }) };
         } else {
           waiver = { requested: true, valid: reason.length > 0, reason: reason.length > 0 ? reason : null };

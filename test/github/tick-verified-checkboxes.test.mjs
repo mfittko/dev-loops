@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { test } from "bun:test";
 
 import {
+  applyTick,
   tickVerifiedCheckboxes,
   parseTickVerifiedCliArgs,
   runCli,
@@ -234,17 +235,24 @@ test("runCli: --pr and --issue together sync both bodies in one call", async () 
   assert.match(stdout.get(), /"issueEdited":true/);
 });
 
-test("runCli: removes the temp dir after a successful flip flow", async () => {
+test("runCli: forwards the ticked body inline, not as --body-file", async () => {
   const { run, calls } = stubGh([
     bodyJson("- [ ] Alpha\n"),
     { stdout: "https://github.com/o/n/pull/17\n" },
   ]);
-  const tickDirs = () => readdirSync(tmpdir()).filter((n) => n.startsWith("tick-verified-"));
-  const before = tickDirs();
   const code = await runCli(["--repo", "o/n", "--pr", "17", "--verified", "Alpha"], { run, stdout: captureStream() });
   assert.equal(code, 0);
   assert.equal(calls[1].includes("--body-file"), false);
-  assert.deepEqual(tickDirs().filter((n) => !before.includes(n)), [], "temp dir should be cleaned up after edit");
+});
+
+test("applyTick: removes its own temp dir after a successful flip flow", async () => {
+  let bodyFile;
+  const r = await applyTick("- [ ] Alpha\n", ["Alpha"], false, (f) => {
+    bodyFile = f;
+    assert.equal(existsSync(f), true);
+  });
+  assert.equal(r.edited, true);
+  assert.equal(existsSync(dirname(bodyFile)), false, "temp dir should be cleaned up after edit");
 });
 
 test("runCli: no gh pr edit when nothing flips", async () => {

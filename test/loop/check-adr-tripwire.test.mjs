@@ -822,6 +822,23 @@ test("a standing-authorization waiver blocks at a different head (a later push m
   assert.ok(r.reasons.some((x) => /waive-adr-tripwire/.test(x)));
 });
 
+test("a standing-authorization line at the right head blocks when a current trigger is unlisted or not a contract-doc", () => {
+  const other = "skills/docs/other-contract.md";
+  const run = (extra, contents = {}) => computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + CONTRACT_DOC, ...extra]),
+    baseContents: { [CONTRACT_DOC]: BASE_CONTRACT, ...contents },
+    headContents: { [CONTRACT_DOC]: HEAD_CONTRACT_PROSE_ONLY, ...contents },
+    prBody: `${standingLine(HEAD_A)}\n`,
+    headSha: HEAD_A,
+    now: new Date("2026-10-04T12:00:00Z"),
+  });
+  for (const extra of [["M\t" + other], ["M\tpackages/core/src/config/extension-defaults.yaml"]]) {
+    const r = run(extra, { [other]: BASE_CONTRACT });
+    assert.equal(r.outcome, "block", extra[0]);
+    assert.equal(r.waiver.stale, true, extra[0]);
+  }
+});
+
 test("a standing-authorization line with no well-formed head, or no evaluated head, blocks (fail closed)", () => {
   assert.equal(contractTouch("adr-tripwire:allow standing-authorization issue=7\n", HEAD_A).outcome, "block");
   assert.equal(contractTouch(`${standingLine(HEAD_A)}\n`, null).outcome, "block");
@@ -874,7 +891,7 @@ test("evaluateAdrTripwire resolves the head ref to its full SHA for the standing
     await writeFile(path.join(fixture, "skills/docs/new-contract.md"), "# New contract\n\nProse.\n");
     execSync("git add . && git commit -qm head", { cwd: fixture, stdio: "ignore" });
     const sha = execSync("git rev-parse HEAD", { cwd: fixture }).toString().trim();
-    const atHead = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture, prBody: `${standingLine(sha)}\n`, now: new Date("2026-10-04T12:00:00Z") });
+    const atHead = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture, prBody: `${standingLine(sha)}`.replace(CONTRACT_DOC, "skills/docs/new-contract.md") + "\n", now: new Date("2026-10-04T12:00:00Z") });
     assert.equal(atHead.outcome, "pass");
     const stale = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture, prBody: `${standingLine(HEAD_B)}\n`, now: new Date("2026-10-04T12:00:00Z") });
     assert.equal(stale.outcome, "block");
