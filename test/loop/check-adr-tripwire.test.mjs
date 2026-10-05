@@ -783,12 +783,29 @@ test("evaluateAdrTripwire (#2605): a real key-less .devloops shadowing an unchan
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
 const standingLine = (head) => `adr-tripwire:allow standing-authorization head=${head} issue=7 granted-by=operator expires=2026-12-01 paths=${CONTRACT_DOC}`;
-const contractTouch = (prBody, headSha) => computeAdrTripwire({
+const contractTouch = (prBody, headSha, now = new Date("2026-10-04T12:00:00Z")) => computeAdrTripwire({
   nameStatusOutput: ns(["M\t" + CONTRACT_DOC]),
   baseContents: { [CONTRACT_DOC]: BASE_CONTRACT },
   headContents: { [CONTRACT_DOC]: HEAD_CONTRACT_PROSE_ONLY },
   prBody,
   headSha,
+  now,
+});
+
+test("a standing-authorization line is valid through its expires day (UTC) and stale after", () => {
+  assert.equal(contractTouch(`${standingLine(HEAD_A)}\n`, HEAD_A, new Date("2026-12-01T23:59:59Z")).outcome, "pass");
+  const stale = contractTouch(`${standingLine(HEAD_A)}\n`, HEAD_A, new Date("2026-12-02T00:00:00Z"));
+  assert.equal(stale.outcome, "block");
+  assert.equal(stale.waiver.stale, true);
+});
+
+test("a standing-authorization line with a missing or invalid expires blocks as stale", () => {
+  for (const expires of ["", "expires=soon", "expires=2026-02-30", "expires=2026-12-01T00:00:00Z", "expires=12/01/2026"]) {
+    const line = `adr-tripwire:allow standing-authorization head=${HEAD_A} issue=7 granted-by=operator ${expires} paths=${CONTRACT_DOC}`;
+    const r = contractTouch(`${line}\n`, HEAD_A);
+    assert.equal(r.outcome, "block", expires);
+    assert.equal(r.waiver.stale, true, expires);
+  }
 });
 
 test("a standing-authorization waiver passes at the head it names", () => {

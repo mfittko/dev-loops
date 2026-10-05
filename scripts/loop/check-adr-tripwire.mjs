@@ -271,6 +271,8 @@ export function unquoteGitPath(p) {
  * @param {string} [input.prBody] — PR body text (the waiver surface)
  * @param {string|null} [input.headSha] — full head SHA a standing-authorization
  *   waiver line must name; null makes every such line stale (fail closed)
+ * @param {Date} [input.now] — a standing-authorization line is stale once its
+ *   `expires=` day is before today (UTC) or is not a valid YYYY-MM-DD
  */
 export function computeAdrTripwire({
   nameStatusOutput = "",
@@ -278,6 +280,7 @@ export function computeAdrTripwire({
   headContents = {},
   prBody = "",
   headSha = null,
+  now = new Date(),
 } = {}) {
   const files = parseNameStatus(nameStatusOutput);
   const triggers = [];
@@ -418,7 +421,8 @@ export function computeAdrTripwire({
         if (kind.standing) {
           // A standing-authorization line is valid only at the head it names;
           // a later push makes it stale until the sanctioned writer re-runs.
-          const atHead = kind.head !== null && typeof headSha === "string" && kind.head === headSha.toLowerCase();
+          const unexpired = kind.expires !== null && kind.expires >= now.toISOString().slice(0, 10);
+          const atHead = unexpired && kind.head !== null && typeof headSha === "string" && kind.head === headSha.toLowerCase();
           waiver = { requested: true, valid: atHead, reason, standing: true, ...(atHead ? {} : { stale: true }) };
         } else {
           waiver = { requested: true, valid: reason.length > 0, reason: reason.length > 0 ? reason : null };
@@ -453,7 +457,7 @@ export function computeAdrTripwire({
     return `${t.path}: decision-shaped contract doc touched`;
   });
   if (waiver.standing && waiver.stale) {
-    reasons.push(`The standing-authorization waiver line does not name the evaluated head${headSha ? ` ${headSha}` : ""}; re-run \`dev-loops pr waive-adr-tripwire\` for the current head.`);
+    reasons.push(`The standing-authorization waiver line does not name the evaluated head or has expired${headSha ? ` ${headSha}` : ""}; re-run \`dev-loops pr waive-adr-tripwire\` for the current head.`);
   }
   reasons.push(
     "ADR tripwire: a decision-shaped surface was touched without adding/updating a docs/decisions/NNNN-*.md record and without a valid `adr-tripwire:allow <reason>` waiver in the PR body.",
