@@ -23,3 +23,11 @@ test("root package.json scripts do not contain a node_modules path", () => {
   const offenders = Object.entries(scripts).filter(([, cmd]) => /node_modules\//.test(cmd)).map(([name]) => name);
   assert.deepEqual(offenders, []);
 });
+
+test("the spawn regex matches cwd-relative forms and ignores unrelated paths", () => {
+  // Samples are built from parts so this file does not match its own scan.
+  const nm = "node" + "_modules/a/cli.js";
+  assert.match(`execFileSync('node', ['${nm}'])`, SPAWN_WITH_RELATIVE_NODE_MODULES);
+  assert.match(`spawn("node", ["./${nm}"])`, SPAWN_WITH_RELATIVE_NODE_MODULES);
+  assert.doesNotMatch(`execFileSync('git', ['check-ignore', '.claude/${nm}'])`, SPAWN_WITH_RELATIVE_NODE_MODULES);
+});
