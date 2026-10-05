@@ -367,9 +367,9 @@ test("decideBashGate denies raw gh issue edit from a subagent on the target repo
   );
 });
 
-test("decideBashGate ALLOWS raw gh issue edit from the MAIN agent (agentType null)", () => {
+test("decideBashGate ALLOWS a non-body raw gh issue edit from the MAIN agent (agentType null)", () => {
   assert.equal(
-    decideBashGate({ command: "gh issue edit 5 --body-file x", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision,
+    decideBashGate({ command: "gh issue edit 5 --add-label bug", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision,
     "allow",
   );
 });
@@ -1714,4 +1714,33 @@ test("decideBashGate lets non-body PR edits, the sanctioned CLI and other repos 
   assert.equal(gate(`gh api -X PATCH repos/${TARGET}/pulls/5 -f title=new`).decision, "allow");
   assert.equal(gate("dev-loops-run cli/index.mjs pr edit --repo mfittko/dev-loops --pr 5 --body-file pr.md").decision, "allow");
   assert.equal(gate("gh pr edit 5 --body-file pr.md", "someone/else").decision, "allow");
+});
+
+test("decideBashGate denies hardened raw body-write forms in launcher-only wording (ADR-TRIPWIRE-STANDING-WAIVER)", () => {
+  const gate = (command) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
+  for (const command of [
+    `gh -R ${TARGET} pr edit 5 --body-file pr.md`,
+    "gh issue edit 5 --body-file i.md",
+    `gh api -X PATCH repos/${TARGET}/issues/5 -f body=x`,
+    `gh api -X PATCH repos/${TARGET}/pulls/5 --input p.json`,
+    "gh api -X PATCH repos/{owner}/{repo}/pulls/5 -f body=x",
+    "gh api -X PATCH pulls/5?x=1 -f body=x",
+    `gh api graphql -f query='mutation { updatePullRequest(input:{pullRequestId:"X", body:"b"}) { clientMutationId } }'`,
+    `bash -c "gh pr edit 5 --body x"`,
+    "echo 5 | xargs -I{} gh issue edit {} --body-file i.md",
+  ]) {
+    const d = gate(command);
+    assert.equal(d.decision, "deny", command);
+    assert.match(d.reason, /ADR-TRIPWIRE-STANDING-WAIVER/, command);
+    assert.match(d.reason, /dev-loops-run cli\/index\.mjs pr edit/, command);
+  }
+  for (const command of [
+    `gh pr edit 5 --title "fix --body flag"`,
+    "gh pr edit 5 --add-assignee me",
+    `gh api -X POST repos/${TARGET}/pulls/5/comments -f body=x`,
+    `gh api -X PATCH repos/${TARGET}/issues/5 -f title=x`,
+    "gh issue edit 5 --repo other/repo --body-file i.md",
+  ]) {
+    assert.equal(gate(command).decision, "allow", command);
+  }
 });
