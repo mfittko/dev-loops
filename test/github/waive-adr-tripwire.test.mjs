@@ -41,6 +41,8 @@ function harness(over = {}) {
   const edits = [];
   const deps = {
     readStandingAuthorization: () => AUTH,
+    detectOriginSlug: () => "o/n",
+    fetchDefaultBranch: async () => "main",
     fetchPr: async () => ({ body: PR_BODY, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 7 }] } }),
     fetchIssueBody: async () => ISSUE_BODY,
     evaluateAdrTripwire: blockUntilWaived,
@@ -102,6 +104,25 @@ for (const state of ["missing", "malformed", "over_long", "expired"]) {
   });
 }
 
+test("refuses with repo_mismatch when the checkout origin is not --repo", async () => {
+  await assertRefusal({ detectOriginSlug: () => "fork/n" }, "repo_mismatch");
+  await assertRefusal({ detectOriginSlug: () => null }, "repo_mismatch");
+});
+
+test("reads the standing authorization from the GitHub default branch, not the local origin/HEAD", async () => {
+  let seen;
+  const { run } = harness({
+    fetchDefaultBranch: async () => "trunk",
+    readStandingAuthorization: (args) => { seen = args.defaultBranch; return AUTH; },
+  });
+  assert.equal((await run()).ok, true);
+  assert.equal(seen, "trunk");
+});
+
+test("refuses when GitHub reports no default branch", async () => {
+  await assertRefusal({ fetchDefaultBranch: async () => null }, "no_standing_authorization");
+});
+
 test("refuses a lightweight PR on the pr_body path (no closing issue)", async () => {
   await assertRefusal({ fetchPr: async () => ({ body: "Summary only.", headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [] } }) }, "lightweight_pr_body_path");
 });
@@ -162,6 +183,8 @@ test("parse and CLI: --repo and --pr are required; a refusal exits 1 with a type
   const code = await runCli(["--repo", "o/n", "--pr", "9"], {
     stdout,
     stderr,
+    detectOriginSlug: () => "o/n",
+    fetchDefaultBranch: async () => "main",
     readStandingAuthorization: () => ({ inForce: false, state: "missing", detail: "none" }),
   });
   assert.equal(code, 1);
@@ -175,6 +198,8 @@ test("the real edit-pr write path accepts the writer's line (no waiver-line refu
   const run = async (_cmd, args) => { calls.push(args); return { code: 0, stdout: "", stderr: "" }; };
   const result = await waiveAdrTripwire(OPTIONS, {
     readStandingAuthorization: () => AUTH,
+    detectOriginSlug: () => "o/n",
+    fetchDefaultBranch: async () => "main",
     fetchPr: async () => ({ body: PR_BODY, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 7 }] } }),
     fetchIssueBody: async () => ISSUE_BODY,
     evaluateAdrTripwire: blockUntilWaived,
@@ -203,6 +228,8 @@ test("a thrown writer error is a typed writer_error refusal, and both tripwire e
   const code = await runCli(["--repo", "o/n", "--pr", "9"], {
     stdout: { write() {} },
     stderr: { write: (s) => { stderr += s; } },
+    detectOriginSlug: () => "o/n",
+    fetchDefaultBranch: async () => "main",
     readStandingAuthorization: () => { throw new Error("gh exploded"); },
   });
   assert.equal(code, 1);

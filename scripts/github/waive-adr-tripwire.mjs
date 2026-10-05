@@ -13,7 +13,7 @@ import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { extractClosingIssueNumbers } from "@dev-loops/core/github/closing-ref-guard";
 import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifact";
@@ -83,6 +83,12 @@ async function defaultFetchPr({ repo, pr }, { env, ghCommand, runChild }) {
   return ghJson(["pr", "view", String(pr), "--repo", repo, "--json", "body,headRefOid,baseRefName,closingIssuesReferences"], { env, ghCommand, runChild });
 }
 
+/** Default branch of --repo as GitHub reports it (never the local origin/HEAD symbolic ref, which any local actor can repoint). */
+async function defaultFetchDefaultBranch({ repo }, { env, ghCommand, runChild }) {
+  const data = await ghJson(["repo", "view", repo, "--json", "defaultBranchRef"], { env, ghCommand, runChild });
+  return typeof data?.defaultBranchRef?.name === "string" ? data.defaultBranchRef.name : null;
+}
+
 async function defaultReadRecordedSpecDigest({ repo, pr, headSha, repoRoot }) {
   const ledgerPath = buildLogPath({ repo, pr, gate: "draft_gate", headSha, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) });
   try {
@@ -108,6 +114,8 @@ export async function waiveAdrTripwire(options, {
   runChild = defaultRunChild,
   now = new Date(),
   readStandingAuthorization = realReadStandingAuthorization,
+  detectOriginSlug = detectRepoSlug,
+  fetchDefaultBranch = defaultFetchDefaultBranch,
   fetchPr = defaultFetchPr,
   fetchIssueBody = realFetchIssueBody,
   evaluateAdrTripwire = realEvaluateAdrTripwire,
@@ -118,7 +126,15 @@ export async function waiveAdrTripwire(options, {
   const { repo, pr } = options;
   const gh = { env, ghCommand, runChild };
 
-  const authorization = readStandingAuthorization({ repoRoot, now });
+  // The record and the tripwire are read from the local checkout: it must be --repo.
+  const originSlug = detectOriginSlug(repoRoot);
+  if (!originSlug || !repoSlugEquals(originSlug, repo)) {
+    return refuse("repo_mismatch", `the checkout origin (${originSlug ?? "unresolved"}) is not ${repo}; run from a clone of ${repo}`);
+  }
+  const defaultBranch = await fetchDefaultBranch({ repo }, gh);
+  if (!defaultBranch) return refuse("no_standing_authorization", `cannot resolve the default branch of ${repo} from GitHub`, { state: "default_branch_unresolved" });
+
+  const authorization = readStandingAuthorization({ repoRoot, defaultBranch, now });
   if (!authorization.inForce) {
     return refuse("no_standing_authorization", `no standing authorization is in force (${authorization.state}: ${authorization.detail})`, { state: authorization.state });
   }
