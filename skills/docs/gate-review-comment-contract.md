@@ -176,8 +176,9 @@ on-demand review pass with no lifecycle obligation ([Review skill](../review/SKI
 through the same single-surface poster and required-fields shape, but is a NON-EVIDENCE gate.
 `review` IS a recognized gate name in the gate-comment header vocabulary
 (`@dev-loops/core/github/copilot-helpers`). A `review` header makes the parser return
-non-evidence immediately, before the lenient whole-body `draft_gate`/`pre_approval_gate` token
-scan, regardless of `--findings-ledger` or the gate-findings-review marker. A `review` comment
+non-evidence immediately, with or without `--findings-ledger` or the gate-findings-review marker.
+The parser takes the gate name only from a labeled gate field line and the head SHA only from a
+labeled head-SHA field line. It never scans free text for either. A `review` comment
 never satisfies `draft_gate` or `pre_approval_gate` evidence, and `GATE-COMMENT-NON-SUBSTITUTION`
 applies to it symmetrically.
 
@@ -353,7 +354,7 @@ finding's record.
 `GATE-COMMENT-VALIDATION-REPORTING`: Keep the visible verdict body compact, deterministic, and
 slightly human-friendly (labels like `Gate review`, `Reviewed head SHA`, `Verdict`,
 `Blocking severities`, `Findings summary`, `Next action`); gate name and reviewed head SHA
-MUST stay deterministically parseable even if label wording changes. Validation reporting
+MUST appear on labeled field lines from the recognized label set (`Gate review` / `Gate` / `Gate name`; `Reviewed head SHA` / `Head SHA` / `Head SHA reviewed`). Validation reporting
 MUST stay concise by default — command names plus pass/fail status, aggregate counts, and
 current-head CI/check status, never raw passing log streams. Any included command output
 MUST be truncated to a deterministic retained-prefix length (a short truncation marker

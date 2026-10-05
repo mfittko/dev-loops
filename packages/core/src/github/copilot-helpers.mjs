@@ -94,11 +94,8 @@ export function copilotReviewBodySignalsChanges(state, body) {
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 // `review` is a RECOGNIZED gate header that carries no draft/pre-approval
 // evidence by design. Recognizing it lets
-// parseGateReviewCommentFields short-circuit to null on a `review` header
-// instead of falling through to the lenient draft_gate/pre_approval_gate token
-// scan — the fallthrough that would otherwise record a `review` verdict whose
-// findings merely mention "draft_gate" as real draft-gate evidence (a
-// draft-gate bypass).
+// parseGateReviewCommentFields return null on a `review` header instead of
+// treating it as an unidentified body.
 const NON_EVIDENCE_GATE_NAMES = new Set(["review"]);
 const RECOGNIZED_GATE_NAMES = new Set([...GATE_REVIEW_NAMES, ...NON_EVIDENCE_GATE_NAMES]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
@@ -122,7 +119,7 @@ export function matchGateReviewCommentHeader(body) {
 // Machine-authored gate artifacts that must never win the newest-gate-marker
 // tie-break in the two summarizers below: a historical standalone findings
 // review or deferred-summary comment embeds a gate name and a sha-shaped id
-// that the lenient parseGateReviewCommentFields fallback would otherwise match.
+// that must not be mistaken for a verdict.
 // Excluded here because this module is the merge point every consumer routes
 // through.
 //
@@ -349,8 +346,7 @@ function stripGateCommentMarkdown(rawLine) {
 
 // Recognizes BOTH evidence gates and the non-evidence `review` gate:
 // parseGateReviewCommentFields relies on `review` coming back identified (not
-// null) so it can short-circuit rather than fall through to the lenient
-// token-scan fallback.
+// null) so it can return null for the non-evidence gate.
 function normalizeGateReviewName(value) {
   const normalized = stripOptionalCodeTicks(value).toLowerCase();
   return RECOGNIZED_GATE_NAMES.has(normalized) ? normalized : null;
@@ -525,49 +521,9 @@ function parseGateReviewCommentFields(body) {
     }
   }
 
-  // A recognized `review` gate is authoritative and returns null before the
-  // lenient token-scan fallback runs: a `review` verdict carries no
-  // draft/pre-approval evidence by design. An identified
-  // non-evidence gate must never be treated as an unidentified body, which is
-  // the only case the token-scan fallback exists for.
+  // A `review` verdict carries no draft/pre-approval evidence by design.
   if (NON_EVIDENCE_GATE_NAMES.has(fields.gate)) {
     return null;
-  }
-
-  // Lenient fallback: detect gate name and head SHA anywhere in body
-  // Handles comments posted via other tools without structured field format
-  if (!fields.gate || !fields.headSha) {
-    const flatBody = body.replace(/\*\*/gu, "").replace(/`/gu, "");
-
-    if (!fields.gate) {
-      const canonicalGateNames = [...GATE_REVIEW_NAMES].join("|");
-      const gateMatch = flatBody.match(
-        new RegExp(`\\b(${canonicalGateNames})\\b`, "iu")
-      );
-      if (gateMatch) {
-        fields.gate = normalizeGateReviewName(gateMatch[1]);
-      }
-    }
-
-    if (!fields.headSha) {
-      // Prefer SHA following a "head" context marker to avoid false matches on
-      // plain-text numeric IDs (issue/comment IDs, etc.).
-      const ctxShaMatch = flatBody.match(
-        /\b(?:head|sha|commit)\b\s*(?:sha)?\s*[:=]?\s*`?\b([0-9a-f]{7,64})\b`?/iu
-      );
-      if (ctxShaMatch) {
-        fields.headSha = normalizeGateReviewHeadSha(ctxShaMatch[1]);
-      } else {
-        // Fallback: any hex token, strip known URL/id noise first
-        const cleanBody = flatBody.replace(
-          /https:\/\/github\.com\/[^\s]+#issuecomment-\d+/g, ""
-        );
-        const shaMatch = cleanBody.match(/\b([0-9a-f]{7,64})\b/iu);
-        if (shaMatch) {
-          fields.headSha = normalizeGateReviewHeadSha(shaMatch[1]);
-        }
-      }
-    }
   }
 
   if (!fields.gate || !fields.headSha) {
