@@ -129,9 +129,9 @@ const ACTIVE_AGENT_RE = /<active_agent name="([^"]*)"\/>/g;
  * the process and cannot by itself separate the child from an untagged main agent running alongside
  * it: reading the bare flag would lock the operator's own session to the pull line. Requiring the
  * canonical native-async pair (child flag plus a non-blank parent session, via
- * `isNativePiAsyncContext`) and a calling session id that differs from the recorded parent scopes
- * the fail-closed to the child itself — the untagged main agent, whose own session id equals the
- * recorded parent, stays unrestricted.
+ * `isNativePiAsyncContext`) and a non-blank calling session id that differs from the recorded
+ * parent scopes the fail-closed to the child itself — the untagged main agent, whose own session
+ * id equals the recorded parent, and a session with no usable id, both stay unrestricted.
  */
 function isNativePiAsyncChildSession(
   env: Record<string, string | undefined>,

@@ -49,12 +49,12 @@ Symmetrically, for a change targeting the Claude-Code-specific seam that MUST NO
 
 ## Read-only role enforcement on Pi
 
-The judge boundary is enforced on both harnesses. The reviewer boundary is enforced on Pi only. Claude Code enforces the judge boundary in the PreToolUse Bash gate (`decideBashGate`), which gates only the judge. Pi enforces the judge and reviewer boundaries in the `tool_call` handler in `extension/readonly-role-gate.ts`. The handler resolves the role on every call from the calling session's own `ctx.getSystemPrompt()`. The role marker is the `active_agent` tag with a `name` attribute that pi-subagents writes into each named child's system prompt. The marker value is the `name` frontmatter of `agents/*.agent.md`. dev-loops sets no env marker. The untagged row is additionally scoped to the calling session: the handler consults `ctx.getSessionId()` against the native-async marker pair, so a lone `PI_SUBAGENT_CHILD=1`, a blank `PI_SUBAGENT_PARENT_SESSION`, or a calling session whose own id equals the recorded parent marker stays the unrestricted main agent. Resolution is fail closed:
+The judge boundary is enforced on both harnesses. The reviewer boundary is enforced on Pi only. Claude Code enforces the judge boundary in the PreToolUse Bash gate (`decideBashGate`), which gates only the judge. Pi enforces the judge and reviewer boundaries in the `tool_call` handler in `extension/readonly-role-gate.ts`. The handler resolves the role on every call from the calling session's own `ctx.getSystemPrompt()`. The role marker is the `active_agent` tag with a `name` attribute that pi-subagents writes into each named child's system prompt. The marker value is the `name` frontmatter of `agents/*.agent.md`. dev-loops sets no env marker. The untagged row is additionally scoped to the calling session: the handler consults `ctx.getSessionId()` against the native-async marker pair, so a lone `PI_SUBAGENT_CHILD=1`, a blank `PI_SUBAGENT_PARENT_SESSION`, an absent or blank calling session id, or a calling session whose own id equals the recorded parent marker stays the unrestricted main agent. Resolution is fail closed:
 
 | Input | Resolved behavior |
 |---|---|
 | No tag, not a native async child session | Main agent, unrestricted |
-| No tag, native async child session (`PI_SUBAGENT_CHILD=1` plus a non-blank `PI_SUBAGENT_PARENT_SESSION`, calling session id differs from the parent marker) | Pull-only |
+| No tag, native async child session (`PI_SUBAGENT_CHILD=1` plus a non-blank `PI_SUBAGENT_PARENT_SESSION`, and a non-blank calling session id that differs from the parent marker) | Pull-only |
 | One distinct name `judge` | Pull line only |
 | One distinct name `review` | Pull line plus read and search forms |
 | One distinct name, another roster role | Unrestricted |
