@@ -206,7 +206,7 @@ test("generated bundled docs and templates carry neither a bare invocation nor t
   const violations = [];
   for (const file of files) {
     const content = fs.readFileSync(path.join(repoRoot, file), "utf8");
-    if (BARE_DEV_LOOPS_NS_RE.test(content) || content.includes("node <dev-loops-package-root>/cli/index.mjs")) violations.push(file);
+    if (BARE_DEV_LOOPS_NS_RE.test(content) || content.includes("<dev-loops-package-root>/cli/index.mjs")) violations.push(file);
   }
   assert.deepEqual(violations, [], `unrewritten invocation in bundled files:\n${violations.join("\n")}`);
   for (const file of [".claude/skills/dev-loop/SKILL.md", ".claude/skills/docs/gate-review-sub-loop-contract.md"]) {

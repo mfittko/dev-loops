@@ -162,7 +162,7 @@ function collectHookBundle(repoRoot) {
 
 /**
  * Recursively collect `*.md` files under a source dir as {target, content} bundle assets.
- * Bodies are passed through `stripPiOnlyBlocks` and `rewriteCliInvocation` (#2648: the Pi source token becomes the `dev-loops-run` launcher form) so bundled contract docs can scope Pi-runtime
+ * Bodies are passed through `stripPiOnlyBlocks` and `rewriteCliInvocation` (the Pi source token becomes the `dev-loops-run` launcher form, ADR 0118) so bundled contract docs can scope Pi-runtime
  * prose out of the Claude copies via `<!-- pi-only -->` markers (a no-op for marker-free docs,
  * so the existing verbatim bundle is unchanged).
  */
