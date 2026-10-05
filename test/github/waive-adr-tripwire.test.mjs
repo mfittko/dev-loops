@@ -111,6 +111,11 @@ test("refuses a PR that links more than one tracker issue, or whose GitHub link 
   await assertRefusal({ fetchPr: async () => ({ body: PR_BODY, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 99 }] } }) }, "not_exactly_one_tracker_issue");
 });
 
+test("refuses a cross-repo closing reference", async () => {
+  await assertRefusal({ fetchPr: async () => ({ body: "Closes other/repo#7", headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [] } }) }, "not_exactly_one_tracker_issue");
+  await assertRefusal({ fetchPr: async () => ({ body: PR_BODY, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 7, repository: { name: "repo", owner: { login: "other" } } }] } }) }, "not_exactly_one_tracker_issue");
+});
+
 test("refuses when the tripwire does not block", async () => {
   await assertRefusal({ evaluateAdrTripwire: async () => ({ outcome: "pass", satisfiedBy: "adr", triggers: [] }) }, "tripwire_not_blocking");
 });
@@ -186,12 +191,14 @@ test("the real edit-pr write path accepts the writer's line (no waiver-line refu
 
 test("a thrown writer error is a typed writer_error refusal, and both tripwire evaluations use the injected clock", async () => {
   const nows = [];
+  const fixedNow = new Date("2026-01-01T00:00:00Z");
   const { run } = harness({
+    now: fixedNow,
     evaluateAdrTripwire: async (input) => { nows.push(input.now); return blockUntilWaived(input); },
   });
   await run();
   assert.equal(nows.length, 2);
-  assert.ok(nows.every((n) => n instanceof Date));
+  assert.ok(nows.every((n) => n === fixedNow));
   let stderr = "";
   const code = await runCli(["--repo", "o/n", "--pr", "9"], {
     stdout: { write() {} },

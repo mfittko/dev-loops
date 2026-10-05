@@ -128,6 +128,14 @@ export async function waiveAdrTripwire(options, {
   if (!/^[0-9a-f]{40}$/u.test(headSha) || !prState?.baseRefName) return refuse("pr_state_unreadable", `cannot read PR #${pr} head and base`);
   const body = typeof prState.body === "string" ? prState.body : "";
 
+  // A closing reference into another repo is not a link to this repo's tracker issue.
+  const refRepo = (n) => n?.repository?.nameWithOwner ?? (n?.repository?.owner?.login && n?.repository?.name ? `${n.repository.owner.login}/${n.repository.name}` : null);
+  const sameRepo = (r) => r === null || r.toLowerCase() === repo.toLowerCase();
+  const crossRepoBody = [...body.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+([\w.-]+\/[\w.-]+)#\d+/giu)].some((m) => !sameRepo(m[1]));
+  const closingNodes = prState.closingIssuesReferences?.nodes ?? prState.closingIssuesReferences ?? [];
+  if (crossRepoBody || closingNodes.some((n) => !sameRepo(refRepo(n)))) {
+    return refuse("not_exactly_one_tracker_issue", `PR #${pr} closes an issue in another repository; exactly one tracker issue in ${repo} is required`);
+  }
   const bodyIssues = extractClosingIssueNumbers(body);
   const linkedIssues = (prState.closingIssuesReferences?.nodes ?? prState.closingIssuesReferences ?? []).map((n) => n?.number).filter(Number.isInteger);
   if (bodyIssues.length === 0) {

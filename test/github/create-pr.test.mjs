@@ -1773,8 +1773,8 @@ test("create-pr refuses --fill and --template (body sourced outside the wrapper)
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-fill-"));
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
-    for (const flag of ["--fill", "--template"]) {
-      const extra = flag === "--template" ? [flag, "t.md"] : [flag];
+    for (const flag of ["--fill", "--template", "--recover"]) {
+      const extra = flag === "--fill" ? [flag] : [flag, "t.md"];
       const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", ...extra], { env });
       assert.equal(result.code, 1);
       assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
