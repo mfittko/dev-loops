@@ -71,8 +71,14 @@ export function resolveDefaultBranch({ repoRoot = process.cwd(), git = defaultGi
 }
 
 /** Fetch `origin/<branch>` so the read sees the current default branch, not a stale local ref. */
-function defaultFetchOrigin(branch, { repoRoot }) {
-  execFileSync("git", ["fetch", "origin", branch], { cwd: repoRoot, stdio: ["ignore", "ignore", "ignore"] });
+export function defaultFetchOrigin(branch, { repoRoot }, exec = execFileSync) {
+  exec("git", ["fetch", "origin", "--", branch], {
+    cwd: repoRoot,
+    stdio: ["ignore", "ignore", "ignore"],
+    timeout: 30000,
+    killSignal: "SIGKILL",
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
 }
 
 /**

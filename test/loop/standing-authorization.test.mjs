@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "bun:test";
 
 import {
+  defaultFetchOrigin,
   evaluateStandingAuthorizationRecord,
   readStandingAuthorization,
 } from "../../scripts/loop/standing-authorization.mjs";
@@ -119,6 +120,26 @@ test("a failed fetch refuses with fetch_failed and never reads the local ref", (
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("the default fetch is bounded, prompt-free and separates the branch with --", () => {
+  const calls = [];
+  defaultFetchOrigin("main", { repoRoot: "/r" }, (cmd, args, opts) => calls.push({ cmd, args, opts }));
+  assert.equal(calls[0].cmd, "git");
+  assert.deepEqual(calls[0].args, ["fetch", "origin", "--", "main"]);
+  assert.equal(calls[0].opts.timeout, 30000);
+  assert.equal(calls[0].opts.killSignal, "SIGKILL");
+  assert.equal(calls[0].opts.env.GIT_TERMINAL_PROMPT, "0");
+  assert.equal(calls[0].opts.cwd, "/r");
+});
+
+test("a fetch timeout from the default fetch yields fetch_failed", () => {
+  const timeout = () => { throw Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }); };
+  const r = readStandingAuthorization({
+    repoRoot: ".", defaultBranch: "main", now: NOW,
+    fetchOrigin: (branch, ctx) => defaultFetchOrigin(branch, ctx, timeout),
+  });
+  assert.equal(r.state, "fetch_failed");
 });
 
 test("the reader fetches the default branch before reading", () => {
