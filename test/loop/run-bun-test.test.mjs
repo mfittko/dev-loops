@@ -5,7 +5,7 @@ import { access, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
+import { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER, RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 import { buildBunTestArgs, childResult, createOutputCapture, createTestProgress, discoverRepositoryTests, parseBunSummary, PER_TEST_TIMEOUT_BASE_MS, resolveBunTestFiles, resolveBunTestParallelism, resolveBunTestTimeoutMs, runBunTest } from "../../scripts/run-bun-test.mjs";
 
 test("a nested worktree's test copies are never discovered as this checkout's own", () => {
@@ -263,6 +263,28 @@ test("the child env drops inherited run-id markers without mutating the caller e
     assert.ok(!(marker in childEnv), `${marker} must not reach the child`);
     assert.equal(env[marker], "leak", `${marker} must stay on the caller env`);
   }
+  assert.equal(childEnv.UNRELATED_VAR, "kept");
+});
+
+test("the child env drops every async-context and harness marker without mutating the caller env", async () => {
+  const stripped = [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER];
+  const env = { ...Object.fromEntries(stripped.map((marker) => [marker, "1"])), UNRELATED_VAR: "kept" };
+  const before = { ...env };
+  let childEnv;
+  const code = await runBunTest(["example.test.mjs"], {
+    env,
+    command: "bun",
+    captureFactory: async () => memoryCapture(" 1 pass\n 0 fail\nRan 1 test across 1 file. [1.00ms]\n", []),
+    spawnImpl: (command, args, options) => {
+      childEnv = options.env;
+      return fakeChild(() => {})(command, args, options);
+    },
+    stdout: { write() {} },
+    stderr: { write() {} },
+  });
+  assert.equal(code, 0);
+  for (const marker of stripped) assert.ok(!(marker in childEnv), `${marker} must not reach the child`);
+  assert.deepEqual(env, before);
   assert.equal(childEnv.UNRELATED_VAR, "kept");
 });
 
