@@ -155,7 +155,7 @@ export const BARE_NODE_SCRIPTS_SOURCE = String.raw`\bnode\s+(scripts\/(?:[a-z0-9
  * `dev-loops-run cli/index.mjs <namespace> <sub>` (ADR 0118). Exported so the no-bare-invocation guard test can build the identical
  * regex from the same `WRAPPER_NS` rather than re-deriving it (single source of truth).
  */
-export const BARE_DEV_LOOPS_NS_SOURCE = String.raw`\bdev-loops (${WRAPPER_NS}) (?=[a-z])`;
+export const BARE_DEV_LOOPS_NS_SOURCE = String.raw`\bdev-loops\s+(${WRAPPER_NS})\s+(?=[a-z])`;
 
 /**
  * Route real wrapper invocations in a generated body through the resolver launcher so a

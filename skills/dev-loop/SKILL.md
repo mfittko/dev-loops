@@ -30,7 +30,7 @@ Required installed runtime contract docs are shared bundled copies under `../doc
 ### Main agent (read-only)
 
 The main agent must **always** dispatch the `dev-loop` async subagent for any dev-loop work.
-Do not run `dev-loops loop startup` or any startup resolver in the main agent.
+Do not run `node <dev-loops-package-root>/cli/index.mjs loop startup` or any startup resolver in the main agent.
 For async-required routes (config `workflow.asyncStartMode`, default `required`) the resolver needs async-context evidence: pi-subagents ≥ 0.65 marks each async child with `PI_SUBAGENT_CHILD=1` plus `PI_SUBAGENT_PARENT_SESSION` (pi-subagents ≤ 0.64 injected the legacy `PI_SUBAGENT_RUN_ID` alias instead), so that native marker pair is the async-start evidence; the Pi `subagent` tool has no env parameter, so the main agent cannot inject a run id — a neutral `DEVLOOPS_RUN_ID` already present in the child's own environment is honored as the primary carrier; under the Claude Code harness the requirement is relaxed automatically (no marker needed). With no run-id carrier present, the run id is synthesized from the child's own `PI_SESSION_ID` (falling back to `PI_SUBAGENT_PARENT_SESSION`), so sibling children of one parent session stay distinct runners. The startup resolver also runs without a marker for non-async routes. Regardless, only the `dev-loop` subagent runs it — never the main agent.
 
 After async dispatch, follow [Async dispatch posture](../docs/main-agent-contract.md#async-dispatch-posture-pi): return control to the user without `subagent_wait`, except for explicitly requested run-to-completion or a skill that must finish in one turn. Pi wakes the session on completion or needs-attention.
@@ -180,7 +180,7 @@ When you need a fact from a dev-loops JSON-emitting script, climb this ladder an
 
 **Inline-first rule:** Prefer inline commands over nested async delegation when managing a single PR. Use nested delegation only for parallel fan-out or when the parent needs to continue other work.
 
-**Bounded async task contract:** Break work into discrete tasks with clear inputs, explicit outputs, bounded scope. No shell polling — use `run-watch-cycle.mjs` or `gh run watch`. Fan-out reviewer waits (gate sub-loops or any Agent-tool fan-out) follow `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md): await completion via the harness notification or the reviewer's findings artifact at its deterministic path and join via the sanctioned fan-in CLI (`dev-loops gate consolidate-fanin`) — never transcript-tail, `node -e`/`python3`-parse tool JSON, or `sleep`-poll.
+**Bounded async task contract:** Break work into discrete tasks with clear inputs, explicit outputs, bounded scope. No shell polling — use `run-watch-cycle.mjs` or `gh run watch`. Fan-out reviewer waits (gate sub-loops or any Agent-tool fan-out) follow `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md): await completion via the harness notification or the reviewer's findings artifact at its deterministic path and join via the sanctioned fan-in CLI (`node <dev-loops-package-root>/cli/index.mjs gate consolidate-fanin`) — never transcript-tail, `node -e`/`python3`-parse tool JSON, or `sleep`-poll.
 
 **Spec authority is engaged by default on every gate round (issue 2008 / ADR 0061):** before
 fan-out dispatch, run the CLI seam that derives the run's spec/digest identities so the skill
@@ -213,7 +213,7 @@ any record type. Full per-writer flag detail: Gate Review Sub-Loop Contract Phas
 **Gate fan-out dispatch (inline imperative — #1637):** When the gate coordinator (`GATE-EXEC-GATE-COORDINATOR` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md)) dispatches the `draft_gate` / `pre_approval_gate` fan-out (parallel fresh-context reviewers seeded from the one neutral context bundle), it MUST join their results through the sanctioned fan-in CLI — not by hand-rolling the wait. Never hand-roll reviewer dispatch via `Promise.all(runs.run)` + transcript-tailing; await each reviewer's findings artifact at its deterministic output path (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) and consolidate via ONE call, always with `--spec-authority <identity-path>` from above:
 
 ```sh
-dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate> \
+node <dev-loops-package-root>/cli/index.mjs gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate> \
   --expected-dispatch-units <n> --out <findings-json-path> --ledger-out <ledger-path> \
   --emit-plan <emit-plan-path> --spec-authority <identity-path> --jq '.severityCounts'
 ```
@@ -234,7 +234,7 @@ bridge to derive the fixer's act list for Phase 4, always with the spec-authorit
 durable-approval flags across re-entry:
 
 ```sh
-dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
+node <dev-loops-package-root>/cli/index.mjs gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
   --findings-file <ledger-path> --judge-verdict <verdict-path> --judge-plan <judge-plan-path> \
   --out <act-list-path> --ledger-out <enriched-ledger-path> \
   --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
@@ -254,17 +254,17 @@ Phase 3.5 and `skills/docs/spec-authority-contract.md` for the enforcement rules
 After the fixer commits the act-list fix and before it pushes, the dev-loop coordinator runs the
 delta-mode pre-push review (`PRE-PUSH-DELTA-TRIGGER` in the
 [Pre-push review contract](../docs/pre-pr-review-contract.md#delta-mode)), which owns the
-baseline, input, result, three-review bound and freshness rules. `dev-loops loop pre-push-delta`
+baseline, input, result, three-review bound and freshness rules. `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta`
 builds the reviewer input and checks each result against the current worktree head.
 
 Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md) and Phase 3 of [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) for the full refusal conditions.
 
 **Bounded test runs (enforced — #1650):** Bound every directly launched focused suite containing gh mocks with `timeout 90 bun test <file>` (or an equivalent hard timeout). Output truncation does not bound execution. `bun run verify` already bounds its suites. Bun is the development runner; Node `>=24` consumer-runtime and npm publication checks remain explicit exceptions.
 
-**Bounded Copilot/CI watch (enforced — #1660):** Use `dev-loops gate probe-copilot --timeout-ms 300000` (5min) or `timeout 540 <cmd>`; pass an explicit bounded timeout and re-check on timeout. Never launch an unbounded blocking watch.
+**Bounded Copilot/CI watch (enforced — #1660):** Use `node <dev-loops-package-root>/cli/index.mjs gate probe-copilot --timeout-ms 300000` (5min) or `timeout 540 <cmd>`; pass an explicit bounded timeout and re-check on timeout. Never launch an unbounded blocking watch.
 
 <!-- rule: DEV-LOOP-PROBE-TIMEOUT-CEILING -->
-`DEV-LOOP-PROBE-TIMEOUT-CEILING`: every explicit `--timeout-ms` on a Copilot or CI probe MUST stay below 600000 ms, the harness tool-call limit. The same ceiling binds the seconds form: `wait-pr-checks.mjs --timeout <seconds>` MUST stay below 600 seconds. `probe-copilot-review.mjs`, `wait-pr-checks.mjs`, and `dev-loops loop watch-ci` / `probe-ci-status.mjs` all default to 1800 s, so every call MUST pass an explicit timeout below the limit: `--timeout-ms` below 600000 for `probe-copilot-review.mjs` and `watch-ci`, `--timeout` below 600 seconds for `wait-pr-checks.mjs`. Each 1800 s default exceeds the limit. The harness auto-backgrounds a call that outlives that limit, so a longer wait loops in separate foreground calls, each with its own bounded timeout below 600000 ms.
+`DEV-LOOP-PROBE-TIMEOUT-CEILING`: every explicit `--timeout-ms` on a Copilot or CI probe MUST stay below 600000 ms, the harness tool-call limit. The same ceiling binds the seconds form: `wait-pr-checks.mjs --timeout <seconds>` MUST stay below 600 seconds. `probe-copilot-review.mjs`, `wait-pr-checks.mjs`, and `node <dev-loops-package-root>/cli/index.mjs loop watch-ci` / `probe-ci-status.mjs` all default to 1800 s, so every call MUST pass an explicit timeout below the limit: `--timeout-ms` below 600000 for `probe-copilot-review.mjs` and `watch-ci`, `--timeout` below 600 seconds for `wait-pr-checks.mjs`. Each 1800 s default exceeds the limit. The harness auto-backgrounds a call that outlives that limit, so a longer wait loops in separate foreground calls, each with its own bounded timeout below 600000 ms.
 
 **Foreground inline probe, never a backgrounded sleep-poll (enforced — #2065):** Under the Claude Code harness the Copilot/CI wait MUST be a bounded FOREGROUND inline probe — `probe-copilot-review.mjs` or `wait-pr-checks.mjs` with an explicit `--timeout`/`--timeout-ms` (`0` = a single immediate foreground check). Claude Code has no async wake, so a backgrounded wait is never joined and never exits: a backgrounded `until`/`while … sleep N … done` poll loop, or bare-`&` backgrounding of a probe/wait script (`node scripts/github/probe-copilot-review.mjs … &`), is FORBIDDEN — it orphans the shell past the agent stop. The PreToolUse Bash-gate denies these for the coordinator and every subagent (`commandContainsDetachedWaitTool`), actor-independently and fail-closed. Run the probe in the foreground and re-check on timeout. (A `SubagentStop` background-shell reaper safety-net, for whatever slips past prevention, is tracked as follow-up #2296.)
 
