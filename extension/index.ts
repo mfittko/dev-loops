@@ -77,7 +77,7 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   // read-only roles; Pi honours `{ block, reason }` from `tool_call`.
   adapter.on('tool_call', (event, ctx) => {
     const { toolName, input } = event as { toolName?: string; input?: { command?: unknown } };
-    return decidePiToolCall({ toolName, input, agentType: resolvePiRole({ systemPrompt: ctx?.getSystemPrompt?.() }) });
+    return decidePiToolCall({ toolName, input, agentType: resolvePiRole({ systemPrompt: ctx?.getSystemPrompt?.(), sessionId: ctx?.getSessionId?.() }) });
   });
 
   adapter.on('tool_result', async (event, ctx) => {

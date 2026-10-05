@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { READONLY_SUBAGENT_ROLES } from "@dev-loops/core/claude/hook-decisions";
+import { NATIVE_PI_PARENT_SESSION_MARKER } from "@dev-loops/core/loop/run-context";
 import extension from "../extension/index.ts";
 import { mapAgentToolsForPi, renderPiAgent } from "../extension/sync-packaged-agents.ts";
 import { BASH_RESTRICTED_ROLES, DEV_LOOPS_ROLES } from "../extension/readonly-role-gate.ts";
@@ -19,15 +20,27 @@ function toolCallHandler() {
   return events.get("tool_call");
 }
 
-async function callWith(prompt, command, toolName = "bash", env = {}) {
-  const prior = process.env.PI_SUBAGENT_CHILD;
-  if (env.PI_SUBAGENT_CHILD === undefined) delete process.env.PI_SUBAGENT_CHILD;
-  else process.env.PI_SUBAGENT_CHILD = env.PI_SUBAGENT_CHILD;
+// The native async markers the runner sets in-process, alongside the calling session id the ctx
+// supplies. Both are snapshotted/restored so a test never leaks a marker into a sibling test.
+const NATIVE_ENV_MARKERS = ["PI_SUBAGENT_CHILD", NATIVE_PI_PARENT_SESSION_MARKER];
+
+async function callWith(prompt, command, toolName = "bash", env = {}, sessionId) {
+  const priors = NATIVE_ENV_MARKERS.map((name) => [name, process.env[name]]);
+  for (const name of NATIVE_ENV_MARKERS) {
+    if (env[name] === undefined) delete process.env[name];
+    else process.env[name] = env[name];
+  }
   try {
-    return await toolCallHandler()({ toolName, input: { command } }, { getSystemPrompt: prompt === undefined ? undefined : () => prompt });
+    const ctx = {
+      getSystemPrompt: prompt === undefined ? undefined : () => prompt,
+      ...(sessionId === undefined ? {} : { sessionManager: { getSessionId: () => sessionId } }),
+    };
+    return await toolCallHandler()({ toolName, input: { command } }, ctx);
   } finally {
-    if (prior === undefined) delete process.env.PI_SUBAGENT_CHILD;
-    else process.env.PI_SUBAGENT_CHILD = prior;
+    for (const [name, prior] of priors) {
+      if (prior === undefined) delete process.env[name];
+      else process.env[name] = prior;
+    }
   }
 }
 
@@ -148,14 +161,47 @@ for (const prompt of FAIL_CLOSED_PROMPTS) {
 }
 
 test("role resolution fails closed per the resolution table", async () => {
-  assert.equal((await callWith("base prompt", "ls", "bash", { PI_SUBAGENT_CHILD: "1" })).block, true);
-  assert.deepEqual(await callWith("base prompt", "ls", "bash", { PI_SUBAGENT_CHILD: "1" }).then(() => callWith("base prompt", "ls")), { block: false });
-  const child = { PI_SUBAGENT_CHILD: "1" };
-  assert.deepEqual(await callWith(tag("developer"), "bun run test", "bash", child), { block: false });
-  assert.deepEqual(await callWith(tag("judge"), PULL, "bash", child), { block: false });
-  assert.equal((await callWith(tag("judge"), "cat README.md", "bash", child)).block, true);
+  // A native async child: the runner's in-process child flag plus a non-blank parent session.
+  const childEnv = { PI_SUBAGENT_CHILD: "1", [NATIVE_PI_PARENT_SESSION_MARKER]: "parent-1" };
+  // The child's own session id differs from the recorded parent: fail closed to the pull line.
+  assert.equal((await callWith("base prompt", "ls", "bash", childEnv, "child-1")).block, true);
+  // Same shared process env, but the calling session is the recorded parent: unrestricted.
+  assert.deepEqual(await callWith("base prompt", "ls", "bash", childEnv, "parent-1"), { block: false });
+  // A lone child flag without the parent marker is not native-async evidence: unrestricted.
+  assert.deepEqual(await callWith("base prompt", "ls", "bash", { PI_SUBAGENT_CHILD: "1" }), { block: false });
+  assert.deepEqual(await callWith("base prompt", "ls"), { block: false });
+  assert.deepEqual(await callWith(tag("developer"), "bun run test", "bash", childEnv, "child-1"), { block: false });
+  assert.deepEqual(await callWith(tag("judge"), PULL, "bash", childEnv, "child-1"), { block: false });
+  assert.equal((await callWith(tag("judge"), "cat README.md", "bash", childEnv, "child-1")).block, true);
   assert.deepEqual(await callWith(`${tag("judge")} ${tag("dev-loops:judge")}`, PULL), { block: false });
   for (const bare of ["reviewer", "worker", "scout"]) assert.deepEqual(await callWith(tag(bare), "bun run test"), { block: false }, bare);
+});
+
+test("the untagged fail-closed row scopes to the calling session, not the shared process env", async () => {
+  // Model the real native-child lifetime: the runner sets PI_SUBAGENT_CHILD=1 and the parent
+  // session marker in the shared process env once and leaves them set. The gate must then decide
+  // per calling session from ctx.sessionManager.getSessionId() rather than the process-global flag
+  // alone, so an untagged main agent in the same process is not locked to the pull line.
+  const handler = toolCallHandler();
+  const priors = NATIVE_ENV_MARKERS.map((name) => [name, process.env[name]]);
+  process.env.PI_SUBAGENT_CHILD = "1";
+  process.env[NATIVE_PI_PARENT_SESSION_MARKER] = "parent-session";
+  try {
+    const call = (sessionId, command) =>
+      handler({ toolName: "bash", input: { command } }, { getSystemPrompt: () => "base prompt", sessionManager: { getSessionId: () => sessionId } });
+    // The parent's own session id equals the recorded parent marker: unrestricted.
+    assert.deepEqual(await call("parent-session", "bun run test"), { block: false });
+    // A child's session id differs from the parent marker: fail closed.
+    assert.equal((await call("child-session", "bun run test")).block, true);
+    // The shared env markers are unchanged across both calls, so the decision cannot come from them.
+    assert.equal(process.env.PI_SUBAGENT_CHILD, "1");
+    assert.equal(process.env[NATIVE_PI_PARENT_SESSION_MARKER], "parent-session");
+  } finally {
+    for (const [name, prior] of priors) {
+      if (prior === undefined) delete process.env[name];
+      else process.env[name] = prior;
+    }
+  }
 });
 
 test("parallel children resolve independently", async () => {
@@ -203,6 +249,8 @@ const REJECT = {
   R9c: `git -C abc" grep '"; touch PWN2; #' src`,
   R11: "grep foo src\nbun run test",
   R12: "cd /w && grep x src\nrm -rf x",
+  R13: "dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope x && rm -rf y",
+  R13b: "dev-loops-run scripts/github/emit-reviewer-blocked.mjs --head abc; rm -rf y",
 };
 for (const [id, cmd] of Object.entries(ACCEPT)) {
   test(`reviewer accepts ${id}`, async () => assert.deepEqual(await callAs("review", cmd), { block: false }));

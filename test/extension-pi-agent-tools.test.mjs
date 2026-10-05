@@ -303,7 +303,8 @@ body
 test("#1604 role-agent sources keep neutral search/execute (no Claude regression — #1086)", async () => {
   // Role agents MUST keep search/execute in source: Claude maps search->Grep+Glob
   // and execute->Bash; dropping them removes Grep/Glob from the Claude-rendered
-  // role agents (a cross-harness regression). Pi sync already maps them to bash.
+  // role agents (a cross-harness regression). Pi sync maps `search` to grep/find/ls
+  // and `execute` to bash.
   //
   // The `review` agent is exempted per #1659: it drops search/execute from source
   // so Pi does not mark review steps `failed` for unavailable declared tools (which

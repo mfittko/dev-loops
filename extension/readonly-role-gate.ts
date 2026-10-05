@@ -1,4 +1,5 @@
 import { EXECUTION_IDENTITY_RE } from '@dev-loops/core/loop/work-order-digest';
+import { NATIVE_PI_PARENT_SESSION_MARKER, isNativePiAsyncContext } from '@dev-loops/core/loop/run-context';
 
 /**
  * Pi enforcement of the read-only role boundary
@@ -112,15 +113,41 @@ export const DEV_LOOPS_ROLES = Object.freeze([
 const ACTIVE_AGENT_RE = /<active_agent name="([^"]*)"\/>/g;
 
 /**
+ * True when the *calling* session is the untagged native async child the fail-closed row targets.
+ *
+ * The native async runner sets the child flag in-process, so the flag is shared by every session in
+ * the process and cannot by itself separate the child from an untagged main agent running alongside
+ * it: reading the bare flag would lock the operator's own session to the pull line. Requiring the
+ * canonical native-async pair (child flag plus a non-blank parent session, via
+ * `isNativePiAsyncContext`) and a calling session id that differs from the recorded parent scopes
+ * the fail-closed to the child itself — the untagged main agent, whose own session id equals the
+ * recorded parent, stays unrestricted.
+ */
+function isNativePiAsyncChildSession(
+  env: Record<string, string | undefined>,
+  sessionId: string | undefined,
+): boolean {
+  if (!isNativePiAsyncContext(env)) return false;
+  const own = (sessionId ?? '').trim();
+  const parent = (env[NATIVE_PI_PARENT_SESSION_MARKER] ?? '').trim();
+  return own !== '' && own !== parent;
+}
+
+/**
  * Resolve the calling role from the session's own system prompt (the pi-subagents `active_agent`
  * tag). Returns null for the unrestricted main agent, a role name, or '' to fail closed.
+ *
+ * `sessionId` is the calling session's own id (from `ctx.getSessionId()`), used only to scope the
+ * untagged native-async-child fail-closed row to the calling session rather than the shared process
+ * env; see `isNativePiAsyncChildSession`.
  */
-export function resolvePiRole({ systemPrompt, env = process.env }: {
+export function resolvePiRole({ systemPrompt, env = process.env, sessionId }: {
   systemPrompt?: string;
   env?: Record<string, string | undefined>;
+  sessionId?: string;
 }): string | null {
   const raws = [...(systemPrompt ?? '').matchAll(ACTIVE_AGENT_RE)].map((m) => m[1]);
-  if (raws.length === 0) return env.PI_SUBAGENT_CHILD === '1' ? '' : null;
+  if (raws.length === 0) return isNativePiAsyncChildSession(env, sessionId) ? '' : null;
   const names = new Set(raws.map((raw) => stripPluginNamespace(raw).trim()));
   if (names.size !== 1) return '';
   const [name] = names;
@@ -131,7 +158,7 @@ export function resolvePiRole({ systemPrompt, env = process.env }: {
 /**
  * Decide a Pi `tool_call`. A restricted role runs only the sanctioned pull line (plus
  * read and search commands for the reviewer). An unresolved role ('' from a blank tag, an
- * unknown dev-loops: name, conflicting tags or an untagged PI_SUBAGENT_CHILD=1 session) fails
+ * unknown dev-loops: name, conflicting tags or an untagged native async child session) fails
  * closed: it is treated as a restricted role that may pull only.
  */
 export function decidePiToolCall({ toolName, input, agentType }: {
