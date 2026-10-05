@@ -196,7 +196,7 @@ test("generated agents/commands/skills carry the Pi token in neither frontmatter
   ];
   assert.ok(files.length > 0, "expected generated files to scan");
   const violations = files.filter((file) =>
-    fs.readFileSync(path.join(repoRoot, file), "utf8").includes("<dev-loops-package-root>/cli/index.mjs"),
+    fs.readFileSync(path.join(repoRoot, file), "utf8").includes("<dev-loops-package-root>"),
   );
   assert.deepEqual(violations, [], `Pi token in generated files:\n${violations.join("\n")}`);
 });
@@ -207,7 +207,7 @@ test("generated bundled docs and templates carry neither a bare invocation nor t
   const violations = [];
   for (const file of files) {
     const content = fs.readFileSync(path.join(repoRoot, file), "utf8");
-    if (BARE_DEV_LOOPS_NS_RE.test(content) || content.includes("<dev-loops-package-root>/cli/index.mjs")) violations.push(file);
+    if (BARE_DEV_LOOPS_NS_RE.test(content) || content.includes("<dev-loops-package-root>")) violations.push(file);
   }
   assert.deepEqual(violations, [], `unrewritten invocation in bundled files:\n${violations.join("\n")}`);
   for (const file of [".claude/skills/dev-loop/SKILL.md", ".claude/skills/docs/gate-review-sub-loop-contract.md"]) {
