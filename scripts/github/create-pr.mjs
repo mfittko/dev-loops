@@ -192,16 +192,24 @@ export { detectClosingKeyword, extractClosingIssueNumber };
 // substituting "" (which used to let a broken/blank --body-file open a body-less
 // PR unnoticed).
 async function resolveBody(args) {
-  const bodyValue = getFlagValue(args, /^--body(?:$|=)/u);
+  // `-b`/`-F` are gh's short forms (`-b x`, `-b=x`, `-bx`); they must not bypass the body guards.
+  const bodyValue = getFlagValue(args, /^(?:--body|-b)(?:$|=)/u) ?? getAttachedShortValue(args, "-b");
   if (bodyValue !== null) {
     return bodyValue;
   }
-  const bodyFileValue = getFlagValue(args, /^--body-file(?:$|=)/u);
+  const bodyFileValue = getFlagValue(args, /^(?:--body-file|-F)(?:$|=)/u) ?? getAttachedShortValue(args, "-F");
   if (bodyFileValue !== null) {
     return resolveBodyOrFile({ bodyFile: bodyFileValue, allowStdin: false });
   }
   return null; // no --body/--body-file given
 }
+// Attached short-flag value (`-bvalue`), which pflag accepts.
+function getAttachedShortValue(args, flag) {
+  const token = args.find((t) => t.startsWith(flag) && t.length > flag.length && t[flag.length] !== "=");
+  return token === undefined ? null : token.slice(flag.length);
+}
+// Flags that make gh source the body itself, so its marker lines cannot be checked here.
+const UNVERIFIABLE_BODY_FLAG_PATTERN = /^(?:--fill(?:-verbose|-first)?|--template|-T)(?:$|=)/u;
 // A plain string value for a single-value flag, in both the space form
 // (`--repo owner/name`) and the inline form (`--repo=owner/name`); unlike
 // resolveBody, never reads a file. Returns null when the flag is absent.
@@ -471,6 +479,9 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     return 0;
   }
   const body = await resolveBody(forwardedArgv);
+  if (body === null && forwardedArgv.some((t) => UNVERIFIABLE_BODY_FLAG_PATTERN.test(t))) {
+    throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --fill/--fill-verbose/--fill-first/--template source the body outside this wrapper, so a waiver line cannot be ruled out; pass --body or --body-file instead");
+  }
   // ADR-TRIPWIRE-STANDING-WAIVER: a new PR starts with no waiver line.
   const waiverRefusal = waiverLineChangeRefusal({ currentBody: "", nextBody: body ?? "", action: "create" });
   if (waiverRefusal) {

@@ -1739,3 +1739,44 @@ test("create-pr refuses any adr-tripwire:allow line in the body before invoking 
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+for (const [label, bodyArgs, useFile] of [
+  ["-b (space form)", ["-b", "x\nadr-tripwire:allow because\n"], false],
+  ["-b= (inline form)", ["-b=x\nadr-tripwire:allow because\n"], false],
+  ["-F (body file)", ["-F"], true],
+]) {
+  test(`create-pr refuses an adr-tripwire:allow line passed via ${label}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-short-"));
+    try {
+      const { env, ghLogPath } = await writeGhStub(tempDir, []);
+      const args = [...bodyArgs];
+      if (useFile) {
+        const file = path.join(tempDir, "body.md");
+        await writeFile(file, "x\nadr-tripwire:allow because\n");
+        args.push(file);
+      }
+      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", ...args], { env });
+      assert.equal(result.code, 1);
+      assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
+      assert.deepEqual(await readGhCalls(ghLogPath), []);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("create-pr refuses --fill and --template (body sourced outside the wrapper)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-fill-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    for (const flag of ["--fill", "--template"]) {
+      const extra = flag === "--template" ? [flag, "t.md"] : [flag];
+      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", ...extra], { env });
+      assert.equal(result.code, 1);
+      assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
+    }
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

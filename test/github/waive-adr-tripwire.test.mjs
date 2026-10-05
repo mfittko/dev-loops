@@ -32,13 +32,18 @@ const PR_BODY = "Summary.\n\nCloses #7\n";
 const AUTH = { inForce: true, record: { grantedBy: "operator", grantedAt: "2026-10-01", expires: "2026-12-01", reason: "contract doc edits" } };
 const OPTIONS = { repo: "o/n", pr: 9 };
 
+// Blocks until the body carries the writer's line, like the real tripwire at the pinned head.
+const blockUntilWaived = async ({ prBody = "" } = {}) => (prBody.includes(`standing-authorization head=${HEAD}`)
+  ? { outcome: "pass", satisfiedBy: "waiver", triggers: [{ type: "contract-doc", path: CONTRACT }] }
+  : { outcome: "block", triggers: [{ type: "contract-doc", path: CONTRACT }] });
+
 function harness(over = {}) {
   const edits = [];
   const deps = {
     readStandingAuthorization: () => AUTH,
     fetchPr: async () => ({ body: PR_BODY, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 7 }] } }),
     fetchIssueBody: async () => ISSUE_BODY,
-    evaluateAdrTripwire: async () => ({ outcome: "block", triggers: [{ type: "contract-doc", path: CONTRACT }] }),
+    evaluateAdrTripwire: blockUntilWaived,
     fetchDraftGateEvidence: async () => ({ currentHeadClean: true }),
     readRecordedSpecDigest: async () => DIGEST,
     editPr: async (opts, rt) => { edits.push({ opts, rt }); return { ok: true }; },
@@ -80,6 +85,14 @@ test("replaces an earlier standing-authorization line and keeps every other line
   assert.ok(!edits[0].opts.body.includes(old));
   assert.ok(edits[0].opts.body.includes("Trailing note."));
   assert.equal(edits[0].opts.body.match(/adr-tripwire:allow/g).length, 1);
+});
+
+test("refuses with waiver_ineffective when the composed body still blocks (earlier bare marker)", async () => {
+  const body = "Summary.\n\nCloses #7\n\nadr-tripwire:allow\n";
+  await assertRefusal({
+    fetchPr: async () => ({ body, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 7 }] } }),
+    evaluateAdrTripwire: async () => ({ outcome: "block", triggers: [{ type: "contract-doc", path: CONTRACT }] }),
+  }, "waiver_ineffective");
 });
 
 for (const state of ["missing", "malformed", "over_long", "expired"]) {
@@ -159,7 +172,7 @@ test("the real edit-pr write path accepts the writer's line (no waiver-line refu
     readStandingAuthorization: () => AUTH,
     fetchPr: async () => ({ body: PR_BODY, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 7 }] } }),
     fetchIssueBody: async () => ISSUE_BODY,
-    evaluateAdrTripwire: async () => ({ outcome: "block", triggers: [{ type: "contract-doc", path: CONTRACT }] }),
+    evaluateAdrTripwire: blockUntilWaived,
     fetchDraftGateEvidence: async () => ({ currentHeadClean: true }),
     readRecordedSpecDigest: async () => DIGEST,
     runChild: run,

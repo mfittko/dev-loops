@@ -198,3 +198,10 @@ test("a path-absent report falls through to the next filename; a listing failure
   const broken = fakeGit({ lsFails: true });
   assert.equal(readStandingAuthorization({ repoRoot: ".", defaultBranch: "main", now: NOW, git: broken, fetchOrigin: noFetch }).state, "malformed");
 });
+
+test("a record whose grantedAt is after today refuses (not yet valid)", () => {
+  const r = evaluateStandingAuthorizationRecord({ ...good, grantedAt: "2030-01-01", expires: "2030-03-31" }, NOW);
+  assert.equal(r.inForce, false);
+  assert.equal(r.state, "malformed");
+  assert.match(r.detail, /not yet valid/);
+});

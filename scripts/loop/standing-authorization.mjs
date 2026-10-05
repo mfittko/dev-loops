@@ -56,6 +56,7 @@ export function evaluateStandingAuthorizationRecord(record, now = new Date()) {
     return { inForce: false, state: "over_long", detail: `expires is ${span} days after grantedAt (maximum ${MAX_STANDING_AUTHORIZATION_DAYS})` };
   }
   const today = now.toISOString().slice(0, 10);
+  if (today < grantedAt) return malformed(`grantedAt ${grantedAt} is after today ${today} UTC (not yet valid)`);
   if (today > expires) return { inForce: false, state: "expired", detail: `expired ${expires} (today ${today} UTC)` };
   return { inForce: true, record: { grantedBy: record.grantedBy, grantedAt, expires, reason: record.reason.trim() } };
 }

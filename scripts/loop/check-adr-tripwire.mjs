@@ -32,6 +32,13 @@
  *     `worktree.commitMsgGuard.requireClaudeSession` is `true` at base and not
  *     `true` at head (set false, key removed, file removed). Only loosening
  *     fires; opting in is stricter.
+ *  6. standing-authorizations-change: the `standingAuthorizations` block of a
+ *     changed devloops config source differs between base and head. Only a
+ *     docs/decisions record satisfies it; no waiver applies.
+ *
+ * Standing-authorization waiver lines (`adr-tripwire:allow standing-
+ * authorization head=<sha> ... expires=<YYYY-MM-DD> ...`) are valid only when
+ * `head=` equals the evaluated head and `expires=` has not passed (UTC).
  *
  * Satisfaction: the diff adds or updates a `docs/decisions/NNNN-*.md` record,
  * or the PR body carries a one-line waiver marker
@@ -90,6 +97,9 @@ Output (stdout, JSON):
     "triggers": [{ "type": "contract-doc"|"gate-config"|"rule-modality-reversal"|"unresolvable-rule-scan"|"devloops-proportionality"|"commit-msg-guard-loosening"|"standing-authorizations-change"|"unresolvable-devloops-scan", "path": "...", ... }],
     "adrFiles": ["docs/decisions/0052-..."],
     "waiver": { "requested": false, "valid": false, "reason": null },
+                               // a standing-authorization line also sets
+                               // "standing": true, and "stale": true when it
+                               // misses the evaluated head or has expired
     "reasons": []
   }
 
@@ -495,6 +505,7 @@ export async function evaluateAdrTripwire({
   prBody = "",
   repoRoot = process.cwd(),
   env = process.env,
+  now = new Date(),
 } = {}) {
   assertPlausibleRef(base, "--base");
   assertPlausibleRef(head, "--head");
@@ -530,7 +541,7 @@ export async function evaluateAdrTripwire({
   }
   let headSha = null;
   try { headSha = runGit(["rev-parse", "--verify", `${head}^{commit}`], { repoRoot, env: gitEnv }).trim().toLowerCase(); } catch { /* unresolvable head: standing lines stay stale */ }
-  return computeAdrTripwire({ nameStatusOutput, baseContents, headContents, prBody, headSha });
+  return computeAdrTripwire({ nameStatusOutput, baseContents, headContents, prBody, headSha, now });
 }
 
 // ---------------------------------------------------------------------------

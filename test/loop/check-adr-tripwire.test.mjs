@@ -874,9 +874,9 @@ test("evaluateAdrTripwire resolves the head ref to its full SHA for the standing
     await writeFile(path.join(fixture, "skills/docs/new-contract.md"), "# New contract\n\nProse.\n");
     execSync("git add . && git commit -qm head", { cwd: fixture, stdio: "ignore" });
     const sha = execSync("git rev-parse HEAD", { cwd: fixture }).toString().trim();
-    const atHead = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture, prBody: `${standingLine(sha)}\n` });
+    const atHead = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture, prBody: `${standingLine(sha)}\n`, now: new Date("2026-10-04T12:00:00Z") });
     assert.equal(atHead.outcome, "pass");
-    const stale = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture, prBody: `${standingLine(HEAD_B)}\n` });
+    const stale = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture, prBody: `${standingLine(HEAD_B)}\n`, now: new Date("2026-10-04T12:00:00Z") });
     assert.equal(stale.outcome, "block");
   } finally {
     await rm(tmp, { recursive: true, force: true });

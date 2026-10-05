@@ -173,8 +173,14 @@ export async function waiveAdrTripwire(options, {
 
   const { record } = authorization;
   const line = buildStandingWaiverLine({ head: headSha, issue, grantedBy: record.grantedBy, expires: record.expires, paths });
+  const nextBody = replaceStandingWaiverLine(body, line);
+  // The tripwire is first-marker-wins: an earlier bare marker can mask the new line.
+  const effective = await evaluateAdrTripwire({ base: `origin/${prState.baseRefName}`, head: headSha, prBody: nextBody, repoRoot, env, now });
+  if (effective.outcome === "block") {
+    return refuse("waiver_ineffective", `the standing-authorization line would not waive the tripwire at head ${headSha.slice(0, 7)} (another adr-tripwire:allow line in the body likely masks it); remove that line in the GitHub UI and re-run`);
+  }
   await editPr(
-    { repo, pr, body: replaceStandingWaiverLine(body, line), addAssignees: [], removeAssignees: [] },
+    { repo, pr, body: nextBody, addAssignees: [], removeAssignees: [] },
     { env, ghCommand, run: runChild, waiverWriter: true, currentBody: body },
   );
   return { ok: true, action: "waiver_written", repo, pr, head: headSha, issue, line };
