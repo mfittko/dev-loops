@@ -21,7 +21,7 @@ The stall also pushed agents to raw provider calls: `gh pr edit --body-file` for
 - The record never waives an `extension-defaults.yaml` trigger, a rule-modality reversal or removal, an unresolvable scan, or a `standingAuthorizations` change, and it never satisfies or is satisfied by the size-budget, cross-issue, replacement-PR, merge, `copilot-body-disposition` or release approvals.
 - The tripwire treats a line whose reason starts with `standing-authorization` as valid only at the `head=` it names, so a later push blocks again until the writer re-runs. A hand-written line keeps today's meaning.
 - A diff that changes the `standingAuthorizations` block is a trigger only a decision record satisfies, and `ready-for-review.mjs` and `pre-pr-ready-gate.mjs` refuse its ready flip until the repo owner approves the current head. The policy cannot be widened under a standing merge authorization.
-- The Claude Code Bash gate denies `gh pr edit --body`/`--body-file` and a `gh api` write of a `body` field to `pulls/<n>` as defense in depth. It is a Claude-only seam, and Pi behavior is unchanged.
+- The Claude Code Bash gate denies `gh pr edit --body`/`--body-file` and a `gh api` write of a `body` field or `--input` payload to `pulls/<n>` or `issues/<n>`, and a `gh api graphql` `updatePullRequest`, as defense in depth. The deny names `pr edit` for PR bodies and `issue edit` for issue bodies. It is a Claude-only seam, and Pi behavior is unchanged.
 
 Rejected: an operator prompt for every contract-doc edit (the stall this record removes). Rejected: a configurable waiver scope or a force flag (a fail-open surface). Rejected: reading the record from the worktree or the PR head (a PR could grant itself the authorization).
 

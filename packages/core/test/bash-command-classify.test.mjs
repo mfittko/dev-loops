@@ -1339,3 +1339,10 @@ test("commandContainsRawPrBodyApiWrite keeps passing comments, title-only and gr
     assert.equal(commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), false, cmd);
   }
 });
+
+test("raw PR body denies see through quoted flag tokens", () => {
+  assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 '--body' 'adr-tripwire:allow x'"), true);
+  assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 "-F" body.md'), true);
+  assert.equal(commandContainsRawPrBodyApiWrite('gh api -X PATCH repos/o/n/pulls/5 -f "body"=x'), true);
+  assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 --title 'a title'"), false);
+});

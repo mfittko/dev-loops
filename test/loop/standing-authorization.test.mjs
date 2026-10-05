@@ -205,3 +205,10 @@ test("a record whose grantedAt is after today refuses (not yet valid)", () => {
   assert.equal(r.state, "malformed");
   assert.match(r.detail, /not yet valid/);
 });
+
+test("an unresolved origin/HEAD refuses with default_branch_unresolved instead of guessing main", () => {
+  const git = () => { throw new Error("no origin/HEAD"); };
+  const r = readStandingAuthorization({ repoRoot: "/nonexistent", now: NOW, git, fetchOrigin: noFetch });
+  assert.equal(r.inForce, false);
+  assert.equal(r.state, "default_branch_unresolved");
+});

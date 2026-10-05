@@ -49,7 +49,7 @@ Required:
   --pr <number>         Pull request number
 Output (stdout, JSON):
   { "ok": true, "action": "waiver_written", "repo", "pr", "head", "issue", "line" }
-Refusal (stderr, JSON, exit 1):
+Refusal (stderr, JSON, exit 1; a thrown gh or git failure is reason "writer_error"):
   { "ok": false, "refused": true, "reason": "<code>", "detail": "..." }
 ${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
@@ -138,7 +138,7 @@ export async function waiveAdrTripwire(options, {
   }
   const issue = bodyIssues[0];
 
-  const tripwire = await evaluateAdrTripwire({ base: `origin/${prState.baseRefName}`, head: headSha, prBody: body, repoRoot, env });
+  const tripwire = await evaluateAdrTripwire({ base: `origin/${prState.baseRefName}`, head: headSha, prBody: body, repoRoot, env, now });
   if (tripwire.outcome !== "block") {
     return refuse("tripwire_not_blocking", `the ADR tripwire does not block PR #${pr} at head ${headSha.slice(0, 7)} (satisfiedBy: ${tripwire.satisfiedBy ?? "no trigger"}); nothing to waive`);
   }
@@ -199,7 +199,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   try {
     result = await waiveAdrTripwire(options, runtime);
   } catch (error) {
-    stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
+    stderr.write(`${JSON.stringify(refuse("writer_error", error instanceof Error ? error.message : String(error)))}\n`);
     return 1;
   }
   if (!result.ok) {

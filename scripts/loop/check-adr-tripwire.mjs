@@ -328,11 +328,6 @@ export function computeAdrTripwire({
       triggers.push({ type: "unresolvable-devloops-scan", path: file.path });
       continue;
     }
-    // standingAuthorizations: any change to the block is decision-shaped and
-    // satisfied only by a decision record (never by any waiver line).
-    if (JSON.stringify(baseParsed?.standingAuthorizations ?? null) !== JSON.stringify(headParsed?.standingAuthorizations ?? null)) {
-      triggers.push({ type: "standing-authorizations-change", path: file.path });
-    }
     const baseFields = extractProportionalityFields(baseParsed);
     const headFields = extractProportionalityFields(headParsed);
     const changedFields = Object.keys(baseFields).filter(
@@ -351,6 +346,18 @@ export function computeAdrTripwire({
   const touchesFamily = (f) => DEVLOOPS_CONFIG_PATHS_SET.has(f.path) || (f.origPath && DEVLOOPS_CONFIG_PATHS_SET.has(f.origPath));
   const changedFamilyFile = files.find(touchesFamily);
   if (changedFamilyFile) {
+    // standingAuthorizations: the reader takes the effective first-existing
+    // family file, so compare the effective block at base and at head (a
+    // deleted shadowing file can expose a shadowed record). Any change is
+    // decision-shaped and satisfied only by a decision record.
+    const effectiveBlock = (contents) => {
+      const name = DEVLOOPS_CONFIG_PATHS.find((n) => contents[n] != null);
+      if (name === undefined) return "null";
+      try { return JSON.stringify(parseYaml(contents[name])?.standingAuthorizations ?? null); } catch { return `unparseable:${contents[name]}`; }
+    };
+    if (effectiveBlock(baseContents) !== effectiveBlock(headContents)) {
+      triggers.push({ type: "standing-authorizations-change", path: changedFamilyFile.path });
+    }
     const effective = (contents) => {
       const name = DEVLOOPS_CONFIG_PATHS.find((n) => contents[n] != null);
       if (name === undefined) return undefined;

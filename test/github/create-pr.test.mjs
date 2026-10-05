@@ -1744,6 +1744,9 @@ for (const [label, bodyArgs, useFile] of [
   ["-b (space form)", ["-b", "x\nadr-tripwire:allow because\n"], false],
   ["-b= (inline form)", ["-b=x\nadr-tripwire:allow because\n"], false],
   ["-F (body file)", ["-F"], true],
+  ["-b attached form", ["-bx\nadr-tripwire:allow because\n"], false],
+  ["a -db shorthand bundle", ["-db", "x\nadr-tripwire:allow because\n"], false],
+  ["a -dF shorthand bundle", ["-dF"], true],
 ]) {
   test(`create-pr refuses an adr-tripwire:allow line passed via ${label}`, async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-short-"));
@@ -1775,6 +1778,21 @@ test("create-pr refuses --fill and --template (body sourced outside the wrapper)
       assert.equal(result.code, 1);
       assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
     }
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr reads the real --body-file when a flag value starts with -b or -F", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-misread-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    const file = path.join(tempDir, "body.md");
+    await writeFile(file, "x\nadr-tripwire:allow because\n");
+    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "-bump deps", "--body-file", file], { env });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
     assert.deepEqual(await readGhCalls(ghLogPath), []);
   } finally {
     await rm(tempDir, { recursive: true, force: true });

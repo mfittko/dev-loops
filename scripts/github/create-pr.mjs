@@ -192,24 +192,57 @@ export { detectClosingKeyword, extractClosingIssueNumber };
 // substituting "" (which used to let a broken/blank --body-file open a body-less
 // PR unnoticed).
 async function resolveBody(args) {
-  // `-b`/`-F` are gh's short forms (`-b x`, `-b=x`, `-bx`); they must not bypass the body guards.
-  const bodyValue = getFlagValue(args, /^(?:--body|-b)(?:$|=)/u) ?? getAttachedShortValue(args, "-b");
-  if (bodyValue !== null) {
-    return bodyValue;
+  const { body, bodyFile } = scanBodySources(args);
+  if (body !== null) {
+    return body;
   }
-  const bodyFileValue = getFlagValue(args, /^(?:--body-file|-F)(?:$|=)/u) ?? getAttachedShortValue(args, "-F");
-  if (bodyFileValue !== null) {
-    return resolveBodyOrFile({ bodyFile: bodyFileValue, allowStdin: false });
+  if (bodyFile !== null) {
+    return resolveBodyOrFile({ bodyFile, allowStdin: false });
   }
   return null; // no --body/--body-file given
 }
-// Attached short-flag value (`-bvalue`), which pflag accepts.
-function getAttachedShortValue(args, flag) {
-  const token = args.find((t) => t.startsWith(flag) && t.length > flag.length && t[flag.length] !== "=");
-  return token === undefined ? null : token.slice(flag.length);
+// pflag-style scan of the forwarded `gh pr create` flags: reads `--body`,
+// `--body-file`, `-b`, `-F` (space, `=`, attached `-bx` and shorthand-bundle
+// `-db x` forms) only in flag position, so a flag VALUE that merely starts
+// with `-b`/`-F` (for example `--title -bump`) is never read as the body.
+// `sourced` is true when gh sources the body itself (--fill*, --template, -f, -T),
+// so its marker lines cannot be checked here.
+const LONG_VALUE_FLAGS = new Set(["assignee", "base", "body", "body-file", "head", "label", "milestone", "project", "recover", "reviewer", "repo", "template", "title"]);
+const SHORT_VALUE_FLAGS = new Set("aBbFHlmprRtT");
+const LONG_SOURCED_FLAGS = new Set(["fill", "fill-verbose", "fill-first", "template"]);
+function scanBodySources(args) {
+  const found = { body: null, bodyFile: null, sourced: false };
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === "--") break;
+    if (token.startsWith("--")) {
+      const eq = token.indexOf("=");
+      const name = token.slice(2, eq === -1 ? undefined : eq);
+      if (LONG_SOURCED_FLAGS.has(name)) found.sourced = true;
+      if (!LONG_VALUE_FLAGS.has(name)) continue;
+      const value = eq !== -1 ? token.slice(eq + 1) : (args[i + 1] ?? null);
+      if (eq === -1) i += 1;
+      if (name === "body") found.body = value;
+      else if (name === "body-file") found.bodyFile = value;
+    } else if (token.startsWith("-") && token.length > 1) {
+      for (let c = 1; c < token.length; c += 1) {
+        const flag = token[c];
+        if (flag === "f" || flag === "T") found.sourced = true;
+        if (!SHORT_VALUE_FLAGS.has(flag)) continue;
+        let value = token.slice(c + 1);
+        if (value.startsWith("=")) value = value.slice(1);
+        if (value === "") {
+          value = args[i + 1] ?? null;
+          i += 1;
+        }
+        if (flag === "b") found.body = value;
+        else if (flag === "F") found.bodyFile = value;
+        break;
+      }
+    }
+  }
+  return found;
 }
-// Flags that make gh source the body itself, so its marker lines cannot be checked here.
-const UNVERIFIABLE_BODY_FLAG_PATTERN = /^(?:--fill(?:-verbose|-first)?|--template|-T)(?:$|=)/u;
 // A plain string value for a single-value flag, in both the space form
 // (`--repo owner/name`) and the inline form (`--repo=owner/name`); unlike
 // resolveBody, never reads a file. Returns null when the flag is absent.
@@ -479,7 +512,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     return 0;
   }
   const body = await resolveBody(forwardedArgv);
-  if (body === null && forwardedArgv.some((t) => UNVERIFIABLE_BODY_FLAG_PATTERN.test(t))) {
+  if (body === null && scanBodySources(forwardedArgv).sourced) {
     throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --fill/--fill-verbose/--fill-first/--template source the body outside this wrapper, so a waiver line cannot be ruled out; pass --body or --body-file instead");
   }
   // ADR-TRIPWIRE-STANDING-WAIVER: a new PR starts with no waiver line.

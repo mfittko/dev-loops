@@ -61,13 +61,13 @@ export function evaluateStandingAuthorizationRecord(record, now = new Date()) {
   return { inForce: true, record: { grantedBy: record.grantedBy, grantedAt, expires, reason: record.reason.trim() } };
 }
 
-/** Default branch name from `refs/remotes/origin/HEAD`, else "main". */
+/** Default branch name from `refs/remotes/origin/HEAD`, else null (never a guessed name). */
 export function resolveDefaultBranch({ repoRoot = process.cwd(), git = defaultGit } = {}) {
   try {
     const ref = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { repoRoot }).trim();
-    return ref.startsWith("origin/") ? ref.slice("origin/".length) : "main";
+    return ref.startsWith("origin/") && ref.length > "origin/".length ? ref.slice("origin/".length) : null;
   } catch {
-    return "main";
+    return null;
   }
 }
 
@@ -92,6 +92,7 @@ export function defaultFetchOrigin(branch, { repoRoot }, exec = execFileSync) {
 export function readStandingAuthorization({ repoRoot = process.cwd(), defaultBranch, now = new Date(), git = defaultGit, fetchOrigin = defaultFetchOrigin } = {}) {
   const branch = defaultBranch ?? resolveDefaultBranch({ repoRoot, git });
   const refuse = (state, detail) => ({ inForce: false, state, detail, defaultBranch: branch });
+  if (!branch) return refuse("default_branch_unresolved", "refs/remotes/origin/HEAD is unset; refusing to guess the default branch");
   try {
     fetchOrigin(branch, { repoRoot });
   } catch {

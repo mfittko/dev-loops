@@ -183,3 +183,24 @@ test("the real edit-pr write path accepts the writer's line (no waiver-line refu
   assert.ok(edit.join(" ").includes("adr-tripwire:allow standing-authorization"));
   assert.equal(calls.length, 1);
 });
+
+test("a thrown writer error is a typed writer_error refusal, and both tripwire evaluations use the injected clock", async () => {
+  const nows = [];
+  const { run } = harness({
+    evaluateAdrTripwire: async (input) => { nows.push(input.now); return blockUntilWaived(input); },
+  });
+  await run();
+  assert.equal(nows.length, 2);
+  assert.ok(nows.every((n) => n instanceof Date));
+  let stderr = "";
+  const code = await runCli(["--repo", "o/n", "--pr", "9"], {
+    stdout: { write() {} },
+    stderr: { write: (s) => { stderr += s; } },
+    readStandingAuthorization: () => { throw new Error("gh exploded"); },
+  });
+  assert.equal(code, 1);
+  const payload = JSON.parse(stderr);
+  assert.equal(payload.reason, "writer_error");
+  assert.equal(payload.refused, true);
+  assert.match(payload.detail, /gh exploded/);
+});

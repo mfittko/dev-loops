@@ -431,3 +431,16 @@ test("editPr: a caller-supplied currentBody is the waiver baseline and skips the
     /dev-loops pr waive-adr-tripwire/,
   );
 });
+
+test("editPr: the closing-reference refusal still fails closed when currentBody is supplied and the PR context is null", async () => {
+  const { run } = stubGh();
+  const fetchPrContext = async () => null;
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Closes #2071" }), { run, fetchPrContext, currentBody: "" }),
+    /CLOSING-REF-BRANCH-MISMATCH.*fail closed/s,
+  );
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Closes #2071" }), { run, fetchPrContext, currentBody: "", waiverWriter: true }),
+    /CLOSING-REF-BRANCH-MISMATCH.*fail closed/s,
+  );
+});

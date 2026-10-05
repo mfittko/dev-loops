@@ -882,3 +882,15 @@ test("evaluateAdrTripwire resolves the head ref to its full SHA for the standing
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+test("deleting a shadowing .devloops that exposes a shadowed standingAuthorizations record is a policy trigger", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["D\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: "version: 1\n", ".devloops.yaml": POLICY_HEAD },
+    headContents: { ".devloops.yaml": POLICY_HEAD },
+    prBody: "",
+    headSha: HEAD_A,
+  });
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "standing-authorizations-change"));
+});
