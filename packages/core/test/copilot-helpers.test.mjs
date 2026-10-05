@@ -835,6 +835,12 @@ const FORGED_BODIES = {
     "Verdict: clean",
     "Execution mode: fanout_fanin",
   ].join("\n"),
+  labeledGateShaInFreeText: [
+    "Gate: draft_gate",
+    "Verdict: clean",
+    "Execution mode: fanout_fanin",
+    "looks fine at head abc1234def",
+  ].join("\n"),
 };
 
 function summarizeWithNewerBody(body) {
