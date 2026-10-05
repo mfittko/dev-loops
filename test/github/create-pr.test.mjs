@@ -1814,3 +1814,38 @@ test("create-pr reads the real --body-file when a flag value starts with -b or -
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+// #2463: every --body-file/-F spelling is rewritten to one inline --body <text>.
+for (const [label, flagArgs] of [
+  ["--body-file=<path>", (p) => [`--body-file=${p}`]],
+  ["attached -F<path>", (p) => [`-F${p}`]],
+  ["bundled -dF <path>", (p) => ["-dF", p]],
+]) {
+  test(`create-pr rewrites ${label} to one inline --body with the file text (#2463)`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-inline-body-"));
+    try {
+      const bodyPath = path.join(tempDir, "pr-body.md");
+      const text = conformantBody("Closes #349");
+      await writeFile(bodyPath, text, "utf8");
+      const { env, ghLogPath } = await writeGhStub(tempDir, [
+        { stdout: graphqlNoLinkedPrPayload() },
+        { stdout: "https://github.com/owner/repo/pull/17\n" },
+      ]);
+
+      const result = await runNode([
+        "--repo", "owner/repo", "--assignee", "@me", "--base", "main",
+        "--head", "issue-349-create-pr", "--title", "Add canonical wrapper",
+        ...flagArgs(bodyPath),
+      ], { env });
+
+      assert.equal(result.code, 0, result.stderr);
+      const ghArgs = (await readGhCalls(ghLogPath))[1];
+      assert.equal(ghArgs.filter((a) => a === "--body").length, 1);
+      assert.equal(ghArgs[ghArgs.indexOf("--body") + 1], text);
+      for (const bad of ["--body-file", "-F"]) assert.ok(!ghArgs.includes(bad), bad);
+      assert.ok(!ghArgs.some((a) => a.includes(bodyPath) || a.startsWith("--body-file")), "no path token");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
