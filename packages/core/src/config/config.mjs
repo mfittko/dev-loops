@@ -6,9 +6,8 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { classifyFile } from "../analysis/diff-analyzer.mjs";
+import { classifyFile, compileClassifyRules, isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 import { ChangeCategory, resolveDynamicAngles } from "../analysis/change-classifier.mjs";
-import { isDevLoopConfigSourcePath } from "../loop/gate-carry-forward.mjs";
 import { isClaudeHarness } from "../loop/run-context.mjs";
 import { trimmedOrNull } from "../loop/normalize.mjs";
 import { matchesDiffExcludeGlob } from "../loop/review-dispatch-plan.mjs";
@@ -167,7 +166,7 @@ export const GATE_ANGLE_SCOPES = Object.freeze(["full", "changed-files", "docs-o
 // classifyFile()'s output range. Both feed z.enum so an unknown name is
 // rejected fail-closed at validation instead of silently never matching.
 const CHANGE_CATEGORY_NAMES = Object.freeze(Object.values(ChangeCategory));
-const FILE_KIND_NAMES = Object.freeze(["code", "docs", "config", "test", "ci", "unknown"]);
+const FILE_KIND_NAMES = Object.freeze(["code", "docs", "config", "test", "ci", "asset", "unknown"]);
 
 // One review angle: a bare string is sugar for `{ name }`; the fields are
 // documented on the schema below. mergeConfigLayers merges these arrays BY
@@ -189,7 +188,7 @@ const GateAngleEntry = z.preprocess(
     tier: z.string().trim().min(1).optional().describe("Model tier alias for this angle (used when `model` is absent)."),
     scope: z.enum(GATE_ANGLE_SCOPES).optional().describe("Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file paths only; the diff stays the required diff read). Unknown/omitted resolves to full."),
     categories: z.array(z.enum(CHANGE_CATEGORY_NAMES)).min(1).optional().describe("Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed."),
-    kinds: z.array(z.enum(FILE_KIND_NAMES)).min(1).optional().describe("File kinds (code/config/test/ci/docs/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed."),
+    kinds: z.array(z.enum(FILE_KIND_NAMES)).min(1).optional().describe("File kinds (code/config/test/ci/docs/asset/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed."),
   }),
 );
 
@@ -197,6 +196,47 @@ const GateAngleEntry = z.preprocess(
 // output range (../analysis/diff-analyzer.mjs), so a tier config can never
 // name a kind the classifier could not produce.
 const GateTierMatchKind = z.enum(FILE_KIND_NAMES);
+
+// Repository classification rules (the `classify` key). The kinds a repository
+// can map files to; `unknown` is a classifier output only. `asset` is also a
+// valid angle/tier kind (see FILE_KIND_NAMES).
+const CLASSIFY_KIND_NAMES = Object.freeze(["code", "docs", "config", "test", "ci", "asset"]);
+
+const ClassifyExtension = z.string().regex(/^\.[^./\\\s]+$/, "extension must start with '.' and contain no whitespace, '/', '\\' or further '.'").transform((v) => v.toLowerCase());
+
+const ClassifyConfig = z
+  .strictObject({
+    extensions: z
+      .strictObject(Object.fromEntries(CLASSIFY_KIND_NAMES.map((kind) => [kind, z.array(ClassifyExtension).min(1).optional()])))
+      .superRefine((extensions, ctx) => {
+        const seen = new Map();
+        for (const [kind, list] of Object.entries(extensions)) {
+          for (const ext of list ?? []) {
+            const key = ext.toLowerCase();
+            if (seen.has(key) && seen.get(key) !== kind) {
+              ctx.addIssue({ code: z.ZodIssueCode.custom, message: `extension ${key} is mapped to both ${seen.get(key)} and ${kind}` });
+            }
+            seen.set(key, kind);
+          }
+        }
+      })
+      .describe("File extensions mapped to a kind (code, docs, config, test, ci, asset). Matched case-insensitively on the file's last extension; the same extension under two kinds is rejected.")
+      .optional(),
+    paths: z
+      .array(z.strictObject({
+        pattern: z.string().min(1)
+          .refine((v) => {
+            const n = v.replaceAll("\\", "/");
+            return n === n.trim() && !n.startsWith("./") && !n.startsWith("/") && !n.endsWith("/")
+              && n.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
+          }, "pattern must be repo-relative: no surrounding whitespace, no leading './' or '/', no trailing '/', and no empty, '.' or '..' segments")
+          .describe("Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive. Must be repo-relative: no surrounding whitespace, no leading `./` or `/`, no trailing `/`, and no empty, `.` or `..` segments."),
+        kind: z.enum(CLASSIFY_KIND_NAMES).describe("Kind assigned to files matching the pattern."),
+      }))
+      .describe("Path rules; the first matching entry wins and beats `extensions` and the built-in tables.")
+      .optional(),
+  })
+  .describe("Repository file-classification rules. Precedence: first matching `paths` entry, then `extensions`, then built-in tables. `.github/` paths stay ci and dev-loop config sources stay config. A later config layer replaces `extensions` and `paths` as whole values. Requires a dev-loops CLI that knows the `classify` key.");
 
 // A tier's match conditions: EVERY changed file's kind must be in `kinds`
 // (when set) AND the change must stay within `maxFiles`/`maxLines` (when
@@ -906,6 +946,7 @@ export const DevLoopConfigSchema = z.strictObject({
   uiReview: UiReviewConfig.optional(),
   postMerge: PostMergeConfig.optional(),
   standingAuthorizations: StandingAuthorizationsConfig.optional(),
+  classify: ClassifyConfig.optional(),
 });
 
 // ============================================================================
@@ -982,6 +1023,7 @@ export const FileConfigSchema = z.strictObject({
   uiReview: UiReviewConfig.partial().describe("UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps.").optional(),
   postMerge: PostMergeConfig.partial().describe("Post-merge local hook actions (postMerge.actions): consumer-declared commands run sequentially, in order, after a merge succeeds — optionally scoped to changed-file substrings (onlyIfChanged) and polled for readiness (verify).").optional(),
   standingAuthorizations: StandingAuthorizationsConfig.describe("Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops.").optional(),
+  classify: ClassifyConfig.optional(),
   // Unknown keys fail closed like any typo (strictObject).
 });
 
@@ -1816,6 +1858,16 @@ export async function loadDevLoopConfig(options = {}) {
   }
 
   return { config: result.data, warnings, errors, checkoutVersion };
+}
+
+/**
+ * Compile the merged config's `classify` key into the rule set every
+ * `classifyFile` consumer passes, or null when the repository sets none.
+ * @param {DevLoopConfig|null|undefined} config
+ * @returns {import("../analysis/diff-analyzer.mjs").ClassifyRules|null}
+ */
+export function resolveClassifyRules(config) {
+  return compileClassifyRules(config?.classify);
 }
 
 /**
@@ -2717,7 +2769,8 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
   if (changedFiles.some((f) => isDevLoopConfigSourcePath(f))) {
     return { tier: null, angles: null, reason: "config_source_delta" };
   }
-  const kinds = changedFiles.map((f) => classifyFile(f));
+  const rules = resolveClassifyRules(config);
+  const kinds = changedFiles.map((f) => classifyFile(f, rules));
   if (kinds.some((k) => k === "unknown")) {
     return { tier: null, angles: null, reason: "unclassifiable_file" };
   }
@@ -2772,7 +2825,8 @@ function selectFloorPlusJustifiedAngles(config, gate, changedFiles) {
   const candidatePool = pool.filter((a) => !mandatoryAngles.includes(a));
   const validChangedFiles = (Array.isArray(changedFiles) ? changedFiles : [])
     .filter((f) => typeof f === "string" && f.trim().length > 0);
-  const fileKinds = [...new Set(validChangedFiles.map((f) => classifyFile(f)))];
+  const rules = resolveClassifyRules(config);
+  const fileKinds = [...new Set(validChangedFiles.map((f) => classifyFile(f, rules)))];
   const { recommendedAngles } = resolveDynamicAngles({
     configuredAngles: candidatePool,
     changeCategories: [],
@@ -2920,12 +2974,13 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
   let prosePresent = false;
   if (diff) {
     const { analyzeT0, analyzeT1 } = await import("../analysis/diff-analyzer.mjs");
-    const t0 = analyzeT0(diff.nameStatusOutput);
+    const rules = resolveClassifyRules(config);
+    const t0 = analyzeT0(diff.nameStatusOutput, rules);
     changedFiles = t0.files;
     filesChanged = changedFiles.length;
     prosePresent = t0.prosePresent; // gate deslop on the prose surface
     if (diff.diffOutput) {
-      const lineStats = analyzeT1(diff.diffOutput, t0).lineStats;
+      const lineStats = analyzeT1(diff.diffOutput, t0, rules).lineStats;
       linesChanged = lineStats.added + lineStats.deleted;
     }
   }
@@ -3015,13 +3070,15 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
   const analysis = analyzeDiff({
     nameStatusOutput: diff.nameStatusOutput,
     diffOutput: diff.diffOutput,
+    rules: resolveClassifyRules(config),
   });
 
   const categories = [...new Set(analysis.t1?.changeCategories ?? [])];
   // File kinds present in the diff, to honor a consumer angle's `kinds`
   // binding. classifyFile is the same classifier the categories above derive
   // from, so this adds no new classification surface.
-  const fileKinds = [...new Set((analysis.t0?.files ?? []).map(classifyFile))];
+  const rules = resolveClassifyRules(config);
+  const fileKinds = [...new Set((analysis.t0?.files ?? []).map((f) => classifyFile(f, rules)))];
 
   // excludeAngles is a hard ceiling: computed once and reused both to cap the
   // additive anglePool and to filter mandatoryAngles below.

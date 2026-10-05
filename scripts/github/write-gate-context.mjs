@@ -28,7 +28,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
@@ -1153,14 +1153,15 @@ function pushPathListLines(lines, entries) {
  * in original order. The hunks themselves stay in the required `diff` read.
  * Blocks whose path failed to parse are counted, never dropped silently.
  * @param {string} diffOutput
+ * @param {import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null} [rules] repository `classify` rules
  * @returns {{ docFiles: string[], unparsedCount: number }}
  */
-function listDocFilesInDiff(diffOutput) {
+function listDocFilesInDiff(diffOutput, rules) {
   // A decoded path with a control character counts as unparsed: rendered
   // unfenced, an embedded newline could forge a heading.
   const paths = parseDiffFileBlocks(diffOutput).map((b) => (isRenderablePath(b.path) ? b.path : null));
   const unparsedCount = paths.filter((p) => p === null).length;
-  const docFiles = paths.filter((p) => p !== null && classifyFile(p) === "docs");
+  const docFiles = paths.filter((p) => p !== null && classifyFile(p, rules) === "docs");
   return { docFiles: [...new Set(docFiles)], unparsedCount };
 }
 
@@ -1532,6 +1533,7 @@ export function renderScopedBriefingVariant(scope, {
   filteredDiffPath = null, excludedFiles = [],
   validationResultsPath = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
+  rules = null,
 }) {
   if (!GATE_ANGLE_SCOPES.includes(scope) || scope === "full") {
     throw new Error(`renderScopedBriefingVariant: scope must be a non-"full" GATE_ANGLE_SCOPES value, got ${JSON.stringify(scope)}`);
@@ -1612,7 +1614,7 @@ export function renderScopedBriefingVariant(scope, {
   const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
   for (const line of renderDiffPointerLines({ hasDiffText, prefixMode, capBytes, collapsedBytes: diffBytes, filteredBytes, diffPath: filteredDiffPath ?? diffPath })) lines.push(line);
   if (scope === "docs-only") {
-    const { docFiles, unparsedCount } = hasDiffText ? listDocFilesInDiff(diffOutput) : { docFiles: [], unparsedCount: 0 };
+    const { docFiles, unparsedCount } = hasDiffText ? listDocFilesInDiff(diffOutput, rules) : { docFiles: [], unparsedCount: 0 };
     lines.push("");
     if (docFiles.length > 0) {
       lines.push(`Doc files in this diff (${docFiles.length}); review their hunks in the \`diff\` read:`);
@@ -2654,6 +2656,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           filteredDiffPath: pendingFilteredDiff?.path ?? null,
           excludedFiles: diffFilter?.excludedFiles ?? [],
           validationResultsPath: options.validationResultsPath ?? null,
+          rules: resolveClassifyRules(options.config),
         });
         pendingVariants.set(scope, { path: scopePath, text: variant.text });
         briefingVariants[scope] = scopePath;

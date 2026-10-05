@@ -111,7 +111,7 @@ export function getLastCopilotReviewHeadSha(prData) {
 // integrate-only base move carries like a pure doc/prose bump. Returns the
 // carry decision when it carries, else null. gh call order: compare
 // last..head, baseRefName, compare base..head.
-export async function resolveConvergenceCarry({ repo, pr }, runtime, { lastReviewSha, currentHeadSha }) {
+export async function resolveConvergenceCarry({ repo, pr, rules = null }, runtime, { lastReviewSha, currentHeadSha }) {
   if (!lastReviewSha || !currentHeadSha || lastReviewSha === currentHeadSha) {
     return null;
   }
@@ -130,7 +130,7 @@ export async function resolveConvergenceCarry({ repo, pr }, runtime, { lastRevie
       deltaComplete = true;
     }
   }
-  const convergence = resolveConvergenceCarryForward({ changedFiles: convergenceDelta, deltaComplete });
+  const convergence = resolveConvergenceCarryForward({ changedFiles: convergenceDelta, deltaComplete, rules });
   return convergence.carryForward ? convergence : null;
 }
 
@@ -139,12 +139,12 @@ export async function resolveConvergenceCarry({ repo, pr }, runtime, { lastRevie
 // withdraw a stranded request; the suppression decisions use
 // resolveConvergenceCarry above. Returns `{ carryForward: false }` whenever the
 // delta is unavailable or unproven.
-export async function classifyDeltaSinceLastReview({ repo, base, head }, runtime = {}) {
+export async function classifyDeltaSinceLastReview({ repo, base, head, rules = null }, runtime = {}) {
   const deltaChangedFiles = await fetchDeltaChangedFiles({ repo, base, head }, runtime);
   if (deltaChangedFiles === null) {
     return { carryForward: false, reason: "delta since the last reviewed head is unavailable or unproven (fail-closed)" };
   }
-  return resolveConvergenceCarryForward({ changedFiles: deltaChangedFiles });
+  return resolveConvergenceCarryForward({ changedFiles: deltaChangedFiles, rules });
 }
 
 // Live thread facts. Returns null when the thread list cannot be read, which
@@ -233,6 +233,7 @@ export async function resolveCarriedConvergence({
   unresolvedThreadCount,
   reviewThreads,
   requireCopilotConvergenceAtLatestHead = false,
+  rules = null,
 }, runtime = {}) {
   if (copilotReviewRequestStatus !== "none") {
     return { carried: false, reason: "a Copilot review request is outstanding on the current head" };
@@ -251,7 +252,7 @@ export async function resolveCarriedConvergence({
       runtime,
     );
   }
-  const delta = await resolveConvergenceCarry({ repo, pr }, runtime, { lastReviewSha, currentHeadSha });
+  const delta = await resolveConvergenceCarry({ repo, pr, rules }, runtime, { lastReviewSha, currentHeadSha });
   if (!delta) {
     return { carried: false, reason: "the delta since the prior reviewed head is not provably docs-only or integrate-only" };
   }
@@ -281,6 +282,7 @@ export async function resolvePostConvergenceReviewSuppressed({
   copilotReviewRequestStatus,
   unresolvedThreadCount,
   reviewThreads,
+  rules = null,
 }, runtime = {}) {
   const refused = (reason) => ({ carried: false, reason });
   if (copilotReviewRequestStatus !== "none") return refused("a Copilot review request is outstanding on the current head");
@@ -291,7 +293,7 @@ export async function resolvePostConvergenceReviewSuppressed({
   if (!liveLastReviewedHeadSha || liveLastReviewedHeadSha !== marker.lastReviewedHeadSha) {
     return refused("the marker's last-reviewed head disagrees with the live last Copilot review");
   }
-  const delta = await resolveConvergenceCarry({ repo, pr }, runtime, { lastReviewSha: marker.lastReviewedHeadSha, currentHeadSha });
+  const delta = await resolveConvergenceCarry({ repo, pr, rules }, runtime, { lastReviewSha: marker.lastReviewedHeadSha, currentHeadSha });
   if (delta === null) return refused("the delta since the prior reviewed head is not provably docs-only or integrate-only");
   return finishCarry(
     {
