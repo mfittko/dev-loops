@@ -24,7 +24,7 @@ GitHub Projects is **optional**. Without a board, queue helpers fall back to pos
 argument ordering. Setting up a board is a one-time operator action, not a startup requirement.
 
 Tooling never mutates project/field structure without explicit operator invocation of the
-bootstrap wrapper (`dev-loops queue ensure`; `dev-loops project ensure` is a back-compat
+bootstrap wrapper (`node <dev-loops-package-root>/cli/index.mjs queue ensure`; `node <dev-loops-package-root>/cli/index.mjs project ensure` is a back-compat
 alias). Runtime queue operations only read/write item position and Status field values.
 
 ## Board identification
@@ -118,7 +118,7 @@ board validates preconditions first:
 ### Idempotent bootstrap exception
 
 <!-- rule: QUEUE-BOOTSTRAP-ONLY-MUTATOR -->
-The `dev-loops queue ensure` bootstrap wrapper has relaxed fail-closed behavior: it
+The `node <dev-loops-package-root>/cli/index.mjs queue ensure` bootstrap wrapper has relaxed fail-closed behavior: it
 **creates** a missing project and/or Status field with conventional columns. It **MUST** be
 the only tool that mutates project structure; runtime queue helpers (list, move, add,
 reorder) **MUST NOT** create or modify project/field structure. It is safe to re-run: when
@@ -138,7 +138,7 @@ When tooling fails closed, it emits a structured JSON error on stderr in one of 
 
 ## Column auto-repair
 
-When the Status field exists but has non-standard columns, `dev-loops queue ensure` calls
+When the Status field exists but has non-standard columns, `node <dev-loops-package-root>/cli/index.mjs queue ensure` calls
 `updateProjectV2Field` to add missing standard columns (`Backlog`, `Next Up`, `In Progress`,
 `Done`) instead of throwing. This covers a subset of standard columns, entirely
 non-standard columns (e.g. `Todo`/`Doing`/`Done`), and a mix. Default auto-repair does NOT
@@ -160,7 +160,7 @@ Without an explicit repair flag, the wrapper:
 
 ### Authorized rename behavior
 
-With `--repair-rename` (`dev-loops queue ensure --repo <owner/name> --repair-rename`), after
+With `--repair-rename` (`node <dev-loops-package-root>/cli/index.mjs queue ensure --repo <owner/name> --repair-rename`), after
 the operator reviews the reported candidates, the wrapper:
 
 - Renames recognized equivalent columns to the canonical standard names.
@@ -217,7 +217,7 @@ When a queue board is configured, `Next Up` is the **normative, fail-closed pick
 
 ### Behavior (board configured)
 
-- `dev-loops queue run` first reconciles the board's `Next Up` items into `.pi/dev-loop-queue.json` (appending a queued entry for any `Next Up` issue not already present). The driver then queries `Next Up` by POSITION ascending before the first dispatch, and dispatches **only** those items, in that order.
+- `node <dev-loops-package-root>/cli/index.mjs queue run` first reconciles the board's `Next Up` items into `.pi/dev-loop-queue.json` (appending a queued entry for any `Next Up` issue not already present). The driver then queries `Next Up` by POSITION ascending before the first dispatch, and dispatches **only** those items, in that order.
 - An entry present in the local queue but **absent** from `Next Up` is **never** auto-picked. Working an item requires moving it to `Next Up` first.
 - <!-- rule: QUEUE-NEXTUP-EMPTY-FAIL-CLOSED --> **Empty `Next Up` (successful query, zero items) → fail closed.** The driver **MUST** idle/stop with an explicit, machine-readable outcome (`reason: "next-up-empty"`, message `"queue empty — prioritize Backlog items into Next Up"`) and **MUST NOT** fall back to Backlog or local order.
 - <!-- rule: QUEUE-BOARD-QUERY-FAIL-CLOSED --> **Board-query error (API/unreachable/unresolvable project) → surface and stop.** The driver **MUST** surface the error and stop (`reason: "board-query-error"`) and **MUST NOT** fall back to Backlog or local order. This is deliberately distinct from an empty `Next Up`: an outage never silently drains Backlog.
@@ -338,7 +338,7 @@ hand-editing `.pi/dev-loop-queue.json`.
 Run the idempotent bootstrap wrapper:
 
 ```sh
-dev-loops queue ensure --repo mfittko/dev-loops
+node <dev-loops-package-root>/cli/index.mjs queue ensure --repo mfittko/dev-loops
 ```
 
 This creates a project named "Dev Loop Queue" (default) under the `mfittko` user:
@@ -442,20 +442,20 @@ queue:
 
 ### Reordering board items
 
-`dev-loops queue reorder` wraps the `updateProjectV2ItemPosition` mutation. In
+`node <dev-loops-package-root>/cli/index.mjs queue reorder` wraps the `updateProjectV2ItemPosition` mutation. In
 addition to the flag form (`--item [--after]`), it exposes three
 subcommands. A `<ref>` is an issue/PR **number** or a project **item node ID**,
 and every form works for both issues and PRs.
 
 ```sh
 # Move issue/PR #630 to the top of its current Status column
-dev-loops queue reorder move-to-top 630 --repo mfittko/dev-loops --project 1
+node <dev-loops-package-root>/cli/index.mjs queue reorder move-to-top 630 --repo mfittko/dev-loops --project 1
 
 # Move #630 immediately after #625
-dev-loops queue reorder move-after 630 625 --repo mfittko/dev-loops --project 1
+node <dev-loops-package-root>/cli/index.mjs queue reorder move-after 630 625 --repo mfittko/dev-loops --project 1
 
 # Set an explicit order: 103 first, then 101, then 102
-dev-loops queue reorder order 103 101 102 --repo mfittko/dev-loops --project 1
+node <dev-loops-package-root>/cli/index.mjs queue reorder order 103 101 102 --repo mfittko/dev-loops --project 1
 ```
 
 The subcommand forms emit JSON with the resolved `item`, `after_ref`, and the column order
@@ -479,19 +479,19 @@ A ref that does not resolve to an item in the target Project fails closed with
 
 ### Archiving completed items
 
-`dev-loops queue archive-done` archives items (via `archiveProjectV2Item`) whose issue or PR
+`node <dev-loops-package-root>/cli/index.mjs queue archive-done` archives items (via `archiveProjectV2Item`) whose issue or PR
 has been **closed** for at least the given duration, regardless of their Status column. It is
 operator-triggered (no webhooks) and scoped to the single repo passed via `--repo`.
 
 ```sh
 # Archive items whose issue/PR closed more than 30 days ago (default)
-dev-loops queue archive-done --repo mfittko/dev-loops --project 1
+node <dev-loops-package-root>/cli/index.mjs queue archive-done --repo mfittko/dev-loops --project 1
 
 # Custom threshold (units: h = hours, d = days, w = weeks)
-dev-loops queue archive-done --repo mfittko/dev-loops --project 1 --older-than 7d
+node <dev-loops-package-root>/cli/index.mjs queue archive-done --repo mfittko/dev-loops --project 1 --older-than 7d
 
 # Preview without mutating
-dev-loops queue archive-done --repo mfittko/dev-loops --project 1 --dry-run
+node <dev-loops-package-root>/cli/index.mjs queue archive-done --repo mfittko/dev-loops --project 1 --dry-run
 ```
 
 The output reports `ok`, `olderThan`, `scanned` (the integer count of all board items of
@@ -514,17 +514,17 @@ stderr, and accept `--help`. The board resolves from `.devloops` per
 
 ```sh
 # List all items in a project
-dev-loops queue list --repo mfittko/dev-loops --project 1
+node <dev-loops-package-root>/cli/index.mjs queue list --repo mfittko/dev-loops --project 1
 
 # List only items in "Next Up" column
-dev-loops queue list --repo mfittko/dev-loops --project 1 --column "Next Up"
+node <dev-loops-package-root>/cli/index.mjs queue list --repo mfittko/dev-loops --project 1 --column "Next Up"
 
 # Limit to top 5 items
-dev-loops queue list --repo mfittko/dev-loops --project 1 --limit 5
+node <dev-loops-package-root>/cli/index.mjs queue list --repo mfittko/dev-loops --project 1 --limit 5
 
 # Human-readable board triage: aligned number/status/title columns
 # (JSON stays the default; --table composes with --column/--limit)
-dev-loops queue list --repo mfittko/dev-loops --project 1 --table
+node <dev-loops-package-root>/cli/index.mjs queue list --repo mfittko/dev-loops --project 1 --table
 ```
 
 #### Add an item to the queue
@@ -532,37 +532,37 @@ dev-loops queue list --repo mfittko/dev-loops --project 1 --table
 ```sh
 # Add issue #42 to the Backlog column (default = unprioritized intake).
 # Backlog items are NEVER auto-picked; promote to Next Up to schedule them.
-dev-loops queue add --repo mfittko/dev-loops --project 1 --item 42
+node <dev-loops-package-root>/cli/index.mjs queue add --repo mfittko/dev-loops --project 1 --item 42
 
 # Enqueue for immediate work: land directly in Next Up (the normative pickup
 # queue). --next-up is sugar for --column "Next Up".
-dev-loops queue add --repo mfittko/dev-loops --project 1 --item 42 --next-up
+node <dev-loops-package-root>/cli/index.mjs queue add --repo mfittko/dev-loops --project 1 --item 42 --next-up
 
 # Add issue #42 to a specific column (--status is a back-compat alias for --column)
-dev-loops queue add --repo mfittko/dev-loops --project 1 --item 42 --column "Next Up"
+node <dev-loops-package-root>/cli/index.mjs queue add --repo mfittko/dev-loops --project 1 --item 42 --column "Next Up"
 ```
 
 #### Move an item between columns
 
 ```sh
 # Move issue #42 from its current column to In Progress
-dev-loops queue move --repo mfittko/dev-loops --project 1 --item 42 --to-column "In Progress"
+node <dev-loops-package-root>/cli/index.mjs queue move --repo mfittko/dev-loops --project 1 --item 42 --to-column "In Progress"
 
 # Move a project item by its node ID
-dev-loops queue move --repo mfittko/dev-loops --project 1 --item "PVTI_..." --to-column "Done"
+node <dev-loops-package-root>/cli/index.mjs queue move --repo mfittko/dev-loops --project 1 --item "PVTI_..." --to-column "Done"
 ```
 
 #### Reorder items
 
 ```sh
 # Move issue #42 to the top of the column
-dev-loops queue reorder --repo mfittko/dev-loops --project 1 --item 42
+node <dev-loops-package-root>/cli/index.mjs queue reorder --repo mfittko/dev-loops --project 1 --item 42
 
 # Move issue #42 after issue #17
-dev-loops queue reorder --repo mfittko/dev-loops --project 1 --item 42 --after 17
+node <dev-loops-package-root>/cli/index.mjs queue reorder --repo mfittko/dev-loops --project 1 --item 42 --after 17
 
 # Reorder by project item node IDs
-dev-loops queue reorder --repo mfittko/dev-loops --project 1 --item "PVTI_abc" --after "PVTI_xyz"
+node <dev-loops-package-root>/cli/index.mjs queue reorder --repo mfittko/dev-loops --project 1 --item "PVTI_abc" --after "PVTI_xyz"
 ```
 
 #### Error format
@@ -593,7 +593,7 @@ has no tracker issue, so it appears on the board as a **PR item only**.
 The queue runner is a **deterministic adapter** over the board, not the orchestration
 harness. It moves an item to **Done** (and marks the entry `done`) only as a reflection of a
 **real terminal signal** supplied by an orchestrator (e.g. the item's linked PR merged). When
-no orchestrator is wired into the current harness, `dev-loops queue run` is a **no-op**: it
+no orchestrator is wired into the current harness, `node <dev-loops-package-root>/cli/index.mjs queue run` is a **no-op**: it
 leaves every board column unchanged and reports `reason: "no-orchestrator"` (#913).
 
 ## See also

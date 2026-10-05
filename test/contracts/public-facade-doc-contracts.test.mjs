@@ -386,7 +386,7 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
   // local-implementation: PRs are always draft and always assigned — self-assigned
   // by default (`--assignee @me`), honoring an explicit assignee — via the canonical wrapper
   assert.match(localImplementationSkill, /always draft and always assigned — self-assigned by default/i);
-  assert.match(localImplementationSkill, /workflow\.requireDraftFirst[\s\S]{0,160}dev-loops pr create --assignee @me/i);
+  assert.match(localImplementationSkill, /workflow\.requireDraftFirst[\s\S]{0,160}node <dev-loops-package-root>\/cli\/index\.mjs pr create --assignee @me/i);
   assert.doesNotMatch(localImplementationSkill, /workflow\.requireDraftFirst[\s\S]{0,160}gh pr create --draft --assignee @me/i);
   assertRuleOwned("OPS-DRAFT-FIRST-PR", "skills/docs/copilot-loop-operations.md");
   assert.match(localImplementationSkill, /OPS-DRAFT-FIRST-PR/);

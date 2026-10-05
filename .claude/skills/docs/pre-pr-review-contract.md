@@ -13,7 +13,7 @@ mode.
 <!-- rule: PRE-PR-BEFORE-FIRST-PUSH -->
 `PRE-PR-BEFORE-FIRST-PUSH`: the pre-PR review MUST run after local implementation
 is complete and committed, and BEFORE the first push of the branch and before
-`dev-loops pr create`. Its fixes MUST be applied to the working tree, validated
+`dev-loops-run cli/index.mjs pr create`. Its fixes MUST be applied to the working tree, validated
 with the narrowest justified check (re-checked after the final round), and
 committed (a follow-up commit or an amend of the last implementation commit), so
 the branch is pushed once, already cleaned and validated. In the `local-implementation`
@@ -125,7 +125,7 @@ claims to resolve. It resolves the same `pre-push-reviewer`
 role and tier as full mode (`PRE-PR-MODEL-CONFIG-RESOLVED`) and uses the same
 harness dispatch. The only delta source is the gate judge's act list. The
 deterministic checks live in `@dev-loops/core/loop/pre-push-delta-review`; the
-dev-loop coordinator runs them through `dev-loops loop pre-push-delta`.
+dev-loop coordinator runs them through `dev-loops-run cli/index.mjs loop pre-push-delta`.
 
 The dev-loop coordinator owns delta mode, because it dispatches the Phase 4
 fixer and owns the push. The sequence is:
@@ -161,7 +161,7 @@ fixer and owns the push. The sequence is:
 
 Each delta review, including a re-review of the current head, consumes one
 invocation. The dev-loop coordinator owns the invocation count and passes it to
-`dev-loops loop pre-push-delta --invocation` monotonically, starting at 1 for
+`dev-loops-run cli/index.mjs loop pre-push-delta --invocation` monotonically, starting at 1 for
 each sequence.
 
 <!-- rule: PRE-PUSH-DELTA-TRIGGER -->

@@ -1,6 +1,6 @@
 ---
 name: "ui-review"
-description: "Internal routed strategy behind `dev-loop` for the UI-review route — the \"prove it in the running app\" review sibling of reviewer/fixer. Drives the PR through five CLI stages (provision, drive, diagnose, report, teardown), each routed as a `dev-loops loop ui-review-*` subcommand."
+description: "Internal routed strategy behind `dev-loop` for the UI-review route — the \"prove it in the running app\" review sibling of reviewer/fixer. Drives the PR through five CLI stages (provision, drive, diagnose, report, teardown), each routed as a `node <dev-loops-package-root>/cli/index.mjs loop ui-review-*` subcommand."
 allowed-tools: Read Bash
 user-invocable: false
 ---

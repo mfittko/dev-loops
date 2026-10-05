@@ -13,12 +13,12 @@ test("dev-loop SKILL inlines the sanctioned consolidate-fanin fan-out dispatch i
   // The gate fan-out dispatch guardrail names the CLI inline (not only via cross-ref).
   assert.match(
     skill,
-    /dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate>/,
+    /node <dev-loops-package-root>\/cli\/index\.mjs gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate>/,
     "the dev-loop SKILL should inline the consolidate-fanin invocation at the dispatch guardrail",
   );
   // Fan-in refuses a fan-out round without --emit-plan (ADR 0106), so the sanctioned calls pass it.
   assert.match(skill, /--ledger-out <ledger-path> \\\n  --emit-plan <emit-plan-path>/);
-  assert.match(await readRepo("skills/copilot-pr-followup/SKILL.md"), /SAME single sanctioned call: `dev-loops gate consolidate-fanin [^`]*--emit-plan <emit-plan-path>/);
+  assert.match(await readRepo("skills/copilot-pr-followup/SKILL.md"), /SAME single sanctioned call: `node <dev-loops-package-root>\/cli\/index\.mjs gate consolidate-fanin [^`]*--emit-plan <emit-plan-path>/);
   // The never-hand-roll rule is visible at the dispatch guardrail.
   assert.match(
     skill,
@@ -52,7 +52,7 @@ test("dev-loop SKILL enforces bounded Copilot/CI watch (#1660)", async () => {
   const skill = await readRepo("skills/dev-loop/SKILL.md");
   assert.match(
     skill,
-    /dev-loops gate probe-copilot --timeout-ms 300000/,
+    /node <dev-loops-package-root>\/cli\/index\.mjs gate probe-copilot --timeout-ms 300000/,
     "the bounded-watch guardrail should name the bounded probe invocation",
   );
   assert.match(skill, /timeout 540 <cmd>/);

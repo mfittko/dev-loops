@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { collectGeneratedAssets, checkAssets, writeAssets } from "../../scripts/claude/generate-claude-assets.mjs";
-import { stripPiOnlyBlocks, transformSkill } from "../../packages/core/src/claude/asset-generation.mjs";
+import { rewriteCliInvocation, stripPiOnlyBlocks, transformSkill } from "../../packages/core/src/claude/asset-generation.mjs";
 import { validateJudgeVerdict } from "../../packages/core/src/loop/gate-fanin.mjs";
 import { decideBashGate } from "../../packages/core/src/claude/hook-decisions.mjs";
 import { computeContentDigest, computeSpecDigest, specCriterionIds, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
@@ -51,8 +51,8 @@ test("shared docs + dev-loop templates are bundled so generated skill links reso
     const source = asset.target.replace(/^\.claude\/skills\//, "skills/");
     assert.equal(
       asset.content,
-      stripPiOnlyBlocks(fs.readFileSync(path.join(repoRoot, source), "utf8")),
-      `${asset.target} must be its source with pi-only blocks stripped (${source})`,
+      rewriteCliInvocation(stripPiOnlyBlocks(fs.readFileSync(path.join(repoRoot, source), "utf8"))),
+      `${asset.target} must be its source with pi-only blocks stripped and the CLI token rewritten (${source})`,
     );
   }
 
@@ -142,7 +142,7 @@ test("watch procedure preserves the shared projection and wait_watch route link"
   const generated = assets.find(a => a.target === ".claude/skills/docs/wait-watch-procedure.md");
   assert.ok(generated);
   assertPiOnlyProjection(source, generated.content);
-  assert.equal(generated.content, stripPiOnlyBlocks(source));
+  assert.equal(generated.content, rewriteCliInvocation(stripPiOnlyBlocks(source)));
   for (const content of [source, generated.content]) {
     assert.match(content, /loop startup --pr/);
     assert.match(content, /loop build-envelope --input/);

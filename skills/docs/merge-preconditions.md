@@ -375,7 +375,7 @@ approval:
 At the handoff boundary, resolve and surface candidates:
 
 ```sh
-dev-loops gate offer-human-handoff --repo <owner/name> --pr <number>
+node <dev-loops-package-root>/cli/index.mjs gate offer-human-handoff --repo <owner/name> --pr <number>
 ```
 
 This prints the deduped, ordered candidate list (priority:
@@ -385,7 +385,7 @@ This prints the deduped, ordered candidate list (priority:
 **OFFER-only — the operator confirms the assignee.** On confirmation, run:
 
 ```sh
-dev-loops gate offer-human-handoff --repo <owner/name> --pr <number> \
+node <dev-loops-package-root>/cli/index.mjs gate offer-human-handoff --repo <owner/name> --pr <number> \
   --assign <login> --request-review <login>
 ```
 
@@ -409,7 +409,7 @@ After a confirmed merge, `merge-pr.mjs` runs three steps itself and reports them
   - **`main_checkout_not_on_main` (a detached or non-`main` checkout):** after a successful fetch, a main checkout proven to be detached or on another named branch is never merged, switched, or reset — the flow only reads its ref (plus, for a detached checkout, a short SHA via `git -C <main-checkout> rev-parse --short HEAD`) and, once fetch succeeds, the post-fetch `HEAD..origin/main` behind count. It reports the stable diagnostic kind `main_checkout_not_on_main` at severity `error`, naming the absolute checkout path, the branch or `detached@<short-sha>`, and the decimal behind count. Claude surfaces it as a structured PostToolUse `systemMessage` on stdout (a different channel from the generic stderr warning above) and still exits 0; Pi surfaces it via `ctx.ui.notify(message, "error")`, falling back to an stderr write when no UI is available. Persistence is session-only — the message lives in the current hook output/UI notification, never a file, GitHub comment, or dashboard entry. The action stays non-fatal; reconcile manually: preserve any local-only commits, then check out `main` and fast-forward it to `origin/main` yourself. A fetch failure, an unresolved worktree (`git worktree list` failed, was killed, or didn't parse — Pi falls back to the cwd repo root and still runs the sync there; a `not_on_main` result against that fallback checkout stays the generic warning instead of the error diagnostic, since the fallback may be a linked feature worktree rather than the true main checkout), an unreadable ref, a failed behind-count read, or a diverged `main` checkout all keep their existing best-effort warning/fallback behavior instead.
 - Verify all main-push workflows are green at the merge commit (`docs/decisions/0050-agent-merge-on-full-gate-pass.md` names this a load-bearing post-merge duty): `node scripts/github/probe-ci-status.mjs --repo <owner/name> --commit <merge-commit-oid> --timeout-ms <n>` is the sanctioned commit-scoped read — it combines the most-recent 100 GitHub Actions workflow runs for that commit (any failure → `failure`, any run still queued/in_progress → `pending`, otherwise `success`) and block-waits up to `--timeout-ms` for the runs to settle. This replaces an ad hoc `gh run list --commit <oid>` + hand-rolled poll, which bypasses the standard `--jq`/`--silent` output contract.
 - Sync the merged item's board Status to Done (issue #1458), from the main checkout:
-  `dev-loops queue sync-status --repo <owner/name> --pr <number> --item <linked-issue> --logical-column done || true`
+  `node <dev-loops-package-root>/cli/index.mjs queue sync-status --repo <owner/name> --pr <number> --item <linked-issue> --logical-column done || true`
   (omit `--item` when the merged PR is itself the queue item — an unfilled/empty `--item` falls back to `--pr`; the
   `|| true` masks the residual usage-error exits the same way the archive step's does). `--logical-column done`
   resolves the Done column through `queue.statusColumns`, so a board that renamed Done still converges. Resolves the

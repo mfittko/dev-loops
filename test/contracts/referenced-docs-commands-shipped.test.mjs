@@ -114,13 +114,13 @@ function findUnknownNpmRunReferences(content, knownScriptNames) {
 // Built from `SUBCOMMAND_ROUTES`'s own keys, so a newly-registered category
 // is covered without a matching regex edit here.
 const CLI_SUBCOMMAND_RE = new RegExp(
-  "`(?:dev-loops|node cli/index\\.mjs) (" + Object.keys(SUBCOMMAND_ROUTES).join("|") + ") ([\\w-]+)`",
+  "`(?:dev-loops|node cli/index\\.mjs|node <dev-loops-package-root>/cli/index\\.mjs|dev-loops-run cli/index\\.mjs) (" + Object.keys(SUBCOMMAND_ROUTES).join("|") + ") ([\\w-]+)`",
   "g",
 );
 // Line-anchored variant for unbackticked citations: anchored at the start of
 // the (trimmed) line, no trailing backticks.
 const CLI_SUBCOMMAND_LINE_RE = new RegExp(
-  "^(?:dev-loops|node cli/index\\.mjs) (" + Object.keys(SUBCOMMAND_ROUTES).join("|") + ") ([\\w-]+)",
+  "^(?:dev-loops|node cli/index\\.mjs|node <dev-loops-package-root>/cli/index\\.mjs|dev-loops-run cli/index\\.mjs) (" + Object.keys(SUBCOMMAND_ROUTES).join("|") + ") ([\\w-]+)",
 );
 
 function isKnownSubcommand(category, subcommand) {
@@ -598,4 +598,15 @@ test("sanitizeForLog escapes control/format characters and line/paragraph separa
   assert.equal(sanitizeForLog("\u200eLRM\u200fRLM"), "\\u200eLRM\\u200fRLM");
   assert.equal(sanitizeForLog("\u061cALM\u200bZWSP\u2060WJ\ufeffZWNBSP"), "\\u061cALM\\u200bZWSP\\u2060WJ\\ufeffZWNBSP");
   assert.equal(sanitizeForLog("\u2028LS\u2029PS"), "\\u2028LS\\u2029PS");
+});
+
+// #2648: the rewritten source/generated citation prefixes stay route-validated.
+test("findUnresolvedSubcommandReferences validates the package-root and launcher prefixes (#2648)", () => {
+  for (const prefix of ["node <dev-loops-package-root>/cli/index.mjs", "dev-loops-run cli/index.mjs"]) {
+    const bad = "queue does-not-exist-synthetic-2648";
+    assert.equal(findUnresolvedSubcommandReferences(`See \`${prefix} ${bad}\`.`).length, 1, `backticked ${prefix}`);
+    assert.equal(findUnresolvedSubcommandReferences(`${prefix} ${bad}\n`).length, 1, `line-anchored ${prefix}`);
+    assert.deepEqual(findUnresolvedSubcommandReferences(`See \`${prefix} loop startup\`.`), []);
+    assert.deepEqual(findUnresolvedSubcommandReferences(`${prefix} gate consolidate-fanin --gate x\n`), []);
+  }
 });

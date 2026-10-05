@@ -9,6 +9,7 @@ import {
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";
+import { rewriteCliInvocation } from "../../packages/core/src/claude/asset-generation.mjs";
 import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
 import { extractRuleReferences } from "../../scripts/docs/validate-rule-ownership.mjs";
 import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
@@ -130,7 +131,7 @@ test("tracker-backed PR validation references its canonical policy and keeps the
   ]);
   const ruleId = "OPS-PR-VALIDATION-STABLE-EVIDENCE";
   assertRuleOwned(ruleId, "skills/docs/copilot-loop-operations.md");
-  assert.equal(claudeMirror, operationsDoc, "generated Claude contract mirror must remain byte-identical");
+  assert.equal(claudeMirror, rewriteCliInvocation(operationsDoc), "generated Claude contract mirror must remain the CLI-token-rewritten source");
   assertValidationPolicyReference(template);
   // Reporting semantics have no executable policy validator. This checks owner
   // discovery/projection, not compliance; quantity exceptions and head-bound
@@ -167,7 +168,7 @@ test("copilot-pr-followup skill routes review requests and wait seams through de
   assert.match(requestSection, /`unavailable`:/i);
   const step6 = extractStep(skillContent, 6);
   assert.match(step6, /detect-copilot-loop-state\.mjs/i);
-  assert.match(step6, /dev-loops loop watch-cycle/i);
+  assert.match(step6, /node <dev-loops-package-root>\/cli\/index\.mjs loop watch-cycle/i);
   assert.match(step6, /gh run watch <run-id> --repo <owner\/name>/i);
   // The manual-polling prohibition is elaboration of COPILOT-FOLLOWUP-WAIT-TOOLS
   // (the deterministic-wait-tools rule owned in this same skill file); loose
@@ -217,7 +218,7 @@ test("follow-up routing preserves reply verification order and gate-owner refere
     rawTarget === "../local-implementation/SKILL.md#branch--review--merge-policy"));
   for (const command of [
     "reply-resolve-review-thread.mjs", "reply-resolve-review-threads.mjs",
-    "dev-loops gate capture-threads", "detect-checkpoint-evidence.mjs", "merge-pr.mjs",
+    "node <dev-loops-package-root>/cli/index.mjs gate capture-threads", "detect-checkpoint-evidence.mjs", "merge-pr.mjs",
   ]) assert.ok(step7.includes(command), `missing follow-up API: ${command}`);
   assert.doesNotMatch(step7, /--require-before-merge/);
   // Reply existence, concern coverage, authorization, conflict recovery and

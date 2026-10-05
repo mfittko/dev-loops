@@ -1,7 +1,7 @@
 ---
 name: pi-session-audit
 description: >-
-  Audit Pi or Claude Code session transcripts via `dev-loops loop audit-session` to measure token efficiency,
+  Audit Pi or Claude Code session transcripts via `node <dev-loops-package-root>/cli/index.mjs loop audit-session` to measure token efficiency,
   identify context snowballing in coordinators, verify cache hit ratios, and report
   per-agent and per-model token breakdowns across runs.
 allowed-tools: read bash
@@ -15,14 +15,14 @@ The `pi-session-audit` skill inspects Pi or Claude Code session usage transcript
 
 ## CLI Invocation
 
-The skill is backed by `scripts/loop/audit-pi-session.mjs` (available directly or via the CLI as `dev-loops loop audit-session`):
+The skill is backed by `scripts/loop/audit-pi-session.mjs` (available directly or via the CLI as `node <dev-loops-package-root>/cli/index.mjs loop audit-session`):
 
 ```bash
 # Audit the latest session for this repository (including its tmp/worktrees runs)
 node scripts/loop/audit-pi-session.mjs --latest
 
 # Or using the dev-loops CLI:
-dev-loops loop audit-session --latest
+node <dev-loops-package-root>/cli/index.mjs loop audit-session --latest
 
 # Audit a specific session directory or session file (a single transcript file is audited alone):
 node scripts/loop/audit-pi-session.mjs ~/.pi/agent/sessions/--Users-user-dev-loops--/<session-id>

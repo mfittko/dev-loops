@@ -6,8 +6,8 @@
 // at zero for the generated tree it actually rewrites (SKILL.md/command/agent bodies — the scope
 // `rewriteWrapperInvocation` is composed into). Bundled docs (`.claude/skills/docs/**`,
 // `.claude/skills/dev-loop/templates/**`) and hand-authored hooks/settings are a documented
-// out-of-scope allowlist (not scanned): they hold illustrative prose examples and permission
-// patterns, not agent-executed generated instructions.
+// out-of-scope allowlist for the `node scripts/` regex only. The unrouted `dev-loops <ns> <sub>`
+// regex is also enforced on the source tree and the bundled docs/templates (#2648).
 //
 // The two regex sources below are imported from `asset-generation.mjs`, the SAME source
 // `rewriteWrapperInvocation` builds its rewrite regexes from — a shared single source of truth so
@@ -144,4 +144,59 @@ test("WRAPPER_NS matches the real top-level CLI namespaces (SUBCOMMAND_ROUTES ke
     realNamespaces,
     `WRAPPER_NS (${WRAPPER_NS}) must equal cli/index.mjs SUBCOMMAND_ROUTES keys (${Object.keys(SUBCOMMAND_ROUTES).join(", ")})`,
   );
+});
+
+// #2648: source prose (read directly by Pi and by agents that follow source paths) must route
+// through `node <dev-loops-package-root>/cli/index.mjs`, never a bare `dev-loops <ns> <sub>` that
+// resolves a stale global binary, and never the Claude-only `dev-loops-run` launcher.
+function listMarkdown(dir, suffix) {
+  const abs = path.join(repoRoot, dir);
+  if (!fs.existsSync(abs)) return [];
+  return fs
+    .readdirSync(abs, { recursive: true })
+    .filter((rel) => String(rel).endsWith(suffix))
+    .map((rel) => path.join(dir, String(rel)));
+}
+
+function sourceFiles() {
+  return [
+    ...listMarkdown("skills", ".md"),
+    ...listMarkdown("agents", ".agent.md"),
+    ...listMarkdown("commands", ".command.md"),
+  ];
+}
+
+function bundledFiles() {
+  return [...listMarkdown(".claude/skills/docs", ".md"), ...listMarkdown(".claude/skills", ".md").filter((f) => f.includes("/templates/"))];
+}
+
+test("source skills/agents/commands carry no bare `dev-loops <ns> <sub>` and no `dev-loops-run cli/index.mjs`", () => {
+  const files = sourceFiles();
+  assert.ok(files.length > 0, "expected source markdown files to scan");
+  const bare = [];
+  const launcher = [];
+  for (const file of files) {
+    const content = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    if (BARE_DEV_LOOPS_NS_RE.test(content)) bare.push(file);
+    if (content.includes("dev-loops-run cli/index.mjs")) launcher.push(file);
+  }
+  assert.deepEqual(bare, [], `bare dev-loops <ns> invocation in source:\n${bare.join("\n")}`);
+  assert.deepEqual(launcher, [], `Claude-only launcher form in source:\n${launcher.join("\n")}`);
+});
+
+test("generated bundled docs and templates carry neither a bare invocation nor the Pi token", () => {
+  const files = bundledFiles();
+  assert.ok(files.length > 0, "expected bundled docs/templates to scan");
+  const violations = [];
+  for (const file of files) {
+    const content = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    if (BARE_DEV_LOOPS_NS_RE.test(content) || content.includes("node <dev-loops-package-root>/cli/index.mjs")) violations.push(file);
+  }
+  assert.deepEqual(violations, [], `unrewritten invocation in bundled files:\n${violations.join("\n")}`);
+  for (const file of [".claude/skills/dev-loop/SKILL.md", ".claude/skills/docs/gate-review-sub-loop-contract.md"]) {
+    assert.ok(
+      fs.readFileSync(path.join(repoRoot, file), "utf8").includes("dev-loops-run cli/index.mjs gate consolidate-fanin"),
+      `${file} must show the launcher fan-in form`,
+    );
+  }
 });

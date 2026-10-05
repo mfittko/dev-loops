@@ -45,7 +45,7 @@ const SAFE_CONTEXT_MARKERS = [
   // A co-mention of the canonical path on the same sentence means the
   // `gh pr create` reference is descriptive of what the wrapper forwards to.
   /create-pr\.mjs/i,
-  /dev-loops pr create\b/i,
+  /node <dev-loops-package-root>\/cli\/index\.mjs pr create\b/i,
 ];
 
 // Per-path allowlist escape hatch (path → array of exact sentences permitted).
@@ -139,7 +139,7 @@ test("heuristic ALLOWS the wrapper's own explanatory mention (negative case)", (
 });
 
 test("heuristic ALLOWS a negated raw mention (`never call raw gh pr create`)", () => {
-  const good = "Always use `dev-loops pr create`; never call raw `gh pr create` to open a PR.";
+  const good = "Always use `node <dev-loops-package-root>/cli/index.mjs pr create`; never call raw `gh pr create` to open a PR.";
   assert.deepEqual(findRawGhPrCreateInstructions(good), []);
 });
 

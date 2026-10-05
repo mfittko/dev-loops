@@ -53,7 +53,7 @@ test("durable guidance records targeted validation, full-suite ownership, and ac
     assert.match(await read(file), /bun run verify/i, `${file} names the retained full suite`);
   }
   for (const file of ["AGENTS.md", "scripts/README.md", ".github/copilot-instructions.md", "skills/docs/validation-policy.md", "skills/copilot-pr-followup/SKILL.md", "packages/core/src/loop/handoff-envelope.mjs"]) {
-    assert.match(await read(file), /dev-loops gate resolve-validation/i, `${file} names full-validation authority`);
+    assert.match(await read(file), /(?:dev-loops|node <dev-loops-package-root>\/cli\/index\.mjs) gate resolve-validation/i, `${file} names full-validation authority`);
   }
   assert.match(await read(".claude/skills/copilot-pr-followup/SKILL.md"), /dev-loops-run cli\/index\.mjs gate resolve-validation/i);
   assert.match(await read("docs/decisions/0062-bun-development-toolchain.md"), /Bun 1\.4\.1[\s\S]*Node `>=24`[\s\S]*npm/i);
