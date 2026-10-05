@@ -846,6 +846,16 @@ const GH_BODY_WRITER_LITERAL = new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}pr\\s
 const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*-\S*c|eval|xargs)(?=\s)/;
 
 /**
+ * Shell-word unquoting for flag tokens: the shell strips the quotes, so `'--body'`, `"-F"` and
+ * `-f "body"=x` reach gh as `--body`, `-F` and `-f body=x`. Only a quoted token that is a bare
+ * flag name (or the `body` field name before `=`) is unquoted; quoted values stay quoted.
+ * @param {string} segment @returns {string}
+ */
+function unquoteFlagTokens(segment) {
+  return segment.replace(/(['"])(-{1,2}[A-Za-z][\w-]*)\1/g, "$2").replace(/(['"])body\1(?==)/g, "body");
+}
+
+/**
  * ADR-TRIPWIRE-STANDING-WAIVER (CLI half): a raw `gh pr edit` that sets the body
  * (`--body`, `--body-file`, `-b`, `-F`), with or without `gh` global repo flags before the subcommand
  * (`gh -R o/n pr edit ...`). A body write is the path that carries an `adr-tripwire:allow` waiver
@@ -859,7 +869,7 @@ const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\
 export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
   if (SHELL_WRAPPER_RE.test(command) && GH_BODY_WRITER_LITERAL.test(command)) return true;
   const res = [ghBodyWriterRegex("pr")];
-  return shellSegments(command).some((segment) =>
+  return shellSegments(command).map(unquoteFlagTokens).some((segment) =>
     res.some((re) => {
       if (!re.test(segment)) return false;
       // An explicit --repo/-R that is provably another repo is out of scope (fail closed otherwise).
@@ -882,7 +892,7 @@ export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
 export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
   const owner = managedSlug ? `(?:${managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}|\\{owner\\}/\\{repo\\})` : "[^/]+/[^/]+";
   const re = new RegExp(`^(?:repos/${owner}/)?(?:pulls|issues)/\\d+$`, "i");
-  return extractGhApiEndpointSegments(command).some(({ segment, endpoint }) => {
+  return extractGhApiEndpointSegments(command).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
     if (endpoint && /^graphql$/i.test(endpoint)) return /updatePullRequest/.test(segment);
     if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
     // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { parseArgs } from "node:util";
 import { spawn, execFileSync } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import {
@@ -207,39 +208,25 @@ async function resolveBody(args) {
 // with `-b`/`-F` (for example `--title -bump`) is never read as the body.
 // `sourced` is true when gh sources the body itself (--fill*, --template, -f, -T),
 // so its marker lines cannot be checked here.
-const LONG_VALUE_FLAGS = new Set(["assignee", "base", "body", "body-file", "head", "label", "milestone", "project", "recover", "reviewer", "repo", "template", "title"]);
-const SHORT_VALUE_FLAGS = new Set("aBbFHlmprRtT");
-const LONG_SOURCED_FLAGS = new Set(["fill", "fill-verbose", "fill-first", "template"]);
+const VALUE_FLAGS = {
+  assignee: "a", base: "B", body: "b", "body-file": "F", head: "H", label: "l", milestone: "m",
+  project: "p", recover: undefined, reviewer: "r", repo: "R", template: "T", title: "t",
+};
+const SCAN_OPTIONS = {
+  ...Object.fromEntries(Object.entries(VALUE_FLAGS).map(([name, short]) => [name, { type: "string", ...(short ? { short } : {}) }])),
+  fill: { type: "boolean", short: "f" },
+  "fill-verbose": { type: "boolean" },
+  "fill-first": { type: "boolean" },
+};
 function scanBodySources(args) {
   const found = { body: null, bodyFile: null, sourced: false };
-  for (let i = 0; i < args.length; i += 1) {
-    const token = args[i];
-    if (token === "--") break;
-    if (token.startsWith("--")) {
-      const eq = token.indexOf("=");
-      const name = token.slice(2, eq === -1 ? undefined : eq);
-      if (LONG_SOURCED_FLAGS.has(name)) found.sourced = true;
-      if (!LONG_VALUE_FLAGS.has(name)) continue;
-      const value = eq !== -1 ? token.slice(eq + 1) : (args[i + 1] ?? null);
-      if (eq === -1) i += 1;
-      if (name === "body") found.body = value;
-      else if (name === "body-file") found.bodyFile = value;
-    } else if (token.startsWith("-") && token.length > 1) {
-      for (let c = 1; c < token.length; c += 1) {
-        const flag = token[c];
-        if (flag === "f" || flag === "T") found.sourced = true;
-        if (!SHORT_VALUE_FLAGS.has(flag)) continue;
-        let value = token.slice(c + 1);
-        if (value.startsWith("=")) value = value.slice(1);
-        if (value === "") {
-          value = args[i + 1] ?? null;
-          i += 1;
-        }
-        if (flag === "b") found.body = value;
-        else if (flag === "F") found.bodyFile = value;
-        break;
-      }
-    }
+  const { tokens } = parseArgs({ args, options: SCAN_OPTIONS, strict: false, allowPositionals: true, tokens: true });
+  for (const token of tokens) {
+    if (token.kind !== "option") continue;
+    if (["fill", "fill-verbose", "fill-first", "template"].includes(token.name)) found.sourced = true;
+    const value = typeof token.value === "string" ? token.value : null;
+    if (token.name === "body") found.body = value;
+    else if (token.name === "body-file") found.bodyFile = value;
   }
   return found;
 }
