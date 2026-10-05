@@ -43,7 +43,7 @@ subagent routes them to the orchestrator:
 - Board status transitions, through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs`.
 - Issue creation, through `scripts/github/create-issue.mjs`.
 - Board-item removal, through `scripts/projects/remove-queue-item.mjs` (undo of a wrong queue add only).
-- ADR tripwire waiver, through `scripts/github/waive-adr-tripwire.mjs` (`dev-loops pr waive-adr-tripwire`).
+- ADR tripwire waiver, through `scripts/github/waive-adr-tripwire.mjs` (`dev-loops-run cli/index.mjs pr waive-adr-tripwire`).
 
 Known gaps outside this contract's current scope still create issues directly with raw
 `gh issue create`. They include the epic-decomposition step in `skills/docs/issue-intake-procedure.md`,

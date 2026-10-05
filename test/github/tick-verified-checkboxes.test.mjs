@@ -194,6 +194,7 @@ test("runCli: fetches body then issues one gh pr edit with the flipped body", as
 test("runCli: --issue ticks the linked issue body via gh issue edit", async () => {
   const { run, calls } = stubGh([
     bodyJson("- [ ] Alpha\n- [ ] Beta\n"), // gh issue view --json body
+    bodyJson("- [ ] Alpha\n- [ ] Beta\n"), // edit-issue guard body read
     { stdout: "" },                          // gh issue edit
   ]);
   let editedBody;
@@ -207,10 +208,10 @@ test("runCli: --issue ticks the linked issue body via gh issue edit", async () =
   const stdout = captureStream();
   const code = await runCli(["--repo", "o/n", "--issue", "42", "--verified", "Alpha"], { run: runCapturing, stdout });
   assert.equal(code, 0);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.deepEqual(calls[0], ["issue", "view", "42", "--repo", "o/n", "--json", "body"]);
-  assert.equal(calls[1][0], "issue");
-  assert.equal(calls[1][1], "edit");
+  assert.equal(calls[2][0], "issue");
+  assert.equal(calls[2][1], "edit");
   assert.equal(editedBody, "- [x] Alpha\n- [ ] Beta\n");
   assert.match(stdout.get(), /"issue":42/);
   assert.match(stdout.get(), /"issueEdited":true/);
@@ -221,12 +222,13 @@ test("runCli: --pr and --issue together sync both bodies in one call", async () 
     bodyJson("- [ ] Alpha\n"),   // gh pr view
     { stdout: "url\n" },          // gh pr edit
     bodyJson("- [ ] Alpha\n"),   // gh issue view
+    bodyJson("- [ ] Alpha\n"),   // edit-issue guard body read
     { stdout: "" },               // gh issue edit
   ]);
   const stdout = captureStream();
   const code = await runCli(["--repo", "o/n", "--pr", "17", "--issue", "42", "--verified", "Alpha"], { run, stdout });
   assert.equal(code, 0);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 5);
   assert.equal(calls[0][0], "pr");
   assert.equal(calls[2][0], "issue");
   assert.match(stdout.get(), /"pr":17/);

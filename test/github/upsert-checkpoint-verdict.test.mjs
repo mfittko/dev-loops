@@ -10658,8 +10658,8 @@ const TICK_ISSUE_BODY_WITH_UNVERIFIED = [
 const reviewPosted = (calls) => calls.some((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
 
 test("tick: a failed post-tick issue re-fetch cannot drop the unverified issue AC item, so no clean is posted", async () => {
-  // Views 1 and 2 (coordination load, tick fetch) succeed; the reload re-fetch fails.
-  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED, failIssueViewAfter: 2 };
+  // Views 1-3 (coordination load, tick fetch, edit-issue guard body read) succeed; the reload re-fetch fails.
+  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED, failIssueViewAfter: 3 };
   await withCompositionRound(round, async ({ post, calls }) => {
     await assert.rejects(
       () => post({ verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS }),
