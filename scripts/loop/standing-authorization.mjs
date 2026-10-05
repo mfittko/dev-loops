@@ -13,13 +13,14 @@ import { parse as parseYaml } from "yaml";
 import { isValidGithubLogin } from "@dev-loops/core/loop/merge-approval";
 import { strictIsoDay } from "./adr-waiver-markers.mjs";
 import { DEVLOOPS_CONFIG_PATHS } from "./check-adr-tripwire.mjs";
+import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
 
 export const MAX_STANDING_AUTHORIZATION_DAYS = 90;
 const RECORD_FIELDS = Object.freeze(["grantedBy", "grantedAt", "expires", "reason"]);
 const DAY_MS = 86_400_000;
 
 function defaultGit(args, { repoRoot }) {
-  return execFileSync("git", args, { cwd: repoRoot, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024 }).toString();
+  return execFileSync("git", args, { cwd: repoRoot, env: gitEnvNoDirOverrides(), stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024 }).toString();
 }
 
 function isoDay(value) {
@@ -78,7 +79,7 @@ export function defaultFetchOrigin(branch, { repoRoot }, exec = execFileSync) {
     stdio: ["ignore", "ignore", "ignore"],
     timeout: 30000,
     killSignal: "SIGKILL",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env: { ...gitEnvNoDirOverrides(), GIT_TERMINAL_PROMPT: "0" },
   });
 }
 

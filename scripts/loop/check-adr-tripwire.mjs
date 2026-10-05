@@ -83,6 +83,9 @@ Optional:
   --pr-body-file <path> File holding the PR body (waiver surface); default:
                         no body — a waiver can then never be honored
 
+A standingAuthorizations change is satisfied only by a docs/decisions record; a
+standing-authorization waiver line is valid only at its head= and until its expires= day.
+
 Exit codes:
    0  pass (no trigger, or trigger satisfied by an ADR / valid waiver)
    1  block — a decision-shaped surface was touched without an ADR or waiver

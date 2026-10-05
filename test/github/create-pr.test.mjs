@@ -1773,12 +1773,27 @@ test("create-pr refuses --fill and --template (body sourced outside the wrapper)
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-fill-"));
   try {
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
-    for (const flag of ["--fill", "--template", "--recover"]) {
-      const extra = flag === "--fill" ? [flag] : [flag, "t.md"];
+    for (const flag of ["--fill", "-f", "--fill-verbose", "--fill-first", "--template", "-T", "--recover"]) {
+      const extra = /fill|^-f$/.test(flag) ? [flag] : [flag, "t.md"];
       const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", ...extra], { env });
       assert.equal(result.code, 1);
       assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
     }
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr refuses --body together with --body-file", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-both-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    const file = path.join(tempDir, "w.md");
+    await writeFile(file, "adr-tripwire:allow because\n");
+    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", "--body-file", file], { env });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /mutually exclusive/);
     assert.deepEqual(await readGhCalls(ghLogPath), []);
   } finally {
     await rm(tempDir, { recursive: true, force: true });

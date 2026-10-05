@@ -79,6 +79,20 @@ test("the record is read from origin/<defaultBranch> and a worktree-only record 
   }
 });
 
+test("an ambient GIT_DIR pointing at a foreign repo does not redirect the read", () => {
+  const { dir: foreign } = repoWithDefaultBranch(RECORD_YAML);
+  const { dir } = repoWithDefaultBranch("version: 1\n");
+  const prior = process.env.GIT_DIR;
+  process.env.GIT_DIR = join(foreign, ".git");
+  try {
+    assert.equal(readStandingAuthorization({ repoRoot: dir, defaultBranch: "main", now: NOW, fetchOrigin: noFetch }).inForce, false);
+  } finally {
+    if (prior === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prior;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(foreign, { recursive: true, force: true });
+  }
+});
+
 test("a PR-head-only record is ignored; the default-branch record is honored", () => {
   const { dir, git } = repoWithDefaultBranch(RECORD_YAML);
   try {

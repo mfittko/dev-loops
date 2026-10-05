@@ -501,8 +501,12 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
+  const sources = scanBodySources(forwardedArgv);
+  if (sources.body !== null && sources.bodyFile !== null) {
+    throw parseError("--body and --body-file are mutually exclusive; pass only one");
+  }
   const body = await resolveBody(forwardedArgv);
-  if (body === null && scanBodySources(forwardedArgv).sourced) {
+  if (body === null && sources.sourced) {
     throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --fill/--fill-verbose/--fill-first/--template/--recover source the body outside this wrapper, so a waiver line cannot be ruled out; pass --body or --body-file instead");
   }
   // ADR-TRIPWIRE-STANDING-WAIVER: a new PR starts with no waiver line.

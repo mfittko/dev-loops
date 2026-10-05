@@ -1259,6 +1259,9 @@ test("commandContainsRawPrBodyApiWrite detects a gh api write of a body field to
     "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 --field body=@pr.md",
     "gh api -X PATCH https://api.github.com/repos/mfittko/dev-loops/pulls/5 -f 'body=text'",
     "gh api -X PATCH pulls/5 -f body=text",
+    'bash -c "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body=x"',
+    'eval "gh api repos/mfittko/dev-loops/pulls/5 -f body=x"',
+    "echo 5 | xargs -I{} gh api -X PATCH repos/mfittko/dev-loops/pulls/{} -f body=x",
   ]) {
     assert.equal(commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), true, cmd);
   }
