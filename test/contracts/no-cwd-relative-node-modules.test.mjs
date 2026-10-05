@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { walkByExt } from "./_walk-helpers.mjs";
 
 // A cwd-relative node_modules path skips Node's parent node_modules lookup, so it
-// breaks in a worktree without its own node_modules (#2632).
+// breaks in a worktree without its own node_modules.
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const SPAWN_WITH_RELATIVE_NODE_MODULES = /\b(?:execFile|execFileSync|spawn|spawnSync)\s*\([^;]*?["'`](?:\.\/)?node_modules\//;
 
