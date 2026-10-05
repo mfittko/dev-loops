@@ -1703,8 +1703,8 @@ test("decideBashGate denies raw PR-body writes naming the sanctioned writers (AD
     const d = gate(command);
     assert.equal(d.decision, "deny", command);
     assert.match(d.reason, /ADR-TRIPWIRE-STANDING-WAIVER/);
-    assert.match(d.reason, /dev-loops pr edit/);
-    assert.match(d.reason, /dev-loops pr waive-adr-tripwire/);
+    assert.match(d.reason, /dev-loops-run cli\/index\.mjs pr edit/);
+    assert.match(d.reason, /dev-loops-run cli\/index\.mjs pr waive-adr-tripwire/);
   }
 });
 
