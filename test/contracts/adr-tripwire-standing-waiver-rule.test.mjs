@@ -28,6 +28,11 @@ test("on resolve_adr_tripwire the orchestrator runs the writer before asking the
   assert.ok(row.includes("`dev-loops pr waive-adr-tripwire`"));
 });
 
+test("the dev-loop SKILL stop-condition names the orchestrator as the writer's actor", () => {
+  assert.match(read("skills/dev-loop/SKILL.md"), /resolve_adr_tripwire` the coordinator stops and reports, and the orchestrator runs `dev-loops pr waive-adr-tripwire`/u);
+  assert.match(read("scripts/loop/sanctioned-commands.mjs"), /orchestratorOwned[\s\S]*waive-adr-tripwire\.mjs/u);
+});
+
 test("the rule pins the refusal surfaces, the sole writer and the fixed exclusions", () => {
   const doc = read("skills/docs/decision-record-contract.md");
   const row = ruleRow();
