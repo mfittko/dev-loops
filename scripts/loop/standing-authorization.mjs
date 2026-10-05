@@ -11,11 +11,11 @@ import { execFileSync } from "node:child_process";
 import { parse as parseYaml } from "yaml";
 
 import { isValidGithubLogin } from "@dev-loops/core/loop/merge-approval";
+import { strictIsoDay } from "./adr-waiver-markers.mjs";
 import { DEVLOOPS_CONFIG_PATHS } from "./check-adr-tripwire.mjs";
 
 export const MAX_STANDING_AUTHORIZATION_DAYS = 90;
 const RECORD_FIELDS = Object.freeze(["grantedBy", "grantedAt", "expires", "reason"]);
-const ISO_DATE_RE = /^(\d{4}-\d{2}-\d{2})(?:T[0-9:.]+(?:Z|[+-]\d{2}:\d{2})?)?$/u;
 const DAY_MS = 86_400_000;
 
 function defaultGit(args, { repoRoot }) {
@@ -23,11 +23,9 @@ function defaultGit(args, { repoRoot }) {
 }
 
 function isoDay(value) {
-  const text = value instanceof Date ? value.toISOString() : value;
-  if (typeof text !== "string") return null;
-  const m = ISO_DATE_RE.exec(text.trim());
-  if (!m || Number.isNaN(Date.parse(`${m[1]}T00:00:00Z`))) return null;
-  return m[1];
+  // YAML parses an unquoted date to a Date; a string must be exactly YYYY-MM-DD.
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10);
+  return strictIsoDay(value);
 }
 
 const dayNumber = (day) => Date.parse(`${day}T00:00:00Z`) / DAY_MS;
@@ -72,27 +70,53 @@ export function resolveDefaultBranch({ repoRoot = process.cwd(), git = defaultGi
   }
 }
 
+/** Fetch `origin/<branch>` so the read sees the current default branch, not a stale local ref. */
+function defaultFetchOrigin(branch, { repoRoot }) {
+  execFileSync("git", ["fetch", "origin", branch], { cwd: repoRoot, stdio: ["ignore", "ignore", "ignore"] });
+}
+
 /**
  * Read and evaluate the standing authorization from `origin/<defaultBranch>`.
- * An unparsable `.devloops` counts as malformed (no authorization).
+ * Fetches the branch first and refuses (`fetch_failed`) when the fetch fails.
+ * Probes the `.devloops` family in loader order and stops at the first file
+ * that exists on the branch; an existing file that cannot be read or parsed
+ * counts as malformed (no authorization), never as "try the next name".
  */
-export function readStandingAuthorization({ repoRoot = process.cwd(), defaultBranch, now = new Date(), git = defaultGit } = {}) {
+export function readStandingAuthorization({ repoRoot = process.cwd(), defaultBranch, now = new Date(), git = defaultGit, fetchOrigin = defaultFetchOrigin } = {}) {
   const branch = defaultBranch ?? resolveDefaultBranch({ repoRoot, git });
+  const refuse = (state, detail) => ({ inForce: false, state, detail, defaultBranch: branch });
+  try {
+    fetchOrigin(branch, { repoRoot });
+  } catch {
+    return refuse("fetch_failed", `git fetch origin ${branch} failed; cannot trust the local origin/${branch} ref`);
+  }
+  try {
+    git(["rev-parse", "--verify", "--quiet", `origin/${branch}^{commit}`], { repoRoot });
+  } catch {
+    return refuse("missing", `no .devloops on origin/${branch} (ref absent)`);
+  }
   let source = null;
   for (const name of DEVLOOPS_CONFIG_PATHS) {
+    let listed;
+    try {
+      listed = git(["ls-tree", "--name-only", `origin/${branch}`, "--", name], { repoRoot });
+    } catch {
+      return refuse("malformed", `cannot list ${name} on origin/${branch}`);
+    }
+    if (listed.trim() === "") continue; // git reports the path absent: try the next name
     try {
       source = git(["show", `origin/${branch}:${name}`], { repoRoot });
-      break;
     } catch {
-      /* absent at this extension */
+      return refuse("malformed", `${name} exists on origin/${branch} but cannot be read`);
     }
+    break;
   }
-  if (source === null) return { inForce: false, state: "missing", detail: `no .devloops on origin/${branch}`, defaultBranch: branch };
+  if (source === null) return refuse("missing", `no .devloops on origin/${branch}`);
   let parsed;
   try {
     parsed = parseYaml(source) ?? {};
   } catch {
-    return { inForce: false, state: "malformed", detail: `.devloops on origin/${branch} does not parse`, defaultBranch: branch };
+    return refuse("malformed", `.devloops on origin/${branch} does not parse`);
   }
   return { ...evaluateStandingAuthorizationRecord(parsed?.standingAuthorizations?.adrTripwireWaiver, now), defaultBranch: branch };
 }

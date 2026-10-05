@@ -11,7 +11,8 @@ import {
 } from "../../scripts/loop/standing-authorization.mjs";
 
 const NOW = new Date("2026-10-04T12:00:00Z");
-const good = { grantedBy: "operator", grantedAt: "2026-10-01", expires: "2026-12-01", reason: "contract doc edits named in the issue matrix" };
+const noFetch = () => {};
+const good ={ grantedBy: "operator", grantedAt: "2026-10-01", expires: "2026-12-01", reason: "contract doc edits named in the issue matrix" };
 
 test("a complete in-window record is in force", () => {
   const r = evaluateStandingAuthorizationRecord(good, NOW);
@@ -69,7 +70,7 @@ test("the record is read from origin/<defaultBranch> and a worktree-only record 
   const { dir } = repoWithDefaultBranch("version: 1\n");
   try {
     writeFileSync(join(dir, ".devloops"), RECORD_YAML);
-    const r = readStandingAuthorization({ repoRoot: dir, defaultBranch: "main", now: NOW });
+    const r = readStandingAuthorization({ repoRoot: dir, defaultBranch: "main", now: NOW, fetchOrigin: noFetch });
     assert.equal(r.inForce, false);
     assert.equal(r.state, "missing");
   } finally {
@@ -83,7 +84,7 @@ test("a PR-head-only record is ignored; the default-branch record is honored", (
     git("checkout", "-q", "-b", "pr-head");
     writeFileSync(join(dir, ".devloops"), "version: 1\n");
     git("commit", "-q", "-am", "drop the record on the PR head");
-    assert.equal(readStandingAuthorization({ repoRoot: dir, defaultBranch: "main", now: NOW }).inForce, true);
+    assert.equal(readStandingAuthorization({ repoRoot: dir, defaultBranch: "main", now: NOW, fetchOrigin: noFetch }).inForce, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -92,7 +93,7 @@ test("a PR-head-only record is ignored; the default-branch record is honored", (
     git2("checkout", "-q", "-b", "pr-head");
     writeFileSync(join(dir2, ".devloops"), RECORD_YAML);
     git2("commit", "-q", "-am", "add a record on the PR head only");
-    assert.equal(readStandingAuthorization({ repoRoot: dir2, defaultBranch: "main", now: NOW }).state, "missing");
+    assert.equal(readStandingAuthorization({ repoRoot: dir2, defaultBranch: "main", now: NOW, fetchOrigin: noFetch }).state, "missing");
   } finally {
     rmSync(dir2, { recursive: true, force: true });
   }
@@ -101,9 +102,78 @@ test("a PR-head-only record is ignored; the default-branch record is honored", (
 test("an unparsable default-branch .devloops is malformed, an absent one is missing", () => {
   const { dir } = repoWithDefaultBranch("version: [unclosed\n");
   try {
-    assert.equal(readStandingAuthorization({ repoRoot: dir, defaultBranch: "main", now: NOW }).state, "malformed");
-    assert.equal(readStandingAuthorization({ repoRoot: dir, defaultBranch: "nope", now: NOW }).state, "missing");
+    assert.equal(readStandingAuthorization({ repoRoot: dir, defaultBranch: "main", now: NOW, fetchOrigin: noFetch }).state, "malformed");
+    assert.equal(readStandingAuthorization({ repoRoot: dir, defaultBranch: "nope", now: NOW, fetchOrigin: noFetch }).state, "missing");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a failed fetch refuses with fetch_failed and never reads the local ref", () => {
+  const { dir } = repoWithDefaultBranch(RECORD_YAML);
+  try {
+    const failing = () => { throw new Error("network down"); };
+    const r = readStandingAuthorization({ repoRoot: dir, defaultBranch: "main", now: NOW, fetchOrigin: failing });
+    assert.equal(r.inForce, false);
+    assert.equal(r.state, "fetch_failed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the reader fetches the default branch before reading", () => {
+  const { dir } = repoWithDefaultBranch(RECORD_YAML);
+  try {
+    const calls = [];
+    const r = readStandingAuthorization({ repoRoot: dir, defaultBranch: "main", now: NOW, fetchOrigin: (branch) => calls.push(branch) });
+    assert.deepEqual(calls, ["main"]);
+    assert.equal(r.inForce, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("record dates must be exactly YYYY-MM-DD and a real calendar day", () => {
+  for (const bad of ["2026-02-30", "2026-10-01T00:00:00Z", "2026-1-01", " 2026-10-01", "2026-13-01"]) {
+    assert.equal(evaluateStandingAuthorizationRecord({ ...good, grantedAt: bad }, NOW).state, "malformed", bad);
+    assert.equal(evaluateStandingAuthorizationRecord({ ...good, expires: bad }, NOW).state, "malformed", bad);
+  }
+  assert.equal(evaluateStandingAuthorizationRecord({ ...good, grantedAt: new Date("2026-10-01"), expires: new Date("2026-12-01") }, NOW).inForce, true, "unquoted YAML dates parse to Date");
+});
+
+function fakeGit({ files = {}, showFails = [], lsFails = false }) {
+  return (args) => {
+    if (args[0] === "rev-parse") return "sha\n";
+    if (args[0] === "ls-tree") {
+      if (lsFails) throw new Error("ls-tree failed");
+      const name = args[args.length - 1];
+      return name in files ? `${name}\n` : "";
+    }
+    if (args[0] === "show") {
+      const name = args[1].split(":")[1];
+      if (showFails.includes(name)) throw new Error("show failed");
+      return files[name];
+    }
+    throw new Error(`unexpected git ${args.join(" ")}`);
+  };
+}
+
+test("the first existing .devloops file wins and a later valid file is never consulted", () => {
+  const git = fakeGit({ files: { ".devloops": "version: 1\n", ".devloops.yaml": RECORD_YAML } });
+  const r = readStandingAuthorization({ repoRoot: ".", defaultBranch: "main", now: NOW, git, fetchOrigin: noFetch });
+  assert.equal(r.state, "missing", "bare .devloops has no record; .devloops.yaml is shadowed");
+});
+
+test("an existing .devloops that git cannot show is malformed and does not fall through", () => {
+  const git = fakeGit({ files: { ".devloops": RECORD_YAML, ".devloops.yaml": RECORD_YAML }, showFails: [".devloops"] });
+  const r = readStandingAuthorization({ repoRoot: ".", defaultBranch: "main", now: NOW, git, fetchOrigin: noFetch });
+  assert.equal(r.inForce, false);
+  assert.equal(r.state, "malformed");
+});
+
+test("a path-absent report falls through to the next filename; a listing failure is malformed", () => {
+  const git = fakeGit({ files: { ".devloops.yml": RECORD_YAML } });
+  assert.equal(readStandingAuthorization({ repoRoot: ".", defaultBranch: "main", now: NOW, git, fetchOrigin: noFetch }).inForce, true);
+  const broken = fakeGit({ lsFails: true });
+  assert.equal(readStandingAuthorization({ repoRoot: ".", defaultBranch: "main", now: NOW, git: broken, fetchOrigin: noFetch }).state, "malformed");
 });
