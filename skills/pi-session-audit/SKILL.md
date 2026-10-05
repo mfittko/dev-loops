@@ -15,7 +15,7 @@ The `pi-session-audit` skill inspects Pi or Claude Code session usage transcript
 
 ## CLI Invocation
 
-The skill is backed by `scripts/loop/audit-pi-session.mjs` (available directly or via the CLI as `node <dev-loops-package-root>/cli/index.mjs loop audit-session`):
+The skill is backed by `scripts/loop/audit-pi-session.mjs` (available directly or via the CLI as `node <dev-loops-package-root>/cli/index.mjs loop audit-session`<!-- pi-only --> (resolve `<dev-loops-package-root>` per the CLI invocation section of [dev-loop SKILL](../dev-loop/SKILL.md))<!-- /pi-only -->):
 
 ```bash
 # Audit the latest session for this repository (including its tmp/worktrees runs)
