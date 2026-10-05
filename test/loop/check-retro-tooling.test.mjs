@@ -6,6 +6,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 
 import { analyzeTranscript, run } from "../../scripts/loop/check-retro-tooling.mjs";
 
@@ -153,7 +154,7 @@ test("comments and blank lines are ignored", () => {
   assert.deepEqual(violations, []);
 });
 
-const SCRIPT = new URL("../../scripts/loop/check-retro-tooling.mjs", import.meta.url).pathname;
+const SCRIPT = fileURLToPath(new URL("../../scripts/loop/check-retro-tooling.mjs", import.meta.url));
 
 function runCli(args, stdinText) {
   return new Promise((resolve, reject) => {
