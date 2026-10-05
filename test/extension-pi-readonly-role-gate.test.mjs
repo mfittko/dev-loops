@@ -263,3 +263,57 @@ test("reviewer rejects R10: the judge gains no reviewer form", async () => {
   for (const cmd of Object.values(ACCEPT)) assert.equal((await callAs("judge", cmd)).block, true, cmd);
   assert.equal((await callAs("judge", "jq '.allPassed' x.json")).block, true);
 });
+
+// A read-only child loads the whole extension, so the mutation-capable post-merge hooks must stay
+// inert there: `isMergeCapableCommand` splits shell segments without quote awareness, so the
+// reviewer's allowed read form below is misread as a merge. Without the guard `onToolResult` marks
+// pending post-merge work and `onAgentEnd` runs pi update, checkout sync and cleanup (#2634).
+test("a read-only Pi session never runs the mutation-capable post-merge hooks", async () => {
+  const calls = [];
+  const events = new Map();
+  extension(
+    { on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) },
+    {
+      postMergeUpdateHook: {
+        getState: () => ({}),
+        onSessionStart: () => {},
+        onToolResult: async (event, ctx) => { calls.push(["tool_result", event, ctx]); },
+        onUserBash: async (event, ctx) => { calls.push(["user_bash", event, ctx]); return undefined; },
+        onAgentEnd: async (event, ctx) => { calls.push(["agent_end", event, ctx]); },
+      },
+    },
+  );
+  const piContext = (prompt, sessionId) => ({
+    cwd: process.cwd(),
+    getSystemPrompt: prompt === undefined ? undefined : () => prompt,
+    ...(sessionId === undefined ? {} : { sessionManager: { getSessionId: () => sessionId } }),
+  });
+  const quotedMergeSearch = "grep '; gh pr merge 42 ;' README.md";
+  // The native async markers are process-global; snapshot and clear them so the untagged main-agent
+  // case below resolves unrestricted even when the test runner is itself a native child.
+  const priors = NATIVE_ENV_MARKERS.map((name) => [name, process.env[name]]);
+  for (const name of NATIVE_ENV_MARKERS) delete process.env[name];
+  try {
+    for (const [label, ctx] of [
+      ["reviewer", piContext(tag("review"), "child-review")],
+      ["judge", piContext(tag("judge"), "child-judge")],
+      ["unresolved fail-closed child", piContext(tag(""), "child-blank")],
+    ]) {
+      await events.get("tool_result")({ toolName: "bash", input: { command: quotedMergeSearch } }, ctx);
+      await events.get("user_bash")({ command: "gh pr merge 42", cwd: process.cwd() }, ctx);
+      await events.get("agent_end")({}, ctx);
+      assert.deepEqual(calls, [], `${label} must not reach the post-merge hooks`);
+    }
+
+    // An unrestricted session (the main agent, or a fixer/developer child) still runs them.
+    const main = piContext(undefined, "main-session");
+    await events.get("tool_result")({ toolName: "bash", input: { command: "gh pr merge 42 --squash" } }, main);
+    await events.get("agent_end")({}, main);
+    assert.deepEqual(calls.map(([name]) => name), ["tool_result", "agent_end"]);
+  } finally {
+    for (const [name, prior] of priors) {
+      if (prior === undefined) delete process.env[name];
+      else process.env[name] = prior;
+    }
+  }
+});

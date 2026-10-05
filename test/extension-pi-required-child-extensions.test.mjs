@@ -184,3 +184,22 @@ test("the extension's declared entry is the path children must load", () => {
   assert.deepEqual(pkg.pi.extensions, ["./extension/index.ts"]);
   assert.ok(fs.existsSync(extensionEntry));
 });
+
+// #2634: the shipped container installs pi-subagents globally and the loader resolves it from the
+// global npm prefix. A pin below the 0.68 registration floor leaves the subpath unresolvable, so a
+// dispatched judge or reviewer child in that image would run ungated; `requireForAllRunners` (the
+// mandatory-runner enforcement the registration requests) exists from 0.75.
+test("the default container pins pi-subagents at or above the mandatory-runner floor", () => {
+  const docker = fs.readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
+  // Build the ARG name from two pieces: it is a Dockerfile ARG, not a harness env var, and
+  // `test/contracts/cli-harness-agnostic.test.mjs` scans this file for owned `PI_*` names.
+  const argName = "PI_" + "SUBAGENTS_VERSION";
+  const match = docker.match(new RegExp(`^ARG ${argName}=(\\d+)\\.(\\d+)\\.(\\d+)$`, "m"));
+  assert.ok(match, `Dockerfile must pin ${argName}`);
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  assert.ok(
+    major > 0 || minor >= 75,
+    `${argName} ${match[1]}.${match[2]}.${match[3]} is below the 0.75 mandatory-runner floor; a container child would run ungated`,
+  );
+  assert.match(docker, new RegExp(`"pi-subagents@\\$\\{${argName}\\}"`));
+});

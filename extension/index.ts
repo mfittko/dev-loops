@@ -33,7 +33,12 @@ const WIDGET_KEY = 'dev-loops.setup';
 // re-export so tests can reach the same binding the session_start handler calls.
 import { syncPackagedAgents } from './sync-packaged-agents.ts';
 export { syncPackagedAgents };
-import { decidePiToolCall, resolvePiRole } from './readonly-role-gate.ts';
+import { decidePiToolCall, isReadOnlyPiRole, resolvePiRole } from './readonly-role-gate.ts';
+
+// The calling session's own role for one handler call: resolved from its system prompt, with the
+// session id scoping the untagged native-async-child fail-closed row (readonly-role-gate.ts).
+const resolveSessionRole = (ctx: { getSystemPrompt?: () => string; getSessionId?: () => string }) =>
+  resolvePiRole({ systemPrompt: ctx?.getSystemPrompt?.(), sessionId: ctx?.getSessionId?.() });
 
 async function dispatchDevLoopIntent(ctx: { sendUserMessage?: (message: string) => unknown }, intent: string) {
   await ctx.sendUserMessage?.(`/skill:dev-loop ${intent}`);
@@ -77,18 +82,29 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   // read-only roles; Pi honours `{ block, reason }` from `tool_call`.
   adapter.on('tool_call', (event, ctx) => {
     const { toolName, input } = event as { toolName?: string; input?: { command?: unknown } };
-    return decidePiToolCall({ toolName, input, agentType: resolvePiRole({ systemPrompt: ctx?.getSystemPrompt?.(), sessionId: ctx?.getSessionId?.() }) });
+    return decidePiToolCall({ toolName, input, agentType: resolveSessionRole(ctx) });
   });
 
+  // A read-only child must never run the mutation-capable post-merge hooks: `isMergeCapableCommand`
+  // splits shell segments without quote awareness, so a reviewer's allowed read form such as
+  // `grep '; gh pr merge 42 ;' README.md` is misread as a merge and would queue post-merge updates,
+  // main-checkout sync and cleanup even though no merge ran. The `tool_call` gate already denies a
+  // read-only session any real merge, so these hooks have nothing legitimate to do there.
+  const readOnlySession = (ctx: { getSystemPrompt?: () => string; getSessionId?: () => string }) =>
+    isReadOnlyPiRole(resolveSessionRole(ctx));
+
   adapter.on('tool_result', async (event, ctx) => {
+    if (readOnlySession(ctx)) return;
     await postMergeUpdateHook.onToolResult(event, ctx);
   });
 
   adapter.on('user_bash', async (event, ctx) => {
+    if (readOnlySession(ctx)) return undefined;
     return postMergeUpdateHook.onUserBash(event, ctx);
   });
 
   adapter.on('agent_end', async (event, ctx) => {
+    if (readOnlySession(ctx)) return;
     await postMergeUpdateHook.onAgentEnd(event, ctx);
   });
 

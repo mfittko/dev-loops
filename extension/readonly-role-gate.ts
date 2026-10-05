@@ -190,3 +190,13 @@ export function decidePiToolCall({ toolName, input, agentType }: {
       '. Never run shell, test or build commands.',
   };
 }
+
+/**
+ * True when a resolved role is read-only: a restricted roster role (`BASH_RESTRICTED_ROLES`) or an
+ * unresolved role (`''`, the fail-closed row). The extension uses this to keep its mutation-capable
+ * post-merge hooks inert in a read-only child session — the `tool_call` gate already denies such a
+ * session any real merge, so the hooks have nothing legitimate to do there.
+ */
+export function isReadOnlyPiRole(agentType: string | null): boolean {
+  return agentType === '' || (agentType !== null && BASH_RESTRICTED_ROLES.includes(agentType));
+}
