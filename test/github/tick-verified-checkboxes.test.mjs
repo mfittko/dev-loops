@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { test } from "bun:test";
 
 import {
@@ -173,8 +173,7 @@ test("runCli: fetches body then issues one gh pr edit with the flipped body", as
   let editedBody;
   const runCapturing = async (cmd, args, env) => {
     if (args[1] === "edit") {
-      const idx = args.indexOf("--body-file");
-      editedBody = readFileSync(args[idx + 1], "utf8");
+      editedBody = args[args.indexOf("--body") + 1];
     }
     return run(cmd, args, env);
   };
@@ -185,8 +184,8 @@ test("runCli: fetches body then issues one gh pr edit with the flipped body", as
   assert.deepEqual(calls[0], ["pr", "view", "17", "--repo", "o/n", "--json", "body"]);
   assert.equal(calls[1][0], "pr");
   assert.equal(calls[1][1], "edit");
-  const bodyFileIdx = calls[1].indexOf("--body-file");
-  assert.notEqual(bodyFileIdx, -1);
+  assert.notEqual(calls[1].indexOf("--body"), -1);
+  assert.equal(calls[1][calls[1].indexOf("--body") + 1], "- [x] Alpha\n- [ ] Beta\n");
   assert.equal(editedBody, "- [x] Alpha\n- [ ] Beta\n");
   assert.match(stdout.get(), /"edited":true/);
 });
@@ -240,11 +239,12 @@ test("runCli: removes the temp dir after a successful flip flow", async () => {
     bodyJson("- [ ] Alpha\n"),
     { stdout: "https://github.com/o/n/pull/17\n" },
   ]);
+  const tickDirs = () => readdirSync(tmpdir()).filter((n) => n.startsWith("tick-verified-"));
+  const before = tickDirs();
   const code = await runCli(["--repo", "o/n", "--pr", "17", "--verified", "Alpha"], { run, stdout: captureStream() });
   assert.equal(code, 0);
-  const bodyFileIdx = calls[1].indexOf("--body-file");
-  const dir = dirname(calls[1][bodyFileIdx + 1]);
-  assert.equal(existsSync(dir), false, "temp dir should be cleaned up after edit");
+  assert.equal(calls[1].includes("--body-file"), false);
+  assert.deepEqual(tickDirs().filter((n) => !before.includes(n)), [], "temp dir should be cleaned up after edit");
 });
 
 test("runCli: no gh pr edit when nothing flips", async () => {
