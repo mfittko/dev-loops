@@ -151,6 +151,7 @@ test("every roster role resolves to its capability", async () => {
 
 const FAIL_CLOSED_PROMPTS = [
   tag(""), tag("  "), tag("dev-loops:"), tag("dev-loops:nope"),
+  tag("dev-loops :nope"), tag("dev-loops : nope"),
   `${tag("nope")} ${tag("dev-loops:nope")}`, `${tag("dev-loops:nope")} ${tag("nope")}`,
   `${tag("judge")} ${tag("developer")}`, `${tag("judge")} ${tag("review")}`,
 ];

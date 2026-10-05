@@ -15,6 +15,16 @@ const SANCTIONED_PULL_RE = new RegExp(
 );
 const parseSanctionedPullLine = (command: string) => SANCTIONED_PULL_RE.test(command.trim());
 const stripPluginNamespace = (agentType: string) => agentType.slice(agentType.lastIndexOf(':') + 1);
+/**
+ * The plugin namespace a tag value names: the text before its first `:`, trimmed; '' when the value
+ * carries no namespace. Read off the same trimmed value as the bare name so a `dev-loops:`-prefixed
+ * name with whitespace around the separator is still recognized as namespaced.
+ */
+const pluginNamespace = (agentType: string) => {
+  const trimmed = agentType.trim();
+  const colon = trimmed.indexOf(':');
+  return colon === -1 ? '' : trimmed.slice(0, colon).trim();
+};
 
 /** Roles whose Pi `bash` is restricted. The judge pulls only; the reviewer also reads and searches. */
 const READ_SEARCH_ROLES = new Set(['review']);
@@ -152,7 +162,7 @@ export function resolvePiRole({ systemPrompt, env = process.env, sessionId }: {
   if (names.size !== 1) return '';
   const [name] = names;
   if (name === '') return '';
-  if (raws.some((raw) => raw.trim().startsWith('dev-loops:')) && !DEV_LOOPS_ROLES.includes(name)) return '';
+  if (raws.some((raw) => pluginNamespace(raw) === 'dev-loops') && !DEV_LOOPS_ROLES.includes(name)) return '';
   return name;
 }
 /**
