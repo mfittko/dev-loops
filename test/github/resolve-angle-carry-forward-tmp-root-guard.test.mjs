@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
 import { buildCarryForwardPlanPath } from "../../scripts/github/write-gate-context.mjs";
+import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { initGitFixture, runNode } from "../_helpers.mjs";
 
 // An explicit --tmp-root inside a LINKED worktree is refused, not read as a missing ledger.
@@ -40,11 +41,31 @@ test("--tmp-root inside a linked worktree exits 1, names the main-anchored defau
   }
 });
 
-test("--tmp-root equal to the main checkout tmp/ passes the guard", async () => {
+test("--tmp-root equal to the main checkout tmp/ carries forward end to end", async () => {
   const { base, main, linked } = makeRepo();
   try {
-    const result = await runNode(SCRIPT, args(path.join(main, "tmp")), { cwd: linked });
+    const git = (...a) => execFileSync("git", a, { cwd: linked, encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+    const prev = git("rev-parse", "HEAD");
+    mkdirSync(path.join(linked, "docs"));
+    writeFileSync(path.join(linked, "docs", "guide.md"), "# Guide\n");
+    git("add", "-A");
+    git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-q", "-m", "delta");
+    const head = git("rev-parse", "HEAD");
+    const tmpRoot = path.join(main, "tmp");
+    const perAngle = [{ angle: "correctness", reviewer: "review-a" }];
+    const logPath = buildLogPath({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: prev, tmpRoot });
+    mkdirSync(path.dirname(logPath), { recursive: true });
+    writeFileSync(logPath, JSON.stringify({ headSha: prev, verdict: "clean", provenance: { distinctReviewers: 1, perAngle } }));
+    const argv = ["--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--prev-head", prev, "--head-sha", head, "--tmp-root", tmpRoot];
+    const result = await runNode(SCRIPT, argv, { cwd: linked });
+    assert.equal(result.code, 0, result.stderr);
     assert.doesNotMatch(result.stderr, /linked worktree/);
+    const planPath = buildCarryForwardPlanPath({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: head, tmpRoot });
+    assert.ok(planPath.startsWith(tmpRoot), planPath);
+    const plan = JSON.parse(readFileSync(planPath, "utf8"));
+    assert.equal(plan.ok, true);
+    assert.equal(plan.headSha, head);
+    assert.equal(plan.prevHead, prev);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
