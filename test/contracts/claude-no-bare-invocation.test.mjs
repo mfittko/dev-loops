@@ -115,6 +115,7 @@ test("scanned tree is non-empty (the guard actually covers files)", () => {
 test("self-check: an injected bare invocation is flagged by both regexes", () => {
   assert.ok(BARE_NODE_SCRIPTS_RE.test("Run `node scripts/loop/watch-cycle.mjs --pr 5`."));
   assert.ok(BARE_DEV_LOOPS_NS_RE.test("Run `dev-loops gate judge-pass --pr 5`."));
+  assert.ok(BARE_DEV_LOOPS_NS_RE.test("Run dev-loops\n  gate judge-pass --pr 5."), "line-wrapped form is flagged");
   // Confirm the routed form does NOT re-trip either regex (proves the rewrite is what clears it).
   assert.equal(BARE_NODE_SCRIPTS_RE.test("Run `dev-loops-run scripts/loop/watch-cycle.mjs --pr 5`."), false);
   assert.equal(BARE_DEV_LOOPS_NS_RE.test("Run `dev-loops-run cli/index.mjs gate judge-pass --pr 5`."), false);

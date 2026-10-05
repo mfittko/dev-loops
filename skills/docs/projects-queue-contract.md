@@ -505,7 +505,7 @@ are never touched.
 ## Usage
 
 Day-to-day guide for the queue helpers. Queue management lives under
-`dev-loops queue <subcommand>` (`node <dev-loops-package-root>/cli/index.mjs queue --help`); `dev-loops project <subcommand>` is
+`node <dev-loops-package-root>/cli/index.mjs queue <subcommand>` (`node <dev-loops-package-root>/cli/index.mjs queue --help`); `node <dev-loops-package-root>/cli/index.mjs project <subcommand>` is
 a back-compat alias. Helpers emit machine-readable JSON on stdout and structured errors on
 stderr, and accept `--help`. The board resolves from `.devloops` per
 `QUEUE-BOARD-DEVLOOPS-RESOLUTION`; `--project <number|id>` overrides it.
