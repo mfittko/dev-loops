@@ -34,7 +34,7 @@ test("--tmp-root inside a linked worktree exits 1, names the main-anchored defau
     assert.match(result.stderr, /linked worktree/);
     assert.ok(result.stderr.includes(path.join(main, "tmp")), result.stderr);
     assert.doesNotMatch(result.stderr, /findings-log not found/);
-    assert.equal(existsSync(path.join(linked, buildCarryForwardPlanPath({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: HEAD, tmpRoot }))), false);
+    assert.equal(existsSync(buildCarryForwardPlanPath({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: HEAD, tmpRoot })), false);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
