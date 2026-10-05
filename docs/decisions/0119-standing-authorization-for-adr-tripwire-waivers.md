@@ -4,9 +4,9 @@
 
 Accepted — 2026-10-04 ([issue 2463](https://github.com/mfittko/dev-loops/issues/2463))
 
-Amends [0052](./0052-adr-tripwire-fail-closed.md): the tripwire still blocks the same surfaces and an operator-written waiver stays valid. The way an agent obtains a waiver for a contract-doc edit changes. Record 0052 stays unedited.
-
 ## Context
+
+Amends [0052](./0052-adr-tripwire-fail-closed.md): the tripwire still blocks the same surfaces and an operator-written waiver stays valid. The way an agent obtains a waiver for a contract-doc edit changes. Record 0052 stays unedited.
 
 The tripwire blocks the ready flip of a PR that touches a decision-shaped surface until the diff adds a `docs/decisions/NNNN-*.md` record or the PR body carries `adr-tripwire:allow <reason>`. The waiver marker is operator-owned, and the harness classifier denies an agent that writes it. Every PR that edits a contract doc stalled at the ready flip until the operator wrote the waiver by hand. Three recent PRs waited between 5 and 7 hours, although each issue's Definition of done required the contract-doc edit that tripped the tripwire.
 
