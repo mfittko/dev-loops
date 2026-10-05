@@ -345,7 +345,9 @@ export async function editPr(
       });
       if (refusal) throw new Error(refusal);
     }
-    if (options.bodyFile === "-") {
+    // Forward the checked text inline for every source so gh never re-reads a
+    // caller path whose bytes could differ from the ones the guard read.
+    if (options.bodyFile !== undefined) {
       options.body = guardBody;
       options.bodyFile = undefined;
     }

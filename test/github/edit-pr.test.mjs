@@ -125,7 +125,7 @@ test("editPr: --body-file reads the body from a real file", async () => {
     { run },
   );
   assert.deepEqual(result.edited, ["body"]);
-  assert.deepEqual(calls[0], ["pr", "edit", "5", "--repo", "o/n", "--body-file", bodyPath]);
+  assert.deepEqual(calls[0], ["pr", "edit", "5", "--repo", "o/n", "--body", "Body from file\nsecond line"]);
 });
 
 test("editPr: --body-file - reads stdin and passes it inline as --body (never re-emits exhausted fd 0)", () => {

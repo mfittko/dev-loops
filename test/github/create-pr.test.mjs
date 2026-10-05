@@ -800,8 +800,8 @@ test("create-pr forwards args in order and preserves gh stdout on success", asyn
       "--base", "main",
       "--head", "issue-349-create-pr",
       "--title", "Add canonical wrapper",
-      "--body-file", bodyPath,
       "positional-token",
+      "--body", conformantBody("Closes #349"),
       "--draft",
     ]);
   } finally {
@@ -839,7 +839,7 @@ test("create-pr defaults --assignee @me end-to-end when no assignee flag is give
       "--base", "main",
       "--head", "feature",
       "--title", "Add feature",
-      "--body-file", bodyPath,
+      "--body", conformantBody("Closes #894"),
       "--assignee", "@me",
       "--draft",
     ]);

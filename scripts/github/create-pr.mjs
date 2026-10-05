@@ -66,7 +66,7 @@ Behavior:
     \`--repo\`, no explicit body source, or an enqueue error is a non-fatal no-op (noted in
     that line; exit code unaffected). Omitting \`--lightweight\`, or a body that already
     carries a closing keyword (tracker-backed), never calls the board.
-  - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\`/\`--recover\` without \`--body\`/\`--body-file\` (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
+  - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\`/\`--recover\`/\`--editor\`/\`--web\` without \`--body\`/\`--body-file\` (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
 Examples:
@@ -234,6 +234,24 @@ function scanBodySources(args) {
     else if (token.name === "body-file") found.bodyFile = value;
   }
   return found;
+}
+// Rewrites every `--body-file`/`-F` occurrence (space, `=`, attached and
+// bundled short forms) into one inline `--body <text>`, so gh writes exactly
+// the bytes the waiver guard checked instead of re-reading the path.
+function inlineBodyFile(args, text) {
+  const { tokens } = parseArgs({ args, options: SCAN_OPTIONS, strict: false, allowPositionals: true, tokens: true });
+  const next = [...args];
+  for (const token of tokens) {
+    if (token.kind !== "option" || token.name !== "body-file") continue;
+    const arg = args[token.index];
+    if (arg.startsWith("--")) next[token.index] = null;
+    else {
+      const rest = arg.slice(0, arg.indexOf("F"));
+      next[token.index] = rest === "-" ? null : rest;
+    }
+    if (!token.inlineValue) next[token.index + 1] = null;
+  }
+  return [...next.filter((arg) => arg !== null), "--body", text];
 }
 // A plain string value for a single-value flag, in both the space form
 // (`--repo owner/name`) and the inline form (`--repo=owner/name`); unlike
@@ -498,7 +516,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   const baseDefault = hasBase
     ? null
     : await resolveBaseDefault(runtime.cwd ?? process.cwd(), runtime);
-  const { help, ghArgs } = buildCreatePrArgs(forwardedArgv, { baseDefault });
+  let { help, ghArgs } = buildCreatePrArgs(forwardedArgv, { baseDefault });
   if (help) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
@@ -509,7 +527,10 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   }
   const body = await resolveBody(forwardedArgv);
   if (body === null && sources.sourced) {
-    throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --fill/--fill-verbose/--fill-first/--template/--recover source the body outside this wrapper, so a waiver line cannot be ruled out; pass --body or --body-file instead");
+    throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --fill/--fill-verbose/--fill-first/--template/--recover/--editor/--web source the body outside this wrapper, so a waiver line cannot be ruled out; pass --body or --body-file instead");
+  }
+  if (sources.bodyFile !== null) {
+    ({ ghArgs } = buildCreatePrArgs(inlineBodyFile(forwardedArgv, body), { baseDefault }));
   }
   // ADR-TRIPWIRE-STANDING-WAIVER: a new PR starts with no waiver line.
   const waiverRefusal = waiverLineChangeRefusal({ currentBody: "", nextBody: body ?? "", action: "create" });
