@@ -157,7 +157,7 @@ const SCRIPT = new URL("../../scripts/loop/check-retro-tooling.mjs", import.meta
 
 function runCli(args, stdinText) {
   return new Promise((resolve, reject) => {
-    const child = spawn("node", [SCRIPT, ...args], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(Bun.which("node") ?? "node", [SCRIPT, ...args], { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d; });
@@ -165,7 +165,7 @@ function runCli(args, stdinText) {
     child.on("error", reject);
     child.on("close", (status) => resolve({ status, stdout, stderr }));
     // Chunked async writes with gaps let the child drain the pipe before EOF, which
-    // is when a non-blocking stdin read fails; a synchronous 200KB write would deadlock.
+    // is when a non-blocking stdin read fails, so the pipe runs dry before EOF as the old code hit.
     child.stdin.on("error", () => {});
     const text = stdinText ?? "";
     let closed = false;
