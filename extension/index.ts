@@ -1,7 +1,12 @@
 import { executeDevLoopsCommand, inspectResultSeverity } from '../lib/dev-loops-core.mjs';
+import { fileURLToPath } from 'node:url';
 import { createExtensionCoreRuntime } from './checks.ts';
 import { createPostMergeUpdateHook } from './post-merge-update.ts';
 import { createPiExtensionAdapter, type ExtensionAPI } from './pi-extension-adapter.ts';
+import {
+  createChildRoleGateRegistrar,
+  loadRegisterRequiredChildExtensions,
+} from './required-child-extensions.ts';
 import {
   buildEntrypointLines,
   buildHelpLines,
@@ -15,6 +20,8 @@ import {
 
 type ExtensionRuntimeOverrides = NonNullable<Parameters<typeof createExtensionCoreRuntime>[1]> & {
   postMergeUpdateHook?: ReturnType<typeof createPostMergeUpdateHook>;
+  /** Test seam: override the `pi-subagents` required-child-extension loader. */
+  loadRegisterRequiredChildExtensions?: typeof loadRegisterRequiredChildExtensions;
 };
 
 const STATUS_KEY = 'dev-loops';
@@ -26,7 +33,12 @@ const WIDGET_KEY = 'dev-loops.setup';
 // re-export so tests can reach the same binding the session_start handler calls.
 import { syncPackagedAgents } from './sync-packaged-agents.ts';
 export { syncPackagedAgents };
-import { decidePiToolCall, resolvePiAgentType } from './readonly-role-gate.ts';
+import { decidePiToolCall, isReadOnlyPiRole, resolvePiRole } from './readonly-role-gate.ts';
+
+// The calling session's own role for one handler call: resolved from its system prompt, with the
+// session id scoping the untagged native-async-child fail-closed row (readonly-role-gate.ts).
+const resolveSessionRole = (ctx: { getSystemPrompt?: () => string; getSessionId?: () => string }) =>
+  resolvePiRole({ systemPrompt: ctx?.getSystemPrompt?.(), sessionId: ctx?.getSessionId?.() });
 
 async function dispatchDevLoopIntent(ctx: { sendUserMessage?: (message: string) => unknown }, intent: string) {
   await ctx.sendUserMessage?.(`/skill:dev-loop ${intent}`);
@@ -36,6 +48,16 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   // Wrap the Pi harness at the entry boundary; everything below talks to the neutral seam.
   const adapter = createPiExtensionAdapter(pi);
   const postMergeUpdateHook = runtimeOverrides.postMergeUpdateHook ?? createPostMergeUpdateHook({ exec: adapter.exec });
+  // A foreground (`async: false`) child never loads ambient extensions, so the read-only
+  // role gate stayed inert in dispatched judge/reviewer children. Register the extension
+  // itself as a required child extension so every child loads it; see
+  // skills/docs/cross-harness-regression-contract.md "Read-only role enforcement on Pi".
+  const childRoleGate = createChildRoleGateRegistrar({
+    // This module is the extension entry (`pi.extensions`), so its own URL is the path a
+    // child must load to run the same `tool_call` handler.
+    extensionPath: fileURLToPath(import.meta.url),
+    load: runtimeOverrides.loadRegisterRequiredChildExtensions ?? loadRegisterRequiredChildExtensions,
+  });
 
   adapter.on('session_start', async (_event, ctx) => {
     postMergeUpdateHook.onSessionStart();
@@ -44,25 +66,45 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
     } catch {
       // Best-effort agent sync — do not break session start
     }
+    try {
+      await childRoleGate.register(ctx.getSessionId?.());
+    } catch {
+      // Best-effort child-extension registration — never break session start
+    }
     ctx.ui.setStatus(STATUS_KEY, undefined);
+  });
+
+  adapter.on('session_shutdown', () => {
+    childRoleGate.disposeAll();
   });
 
   // Read-only role enforcement on Pi (cross-harness-regression-contract.md): block shell for
   // read-only roles; Pi honours `{ block, reason }` from `tool_call`.
-  adapter.on('tool_call', (event) => {
+  adapter.on('tool_call', (event, ctx) => {
     const { toolName, input } = event as { toolName?: string; input?: { command?: unknown } };
-    return decidePiToolCall({ toolName, input, agentType: resolvePiAgentType() });
+    return decidePiToolCall({ toolName, input, agentType: resolveSessionRole(ctx) });
   });
 
+  // A read-only child must never run the mutation-capable post-merge hooks: `isMergeCapableCommand`
+  // splits shell segments without quote awareness, so a reviewer's allowed read form such as
+  // `grep '; gh pr merge 42 ;' README.md` is misread as a merge and would queue post-merge updates,
+  // main-checkout sync and cleanup even though no merge ran. The `tool_call` gate already denies a
+  // read-only session any real merge, so these hooks have nothing legitimate to do there.
+  const readOnlySession = (ctx: { getSystemPrompt?: () => string; getSessionId?: () => string }) =>
+    isReadOnlyPiRole(resolveSessionRole(ctx));
+
   adapter.on('tool_result', async (event, ctx) => {
+    if (readOnlySession(ctx)) return;
     await postMergeUpdateHook.onToolResult(event, ctx);
   });
 
   adapter.on('user_bash', async (event, ctx) => {
+    if (readOnlySession(ctx)) return undefined;
     return postMergeUpdateHook.onUserBash(event, ctx);
   });
 
   adapter.on('agent_end', async (event, ctx) => {
+    if (readOnlySession(ctx)) return;
     await postMergeUpdateHook.onAgentEnd(event, ctx);
   });
 
