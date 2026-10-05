@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { compareSemver, createCliRuntime, fetchLatestPublishedVersion, isPlausibleDistTagVersion, runCli } from "../cli/index.mjs";
 import { EventEmitter } from "node:events";
 import { SETUP_GUIDANCE } from "../lib/dev-loops-core.mjs";
+import { writeGhStub } from "./_helpers.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -427,6 +428,35 @@ test("pr category help lists edit and `pr edit` routes to edit-pr.mjs (issue #24
   const edit = spawnSync("node", ["./cli/index.mjs", "pr", "edit", "--help"], { cwd: repoRoot, encoding: "utf8" });
   assert.equal(edit.status, 0);
   assert.match(edit.stdout, /Usage: edit-pr\.mjs/);
+});
+
+test("`pr edit` round-trips one edit and one existing-guard refusal through edit-pr.mjs (issue #2463)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-edit-"));
+  try {
+    const ok = await writeGhStub(tempDir, [{ assertArgs: ["pr", "edit", "7", "--title", "New title"], stdout: "" }]);
+    const success = spawnSync("node", ["./cli/index.mjs", "pr", "edit", "--repo", "mfittko/dev-loops", "--pr", "7", "--title", "New title"], {
+      cwd: repoRoot,
+      env: ok.env,
+      encoding: "utf8",
+    });
+    assert.equal(success.status, 0, success.stderr);
+    assert.deepEqual(JSON.parse(success.stdout), { ok: true, repo: "mfittko/dev-loops", pr: 7, edited: ["title"] });
+
+    // Existing guard: a body that adds an adr-tripwire:allow line is refused
+    // after the baseline `gh pr view`; no `gh pr edit` call follows.
+    const view = JSON.stringify({ headRefName: "issue-7", closingIssuesReferences: [], body: "plain body" });
+    const guarded = await writeGhStub(tempDir, [{ assertArgs: ["pr", "view", "7"], stdout: `${view}\n` }]);
+    const refusal = spawnSync("node", ["./cli/index.mjs", "pr", "edit", "--repo", "mfittko/dev-loops", "--pr", "7", "--body", "x\nadr-tripwire:allow because"], {
+      cwd: repoRoot,
+      env: guarded.env,
+      encoding: "utf8",
+    });
+    assert.equal(refusal.status, 1);
+    assert.equal(refusal.stdout, "");
+    assert.match(refusal.stderr, /ADR-TRIPWIRE-STANDING-WAIVER/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("project routes are exactly queue routes minus run (issue #1090)", async () => {
