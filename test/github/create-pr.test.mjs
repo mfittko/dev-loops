@@ -868,7 +868,7 @@ test("create-pr preserves an existing --draft without adding another copy", asyn
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--base", INHERITED_BASE_DEFAULT,
+      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--base", INHERITED_BASE_DEFAULT, "--body", "",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -891,7 +891,7 @@ test("create-pr appends --draft after --draft=false so draft-first still wins", 
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft",
+      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft", "--body", "",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -914,7 +914,7 @@ test("create-pr re-appends --draft when a later token disables it", async () => 
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft",
+      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft", "--body", "",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -937,7 +937,7 @@ test("create-pr treats --draft=true as already supplied and avoids a duplicate",
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=true", "--base", INHERITED_BASE_DEFAULT,
+      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=true", "--base", INHERITED_BASE_DEFAULT, "--body", "",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -981,7 +981,7 @@ test("create-pr preserves gh stdout, stderr, and exit code on failure", async ()
     assert.equal(result.stdout, "partial gh stdout\n");
     assert.equal(result.stderr, "gh create failed\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--base", INHERITED_BASE_DEFAULT, "--draft",
+      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--base", INHERITED_BASE_DEFAULT, "--draft", "--body", "",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1862,3 +1862,18 @@ for (const [label, flagArgs] of [
     }
   });
 }
+
+test("create-pr refuses --editor and --web even with an explicit --body", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-editor-body-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    for (const flag of ["--editor", "-e", "--web", "-w"]) {
+      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", flag], { env });
+      assert.equal(result.code, 1);
+      assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
+    }
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

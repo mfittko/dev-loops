@@ -226,3 +226,10 @@ test("an unresolved origin/HEAD refuses with default_branch_unresolved instead o
   assert.equal(r.inForce, false);
   assert.equal(r.state, "default_branch_unresolved");
 });
+
+test("a .devloops.json source is parsed as JSON, so YAML-only content is malformed", () => {
+  const git = fakeGit({ files: { ".devloops.json": RECORD_YAML } });
+  const r = readStandingAuthorization({ repoRoot: ".", defaultBranch: "main", now: NOW, git, fetchOrigin: noFetch });
+  assert.equal(r.inForce, false);
+  assert.equal(r.state, "malformed");
+});

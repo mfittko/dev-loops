@@ -21,7 +21,7 @@ import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spe
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { evaluateAdrTripwire as realEvaluateAdrTripwire } from "../loop/check-adr-tripwire.mjs";
 import { buildStandingWaiverLine, replaceStandingWaiverLine } from "../loop/adr-waiver-markers.mjs";
-import { readStandingAuthorization as realReadStandingAuthorization } from "../loop/standing-authorization.mjs";
+import { defaultFetchOrigin, readStandingAuthorization as realReadStandingAuthorization } from "../loop/standing-authorization.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fetchIssueBody as realFetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { fetchDraftGateEvidence as realFetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
@@ -116,6 +116,7 @@ export async function waiveAdrTripwire(options, {
   readStandingAuthorization = realReadStandingAuthorization,
   detectOriginSlug = detectRepoSlug,
   fetchDefaultBranch = defaultFetchDefaultBranch,
+  fetchBaseBranch = defaultFetchOrigin,
   fetchPr = defaultFetchPr,
   fetchIssueBody = realFetchIssueBody,
   evaluateAdrTripwire = realEvaluateAdrTripwire,
@@ -143,6 +144,12 @@ export async function waiveAdrTripwire(options, {
   const headSha = typeof prState?.headRefOid === "string" ? prState.headRefOid.trim().toLowerCase() : "";
   if (!/^[0-9a-f]{40}$/u.test(headSha) || !prState?.baseRefName) return refuse("pr_state_unreadable", `cannot read PR #${pr} head and base`);
   const body = typeof prState.body === "string" ? prState.body : "";
+  // Both tripwire evaluations diff against origin/<baseRefName>: fetch it fresh (bounded, prompt-free) or refuse.
+  try {
+    fetchBaseBranch(prState.baseRefName, { repoRoot });
+  } catch {
+    return refuse("base_fetch_failed", `git fetch origin ${prState.baseRefName} failed; cannot trust the local origin/${prState.baseRefName} ref`);
+  }
 
   // A closing reference into another repo is not a link to this repo's tracker issue.
   const refRepo = (n) => n?.repository?.nameWithOwner ?? (n?.repository?.owner?.login && n?.repository?.name ? `${n.repository.owner.login}/${n.repository.name}` : null);

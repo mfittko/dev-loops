@@ -43,6 +43,7 @@ function harness(over = {}) {
     readStandingAuthorization: () => AUTH,
     detectOriginSlug: () => "o/n",
     fetchDefaultBranch: async () => "main",
+    fetchBaseBranch: () => {},
     fetchPr: async () => ({ body: PR_BODY, headRefOid: HEAD, baseRefName: "main", closingIssuesReferences: { nodes: [{ number: 7 }] } }),
     fetchIssueBody: async () => ISSUE_BODY,
     evaluateAdrTripwire: blockUntilWaived,
@@ -237,4 +238,15 @@ test("a thrown writer error is a typed writer_error refusal, and both tripwire e
   assert.equal(payload.reason, "writer_error");
   assert.equal(payload.refused, true);
   assert.match(payload.detail, /gh exploded/);
+});
+
+test("fetches the PR base branch and refuses when the fetch fails", async () => {
+  const seen = [];
+  const { run } = harness({
+    fetchPr: async () => ({ body: "Closes #7", headRefOid: HEAD, baseRefName: "release-x", closingIssuesReferences: { nodes: [{ number: 7 }] } }),
+    fetchBaseBranch: (branch) => seen.push(branch),
+  });
+  await run();
+  assert.deepEqual(seen, ["release-x"]);
+  await assertRefusal({ fetchBaseBranch: () => { throw new Error("offline"); } }, "base_fetch_failed");
 });

@@ -105,6 +105,7 @@ export function readStandingAuthorization({ repoRoot = process.cwd(), defaultBra
     return refuse("missing", `no .devloops on origin/${branch} (ref absent)`);
   }
   let source = null;
+  let sourceName = null;
   for (const name of DEVLOOPS_CONFIG_PATHS) {
     let listed;
     try {
@@ -118,12 +119,13 @@ export function readStandingAuthorization({ repoRoot = process.cwd(), defaultBra
     } catch {
       return refuse("malformed", `${name} exists on origin/${branch} but cannot be read`);
     }
+    sourceName = name;
     break;
   }
   if (source === null) return refuse("missing", `no .devloops on origin/${branch}`);
   let parsed;
   try {
-    parsed = parseYaml(source) ?? {};
+    parsed = (sourceName.endsWith(".json") ? JSON.parse(source) : parseYaml(source)) ?? {};
   } catch {
     return refuse("malformed", `.devloops on origin/${branch} does not parse`);
   }

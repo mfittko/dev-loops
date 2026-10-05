@@ -222,11 +222,12 @@ const SCAN_OPTIONS = {
   web: { type: "boolean", short: "w" },
 };
 function scanBodySources(args) {
-  const found = { body: null, bodyFile: null, sourced: false };
+  const found = { body: null, bodyFile: null, sourced: false, editorOrWeb: false };
   const { tokens } = parseArgs({ args, options: SCAN_OPTIONS, strict: false, allowPositionals: true, tokens: true });
   for (const token of tokens) {
     if (token.kind !== "option") continue;
     if (["fill", "fill-verbose", "fill-first", "template", "recover", "editor", "web"].includes(token.name)) found.sourced = true;
+    if (token.name === "editor" || token.name === "web") found.editorOrWeb = true;
     let value = typeof token.value === "string" ? token.value : null;
     // pflag strips one leading "=" from an inline short value (`-b=x`); parseArgs keeps it.
     if (value !== null && token.inlineValue && /^-[^-]/u.test(token.rawName) && value.startsWith("=")) value = value.slice(1);
@@ -529,12 +530,14 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   if (forwardedArgv.some((token) => token === "--recover" || token.startsWith("--recover="))) {
     throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --recover loads a saved body that this wrapper cannot check, even with --body or --body-file; remove --recover");
   }
-  if (body === null && sources.sourced) {
+  if (sources.editorOrWeb || (body === null && sources.sourced)) {
     throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --fill/--fill-verbose/--fill-first/--template/--recover/--editor/--web source the body outside this wrapper, so a waiver line cannot be ruled out; pass --body or --body-file instead");
   }
   if (sources.bodyFile !== null) {
     ({ ghArgs } = buildCreatePrArgs(inlineBodyFile(forwardedArgv, body), { baseDefault }));
   }
+  // No body source: pass an explicit empty body so gh never prompts for one.
+  if (body === null) ghArgs = [...ghArgs, "--body", ""];
   // ADR-TRIPWIRE-STANDING-WAIVER: a new PR starts with no waiver line.
   const waiverRefusal = waiverLineChangeRefusal({ currentBody: "", nextBody: body ?? "", action: "create" });
   if (waiverRefusal) {
