@@ -29,7 +29,7 @@ test("on resolve_adr_tripwire the orchestrator runs the writer before asking the
 });
 
 test("the dev-loop SKILL stop-condition names the orchestrator as the writer's actor", () => {
-  assert.match(read("skills/dev-loop/SKILL.md"), /resolve_adr_tripwire` the coordinator stops and reports, and the orchestrator runs `node <dev-loops-package-root>/cli/index.mjs pr waive-adr-tripwire`/u);
+  assert.match(read("skills/dev-loop/SKILL.md"), /resolve_adr_tripwire` the coordinator stops and reports, and the orchestrator runs `node <dev-loops-package-root>\/cli\/index.mjs pr waive-adr-tripwire`/u);
   assert.match(read("scripts/loop/sanctioned-commands.mjs"), /orchestratorOwned[\s\S]*waive-adr-tripwire\.mjs/u);
 });
 
