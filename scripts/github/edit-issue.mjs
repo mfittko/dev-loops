@@ -6,6 +6,7 @@ import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitive
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
 import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { parseArgs } from "node:util";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -42,6 +43,8 @@ At least one edit:
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
+ADR tripwire waiver lines: a body that adds, changes or removes an
+\`adr-tripwire:allow\` line (compared with the current body) is refused.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "issue": 17, "edited": ["title", "body", ..., "state"] }
 Error output (stderr, JSON):
@@ -214,6 +217,34 @@ export function parseEditIssueCliArgs(argv) {
 }
 
 export async function editIssue(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
+  // ADR-TRIPWIRE-STANDING-WAIVER: a PR is also an issue, so `gh issue edit` can
+  // rewrite a PR body. A body write may not add, change or remove an
+  // `adr-tripwire:allow` line; fail closed when the current body is unreadable.
+  // The body is resolved once and forwarded inline so stdin is read a single time.
+  if (options.body !== undefined || options.bodyFile !== undefined) {
+    let body = options.body;
+    if (body === undefined) {
+      body = options.bodyFile === "-" ? readFileSync(0, "utf8") : await readFile(options.bodyFile, "utf8");
+      if (body.trim().length === 0) {
+        throw new Error(`--body-file ${options.bodyFile} is empty`);
+      }
+    }
+    let baseline;
+    try {
+      const view = await run(ghCommand, ["issue", "view", String(options.issue), "--repo", options.repo, "--json", "body"], env);
+      if (view && view.code === 0) baseline = JSON.parse(view.stdout).body;
+    } catch {
+      baseline = undefined;
+    }
+    if (typeof baseline !== "string") {
+      throw new Error(
+        `ADR-TRIPWIRE-STANDING-WAIVER: cannot read the current body of #${options.issue} (gh issue view failed), so its \`adr-tripwire:allow\` lines cannot be compared; refusing on ambiguity (fail closed).`,
+      );
+    }
+    const waiverRefusal = waiverLineChangeRefusal({ currentBody: baseline, nextBody: body, action: "write" });
+    if (waiverRefusal) throw new Error(waiverRefusal);
+    if (options.bodyFile === "-") options = { ...options, body, bodyFile: undefined };
+  }
   // GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628): behind the --enforce-grill opt-in,
   // refuse to write a body that embeds grill transcript/synthesis/Q&A headings.
   if (options.enforceGrill && (options.body !== undefined || options.bodyFile !== undefined)) {

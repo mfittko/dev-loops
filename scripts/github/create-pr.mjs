@@ -66,7 +66,7 @@ Behavior:
     \`--repo\`, no explicit body source, or an enqueue error is a non-fatal no-op (noted in
     that line; exit code unaffected). Omitting \`--lightweight\`, or a body that already
     carries a closing keyword (tracker-backed), never calls the board.
-  - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\`/\`--recover\`/\`--editor\`/\`--web\` without \`--body\`/\`--body-file\` (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
+  - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\` without \`--body\`/\`--body-file\`, and \`--recover\`/\`--editor\`/\`--web\` always (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
 Examples:

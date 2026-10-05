@@ -10,8 +10,21 @@ import { parseEditIssueCliArgs, editIssue, runCli } from "../../scripts/github/e
 import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 function stubGh({ code = 0, stderr = "" } = {}) {
-  return makeGhStub([{ code, stdout: code === 0 ? "https://github.com/o/n/issues/17\n" : "", stderr }], { repeatLastOnOverflow: true });
+  const stub = makeGhStub([{ code, stdout: code === 0 ? "https://github.com/o/n/issues/17\n" : "", stderr }], { repeatLastOnOverflow: true });
+  // Answer the waiver-baseline `issue view` read without recording it in calls.
+  const run = (cmd, args, env) =>
+    args[1] === "view" ? Promise.resolve({ code: 0, stdout: JSON.stringify({ body: "" }), stderr: "" }) : stub.run(cmd, args, env);
+  return { run, calls: stub.calls };
 }
+
+test("editIssue: refuses a body write that adds an adr-tripwire:allow line (PR bodies are issue bodies)", async () => {
+  const { run, calls } = stubGh();
+  await assert.rejects(
+    () => editIssue({ repo: "o/n", issue: 7, body: "x\nadr-tripwire:allow ok", addAssignees: [], removeAssignees: [] }, { run }),
+    /ADR-TRIPWIRE-STANDING-WAIVER/,
+  );
+  assert.equal(calls.length, 0);
+});
 
 test("parseEditIssueCliArgs: requires --repo, --issue and at least one edit", () => {
   assert.throws(() => parseEditIssueCliArgs(["--repo", "o/n"]), /requires both --repo/);
@@ -128,7 +141,7 @@ test("editIssue: --body-file - reads stdin and passes it inline as --body (never
       "const calls = [];\n" +
       "await editIssue(\n" +
       "  { repo: \"o/n\", issue: 17, bodyFile: \"-\", addAssignees: [], removeAssignees: [] },\n" +
-      "  { run: async (_cmd, args) => { calls.push(args); return { code: 0, stdout: \"\", stderr: \"\" }; } },\n" +
+      "  { run: async (_cmd, args) => { if (args[1] === \"view\") return { code: 0, stdout: '{\"body\":\"\"}', stderr: \"\" }; calls.push(args); return { code: 0, stdout: \"\", stderr: \"\" }; } },\n" +
       ");\n" +
       "process.stdout.write(JSON.stringify(calls[0]));\n",
   );
@@ -258,6 +271,7 @@ test("editIssue: throws when the gh issue reopen call fails", async () => {
 test("editIssue: a reopen failure after a successful field edit reports the edits that landed", async () => {
   const calls = [];
   const run = async (_cmd, args) => {
+    if (args[1] === "view") return { code: 0, stdout: '{"body":""}', stderr: "" };
     calls.push(args);
     return calls.length === 1
       ? { code: 0, stdout: "", stderr: "" }
@@ -319,7 +333,7 @@ test("editIssue: --enforce-grill with --body-file - forwards stdin inline (no fd
       "const calls = [];\n" +
       "await editIssue(\n" +
       "  { repo: \"o/n\", issue: 17, bodyFile: \"-\", enforceGrill: true, addAssignees: [], removeAssignees: [] },\n" +
-      "  { run: async (_c, args) => { calls.push(args); return { code: 0, stdout: \"\", stderr: \"\" }; } },\n" +
+      "  { run: async (_c, args) => { if (args[1] === \"view\") return { code: 0, stdout: '{\"body\":\"\"}', stderr: \"\" }; calls.push(args); return { code: 0, stdout: \"\", stderr: \"\" }; } },\n" +
       ");\n" +
       "process.stdout.write(JSON.stringify(calls[0]));\n",
   );

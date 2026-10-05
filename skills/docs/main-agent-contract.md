@@ -36,12 +36,14 @@ index of the sanctioned GitHub-operation surface. It maps each operation to its 
 lists the raw commands that are forbidden. Read the index for the current list. This section does
 not copy it.
 
-The `SANCTIONED_COMMANDS` index marks three operations as orchestrator-owned. A spawned `dev-loop`
+The `SANCTIONED_COMMANDS` index marks the orchestrator-owned operations. A spawned `dev-loop`
 subagent routes them to the orchestrator:
 
 - Merge, through `scripts/github/merge-pr.mjs`.
 - Board status transitions, through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs`.
 - Issue creation, through `scripts/github/create-issue.mjs`.
+- Board-item removal, through `scripts/projects/remove-queue-item.mjs` (undo of a wrong queue add only).
+- ADR tripwire waiver, through `scripts/github/waive-adr-tripwire.mjs` (`dev-loops pr waive-adr-tripwire`).
 
 Known gaps outside this contract's current scope still create issues directly with raw
 `gh issue create`. They include the epic-decomposition step in `skills/docs/issue-intake-procedure.md`,
@@ -71,7 +73,7 @@ The main agent is **read-only** for every file tracked by the repository. Every
 write, edit, delete, commit, branch, push, and PR lifecycle operation must flow
 through the `dev-loop` async subagent. The exceptions are the orchestrator-owned
 operations in [Sanctioned tooling](#sanctioned-tooling): merge, board status
-transitions, and issue creation. The main agent performs them through their wrappers.
+transitions, issue creation, board-item removal, and the ADR tripwire waiver. The main agent performs them through their wrappers.
 
 This contract is a hard rule, not a default or guideline. The main agent must
 never rationalize a direct mutation — not because the work is small, not
@@ -85,6 +87,7 @@ because "the user said yes," not because it is running from a worktree.
 - Issue creation through `scripts/github/create-issue.mjs` (orchestrator-owned)
 - Merge through `scripts/github/merge-pr.mjs` (orchestrator-owned)
 - Board status transitions through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs` (orchestrator-owned)
+- Board-item removal through `scripts/projects/remove-queue-item.mjs` and the ADR tripwire waiver through `scripts/github/waive-adr-tripwire.mjs` (orchestrator-owned)
 - Issue close through `scripts/github/edit-issue.mjs --state closed [--reason completed|not_planned]` (GitHub API, not file mutations)
 - PR reads through `scripts/github/view-pr.mjs` (read-only GitHub API)
 - PR listing through `gh pr list` (no sanctioned wrapper exists; read-only GitHub API)

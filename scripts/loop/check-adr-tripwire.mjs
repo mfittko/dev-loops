@@ -85,7 +85,7 @@ Optional:
                         no body — a waiver can then never be honored
 
 A standingAuthorizations change is satisfied only by a docs/decisions record; a
-standing-authorization waiver line is valid only at its head= and until its expires= day.
+standing-authorization waiver line is valid only at its head=, until its expires= day, and when every current trigger is a contract-doc listed in paths=.
 
 Exit codes:
    0  pass (no trigger, or trigger satisfied by an ADR / valid waiver)
