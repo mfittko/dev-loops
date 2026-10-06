@@ -697,12 +697,22 @@ test("regenerate: the rendered line is present and the materialization hash stil
   });
 });
 
-test("regenerate: the rule is identical for the claude and pi harnesses", async () => {
-  await withFixture(async ({ wt, emit }) => {
+test("regenerate: the rule is identical for the claude and pi harness CLI adapters", async () => {
+  await withFixture(async ({ root, wt, head, files }) => {
     await addGenerator(wt);
-    const claude = await emit({ harness: "claude" });
-    const pi = await emit({ harness: "pi" });
-    assert.ok(claude.workOrder.executionRules.regenerate);
-    assert.equal(claude.workOrder.executionRules.regenerate, pi.workOrder.executionRules.regenerate);
+    const bin = path.join(root, "tmp", "bin");
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ headRefName: "issue-1", headRefOid: head })}'\n`);
+    chmodSync(path.join(bin, "gh"), 0o755);
+    const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+    const rules = [];
+    for (const harness of ["claude", "pi"]) {
+      const cli = spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate"], { cwd: wt, encoding: "utf8", env });
+      assert.equal(cli.status, 0, cli.stderr);
+      rules.push(JSON.parse(await readFile(JSON.parse(cli.stdout).planPath, "utf8")).workOrder.executionRules.regenerate);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    assert.ok(rules[0]);
+    assert.equal(rules[0], rules[1]);
   });
 });
