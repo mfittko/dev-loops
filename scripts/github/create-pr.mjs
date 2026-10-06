@@ -663,7 +663,8 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   if (code === 0 && typeof baseForDiff === "string" && baseForDiff.trim().length > 0) {
     const earlySurface = await (runtime.evaluateEarlySurface ?? evaluateEarlySurface)({
       baseRefName: baseForDiff.trim().replace(/^origin\//u, ""),
-      head: "HEAD",
+      // ponytail: a bare branch name; owner:branch forms do not resolve locally and report unknown
+      head: getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN) ?? "HEAD",
       prBody: body ?? "",
       repoRoot: runtime.cwd ?? process.cwd(),
     });

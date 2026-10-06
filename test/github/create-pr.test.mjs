@@ -1885,6 +1885,7 @@ async function createPrEarlySurface(headFiles) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-early-surface-"));
   try {
     await initSizeBudgetFixtureRepo(tempDir, { headFiles });
+    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
     const { env } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
     const result = await runNode([
       "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
