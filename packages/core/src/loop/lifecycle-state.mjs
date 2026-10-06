@@ -369,12 +369,16 @@ export function lifecyclePhaseForCopilotState(copilotState) {
 export const LIFECYCLE_PHASE_UNKNOWN = "unknown";
 
 /**
- * Decide whether a PR carries any dev-loop evidence. True when EITHER:
- * - a loop checkpoint exists (`hasCheckpoint`), or
- * - steering evidence was loaded (`hasSteeringEvidence`).
- * Otherwise the PR is not dev-loop-driven and the phase must not be guessed.
- * Loop iteration records are intentionally excluded: the viewer defers that
- * fan-out, and the phase must be identical with or without it.
+ * Decide whether a PR carries dev-loop evidence. Dev-loop evidence is exactly
+ * two local facts, and True when EITHER holds:
+ * - an outer-loop checkpoint exists (`hasCheckpoint`), or
+ * - a steering state was loaded (`hasSteeringEvidence`).
+ * Gate artifacts, gate ledgers and loop-iteration records are NOT evidence.
+ * Gate state stays local, and inspection must not need to reconcile gate rounds.
+ * The viewer also defers the loop-iteration fan-out, and the phase must be
+ * identical with or without it.
+ * A dev-loop-driven PR with neither fact reports "unknown" by design, and the
+ * phase must not be guessed.
  *
  * @param {{hasCheckpoint?: boolean, hasSteeringEvidence?: boolean}} [facts]
  * @returns {boolean}

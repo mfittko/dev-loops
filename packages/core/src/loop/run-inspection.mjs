@@ -543,9 +543,11 @@ export function composeRunInspectionSnapshot({
   let lifecyclePhase = null;
   let lifecycleAllowedTransitions = null;
 
-  // Fail closed: with no dev-loop evidence the phase is not guessed.
-  // loopIterations is deliberately not an input: the viewer page defers that fan-out
-  // while /snapshot.json does not, and lifecyclePhase must not depend on it.
+  // Fail closed: dev-loop evidence is exactly two local facts, an outer-loop
+  // checkpoint or a loaded steering state. Gate artifacts, gate ledgers and
+  // loopIterations are NOT evidence (gate state stays local; inspection must not
+  // reconcile gate rounds). A dev-loop-driven PR with neither reports "unknown"
+  // by design, and the phase is not guessed.
   const devLoopEvidence = hasDevLoopEvidence({
     hasCheckpoint: existingCheckpoint !== null && existingCheckpoint !== undefined,
     hasSteeringEvidence: steeringEvidence !== null && steeringEvidence !== undefined,
