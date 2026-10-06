@@ -17,6 +17,9 @@ import {
 } from "../../scripts/loop/run-gate-validation.mjs";
 import { initGitFixture, runNode } from "../_helpers.mjs";
 
+// Hermetic: the default PR title reader would otherwise shell out to gh.
+process.env.DEVLOOPS_SKIP_PR_TITLE_READ = "1";
+
 const SCRIPT = fileURLToPath(new URL("../../scripts/loop/run-gate-validation.mjs", import.meta.url));
 
 function git(repoRoot, args) {

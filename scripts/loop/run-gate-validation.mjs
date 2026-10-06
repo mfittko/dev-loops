@@ -51,7 +51,7 @@ Optional:
 
 Output (stdout, JSON — the artifact itself):
   { "ok": true, "repo": "...", "pr": 1, "gate": "draft_gate", "headSha": "...",
-    "generatedAt": "...", "allPassed": true,
+    "prTitle": "..." | null, "generatedAt": "...", "allPassed": true,
     "suites": [ { "name": "test:scripts", "command": "bun run test:scripts", "exitCode": 0,
                   "outputTail": "...", "outputPath": "tmp/gate-context/.../...log" } ] }
 Exit codes:
@@ -264,9 +264,20 @@ function runSuite(name, { repoRoot, env }) {
   });
 }
 
-async function defaultReadPrTitle({ repo, pr }) {
-  const { pr: view } = await viewPr({ repo, pr, fields: "title" });
-  return view.title;
+const PR_TITLE_READ_TIMEOUT_MS = 10_000;
+
+// Bounded so a stalled gh call maps to null (commit-subject fallback) instead of
+// hanging the run. DEVLOOPS_SKIP_PR_TITLE_READ=1 skips the read (hermetic tests).
+async function defaultReadPrTitle({ repo, pr }, env = process.env) {
+  if (env.DEVLOOPS_SKIP_PR_TITLE_READ === "1") return null;
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), PR_TITLE_READ_TIMEOUT_MS); });
+  try {
+    const read = viewPr({ repo, pr, fields: "title" }).then(({ pr: view }) => view.title);
+    return await Promise.race([read, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -289,7 +300,7 @@ export async function buildValidationArtifact(
   // The changelog validator reads the PR title from DEVLOOPS_PR_TITLE. A failed or
   // empty read leaves it unset so the check falls back to commit subjects (stricter).
   const { DEVLOOPS_PR_TITLE: _inherited, ...baseEnv } = env;
-  const prTitle = await Promise.resolve(readPrTitle({ repo, pr })).then(
+  const prTitle = await Promise.resolve(readPrTitle({ repo, pr }, env)).then(
     (t) => (typeof t === "string" && t.trim() !== "" ? t : null),
     () => null,
   );
