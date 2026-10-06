@@ -12,7 +12,7 @@ function parseTable(markdown) {
   assert.ok(section, "ROUTING-PRIORITY-ORDER marker not found");
   const table = section.match(/^\| Priority \|[^\n]*\n(?:\|[^\n]*\n?)+/m);
   assert.ok(table, "priority table not found");
-  const dataLines = table[0].split("\n").filter((line) => /^\| (0[abc]|\d+) \|/.test(line));
+  const dataLines = table[0].split("\n").slice(2).filter((line) => line.startsWith("|"));
   const parsed = dataLines
     .map((line) => line.match(/^\| (0[abc]|\d+) \| .*? \| `([a-z_]+)`(?: \(`([a-z_]+)`\))?/))
     .filter(Boolean)
@@ -54,4 +54,8 @@ test("freshness check fails for a swapped, deleted or malformed table row in the
   const last = lines.findIndex((line) => line.startsWith("| 17 |"));
   appended.splice(last + 1, 0, "| 18 | x | needs_reconcile |");
   assert.throws(() => parseTable(appended.join("\n")), /cannot read/);
+
+  const unknownLabel = [...lines];
+  unknownLabel.splice(last + 1, 0, "| 0d | x | `needs_reconcile` (`unknown_state`) |");
+  assert.throws(() => parseTable(unknownLabel.join("\n")), /cannot read/);
 });
