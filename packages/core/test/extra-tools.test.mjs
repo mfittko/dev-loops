@@ -118,7 +118,7 @@ describe("extraToolsGuidance schema", () => {
   });
 
   test("rejects an empty value, a value over 2000 characters and a malformed key, naming the key", () => {
-    for (const value of ["", "x".repeat(2001)]) {
+    for (const value of ["", "   ", "a\n## Other rules", "x".repeat(2001)]) {
       const result = FileConfigSchema.safeParse({ ...GUIDED, extraToolsGuidance: { mcp__srv: value } });
       assert.deepEqual(result.error.issues.map((issue) => issue.path.join(".")), ["extraToolsGuidance.mcp__srv"]);
     }
@@ -196,6 +196,11 @@ describe("extraToolsGuidance render", () => {
     const overrides = buildAgentOverrides(GUIDED, repoRoot, new Set(["srv", "other"]));
     assert.match(overrides.developer.prompt, /mcp__srv/);
     assert.doesNotMatch(overrides.fixer.prompt, /Session MCP tool guidance/);
+  });
+
+  test("matches a detected server whose name holds characters Claude Code maps to underscore", () => {
+    const config = { ...GUIDED, extraTools: { developer: ["mcp__code_graph"] }, extraToolsGuidance: { mcp__code_graph: "Use graph." } };
+    assert.match(promptOf(buildAgentOverrides(config, repoRoot, new Set(["code.graph"])), "developer"), /- `mcp__code_graph`: Use graph\./);
   });
 
   test("tools, allowedTools and env are unchanged by guidance and detection", () => {

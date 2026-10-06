@@ -121,7 +121,6 @@
       },
       "additionalProperties": {
         "type": "string",
-        "minLength": 1,
         "maxLength": 2000
       },
       "description": "Claude-only: `extraTools` entry → usage guidance appended to the prompt of each role that lists the entry, when that MCP server is detected for the session (Pi ignores it)."

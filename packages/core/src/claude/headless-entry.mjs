@@ -59,8 +59,10 @@ export function detectSessionMcpServers({ repoRoot, homeDir, env = process.env }
 const GUIDANCE_FRAME = "## Session MCP tool guidance\n\nApply a line only when tools named `mcp__<server>__*` for that server are in your tool list.\n";
 
 function renderGuidance(extra, guidance, detectedServers) {
+  // Claude Code maps characters outside [A-Za-z0-9_-] in a server name to `_` in tool names.
+  const toolServers = new Set([...detectedServers].map((name) => String(name).replace(/[^A-Za-z0-9_-]/g, "_")));
   const lines = extra
-    .filter((entry) => Object.hasOwn(guidance, entry) && detectedServers.has(entry.split("__")[1]))
+    .filter((entry) => Object.hasOwn(guidance, entry) && toolServers.has(entry.split("__")[1]))
     .map((entry) => `- \`${entry}\`: ${guidance[entry]}`);
   return lines.length === 0 ? "" : `\n\n${GUIDANCE_FRAME}\n${lines.join("\n")}`;
 }
