@@ -31,7 +31,7 @@ function readJson(file) {
   }
 }
 
-const serverNames = (servers) => (servers && typeof servers === "object" ? Object.keys(servers) : []);
+const serverNames = (servers) => (servers && typeof servers === "object" && !Array.isArray(servers) ? Object.keys(servers) : []);
 
 /**
  * Names of the MCP servers that the launched session loads from its config files: user and local
@@ -42,8 +42,9 @@ const serverNames = (servers) => (servers && typeof servers === "object" ? Objec
  * @param {{ repoRoot: string, homeDir?: string, env?: Record<string,string|undefined> }} params
  * @returns {Set<string>}
  */
-export function detectSessionMcpServers({ repoRoot, homeDir = os.homedir(), env = process.env }) {
-  const configDir = env.CLAUDE_CONFIG_DIR || homeDir;
+export function detectSessionMcpServers({ repoRoot, homeDir, env = process.env }) {
+  const configDir = env.CLAUDE_CONFIG_DIR || homeDir || env.HOME || os.homedir();
+  repoRoot = path.resolve(repoRoot);
   const claudeJson = readJson(path.join(configDir, ".claude.json"));
   const local = claudeJson.projects?.[repoRoot] ?? {};
   const servers = new Set([

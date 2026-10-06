@@ -1047,7 +1047,7 @@ export const FileConfigSchema = z.strictObject({
   standingAuthorizations: StandingAuthorizationsConfig.describe("Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops.").optional(),
   classify: ClassifyConfig.optional(),
   // Unknown keys fail closed like any typo (strictObject).
-}).superRefine(refineExtraToolsGuidanceKeys);
+});
 
 // ============================================================================
 // Built-in persona registry — fallback for gate-review angle → reviewer

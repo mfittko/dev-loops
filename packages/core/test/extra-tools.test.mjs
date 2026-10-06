@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
 
-import { DevLoopConfigSchema, FileConfigSchema, resolveExtraToolsGuidance, resolveRoleExtraTools } from "../src/config/config.mjs";
+import { DevLoopConfigSchema, FileConfigSchema, loadDevLoopConfigStrict, resolveExtraToolsGuidance, resolveRoleExtraTools } from "../src/config/config.mjs";
 import { buildAgentOverrides, buildClaudeLaunch, buildHeadlessClaudeInvocation, detectSessionMcpServers } from "../src/claude/headless-entry.mjs";
 import { decideAgentDispatch } from "../src/claude/hook-decisions.mjs";
 
@@ -107,16 +107,20 @@ describe("extraToolsGuidance schema", () => {
     assert.deepEqual(resolveExtraToolsGuidance(null), {});
   });
 
-  test("rejects an unlisted key and names it", () => {
+  test("a merged config rejects an unlisted key and names it; a single layer is not judged alone", () => {
     const config = { ...GUIDED, extraToolsGuidance: { mcp__ghost: "x" } };
-    assert.deepEqual(guidanceErrors(config), ['extraToolsGuidance key "mcp__ghost" matches no extraTools entry']);
-    assert.equal(DevLoopConfigSchema.safeParse(config).success, false);
-    assert.notEqual(guidanceErrors({ version: 1, extraToolsGuidance: { mcp__srv: "x" } }).length, 0);
+    const merged = DevLoopConfigSchema.safeParse(config);
+    assert.equal(merged.success, false);
+    assert.deepEqual(merged.error.issues.map((issue) => issue.message), ['extraToolsGuidance key "mcp__ghost" matches no extraTools entry']);
+    const layer = { version: 1, extraToolsGuidance: { mcp__srv: "x" } };
+    assert.equal(FileConfigSchema.safeParse(layer).success, true);
+    assert.equal(DevLoopConfigSchema.safeParse(layer).success, false);
   });
 
-  test("rejects an empty value, a value over 2000 characters and a malformed key", () => {
+  test("rejects an empty value, a value over 2000 characters and a malformed key, naming the key", () => {
     for (const value of ["", "x".repeat(2001)]) {
-      assert.notEqual(guidanceErrors({ ...GUIDED, extraToolsGuidance: { mcp__srv: value } }).length, 0);
+      const result = FileConfigSchema.safeParse({ ...GUIDED, extraToolsGuidance: { mcp__srv: value } });
+      assert.deepEqual(result.error.issues.map((issue) => issue.path.join(".")), ["extraToolsGuidance.mcp__srv"]);
     }
     assert.equal(FileConfigSchema.safeParse({ ...GUIDED, extraToolsGuidance: { mcp__srv: "x".repeat(2000) } }).success, true);
     assert.notEqual(guidanceErrors({ ...GUIDED, extraToolsGuidance: { Read: "x" } }).length, 0);
@@ -199,17 +203,46 @@ describe("extraToolsGuidance render", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "mcp-launch-"));
     try {
       writeFileSync(path.join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { srv: {} } }));
-      const guided = buildClaudeLaunch({ config: GUIDED, repoRoot, projectRoot: dir, baseEnv: { HOME: dir } });
+      const guided = buildClaudeLaunch({ config: GUIDED, repoRoot, projectRoot: dir, baseEnv: { HOME: dir, CLAUDE_CONFIG_DIR: dir } });
       const absent = buildClaudeLaunch({ config: GUIDED, repoRoot, projectRoot: path.join(dir, "none"), baseEnv: { CLAUDE_CONFIG_DIR: dir } });
       const overrides = JSON.parse(guided.args[1]);
       assert.match(overrides.developer.prompt, /Session MCP tool guidance/);
       assert.deepEqual(guided.args.slice(2), plain.args.slice(2));
-      assert.deepEqual(guided.env, { ...plain.env, HOME: dir });
+      assert.deepEqual(guided.env, { ...plain.env, HOME: dir, CLAUDE_CONFIG_DIR: dir });
       assert.equal(absent.args[1], plain.args[1]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+test("the repo .devloops guidance renders for developer, fixer and refiner when the server is detected", async () => {
+  const { config } = await loadDevLoopConfigStrict({ repoRoot });
+  const overrides = buildAgentOverrides(config, repoRoot, new Set(["codebase-memory"]));
+  for (const role of ["developer", "fixer", "refiner"]) {
+    const prompt = overrides[role].prompt;
+    assert.match(prompt, /Session MCP tool guidance/, role);
+    assert.match(prompt, /call delete_project for that project before your hand-back/, role);
+    assert.match(prompt, /call index_repository once on your worktree path/, role);
+    assert.match(prompt, /use the main-checkout project and confirm each answer with Read or Grep/, role);
+  }
+});
+
+test("headless-entry does not import child_process", () => {
+  const source = readFileSync(path.join(repoRoot, "packages/core/src/claude/headless-entry.mjs"), "utf8");
+  assert.doesNotMatch(source, /child_process/);
+});
+
+test("detection ignores array-shaped mcpServers and normalizes the project root", () => {
+  const home = mkdtempSync(path.join(tmpdir(), "mcp-detect-"));
+  try {
+    const project = path.join(home, "proj");
+    mkdirSync(project);
+    writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: ["a"], projects: { [project]: { mcpServers: { local: {} } } } }));
+    assert.deepEqual([...detectSessionMcpServers({ repoRoot: `${project}/sub/..`, homeDir: home, env: {} })], ["local"]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 describe("launcher and headless entry scripts", () => {
