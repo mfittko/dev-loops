@@ -218,7 +218,7 @@ The priority table above is hand-written. Its policy source is the JSON chart at
 - The `route` state holds the `always` arrows in first-match order: pre-checks `0a`, `0b`, `0c`, then rules 1 to 17. The runner takes the first arrow whose guard holds. Rule 17 has no guard and is last.
 - Each arrow targets a final state named after a routing outcome. The final state's `meta` supplies `outerAction`, `loopFamily` and `entrypoint`. The arrow's `meta` supplies `rule`, `stopReason` and `preCheck`.
 - The guard predicates and the reason texts, keyed by rule, live in `packages/core/src/loop/conductor-routing.mjs`. `evaluateConductorRouting` normalizes the input, runs the chart and builds the envelope. Pre-check results carry empty `requiredArgs`.
-- Coverage invariants: no arrow is dead over the full input product, and the golden test pins every result of that product (24,480 inputs).
+- Coverage invariants: no arrow is dead over the full input product, and the golden test (`packages/core/test/conductor-routing-golden.test.mjs`) pins every result of that product (24,480 inputs) against the fixture `packages/core/test/fixtures/conductor-routing-golden.json`.
 - A freshness test fails when the `ROUTING-PRIORITY-ORDER` table differs from the chart arrows in row order, rule ids, outcomes or stop reasons.
 
 ---

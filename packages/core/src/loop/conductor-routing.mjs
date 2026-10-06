@@ -293,7 +293,13 @@ const REASONS = Object.freeze({
     `Unrecognized combined state: copilot_state=${copilotState}, reviewer_state=${reviewerState}`,
 });
 
+// Freeze the shared JSON arrows so a consumer of selectRoutingArrow cannot mutate routing.
 const ROUTE_ARROWS = routingChart.states[routingChart.initial].always;
+for (const arrow of ROUTE_ARROWS) {
+  Object.freeze(arrow.meta);
+  Object.freeze(arrow);
+}
+Object.freeze(ROUTE_ARROWS);
 
 // First `always` arrow whose guard holds wins; the last arrow is unguarded.
 // Exported so tests can see which rule fired.

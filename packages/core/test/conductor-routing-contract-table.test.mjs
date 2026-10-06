@@ -31,9 +31,20 @@ test("contract priority table matches the chart arrows in order, outcomes and st
   assert.deepEqual(rows, chartRows);
 });
 
-test("freshness check fails for a reordered or missing table row", () => {
-  const rows = parseTable(readFileSync(contractPath, "utf8"));
-  const reordered = [rows[1], rows[0], ...rows.slice(2)];
-  assert.notDeepEqual(reordered, chartRows);
-  assert.notDeepEqual(rows.slice(1), chartRows);
+test("freshness check fails for a swapped, deleted or malformed table row in the contract text", () => {
+  const markdown = readFileSync(contractPath, "utf8");
+  const lines = markdown.split("\n");
+  const start = lines.findIndex((line) => line.startsWith("| 0a |"));
+  assert.ok(start >= 0, "first table row not found");
+
+  const swapped = [...lines];
+  [swapped[start], swapped[start + 1]] = [swapped[start + 1], swapped[start]];
+  const deleted = lines.filter((_, index) => index !== start);
+  const malformed = [...lines];
+  malformed[start] = malformed[start].replace("`needs_reconcile`", "needs_reconcile");
+  assert.notEqual(malformed[start], lines[start], "malformed mutation must change the row");
+
+  assert.notDeepEqual(parseTable(swapped.join("\n")), chartRows);
+  assert.notDeepEqual(parseTable(deleted.join("\n")), chartRows);
+  assert.notEqual(parseTable(malformed.join("\n")).length, 20);
 });
