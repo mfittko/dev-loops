@@ -92,7 +92,12 @@ test('existing focus priority preserves unavailable lifecycle focus without inve
   const unknownLifecycle = buildInspectionGraph(makeSnapshot({ lifecyclePhase: 'unrecognized_phase' }));
   assert.equal(unknownLifecycle.initialLayerId, 'lifecycle_layer');
   assert.equal(unknownLifecycle.layers[3].current.nodeId, null);
-  assert.notEqual(buildInspectionGraph(makeSnapshot({ lifecyclePhase: 'unknown' })).initialLayerId, 'lifecycle_layer');
+  const unknownToken = buildInspectionGraph(makeSnapshot({ lifecyclePhase: 'unknown' }));
+  assert.notEqual(unknownToken.initialLayerId, 'lifecycle_layer');
+  assert.equal(unknownToken.layers[3].current.status, 'unavailable');
+  assert.equal(unknownToken.layers[3].current.reason, 'unknown-token');
+  const reReview = layer({ layers: { reviewer: { currentState: 're_review_needed', allowedTransitions: [] } } }, 'reviewer_layer');
+  assert.notEqual(reReview.current.nodeId, null);
   assert.equal(buildInspectionGraph(makeSnapshot({ lifecyclePhase: null, outerState: OUTER_STATE.HANDOFF_TO_COPILOT_LOOP })).initialLayerId, 'copilot_layer');
   assert.equal(buildInspectionGraph(makeSnapshot({ lifecyclePhase: null, outerState: OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP })).initialLayerId, 'reviewer_layer');
   assert.equal(buildInspectionGraph(makeSnapshot({ lifecyclePhase: null, outerState: 'unknown', outerAction: 'reenter_reviewer_loop' })).initialLayerId, 'reviewer_layer');
