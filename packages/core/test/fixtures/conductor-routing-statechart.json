@@ -1,0 +1,45 @@
+{
+  "id": "conductor-routing",
+  "initial": "route",
+  "context": {
+    "targetValid": true,
+    "copilotState": "pr_draft",
+    "reviewerState": "waiting_for_review_request",
+    "ownershipState": null,
+    "sourceMode": "local",
+    "requiresLocalIsolation": false
+  },
+  "states": {
+    "route": {
+      "always": [
+        { "target": "needs_reconcile", "guard": "invalidTarget", "meta": { "rule": "0a", "stopReason": "unknown_state", "preCheck": true } },
+        { "target": "needs_reconcile", "guard": "missingCopilotState", "meta": { "rule": "0b", "stopReason": "unknown_state", "preCheck": true } },
+        { "target": "needs_reconcile", "guard": "missingReviewerState", "meta": { "rule": "0c", "stopReason": "unknown_state", "preCheck": true } },
+        { "target": "needs_reconcile", "guard": "duplicateOwners", "meta": { "rule": 1, "stopReason": "ownership_conflict" } },
+        { "target": "done_terminal", "guard": "copilotDone", "meta": { "rule": 2 } },
+        { "target": "stop_needs_human", "guard": "copilotNoPr", "meta": { "rule": 3, "stopReason": "pr_not_ready" } },
+        { "target": "stop_needs_human", "guard": "reviewUnavailable", "meta": { "rule": 4, "stopReason": "review_unavailable" } },
+        { "target": "stop_needs_human", "guard": "copilotBlocked", "meta": { "rule": 5, "stopReason": "copilot_blocked" } },
+        { "target": "stop_needs_human", "guard": "reviewerBlocked", "meta": { "rule": 6, "stopReason": "reviewer_blocked" } },
+        { "target": "stay_with_current_live_owner", "guard": "copilotDraftAndLiveOwner", "meta": { "rule": 7 } },
+        { "target": "handoff_to_copilot_loop", "guard": "copilotDraft", "meta": { "rule": 8 } },
+        { "target": "continue_current_wait", "guard": "waitingForCopilotReview", "meta": { "rule": 9 } },
+        { "target": "stay_with_current_live_owner", "guard": "reviewerActiveAndLiveOwner", "meta": { "rule": 10 } },
+        { "target": "handoff_to_reviewer_loop", "guard": "reviewerActive", "meta": { "rule": 11 } },
+        { "target": "stay_with_current_live_owner", "guard": "copilotStrongActiveAndLiveOwner", "meta": { "rule": 12 } },
+        { "target": "handoff_to_copilot_loop", "guard": "copilotStrongActive", "meta": { "rule": 13 } },
+        { "target": "continue_current_wait", "guard": "anyWait", "meta": { "rule": 14 } },
+        { "target": "stay_with_current_live_owner", "guard": "copilotWeakActiveAndLiveOwner", "meta": { "rule": 15 } },
+        { "target": "handoff_to_copilot_loop", "guard": "copilotWeakActive", "meta": { "rule": 16 } },
+        { "target": "needs_reconcile", "meta": { "rule": 17, "stopReason": "unknown_state" } }
+      ]
+    },
+    "needs_reconcile": { "type": "final", "meta": { "outerAction": "stop" } },
+    "done_terminal": { "type": "final", "meta": { "outerAction": "done" } },
+    "stop_needs_human": { "type": "final", "meta": { "outerAction": "stop" } },
+    "stay_with_current_live_owner": { "type": "final", "meta": { "outerAction": "continue_wait", "loopFamily": "outer_loop", "entrypoint": "outer_loop_wait" } },
+    "handoff_to_copilot_loop": { "type": "final", "meta": { "outerAction": "reenter_copilot_loop", "loopFamily": "copilot_loop", "entrypoint": "copilot_pr_handoff" } },
+    "handoff_to_reviewer_loop": { "type": "final", "meta": { "outerAction": "reenter_reviewer_loop", "loopFamily": "reviewer_loop", "entrypoint": "reviewer_loop_handler" } },
+    "continue_current_wait": { "type": "final", "meta": { "outerAction": "continue_wait", "loopFamily": "outer_loop", "entrypoint": "outer_loop_wait" } }
+  }
+}
