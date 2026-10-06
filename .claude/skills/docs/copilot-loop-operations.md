@@ -180,7 +180,7 @@ One Copilot review watch boundary must be capped. Defaults:
 - parent/subagent no-activity threshold for watcher-style runs: at least **15 minutes**
 - active-long-running notice threshold for watcher-style runs: about **30 minutes**
 
-`probe-copilot-review.mjs`, `run-watch-cycle.mjs`, and the `watchArgs` emitted by `copilot-pr-handoff.mjs` build in these defaults. Do not pass removed CLI policy flags (`--poll-interval-ms`, `--probe-only`). The scripts reject them, but in the `dev-loops gate …` path the CLI retry-wrapper (`buildCorrectedArgs`) may strip such a flag and silently retry with defaults. `probe-copilot-review.mjs` does accept `--timeout-ms` (watch budget in ms; `0` = single immediate idle check, no watch); timeouts and intervals are otherwise derived from `packages/core/src/loop/policy-constants.mjs`.
+`probe-copilot-review.mjs`, `run-watch-cycle.mjs`, and the `watchArgs` emitted by `copilot-pr-handoff.mjs` build in these defaults. Do not pass removed CLI policy flags (`--poll-interval-ms`, `--probe-only`). The scripts reject them, and every routed `dev-loops` subcommand rejects them the same way, with the script's exit code and error text. `probe-copilot-review.mjs` does accept `--timeout-ms` (watch budget in ms; `0` = single immediate idle check, no watch); timeouts and intervals are otherwise derived from `packages/core/src/loop/policy-constants.mjs`.
 
 ### Outer-loop checkpoint: canonical re-attachment artifact
 

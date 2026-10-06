@@ -808,7 +808,7 @@ export async function runCli({
       if (!isCoreResolvable()) return writeCoreUnresolvableError(stderr);
       if (fromTop.deprecationNotice) { writeLines(stderr, [fromTop.deprecationNotice]); }
       const scriptArgs = fromTop.forwardedArgs || [];
-      // Interactive launchers hand the terminal to the child: inherited stdio, no usage-retry.
+      // Interactive launchers hand the terminal to the child: inherited stdio.
       if (INHERIT_STDIO_SCRIPTS.has(fromTop.scriptPath)) {
         // Ctrl-C reaches the whole foreground group; the child handles it, this wrapper must stay alive.
         const ignoreSigint = () => {};
@@ -820,35 +820,6 @@ export async function runCli({
       const result = spawnSync("node", [fromTop.scriptPath, ...scriptArgs], {
         cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       });
-      // Retry on usage/flag errors: parse usage for valid flags, retry once.
-      // Reached only once core is confirmed resolvable above, so this dynamic
-      // import (not a top-level one) never throws ERR_MODULE_NOT_FOUND itself.
-      const { isUsageError, buildCorrectedArgs, extractUsageText } = result.status !== 0
-        ? await import("@dev-loops/core/cli/retry-wrapper")
-        : {};
-      if (result.status !== 0 && isUsageError(result.stderr)) {
-        // An argument error's stderr JSON now carries a short `hint`, not the
-        // full usage text (short-error contract), so `buildCorrectedArgs`
-        // usually has nothing to extract valid flags from. `--help` still
-        // prints the full usage unchanged — fetch it there instead so the
-        // auto-correct retry keeps working.
-        let usageSource = result.stderr;
-        if (!extractUsageText(usageSource)) {
-          const helpResult = spawnSync("node", [fromTop.scriptPath, "--help"], {
-            cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-          });
-          if (helpResult.stdout) usageSource = helpResult.stdout;
-        }
-        const correctedArgs = buildCorrectedArgs(scriptArgs, usageSource);
-        if (correctedArgs && correctedArgs.length > 0) {
-          const retryResult = spawnSync("node", [fromTop.scriptPath, ...correctedArgs], {
-            cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-          });
-          if (retryResult.stdout) stdout.write(retryResult.stdout);
-          if (retryResult.stderr) stderr.write(retryResult.stderr);
-          return retryResult.status ?? (retryResult.signal ? 1 : retryResult.error ? 1 : 0);
-        }
-      }
       if (result.stdout) stdout.write(result.stdout);
       if (result.stderr) stderr.write(result.stderr);
       return result.status ?? (result.signal ? 1 : result.error ? 1 : 0);

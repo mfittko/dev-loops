@@ -873,3 +873,28 @@ test("isPlausibleDistTagVersion: rejects a plausible numeric core carrying contr
   assert.equal(isPlausibleDistTagVersion("1.0.0-`ls`"), false);
   assert.equal(isPlausibleDistTagVersion("1.0.0-rc.1\nRunning the latest published version (9.9.9)"), false);
 });
+
+test("routed subcommands reject an unknown flag exactly like the direct script", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-unknown-flag-"));
+  try {
+    const bodyFile = path.join(dir, "body.md");
+    await writeFile(bodyFile, "## Problem\nx\n");
+    const judgeFlags = ["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abcdef1", "--findings-file", "x", "--judge-verdict", "y", "--judge-plan", "z"];
+    const cases = [
+      { cli: ["gate", "judge-pass", ...judgeFlags, "--prior-approvals-ignore"], script: "scripts/loop/judge-pass.mjs" },
+      { cli: ["loop", "spec-lint", "--body-file", bodyFile, "--bogus-flag"], script: "scripts/loop/spec-lint.mjs" },
+    ];
+    for (const { cli, script } of cases) {
+      const viaCli = spawnSync("node", ["./cli/index.mjs", ...cli], { cwd: repoRoot, encoding: "utf8" });
+      const direct = spawnSync("node", [script, ...cli.slice(2)], { cwd: repoRoot, encoding: "utf8" });
+      assert.notEqual(viaCli.status, 0, cli.join(" "));
+      assert.equal(viaCli.status, direct.status, cli.join(" "));
+      assert.equal(viaCli.stderr, direct.stderr, cli.join(" "));
+    }
+    const gate = spawnSync("node", ["./cli/index.mjs", "gate", "judge-pass", ...judgeFlags, "--prior-approvals-ignore"], { cwd: repoRoot, encoding: "utf8" });
+    assert.match(gate.stderr, /Unknown argument: --prior-approvals-ignore/);
+    assert.doesNotMatch(gate.stderr, /ENOENT/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
