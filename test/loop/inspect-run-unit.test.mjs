@@ -13,6 +13,7 @@ import {
   TRUST,
 } from "../../packages/core/src/loop/run-inspection.mjs";
 import { STATE as COPILOT_STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
+import { interpretReviewerLoopState } from "../../packages/core/src/loop/reviewer-loop-state.mjs";
 import { inspectRun, inspectRunLoopIterations, parseInspectRunCliArgs } from "../../scripts/loop/inspect-run.mjs";
 import {
   makeCopilotEvidence,
@@ -62,7 +63,7 @@ test("composeRunInspectionSnapshot: complete live evidence returns all required 
     outerReason: undefined,
     copilotEvidence,
     reviewerEvidence,
-    existingCheckpoint: null,
+    existingCheckpoint: {},
     liveAvailability: { copilot: "ok", reviewer: "ok" },
     steeringLocatorPath: null,
     steeringEvidence: null,
@@ -156,7 +157,7 @@ test("composeRunInspectionSnapshot: explicitTargetMissing uses hasLinkedPr false
     explicitTargetMissing: false,
     copilotEvidence,
     reviewerEvidence,
-    existingCheckpoint: null,
+    existingCheckpoint: {},
     liveAvailability: { copilot: "ok", reviewer: "ok" },
     steeringLocatorPath: null,
     steeringEvidence: null,
@@ -173,7 +174,7 @@ test("composeRunInspectionSnapshot: explicitTargetMissing uses hasLinkedPr false
     explicitTargetMissing: true,
     copilotEvidence,
     reviewerEvidence,
-    existingCheckpoint: null,
+    existingCheckpoint: {},
     liveAvailability: { copilot: "ok", reviewer: "ok" },
     steeringLocatorPath: null,
     steeringEvidence: null,
@@ -911,7 +912,7 @@ function composeWithLoopIterations(loopIterations, { copilotEvidence, liveAvaila
     outerReason: undefined,
     copilotEvidence,
     reviewerEvidence: makeReviewerEvidence("waiting_for_author_followup"),
-    existingCheckpoint: null,
+    existingCheckpoint: {},
     liveAvailability,
     steeringLocatorPath: null,
     steeringEvidence: null,
@@ -1052,4 +1053,52 @@ test("inspectRun names config_load_failed instead of a fetch failure when .devlo
       process.chdir(originalCwd);
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// Unit tests: fail-closed lifecycle phase and stale-review state (#2660)
+// ---------------------------------------------------------------------------
+
+function composeNonDevLoopStalePr({ existingCheckpoint = null, steeringEvidence = null } = {}) {
+  const reviewerSnapshot = {
+    prExists: true,
+    prNumber: 55,
+    prHeadSha: "def456",
+    reviewRequested: false,
+    submittedReviewPresent: true,
+    submittedReviewCommitSha: "abc123",
+    submittedReviewState: "COMMENTED",
+  };
+  const reviewerEvidence = makeReviewerEvidence();
+  reviewerEvidence.snapshot = { ...reviewerEvidence.snapshot, ...reviewerSnapshot };
+  reviewerEvidence.interpretation = interpretReviewerLoopState(reviewerSnapshot);
+  return composeRunInspectionSnapshot({
+    target: { repo: "owner/repo", pr: 55 },
+    inspectedAt: "2026-05-18T12:00:00Z",
+    outerState: "continue_current_wait",
+    outerAllowedTransitions: ["continue_current_wait"],
+    outerAction: "continue_wait",
+    copilotEvidence: makeCopilotEvidence("pr_ready_no_feedback"),
+    reviewerEvidence,
+    existingCheckpoint,
+    liveAvailability: { copilot: "ok", reviewer: "ok" },
+    steeringLocatorPath: null,
+    steeringEvidence,
+    steeringLoadFailed: false,
+  });
+}
+
+test("composeRunInspectionSnapshot: a ready non-dev-loop PR with a stale review is lifecycle unknown and re_review_needed", () => {
+  const snapshot = composeNonDevLoopStalePr();
+  assert.equal(snapshot.lifecyclePhase, "unknown");
+  assert.deepEqual(snapshot.lifecycleAllowedTransitions, []);
+  assert.equal(snapshot.layers.reviewer.currentState, "re_review_needed");
+});
+
+test("composeRunInspectionSnapshot: checkpoint or steering evidence keeps the mapped lifecycle phase", () => {
+  for (const evidence of [{ existingCheckpoint: {} }, { steeringEvidence: {} }]) {
+    const snapshot = composeNonDevLoopStalePr(evidence);
+    assert.equal(snapshot.lifecyclePhase, "draft_gate");
+    assert.deepEqual(snapshot.lifecycleAllowedTransitions, ["implementation", "feedback_resolution"]);
+  }
 });

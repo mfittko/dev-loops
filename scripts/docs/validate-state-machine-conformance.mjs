@@ -859,6 +859,7 @@ const REVIEWER_LOOP_STATE_ABSTRACT_ROWS = new Map([
     [REVIEWER_STATE.WAITING_FOR_USER_SUBMIT, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
     [REVIEWER_STATE.REVIEW_INVALIDATED, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
     [REVIEWER_STATE.SUBMITTED_REVIEW, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
+    [REVIEWER_STATE.RE_REVIEW_NEEDED, REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION],
   ]],
   // The reviewSubmissionStatus:"submitted" guard routes the pre-posted local-metadata
   // branches into submitted_review (draft_review_posted/waiting_for_user_submit reach it
@@ -902,6 +903,7 @@ const REVIEWER_LOOP_STATE_TO_FIXTURE = new Map([
   [REVIEWER_STATE.WAITING_FOR_USER_SUBMIT, () => ({ prExists: true, prDraft: false, draftReviewPosted: true, draftReviewNotificationStatus: "notified", prHeadSha: "abc1234", draftReviewCommitSha: "abc1234" })],
   [REVIEWER_STATE.SUBMITTED_REVIEW, () => ({ prExists: true, prDraft: false, submittedReviewPresent: true, prHeadSha: "abc1234", submittedReviewCommitSha: "abc1234", reviewRequested: false })],
   [REVIEWER_STATE.REVIEW_INVALIDATED, () => ({ prExists: true, prDraft: false, draftReviewPosted: true, prHeadSha: "def5678", draftReviewCommitSha: "abc1234" })],
+  [REVIEWER_STATE.RE_REVIEW_NEEDED, () => ({ prExists: true, prDraft: false, submittedReviewPresent: true, prHeadSha: "def5678", submittedReviewCommitSha: "abc1234", reviewRequested: false })],
   [REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST, () => ({ prExists: false })],
   // Four variants — one per failure field the interpreter fail-closes on
   // (reviewer-loop-state.mjs routes any of them to BLOCKED identically), so the

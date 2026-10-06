@@ -25,6 +25,7 @@ Implementation:
 | `draft_review_posted` | Pending GitHub review exists for current head but link not yet surfaced |
 | <!-- term: state:waiting_for_user_submit --> `waiting_for_user_submit` | Pending review link is surfaced; wait for submission |
 | `submitted_review` | Internal reviewer pass reached a submitted outcome/verdict; handoff boundary to remediation/fix follow-up |
+| `re_review_needed` | The latest submitted review targets a commit other than the current head and no fresh review is requested; the PR needs a re-review (external wait, named actor boundary: author/operator re-request of a fresh review on the current head) |
 | <!-- term: state:waiting_for_author_followup --> `waiting_for_author_followup` | Legacy external-wait compatibility state (named actor boundary: author/Copilot follow-up), not an internal reviewer-pass completion target |
 | <!-- term: state:waiting_for_re_request --> `waiting_for_re_request` | Legacy external-wait compatibility state (named actor boundary: author/Copilot re-request action), not an internal reviewer-pass completion target |
 | `review_invalidated` | Pending draft review is stale for current head SHA |
@@ -39,7 +40,7 @@ Terminal state with no outgoing transitions: `blocked_needs_user_decision`.
 - any active reviewer-pass state -> `blocked_needs_user_decision`
   - unexpected failure in planning, local review runs, or merge synthesis; "any active reviewer-pass state" means the five states `review_requested`, `determine_review_plan`, `reviews_running`, `merge_results`, and `draft_review_ready`
 - any submission-failure-eligible state -> `blocked_needs_user_decision`
-  - the `reviewSubmissionStatus: "failed"` guard fails closed from every pre-gate-passing state; beyond the active reviewer-pass states above that means `waiting_for_review_request`, `draft_review_posted`, `waiting_for_user_submit`, `review_invalidated`, and `submitted_review`
+  - the `reviewSubmissionStatus: "failed"` guard fails closed from every pre-gate-passing state; beyond the active reviewer-pass states above that means `waiting_for_review_request`, `draft_review_posted`, `waiting_for_user_submit`, `review_invalidated`, `submitted_review`, and `re_review_needed`
 - any pre-posted submission-settled state -> `submitted_review`
   - a recorded `reviewSubmissionStatus: "submitted"` outcome outranks the pre-posted local-metadata branches into `submitted_review`: `waiting_for_review_request`, `review_requested`, `determine_review_plan`, `reviews_running`, `merge_results`, and `draft_review_ready`
 - `review_requested` -> `determine_review_plan`
@@ -62,6 +63,14 @@ Terminal state with no outgoing transitions: `blocked_needs_user_decision`.
   - review submission settles as submitted
 - `waiting_for_user_submit` -> `review_invalidated`
   - draft review commit SHA no longer matches the PR head SHA
+- `submitted_review` -> `re_review_needed`
+  - author/Copilot pushed a new head after the submitted review and no fresh review is requested
+- `re_review_needed` -> `review_requested`
+  - a fresh review is explicitly requested on the current head
+- `re_review_needed` -> `submitted_review`
+  - a fresh review is submitted on the current head without an explicit re-request
+- `re_review_needed` -> `waiting_for_review_request`
+  - the PR is converted to draft, closed, or merged
 - `submitted_review` -> `review_requested`
   - author/Copilot pushed a new head and a fresh review was explicitly re-requested
 - `submitted_review` -> `waiting_for_review_request`

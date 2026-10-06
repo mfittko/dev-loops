@@ -25,7 +25,7 @@
 
 import { summarizeLoopInterpretation } from "./copilot-loop-state.mjs";
 import { isKnownOuterState } from "./conductor-routing.mjs";
-import { getAllowedTransitions, lifecyclePhaseForCopilotState, resolveLifecycleState } from "./lifecycle-state.mjs";
+import { getAllowedTransitions, hasDevLoopEvidence, LIFECYCLE_PHASE_UNKNOWN, lifecyclePhaseForCopilotState, resolveLifecycleState } from "./lifecycle-state.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -543,7 +543,20 @@ export function composeRunInspectionSnapshot({
   let lifecyclePhase = null;
   let lifecycleAllowedTransitions = null;
 
-  if (copilotLiveOk && copilotEvidence !== null) {
+  // Fail closed: dev-loop evidence is exactly two local facts, an outer-loop
+  // checkpoint or a loaded steering state. Gate artifacts, gate ledgers and
+  // loopIterations are NOT evidence (gate state stays local; inspection must not
+  // reconcile gate rounds). A dev-loop-driven PR with neither reports "unknown"
+  // by design, and the phase is not guessed.
+  const devLoopEvidence = hasDevLoopEvidence({
+    hasCheckpoint: existingCheckpoint !== null && existingCheckpoint !== undefined,
+    hasSteeringEvidence: steeringEvidence !== null && steeringEvidence !== undefined,
+  });
+
+  if (!devLoopEvidence) {
+    lifecyclePhase = LIFECYCLE_PHASE_UNKNOWN;
+    lifecycleAllowedTransitions = [];
+  } else if (copilotLiveOk && copilotEvidence !== null) {
     const copilotState = copilotEvidence.interpretation.state;
     const mappedPhase = lifecyclePhaseForCopilotState(copilotState);
     if (mappedPhase) {

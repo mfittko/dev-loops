@@ -3,6 +3,8 @@ import { test } from "bun:test";
 
 import {
   LIFECYCLE_STATE,
+  LIFECYCLE_PHASE_UNKNOWN,
+  hasDevLoopEvidence,
   LIFECYCLE_TRANSITIONS,
   LIFECYCLE_GRAPH,
   LIFECYCLE_NEXT_ACTIONS,
@@ -605,4 +607,13 @@ test("resolveLifecycleState result is valid for all transition inputs", () => {
     assert.ok(Array.isArray(result.allowedTransitions));
     assert.equal(typeof result.nextAction, "string");
   }
+});
+
+test("hasDevLoopEvidence is true only with a checkpoint or steering evidence", () => {
+  assert.equal(LIFECYCLE_PHASE_UNKNOWN, "unknown");
+  assert.equal(Object.values(LIFECYCLE_STATE).includes(LIFECYCLE_PHASE_UNKNOWN), false);
+  assert.equal(hasDevLoopEvidence(), false);
+  assert.equal(hasDevLoopEvidence({}), false);
+  assert.equal(hasDevLoopEvidence({ hasCheckpoint: true }), true);
+  assert.equal(hasDevLoopEvidence({ hasSteeringEvidence: true }), true);
 });

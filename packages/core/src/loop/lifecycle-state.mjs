@@ -360,3 +360,29 @@ export function lifecyclePhaseForCopilotState(copilotState) {
   }
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Fail-closed phase for PRs without dev-loop evidence
+// ---------------------------------------------------------------------------
+
+/** Fail-closed lifecycle phase reported when no dev-loop evidence exists. Not a member of LIFECYCLE_STATE. */
+export const LIFECYCLE_PHASE_UNKNOWN = "unknown";
+
+/**
+ * Decide whether a PR carries dev-loop evidence. Dev-loop evidence is exactly
+ * two local facts, and True when EITHER holds:
+ * - an outer-loop checkpoint exists (`hasCheckpoint`), or
+ * - a steering state was loaded (`hasSteeringEvidence`).
+ * Gate artifacts, gate ledgers and loop-iteration records are NOT evidence.
+ * Gate state stays local, and inspection must not need to reconcile gate rounds.
+ * The viewer also defers the loop-iteration fan-out, and the phase must be
+ * identical with or without it.
+ * A dev-loop-driven PR with neither fact reports "unknown" by design, and the
+ * phase must not be guessed.
+ *
+ * @param {{hasCheckpoint?: boolean, hasSteeringEvidence?: boolean}} [facts]
+ * @returns {boolean}
+ */
+export function hasDevLoopEvidence({ hasCheckpoint = false, hasSteeringEvidence = false } = {}) {
+  return hasCheckpoint === true || hasSteeringEvidence === true;
+}

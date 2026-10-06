@@ -205,7 +205,7 @@ Rule 17 also catches `low_signal_converged`, `round_cap_reached`, `round_cap_cle
 <!-- rule: ROUTING-LOCAL-ISOLATION-PASSTHROUGH -->
 When `requiresLocalIsolation=true`, those local-execution states **MUST NOT** become terminal stop outcomes by themselves. The routing result **MUST** stay on the owning loop family and **MUST** carry `handoffEnvelope.requiresLocalIsolation=true` so the caller can re-enter from a safe isolated checkout/worktree.
 
-**Copilot/reviewer wait states** (owned by orchestrator): `waiting_for_copilot_review`, `waiting_for_ci` (copilot); `submitted_review`, `waiting_for_author_followup`, `waiting_for_re_request` (reviewer)
+**Copilot/reviewer wait states** (owned by orchestrator): `waiting_for_copilot_review`, `waiting_for_ci` (copilot); `submitted_review`, `re_review_needed`, `waiting_for_author_followup`, `waiting_for_re_request` (reviewer)
 
 `waiting_for_copilot_review` is a post-request settle gate for the current head: routing stays `continue_current_wait` until that Copilot pass settles, even when reviewer-side state is active (priority 9).
 
@@ -218,7 +218,7 @@ The priority table above is hand-written. Its policy source is the JSON chart at
 - The `route` state holds the `always` arrows in first-match order: pre-checks `0a`, `0b`, `0c`, then rules 1 to 17. The runner takes the first arrow whose guard holds. Rule 17 has no guard and is last.
 - Each arrow targets a final state named after a routing outcome. The final state's `meta` supplies `outerAction`, `loopFamily` and `entrypoint`. The arrow's `meta` supplies `rule`, `stopReason` and `preCheck`.
 - The guard predicates and the reason texts, keyed by rule, live in `packages/core/src/loop/conductor-routing.mjs`. `evaluateConductorRouting` normalizes the input, runs the chart and builds the envelope. Pre-check results carry empty `requiredArgs`.
-- Coverage invariants: no arrow is dead over the full input product, and the golden test (`packages/core/test/conductor-routing-golden.test.mjs`) pins every result of that product (24,480 inputs) against the fixture `packages/core/test/fixtures/conductor-routing-golden.json`.
+- Coverage invariants: no arrow is dead over the full input product, and the golden test (`packages/core/test/conductor-routing-golden.test.mjs`) pins every result of that product (26,112 inputs) against the fixture `packages/core/test/fixtures/conductor-routing-golden.json`.
 - A freshness test fails when the `ROUTING-PRIORITY-ORDER` table differs from the chart arrows in row order, rule ids, outcomes or stop reasons.
 
 ---

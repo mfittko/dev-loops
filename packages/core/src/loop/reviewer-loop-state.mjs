@@ -14,6 +14,7 @@ export const REVIEWER_STATE = Object.freeze({
   DRAFT_REVIEW_POSTED: "draft_review_posted",
   WAITING_FOR_USER_SUBMIT: "waiting_for_user_submit",
   SUBMITTED_REVIEW: "submitted_review",
+  RE_REVIEW_NEEDED: "re_review_needed",
   WAITING_FOR_AUTHOR_FOLLOWUP: "waiting_for_author_followup",
   WAITING_FOR_RE_REQUEST: "waiting_for_re_request",
   REVIEW_INVALIDATED: "review_invalidated",
@@ -65,7 +66,14 @@ export const REVIEWER_TRANSITIONS = Object.freeze({
     REVIEWER_STATE.REVIEW_INVALIDATED,
     REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION,
   ],
+  [REVIEWER_STATE.RE_REVIEW_NEEDED]: [
+    REVIEWER_STATE.REVIEW_REQUESTED,
+    REVIEWER_STATE.SUBMITTED_REVIEW,
+    REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST,
+    REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION,
+  ],
   [REVIEWER_STATE.SUBMITTED_REVIEW]: [
+    REVIEWER_STATE.RE_REVIEW_NEEDED,
     REVIEWER_STATE.REVIEW_REQUESTED,
     REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST,
     REVIEWER_STATE.BLOCKED_NEEDS_USER_DECISION,
@@ -96,6 +104,7 @@ const REVIEWER_NEXT_ACTIONS = Object.freeze({
   [REVIEWER_STATE.DRAFT_REVIEW_POSTED]: "Share the draft review URL and move to submit wait state",
   [REVIEWER_STATE.WAITING_FOR_USER_SUBMIT]: "Wait for review submission through Pi or directly on GitHub",
   [REVIEWER_STATE.SUBMITTED_REVIEW]: "Review outcome submitted; hand off to remediation/fix follow-up until explicit re-request",
+  [REVIEWER_STATE.RE_REVIEW_NEEDED]: "Submitted review predates the current head; request a fresh review on the current head",
   [REVIEWER_STATE.WAITING_FOR_AUTHOR_FOLLOWUP]: "Legacy external wait: author/Copilot follow-up boundary after submitted review",
   [REVIEWER_STATE.WAITING_FOR_RE_REQUEST]: "Legacy external wait: explicit re-request boundary after submitted review",
   [REVIEWER_STATE.REVIEW_INVALIDATED]: "Discard stale pending draft review and restart at review_requested",
@@ -231,9 +240,9 @@ export function interpretReviewerLoopState(snapshot) {
       state = REVIEWER_STATE.DRAFT_REVIEW_POSTED;
     }
   } else if (s.submittedReviewPresent) {
-    state = authorPushedSinceSubmit && s.reviewRequested
-      ? REVIEWER_STATE.REVIEW_REQUESTED
-      : REVIEWER_STATE.SUBMITTED_REVIEW;
+    if (!authorPushedSinceSubmit) state = REVIEWER_STATE.SUBMITTED_REVIEW;
+    else if (s.reviewRequested) state = REVIEWER_STATE.REVIEW_REQUESTED;
+    else state = REVIEWER_STATE.RE_REVIEW_NEEDED;
   } else if (s.reviewSubmissionStatus === "submitted") {
     state = REVIEWER_STATE.SUBMITTED_REVIEW;
   } else if (s.draftReviewPrepared || s.localMergeStatus === "ready") {
