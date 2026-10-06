@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -13,29 +12,12 @@ import {
   readRateLimitResetMs,
 } from "../../scripts/loop/_inspect-run-viewer-adapter.mjs";
 import {
-  buildInspectionMermaidGraph,
   formatInspectRunViewerUrl,
   listListeningPidsForPort,
-  loadMermaidBrowserScript,
   parseInspectRunViewerCliArgs,
-  renderInspectRunViewerHtml,
-  resetMermaidBrowserScriptCache,
   restartExistingPortListener,
   runCli,
 } from "../../scripts/loop/inspect-run-viewer.mjs";
-import {
-  STATE as COPILOT_STATE,
-  TRANSITIONS as COPILOT_TRANSITIONS,
-} from "../../packages/core/src/loop/copilot-loop-state.mjs";
-import {
-  OUTER_STATE,
-  OUTER_TRANSITIONS,
-} from "../../packages/core/src/loop/conductor-routing.mjs";
-import {
-  REVIEWER_STATE,
-  REVIEWER_TRANSITIONS,
-} from "../../packages/core/src/loop/reviewer-loop-state.mjs";
-import { MERMAID_BROWSER_ASSET_PATH } from "../../scripts/loop/inspect-run-viewer/constants.mjs";
 import { makeSnapshot } from "./inspect-run-viewer-test-helpers.mjs";
 test("createInspectionViewerAdapter loadSnapshot validates target deterministically", async () => {
   const adapter = createInspectionViewerAdapter({
@@ -560,182 +542,6 @@ test("createInspectionViewerAdapter listAssignedPullRequests skips malformed sea
   ]);
 });
 
-test("buildInspectionMermaidGraph renders full authoritative Mermaid state machines with current/next/terminal cues", () => {
-  const graph = buildInspectionMermaidGraph(makeSnapshot({
-    layers: {
-      copilot: {
-        currentState: "done",
-        allowedTransitions: [],
-      },
-      reviewer: {
-        currentState: "waiting_for_author_followup",
-        scope: { mode: "all_reviewers", reviewerLogin: null },
-        allowedTransitions: ["review_requested"],
-      },
-      steering: { status: "unavailable", reason: "no_steering_locator" },
-    },
-  }));
-
-  assert.ok(graph);
-  assert.match(graph.definition, /flowchart TB/);
-  assert.match(graph.definition, /subgraph outer_loop_family\["outer-loop family"\]/);
-  assert.match(graph.definition, /outer_loop_family_start\(\["Start"\]\)/);
-  assert.match(graph.definition, /outer_loop_family_end\(\("End"\)\)/);
-  assert.match(graph.definition, /outer_loop_family_continue_current_wait\["continue current wait"\]/);
-  assert.match(graph.definition, /copilot_layer_start\(\["Start"\]\)/);
-  assert.match(graph.definition, /reviewer_layer_start\(\["Start"\]\)/);
-  assert.match(graph.definition, /copilot_layer_no_pr\["no_pr"\]/);
-  assert.match(graph.definition, /copilot_layer_ready_to_rerequest_review\["ready_to_rerequest_review"\]/);
-  assert.match(graph.definition, /reviewer_layer_review_requested\["review_requested"\]/);
-  assert.match(graph.definition, /reviewer_layer_waiting_for_re_request\["waiting_for_re_request"\]/);
-  assert.match(graph.definition, /layer view/);
-  assert.match(graph.definition, /next evaluation may resolve to any shown state/);
-  assert.match(graph.definition, /class outer_loop_family_continue_current_wait,reviewer_layer_waiting_for_author_followup,lifecycle_layer_implementation current;/);
-  assert.match(graph.definition, /class copilot_layer_done currentTerminal;/);
-  assert.match(graph.definition, /class [^\n]*reviewer_layer_review_requested[^\n]* next;/);
-});
-
-test("buildInspectionMermaidGraph covers every exported outer, Copilot, and reviewer state and edge", () => {
-  const graph = buildInspectionMermaidGraph(makeSnapshot());
-
-  assert.ok(graph);
-
-  for (const state of Object.values(OUTER_STATE)) {
-    const humanized = state.replaceAll("_", " ");
-    assert.match(graph.definition, new RegExp(`outer_loop_family_${state}\\["${humanized}"\\]`));
-  }
-  for (const [state, nextStates] of Object.entries(OUTER_TRANSITIONS)) {
-    if (nextStates.length === 0) {
-      assert.match(graph.definition, new RegExp(`outer_loop_family_${state} --> outer_loop_family_end`));
-      continue;
-    }
-    for (const nextState of nextStates) {
-      assert.match(graph.definition, new RegExp(`outer_loop_family_${state} --> outer_loop_family_${nextState}`));
-    }
-  }
-
-  for (const state of Object.values(COPILOT_STATE)) {
-    assert.match(graph.definition, new RegExp(`copilot_layer_${state}\\["${state}"\\]`));
-  }
-  for (const [state, nextStates] of Object.entries(COPILOT_TRANSITIONS)) {
-    if (nextStates.length === 0) {
-      assert.match(graph.definition, new RegExp(`copilot_layer_${state} --> copilot_layer_end`));
-      continue;
-    }
-    for (const nextState of nextStates) {
-      assert.match(graph.definition, new RegExp(`copilot_layer_${state} --> copilot_layer_${nextState}`));
-    }
-  }
-
-  for (const state of Object.values(REVIEWER_STATE)) {
-    assert.match(graph.definition, new RegExp(`reviewer_layer_${state}\\["${state}"\\]`));
-  }
-  for (const [state, nextStates] of Object.entries(REVIEWER_TRANSITIONS)) {
-    if (nextStates.length === 0) {
-      assert.match(graph.definition, new RegExp(`reviewer_layer_${state} --> reviewer_layer_end`));
-      continue;
-    }
-    for (const nextState of nextStates) {
-      assert.match(graph.definition, new RegExp(`reviewer_layer_${state} --> reviewer_layer_${nextState}`));
-    }
-  }
-});
-
-test("buildInspectionMermaidGraph fails closed for invalid next-state highlights", () => {
-  const graph = buildInspectionMermaidGraph(makeSnapshot({
-    layers: {
-      copilot: {
-        currentState: "waiting_for_copilot_review",
-        allowedTransitions: ["done"],
-      },
-      reviewer: {
-        currentState: "unknown",
-        scope: { mode: "all_reviewers", reviewerLogin: null },
-        allowedTransitions: ["review_requested"],
-      },
-      steering: { status: "unavailable", reason: "no_steering_locator" },
-    },
-  }));
-
-  assert.ok(graph);
-  assert.doesNotMatch(graph.definition, /class [^\n]*copilot_layer_done nextTerminal;/);
-  assert.doesNotMatch(graph.definition, /class [^\n]*reviewer_layer_review_requested next;/);
-});
-
-
-test("buildInspectionMermaidGraph normalizes and de-duplicates transition tokens before highlighting", () => {
-  const snapshot = makeSnapshot({
-    layers: {
-      copilot: {
-        currentState: "waiting_for_copilot_review",
-        allowedTransitions: [" waiting_for_ci ", "waiting_for_ci", " ready_to_rerequest_review "],
-      },
-      reviewer: {
-        currentState: "waiting_for_author_followup",
-        scope: { mode: "all_reviewers", reviewerLogin: null },
-        allowedTransitions: ["waiting_for_re_request"],
-      },
-      steering: { status: "unavailable", reason: "no_steering_locator" },
-    },
-  });
-
-  const graph = buildInspectionMermaidGraph(snapshot);
-  const html = renderInspectRunViewerHtml({
-    repo: "owner/repo",
-    target: { repo: "owner/repo", pr: 55 },
-    snapshot,
-  });
-
-  assert.ok(graph);
-  assert.match(graph.definition, /class [^\n]*copilot_layer_waiting_for_ci[^\n]* next;/);
-  assert.match(graph.definition, /class [^\n]*copilot_layer_ready_to_rerequest_review[^\n]* next;/);
-  assert.match(html, /copilot layer:[\s\S]*full authoritative state machine shown; waiting_for_ci, ready_to_rerequest_review/);
-  assert.doesNotMatch(html, /waiting_for_ci,\s*waiting_for_ci/);
-});
-test("MERMAID_BROWSER_ASSET_PATH points at the vendored mermaid bundle and the file matches the mermaid@11.15.0 pin", async () => {
-  assert.match(MERMAID_BROWSER_ASSET_PATH, /scripts[\\/]loop[\\/]inspect-run-viewer[\\/]vendor[\\/]mermaid\.min\.js$/);
-  const assetStat = await stat(MERMAID_BROWSER_ASSET_PATH);
-  assert.ok(assetStat.isFile());
-  // sha256 of mermaid@11.15.0 dist/mermaid.min.js — the vendored bundle pin.
-  const MERMAID_11_15_0_DIST_SHA256 = "70137e77bb273bb2ef972b86e8b0400cca8be53cb25bfc45911a186dc98665de";
-  const digest = createHash("sha256").update(await readFile(MERMAID_BROWSER_ASSET_PATH)).digest("hex");
-  assert.equal(digest, MERMAID_11_15_0_DIST_SHA256);
-});
-test("loadMermaidBrowserScript clears failed cache entries so later retries can recover", async () => {
-  let callCount = 0;
-  resetMermaidBrowserScriptCache();
-
-  try {
-    await assert.rejects(
-      () => loadMermaidBrowserScript({
-        readFileImpl: async () => {
-          callCount += 1;
-          throw new Error("missing mermaid asset");
-        },
-      }),
-      /missing mermaid asset/,
-    );
-
-    const firstSuccess = await loadMermaidBrowserScript({
-      readFileImpl: async () => {
-        callCount += 1;
-        return "mermaid browser bundle";
-      },
-    });
-    const secondSuccess = await loadMermaidBrowserScript({
-      readFileImpl: async () => {
-        callCount += 1;
-        return "should stay cached";
-      },
-    });
-
-    assert.equal(firstSuccess, "mermaid browser bundle");
-    assert.equal(secondSuccess, "mermaid browser bundle");
-    assert.equal(callCount, 2);
-  } finally {
-    resetMermaidBrowserScriptCache();
-  }
-});
 
 test("parseInspectRunViewerCliArgs normalizes repo values and rejects malformed input with usage", () => {
   const parsed = parseInspectRunViewerCliArgs(["--repo", "  owner/repo  "]);

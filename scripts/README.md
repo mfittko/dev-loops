@@ -987,17 +987,35 @@ Contract:
 - uses one adapter module (`scripts/loop/_inspect-run-viewer-adapter.mjs`) to load the normalized inspection snapshot
 - adapter is the only viewer integration seam that calls the existing `inspect-run` contract in this source-loaded workspace
 - serves an explicit read-only route set:
-  - `/` → operator-facing HTML with an assigned-PR inbox shell and, when a PR is selected via URL or sidebar, the Mermaid-first graph plus current-PR-state banner and supporting textual summary/evidence. The page render skips the loop-iteration fan-out; the client fills the round-metrics grid from `/round-metrics.html` after first paint
+  - `/` → operator-facing HTML with an assigned-PR inbox shell and, when a PR is selected via URL or sidebar, the current-PR-state banner and Overview tab first. Graph, Layers and Agent handoff remain separate tabs. The page render skips the loop-iteration fan-out; the client fills the round-metrics grid from `/round-metrics.html` after first paint
   - `/snapshot.json` → the full authoritative inspection snapshot JSON for the currently selected PR/query target
   - `/healthz` → `200 ok` as `text/plain; charset=utf-8`, answered from memory with no `gh` call; the managed launcher polls this instead of rendering the dashboard to prove the port is up
   - `/handoff-envelope.json` → the agent handoff envelope as JSON for the selected target
   - `/round-metrics.html` and `/handoff-envelope.html` → `text/html; charset=utf-8` deferred fragments for the selected target, resolved from that route's own `?repo=&pr=` rather than from inbox order. Each answers `400` with an HTML placeholder when the request names no target, and `500` with an HTML error card when resolution throws
+  - `/assets/inspect-graph.mjs` → local native ES module for the read-only SVG graph, shipped from the same checkout/package as its server-side model and layout; no CDN asset is loaded
 - HTML includes a visible link to `/snapshot.json` so machine-readable state no longer depends on an inline full-snapshot dump in the page itself
 - `/snapshot.json` returns `application/json; charset=utf-8` on success and deterministic JSON error output with non-2xx status when snapshot loading throws or yields no snapshot
 - unsupported paths return deterministic `404` without loading a snapshot (even for unsupported methods on unknown paths); `/favicon.ico` returns deterministic `204`; unsupported methods on supported routes return `405 Allow: GET`
 - both primary endpoints send `Cache-Control: no-store` to match the manual-reload workflow
 - the script-local `--restart` flag remains a manual/debug fallback only; the extension-managed path must not depend on killing unknown listeners
-- reload is operator-driven: the 🔄 Reload control navigates to `?refresh=1` via `window.location.assign`, which forces a live re-fetch of the selected PR's snapshot on the page render only (the deferred fragments keep their own cache windows) and is stripped from the address bar afterwards; the auto-reload period is an explicit operator selection with a 60s floor. No watch/timeout/control semantics
+- refresh remains operator-driven by default: Auto-reload is Off unless the operator's saved shell preference enables it. The existing shell offers persisted 1-, 5- and 15-minute page reloads; enabling it hides the manual Reload button. The graph renderer adds no polling, timers, snapshot requests or execution requests
+- the 🔄 Reload snapshot control navigates to `?refresh=1` via `window.location.assign`, forcing a live re-fetch of the selected PR's snapshot on the page render only; deferred fragments keep their own cache windows. The flag is then stripped from the address bar. Plain browser refresh and opt-in shell Auto-reload use the normal snapshot cache. No watch/timeout/control semantics
+
+Graph presentation and controls:
+- the Graph tab shows one selected layer at a time, with all four selector summaries always accessible: outer-loop family, Copilot, reviewer and lifecycle. Each summary reports its current state and snapshot transition availability; switching layers does not imply cross-layer transitions or a call stack
+- initial layer selection preserves the existing focus priority: lifecycle when available, then an explicit Copilot/reviewer handoff, otherwise known Copilot state or the outer-loop fallback. A known current card opens centered at a readable scale; unavailable current states use a full-layer overview without inventing a focus target
+- Simulator-style state cards show labels, identifiers and Current / Next / Terminal / Inactive text indicators, with directional edges and separate presentation-only entry/exit cues. This is not simulated playback or an execution-history trace; no teaching scenarios, handlers or playback engine are imported
+- the entire viewer, graph and native controls share a fixed light theme, including when the operating system prefers dark. The graph does not independently switch palettes; a dark viewer palette is not currently provided
+- every authoritative state and directed transition comes from the existing transition tables. Deterministic automatic directed layout runs on the server from stable graph IDs, edges and labels, not hand-maintained coordinates; snapshot-only emphasis changes do not move the graph
+- labels and identifiers wrap losslessly within card widths, including wide Latin, CJK and emoji text, with conservative headroom for platform font fallback; feedback styling follows the left-to-right layout direction
+- next-state emphasis intersects snapshot allowed transitions with the known current state's authoritative outgoing transitions. Broad outer eligibility is explained without highlighting every state as an immediate next step
+- unknown or missing current identifiers remain unavailable rather than selecting a known state; Focus current state is disabled in that case. Missing transition data, an explicitly empty allowed list and table-terminal states remain distinct; a missing/unavailable whole snapshot produces an explanation rather than fabricated graph state
+- selecting a card is read-only: details show its identifier, classification and authoritative outgoing transitions separately from snapshot availability, allowed transitions and eligibility. Snapshot-derived strings are rendered as text, not executable markup
+- zoom buttons and background drag pan the camera; arrow keys pan the focused viewport. Tab reaches a state, Enter/Space selects it, and arrow keys or Home/End navigate state selection. Fit graph fits the full layer; Focus current state centers its known current card at a readable scale; Reset view centers the graph at 100%
+- viewport resizing preserves Fit or Focus intent. After manual zoom, pan or Reset, resizing preserves the chosen world-space center and scale rather than refitting over the operator's view
+- Fullscreen requests the browser's native fullscreen API, with an explicitly labeled expanded graph view when that API is unavailable or denied. Use its exit button or Escape to return
+- full textual graph guide/layer details and the target-qualified `/snapshot.json` link remain usable if JavaScript, the local renderer asset or layout is unavailable. The internal model/layout/browser interface is same-build only: public/persisted inspection snapshots, adapter inputs, CLI, lifecycle and gate contracts are unchanged, including main-checkout snapshot producers consumed by a PR-head viewer
+- the inspect-specific Mermaid renderer and `/assets/mermaid.min.js` route are retired. The shared `scripts/loop/inspect-run-viewer/vendor/mermaid.min.js` file remains for State Atlas; unrelated Mermaid consumers are unchanged
 
 Local manual verification path:
 1. Preferred extension-managed path:
@@ -1011,7 +1029,8 @@ Local manual verification path:
 3. Open the printed/resolved URL in a local browser and verify the human-oriented `/` page
 4. Select a PR via the sidebar or by adding `?repo=<owner/name>&pr=<number>` to the viewer URL
 5. Open `/snapshot.json` for that selected/query-targeted PR and verify it returns the matching full inspection snapshot JSON
-6. Use browser refresh or the reload button for point-in-time re-inspection
+6. Open Graph, switch through all four layers, select cards and inspect their textual details; exercise Fit, Focus, Reset, zoom, pointer/keyboard pan and fullscreen or the labeled expanded-view fallback
+7. Use Reload snapshot with Auto-reload Off for a forced point-in-time re-inspection; browser refresh uses the normal snapshot cache
 
 Local WebKit/Playwright smoke path:
 1. Install the Safari/WebKit browser runtime once:

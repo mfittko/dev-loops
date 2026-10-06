@@ -29,12 +29,10 @@ Optional:
 
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4311;
-export const MERMAID_BROWSER_ASSET_ROUTE = "/assets/mermaid.min.js";
-// Vendored pinned mermaid@11.15.0 browser bundle; no runtime mermaid dependency.
-export const MERMAID_BROWSER_ASSET_PATH = path.join(
+export const INSPECTION_GRAPH_BROWSER_ASSET_ROUTE = "/assets/inspect-graph.mjs";
+export const INSPECTION_GRAPH_BROWSER_ASSET_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
-  "vendor",
-  "mermaid.min.js",
+  "browser.mjs",
 );
 // Default inbox window. It bounds the RESULT SET, not the call count (a list
 // refresh costs the same searches at any window), so widening it is a readability

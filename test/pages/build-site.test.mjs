@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, relative, win32 } from 'node:path';
 import { test } from 'bun:test';
@@ -19,6 +20,12 @@ function ghAnchor(html) {
   assert.ok(m, 'page has a .site-nav-gh anchor');
   return { href: m[1], inner: m[2] };
 }
+
+test('State Atlas retains the trusted Mermaid 11.15.0 distribution bytes', async () => {
+  const source = new URL('../../scripts/loop/inspect-run-viewer/vendor/mermaid.min.js', import.meta.url);
+  const digest = createHash('sha256').update(await readFile(source)).digest('hex');
+  assert.equal(digest, '70137e77bb273bb2ef972b86e8b0400cca8be53cb25bfc45911a186dc98665de');
+});
 
 test('build-site: index is the intro article, all resources published, nav links the others', async () => {
   const out = await mkdtemp(join(tmpdir(), 'pages-site-'));

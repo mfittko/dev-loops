@@ -3,13 +3,11 @@ import {
   DEFAULT_INBOX_PAGE,
   DEFAULT_INBOX_PR_STATE,
   DEFAULT_INBOX_UPDATED_WITHIN_DAYS,
+  INSPECTION_GRAPH_BROWSER_ASSET_ROUTE,
 } from "./constants.mjs";
 import {
-  buildInspectionMermaidGraph,
-  loadMermaidBrowserScript,
-  renderMermaidBootScript,
+  buildInspectionGraph,
   renderStateVisualizationSection,
-  resetMermaidBrowserScriptCache,
 } from "./graph.mjs";
 import { renderInboxShellScript, renderInboxSidebar } from "./inbox.mjs";
 import {
@@ -30,12 +28,9 @@ import {
 import { renderHandoffEnvelopeSection } from "./handoff-envelope-renderer.mjs";
 
 export {
-  buildInspectionMermaidGraph,
   deriveInboxSignalFromSnapshot,
-  loadMermaidBrowserScript,
   normalizeInboxSignal,
   renderTargetKey,
-  resetMermaidBrowserScriptCache,
 };
 
 // The handoff envelope needs a resolver spawn, so the panel loads on first open
@@ -118,7 +113,7 @@ export function renderInspectRunViewerHtml({
   inboxTotalPages = 1,
 }) {
   const normalizedSnapshot = snapshot ?? null;
-  const graph = target ? buildInspectionMermaidGraph(normalizedSnapshot) : null;
+  const graph = target ? buildInspectionGraph(normalizedSnapshot) : null;
   const stateLabel = renderSnapshotStateLabel(normalizedSnapshot);
   const selectedInboxItem = target === null
     ? null
@@ -138,6 +133,7 @@ export function renderInspectRunViewerHtml({
     <title>${escapeHtml(title)}</title>
     <style>
       *, *::before, *::after { box-sizing: border-box; }
+      html { color-scheme: light; }
       body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 1.25rem; max-width: none; line-height: 1.55; color: #20384f; background: #fff; }
       code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
       code { padding: 0.12rem 0.38rem; border-radius: 0.42rem; background: #f4f8fd; color: #20496f; font-size: 0.94em; line-height: 1.45; overflow-wrap: anywhere; }
@@ -235,7 +231,7 @@ export function renderInspectRunViewerHtml({
       .viewer-card-list-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.9rem; margin-top: 1rem; }
       .viewer-card-list-block h4,
       .viewer-card-subsection h4,
-      .viewer-graph-header h3 { margin: 0; font-size: 0.9rem; font-weight: 700; line-height: 1.35; color: #486174; }
+      .viewer-graph-header h2 { margin: 0; font-size: 0.9rem; font-weight: 700; line-height: 1.35; color: #486174; }
       .viewer-card-subsection { margin-top: 1.1rem; display: grid; gap: 0.55rem; }
       .viewer-card-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
       .viewer-card-list li { border: 1px solid #dbe6f3; border-radius: 0.65rem; background: #fbfdff; padding: 0.65rem 0.8rem; color: #23384d; line-height: 1.5; }
@@ -249,34 +245,58 @@ export function renderInspectRunViewerHtml({
       .viewer-next-action { margin-bottom: 0; }
       .viewer-graph-header { margin-bottom: 0; }
       .viewer-graph-description { margin: 0.7rem 0 0 0; color: #6b8296; font-size: 0.82rem; line-height: 1.5; }
-      .state-graph-block { margin-top: 0.25rem; }
-      .state-graph-frame { margin-top: 0.75rem; min-width: 0; border: 1px solid #d7e3f4; border-radius: 0.85rem; background: linear-gradient(180deg, #fbfdff 0%, #f4f8fc 100%); overflow: hidden; }
-      .state-graph-toolbar { display: flex; align-items: center; gap: 0.55rem; padding: 0.75rem 0.85rem; border-bottom: 1px solid #d7e3f4; background: rgba(255,255,255,0.85); }
-      .state-graph-toolbar button { border: 1px solid #9fb6cb; background: #fff; border-radius: 0.45rem; padding: 0.38rem 0.72rem; font: inherit; font-weight: 600; line-height: 1.25; cursor: pointer; }
-      .state-graph-toolbar button:hover { background: #f3f8fd; }
-      .state-graph-zoom-value { margin-left: auto; font-size: 0.92rem; line-height: 1.4; color: #486174; }
-      .viewer-graph-body,
-      .state-graph-block { min-width: 0; }
-      .mermaid-state-graph { min-height: 21rem; min-width: 0; max-width: 100%; padding: 1rem; overflow: auto; cursor: grab; user-select: none; touch-action: none; }
-      .mermaid-state-graph[data-dragging="true"] { cursor: grabbing; }
-      .mermaid-state-graph[data-rendered="pending"] { color: #5a7184; opacity: 0; pointer-events: none; }
-      .mermaid-state-graph[data-rendered="settling"] { opacity: 0; pointer-events: none; }
-      .mermaid-state-graph svg { display: block; width: 100%; height: auto; transition: width 120ms ease; }
-      .state-graph-cues { display: flex; flex-wrap: wrap; gap: 0.55rem 0.85rem; margin: 1rem 0 0.2rem 0; }
-      .state-graph-cue { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.9rem; line-height: 1.45; color: #355061; }
-      .state-graph-cue-chip { display: inline-flex; align-items: center; justify-content: center; min-width: 2.5rem; padding: 0.22rem 0.58rem; border-radius: 999px; border: 1px solid #90a4ae; background: #fff; font-weight: 700; line-height: 1.2; }
-      .state-graph-cue-chip-start { border-color: #78909c; background: #f5f7f9; }
-      .state-graph-cue-chip-current { border-color: #1565c0; background: #e3f2fd; }
-      .state-graph-cue-chip-next { border-color: #5c6bc0; background: #f3f4ff; }
-      .state-graph-cue-chip-end { border-color: #2e7d32; background: #e8f5e9; }
-      .state-graph-cue-chip-loop { border-color: #ef6c00; background: #fff3e0; }
+      .state-graph-block { margin-top: 0.25rem; min-width: 0; }
+      .state-graph-frame { --graph-panel: #fff; --graph-ink: #16212e; --graph-muted: #566270; --graph-line: #d3d9e0; --graph-node: #f7f9fb; --graph-node-line: #7a8795; --graph-accent: #2347c9; --graph-accent-ink: #fff; --graph-accent-soft: #e2e8fa; --graph-guard: #8a5100; --graph-guard-soft: #fbefd9; --graph-ok: #1e7a4c; --graph-ok-soft: #ddf1e6; margin-top: 0.75rem; min-width: 0; border: 1px solid var(--graph-line); border-radius: 0.85rem; background: var(--graph-panel); color: var(--graph-ink); overflow: hidden; }
+      .state-graph-layer-selector { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; padding: 0.75rem; }
+      .state-graph-layer-selector button { min-width: 0; padding: 0.75rem; border: 1px solid var(--graph-line); border-radius: 0.6rem; background: var(--graph-node); color: var(--graph-ink); text-align: left; font: inherit; cursor: pointer; }
+      .state-graph-layer-selector button span { display: block; margin-top: 0.3rem; font-size: 0.78rem; overflow-wrap: anywhere; color: var(--graph-muted); }
+      .state-graph-layer-selector button[aria-pressed="true"] { background: var(--graph-accent-soft); border-color: var(--graph-accent); box-shadow: inset 0 0 0 1px var(--graph-accent); }
+      .state-graph-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.75rem; border-block: 1px solid var(--graph-line); }
+      .state-graph-toolbar button { border: 1px solid var(--graph-node-line); background: var(--graph-panel); color: var(--graph-ink); border-radius: 0.45rem; min-height: 2.75rem; padding: 0.45rem 0.65rem; font: inherit; font-weight: 600; cursor: pointer; }
+      .state-graph-toolbar button:hover:not(:disabled) { background: var(--graph-accent-soft); }
+      .state-graph-toolbar button:disabled { opacity: 0.55; cursor: not-allowed; }
+      .state-graph-frame button:focus-visible, .inspection-graph-viewport:focus-visible { outline: 3px solid var(--graph-accent); outline-offset: -3px; }
+      .state-graph-zoom-value { margin-left: auto; font: 0.85rem ui-monospace, Menlo, monospace; color: var(--graph-muted); }
+      .viewer-graph-body { min-width: 0; }
+      .inspection-graph-viewport { height: min(60vh, 560px); min-height: 320px; width: 100%; overflow: hidden; position: relative; cursor: grab; touch-action: none; user-select: none; background: var(--graph-node); }
+      .inspection-graph-viewport[data-dragging="true"] { cursor: grabbing; }
+      .inspection-graph-svg { display: block; width: 100%; height: 100%; }
+      .inspection-graph-card { fill: var(--graph-node); stroke: var(--graph-node-line); stroke-width: 1.5; }
+      .inspection-graph-node { cursor: pointer; }
+      .inspection-graph-node.current .inspection-graph-card { fill: var(--graph-accent); stroke: var(--graph-accent); stroke-width: 3; }
+      .inspection-graph-node.next:not(.current) .inspection-graph-card { fill: var(--graph-accent-soft); stroke: var(--graph-accent); stroke-width: 2.5; }
+      .inspection-graph-node.terminal:not(.current):not(.next) .inspection-graph-card { fill: var(--graph-ok-soft); stroke: var(--graph-ok); stroke-width: 2.5; }
+      .inspection-graph-node.selected .inspection-graph-card { stroke: var(--graph-guard); stroke-width: 4; stroke-dasharray: 7 3; }
+      .inspection-graph-node:focus-visible { outline: none; }
+      .inspection-graph-node:focus-visible .inspection-graph-card { stroke: var(--graph-guard); stroke-width: 5; }
+      .inspection-graph-label { fill: var(--graph-ink); font: 600 16px system-ui, sans-serif; }
+      .inspection-graph-state-id { fill: var(--graph-muted); font: 12px ui-monospace, Menlo, monospace; }
+      .inspection-graph-chip { fill: var(--graph-ink); font: 700 12px system-ui, sans-serif; }
+      .inspection-graph-node.current .inspection-graph-label, .inspection-graph-node.current .inspection-graph-state-id, .inspection-graph-node.current .inspection-graph-chip { fill: var(--graph-accent-ink); }
+      .inspection-graph-edge { fill: none; stroke: var(--graph-node-line); stroke-width: 1.5; }
+      .inspection-graph-edge.feedback { stroke: var(--graph-guard); }
+      .inspection-graph-cue-link { fill: none; stroke: var(--graph-node-line); stroke-width: 1.2; stroke-dasharray: 5 4; }
+      .inspection-graph-cue rect { fill: var(--graph-panel); stroke: var(--graph-node-line); stroke-dasharray: 5 4; }
+      .inspection-graph-cue-label { fill: var(--graph-muted); font: 600 14px system-ui, sans-serif; }
+      .state-graph-status, .state-graph-keyboard-help { margin: 0; padding: 0.7rem 0.85rem; color: var(--graph-muted); font-size: 0.82rem; }
+      .state-graph-node-details { padding: 0.85rem; border-top: 1px solid var(--graph-line); overflow-wrap: anywhere; }
+      .state-graph-node-details dl { grid-template-columns: minmax(0, 12rem) minmax(0, 1fr); }
+      .state-graph-node-details dd { min-width: 0; }
+      .state-graph-frame .state-graph-node-details h3, .state-graph-frame .state-graph-node-details p { margin: 0.4rem 0; color: var(--graph-ink); }
+      .state-graph-node-details code { background: var(--graph-accent-soft); color: var(--graph-ink); }
+      .state-graph-frame .viewer-inline-link { color: var(--graph-accent); }
+      .state-graph-frame.expanded-graph-view { position: fixed; inset: 0.5rem; z-index: 100; margin: 0; overflow: auto; box-shadow: 0 0 0 1rem rgba(0,0,0,.65); }
+      .state-graph-frame:fullscreen { width: 100%; height: 100%; overflow: auto; border-radius: 0; }
       .state-graph-details { margin-top: 0.9rem; }
       .state-graph-details summary { cursor: pointer; font-weight: 600; line-height: 1.4; color: #355061; }
       .state-graph-help { margin: 0.85rem 0 1rem 1.2rem; padding: 0; line-height: 1.55; color: #425d70; }
       .state-graph-help li + li { margin-top: 0.4rem; }
-      .state-graph-render-error { margin: 0; padding: 1rem; line-height: 1.55; color: #7f4b00; }
-      .state-graph-summaries { margin: 1rem 0 0 0; padding-left: 1.2rem; line-height: 1.55; }
-      .state-graph-summary + .state-graph-summary { margin-top: 0.45rem; }
+      .state-graph-summaries { margin: 1rem 0; padding-left: 1.2rem; line-height: 1.55; }
+      .state-graph-layer-details { margin-top: 0.65rem; overflow-wrap: anywhere; }
+      .state-graph-layer-details li { margin-block: 0.4rem; }
+      @media (max-width: 1100px) { .state-graph-layer-selector { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @media (max-width: 640px) { .state-graph-node-details dl { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; } .state-graph-node-details dt { margin-top: 0.65rem; } }
+      @media (max-width: 440px) { .state-graph-layer-selector { grid-template-columns: 1fr; } }
       dl { display: grid; grid-template-columns: 14rem 1fr; gap: 0.5rem 0.95rem; }
       dt { font-weight: 600; line-height: 1.4; }
       dd { margin: 0; line-height: 1.55; overflow-wrap: anywhere; }
@@ -426,12 +446,11 @@ export function renderInspectRunViewerHtml({
                 <article class="handoff-card handoff-card-emphasis viewer-card">
                   <p class="handoff-card-kicker">Graph</p>
                   <div class="viewer-graph-header">
-                    <h3>Full state machine graph</h3>
+                    <h2>Full state machine graph</h2>
                   </div>
-                  ${graph === null
-                    ? `<p>${escapeHtml(error?.message ?? "Unable to load inspect-run snapshot.")}</p><p>Snapshot unavailable, so no state graph can be rendered yet. Use the Reload snapshot control to refresh.</p>`
-                    : `<div class="viewer-graph-body">${renderStateVisualizationSection(normalizedSnapshot, graph)}</div>`}
-                  <p class="viewer-graph-description">Use zoom controls, drag, and the graph guide below to inspect current and next-state cues.</p>
+                  ${graph === null ? `<p>${escapeHtml(error?.message ?? "Unable to load inspect-run snapshot.")}</p><p>Use the Reload snapshot control to refresh.</p>` : ""}
+                  <div class="viewer-graph-body">${renderStateVisualizationSection(normalizedSnapshot, graph, target)}</div>
+                  <p class="viewer-graph-description">Select a layer or state, use Fit or Focus, and inspect authoritative transitions in the graph guide. Selection is read-only.</p>
                 </article>
               </section>
             </div>
@@ -476,7 +495,7 @@ export function renderInspectRunViewerHtml({
     </script>
     ${renderHandoffLazyScript()}
     ${renderRoundMetricsLazyScript(target)}
-    ${graph === null ? "" : renderMermaidBootScript()}
+    ${graph === null ? "" : `<script type="module" src="${INSPECTION_GRAPH_BROWSER_ASSET_ROUTE}"></script>`}
   </body>
 </html>`;
 }

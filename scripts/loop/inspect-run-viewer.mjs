@@ -9,12 +9,7 @@ import {
   listListeningPidsForPort,
   restartExistingPortListener,
 } from "./inspect-run-viewer/server.mjs";
-import {
-  buildInspectionMermaidGraph,
-  loadMermaidBrowserScript,
-  renderInspectRunViewerHtml,
-  resetMermaidBrowserScriptCache,
-} from "./inspect-run-viewer/rendering.mjs";
+import { renderInspectRunViewerHtml } from "./inspect-run-viewer/rendering.mjs";
 function normalizeRestartCapabilityError(error) {
   const missingLsof = error?.code === "ENOENT"
     && (error?.path === "lsof" || /(^|\b)lsof(\b|$)/i.test(String(error?.message ?? "")));
@@ -28,14 +23,11 @@ function normalizeRestartCapabilityError(error) {
   return parseFriendlyError;
 }
 export {
-  buildInspectionMermaidGraph,
   createInspectRunViewerServer,
   formatInspectRunViewerUrl,
   listListeningPidsForPort,
-  loadMermaidBrowserScript,
   parseInspectRunViewerCliArgs,
   renderInspectRunViewerHtml,
-  resetMermaidBrowserScriptCache,
   restartExistingPortListener,
 };
 // ponytail: lifetime timeout defaults to 8h so a forgotten direct-run viewer cannot leak indefinitely; callers pass lifetimeMs to override.
