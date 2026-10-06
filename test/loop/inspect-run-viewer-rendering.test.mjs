@@ -1037,3 +1037,20 @@ test("the current-state banner strips ?refresh=1 from the address bar after the 
   assert.match(untouched.html, /searchParams\.set\('refresh', '1'\)/);
   assert.match(untouched.html, /window\.location\.assign\(/);
 });
+
+test("renderInspectRunViewerHtml text fallback distinguishes unavailable from empty layer transitions", () => {
+  const copilotBlock = (allowedTransitions) => {
+    const snapshot = makeSnapshot();
+    snapshot.layers.copilot = { ...snapshot.layers.copilot, allowedTransitions };
+    const html = renderInspectRunViewerHtml({ repo: "owner/repo", target: { repo: "owner/repo", pr: 55 }, snapshot, inboxItems: [] });
+    const start = html.indexOf("<summary>copilot layer");
+    assert.notEqual(start, -1);
+    return html.slice(start, html.indexOf("</details>", start));
+  };
+  const unavailable = copilotBlock(undefined);
+  const empty = copilotBlock([]);
+  assert.match(unavailable, /Snapshot allowed transitions: transition data unavailable in this snapshot\./);
+  assert.doesNotMatch(unavailable, /no allowed transitions/);
+  assert.match(empty, /Snapshot allowed transitions: no allowed transitions\./);
+  assert.doesNotMatch(empty, /transition data unavailable/);
+});
