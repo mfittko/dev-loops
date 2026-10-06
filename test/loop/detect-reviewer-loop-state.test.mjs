@@ -116,7 +116,7 @@ test("detect-reviewer-loop-state --input treats submitted review as handoff and 
       reviewRequested: false,
     });
     const waitingRerequest = await runNode(["--input", snapshotPath]);
-    assert.equal(JSON.parse(waitingRerequest.stdout).state, "submitted_review");
+    assert.equal(JSON.parse(waitingRerequest.stdout).state, "re_review_needed");
 
     await writeJson(snapshotPath, {
       prExists: true,

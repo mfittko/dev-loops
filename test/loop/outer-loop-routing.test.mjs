@@ -562,7 +562,7 @@ test("outer-loop: reviewer submitted_review (same head) → continue_wait", asyn
 // CLI: reviewer submitted_review after author push → continue_wait (same remediation family)
 // ---------------------------------------------------------------------------
 
-test("outer-loop: reviewer submitted_review (author pushed; no re-request) → continue_wait", async () => {
+test("outer-loop: reviewer re_review_needed (author pushed; no re-request) → continue_wait", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-outer-reviewer-rerequest-"));
 
   try {
@@ -607,7 +607,7 @@ test("outer-loop: reviewer submitted_review (author pushed; no re-request) → c
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.outerAction, "continue_wait");
-    assert.equal(output.reviewerState, "submitted_review");
+    assert.equal(output.reviewerState, "re_review_needed");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

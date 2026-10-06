@@ -1,4 +1,4 @@
 ### Fixed
 
-- `inspect-run` reports `lifecyclePhase: "unknown"` (with empty `lifecycleAllowedTransitions`) for a PR without dev-loop evidence instead of a phase guessed from the Copilot state map. "Dev-loop evidence" means a loop checkpoint exists or steering evidence was loaded; loop iteration records are not an input because the viewer defers that fan-out. PRs with evidence resolve the phase as before. (#2660)
-- The reviewer layer reports the new `re_review_needed` state, added to the reviewer transition table and graph, when the latest submitted review targets a commit other than the current head and no fresh review is requested. A review on the current head still reports `submitted_review`, and a stale review with a fresh request still reports `review_requested`. The viewer shows a "Re-review needed" headline. (#2660)
+- `inspect-run` reports `lifecyclePhase: "unknown"` for a PR without dev-loop evidence instead of a phase guessed from the Copilot state map. (#2660)
+- The reviewer layer reports `re_review_needed` when the latest submitted review targets a stale commit and no fresh review is requested. (#2660)
