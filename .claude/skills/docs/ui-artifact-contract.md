@@ -15,7 +15,7 @@ A **named UI state** is one small explicit render or interaction state that:
 - has a stable human-readable state name and a deterministic path slug
 - is narrow enough that reviewers can understand what they are looking at without replaying the whole feature manually
 
-Examples from the inspect-run viewer: `Current PR dashboard`, `Checkpoint only graph uncertainty`, `Terminal merged state`.
+Examples from the inspect-run viewer: `Current PR dashboard`, `Unknown current state`, `Terminal current state`.
 
 ## Artifact levels
 

@@ -406,6 +406,13 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
         await expect(pointerTarget).toBeFocused();
         await page.keyboard.press("ArrowRight");
         await expect(graph.locator(".inspection-graph-node.selected")).toHaveAttribute("data-node-id", lifecycle.nodes[(pointerIndex + 1) % lifecycle.nodes.length].id);
+        const selectedNode = graph.locator(".inspection-graph-node.selected");
+        await page.keyboard.press("End");
+        await expect(selectedNode).toHaveAttribute("data-node-id", lifecycle.nodes.at(-1).id);
+        await page.keyboard.press("Home");
+        await expect(selectedNode).toHaveAttribute("data-node-id", lifecycle.nodes[0].id);
+        await page.keyboard.press("ArrowLeft");
+        await expect(selectedNode).toHaveAttribute("data-node-id", lifecycle.nodes.at(-1).id);
         await captureViewerState(page, testInfo, `${theme} pointer keyboard transition`, "Pointer selection and subsequent arrow-key navigation stay on the selected card.", { interactionState: "focus" });
       } finally {
         await stopFixtureServer(server);

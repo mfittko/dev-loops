@@ -231,7 +231,7 @@ export function renderInspectRunViewerHtml({
       .viewer-card-list-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.9rem; margin-top: 1rem; }
       .viewer-card-list-block h4,
       .viewer-card-subsection h4,
-      .viewer-graph-header h3 { margin: 0; font-size: 0.9rem; font-weight: 700; line-height: 1.35; color: #486174; }
+      .viewer-graph-header h2 { margin: 0; font-size: 0.9rem; font-weight: 700; line-height: 1.35; color: #486174; }
       .viewer-card-subsection { margin-top: 1.1rem; display: grid; gap: 0.55rem; }
       .viewer-card-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
       .viewer-card-list li { border: 1px solid #dbe6f3; border-radius: 0.65rem; background: #fbfdff; padding: 0.65rem 0.8rem; color: #23384d; line-height: 1.5; }

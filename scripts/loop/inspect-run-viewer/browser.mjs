@@ -121,13 +121,13 @@ export function mountInspectionGraph(root, graph) {
     center(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2, scale);
   }
 
-  function focusNode(id, readable = false) {
+  function focusNode(id, readable = false, requested = Math.max(1, camera.scale)) {
     const node = geometry?.nodes.get(id);
     if (!node || !world) return;
-    activeCamera = () => focusNode(id, readable);
-    if (!viewport.clientWidth || !viewport.clientHeight) { pendingCamera = () => focusNode(id, readable); return; }
+    activeCamera = () => focusNode(id, readable, requested);
+    if (!viewport.clientWidth || !viewport.clientHeight) { pendingCamera = () => focusNode(id, readable, requested); return; }
     pendingCamera = null;
-    const scale = readable ? Math.min(Math.max(1, camera.scale), Math.max(1, viewport.clientWidth - 32) / node.width, Math.max(1, viewport.clientHeight - 32) / node.height) : camera.scale;
+    const scale = readable ? Math.min(requested, Math.max(1, viewport.clientWidth - 32) / node.width, Math.max(1, viewport.clientHeight - 32) / node.height) : camera.scale;
     center(node.x + node.width / 2, node.y + node.height / 2, scale);
   }
 
