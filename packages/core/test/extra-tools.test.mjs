@@ -6,8 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
 
-import { DevLoopConfigSchema, FileConfigSchema, resolveRoleExtraTools } from "../src/config/config.mjs";
-import { buildAgentOverrides, buildClaudeLaunch, buildHeadlessClaudeInvocation } from "../src/claude/headless-entry.mjs";
+import { DevLoopConfigSchema, FileConfigSchema, resolveExtraToolsGuidance, resolveRoleExtraTools } from "../src/config/config.mjs";
+import { buildAgentOverrides, buildClaudeLaunch, buildHeadlessClaudeInvocation, detectSessionMcpServers } from "../src/claude/headless-entry.mjs";
 import { decideAgentDispatch } from "../src/claude/hook-decisions.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
@@ -84,6 +84,131 @@ describe("buildAgentOverrides and launcher argv", () => {
     assert.deepEqual(buildClaudeLaunch({ config: { version: 1 }, repoRoot, baseEnv }).env, { A: "1" });
     const headless = buildHeadlessClaudeInvocation({ prompt: "p", runId: "r", baseEnv, extraTools: { config: { version: 1 }, repoRoot } });
     assert.equal(headless.env.DEVLOOPS_AGENT_OVERRIDES, undefined);
+  });
+});
+
+const GUIDED = {
+  version: 1,
+  extraTools: { developer: ["mcp__srv"], fixer: ["mcp__other"] },
+  extraToolsGuidance: { mcp__srv: "Use srv first." },
+};
+
+describe("extraToolsGuidance schema", () => {
+  const guidanceErrors = (config) => {
+    const result = FileConfigSchema.safeParse(config);
+    return result.success ? [] : result.error.issues.map((issue) => issue.message);
+  };
+
+  test("accepts a guidance key that a role lists, in both schemas", () => {
+    assert.equal(FileConfigSchema.safeParse(GUIDED).success, true);
+    assert.equal(DevLoopConfigSchema.safeParse(GUIDED).success, true);
+    assert.deepEqual(resolveExtraToolsGuidance(GUIDED), { mcp__srv: "Use srv first." });
+    assert.deepEqual(resolveExtraToolsGuidance({ version: 1 }), {});
+    assert.deepEqual(resolveExtraToolsGuidance(null), {});
+  });
+
+  test("rejects an unlisted key and names it", () => {
+    const config = { ...GUIDED, extraToolsGuidance: { mcp__ghost: "x" } };
+    assert.deepEqual(guidanceErrors(config), ['extraToolsGuidance key "mcp__ghost" matches no extraTools entry']);
+    assert.equal(DevLoopConfigSchema.safeParse(config).success, false);
+    assert.notEqual(guidanceErrors({ version: 1, extraToolsGuidance: { mcp__srv: "x" } }).length, 0);
+  });
+
+  test("rejects an empty value, a value over 2000 characters and a malformed key", () => {
+    for (const value of ["", "x".repeat(2001)]) {
+      assert.notEqual(guidanceErrors({ ...GUIDED, extraToolsGuidance: { mcp__srv: value } }).length, 0);
+    }
+    assert.equal(FileConfigSchema.safeParse({ ...GUIDED, extraToolsGuidance: { mcp__srv: "x".repeat(2000) } }).success, true);
+    assert.notEqual(guidanceErrors({ ...GUIDED, extraToolsGuidance: { Read: "x" } }).length, 0);
+  });
+});
+
+describe("detectSessionMcpServers", () => {
+  const fixture = ({ claudeJson, mcpJson, configDirJson }) => {
+    const home = mkdtempSync(path.join(tmpdir(), "mcp-detect-"));
+    const project = path.join(home, "proj");
+    mkdirSync(project, { recursive: true });
+    if (claudeJson !== undefined) writeFileSync(path.join(home, ".claude.json"), typeof claudeJson === "string" ? claudeJson : JSON.stringify(claudeJson(project)));
+    if (mcpJson !== undefined) writeFileSync(path.join(project, ".mcp.json"), typeof mcpJson === "string" ? mcpJson : JSON.stringify(mcpJson));
+    let configDir;
+    if (configDirJson) {
+      configDir = path.join(home, "alt");
+      mkdirSync(configDir);
+      writeFileSync(path.join(configDir, ".claude.json"), JSON.stringify(configDirJson));
+    }
+    return { home, project, configDir };
+  };
+  const detect = ({ home, project, configDir }) =>
+    [...detectSessionMcpServers({ repoRoot: project, homeDir: home, env: configDir ? { CLAUDE_CONFIG_DIR: configDir } : {} })].sort();
+
+  test("reads user, local and project scope and removes disabled servers", () => {
+    const f = fixture({
+      claudeJson: (project) => ({ mcpServers: { user: {} }, projects: { [project]: { mcpServers: { local: {}, off: {} }, disabledMcpServers: ["off", "user"] } } }),
+      mcpJson: { mcpServers: { proj: {} } },
+    });
+    try {
+      assert.deepEqual(detect(f), ["local", "proj"]);
+    } finally {
+      rmSync(f.home, { recursive: true, force: true });
+    }
+  });
+
+  test("honors CLAUDE_CONFIG_DIR over the home directory", () => {
+    const f = fixture({ claudeJson: () => ({ mcpServers: { home: {} } }), configDirJson: { mcpServers: { alt: {} } } });
+    try {
+      assert.deepEqual(detect(f), ["alt"]);
+    } finally {
+      rmSync(f.home, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing or malformed file contributes nothing and does not throw", () => {
+    const missing = fixture({});
+    const malformed = fixture({ claudeJson: "{not json", mcpJson: "[1,2" });
+    try {
+      assert.deepEqual(detect(missing), []);
+      assert.deepEqual(detect(malformed), []);
+    } finally {
+      rmSync(missing.home, { recursive: true, force: true });
+      rmSync(malformed.home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("extraToolsGuidance render", () => {
+  const srv = new Set(["srv"]);
+  const promptOf = (overrides, role) => overrides[role].prompt;
+
+  test("appends the frame, the condition line and the key line for a detected server", () => {
+    const prompt = promptOf(buildAgentOverrides(GUIDED, repoRoot, srv), "developer");
+    assert.match(prompt, /\n\n## Session MCP tool guidance\n\nApply a line only when tools named `mcp__<server>__\*` for that server are in your tool list\.\n\n- `mcp__srv`: Use srv first\.$/);
+    assert.ok(prompt.indexOf("Apply a line only when") < prompt.indexOf("- `mcp__srv`"));
+  });
+
+  test("renders nothing for an undetected server, and for a role that does not list the key", () => {
+    const base = promptOf(buildAgentOverrides(withTools(GUIDED.extraTools), repoRoot), "developer");
+    assert.equal(promptOf(buildAgentOverrides(GUIDED, repoRoot, new Set()), "developer"), base);
+    assert.equal(promptOf(buildAgentOverrides(GUIDED, repoRoot), "developer"), base);
+    const overrides = buildAgentOverrides(GUIDED, repoRoot, new Set(["srv", "other"]));
+    assert.match(overrides.developer.prompt, /mcp__srv/);
+    assert.doesNotMatch(overrides.fixer.prompt, /Session MCP tool guidance/);
+  });
+
+  test("tools, allowedTools and env are unchanged by guidance and detection", () => {
+    const plain = buildClaudeLaunch({ config: withTools(GUIDED.extraTools), repoRoot, baseEnv: {} });
+    const dir = mkdtempSync(path.join(tmpdir(), "mcp-launch-"));
+    try {
+      writeFileSync(path.join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { srv: {} } }));
+      const guided = buildClaudeLaunch({ config: GUIDED, repoRoot, projectRoot: dir, baseEnv: { HOME: dir } });
+      const absent = buildClaudeLaunch({ config: GUIDED, repoRoot, projectRoot: path.join(dir, "none"), baseEnv: { CLAUDE_CONFIG_DIR: dir } });
+      const overrides = JSON.parse(guided.args[1]);
+      assert.match(overrides.developer.prompt, /Session MCP tool guidance/);
+      assert.deepEqual(guided.args.slice(2), plain.args.slice(2));
+      assert.deepEqual(guided.env, { ...plain.env, HOME: dir });
+      assert.equal(absent.args[1], plain.args[1]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -192,7 +317,7 @@ test("extension README documents extraTools next to models.roleTiers", async () 
   const { readFileSync } = await import("node:fs");
   const readme = readFileSync(path.join(repoRoot, "extension/README.md"), "utf8");
   assert.ok(readme.indexOf("`models.roleTiers`") < readme.indexOf("(`extraTools`)"));
-  for (const text of ["mcp__codebase-memory", "dev-loops loop claude-launch", ".claude/settings.local.json", "classifier may still deny", "Worktree freshness limit"]) {
+  for (const text of ["mcp__<server>", "extraToolsGuidance", "## Session MCP tool guidance", "CLAUDE_CONFIG_DIR", "Detection limit", "needs the dev-loops release", "Provisioning does not index", "dev-loops loop claude-launch", ".claude/settings.local.json", "classifier may still deny", "Worktree freshness limit"]) {
     assert.ok(readme.includes(text), text);
   }
 });

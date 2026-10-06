@@ -115,7 +115,7 @@ async function main(argv) {
     prompt,
     runId,
     claudeBin: opts.claudeBin,
-    extraTools: { config: loaded.config ?? loaded, repoRoot },
+    extraTools: { config: loaded.config ?? loaded, repoRoot, projectRoot: resolveRepoRoot(process.cwd()) },
   });
 
   if (opts.dryRun) {

@@ -12,14 +12,57 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
-import { resolveRoleExtraTools, EXTRA_TOOLS_ROLES } from "../config/config.mjs";
+import { resolveRoleExtraTools, resolveExtraToolsGuidance, EXTRA_TOOLS_ROLES } from "../config/config.mjs";
 import { runContextEnv } from "../loop/run-context.mjs";
 import { splitFrontmatter, transformAgent } from "./asset-generation.mjs";
 
 /** Default Claude CLI binary name. */
 export const DEFAULT_CLAUDE_BIN = "claude";
+
+function readJson(file) {
+  try {
+    const data = JSON.parse(fs.readFileSync(file, "utf8"));
+    return data && typeof data === "object" ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+const serverNames = (servers) => (servers && typeof servers === "object" ? Object.keys(servers) : []);
+
+/**
+ * Names of the MCP servers that the launched session loads from its config files: user and local
+ * scope in `<config>/.claude.json`, project scope in `<repoRoot>/.mcp.json`. Servers listed in the
+ * local `disabledMcpServers` are removed. A missing or malformed file contributes nothing. No
+ * process is spawned; plugin, managed, connector and `--mcp-config` servers are not seen.
+ *
+ * @param {{ repoRoot: string, homeDir?: string, env?: Record<string,string|undefined> }} params
+ * @returns {Set<string>}
+ */
+export function detectSessionMcpServers({ repoRoot, homeDir = os.homedir(), env = process.env }) {
+  const configDir = env.CLAUDE_CONFIG_DIR || homeDir;
+  const claudeJson = readJson(path.join(configDir, ".claude.json"));
+  const local = claudeJson.projects?.[repoRoot] ?? {};
+  const servers = new Set([
+    ...serverNames(claudeJson.mcpServers),
+    ...serverNames(local.mcpServers),
+    ...serverNames(readJson(path.join(repoRoot, ".mcp.json")).mcpServers),
+  ]);
+  for (const name of Array.isArray(local.disabledMcpServers) ? local.disabledMcpServers : []) servers.delete(name);
+  return servers;
+}
+
+const GUIDANCE_FRAME = "## Session MCP tool guidance\n\nApply a line only when tools named `mcp__<server>__*` for that server are in your tool list.\n";
+
+function renderGuidance(extra, guidance, detectedServers) {
+  const lines = extra
+    .filter((entry) => Object.hasOwn(guidance, entry) && detectedServers.has(entry.split("__")[1]))
+    .map((entry) => `- \`${entry}\`: ${guidance[entry]}`);
+  return lines.length === 0 ? "" : `\n\n${GUIDANCE_FRAME}\n${lines.join("\n")}`;
+}
 
 /**
  * Render the session-scoped `claude --agents` overrides for roles with `extraTools`.
@@ -28,9 +71,11 @@ export const DEFAULT_CLAUDE_BIN = "claude";
  *
  * @param {object} config - Loaded dev-loops config.
  * @param {string} repoRoot - Root that holds `agents/<role>.agent.md`.
+ * @param {Set<string>} [detectedServers] - Detected MCP server names; gates `extraToolsGuidance` only.
  * @returns {Record<string, { description: string, prompt: string, tools: string[], model?: string }>}
  */
-export function buildAgentOverrides(config, repoRoot) {
+export function buildAgentOverrides(config, repoRoot, detectedServers = new Set()) {
+  const guidance = resolveExtraToolsGuidance(config);
   const overrides = {};
   for (const role of EXTRA_TOOLS_ROLES) {
     const extra = resolveRoleExtraTools(config, role);
@@ -41,7 +86,7 @@ export function buildAgentOverrides(config, repoRoot) {
     const builtIn = String(frontmatter.tools ?? "").split(/[\s,]+/).filter(Boolean);
     overrides[role] = {
       description: String(frontmatter.description ?? ""),
-      prompt: body.trim(),
+      prompt: body.trim() + renderGuidance(extra, guidance, detectedServers),
       tools: [...new Set([...builtIn, ...extra])],
       ...(frontmatter.model ? { model: String(frontmatter.model) } : {}),
     };
@@ -54,11 +99,15 @@ export function buildAgentOverrides(config, repoRoot) {
  * `--allowedTools=<entries>` is one token because the option is variadic and would swallow a following positional.
  *
  * @param {object} config
- * @param {string} repoRoot
+ * @param {string} repoRoot - Root that holds `agents/<role>.agent.md`.
+ * @param {{ projectRoot?: string, homeDir?: string, env?: Record<string,string|undefined> }} [detect] - Where to detect session MCP servers; `projectRoot` defaults to `repoRoot`.
  * @returns {{ args: string[], env: Record<string,string> }}
  */
-export function buildExtraToolsLaunch(config, repoRoot) {
-  const overrides = buildAgentOverrides(config, repoRoot);
+export function buildExtraToolsLaunch(config, repoRoot, { projectRoot = repoRoot, homeDir, env } = {}) {
+  const detected = Object.keys(resolveExtraToolsGuidance(config)).length > 0
+    ? detectSessionMcpServers({ repoRoot: projectRoot, homeDir, env })
+    : new Set();
+  const overrides = buildAgentOverrides(config, repoRoot, detected);
   const roles = Object.keys(overrides);
   if (roles.length === 0) return { args: [], env: {} };
   const entries = [...new Set(roles.flatMap((role) => overrides[role].tools.filter((tool) => tool.startsWith("mcp__"))))];
@@ -104,7 +153,7 @@ function withoutAgentOverrides(baseEnv) {
  * @param {string} [params.claudeBin] - Claude CLI binary (default "claude").
  * @param {string[]} [params.extraArgs] - Extra args appended after `-p <prompt>`.
  * @param {Record<string,string|undefined>} [params.baseEnv] - Base env (default process.env).
- * @param {{ config: object, repoRoot: string }} [params.extraTools] - When set, adds the `extraTools` --agents/--allowedTools args and env.
+ * @param {{ config: object, repoRoot: string, projectRoot?: string }} [params.extraTools] - When set, adds the `extraTools` --agents/--allowedTools args and env.
  * @returns {{ command: string, args: string[], env: Record<string,string|undefined> }}
  */
 export function buildHeadlessClaudeInvocation({ prompt, runId, claudeBin = DEFAULT_CLAUDE_BIN, extraArgs = [], baseEnv = process.env, extraTools }) {
@@ -120,7 +169,7 @@ export function buildHeadlessClaudeInvocation({ prompt, runId, claudeBin = DEFAU
   if (!Array.isArray(extraArgs)) {
     throw new TypeError("buildHeadlessClaudeInvocation: extraArgs must be an array");
   }
-  const launch = extraTools ? buildExtraToolsLaunch(extraTools.config, extraTools.repoRoot) : { args: [], env: {} };
+  const launch = extraTools ? buildExtraToolsLaunch(extraTools.config, extraTools.repoRoot, { projectRoot: extraTools.projectRoot, env: baseEnv }) : { args: [], env: {} };
   return {
     command: claudeBin,
     args: ["-p", prompt, ...launch.args, ...extraArgs],
@@ -135,12 +184,13 @@ export function buildHeadlessClaudeInvocation({ prompt, runId, claudeBin = DEFAU
  * @param {Object} params
  * @param {object} params.config
  * @param {string} params.repoRoot - Root that holds `agents/<role>.agent.md`.
+ * @param {string} [params.projectRoot] - The consuming project's root, for MCP server detection (default `repoRoot`).
  * @param {string[]} [params.passthroughArgs]
  * @param {string} [params.claudeBin]
  * @param {Record<string,string|undefined>} [params.baseEnv]
  * @returns {{ command: string, args: string[], env: Record<string,string|undefined> }}
  */
-export function buildClaudeLaunch({ config, repoRoot, passthroughArgs = [], claudeBin = DEFAULT_CLAUDE_BIN, baseEnv = process.env }) {
-  const launch = buildExtraToolsLaunch(config, repoRoot);
+export function buildClaudeLaunch({ config, repoRoot, projectRoot, passthroughArgs = [], claudeBin = DEFAULT_CLAUDE_BIN, baseEnv = process.env }) {
+  const launch = buildExtraToolsLaunch(config, repoRoot, { projectRoot, env: baseEnv });
   return { command: claudeBin, args: [...launch.args, ...passthroughArgs], env: { ...withoutAgentOverrides(baseEnv), ...launch.env } };
 }

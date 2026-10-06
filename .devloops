@@ -220,6 +220,15 @@ extraTools:
   refiner:
     - mcp__codebase-memory
 
+# Usage guidance rendered into those roles' prompts when the server is detected for the session.
+extraToolsGuidance:
+  mcp__codebase-memory: >-
+    Apply this only when mcp__codebase-memory__* tools are in your tool list.
+    (1) Use the graph tools first for symbol, caller and structure questions. Use grep only for literals or coverage gaps.
+    (2) Before the first graph query, call index_repository once on your worktree path with persistence off, and use that project.
+    (3) If indexing fails or the tool is missing, use the main-checkout project and confirm each answer with Read or Grep in the worktree before an edit.
+    (4) If you indexed your worktree, call delete_project for that project before your hand-back.
+
 tracker:
   board:
     number: 3  # https://github.com/users/mfittko/projects/3 (stable; survives project renames)
