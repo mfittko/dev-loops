@@ -911,6 +911,7 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   falls back to the severity-based `blockCleanOnFindingSeverities` set below.
 - apply only the accepted narrow fixes on the same branch
 - do not broaden scope or touch unrelated files
+- when the fix changes a file under `skills/`, `agents/` or `commands/`, follow the work order's `executionRules.regenerate`: regenerate the `.claude` mirror, commit it with the fix, and never hand-edit it
 - run the smallest honest validation for the accepted fix scope
 - commit and push fixes on the branch; for a judge act-list fix, push only after the
   delta pre-push review (`PRE-PUSH-DELTA-TRIGGER` in [Pre-push review contract](pre-pr-review-contract.md#delta-mode))

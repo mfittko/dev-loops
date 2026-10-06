@@ -11,7 +11,7 @@ import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
-import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder, locateFixerUnit } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 
@@ -659,5 +659,50 @@ test("F1: the full-phase work order tells the fixer to pass --disposition fixed 
   await withFixture(async ({ emit }) => {
     const { promptPath } = await emit({});
     assert.match(await readFile(promptPath, "utf8"), /--disposition fixed.*full 40-character SHA of the fixing commit/);
+  });
+});
+
+const GENERATOR = "scripts/claude/generate-claude-assets.mjs";
+async function addGenerator(wt) {
+  await mkdir(path.join(wt, "scripts", "claude"), { recursive: true });
+  await writeFile(path.join(wt, GENERATOR), "");
+}
+
+test("regenerate: a repository with the generator gets the rule, named for the mirror trees only", async () => {
+  await withFixture(async ({ wt, emit }) => {
+    await addGenerator(wt);
+    const { workOrder } = await emit({});
+    const rule = workOrder.executionRules.regenerate;
+    for (const part of ["`skills/`", "`agents/`", "`commands/`", `node ${GENERATOR}`, "same commit", "bun run assets:check", "never hand-edit"]) assert.ok(rule.includes(part), part);
+    assert.deepEqual([...new Set(rule.match(/\.claude\/[\w.]+\/?/g))].sort(), [".claude/agents/", ".claude/commands/", ".claude/skills/"]);
+  });
+});
+
+test("regenerate: a repository without the generator gets no rule and no rendered line", async () => {
+  await withFixture(async ({ emit }) => {
+    const { workOrder, promptPath } = await emit({});
+    assert.equal(workOrder.executionRules.regenerate, undefined);
+    assert.doesNotMatch(await readFile(promptPath, "utf8"), /Regenerate:/);
+  });
+});
+
+test("regenerate: the rendered line is present and the materialization hash still recomputes", async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    await addGenerator(wt);
+    const unit = await emit({});
+    const text = await readFile(unit.promptPath, "utf8");
+    assert.ok(text.split("\n").includes(`Regenerate: ${unit.workOrder.executionRules.regenerate}.`));
+    const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] });
+    assert.equal(located.materializationHash, unit.materializationHash);
+  });
+});
+
+test("regenerate: the rule is identical for the claude and pi harnesses", async () => {
+  await withFixture(async ({ wt, emit }) => {
+    await addGenerator(wt);
+    const claude = await emit({ harness: "claude" });
+    const pi = await emit({ harness: "pi" });
+    assert.ok(claude.workOrder.executionRules.regenerate);
+    assert.equal(claude.workOrder.executionRules.regenerate, pi.workOrder.executionRules.regenerate);
   });
 });

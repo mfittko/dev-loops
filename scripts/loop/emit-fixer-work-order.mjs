@@ -45,6 +45,8 @@ const PLAN_FILE = "fixer-emit-plan.json";
 const FIXER_CONTRACTS = ["agents/fixer.agent.md", "skills/docs/gate-review-sub-loop-contract.md", "skills/docs/validation-policy.md"];
 const PACKAGE_ROOT = new URL("../../", import.meta.url);
 const VALIDATION_RULE = "Run targeted checks via resolveTargetedValidation(changedPaths) per skills/docs/validation-policy.md VALIDATE-TARGETED-FIRST; a local full-repository run goes only through `dev-loops gate resolve-validation`";
+// The mirror trees are the generator output; other .claude/ paths are hand-edited and stay outside this rule.
+const REGENERATE_RULE = "When the fix changes a file under `skills/`, `agents/` or `commands/`, run `node scripts/claude/generate-claude-assets.mjs`, commit the regenerated files under `.claude/skills/`, `.claude/agents/` and `.claude/commands/` in the same commit as the fix, run `bun run assets:check`, and never hand-edit a file under those mirror trees";
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const sortKeys = (value) => (Array.isArray(value) ? value.map(sortKeys)
@@ -96,7 +98,7 @@ ${task}
 When a \`delta-result\` read is listed, follow agents/fixer.agent.md step 7 for its act-item statuses.
 Read every \`required\` entry below IN FULL before any change. If one is missing, unreadable, or its sha256 differs, stop and report which read failed.
 Mutation authority: branch ${JSON.stringify(branch)}, paths ${allowedPaths.map((p) => JSON.stringify(p)).join(", ")}. ${workOrder.executionRules.mutation}.
-Validation: ${workOrder.executionRules.validation}.
+Validation: ${workOrder.executionRules.validation}.${workOrder.executionRules.regenerate ? `\nRegenerate: ${workOrder.executionRules.regenerate}.` : ""}
 
 ## Required reads
 
@@ -173,6 +175,7 @@ export async function emitFixerWorkOrder({
       phase,
       validation: VALIDATION_RULE,
       mutation: "Mutate only files under mutationAuthority.allowedPaths on mutationAuthority.branch",
+      regenerate: existsSync(path.join(resolveRepoRoot(cwd), "scripts/claude/generate-claude-assets.mjs")) ? REGENERATE_RULE : undefined,
     },
   };
   const identityTriple = {
