@@ -118,7 +118,7 @@ describe("extraToolsGuidance schema", () => {
   });
 
   test("rejects an empty value, a value over 2000 characters and a malformed key, naming the key", () => {
-    for (const value of ["", "   ", "a\n## Other rules", "x".repeat(2001)]) {
+    for (const value of ["", "   ", "a\n## Other rules", "a\u2028## Other rules", "x".repeat(2001)]) {
       const result = FileConfigSchema.safeParse({ ...GUIDED, extraToolsGuidance: { mcp__srv: value } });
       assert.deepEqual(result.error.issues.map((issue) => issue.path.join(".")), ["extraToolsGuidance.mcp__srv"]);
     }

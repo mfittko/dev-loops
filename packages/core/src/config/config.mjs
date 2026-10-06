@@ -142,9 +142,9 @@ const ExtraToolsConfig = z
 
 const ExtraToolsGuidanceConfig = z.record(
   z.string().regex(EXTRA_TOOL_ENTRY_RE, "extraToolsGuidance keys must be MCP tool entries: mcp__<server>, mcp__<server>__* or mcp__<server>__<tool>"),
-  z.string().max(2000, "extraToolsGuidance values must be at most 2000 characters")
-    .refine((value) => value.trim().length > 0, "extraToolsGuidance values must be non-empty")
-    .refine((value) => !/[\r\n]/.test(value), "extraToolsGuidance values must be a single line"),
+  z.string().min(1, "extraToolsGuidance values must be non-empty").max(2000, "extraToolsGuidance values must be at most 2000 characters")
+    .refine((value) => value === "" || value.trim().length > 0, "extraToolsGuidance values must be non-empty")
+    .refine((value) => !/[\r\n\v\f\u0085\u2028\u2029]/.test(value), "extraToolsGuidance values must be a single line"),
 );
 
 /** Each guidance key must equal an `extraTools` entry that at least one role lists. */
