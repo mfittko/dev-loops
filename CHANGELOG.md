@@ -2,6 +2,69 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.6-pre.0
+
+### Added
+
+- `dev-loops pr edit` routes to `edit-pr.mjs`, and `dev-loops queue remove` removes one mistaken board item (#2463)
+- `dev-loops pr waive-adr-tripwire` writes a head-pinned ADR tripwire waiver under an operator-recorded standing authorization (#2463)
+- `edit-pr.mjs` and `create-pr.mjs` refuse a body that adds, changes or removes an `adr-tripwire:allow` line (#2463)
+- A PR that changes the `.devloops` `standingAuthorizations` block needs a decision record and a fresh owner approval to leave draft (#2463)
+- `edit-issue.mjs` refuses a body write that adds, changes or removes an `adr-tripwire:allow` line (#2463)
+- `create-pr.mjs` refuses --fill*/--template without --body/--body-file and --recover/--editor/--web always; it and `edit-pr.mjs` forward the checked body inline (#2463)
+- `.devloops` `extraTools` adds MCP tools to Claude developer, fixer and refiner agents via `dev-loops loop claude-launch` and the headless entry (#2598)
+- `dev-loops loop audit-session` reports tool calls per session and an MCP usage table by role, with denied calls and working-directory class (#2601)
+- HTML and CSS files classify as code, images and fonts as a new asset kind, and a `.devloops` `classify` key maps a repository's own files (#2616)
+
+### Changed
+
+- The Pi read-only role gate reads the pi-subagents `active_agent` prompt tag, so dispatched judge and review children are gated; the env marker is removed (#2582)
+- The dev-loops extension registers itself as a required child extension, so a foreground judge or reviewer child loads the gate and its `tool_call` handler runs (#2582)
+- A read-only Pi session keeps the extension's mutation-capable post-merge hooks inert, so a reviewer's quoted merge text in an allowed read form cannot queue post-merge updates (#2582)
+- The default container image pins `pi-subagents` at 0.75.0, the mandatory-runner floor for the required-child-extension registration API (#2582)
+- Gate review contract and reviewer/coordinator agent prose is condensed; obligations are unchanged (#2603)
+- The commit-msg guard no longer requires a Claude-Session trailer; set worktree.commitMsgGuard.requireClaudeSession: true on your default branch to keep it (#2605)
+- A config load error no longer relaxes a gate: startup returns needs_reconcile with a configError, and every gate script that used a default now fails closed with config_load_failed (#2612)
+- Generated Claude forms run `dev-loops-run cli/index.mjs` instead of a pinned `npx dev-loops@<version>`, so a dev-loops checkout runs its own code (#2612)
+- `isDevLoopConfigSourcePath` is no longer exported from `@dev-loops/core/loop/gate-carry-forward`; it now lives in `@dev-loops/core/analysis/diff-analyzer` (#2616)
+- GitHub Pages Simulator navigation now opens the lifecycle Overview entrypoint (#2624)
+- Paired links show Overview before Detailed, preserving both original pages' stable URLs and active-view labels (#2624)
+- Simulator-family navigation aligns with each view's overall content container and keeps a clear desktop/mobile gap above paired-view controls (#2624)
+- Simulator navigation changes preserve unrelated navigation and fullscreen graph layout (#2624)
+- Detailed and Overview graphs expose named keyboard-scrollable regions in normal and full-window modes; arrow panning does not change execution (#2624)
+- Overview full-window graph focus rings stay inside the viewport without changing graph geometry (#2624)
+- Simulator pages improve light/dark contrast with state cues, expose graph controls to keyboard/screen-reader users, and add labeled keyboard-scrollable traces and a main landmark (#2624)
+- Simulator desktop/mobile UI checks use controlled local fallback fonts instead of live Google Fonts, keeping layout checks and captures independent of external font availability (#2624)
+- Original Detailed and Overview models load from separate native modules; teaching scenarios, defaults, transitions, and runtime controls are preserved (#2624)
+- Original model asset changes select their owning automatic browser suite; published pages and npm packages include both modules (#2624)
+- Overview transitions reuse model-scoped helpers with explicit run state instead of recreating five helper functions per step (#2624)
+- Orphan-entrypoint checks distinguish published browser model metadata from real Node imports and spawns, preserving the standalone-tool ratchet (#2624)
+- Detailed Simulator graph shortcuts expose a named control group to assistive technology without adding a navigation landmark (#2624)
+- Retained atlas checks cover byte-identical output across fresh builds; default WebKit capture failure coverage runs in an isolated process (#2624)
+- Inspect graph layer selectors and camera controls expose descriptive accessible group names without changing native button navigation (#2627)
+- The inspect viewer Graph tab replaces Mermaid with read-only SVG state cards, four layer summaries and keyboard-operable details, zoom, pan, Fit, Focus, Reset and fullscreen controls (#2627)
+- Inspect graph layout is automatic and deterministic. Feedback edges follow the left-to-right direction, and wide labels wrap losslessly while Fit/Focus intent survives resizing (#2627)
+- Inspect graph uses the shell's light theme under a dark OS preference, and pointer selection focuses the chosen state so keyboard navigation stays aligned (#2627)
+- Manual refresh and read-only behavior are unchanged, and snapshot contracts are unchanged. Textual layer details and Snapshot JSON remain if rendering fails. State Atlas keeps Mermaid (#2627)
+- Inspect graph state details report snapshot-list membership independently of next-state eligibility, without changing Next emphasis (#2627)
+- The conductor routing statechart is now the runtime routing policy source, shipped in `@dev-loops/core`; routing results are unchanged (#2668)
+
+### Fixed
+
+- omp commits no longer require false Claude attribution when omp also sets `CLAUDECODE=1`; genuine Claude and general message checks remain enforced (#2624)
+- The inspect viewer Reload snapshot button uses `window.URL`, so `refresh=1` navigation forces a fresh selected-PR snapshot (#2627)
+- Playwright config test and `test:playwright:*` scripts resolve the Playwright CLI without a cwd-relative `node_modules/` path, so they pass in a worktree without `node_modules` (#2632)
+- Fixer work orders tell the fixer to regenerate the `.claude` mirror when its fix changes `skills/`, `agents/` or `commands/` (#2636)
+- `scripts/run-bun-test.mjs` strips every async-context marker and the Claude harness marker from the env of the spawned `bun test` child, so local runs match CI (#2637)
+- Gate verdict parsing reads the gate name and head SHA only from labeled field lines, so an approval note that mentions them no longer replaces the real verdict as gate evidence (#2640)
+- `emit-fixer-work-order` and `resolve-angle-carry-forward` refuse an explicit `--tmp-root` inside a linked worktree instead of emitting an ungranted work order or reporting a missing ledger (#2641)
+- The retro tooling checker reads piped stdin to EOF, so a transcript over 64KB no longer reports clean, and empty or unreadable input exits 2 with a reason (#2646)
+- Skill prose names the `node <dev-loops-package-root>/cli/index.mjs` form, not a bare `dev-loops` that can resolve a stale global binary; generated docs use `dev-loops-run` (#2648)
+- `dev-loops` routed subcommands fail closed on an unknown flag: the CLI no longer re-runs the script with the flag stripped, and returns the script's own exit code and error text (#2655)
+- Removed the `@dev-loops/core/cli/retry-wrapper` export and its module (#2655)
+- `inspect-run` reports `lifecyclePhase: "unknown"` for a PR without dev-loop evidence instead of a phase guessed from the Copilot state map. (#2660)
+- The reviewer layer reports `re_review_needed` when the latest submitted review targets a stale commit and no fresh review is requested. (#2660)
+
 ## 1.0.5
 
 ### Added
