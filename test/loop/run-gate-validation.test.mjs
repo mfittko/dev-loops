@@ -668,11 +668,19 @@ test("defaultReadPrTitle: returns the title, and a never-settling read maps to n
 
 test("defaultReadPrTitle: the timeout kills the spawned child", async () => {
   const env = { ...process.env, DEVLOOPS_SKIP_PR_TITLE_READ: "0" };
+  let runRejection;
   const started = Date.now();
   const title = await defaultReadPrTitle({ repo: "o/r", pr: 1 }, env, {
-    read: (_opts, { run }) => run("sleep", ["30"], env),
+    read: (_opts, { run }) => {
+      const child = run("sleep", ["30"], env);
+      runRejection = child.catch((error) => error);
+      return child;
+    },
     timeoutMs: 100,
   });
   assert.equal(title, null);
+  // The kill itself: execFile rejects with killed=true only when its timeout fired.
+  const error = await runRejection;
+  assert.equal(error.killed, true);
   assert.ok(Date.now() - started < 5000);
 });
