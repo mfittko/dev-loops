@@ -246,17 +246,15 @@ test("coverage report: per arrow, per final, dead arrows, rule-17 fall-through",
   const perArrow = new Map(chart.states.route.always.map((a) => [String(a.meta.rule), 0]));
   const perFinal = new Map(Object.keys(chart.states).filter((n) => n !== "route").map((n) => [n, 0]));
   const fallThrough = new Map();
-  let sentinelFallThrough = 0;
+  const fallThroughInputs = [];
   for (const r of runs) {
     perArrow.set(String(r.arrow.meta.rule), perArrow.get(String(r.arrow.meta.rule)) + 1);
     perFinal.set(r.final, perFinal.get(r.final) + 1);
     if (r.arrow.meta.rule === 17) {
       const i = r.input;
+      fallThroughInputs.push(JSON.stringify(i));
       const known = Object.values(STATE).includes(i.copilotState) && Object.values(REVIEWER_STATE).includes(i.reviewerState);
-      if (!known) {
-        sentinelFallThrough += 1;
-        continue;
-      }
+      if (!known) continue;
       if (!fallThrough.has(i.copilotState)) fallThrough.set(i.copilotState, new Set());
       fallThrough.get(i.copilotState).add(i.reviewerState);
     }
@@ -273,7 +271,12 @@ test("coverage report: per arrow, per final, dead arrows, rule-17 fall-through",
     `dead arrows: ${dead.length === 0 ? "none" : dead.join(", ")}`,
     "rule 17 fall-through (known copilot state -> known reviewer states):",
     ...[...fallThrough].map(([c, set]) => `  ${c} -> ${[...set].sort().join(", ")}`),
-    `rule 17 fall-through with the unknown sentinel on either side: ${sentinelFallThrough} inputs`,
+    `rule 17 fall-through, every input record (${fallThroughInputs.length}):`,
+    ...fallThroughInputs.map((s) => `  ${s}`),
   ];
-  console.log(lines.join("\n"));
+  const report = lines.join("\n");
+  console.log(report);
+  // The doc embeds this report verbatim; a stale doc fails here.
+  const doc = readFileSync(new URL("../../../docs/conductor-routing-statechart-spike.md", import.meta.url), "utf8");
+  assert.ok(doc.includes(report), "docs/conductor-routing-statechart-spike.md must embed the full coverage report");
 });
