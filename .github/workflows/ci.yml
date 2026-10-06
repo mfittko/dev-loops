@@ -142,10 +142,14 @@ jobs:
 
       - name: Run ${{ matrix.suite }}
         if: matrix.shard == ''
+        env:
+          DEVLOOPS_PR_TITLE: ${{ github.event.pull_request.title }}
         run: bun run ${{ matrix.suite }}
 
       - name: Run ${{ matrix.suite }} shard ${{ matrix.shard }}
         if: matrix.shard != ''
+        env:
+          DEVLOOPS_PR_TITLE: ${{ github.event.pull_request.title }}
         run: bun run ${{ matrix.suite }} --timings=.bun-test-timings.json --shard=${{ matrix.shard }}
 
   verify:

@@ -24,6 +24,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "../github/_gate-names.mjs";
 import { assertWorktreeAtHead, buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { viewPr } from "../github/view-pr.mjs";
 import { parseBunLock } from "../release/assert-core-dependency-version.mjs";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 import { verificationCommandSegments } from "@dev-loops/core/loop/bash-command-classify";
@@ -240,15 +241,15 @@ export function stripAnsi(text) {
  * Never rejects: a non-zero exit or a spawn failure is reported as a suite
  * result, not thrown, so one suite's failure never aborts the round.
  * @param {string} name
- * @param {{ repoRoot: string }} opts
+ * @param {{ repoRoot: string, env: NodeJS.ProcessEnv }} opts
  * @returns {Promise<{ name: string, command: string, exitCode: number, output: string }>}
  */
-function runSuite(name, { repoRoot }) {
+function runSuite(name, { repoRoot, env }) {
   return new Promise((resolve) => {
     execFile(
       "bun",
       ["run", name],
-      { cwd: repoRoot, maxBuffer: MAX_BUFFER_BYTES, env: process.env },
+      { cwd: repoRoot, maxBuffer: MAX_BUFFER_BYTES, env },
       (error, stdout, stderr) => {
         let output = `${stdout ?? ""}${stderr ?? ""}`;
         const exitCode = error ? (typeof error.code === "number" ? error.code : 1) : 0;
@@ -263,6 +264,11 @@ function runSuite(name, { repoRoot }) {
   });
 }
 
+async function defaultReadPrTitle({ repo, pr }) {
+  const { pr: view } = await viewPr({ repo, pr, fields: "title" });
+  return view.title;
+}
+
 /**
  * Run every named suite once, write each suite's full (ANSI-stripped) output
  * to its own log file beside the validation-results artifact, and build the
@@ -272,14 +278,26 @@ function runSuite(name, { repoRoot }) {
  * @param {{ repoRoot: string }} opts
  * @returns {Promise<object>} the artifact (no `ok`/ file-write side effect on the artifact itself)
  */
-export async function buildValidationArtifact({ repo, pr, gate, headSha, suites, tmpRoot }, { repoRoot }) {
+export async function buildValidationArtifact(
+  { repo, pr, gate, headSha, suites, tmpRoot },
+  { repoRoot, readPrTitle = defaultReadPrTitle, env = process.env },
+) {
   const artifactPath = buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot });
   const artifactDir = path.dirname(artifactPath);
   await mkdir(path.resolve(repoRoot, artifactDir), { recursive: true });
 
+  // The changelog validator reads the PR title from DEVLOOPS_PR_TITLE. A failed or
+  // empty read leaves it unset so the check falls back to commit subjects (stricter).
+  const { DEVLOOPS_PR_TITLE: _inherited, ...baseEnv } = env;
+  const prTitle = await Promise.resolve(readPrTitle({ repo, pr })).then(
+    (t) => (typeof t === "string" && t.trim() !== "" ? t : null),
+    () => null,
+  );
+  const suiteEnv = prTitle === null ? baseEnv : { ...baseEnv, DEVLOOPS_PR_TITLE: prTitle };
+
   const suiteResults = [];
   for (const name of suites) {
-    const { command, exitCode, output } = await runSuite(name, { repoRoot });
+    const { command, exitCode, output } = await runSuite(name, { repoRoot, env: suiteEnv });
     const cleaned = stripAnsi(output);
     // ":" is a routine npm-script-key character (assets:check, schema:check)
     // but not a valid filename character on Windows, so it is mapped to "-"
@@ -305,6 +323,7 @@ export async function buildValidationArtifact({ repo, pr, gate, headSha, suites,
     pr,
     gate,
     headSha,
+    prTitle,
     generatedAt: new Date().toISOString(),
     allPassed: suiteResults.every((s) => s.exitCode === 0),
     // Stamp dependency state relative to the authoritative lockfile: a worktree

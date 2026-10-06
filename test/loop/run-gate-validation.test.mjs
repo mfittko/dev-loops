@@ -212,7 +212,7 @@ test("artifact shape: no outputSha256/durationMs anywhere, and the documented ke
 
     const artifact = JSON.parse(stdout.trim());
     assert.deepEqual(Object.keys(artifact).sort(), [
-      "allPassed", "depState", "gate", "generatedAt", "headSha", "ok", "pr", "repo", "suites",
+      "allPassed", "depState", "gate", "generatedAt", "headSha", "ok", "pr", "prTitle", "repo", "suites",
     ]);
     assert.deepEqual(Object.keys(artifact.suites[0]).sort(), [
       "command", "exitCode", "name", "outputPath", "outputTail",
@@ -623,5 +623,32 @@ test("buildValidationArtifact: stamps depState n-a when there is no package-lock
     assert.equal(artifact.depState.status, "n-a");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+async function runEnvEcho(readPrTitle, env) {
+  const { repoRoot } = await makeFixtureRepo({ envecho: "bun scripts/envecho.mjs" });
+  try {
+    await writeFile(path.join(repoRoot, "scripts", "envecho.mjs"), "console.log('TITLE=' + JSON.stringify(process.env.DEVLOOPS_PR_TITLE ?? null))");
+    return await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: ["envecho"], tmpRoot: "tmp" },
+      { repoRoot, readPrTitle, env },
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+}
+
+test("buildValidationArtifact: passes the PR title to the suite env and records it", async () => {
+  const artifact = await runEnvEcho(async () => "test(x): a title", { ...process.env, DEVLOOPS_PR_TITLE: "stale inherited" });
+  assert.equal(artifact.prTitle, "test(x): a title");
+  assert.match(artifact.suites[0].outputTail, /TITLE="test\(x\): a title"/);
+});
+
+test("buildValidationArtifact: a failed or empty PR title read leaves DEVLOOPS_PR_TITLE unset", async () => {
+  for (const reader of [async () => { throw new Error("gh down"); }, async () => "  "]) {
+    const artifact = await runEnvEcho(reader, { ...process.env, DEVLOOPS_PR_TITLE: "stale inherited" });
+    assert.equal(artifact.prTitle, null);
+    assert.match(artifact.suites[0].outputTail, /TITLE=null/);
   }
 });
