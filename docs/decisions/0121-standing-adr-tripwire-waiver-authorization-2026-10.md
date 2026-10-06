@@ -18,4 +18,4 @@ Record 0119 introduced standing authorizations for ADR tripwire waivers. This re
 
 ## Consequences
 
-A contract-doc-only tripwire that records no new decision stops needing a manual operator line. Every other case still needs a decision record or a fresh operator approval: rule modality changes, `standingAuthorizations` changes, and non-contract triggers.
+A contract-doc-only tripwire that records no new decision stops needing a manual operator line, under the eligibility conditions of 0119. The exclusions of 0119 stay in force: the record never waives an `extension-defaults.yaml` trigger, a rule-modality reversal or removal, an unresolvable scan, a contract doc the issue's AC / DoD matrix does not name, or a change to the `standingAuthorizations` block. A `standingAuthorizations` change needs a decision record, and its ready flip also needs the repo owner's approval of the current head. Every non-contract trigger still needs a decision record or an operator-written waiver.
