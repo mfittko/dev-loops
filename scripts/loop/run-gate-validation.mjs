@@ -266,14 +266,29 @@ function runSuite(name, { repoRoot, env }) {
 
 const PR_TITLE_READ_TIMEOUT_MS = 10_000;
 
-// Bounded so a stalled gh call maps to null (commit-subject fallback) instead of
-// hanging the run. DEVLOOPS_SKIP_PR_TITLE_READ=1 skips the read (hermetic tests).
-async function defaultReadPrTitle({ repo, pr }, env = process.env) {
+// A stalled gh call maps to null (commit-subject fallback) instead of hanging the
+// run. execFile's `timeout` kills the gh child, so no live child keeps the event
+// loop (and the CLI process) alive after the artifact prints.
+// DEVLOOPS_SKIP_PR_TITLE_READ=1 skips the read (hermetic tests).
+function runKillable(timeoutMs) {
+  return (command, args, env) => new Promise((resolve, reject) => {
+    execFile(command, args, { env, timeout: timeoutMs, killSignal: "SIGKILL" }, (error, stdout, stderr) => {
+      if (error && (error.killed || typeof error.code !== "number")) reject(error);
+      else resolve({ code: error ? error.code : 0, stdout, stderr });
+    });
+  });
+}
+
+export async function defaultReadPrTitle(
+  { repo, pr },
+  env = process.env,
+  { read: viewTitle = viewPr, timeoutMs = PR_TITLE_READ_TIMEOUT_MS } = {},
+) {
   if (env.DEVLOOPS_SKIP_PR_TITLE_READ === "1") return null;
   let timer;
-  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), PR_TITLE_READ_TIMEOUT_MS); });
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); });
   try {
-    const read = viewPr({ repo, pr, fields: "title" }).then(({ pr: view }) => view.title);
+    const read = viewTitle({ repo, pr, fields: "title" }, { env, run: runKillable(timeoutMs) }).then(({ pr: view }) => view.title);
     return await Promise.race([read, timeout]);
   } finally {
     clearTimeout(timer);

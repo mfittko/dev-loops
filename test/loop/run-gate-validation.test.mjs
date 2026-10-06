@@ -13,6 +13,7 @@ import {
   stripAnsi,
   validateSuiteNames,
   buildValidationArtifact,
+  defaultReadPrTitle,
   classifyPackageSuites,
 } from "../../scripts/loop/run-gate-validation.mjs";
 import { initGitFixture, runNode } from "../_helpers.mjs";
@@ -654,4 +655,24 @@ test("buildValidationArtifact: a failed or empty PR title read leaves DEVLOOPS_P
     assert.equal(artifact.prTitle, null);
     assert.match(artifact.suites[0].outputTail, /TITLE=null/);
   }
+});
+
+test("defaultReadPrTitle: returns the title, and a never-settling read maps to null within the timeout", async () => {
+  const env = { ...process.env, DEVLOOPS_SKIP_PR_TITLE_READ: "0" };
+  assert.equal(await defaultReadPrTitle({ repo: "o/r", pr: 1 }, env, { read: async () => ({ pr: { title: "t" } }) }), "t");
+  const started = Date.now();
+  const title = await defaultReadPrTitle({ repo: "o/r", pr: 1 }, env, { read: () => new Promise(() => {}), timeoutMs: 50 });
+  assert.equal(title, null);
+  assert.ok(Date.now() - started < 2000);
+});
+
+test("defaultReadPrTitle: the timeout kills the spawned child", async () => {
+  const env = { ...process.env, DEVLOOPS_SKIP_PR_TITLE_READ: "0" };
+  const started = Date.now();
+  const title = await defaultReadPrTitle({ repo: "o/r", pr: 1 }, env, {
+    read: (_opts, { run }) => run("sleep", ["30"], env),
+    timeoutMs: 100,
+  });
+  assert.equal(title, null);
+  assert.ok(Date.now() - started < 5000);
 });
