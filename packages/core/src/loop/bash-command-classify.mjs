@@ -829,6 +829,84 @@ export function commandContainsCopilotRequestBypass(command, managedSlug = null)
   );
 }
 
+/** `gh` global repo flags that may sit between `gh` and the subcommand: `-R <slug>`, `-R<slug>`,
+ * `--repo <slug>`, `--repo=<slug>`. */
+const GH_GLOBAL_REPO_FLAGS = "(?:(?:(?:-R|--repo)(?:=|\\s+)|-R)\\S+\\s+)*";
+
+/** `gh [global repo flags] <subcmd> <verb>` prefix matcher; the same regex strips the prefix. */
+function ghBodyWriterRegex(subcmd) {
+  return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+${GH_GLOBAL_REPO_FLAGS}${subcmd}\\s+edit(?:\\s|$)`, "i");
+}
+
+/** A `gh pr edit` literal anywhere in a command string, quoted or not. */
+const GH_BODY_WRITER_LITERAL = new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}pr\\s+edit(?=[\\s"'\`]|$)`, "i");
+
+/** A shell wrapper that hides a command from per-segment inspection: `bash|sh|zsh|dash|ksh -c`, `eval`, `xargs`. */
+const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*-\S*c|eval|xargs)(?=\s)/;
+
+/**
+ * Shell-word unquoting for flag tokens: the shell strips the quotes, so `'--body'`, `"-F"` and
+ * `-f "body"=x` reach gh as `--body`, `-F` and `-f body=x`. Only a quoted token that is a bare
+ * flag name (or the `body` field name before `=`) is unquoted; quoted values stay quoted.
+ * @param {string} segment @returns {string}
+ */
+function unquoteFlagTokens(segment) {
+  return segment.replace(/(['"])(-{1,2}[A-Za-z][\w-]*(?:=(?:(?!\1).)*)?)\1/g, "$2").replace(/(['"])body\1(?==)/g, "body");
+}
+
+/**
+ * ADR-TRIPWIRE-STANDING-WAIVER (CLI half): a raw `gh pr edit` that sets the body
+ * (`--body`, `--body-file`, `-b`, `-F`), with or without `gh` global repo flags before the subcommand
+ * (`gh -R o/n pr edit ...`). A body write is the path that carries an `adr-tripwire:allow` waiver
+ * line, so it must flow through the launcher's `pr edit` / `pr waive-adr-tripwire`. Quoted values are
+ * blanked first, so a flag-looking word inside a title does not match. A `gh pr edit`
+ * literal inside `bash -c`/`sh -c`/`eval`/`xargs` is denied outright: the wrapper hides the real
+ * flags from segment inspection, so the literal itself is the signal (fail closed). An explicit
+ * `--repo`/`-R` that is provably not `managedSlug` passes through (direct, unwrapped forms only).
+ * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
+ */
+export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
+  if (SHELL_WRAPPER_RE.test(command) && GH_BODY_WRITER_LITERAL.test(command)) return true;
+  const res = [ghBodyWriterRegex("pr")];
+  return shellSegments(command).map(unquoteFlagTokens).some((segment) =>
+    res.some((re) => {
+      if (!re.test(segment)) return false;
+      // An explicit --repo/-R that is provably another repo is out of scope (fail closed otherwise).
+      const repoFlag = /(?:^|\s)(?:--repo|-R)(?:=|\s+)(\S+)/.exec(stripQuotedLiterals(segment));
+      if (repoFlag && explicitRepoProvenForeign(repoFlag[1], managedSlug)) return false;
+      const flags = stripQuotedLiterals(segment.replace(re, " "));
+      return /(?:^|\s)(?:--body(?:-file)?(?=[=\s]|$)|-[bF](?=[=\s]|\S|$))/.test(flags);
+    }));
+}
+
+/**
+ * ADR-TRIPWIRE-STANDING-WAIVER (API half): a raw `gh api` write to `.../pulls/<n>` or
+ * `.../issues/<n>` on the managed repo that carries a `body` field (`-f`/`-F`/`--field`/
+ * `--raw-field body=...`) or an `--input` payload, or a `gh api graphql` call carrying an
+ * `updatePullRequest` mutation. The endpoint may be a bare path, an absolute URL, carry a query
+ * string (`pulls/5?x=1`), or use gh's `{owner}/{repo}` placeholders. A write to a sub-path
+ * (`pulls/<n>/comments`, `issues/<n>/comments`) or without a body field passes through.
+ * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
+ */
+export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
+  // A `gh api` literal inside `bash -c`/`eval`/`xargs` hides its flags from segment inspection: mirror the
+  // CLI half and deny the literal when it names a pull/issue path with a body field or `--input`, or `updatePullRequest`.
+  if (SHELL_WRAPPER_RE.test(command) && /\bgh\s+api\b/.test(command)
+    && (/updatePullRequest/.test(command) || (/(?:pulls|issues)\/(?:\d+|\{\})/.test(command) && /body=|--input/.test(command)))) return true;
+  const owner = managedSlug ? `(?:${managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}|\\{owner\\}/\\{repo\\})` : "[^/]+/[^/]+";
+  const re = new RegExp(`^(?:repos/${owner}/)?(?:pulls|issues)/\\d+$`, "i");
+  return extractGhApiEndpointSegments(command).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
+    if (endpoint && /^graphql$/i.test(endpoint)) return /updatePullRequest/.test(segment);
+    if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
+    // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).
+    if (/(?:^|\s)--input(?:=|\s)/.test(stripQuotedLiterals(segment))) return true;
+    // gh defaults to POST when a field is present, so only an explicit GET/HEAD makes a body field a read.
+    if (/(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?(?:GET|HEAD)\b/i.test(stripQuotedLiterals(segment))) return false;
+    // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
+    return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
+  });
+}
+
 /**
  * COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY (comment-summon half): a raw `gh pr comment` body carrying a
  * bare Copilot summon (`/copilot` or `/copilot re-review`). The agent MUST request Copilot via

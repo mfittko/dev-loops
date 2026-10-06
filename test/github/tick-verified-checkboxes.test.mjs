@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { test } from "bun:test";
 
 import {
+  applyTick,
   tickVerifiedCheckboxes,
   parseTickVerifiedCliArgs,
   runCli,
@@ -173,8 +174,7 @@ test("runCli: fetches body then issues one gh pr edit with the flipped body", as
   let editedBody;
   const runCapturing = async (cmd, args, env) => {
     if (args[1] === "edit") {
-      const idx = args.indexOf("--body-file");
-      editedBody = readFileSync(args[idx + 1], "utf8");
+      editedBody = args[args.indexOf("--body") + 1];
     }
     return run(cmd, args, env);
   };
@@ -185,8 +185,8 @@ test("runCli: fetches body then issues one gh pr edit with the flipped body", as
   assert.deepEqual(calls[0], ["pr", "view", "17", "--repo", "o/n", "--json", "body"]);
   assert.equal(calls[1][0], "pr");
   assert.equal(calls[1][1], "edit");
-  const bodyFileIdx = calls[1].indexOf("--body-file");
-  assert.notEqual(bodyFileIdx, -1);
+  assert.notEqual(calls[1].indexOf("--body"), -1);
+  assert.equal(calls[1][calls[1].indexOf("--body") + 1], "- [x] Alpha\n- [ ] Beta\n");
   assert.equal(editedBody, "- [x] Alpha\n- [ ] Beta\n");
   assert.match(stdout.get(), /"edited":true/);
 });
@@ -194,6 +194,7 @@ test("runCli: fetches body then issues one gh pr edit with the flipped body", as
 test("runCli: --issue ticks the linked issue body via gh issue edit", async () => {
   const { run, calls } = stubGh([
     bodyJson("- [ ] Alpha\n- [ ] Beta\n"), // gh issue view --json body
+    bodyJson("- [ ] Alpha\n- [ ] Beta\n"), // edit-issue guard body read
     { stdout: "" },                          // gh issue edit
   ]);
   let editedBody;
@@ -207,10 +208,10 @@ test("runCli: --issue ticks the linked issue body via gh issue edit", async () =
   const stdout = captureStream();
   const code = await runCli(["--repo", "o/n", "--issue", "42", "--verified", "Alpha"], { run: runCapturing, stdout });
   assert.equal(code, 0);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.deepEqual(calls[0], ["issue", "view", "42", "--repo", "o/n", "--json", "body"]);
-  assert.equal(calls[1][0], "issue");
-  assert.equal(calls[1][1], "edit");
+  assert.equal(calls[2][0], "issue");
+  assert.equal(calls[2][1], "edit");
   assert.equal(editedBody, "- [x] Alpha\n- [ ] Beta\n");
   assert.match(stdout.get(), /"issue":42/);
   assert.match(stdout.get(), /"issueEdited":true/);
@@ -221,12 +222,13 @@ test("runCli: --pr and --issue together sync both bodies in one call", async () 
     bodyJson("- [ ] Alpha\n"),   // gh pr view
     { stdout: "url\n" },          // gh pr edit
     bodyJson("- [ ] Alpha\n"),   // gh issue view
+    bodyJson("- [ ] Alpha\n"),   // edit-issue guard body read
     { stdout: "" },               // gh issue edit
   ]);
   const stdout = captureStream();
   const code = await runCli(["--repo", "o/n", "--pr", "17", "--issue", "42", "--verified", "Alpha"], { run, stdout });
   assert.equal(code, 0);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 5);
   assert.equal(calls[0][0], "pr");
   assert.equal(calls[2][0], "issue");
   assert.match(stdout.get(), /"pr":17/);
@@ -235,16 +237,24 @@ test("runCli: --pr and --issue together sync both bodies in one call", async () 
   assert.match(stdout.get(), /"issueEdited":true/);
 });
 
-test("runCli: removes the temp dir after a successful flip flow", async () => {
+test("runCli: forwards the ticked body inline, not as --body-file", async () => {
   const { run, calls } = stubGh([
     bodyJson("- [ ] Alpha\n"),
     { stdout: "https://github.com/o/n/pull/17\n" },
   ]);
   const code = await runCli(["--repo", "o/n", "--pr", "17", "--verified", "Alpha"], { run, stdout: captureStream() });
   assert.equal(code, 0);
-  const bodyFileIdx = calls[1].indexOf("--body-file");
-  const dir = dirname(calls[1][bodyFileIdx + 1]);
-  assert.equal(existsSync(dir), false, "temp dir should be cleaned up after edit");
+  assert.equal(calls[1].includes("--body-file"), false);
+});
+
+test("applyTick: removes its own temp dir after a successful flip flow", async () => {
+  let bodyFile;
+  const r = await applyTick("- [ ] Alpha\n", ["Alpha"], false, (f) => {
+    bodyFile = f;
+    assert.equal(existsSync(f), true);
+  });
+  assert.equal(r.edited, true);
+  assert.equal(existsSync(dirname(bodyFile)), false, "temp dir should be cleaned up after edit");
 });
 
 test("runCli: no gh pr edit when nothing flips", async () => {

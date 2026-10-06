@@ -233,7 +233,7 @@ test("DEV-LOOP-RUNNER-STOP-CONDITIONS names all three conditions and the quote-a
   const rule = sectionFrom(await readRepo(DEV_LOOP_SKILL), "<!-- rule: DEV-LOOP-RUNNER-STOP-CONDITIONS -->", "\n## ");
   assert.match(rule, /MUST stop and report, and never self-waives/);
   assert.match(rule, /- a size-budget `escalate` or `block` outcome;/);
-  assert.match(rule, /- an ADR tripwire trip \(`check-adr-tripwire\.mjs`\);/);
+  assert.match(rule, /- an ADR tripwire trip \(`check-adr-tripwire\.mjs`\)(, except [^;]*)?;/);
   assert.match(rule, /- a harness permission or classifier denial, or an interruption\./);
   assert.match(rule, /quotes the denial text verbatim/);
   assert.match(rule, /does not retry the denied call/);

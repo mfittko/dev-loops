@@ -396,6 +396,7 @@ test("buildResolveDevLoopStartupResult maps linked Copilot follow-up to the PR f
     "skills/docs/retrospective-checkpoint-contract.md",
     "skills/copilot-pr-followup/SKILL.md",
     "skills/docs/copilot-loop-operations.md",
+    "skills/docs/decision-record-contract.md",
   ]);
   assert.equal(result.canonicalStateSummary.target.kind, "pr");
   assert.equal(result.canonicalStateSummary.target.pr, 92);

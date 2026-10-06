@@ -9390,9 +9390,9 @@ function makeAcRunChild({
     calls.push({ command: cmd, args: [...args], stdinText: _stdin ?? "" });
     if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
     const a = args.join(" ");
-    if ((args[0] === "pr" || args[0] === "issue") && args[1] === "edit" && args.includes("--body-file")) {
+    if ((args[0] === "pr" || args[0] === "issue") && args[1] === "edit" && (args.includes("--body") || args.includes("--body-file"))) {
       if (control.failBodyEdit === true || control.failBodyEdit === args[0]) return { code: 1, stdout: "", stderr: "HTTP 502: body edit failed\n" };
-      const body = await readFile(args[args.indexOf("--body-file") + 1], "utf8");
+      const body = args.includes("--body") ? args[args.indexOf("--body") + 1] : await readFile(args[args.indexOf("--body-file") + 1], "utf8");
       editedBodies.push({ kind: args[0], number: args[2], body });
       if (args[0] === "pr") currentPrBody = body;
       else issueBodies[args[2]] = body;
@@ -10364,7 +10364,7 @@ test("#2389 regression: a clean ledger plus an unchecked PR-body DoD item posts 
     assert.equal(result.reviewVerdict, "clean");
     assert.deepEqual(result.gateBlockers, [{ kind: "unchecked PR-body Definition of done", item: "post-merge smoke run recorded" }]);
     // Posted before any fixer mutation: no PR-body edit ran in this call.
-    assert.equal(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("--body-file")), false);
+    assert.equal(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && (c.args.includes("--body") || c.args.includes("--body-file"))), false);
   });
 });
 
@@ -10613,7 +10613,7 @@ test("tick: draft_gate never ticks, even with verifiedItems in the ledger", asyn
     const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
     assert.equal(result.action, "created");
     assert.deepEqual(editedBodies, []);
-    assert.equal(calls.some((c) => c.args[1] === "edit" && c.args.includes("--body-file")), false);
+    assert.equal(calls.some((c) => c.args[1] === "edit" && (c.args.includes("--body") || c.args.includes("--body-file"))), false);
   });
 });
 
@@ -10623,7 +10623,7 @@ test("tick: without --findings-ledger nothing is ticked", async () => {
       () => post({ findingsLedger: undefined, verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS }),
       /unchecked Acceptance criteria box/,
     );
-    assert.equal(calls.some((c) => c.args[1] === "edit" && c.args.includes("--body-file")), false);
+    assert.equal(calls.some((c) => c.args[1] === "edit" && (c.args.includes("--body") || c.args.includes("--body-file"))), false);
   });
 });
 
@@ -10658,8 +10658,8 @@ const TICK_ISSUE_BODY_WITH_UNVERIFIED = [
 const reviewPosted = (calls) => calls.some((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
 
 test("tick: a failed post-tick issue re-fetch cannot drop the unverified issue AC item, so no clean is posted", async () => {
-  // Views 1 and 2 (coordination load, tick fetch) succeed; the reload re-fetch fails.
-  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED, failIssueViewAfter: 2 };
+  // Views 1-3 (coordination load, tick fetch, edit-issue guard body read) succeed; the reload re-fetch fails.
+  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED, failIssueViewAfter: 3 };
   await withCompositionRound(round, async ({ post, calls }) => {
     await assert.rejects(
       () => post({ verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS }),
@@ -10695,7 +10695,7 @@ test("clean guards give the ledger path (rerun the gate for verifiedItems) and t
 test("tick: a PR body that is not a string fails closed before any edit or verdict", async () => {
   await withCompositionRound({ overallVerdict: "clean", prBody: null, verifiedItems: TICK_ITEMS }, async ({ post, calls }) => {
     await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS }), /PR body is not a string/);
-    assert.equal(calls.some((c) => c.args[1] === "edit" && c.args.includes("--body-file")), false);
+    assert.equal(calls.some((c) => c.args[1] === "edit" && (c.args.includes("--body") || c.args.includes("--body-file"))), false);
     assert.equal(reviewPosted(calls), false);
   });
 });
@@ -10715,7 +10715,7 @@ test("tick: a failed issue edit after a successful PR edit posts no verdict; the
   });
 });
 
-const bodyEdited = (calls) => calls.some((c) => c.args[1] === "edit" && c.args.includes("--body-file"));
+const bodyEdited = (calls) => calls.some((c) => c.args[1] === "edit" && (c.args.includes("--body") || c.args.includes("--body-file")));
 
 for (const [name, provenance] of [
   ["no provenance", null],

@@ -211,7 +211,7 @@ export async function tickCheckboxes(
     const r = await applyTick(currentBody, options.verified, options.dryRun, (bodyFile) =>
       edit(
         { repo: options.repo, pr: options.pr, bodyFile, addAssignees: [], removeAssignees: [] },
-        { env, ghCommand, run },
+        { env, ghCommand, run, currentBody },
       ),
     );
     result.pr = options.pr;

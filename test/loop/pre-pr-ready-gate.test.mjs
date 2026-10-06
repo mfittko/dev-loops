@@ -7,6 +7,7 @@ import { onTestFinished, test } from "bun:test";
 import { initSizeBudgetFixtureRepo, makeGhMock, repeatedLinesContent, runIdFreeEnv } from "../_helpers.mjs";
 
 import { parsePrePrReadyGateCliArgs, prePrReadyGate } from "../../scripts/loop/pre-pr-ready-gate.mjs";
+import { verifyPolicyChangeApproval as realVerifyPolicyChangeApproval } from "../../scripts/github/_policy-change-approval.mjs";
 
 const GH_RUNNER = Symbol("pre-pr-ready-gate-gh-runner");
 
@@ -784,4 +785,71 @@ test("size budget: non-empty config errors[] block the raw gh pr ready path fail
   const stderrParsed = JSON.parse(result.stderr);
   assert.equal(stderrParsed.ok, false);
   assert.match(stderrParsed.error, /config errors/i);
+});
+
+// --- ADR-TRIPWIRE-STANDING-WAIVER: a standingAuthorizations change needs a fresh owner approval ---
+
+const ADR_RECORD = "# 0999. Standing authorization policy\n\n## Status\n\nAccepted — 2026-10-04 (PR)\n\n## Context\n\nContext.\n\n## Decision\n\nDecision.\n\n## Consequences\n\nConsequences.\n";
+const POLICY_DEVLOOPS = "version: 1\nstandingAuthorizations:\n  adrTripwireWaiver:\n    grantedBy: owner\n    grantedAt: '2026-10-01'\n    expires: '2026-12-01'\n    reason: contract doc edits named in the issue matrix\n";
+
+// Answers the reviews + issue-comments reads of the policy-change approval check.
+function approvalReadsRunChild({ comments = [], reviews = [] } = {}) {
+  return async (_cmd, args) => {
+    const path = args.find((a) => typeof a === "string" && a.startsWith("repos/")) ?? "";
+    const payload = path.includes("/reviews") ? reviews : comments;
+    return { code: 0, stdout: JSON.stringify([payload]), stderr: "" };
+  };
+}
+
+async function runPolicyChangeGate(tmpDir, approvalReads) {
+  const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tmpDir, {
+    devloopsYaml: "version: 1\n",
+    headFiles: [
+      { path: ".devloops", content: POLICY_DEVLOOPS },
+      { path: "docs/decisions/0999-standing-authorization-policy.md", content: ADR_RECORD },
+    ],
+  });
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true, headRefOid: headSha, baseRefName: baseBranch })) },
+    { stdout: JSON.stringify([makeDraftGateComment(headSha.slice(0, 7))]) },
+    ...gateCloseStubs(),
+  ]);
+  const runChild = env[GH_RUNNER];
+  const result = await prePrReadyGate({ repo: "owner/repo", pr: 42 }, {
+    env: runIdFreeEnv(Object.fromEntries(Object.entries(env))),
+    ghCommand: "gh",
+    repoRoot: tmpDir,
+    runChild,
+    verifyPolicyChangeApproval: (a, rt) => realVerifyPolicyChangeApproval(a, { ...rt, runChild: approvalReadsRunChild(approvalReads(headSha)) }),
+  });
+  return { result, headSha };
+}
+
+test("standingAuthorizations change: refused without a fresh owner approval even with its ADR present", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-policy-refuse-"));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
+  const { result } = await runPolicyChangeGate(tmpDir, () => ({}));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /standingAuthorizations/);
+  assert.equal(result.adrTripwire.satisfiedBy, "adr");
+  assert.equal(result.policyApproval.satisfied, false);
+});
+
+test("standingAuthorizations change: passes with an approve merge <headSha> comment from the repo owner", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-policy-pass-"));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
+  const { result } = await runPolicyChangeGate(tmpDir, (head) => ({ comments: [{ user: { login: "owner", type: "User" }, body: `approve merge ${head}` }] }));
+  assert.equal(result.ok, true, JSON.stringify(result));
+});
+
+test("standingAuthorizations change: a comment pinned to an older head or from another login is refused", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-policy-stale-"));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
+  const { result } = await runPolicyChangeGate(tmpDir, () => ({
+    comments: [
+      { user: { login: "owner", type: "User" }, body: `approve merge ${"0".repeat(40)}` },
+      { user: { login: "someone-else", type: "User" }, body: "approve merge HEAD" },
+    ],
+  }));
+  assert.equal(result.ok, false);
 });

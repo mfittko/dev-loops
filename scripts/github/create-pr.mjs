@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { parseArgs } from "node:util";
 import { spawn, execFileSync } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import {
@@ -16,6 +17,7 @@ import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-b
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
 import { evaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
+import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
 Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
@@ -64,6 +66,7 @@ Behavior:
     \`--repo\`, no explicit body source, or an enqueue error is a non-fatal no-op (noted in
     that line; exit code unaffected). Omitting \`--lightweight\`, or a body that already
     carries a closing keyword (tracker-backed), never calls the board.
+  - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\` without \`--body\`/\`--body-file\`, and \`--recover\`/\`--editor\`/\`--web\` always (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
 Examples:
@@ -191,15 +194,65 @@ export { detectClosingKeyword, extractClosingIssueNumber };
 // substituting "" (which used to let a broken/blank --body-file open a body-less
 // PR unnoticed).
 async function resolveBody(args) {
-  const bodyValue = getFlagValue(args, /^--body(?:$|=)/u);
-  if (bodyValue !== null) {
-    return bodyValue;
+  const { body, bodyFile } = scanBodySources(args);
+  if (body !== null) {
+    return body;
   }
-  const bodyFileValue = getFlagValue(args, /^--body-file(?:$|=)/u);
-  if (bodyFileValue !== null) {
-    return resolveBodyOrFile({ bodyFile: bodyFileValue, allowStdin: false });
+  if (bodyFile !== null) {
+    return resolveBodyOrFile({ bodyFile, allowStdin: false });
   }
   return null; // no --body/--body-file given
+}
+// pflag-style scan of the forwarded `gh pr create` flags: reads `--body`,
+// `--body-file`, `-b`, `-F` (space, `=`, attached `-bx` and shorthand-bundle
+// `-db x` forms) only in flag position, so a flag VALUE that merely starts
+// with `-b`/`-F` (for example `--title -bump`) is never read as the body.
+// `sourced` is true when gh sources the body itself (--fill*, --template, --editor, --web, -f, -T, -e, -w),
+// so its marker lines cannot be checked here.
+const VALUE_FLAGS = {
+  assignee: "a", base: "B", body: "b", "body-file": "F", head: "H", label: "l", milestone: "m",
+  project: "p", recover: undefined, reviewer: "r", repo: "R", template: "T", title: "t",
+};
+const SCAN_OPTIONS = {
+  ...Object.fromEntries(Object.entries(VALUE_FLAGS).map(([name, short]) => [name, { type: "string", ...(short ? { short } : {}) }])),
+  fill: { type: "boolean", short: "f" },
+  "fill-verbose": { type: "boolean" },
+  "fill-first": { type: "boolean" },
+  editor: { type: "boolean", short: "e" },
+  web: { type: "boolean", short: "w" },
+};
+function scanBodySources(args) {
+  const found = { body: null, bodyFile: null, sourced: false, editorOrWeb: false };
+  const { tokens } = parseArgs({ args, options: SCAN_OPTIONS, strict: false, allowPositionals: true, tokens: true });
+  for (const token of tokens) {
+    if (token.kind !== "option") continue;
+    if (["fill", "fill-verbose", "fill-first", "template", "recover", "editor", "web"].includes(token.name)) found.sourced = true;
+    if (token.name === "editor" || token.name === "web") found.editorOrWeb = true;
+    let value = typeof token.value === "string" ? token.value : null;
+    // pflag strips one leading "=" from an inline short value (`-b=x`); parseArgs keeps it.
+    if (value !== null && token.inlineValue && /^-[^-]/u.test(token.rawName) && value.startsWith("=")) value = value.slice(1);
+    if (token.name === "body") found.body = value;
+    else if (token.name === "body-file") found.bodyFile = value;
+  }
+  return found;
+}
+// Rewrites every `--body-file`/`-F` occurrence (space, `=`, attached and
+// bundled short forms) into one inline `--body <text>`, so gh writes exactly
+// the bytes the waiver guard checked instead of re-reading the path.
+function inlineBodyFile(args, text) {
+  const { tokens } = parseArgs({ args, options: SCAN_OPTIONS, strict: false, allowPositionals: true, tokens: true });
+  const next = [...args];
+  for (const token of tokens) {
+    if (token.kind !== "option" || token.name !== "body-file") continue;
+    const arg = args[token.index];
+    if (arg.startsWith("--")) next[token.index] = null;
+    else {
+      const rest = arg.slice(0, arg.indexOf("F"));
+      next[token.index] = rest === "-" ? null : rest;
+    }
+    if (!token.inlineValue) next[token.index + 1] = null;
+  }
+  return [...next.filter((arg) => arg !== null), "--body", text];
 }
 // A plain string value for a single-value flag, in both the space form
 // (`--repo owner/name`) and the inline form (`--repo=owner/name`); unlike
@@ -464,12 +517,32 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   const baseDefault = hasBase
     ? null
     : await resolveBaseDefault(runtime.cwd ?? process.cwd(), runtime);
-  const { help, ghArgs } = buildCreatePrArgs(forwardedArgv, { baseDefault });
+  let { help, ghArgs } = buildCreatePrArgs(forwardedArgv, { baseDefault });
   if (help) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
+  const sources = scanBodySources(forwardedArgv);
+  if (sources.body !== null && sources.bodyFile !== null) {
+    throw parseError("--body and --body-file are mutually exclusive; pass only one");
+  }
   const body = await resolveBody(forwardedArgv);
+  if (forwardedArgv.some((token) => token === "--recover" || token.startsWith("--recover="))) {
+    throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --recover loads a saved body that this wrapper cannot check, even with --body or --body-file; remove --recover");
+  }
+  if (sources.editorOrWeb || (body === null && sources.sourced)) {
+    throw parseError("ADR-TRIPWIRE-STANDING-WAIVER: --fill/--fill-verbose/--fill-first/--template/--recover/--editor/--web source the body outside this wrapper, so a waiver line cannot be ruled out; pass --body or --body-file instead");
+  }
+  if (sources.bodyFile !== null) {
+    ({ ghArgs } = buildCreatePrArgs(inlineBodyFile(forwardedArgv, body), { baseDefault }));
+  }
+  // No body source: pass an explicit empty body so gh never prompts for one.
+  if (body === null) ghArgs = [...ghArgs, "--body", ""];
+  // ADR-TRIPWIRE-STANDING-WAIVER: a new PR starts with no waiver line.
+  const waiverRefusal = waiverLineChangeRefusal({ currentBody: "", nextBody: body ?? "", action: "create" });
+  if (waiverRefusal) {
+    throw parseError(waiverRefusal);
+  }
   // With --issue <n> the closing reference is a MUST. A warning is
   // invisible under --jq (which the repo's token-discipline contract
   // mandates), so a missing or mismatched reference is refused before gh is

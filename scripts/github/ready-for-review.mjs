@@ -10,6 +10,7 @@ import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers"
 import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { evaluateAdrTripwire } from "../loop/check-adr-tripwire.mjs";
+import { verifyPolicyChangeApproval, policyChangeApprovalRefusal } from "./_policy-change-approval.mjs";
 import { evaluateCommentDiscipline as realEvaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { sanitizeInline } from "./post-gate-findings.mjs";
@@ -193,7 +194,7 @@ async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reas
 // `skipCiPrecondition` is a runtime-only seam (no CLI flag on this script):
 // restore-ready.mjs calls readyForReview() directly with it set, so the CI
 // precondition can never be skipped through this script's own CLI surface.
-export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline, skipCiPrecondition = false } = {}) {
+export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, verifyPolicyChangeApproval: verifyPolicyChangeApprovalFn = verifyPolicyChangeApproval, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline, skipCiPrecondition = false } = {}) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const requireCi = draftGateConfig?.requireCi !== false && skipCiPrecondition !== true;
@@ -251,6 +252,15 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   });
   if (adrTripwire.outcome === "block") {
     throw new Error(`PR #${options.pr} blocked by the ADR tripwire: ${adrTripwire.reasons.join("; ")}`);
+  }
+  // A PR that changes the .devloops standingAuthorizations block also needs a
+  // fresh head-pinned human approval, even with its decision record present.
+  const policyApproval = await verifyPolicyChangeApprovalFn(
+    { repo: options.repo, pr: options.pr, headSha, adrTripwire },
+    { env, ghCommand, runChild: runChildImpl },
+  );
+  if (!policyApproval.satisfied) {
+    throw new Error(policyChangeApprovalRefusal({ pr: options.pr, headSha, approval: policyApproval }));
   }
   // Fail-closed comment-discipline guard (LOCAL-COMMENT-DISCIPLINE, #2054):
   // added-lines-only; blocks a newly added runtime comment that narrates

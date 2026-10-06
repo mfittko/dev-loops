@@ -35,6 +35,8 @@ import {
   commandContainsGraphqlResolveReviewThread,
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
+  commandContainsRawPrBodyEdit,
+  commandContainsRawPrBodyApiWrite,
   commandContainsDetachedWaitTool,
   commandIsSleepPollLoop,
   commandIsFileMarkerPollLoop,
@@ -1220,4 +1222,132 @@ test("decideBashGate denies the env -C forms (#2550)", () => {
     assert.equal(result.decision, "deny", extra.command);
     assert.match(result.reason, reason, extra.command);
   }
+});
+
+test("commandContainsRawPrBodyEdit detects gh pr edit body writes (--body, --body-file, -b, -F)", () => {
+  for (const cmd of [
+    "gh pr edit 5 --body-file pr.md",
+    "gh pr edit 5 --body 'text'",
+    "gh pr edit 5 --body='text'",
+    "gh pr edit 5 --repo o/n -b 'text'",
+    "gh pr edit 5 -F pr.md",
+    "echo ok && gh pr edit 5 --body-file -",
+  ]) {
+    assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
+  }
+});
+
+test("commandContainsRawPrBodyEdit passes non-body edits, other verbs and flag-looking words in quotes", () => {
+  for (const cmd of [
+    "gh pr edit 5 --add-assignee me",
+    "gh pr edit 5 --title 'fix -b handling'",
+    "gh pr edit 5 --base main",
+    "gh pr view 5 --json body",
+    "gh pr edit --help",
+    "node scripts/github/edit-pr.mjs --repo o/n --pr 5 --body-file pr.md",
+    "dev-loops-run cli/index.mjs pr edit --repo o/n --pr 5 --body-file pr.md",
+  ]) {
+    assert.equal(commandContainsRawPrBodyEdit(cmd), false, cmd);
+  }
+});
+
+test("commandContainsRawPrBodyApiWrite detects a gh api write of a body field to pulls/<n>", () => {
+  for (const cmd of [
+    "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body='text'",
+    "gh api --method PATCH repos/mfittko/dev-loops/pulls/5 -F body=@pr.md",
+    "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 --raw-field body=text",
+    "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 --field body=@pr.md",
+    "gh api -X PATCH https://api.github.com/repos/mfittko/dev-loops/pulls/5 -f 'body=text'",
+    "gh api -X PATCH pulls/5 -f body=text",
+    'bash -c "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body=x"',
+    'eval "gh api repos/mfittko/dev-loops/pulls/5 -f body=x"',
+    "echo 5 | xargs -I{} gh api -X PATCH repos/mfittko/dev-loops/pulls/{} -f body=x",
+  ]) {
+    assert.equal(commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), true, cmd);
+  }
+});
+
+test("commandContainsRawPrBodyApiWrite passes reads, non-body fields, sub-paths and another repo", () => {
+  for (const cmd of [
+    "gh api repos/mfittko/dev-loops/pulls/5",
+    "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f title=new",
+    "gh api -X POST repos/mfittko/dev-loops/pulls/5/comments -f body=text",
+    "gh api -X PATCH repos/other/repo/pulls/5 -f body=text",
+    "gh api -X POST repos/mfittko/dev-loops/issues/5/comments -f body=text",
+  ]) {
+    assert.equal(commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), false, cmd);
+  }
+});
+
+test("commandContainsRawPrBodyEdit denies global-flag and wrapped literal forms", () => {
+  for (const cmd of [
+    "gh -R o/n pr edit 5 --body-file pr.md",
+    "gh --repo o/n pr edit 5 --body 'x'",
+    "gh --repo=o/n pr edit 5 -b x",
+    "gh -Ro/n pr edit 5 -F pr.md",
+    `bash -c "gh pr edit 5 --body-file pr.md"`,
+    `eval "gh pr edit 5 --body x"`,
+    "echo 5 | xargs -I{} gh pr edit {} --body-file pr.md",
+  ]) {
+    assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
+  }
+});
+
+test("commandContainsRawPrBodyEdit keeps passing title, assignee and read forms", () => {
+  for (const cmd of [
+    `gh pr edit 5 --title "fix --body flag"`,
+    "gh -R o/n pr edit 5 --add-assignee me",
+    "gh issue edit 5 --add-label bug",
+    "gh issue edit 5 --body-file i.md",
+    "gh issue edit 5 --title 'a -b b'",
+    "gh -R o/n pr view 5",
+    `bash -c "echo hi"`,
+    "git commit -m 'gh pr edit notes'",
+  ]) {
+    assert.equal(commandContainsRawPrBodyEdit(cmd), false, cmd);
+  }
+});
+
+test("commandContainsRawPrBodyApiWrite denies issues/<n>, --input, placeholder, query and graphql forms", () => {
+  for (const cmd of [
+    "gh api -X PATCH repos/mfittko/dev-loops/issues/5 -f body=text",
+    "gh api repos/mfittko/dev-loops/pulls/5 -f body=text",
+    "gh api repos/mfittko/dev-loops/issues/5 -F body=@i.md",
+    "gh api repos/mfittko/dev-loops/pulls/5 --field body=x",
+    "gh api repos/mfittko/dev-loops/pulls/5 --raw-field body=x",
+    "gh api --method PUT repos/mfittko/dev-loops/issues/5 -F body=@i.md",
+    "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 --input payload.json",
+    "gh api repos/mfittko/dev-loops/issues/5 --input=payload.json",
+    "gh api -X PATCH repos/{owner}/{repo}/pulls/5 -f body=x",
+    "gh api -X PATCH 'repos/mfittko/dev-loops/pulls/5?x=1' -f body=x",
+    "gh api -X PATCH pulls/5?x=1 -f body=x",
+    "gh api -X PATCH repos/{owner}/{repo}/issues/5 --input p.json",
+    `gh api graphql -f query='mutation { updatePullRequest(input:{pullRequestId:"X", body:"b"}) { clientMutationId } }'`,
+  ]) {
+    assert.equal(commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), true, cmd);
+  }
+});
+
+test("commandContainsRawPrBodyApiWrite keeps passing comments, title-only and graphql reads", () => {
+  for (const cmd of [
+    "gh api -X POST repos/mfittko/dev-loops/pulls/5/comments -f body=text",
+    "gh api -X POST repos/mfittko/dev-loops/issues/5/comments -f body=text",
+    "gh api -X PATCH repos/mfittko/dev-loops/issues/5 -f title=new",
+    "gh api -X GET repos/mfittko/dev-loops/pulls/5 -f body=x",
+    "gh api repos/mfittko/dev-loops/issues/5",
+    "gh api repos/{owner}/{repo}/pulls/5?x=1",
+    "gh api graphql -f query='query { viewer { login } }'",
+    "gh api -X PATCH repos/other/repo/issues/5 -f body=text",
+  ]) {
+    assert.equal(commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), false, cmd);
+  }
+});
+
+test("raw PR body denies see through quoted flag tokens", () => {
+  assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 '--body' 'adr-tripwire:allow x'"), true);
+  assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 '--body=adr-tripwire:allow x'"), true);
+  assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 "--body=x"'), true);
+  assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 "-F" body.md'), true);
+  assert.equal(commandContainsRawPrBodyApiWrite('gh api -X PATCH repos/o/n/pulls/5 -f "body"=x'), true);
+  assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 --title 'a title'"), false);
 });

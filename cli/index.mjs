@@ -249,6 +249,7 @@ const QUEUE_ROUTES = {
   add:     "scripts/projects/add-queue-item.mjs",
   move:    "scripts/projects/move-queue-item.mjs",
   reorder: "scripts/projects/reorder-queue-item.mjs",
+  remove:  "scripts/projects/remove-queue-item.mjs",
   "archive-done": "scripts/projects/archive-done-items.mjs",
   "sync-status": "scripts/projects/sync-item-status.mjs",
   ensure:  "scripts/projects/ensure-queue-board.mjs",
@@ -264,6 +265,7 @@ const QUEUE_DESCRIPTIONS = {
   add: "Add issue/PR to queue board",
   move: "Move queue item between Status columns",
   reorder: "Reorder items (move-to-top/move-after/order, --dry-run)",
+  remove: "Remove one mistakenly added item from the board (proven by direct item lookup)",
   "archive-done": "Archive closed Done items older than a duration",
   "sync-status": "Sync a queued issue/PR's board Status column (best-effort)",
   ensure: "Create/repair queue board bootstrap surface",
@@ -319,6 +321,8 @@ export const SUBCOMMAND_ROUTES = {
   },
   pr: {
     create:             "scripts/github/create-pr.mjs",
+    edit:               "scripts/github/edit-pr.mjs",
+    "waive-adr-tripwire": "scripts/github/waive-adr-tripwire.mjs",
     "ready-for-review": "scripts/github/ready-for-review.mjs",
     "reconcile-draft":  "scripts/github/reconcile-draft-gate.mjs",
     "convert-to-draft": "scripts/github/convert-to-draft.mjs",
@@ -433,6 +437,8 @@ const SUBCOMMAND_DESCRIPTIONS = {
   },
   pr: {
     create: "Create PR (always draft, self-assigned by default)",
+    edit: "Edit PR title/body/assignees/milestone/base (refuses adr-tripwire:allow line changes)",
+    "waive-adr-tripwire": "Write the head-pinned ADR tripwire waiver under a standing authorization",
     "ready-for-review": "Mark PR ready for review",
     "reconcile-draft": "Reconcile non-draft PR",
     "convert-to-draft": "Convert a ready PR to draft (idempotent)",
