@@ -238,3 +238,12 @@ queue:
 # unchanged, so the config alone clears nothing.
 autonomy:
   humanMergeOnly: false
+
+# Operator-recorded standing authorization (mfittko, 2026-10-06): lets the ADR
+# tripwire waiver writer act on this repo's behalf until the expiry below.
+standingAuthorizations:
+  adrTripwireWaiver:
+    grantedBy: mfittko
+    grantedAt: 2026-10-06
+    expires: 2027-01-03
+    reason: Queue drain; waive contract-doc tripwires that record no new decision
