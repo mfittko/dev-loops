@@ -147,6 +147,25 @@ test("resizing preserves current focus, fitted bounds and deliberate camera pan"
   }
 });
 
+test("Focus scale is captured at click and independent of resize history", async ({ page }) => {
+  const { server, url } = await startViewer();
+  try {
+    await page.goto(url);
+    await openTab(page, "graph");
+    const graph = await waitForInspectionGraph(page);
+    const root = page.locator("[data-inspection-graph-root]");
+    const scale = () => graph.evaluate((viewport) => viewport.querySelector(".inspection-graph-world").transform.baseVal.consolidate().matrix.a);
+    await root.locator("[data-graph-focus]").click();
+    const first = await scale();
+    for (const size of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
+      await page.setViewportSize(size);
+    }
+    await expect.poll(async () => Math.abs((await scale()) - first)).toBeLessThan(0.001);
+  } finally {
+    await stopFixtureServer(server);
+  }
+});
+
 test("viewer keeps a consistent light theme under a dark system preference", async ({ page }, testInfo) => {
   const { server, url } = await startViewer();
   try {
