@@ -14,7 +14,7 @@ function parseTable(markdown) {
   assert.ok(table, "priority table not found");
   const dataLines = table[0].split("\n").slice(2).filter((line) => line.startsWith("|"));
   const parsed = dataLines
-    .map((line) => line.match(/^\| (0[abc]|\d+) \| .*? \| `([a-z_]+)`(?: \(`([a-z_]+)`\))?/))
+    .map((line) => line.match(/^\| (0[abc]|\d+) \| .*? \| `([a-z_]+)`(?: \(`([a-z_]+)`\))?(?: \(`requiresLocalIsolation` passthrough when true\))? \|$/))
     .filter(Boolean)
     .map(([, rule, outcome, stopReason]) => ({ rule, outcome, stopReason: stopReason ?? null }));
   assert.equal(parsed.length, dataLines.length, "table has a row the parser cannot read");
