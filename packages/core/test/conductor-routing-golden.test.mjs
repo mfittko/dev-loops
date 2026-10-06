@@ -75,6 +75,6 @@ test("golden: evaluator matches the pinned table over the full input product", (
     }
   });
   console.log(`golden inputs=${inputs.length} mismatches=${mismatches.length}`);
-  assert.equal(inputs.length, 24480);
+  assert.equal(inputs.length, 26112);
   assert.deepEqual(mismatches, []);
 });

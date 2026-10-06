@@ -364,7 +364,29 @@
  },
  {
   "copilotState": "no_pr",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "stop_needs_human",
+  "outerAction": "stop",
+  "stopReason": "pr_not_ready",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "no_pr",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "stop_needs_human",
+  "outerAction": "stop",
+  "stopReason": "pr_not_ready",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "no_pr",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "stop_needs_human",
   "outerAction": "stop",
@@ -386,7 +408,29 @@
  },
  {
   "copilotState": "no_pr",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "no_pr",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "stop_needs_human",
+  "outerAction": "stop",
+  "stopReason": "pr_not_ready",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "no_pr",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "stop_needs_human",
   "outerAction": "stop",
@@ -1024,7 +1068,29 @@
  },
  {
   "copilotState": "pr_draft",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "handoff_to_copilot_loop",
+  "outerAction": "reenter_copilot_loop",
+  "stopReason": null,
+  "loopFamily": "copilot_loop",
+  "entrypoint": "copilot_pr_handoff",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "pr_draft",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "stay_with_current_live_owner",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "pr_draft",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "stay_with_current_live_owner",
   "outerAction": "continue_wait",
@@ -1046,7 +1112,29 @@
  },
  {
   "copilotState": "pr_draft",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "pr_draft",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "handoff_to_copilot_loop",
+  "outerAction": "reenter_copilot_loop",
+  "stopReason": null,
+  "loopFamily": "copilot_loop",
+  "entrypoint": "copilot_pr_handoff",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "pr_draft",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "handoff_to_copilot_loop",
   "outerAction": "reenter_copilot_loop",
@@ -1684,7 +1772,29 @@
  },
  {
   "copilotState": "pr_ready_no_feedback",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "pr_ready_no_feedback",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "pr_ready_no_feedback",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -1706,7 +1816,29 @@
  },
  {
   "copilotState": "pr_ready_no_feedback",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "pr_ready_no_feedback",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "pr_ready_no_feedback",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -2344,7 +2476,29 @@
  },
  {
   "copilotState": "waiting_for_copilot_review",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "waiting_for_copilot_review",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "waiting_for_copilot_review",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -2366,7 +2520,29 @@
  },
  {
   "copilotState": "waiting_for_copilot_review",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "waiting_for_copilot_review",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "waiting_for_copilot_review",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -3004,7 +3180,29 @@
  },
  {
   "copilotState": "unresolved_feedback_present",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "handoff_to_copilot_loop",
+  "outerAction": "reenter_copilot_loop",
+  "stopReason": null,
+  "loopFamily": "copilot_loop",
+  "entrypoint": "copilot_pr_handoff",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "unresolved_feedback_present",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "stay_with_current_live_owner",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "unresolved_feedback_present",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "stay_with_current_live_owner",
   "outerAction": "continue_wait",
@@ -3026,7 +3224,29 @@
  },
  {
   "copilotState": "unresolved_feedback_present",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "unresolved_feedback_present",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "handoff_to_copilot_loop",
+  "outerAction": "reenter_copilot_loop",
+  "stopReason": null,
+  "loopFamily": "copilot_loop",
+  "entrypoint": "copilot_pr_handoff",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "unresolved_feedback_present",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "handoff_to_copilot_loop",
   "outerAction": "reenter_copilot_loop",
@@ -3664,7 +3884,29 @@
  },
  {
   "copilotState": "already_fixed_needs_reply_resolve",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "handoff_to_copilot_loop",
+  "outerAction": "reenter_copilot_loop",
+  "stopReason": null,
+  "loopFamily": "copilot_loop",
+  "entrypoint": "copilot_pr_handoff",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "already_fixed_needs_reply_resolve",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "stay_with_current_live_owner",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "already_fixed_needs_reply_resolve",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "stay_with_current_live_owner",
   "outerAction": "continue_wait",
@@ -3686,7 +3928,29 @@
  },
  {
   "copilotState": "already_fixed_needs_reply_resolve",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "already_fixed_needs_reply_resolve",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "handoff_to_copilot_loop",
+  "outerAction": "reenter_copilot_loop",
+  "stopReason": null,
+  "loopFamily": "copilot_loop",
+  "entrypoint": "copilot_pr_handoff",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "already_fixed_needs_reply_resolve",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "handoff_to_copilot_loop",
   "outerAction": "reenter_copilot_loop",
@@ -4324,7 +4588,29 @@
  },
  {
   "copilotState": "ready_to_rerequest_review",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "ready_to_rerequest_review",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "ready_to_rerequest_review",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -4346,7 +4632,29 @@
  },
  {
   "copilotState": "ready_to_rerequest_review",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "ready_to_rerequest_review",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "ready_to_rerequest_review",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -4984,7 +5292,29 @@
  },
  {
   "copilotState": "low_signal_converged",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "low_signal_converged",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "low_signal_converged",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -5006,7 +5336,29 @@
  },
  {
   "copilotState": "low_signal_converged",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "low_signal_converged",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "low_signal_converged",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -5644,7 +5996,29 @@
  },
  {
   "copilotState": "review_request_unavailable",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "stop_needs_human",
+  "outerAction": "stop",
+  "stopReason": "review_unavailable",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "review_request_unavailable",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "stop_needs_human",
+  "outerAction": "stop",
+  "stopReason": "review_unavailable",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "review_request_unavailable",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "stop_needs_human",
   "outerAction": "stop",
@@ -5666,7 +6040,29 @@
  },
  {
   "copilotState": "review_request_unavailable",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "review_request_unavailable",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "stop_needs_human",
+  "outerAction": "stop",
+  "stopReason": "review_unavailable",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "review_request_unavailable",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "stop_needs_human",
   "outerAction": "stop",
@@ -6304,7 +6700,29 @@
  },
  {
   "copilotState": "waiting_for_ci",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "waiting_for_ci",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "waiting_for_ci",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -6326,7 +6744,29 @@
  },
  {
   "copilotState": "waiting_for_ci",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "waiting_for_ci",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "waiting_for_ci",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -6964,7 +7404,29 @@
  },
  {
   "copilotState": "blocked_needs_user_decision",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "stop_needs_human",
+  "outerAction": "stop",
+  "stopReason": "copilot_blocked",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "blocked_needs_user_decision",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "stop_needs_human",
+  "outerAction": "stop",
+  "stopReason": "copilot_blocked",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "blocked_needs_user_decision",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "stop_needs_human",
   "outerAction": "stop",
@@ -6986,7 +7448,29 @@
  },
  {
   "copilotState": "blocked_needs_user_decision",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "blocked_needs_user_decision",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "stop_needs_human",
+  "outerAction": "stop",
+  "stopReason": "copilot_blocked",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "blocked_needs_user_decision",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "stop_needs_human",
   "outerAction": "stop",
@@ -7624,7 +8108,29 @@
  },
  {
   "copilotState": "done",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "done_terminal",
+  "outerAction": "done",
+  "stopReason": null,
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "done",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "done_terminal",
+  "outerAction": "done",
+  "stopReason": null,
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "done",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "done_terminal",
   "outerAction": "done",
@@ -7646,7 +8152,29 @@
  },
  {
   "copilotState": "done",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "done",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "done_terminal",
+  "outerAction": "done",
+  "stopReason": null,
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "done",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "done_terminal",
   "outerAction": "done",
@@ -8284,7 +8812,29 @@
  },
  {
   "copilotState": "round_cap_reached",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "round_cap_reached",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "round_cap_reached",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -8306,7 +8856,29 @@
  },
  {
   "copilotState": "round_cap_reached",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "round_cap_reached",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "round_cap_reached",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -8944,7 +9516,29 @@
  },
  {
   "copilotState": "round_cap_clean_fallback",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "round_cap_clean_fallback",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "round_cap_clean_fallback",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -8966,7 +9560,29 @@
  },
  {
   "copilotState": "round_cap_clean_fallback",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "round_cap_clean_fallback",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "round_cap_clean_fallback",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -9604,7 +10220,29 @@
  },
  {
   "copilotState": "internal_tooling_direct_gate",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "internal_tooling_direct_gate",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "internal_tooling_direct_gate",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -9626,7 +10264,29 @@
  },
  {
   "copilotState": "internal_tooling_direct_gate",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "internal_tooling_direct_gate",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "internal_tooling_direct_gate",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -10264,7 +10924,29 @@
  },
  {
   "copilotState": "",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "unknown_state",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "empty"
+ },
+ {
+  "copilotState": "",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "unknown_state",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "empty"
+ },
+ {
+  "copilotState": "",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "needs_reconcile",
   "outerAction": "stop",
@@ -10286,7 +10968,29 @@
  },
  {
   "copilotState": "",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "unknown_state",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "empty"
+ },
+ {
+  "copilotState": "",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "unknown_state",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "empty"
+ },
+ {
+  "copilotState": "",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "needs_reconcile",
   "outerAction": "stop",
@@ -10924,7 +11628,29 @@
  },
  {
   "copilotState": "unknown_sentinel_state",
+  "reviewerState": "re_review_needed",
+  "ownershipState": null,
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "unknown_sentinel_state",
   "reviewerState": "submitted_review",
+  "ownershipState": "live_owner",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "unknown_sentinel_state",
+  "reviewerState": "re_review_needed",
   "ownershipState": "live_owner",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
@@ -10946,7 +11672,29 @@
  },
  {
   "copilotState": "unknown_sentinel_state",
+  "reviewerState": "re_review_needed",
+  "ownershipState": "duplicate_local_owners",
+  "routingOutcome": "needs_reconcile",
+  "outerAction": "stop",
+  "stopReason": "ownership_conflict",
+  "loopFamily": null,
+  "entrypoint": null,
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "unknown_sentinel_state",
   "reviewerState": "submitted_review",
+  "ownershipState": "some_other_ownership",
+  "routingOutcome": "continue_current_wait",
+  "outerAction": "continue_wait",
+  "stopReason": null,
+  "loopFamily": "outer_loop",
+  "entrypoint": "outer_loop_wait",
+  "requiredArgs": "target"
+ },
+ {
+  "copilotState": "unknown_sentinel_state",
+  "reviewerState": "re_review_needed",
   "ownershipState": "some_other_ownership",
   "routingOutcome": "continue_current_wait",
   "outerAction": "continue_wait",
