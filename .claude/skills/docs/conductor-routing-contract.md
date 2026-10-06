@@ -192,7 +192,7 @@ The evaluator **MUST** apply the following first-match-wins priority order:
 | 16 | copilot weak-active | `handoff_to_copilot_loop` |
 | 17 | anything else | `needs_reconcile` (`unknown_state`) |
 
-Rule 17 also catches `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback` and `internal_tooling_direct_gate`: when no earlier row matches (for example with reviewer state `waiting_for_review_request`) they reach `needs_reconcile` with stop reason `unknown_state`. With a reviewer active state they route through rule 11, and with a reviewer wait state through rule 14.
+Rule 17 also catches `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback` and `internal_tooling_direct_gate`: when no earlier row matches (for example with reviewer state `waiting_for_review_request`) they reach `needs_reconcile` with stop reason `unknown_state`. With other reviewer states an earlier row matches first.
 
 **Copilot strong-active states** (win over reviewer wait states): `unresolved_feedback_present`, `already_fixed_needs_reply_resolve`
 
