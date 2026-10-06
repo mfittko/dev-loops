@@ -310,7 +310,7 @@ export function selectRoutingArrow({ target, ownershipState, copilotState, revie
     reviewerState,
     ownershipState: ownershipState ?? null,
   };
-  return ROUTE_ARROWS.find((arrow) => arrow.guard === undefined || ROUTING_GUARDS[arrow.guard](context));
+  return ROUTE_ARROWS.find((arrow) => arrow.guard === undefined || (Object.hasOwn(ROUTING_GUARDS, arrow.guard) && ROUTING_GUARDS[arrow.guard](context)));
 }
 
 // ---------------------------------------------------------------------------

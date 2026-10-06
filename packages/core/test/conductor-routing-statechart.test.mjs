@@ -23,7 +23,7 @@ test("chart is plain JSON, uses only the XState v5 key allowlist, and every guar
     for (const arrow of state.always ?? []) {
       checkKeys(arrow);
       assert.ok(arrow.target in chart.states, `${name}: unknown target ${arrow.target}`);
-      if (arrow.guard !== undefined) assert.equal(typeof ROUTING_GUARDS[arrow.guard], "function", arrow.guard);
+      if (arrow.guard !== undefined) { assert.ok(Object.hasOwn(ROUTING_GUARDS, arrow.guard), arrow.guard); assert.equal(typeof ROUTING_GUARDS[arrow.guard], "function", arrow.guard); }
     }
   }
 });
@@ -68,6 +68,7 @@ test("fail-closed arrows fire for malformed target, blank states and duplicate o
   for (const [rule, input, stopReason] of cases) {
     const result = evaluateConductorRouting(input);
     assert.equal(String(selectRoutingArrow(input).meta.rule), rule);
+    assert.ok(Object.isFrozen(selectRoutingArrow(input)) && Object.isFrozen(selectRoutingArrow(input).meta));
     assert.equal(result.routingOutcome, ROUTING_OUTCOME.NEEDS_RECONCILE);
     assert.equal(result.stopReason, stopReason);
     assert.equal(result.handoffEnvelope.loopFamily, null);

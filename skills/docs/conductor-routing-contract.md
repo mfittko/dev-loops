@@ -149,7 +149,7 @@ Every routing decision emits a `handoffEnvelope` with the following fields:
 | `loopFamily` | `string | null` | Which loop family receives control; `null` for terminal/blocked/reconcile |
 | `entrypoint` | `string | null` | Specific handler identifier; `null` when no automated handler applies |
 | `reason` | `string` | Human-readable reason/evidence summary for the routing decision |
-| `requiredArgs` | `object` | Minimum args required by the entrypoint handler (`{ repo, pr }` at minimum) |
+| `requiredArgs` | `object` | Minimum args required by the entrypoint handler (`{ repo, pr }` for routed results, `{}` for pre-check results 0a, 0b and 0c) |
 | `requiresLocalIsolation` | `boolean` | Whether the next step needs an isolated local checkout |
 | `confidence` | `string` | Source mode: `"authoritative"` \| `"local"` \| `"snapshot"` |
 
@@ -192,7 +192,7 @@ The evaluator **MUST** apply the following first-match-wins priority order:
 | 16 | copilot weak-active | `handoff_to_copilot_loop` |
 | 17 | anything else | `needs_reconcile` (`unknown_state`) |
 
-Rule 17 also catches `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback` and `internal_tooling_direct_gate`: they reach `needs_reconcile` with stop reason `unknown_state`.
+Rule 17 also catches `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback` and `internal_tooling_direct_gate`: when no earlier row matches (for example with reviewer state `waiting_for_review_request`) they reach `needs_reconcile` with stop reason `unknown_state`. With a reviewer active state they route through rule 11, and with a reviewer wait state through rule 14.
 
 **Copilot strong-active states** (win over reviewer wait states): `unresolved_feedback_present`, `already_fixed_needs_reply_resolve`
 
