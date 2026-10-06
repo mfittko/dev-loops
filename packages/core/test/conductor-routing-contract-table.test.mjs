@@ -12,11 +12,13 @@ function parseTable(markdown) {
   assert.ok(section, "ROUTING-PRIORITY-ORDER marker not found");
   const table = section.match(/^\| Priority \|[^\n]*\n(?:\|[^\n]*\n?)+/m);
   assert.ok(table, "priority table not found");
-  return table[0]
-    .split("\n")
+  const dataLines = table[0].split("\n").filter((line) => /^\| (0[abc]|\d+) \|/.test(line));
+  const parsed = dataLines
     .map((line) => line.match(/^\| (0[abc]|\d+) \| .*? \| `([a-z_]+)`(?: \(`([a-z_]+)`\))?/))
     .filter(Boolean)
     .map(([, rule, outcome, stopReason]) => ({ rule, outcome, stopReason: stopReason ?? null }));
+  assert.equal(parsed.length, dataLines.length, "table has a row the parser cannot read");
+  return parsed;
 }
 
 const chartRows = chart.states.route.always.map((arrow) => ({
@@ -46,5 +48,10 @@ test("freshness check fails for a swapped, deleted or malformed table row in the
 
   assert.notDeepEqual(parseTable(swapped.join("\n")), chartRows);
   assert.notDeepEqual(parseTable(deleted.join("\n")), chartRows);
-  assert.notEqual(parseTable(malformed.join("\n")).length, 20);
+  assert.throws(() => parseTable(malformed.join("\n")), /cannot read/);
+
+  const appended = [...lines];
+  const last = lines.findIndex((line) => line.startsWith("| 17 |"));
+  appended.splice(last + 1, 0, "| 18 | x | needs_reconcile |");
+  assert.throws(() => parseTable(appended.join("\n")), /cannot read/);
 });
