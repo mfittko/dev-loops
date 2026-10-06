@@ -58,4 +58,9 @@ test("freshness check fails for a swapped, deleted or malformed table row in the
   const unknownLabel = [...lines];
   unknownLabel.splice(last + 1, 0, "| 0d | x | `needs_reconcile` (`unknown_state`) |");
   assert.throws(() => parseTable(unknownLabel.join("\n")), /cannot read/);
+
+  const trailing = [...lines];
+  trailing[start] = trailing[start].replace("`needs_reconcile` (`unknown_state`) |", "`needs_reconcile` (`unknown_state`) drift |");
+  assert.notEqual(trailing[start], lines[start], "trailing mutation must change the row");
+  assert.throws(() => parseTable(trailing.join("\n")), /cannot read/);
 });
