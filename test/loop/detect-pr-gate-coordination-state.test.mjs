@@ -2409,7 +2409,7 @@ test("detect-pr-gate-coordination-state does NOT release the runner-coordination
 test("TERMINAL_RUNNER_RELEASE_ACTIONS covers exactly the six run-completion/stop actions (#1632)", () => {
   // All six gate-coordination terminal stop actions trigger the release; no
   // mid-gate / non-terminal action does. Proves the Set membership that the
-  // integration test (REPORT_BLOCKED) exercises for one action holds for all four.
+  // integration test (REPORT_BLOCKED) exercises for one action holds for all six.
   // Cardinality is asserted so a future accidental 7th member is caught here
   // rather than silently releasing at a non-terminal mid-gate boundary.
   assert.equal(TERMINAL_RUNNER_RELEASE_ACTIONS.size, 6);

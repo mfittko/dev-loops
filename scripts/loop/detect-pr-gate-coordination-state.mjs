@@ -1209,10 +1209,12 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     ? { ...context, interpretation: reopenedInterpretation, disposition: summarizeLoopInterpretation(reopenedInterpretation) }
     : context;
   // ADR-TRIPWIRE-EARLY-SURFACE: draft PRs only; a payload without baseRefName yields unknown.
+  // An injected runChild (hermetic runtime) must never reach real git: it defaults to unknown.
+  const unknownEarlySurface = async () => ({ adrTripwire: buildAdrTripwireField(null), sizeBudget: buildSizeBudgetField(null) });
   const prBaseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
   const earlySurface = context.prData?.isDraft !== true ? null : prBaseRefName.length === 0
     ? { adrTripwire: buildAdrTripwireField(null), sizeBudget: buildSizeBudgetField(null) }
-    : await (runtime.evaluateEarlySurface ?? evaluateEarlySurface)({
+    : await (runtime.evaluateEarlySurface ?? (runtime.runChild ? unknownEarlySurface : evaluateEarlySurface))({
         baseRefName: prBaseRefName,
         head: context.currentHeadSha,
         prBody: typeof context.prData?.body === "string" ? context.prData.body : "",

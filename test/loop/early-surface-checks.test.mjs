@@ -47,7 +47,7 @@ test("a decision-shaped change pushed after PR creation is reported as a tripwir
   }
 });
 
-test("an unresolvable base yields unknown outcomes and never fetches", async () => {
+test("an unresolvable base yields unknown outcomes naming git fetch origin", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-early-surface-unknown-"));
   try {
     await initSizeBudgetFixtureRepo(tempDir);

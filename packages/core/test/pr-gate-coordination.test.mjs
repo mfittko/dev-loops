@@ -7,6 +7,8 @@ import {
   PR_CHECKPOINT,
   shouldGuardCopilotReviewRequest,
   ADR_TRIPWIRE_REMEDIES,
+  buildAdrTripwireField,
+  buildSizeBudgetField,
 } from "../src/loop/pr-gate-coordination.mjs";
 import { DISPOSITION, interpretLoopState, STATE } from "../src/loop/copilot-loop-state.mjs";
 import { FIXER_DISPOSITION_FORBIDDEN_ACTIONS } from "../src/loop/fixer-disposition.mjs";
@@ -4609,4 +4611,23 @@ test("early surface: passing outcomes and non-draft PRs change nothing", () => {
   assert.equal(pass.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
   const ready = draftAt({ clean: true, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, adrTripwire: ADR_BLOCK });
   assert.equal(ready.adrTripwire, undefined);
+});
+
+test("early surface: an ADR block with an unwaivable size block reports blocked naming both decisions", () => {
+  const result = draftAt({ clean: true, adrTripwire: ADR_BLOCK, sizeBudget: { ...SIZE_BLOCK, waivable: false } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(result.reason, /ADR tripwire/u);
+  assert.match(result.reason, /no waiver applies/u);
+});
+
+test("early surface: an unknown size budget alone reports blocked", () => {
+  const result = draftAt({ clean: true, sizeBudget: buildSizeBudgetField(null) });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(result.reason, /size budget outcome is unknown/u);
+});
+
+test("early surface: an unexpected tripwire outcome maps to unknown with no remedies", () => {
+  const field = buildAdrTripwireField({ outcome: "error" });
+  assert.equal(field.outcome, "unknown");
+  assert.deepEqual(field.remedies, []);
 });
