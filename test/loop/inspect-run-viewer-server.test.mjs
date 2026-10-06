@@ -560,6 +560,7 @@ test("createInspectRunViewerServer keeps graph asset failures generic and path-f
     assert.equal(response.statusCode, 500);
     assert.equal(response.headers["content-type"], "text/plain; charset=utf-8");
     assert.equal(response.headers["cache-control"], "no-store");
+    assert.equal(response.body, "Inspection graph browser asset unavailable");
     assert.doesNotMatch(response.body, /Users\/tester/);
     assert.equal(loadCount, 0);
     assert.deepEqual(loggedErrors, ["ENOENT: open '/Users/tester/project/scripts/loop/inspect-run-viewer/browser.mjs'"]);

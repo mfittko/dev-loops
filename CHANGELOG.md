@@ -2,21 +2,6 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
-
-### Changed
-
-- The inspect viewer's Graph tab replaces Mermaid with read-only Simulator-style SVG cards, four persistent layer summaries, server-side automatic layout and keyboard-operable selection, details, zoom, pan, Fit, Focus, Reset and fullscreen/expanded-view controls. Known current states open centered at a readable scale; Overview remains the default tab. Full textual layer details and Snapshot JSON remain available if rendering fails. Public snapshots and adapter contracts, manual refresh and the existing opt-in shell Auto-reload are unchanged; the renderer adds no polling or teaching-engine dependency. Shared Mermaid assets remain for State Atlas (#2627)
-
-### Fixed
-
-- The inspect graph now distinguishes forward and feedback edges along its left-to-right layout direction, rather than mistaking vertical routing for feedback (#2627)
-- Wide inspect-graph labels and identifiers wrap losslessly with extra platform-font headroom. Resizing retains Fit/Focus intent or the operator's deliberately panned/zoomed camera (#2627)
-- The inspect graph shares the shell's light theme even under a dark OS preference; native controls also remain light instead of mixing independent light/dark palettes (#2627)
-- Pointer selection explicitly focuses the chosen inspect-graph state, keeping subsequent keyboard navigation aligned with the selection across browsers (#2627)
-
-- The inspect viewer's Reload snapshot button now uses `window.URL`, avoiding the inline handler's `document.URL` name collision so `refresh=1` navigation forces a fresh selected-PR snapshot (#2627)
-
 ## 1.0.5
 
 ### Added

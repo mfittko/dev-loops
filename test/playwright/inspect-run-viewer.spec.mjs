@@ -525,6 +525,19 @@ for (const fullscreenMode of ["native", "unsupported", "rejected"]) {
         await expect(root).toHaveClass(/expanded-graph-view/);
         await expect(toggle).toHaveAccessibleName(/expanded/i);
         expect(await page.evaluate(() => Boolean(document.fullscreenElement))).toBe(false);
+        // Tab focus trap: wrap forward from the last and backward from the first focusable control.
+        const edgeState = (focusEdge) => page.evaluate((which) => {
+          const list = [...document.querySelector("[data-inspection-graph-root]").querySelectorAll('button:not(:disabled), a[href], [tabindex="0"], summary')].filter((element) => element.getClientRects().length);
+          const focused = list.indexOf(document.activeElement);
+          if (which === "last") list.at(-1).focus();
+          return { focused, last: list.length - 1 };
+        }, focusEdge);
+        await edgeState("last");
+        await page.keyboard.press("Tab");
+        expect((await edgeState(null)).focused).toBe(0);
+        await page.keyboard.press("Shift+Tab");
+        const afterReverse = await edgeState(null);
+        expect(afterReverse.focused).toBe(afterReverse.last);
       }
       await expect(toggle).toBeVisible();
       await captureViewerState(page, testInfo, `${fullscreenMode} full graph view`, "Exit and layer summaries stay usable; fallback never claims native fullscreen.");
