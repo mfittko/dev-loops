@@ -160,9 +160,9 @@ instruction, not something this skill initiates itself.
 
 A `review` verdict is never `draft_gate`/`pre_approval_gate` evidence, in any
 `--submit` mode. `parseGateReviewCommentFields` recognizes the `review` header
-and returns `null` before the whole-body lifecycle-token fallback, with or
-without a findings marker. Preserve that header: findings mentioning lifecycle
-gate names must not become evidence.
+and returns `null`, with or without a findings marker. The parser reads the gate
+name only from a labeled gate field line, never from free text. Preserve that
+header: findings mentioning lifecycle gate names must not become evidence.
 
 GitHub-native `APPROVE` can satisfy required approvals and `REQUEST_CHANGES` can
 block merge independently. The interactive choice above owns their confirmation

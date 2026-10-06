@@ -157,18 +157,21 @@ const STRATEGY_REQUIRED_READS = {
     SHARED_RETROSPECTIVE_CONTRACT,
     "skills/copilot-pr-followup/SKILL.md",
     "skills/docs/copilot-loop-operations.md",
+    "skills/docs/decision-record-contract.md",
   ],
   external_pr_followup: [
     SHARED_PUBLIC_CONTRACT,
     SHARED_RETROSPECTIVE_CONTRACT,
     "skills/copilot-pr-followup/SKILL.md",
     "skills/docs/copilot-loop-operations.md",
+    "skills/docs/decision-record-contract.md",
   ],
   reviewer_fixer: [
     SHARED_PUBLIC_CONTRACT,
     SHARED_RETROSPECTIVE_CONTRACT,
     "skills/copilot-pr-followup/SKILL.md",
     "skills/docs/copilot-loop-operations.md",
+    "skills/docs/decision-record-contract.md",
   ],
   wait_watch: [
     SHARED_PUBLIC_CONTRACT,

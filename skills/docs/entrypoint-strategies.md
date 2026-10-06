@@ -9,9 +9,9 @@ State vocabulary: `waiting_for_initial_copilot_implementation`, `waiting_for_cop
 Next-action sentence: "Load PR state from `detect-copilot-loop-state.mjs`, resolve gate coordination, then execute the appropriate follow-up action (fix, review, wait, or escalate)."
 
 Helpers to run first:
-1. `dev-loops loop loop-state --repo <owner/name> --pr <N>` — resolve loop state
-2. `dev-loops loop gate-coordination --repo <owner/name> --pr <N>` — resolve gate state
-3. `dev-loops gate upsert-verdict` — post/update gate comments
+1. `node <dev-loops-package-root>/cli/index.mjs loop loop-state --repo <owner/name> --pr <N>` — resolve loop state
+2. `node <dev-loops-package-root>/cli/index.mjs loop gate-coordination --repo <owner/name> --pr <N>` — resolve gate state
+3. `node <dev-loops-package-root>/cli/index.mjs gate upsert-verdict` — post/update gate comments
 
 Required reading:
 - [Public Dev Loop Contract](public-dev-loop-contract.md)
@@ -37,8 +37,8 @@ State vocabulary: `approval_ready`, `merge_ready`, `waiting_for_merge_authorizat
 Next-action sentence: "Verify pre_approval_gate evidence, confirm CI green + resolved threads, then request explicit merge authorization."
 
 Helpers to run first:
-1. `dev-loops gate detect-evidence --repo <owner/name> --pr <N>` — verify gate evidence
-2. `dev-loops gate upsert-verdict` — post pre_approval_gate
+1. `node <dev-loops-package-root>/cli/index.mjs gate detect-evidence --repo <owner/name> --pr <N>` — verify gate evidence
+2. `node <dev-loops-package-root>/cli/index.mjs gate upsert-verdict` — post pre_approval_gate
 
 Required reading:
 - [Public Dev Loop Contract](public-dev-loop-contract.md)
@@ -53,8 +53,8 @@ State vocabulary: `waiting_for_initial_copilot_implementation`, `needs_refinemen
 Next-action sentence: "Resolve issue readiness, handle assignment seam, then bootstrap PR creation or wait for Copilot implementation."
 
 Helpers to run first:
-1. `dev-loops loop linked-issue-pr --repo <owner/name> --issue <N>` — resolve issue↔PR linkage
-2. `dev-loops loop startup` — resolve routing
+1. `node <dev-loops-package-root>/cli/index.mjs loop linked-issue-pr --repo <owner/name> --issue <N>` — resolve issue↔PR linkage
+2. `node <dev-loops-package-root>/cli/index.mjs loop startup` — resolve routing
 
 Required reading:
 - [Public Dev Loop Contract](public-dev-loop-contract.md)
@@ -69,7 +69,7 @@ State vocabulary: `local_branch`, `local_phase`, `in_progress`, `review`, `merge
 Next-action sentence: "Fan-out refinement (unless light-mode), implement phase, validate, then create PR or continue to next phase."
 
 Helpers to run first:
-1. `dev-loops loop startup` — resolve routing
+1. `node <dev-loops-package-root>/cli/index.mjs loop startup` — resolve routing
 2. `node scripts/loop/pre-commit-branch-guard.mjs --expected-branch <name> [--require-worktree] [--block-main-checkout]` — verify isolation (no CLI route; use script path)
 
 Required reading:
@@ -92,8 +92,8 @@ State vocabulary: `waiting`, `waiting_for_initial_copilot_implementation`, `wait
 Next-action sentence: "Enter healthy-watch mode with configured timeout; escalate only on genuine blocked/authorization/reconcile states."
 
 Helpers to run first:
-1. `dev-loops loop watch-initial --repo <owner/name> --issue <N>` — bootstrap watcher
-2. `dev-loops loop watch-cycle --repo <owner/name> --pr <N>` — cycle watcher
+1. `node <dev-loops-package-root>/cli/index.mjs loop watch-initial --repo <owner/name> --issue <N>` — bootstrap watcher
+2. `node <dev-loops-package-root>/cli/index.mjs loop watch-cycle --repo <owner/name> --pr <N>` — cycle watcher
 
 Required reading:
 - [Public Dev Loop Contract](public-dev-loop-contract.md)

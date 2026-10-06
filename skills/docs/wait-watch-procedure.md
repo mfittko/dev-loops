@@ -19,9 +19,9 @@ required helper is unavailable.
 
 | Current boundary | Command / action |
 | --- | --- |
-| Initial Copilot implementation, no follow-up-ready PR | `dev-loops loop watch-initial --repo <owner/name> --issue <N>`; preserve the bootstrap budget and exceptions in `FACADE-BOOTSTRAP-WATCH-ROUTE` and its adjacent rules in the public contract. |
-| Current PR | Refresh with `dev-loops loop loop-state --repo <owner/name> --pr <N>` (add `--lightweight` for a light-dispatched PR so the round cap composes correctly). If the refreshed state remains waiting and preflight below is satisfied, use `dev-loops loop watch-cycle --repo <owner/name> --pr <N> --concise`. |
-| Pending/absent CI | The cycle routes to the provider-agnostic CI watcher. The direct equivalent is `dev-loops loop watch-ci --repo <owner/name> --pr <N> --timeout-ms <remaining-budget-ms>`. Failed CI needs follow-up, not more waiting. |
+| Initial Copilot implementation, no follow-up-ready PR | `node <dev-loops-package-root>/cli/index.mjs loop watch-initial --repo <owner/name> --issue <N>`; preserve the bootstrap budget and exceptions in `FACADE-BOOTSTRAP-WATCH-ROUTE` and its adjacent rules in the public contract. |
+| Current PR | Refresh with `node <dev-loops-package-root>/cli/index.mjs loop loop-state --repo <owner/name> --pr <N>` (add `--lightweight` for a light-dispatched PR so the round cap composes correctly). If the refreshed state remains waiting and preflight below is satisfied, use `node <dev-loops-package-root>/cli/index.mjs loop watch-cycle --repo <owner/name> --pr <N> --concise`. |
+| Pending/absent CI | The cycle routes to the provider-agnostic CI watcher. The direct equivalent is `node <dev-loops-package-root>/cli/index.mjs loop watch-ci --repo <owner/name> --pr <N> --timeout-ms <remaining-budget-ms>`. Failed CI needs follow-up, not more waiting. |
 
 Before invoking handoff/watch-cycle, route a newly actionable state through the
 fresh-envelope sequence below. If the snapshot reports `mergeStateStatus=BEHIND`
@@ -47,16 +47,16 @@ or merge.
 
 After a watch settles:
 
-1. Refresh authoritative state with `dev-loops loop loop-state --repo <owner/name> --pr <N>`.
-   For `timeout`/`idle`, use `dev-loops loop handoff --repo <owner/name> --pr <N> --watch-status <status>`
+1. Refresh authoritative state with `node <dev-loops-package-root>/cli/index.mjs loop loop-state --repo <owner/name> --pr <N>`.
+   For `timeout`/`idle`, use `node <dev-loops-package-root>/cli/index.mjs loop handoff --repo <owner/name> --pr <N> --watch-status <status>`
    for the existing timeout refresh. For a light-dispatched PR, pass `--lightweight`
    on these round-cap-consuming refreshes (`loop-state`, `handoff`) so the composed
    lightweight cap is enforced. Bootstrap
    waits re-resolve the issue and its linked PR. Use command `--jq`/`--silent`
    fields or concise output; no inline JSON interpreters.
-2. Run `dev-loops loop startup --pr <N>` (or `--issue <N>` for bootstrap), preserving
+2. Run `node <dev-loops-package-root>/cli/index.mjs loop startup --pr <N>` (or `--issue <N>` for bootstrap), preserving
    the active run's intent/settings and watch outcome. Build the fresh
-   envelope with `dev-loops loop build-envelope --input <startup-output.json>`;
+   envelope with `node <dev-loops-package-root>/cli/index.mjs loop build-envelope --input <startup-output.json>`;
    validate it before consuming it. A failed resolver or invalid envelope stops
    execution. Keep the same canonical artifact; reuse a newly resolved linked PR.
 3. Load the fresh envelope's ordered `requiredReads` before executing its

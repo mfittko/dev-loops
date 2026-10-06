@@ -681,6 +681,88 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
   }
 });
 
+for (const enforced of [true, false]) {
+test(`detect-checkpoint-evidence keeps the real fan-out verdict when a newer approval note names the gate and head SHA (fan-out enforcement ${enforced ? "on" : "off"})`, async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-checkpoint-evidence-"));
+
+  try {
+    if (!enforced) {
+      await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    }
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: '{"headRefOid":"abc1234"}\n',
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([
+          {
+            id: 42,
+            body: [
+              "### Gate review: `draft_gate`",
+              "",
+              "**Reviewed head SHA:** `abc1234`",
+              "**Verdict:** clean",
+              "**Execution mode:** fanout_fanin",
+              "**Findings summary:** no issues found",
+              "**Next action:** mark ready for review",
+            ].join("\n"),
+            updated_at: "2026-05-29T21:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-42",
+          },
+          {
+            id: 43,
+            body: "approve merge abc1234\n\ndraft_gate clean at abc1234",
+            updated_at: "2026-05-29T22:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-43",
+          },
+          {
+            id: 44,
+            body: [
+              "Gate review: pre_approval_gate",
+              "Reviewed head SHA: abc1234",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: await final human approval",
+              "Size-budget outcome: pass",
+              "Size-budget T1 slice: not touched",
+              "Size-budget waiver: none",
+            ].join("\n"),
+            updated_at: "2026-05-29T21:30:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-44",
+          },
+        ])}\n`,
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: "[]\n",
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: JSON.stringify({
+          data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } },
+        }) + "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+    // The failure payload (enforced run) lands on stderr; the success payload on stdout.
+    const parsed = JSON.parse(enforced ? result.stderr : result.stdout);
+    assert.equal(parsed.preMergeGateCheck.failures.some((failure) => failure.startsWith("draft_gate") && failure.includes("inline gate verdicts")), false);
+    if (enforced) {
+      // The ledger failure proves enforcement saw executionMode fanout_fanin.
+      assert.equal(parsed.preMergeGateCheck.failures.some((failure) => failure.includes("no findings-log ledger")), true);
+    } else {
+      assert.equal(parsed.draftGateMarker.commentId, 42);
+      assert.equal(parsed.draftGateMarker.executionMode, "fanout_fanin");
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+}
+
 test("detect-checkpoint-evidence --fields returns the named top-level scalars as one tab-separated line (#2163)", async () => {
   // One `--fields` call on this checkpoint-evidence surface returns the named
   // top-level scalars in a single invocation — no `node -e`, no jq

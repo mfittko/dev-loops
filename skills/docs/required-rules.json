@@ -33,6 +33,9 @@
       "enforcement": "doc"
     },
     {
+      "id": "ADR-TRIPWIRE-STANDING-WAIVER"
+    },
+    {
       "id": "ADR-WORTHY-PERSIST",
       "enforcement": "doc"
     },

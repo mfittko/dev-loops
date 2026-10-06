@@ -1,7 +1,8 @@
-import { describe, it } from "bun:test";
+import { afterAll, describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import { Writable } from "node:stream";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { main, parseCliArgs, runCli } from "../../scripts/github/withdraw-copilot-review-request.mjs";
@@ -9,6 +10,10 @@ import { interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination } from "@dev-loops/core/loop/pr-gate-coordination";
 import { readSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
+
+// Empty repo root: classification rules never depend on the runner cwd .devloops.
+const REPO_ROOT = mkdtempSync(path.join(os.tmpdir(), "withdraw-repo-"));
+afterAll(() => rmSync(REPO_ROOT, { recursive: true, force: true }));
 
 function collectingStream() {
   const chunks = [];
@@ -95,7 +100,7 @@ describe("withdraw-copilot-review-request", () => {
   describe("guards (each one is what makes the withdrawal safe)", () => {
     it("no-ops when no Copilot request is pending", async () => {
       const gh = ghStub({ copilotRequested: false, reviews: SUBMITTED_COPILOT_REVIEW });
-      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild });
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });
       assert.equal(result.ok, true);
       assert.equal(result.status, "not-requested");
       assert.equal(result.withdrawn, false);
@@ -104,7 +109,7 @@ describe("withdraw-copilot-review-request", () => {
 
     it("REFUSES when Copilot never submitted a review — withdrawing would skip the first review", async () => {
       const gh = ghStub({ copilotRequested: true, reviews: [] });
-      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild });
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });
       assert.equal(result.ok, false);
       assert.equal(result.status, "refused");
       assert.match(result.reason, /no prior review to fall back on/);
@@ -117,7 +122,7 @@ describe("withdraw-copilot-review-request", () => {
         reviews: SUBMITTED_COPILOT_REVIEW,
         threads: [{ id: "t1", comments: { nodes: [] } }],
       });
-      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild });
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });
       assert.equal(result.status, "refused");
     });
 
@@ -127,7 +132,7 @@ describe("withdraw-copilot-review-request", () => {
         reviews: SUBMITTED_COPILOT_REVIEW,
         threads: [{ id: "t1", isResolved: false, comments: { nodes: [] } }, { id: "t2", isResolved: true, comments: { nodes: [] } }],
       });
-      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild });
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });
       assert.equal(result.ok, false);
       assert.equal(result.status, "refused");
       assert.match(result.reason, /1 unresolved review thread/);
@@ -139,7 +144,7 @@ describe("withdraw-copilot-review-request", () => {
         copilotRequested: true,
         reviews: [{ author: { login: "Copilot" }, state: "PENDING" }],
       });
-      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild });
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });
       assert.equal(result.status, "refused");
     });
 
@@ -148,7 +153,7 @@ describe("withdraw-copilot-review-request", () => {
         copilotRequested: true,
         reviews: [{ author: { login: "Copilot" }, state: "COMMENTED", body: "Copilot encountered an error and was unable to review this pull request." }],
       });
-      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild });
+      const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });
       assert.equal(result.status, "refused");
       assert.match(result.reason, /no prior review to fall back on/);
     });
@@ -159,7 +164,7 @@ describe("withdraw-copilot-review-request", () => {
           copilotRequested: true,
           reviews: [{ author: { login: "Copilot" }, state }],
         });
-        const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild });
+        const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });
         assert.equal(result.status, "refused", `state ${JSON.stringify(state)} must not count as submitted`);
       }
     });
@@ -171,7 +176,7 @@ describe("withdraw-copilot-review-request", () => {
           reviews: [{ author: { login: "Copilot" }, state, commit: { oid: "currentsha" } }],
           threads: [],
         });
-        const result = await main({ repo: "o/n", pr: 10, dryRun: true }, { env: {}, runChild: gh.runChild });
+        const result = await main({ repo: "o/n", pr: 10, dryRun: true }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });
         assert.equal(result.status, "dry-run", `state ${state} should count as submitted`);
       }
     });
@@ -184,7 +189,7 @@ describe("withdraw-copilot-review-request", () => {
         reviews: SUBMITTED_COPILOT_REVIEW,
         threads: [{ id: "t1", isResolved: true, comments: { nodes: [] } }],
       });
-      const result = await main({ repo: "o/n", pr: 10, reason: "Copilot declined a converged reword" }, { env: {}, runChild: gh.runChild });
+      const result = await main({ repo: "o/n", pr: 10, reason: "Copilot declined a converged reword" }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });
       assert.equal(result.ok, true);
       assert.equal(result.withdrawn, true);
       assert.equal(result.status, "withdrawn");
@@ -199,7 +204,7 @@ describe("withdraw-copilot-review-request", () => {
 
     it("--dry-run reports the guards hold without issuing the DELETE", async () => {
       const gh = ghStub({ copilotRequested: true, reviews: SUBMITTED_COPILOT_REVIEW, threads: [] });
-      const result = await main({ repo: "o/n", pr: 10, dryRun: true }, { env: {}, runChild: gh.runChild });
+      const result = await main({ repo: "o/n", pr: 10, dryRun: true }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild });
       assert.equal(result.status, "dry-run");
       assert.equal(result.withdrawn, false);
       assert.ok(!gh.calls.some((argv) => argv.includes("--remove-reviewer")), "dry-run must not remove the reviewer");
@@ -208,7 +213,7 @@ describe("withdraw-copilot-review-request", () => {
     it("surfaces a failing removal as an error rather than reporting success", async () => {
       const gh = ghStub({ copilotRequested: true, reviews: SUBMITTED_COPILOT_REVIEW, threads: [], removeFails: true });
       await assert.rejects(
-        () => main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild }),
+        () => main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild }),
         /gh command failed/,
       );
     });
@@ -221,7 +226,7 @@ describe("withdraw-copilot-review-request", () => {
       // attempt, so the helper exhausts the full bounded retry window.
       const gh = ghStub({ copilotRequested: true, reviews: SUBMITTED_COPILOT_REVIEW, threads: [], removeIsNoop: true });
       await assert.rejects(
-        () => main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild, delayImpl: async () => {} }),
+        () => main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild, delayImpl: async () => {} }),
         /still pending after/,
       );
     });
@@ -433,7 +438,7 @@ describe("withdraw-copilot-review-request", () => {
         });
         const result = await main(
           { repo: "o/n", pr: 10, reason: "Copilot declined a converged reword on the new head" },
-          { env: {}, runChild: gh.runChild, checkpointDir },
+          { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild, checkpointDir },
         );
         assert.equal(result.ok, true);
         assert.equal(result.withdrawn, true);
@@ -450,6 +455,27 @@ describe("withdraw-copilot-review-request", () => {
       });
     });
 
+    it("withdraws when the target repo's classify config maps the changed extension to docs", async () => {
+      await withTempCheckpointDir(async (checkpointDir) => {
+        const repoRoot = await mkdtemp(path.join(os.tmpdir(), "withdraw-classify-"));
+        try {
+          await writeFile(path.join(repoRoot, ".devloops.json"), JSON.stringify({ version: 1, classify: { extensions: { docs: [".foo"] } } }), "utf8");
+          const gh = ghStub({
+            copilotRequested: true,
+            headRefOid: "newsha",
+            reviews: SUBMITTED_COPILOT_REVIEW_OLD_HEAD,
+            threads: [],
+            compare: { status: "ahead", files: [{ filename: "src/a.foo", status: "modified" }] },
+          });
+          const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot, runChild: gh.runChild, checkpointDir });
+          assert.equal(result.withdrawn, true);
+          assert.equal(gh.requested, false);
+        } finally {
+          await rm(repoRoot, { recursive: true, force: true });
+        }
+      });
+    });
+
     it("refuses when the delta touches Copilot's review surface (a code file) — never widens what counts as docs-only", async () => {
       await withTempCheckpointDir(async (checkpointDir) => {
         const gh = ghStub({
@@ -459,7 +485,7 @@ describe("withdraw-copilot-review-request", () => {
           threads: [],
           compare: { status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] },
         });
-        const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild, checkpointDir });
+        const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild, checkpointDir });
         assert.equal(result.ok, false);
         assert.equal(result.status, "refused");
         assert.match(result.reason, /not provably a pure doc\/prose bump/);
@@ -476,7 +502,7 @@ describe("withdraw-copilot-review-request", () => {
           reviews: [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED" }],
           threads: [],
         });
-        const result = await main({ repo: "o/n", pr: 10 }, { env: {}, runChild: gh.runChild, checkpointDir });
+        const result = await main({ repo: "o/n", pr: 10 }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild, checkpointDir });
         assert.equal(result.status, "refused");
         assert.match(result.reason, /commit SHA data is unavailable/);
         assert.ok(!gh.calls.some((argv) => argv.includes("--remove-reviewer")), "must not remove the reviewer");
@@ -492,7 +518,7 @@ describe("withdraw-copilot-review-request", () => {
           threads: [],
           compare: { status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }] },
         });
-        const result = await main({ repo: "o/n", pr: 10, dryRun: true }, { env: {}, runChild: gh.runChild, checkpointDir });
+        const result = await main({ repo: "o/n", pr: 10, dryRun: true }, { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild, checkpointDir });
         assert.equal(result.status, "dry-run");
         assert.equal(result.headAdvanced, true);
         assert.ok(!gh.calls.some((argv) => argv.includes("--remove-reviewer")), "dry-run must not remove the reviewer");
@@ -693,7 +719,7 @@ describe("withdraw-copilot-review-request", () => {
         });
         const withdrawal = await main(
           { repo: "o/n", pr: 17, reason: "Copilot declined the converged reword" },
-          { env: {}, runChild: gh.runChild, checkpointDir: dir },
+          { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild, checkpointDir: dir },
         );
         assert.equal(withdrawal.status, "withdrawn");
         assert.equal(withdrawal.headAdvanced, true);
@@ -718,7 +744,7 @@ describe("withdraw-copilot-review-request", () => {
             copilotReviewRequestStatus: "none", unresolvedThreadCount: 0,
             prData: { headRefOid: "newsha", reviews: SUBMITTED_COPILOT_REVIEW_OLD_HEAD },
           },
-          { env: {}, runChild: gh.runChild, checkpointDir: dir },
+          { env: {}, repoRoot: REPO_ROOT, runChild: gh.runChild, checkpointDir: dir },
         );
         assert.equal(postConvergenceReviewSuppressed.carried, true);
 

@@ -2197,7 +2197,7 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordination
     return (index) => indices.has(index);
   };
   const prTick = await applyTick(prData.body, inList([...(artifact?.prBodyUncheckedAcItems ?? []), ...(artifact?.prBodyUncheckedDodItems ?? [])]), false, (bodyFile) =>
-    editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
+    editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild, currentBody: prData.body }),
   inSections(prData.body));
   const issueLabels = inList(artifact?.uncheckedAcItems);
   const tickedIssueBodies = [];

@@ -365,7 +365,7 @@ test("create-pr --lightweight without --body/--body-file never enqueues: reason 
     const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/42\n" }], { logCalls: true });
 
     const result = await runNode(
-      ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--fill", "--lightweight"],
+      ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--lightweight"],
       { env, cwd: tempDir },
     );
 

@@ -800,8 +800,8 @@ test("create-pr forwards args in order and preserves gh stdout on success", asyn
       "--base", "main",
       "--head", "issue-349-create-pr",
       "--title", "Add canonical wrapper",
-      "--body-file", bodyPath,
       "positional-token",
+      "--body", conformantBody("Closes #349"),
       "--draft",
     ]);
   } finally {
@@ -839,7 +839,7 @@ test("create-pr defaults --assignee @me end-to-end when no assignee flag is give
       "--base", "main",
       "--head", "feature",
       "--title", "Add feature",
-      "--body-file", bodyPath,
+      "--body", conformantBody("Closes #894"),
       "--assignee", "@me",
       "--draft",
     ]);
@@ -868,7 +868,7 @@ test("create-pr preserves an existing --draft without adding another copy", asyn
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--base", INHERITED_BASE_DEFAULT,
+      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--base", INHERITED_BASE_DEFAULT, "--body", "",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -891,7 +891,7 @@ test("create-pr appends --draft after --draft=false so draft-first still wins", 
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft",
+      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft", "--body", "",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -914,7 +914,7 @@ test("create-pr re-appends --draft when a later token disables it", async () => 
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft",
+      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft", "--body", "",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -937,7 +937,7 @@ test("create-pr treats --draft=true as already supplied and avoids a duplicate",
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=true", "--base", INHERITED_BASE_DEFAULT,
+      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=true", "--base", INHERITED_BASE_DEFAULT, "--body", "",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -981,7 +981,7 @@ test("create-pr preserves gh stdout, stderr, and exit code on failure", async ()
     assert.equal(result.stdout, "partial gh stdout\n");
     assert.equal(result.stderr, "gh create failed\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--base", INHERITED_BASE_DEFAULT, "--draft",
+      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--base", INHERITED_BASE_DEFAULT, "--draft", "--body", "",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1711,6 +1711,167 @@ test("create-pr fails closed when the resolvability probe errors for a reason ot
       "--body", "no closing keyword",
     ], { env, cwd: tempDir });
     assert.notEqual(result.code, 0);
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr refuses any adr-tripwire:allow line in the body before invoking gh and names the sanctioned writer", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-"));
+  try {
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Body\n\nadr-tripwire:allow contract doc edit\n",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /ADR-TRIPWIRE-STANDING-WAIVER/);
+    assert.match(stderrPayload.error, /dev-loops pr waive-adr-tripwire/);
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+for (const [label, bodyArgs, useFile] of [
+  ["-b (space form)", ["-b", "x\nadr-tripwire:allow because\n"], false],
+  ["-b= (inline form)", ["-b=x\nadr-tripwire:allow because\n"], false],
+  ["-b= (inline form, marker on line 1)", ["-b=adr-tripwire:allow because"], false],
+  ["-F (body file)", ["-F"], true],
+  ["-b attached form", ["-bx\nadr-tripwire:allow because\n"], false],
+  ["a -db shorthand bundle", ["-db", "x\nadr-tripwire:allow because\n"], false],
+  ["a -dF shorthand bundle", ["-dF"], true],
+]) {
+  test(`create-pr refuses an adr-tripwire:allow line passed via ${label}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-short-"));
+    try {
+      const { env, ghLogPath } = await writeGhStub(tempDir, []);
+      const args = [...bodyArgs];
+      if (useFile) {
+        const file = path.join(tempDir, "body.md");
+        await writeFile(file, "x\nadr-tripwire:allow because\n");
+        args.push(file);
+      }
+      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", ...args], { env });
+      assert.equal(result.code, 1);
+      assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
+      assert.deepEqual(await readGhCalls(ghLogPath), []);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("create-pr refuses --fill and --template (body sourced outside the wrapper)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-fill-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    for (const flag of ["--fill", "-f", "--fill-verbose", "--fill-first", "--template", "-T", "--recover", "--editor", "-e", "--web", "-w"]) {
+      const extra = /fill|^-[few]$|editor|web/.test(flag) ? [flag] : [flag, "t.md"];
+      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", ...extra], { env });
+      assert.equal(result.code, 1);
+      assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
+    }
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr refuses --recover even with --body (the saved body is never checked)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-recover-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", "--recover", "r.json"], { env });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER.*--recover/);
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr refuses --body together with --body-file", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-both-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    const file = path.join(tempDir, "w.md");
+    await writeFile(file, "adr-tripwire:allow because\n");
+    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", "--body-file", file], { env });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /mutually exclusive/);
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr reads the real --body-file when a flag value starts with -b or -F", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-misread-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    const file = path.join(tempDir, "body.md");
+    await writeFile(file, "x\nadr-tripwire:allow because\n");
+    const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "-bump deps", "--body-file", file], { env });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #2463: every --body-file/-F spelling is rewritten to one inline --body <text>.
+for (const [label, flagArgs] of [
+  ["--body-file=<path>", (p) => [`--body-file=${p}`]],
+  ["attached -F<path>", (p) => [`-F${p}`]],
+  ["bundled -dF <path>", (p) => ["-dF", p]],
+]) {
+  test(`create-pr rewrites ${label} to one inline --body with the file text (#2463)`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-inline-body-"));
+    try {
+      const bodyPath = path.join(tempDir, "pr-body.md");
+      const text = conformantBody("Closes #349");
+      await writeFile(bodyPath, text, "utf8");
+      const { env, ghLogPath } = await writeGhStub(tempDir, [
+        { stdout: graphqlNoLinkedPrPayload() },
+        { stdout: "https://github.com/owner/repo/pull/17\n" },
+      ]);
+
+      const result = await runNode([
+        "--repo", "owner/repo", "--assignee", "@me", "--base", "main",
+        "--head", "issue-349-create-pr", "--title", "Add canonical wrapper",
+        ...flagArgs(bodyPath),
+      ], { env });
+
+      assert.equal(result.code, 0, result.stderr);
+      const ghArgs = (await readGhCalls(ghLogPath))[1];
+      assert.equal(ghArgs.filter((a) => a === "--body").length, 1);
+      assert.equal(ghArgs[ghArgs.indexOf("--body") + 1], text);
+      for (const bad of ["--body-file", "-F"]) assert.ok(!ghArgs.includes(bad), bad);
+      assert.ok(!ghArgs.some((a) => a.includes(bodyPath) || a.startsWith("--body-file")), "no path token");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("create-pr refuses --editor and --web even with an explicit --body", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-waiver-editor-body-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    for (const flag of ["--editor", "-e", "--web", "-w"]) {
+      const result = await runNode(["--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes 7", flag], { env });
+      assert.equal(result.code, 1);
+      assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
+    }
     assert.deepEqual(await readGhCalls(ghLogPath), []);
   } finally {
     await rm(tempDir, { recursive: true, force: true });

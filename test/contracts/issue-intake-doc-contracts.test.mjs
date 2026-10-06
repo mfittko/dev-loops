@@ -243,9 +243,9 @@ test("issue-intake flow carries the resolved repo slug through later GitHub issu
 
   assert.match(skillContent, /Carry that resolved repo slug through every later GitHub issue\/PR command/i);
   assert.match(skillContent, /gh issue create --repo <resolved-repo> --assignee @me/);
-  assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --body-file <updated-body-file>/);
-  assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee @me/);
-  assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent/);
+  assert.match(skillContent, /node <dev-loops-package-root>\/cli\/index\.mjs issue edit --repo <resolved-repo> --issue <number> --body-file <updated-body-file>/);
+  assert.match(skillContent, /node <dev-loops-package-root>\/cli\/index\.mjs issue edit --repo <resolved-repo> --issue <number> --add-assignee @me/);
+  assert.match(skillContent, /node <dev-loops-package-root>\/cli\/index\.mjs issue edit --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent/);
   const intake = await readRepo("skills/docs/issue-intake-procedure.md");
   assertIntakePrEditUsesWrapper(intake);
   const ready = intake.match(/^node <resolved-skill-scripts>\/github\/ready-for-review\.mjs (.+)$/m);
@@ -271,11 +271,11 @@ test("residual raw-script refs are migrated to dev-loops subcommands (subcommand
     readRepo("skills/docs/epic-tree-refinement-procedure.md"),
   ]);
   // pre-flight-gate + ensure-worktree routed under the `loop` category.
-  assert.match(localImpl, /dev-loops loop pre-flight-gate /);
-  assert.match(localImpl, /dev-loops loop ensure-worktree /);
+  assert.match(localImpl, /node <dev-loops-package-root>\/cli\/index\.mjs loop pre-flight-gate /);
+  assert.match(localImpl, /node <dev-loops-package-root>\/cli\/index\.mjs loop ensure-worktree /);
   // edit-issue routed under the new `issue` category.
-  assert.match(grill, /dev-loops issue edit /);
-  assert.match(epic, /dev-loops issue edit /);
+  assert.match(grill, /node <dev-loops-package-root>\/cli\/index\.mjs issue edit /);
+  assert.match(epic, /node <dev-loops-package-root>\/cli\/index\.mjs issue edit /);
 });
 
 test("issue-intake docs define closed-match handling and keep the handoff helper on the resolved repo", async () => {

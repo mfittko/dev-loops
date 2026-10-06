@@ -21,7 +21,7 @@ const PROJECT_AGENTS_SUBPATH = path.join(".pi", "agents");
  * agent tool vocabulary to Pi builtins. Applied at session-start sync time so
  * `~/.agents/*.agent.md` lists only valid Pi builtin tool names (#1583).
  *
- *   read→read, search→bash, execute→bash, bash→bash, edit→edit, write→write,
+ *   read→read, search→grep+find+ls, execute→bash, bash→bash, edit→edit, write→write,
  *   agent→subagent, subagent→subagent, todo→(drop), review_loop→review_loop
  *
  * `todo` has no Pi builtin (Claude keeps `TodoWrite`); the dev-loop acceptance
@@ -30,9 +30,9 @@ const PROJECT_AGENTS_SUBPATH = path.join(".pi", "agents");
  * Pi path had no equivalent map, so Pi rejected `search`/`execute`/`agent`/`todo`
  * as unavailable child tools and ended runs with a `failed` status.
  */
-export const TOOL_NAME_MAP_PI: Readonly<Record<string, string | null>> = Object.freeze({
+export const TOOL_NAME_MAP_PI: Readonly<Record<string, string | readonly string[] | null>> = Object.freeze({
   read: "read",
-  search: "bash",
+  search: ["grep", "find", "ls"], // shell-free builtins: a search-only role keeps no unrestricted shell (#2582)
   execute: "bash",
   bash: "bash",
   edit: "edit",
@@ -48,8 +48,8 @@ export function mapAgentToolsForPi(tools: string[]): string[] {
   const out: string[] = [];
   for (const tool of tools ?? []) {
     const mapped = TOOL_NAME_MAP_PI[String(tool).trim()];
-    if (mapped != null && !out.includes(mapped)) {
-      out.push(mapped);
+    for (const name of [mapped ?? []].flat()) {
+      if (!out.includes(name)) out.push(name);
     }
   }
   return out;

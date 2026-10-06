@@ -35,7 +35,7 @@ Before starting, verify:
 Optional but recommended before and after edits:
 
 ```sh
-dev-loops refine verify --issue <root> --repo <repo>
+node <dev-loops-package-root>/cli/index.mjs refine verify --issue <root> --repo <repo>
 ```
 
 This verification command checks linkage policy, sibling scope boundaries, refinement completeness,
@@ -60,7 +60,7 @@ For the root issue:
 5. Confirm **non-goals** section
 6. Write the updated body to a tmp file: `tmp/issues/<root>/refinement/root-body.md`
 7. Show the diff and obtain confirmation before mutating GitHub
-8. Apply: `dev-loops issue edit --repo <repo> --issue <root> --body-file tmp/issues/<root>/refinement/root-body.md`
+8. Apply: `node <dev-loops-package-root>/cli/index.mjs issue edit --repo <repo> --issue <root> --body-file tmp/issues/<root>/refinement/root-body.md`
 
 <!-- rule: EPIC-REFINEMENT-SERIAL-PHASE-GATE -->
 **Gate:** Phase B MUST NOT start until Phase A is complete and the root body is updated on GitHub. The same serial-gate discipline applies at every phase boundary below: a level/phase MUST fully complete (siblings may run in parallel within it) before the next one starts.
@@ -85,7 +85,7 @@ parent's updated body, not each other's output.
    - **Non-goals** — what this child intentionally excludes
 6. Write refined body to `tmp/issues/<child>/refinement/child-body.md`
 7. Show the diff and obtain confirmation before mutating (unless running unattended with explicit authorization)
-8. Apply: `dev-loops issue edit --repo <repo> --issue <child> --body-file tmp/issues/<child>/refinement/child-body.md`
+8. Apply: `node <dev-loops-package-root>/cli/index.mjs issue edit --repo <repo> --issue <child> --body-file tmp/issues/<child>/refinement/child-body.md`
 
 **Serial gate between levels** ([EPIC-REFINEMENT-SERIAL-PHASE-GATE](#phase-a--root-refinement-serial)): all children at level N must complete before descending to level N+1.
 
@@ -111,7 +111,7 @@ updated bodies, not sibling parents).
 4. Update the parent's phase scope table and AC/DoD as needed to reflect what children now explicitly own
 5. Write refined body to `tmp/issues/<parent>/refinement/parent-reconciled-body.md`
 6. Show the diff and obtain confirmation before mutating
-7. Apply: `dev-loops issue edit --repo <repo> --issue <parent> --body-file tmp/issues/<parent>/refinement/parent-reconciled-body.md`
+7. Apply: `node <dev-loops-package-root>/cli/index.mjs issue edit --repo <repo> --issue <parent> --body-file tmp/issues/<parent>/refinement/parent-reconciled-body.md`
 
 **Serial gate between levels** ([EPIC-REFINEMENT-SERIAL-PHASE-GATE](#phase-a--root-refinement-serial)): all parents at depth N must complete reconciliation before ascending to depth N-1.
 
@@ -130,7 +130,7 @@ After all immediate children of the root have been reconciled:
 4. Update the root body with the final reconciled phase scope table and AC/DoD
 5. Write to `tmp/issues/<root>/refinement/root-final-body.md`
 6. Show the diff and obtain confirmation before mutating
-7. Apply: `dev-loops issue edit --repo <repo> --issue <root> --body-file tmp/issues/<root>/refinement/root-final-body.md`
+7. Apply: `node <dev-loops-package-root>/cli/index.mjs issue edit --repo <repo> --issue <root> --body-file tmp/issues/<root>/refinement/root-final-body.md`
 8. Verify the sub-issue tree still reflects the correct execution order:
    ```sh
    node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
@@ -146,7 +146,7 @@ After all immediate children of the root have been reconciled:
 
 <!-- rule: EPIC-REFINEMENT-SCOPE-BOUNDARY -->
 This procedure MUST stay refinement-only: no implementation, no PRs, no Copilot assignment.
-Apply changes directly with `dev-loops issue edit` (raw `node scripts/github/edit-issue.mjs` remains a source-repo fallback) — never create new issues or PRs. Hierarchy MUST
+Apply changes directly with `node <dev-loops-package-root>/cli/index.mjs issue edit` (raw `node scripts/github/edit-issue.mjs` remains a source-repo fallback) — never create new issues or PRs. Hierarchy MUST
 stay in the GitHub sub-issues API, not prose parent/child links or a duplicated child-list
 checklist in parent bodies.
 
@@ -163,7 +163,7 @@ with the enqueue/draft gate), which rejects a missing/empty/identifier-only matr
 <!-- rule: EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE -->
 `EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE`: The procedure MUST write the refined body to
 `tmp/issues/<number>/refinement/` first and MUST show the diff and get confirmation before
-each `dev-loops issue edit` mutation, unless running unattended with explicit authorization.
+each `node <dev-loops-package-root>/cli/index.mjs issue edit` mutation, unless running unattended with explicit authorization.
 
 ---
 

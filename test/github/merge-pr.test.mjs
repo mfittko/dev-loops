@@ -866,3 +866,9 @@ test("a record naming a later older-commit review does not clear a current-head 
   assert.equal(merged.merged, true);
   assert.equal(merged.copilotBodyDisposition.reviewId, "PRR_head");
 });
+
+test("merge-pr default evidence probe shells the same detect-checkpoint-evidence script as gate-evidence CI", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../../scripts/github/merge-pr.mjs", import.meta.url), "utf8");
+  assert.match(source, /new URL\("\.\/detect-checkpoint-evidence\.mjs", import\.meta\.url\)/u);
+});

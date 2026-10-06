@@ -6,7 +6,7 @@ import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } fro
 import { resolvePrConflicts } from "./resolve-pr-conflicts.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
-import { loadDevLoopConfigStrict, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { autoDetectSnapshot } from "./detect-copilot-loop-state.mjs";
 import { performCopilotReviewRequest } from "../github/request-copilot-review.mjs";
 import { detectInternalOnly as detectPrInternalOnly } from "./detect-internal-only-pr.mjs";
@@ -736,6 +736,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         copilotReviewRequestStatus: snapshot.copilotReviewRequestStatus ?? "none",
         unresolvedThreadCount: snapshot.unresolvedThreadCount,
         requireCopilotConvergenceAtLatestHead,
+        rules: resolveClassifyRules(config.config),
       },
       { env, ghCommand, runChild },
     )).carried;
@@ -748,6 +749,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         changedFiles: reopenFacts?.files,
         roundCapReached: true,
         regularCopilotRounds: (snapshot.copilotReviewRoundCount ?? 0) > 0,
+        rules: resolveClassifyRules(config.config),
       },
       { env, ghCommand, runChild },
     );
@@ -778,6 +780,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         copilotReviewRequestStatus: snapshot.copilotReviewRequestStatus ?? "none",
         unresolvedThreadCount: snapshot.unresolvedThreadCount,
         requireCopilotConvergenceAtLatestHead,
+        rules: resolveClassifyRules(config.config),
       };
       const runtime = { env, ghCommand, runChild };
       const markerCarry = await resolvePostConvergenceReviewSuppressed(carryFacts, runtime);

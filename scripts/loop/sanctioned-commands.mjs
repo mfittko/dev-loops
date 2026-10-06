@@ -89,6 +89,8 @@ export const SANCTIONED_COMMANDS = Object.freeze({
   orchestratorOwned: Object.freeze([
     "pr merge via scripts/github/merge-pr.mjs --human-approved-by <login> (raw gh pr merge forbidden)",
     "board status transitions (move-queue-item / sync-item-status.mjs; current batch model)",
+    "board-item removal via scripts/projects/remove-queue-item.mjs (undo of a wrong queue add only; raw deleteProjectV2Item forbidden)",
+    "ADR tripwire waiver via scripts/github/waive-adr-tripwire.mjs (the only writer of an adr-tripwire:allow line; edit-pr.mjs and create-pr.mjs refuse a hand-written one)",
     "issue creation via scripts/github/create-issue.mjs (the dev-loop child emits prio-routed findings; the orchestrator files/routes them; #2173 tracks the deterministic child-origin enforcement check)",
   ]),
 });

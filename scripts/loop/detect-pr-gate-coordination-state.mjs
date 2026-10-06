@@ -11,7 +11,7 @@ import {
   summarizeCopilotReviews,
 } from "../_core-helpers.mjs";
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { loadDevLoopConfigStrict, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -995,6 +995,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     unresolvedThreadCount: snapshot.unresolvedThreadCount,
     reviewThreads: parsedThreads.threads,
     requireCopilotConvergenceAtLatestHead: resolveRequireCopilotConvergenceAtLatestHead(interpreterConfigResult.config),
+    rules: resolveClassifyRules(interpreterConfigResult.config),
   };
   // ponytail: the carry predicate re-reads the disposition comment stream the
   // body-feedback resolver above already read; share the result if gh call
@@ -1188,6 +1189,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       changedFiles: context.prData?.files,
       roundCapReached: roundCapReached && context.interpretation?.roundCapReopenEligible === true,
       regularCopilotRounds: (context.snapshot?.copilotReviewRoundCount ?? 0) > 0,
+      rules: resolveClassifyRules(config),
     },
     runtime,
   );

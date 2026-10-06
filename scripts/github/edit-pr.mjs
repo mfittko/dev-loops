@@ -9,6 +9,7 @@ import {
   resolveClosingRefMismatch,
 } from "@dev-loops/core/github/closing-ref-guard";
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
+import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -47,6 +48,9 @@ At least one edit:
                                 full closing-keyword vocabulary (close/fix/resolve
                                 variants, any case), not only \`Closes\`/\`Fixes\`,
                                 and checks every reference in the body.
+ADR tripwire waiver lines: a body that adds, changes or removes an
+\`adr-tripwire:allow\` line (compared with the PR's current body) is refused.
+Use \`dev-loops pr waive-adr-tripwire\` (ADR-TRIPWIRE-STANDING-WAIVER).
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "pr": 17, "edited": ["title", "body", ...] }
 Error output (stderr, JSON):
@@ -226,7 +230,8 @@ async function resolveBody(options) {
 }
 
 // Read the PR's own facts needed to resolve the issue it is expected to close:
-// its head branch slug and its GitHub-derived closingIssuesReferences. Returns
+// its head branch slug, its GitHub-derived closingIssuesReferences and its
+// current body (the waiver-line baseline). Returns
 // null when the read fails, so the caller can fail closed on ambiguity.
 // Injectable via the editPr `fetchPrContext` option for tests.
 async function defaultFetchPrContext(options, { run, ghCommand, env }) {
@@ -234,7 +239,7 @@ async function defaultFetchPrContext(options, { run, ghCommand, env }) {
   try {
     result = await run(
       ghCommand,
-      ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefName,closingIssuesReferences"],
+      ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefName,closingIssuesReferences,body"],
       env,
     );
   } catch {
@@ -243,7 +248,7 @@ async function defaultFetchPrContext(options, { run, ghCommand, env }) {
   if (!result || result.code !== 0) return null;
   try {
     const parsed = JSON.parse(result.stdout);
-    return { headRefName: parsed.headRefName, closingIssuesReferences: parsed.closingIssuesReferences };
+    return { headRefName: parsed.headRefName, closingIssuesReferences: parsed.closingIssuesReferences, body: parsed.body };
   } catch {
     return null;
   }
@@ -294,9 +299,18 @@ async function buildEditArgs(options) {
 
 export async function editPr(
   options,
-  { env = process.env, ghCommand = "gh", run = runChild, fetchPrContext = defaultFetchPrContext } = {},
+  { env = process.env, ghCommand = "gh", run = runChild, fetchPrContext = defaultFetchPrContext, waiverWriter = false, currentBody } = {},
 ) {
   assertGithubWriteStubbedInTestMode(run, "pr edit/close", { env });
+  // ADR-TRIPWIRE-STANDING-WAIVER: a body edit may not add, change or remove an
+  // `adr-tripwire:allow` line. `waiverWriter` is a runtime-only seam (no CLI
+  // flag) that only waive-adr-tripwire.mjs sets. `currentBody` lets a caller
+  // that just read the body (checkbox ticking) skip the baseline fetch.
+  let prContext;
+  const readPrContext = async () => {
+    if (prContext === undefined) prContext = await fetchPrContext(options, { run, ghCommand, env });
+    return prContext;
+  };
   // CLOSING-REF-BRANCH-MISMATCH: when the edit sets a body carrying a
   // `Closes`/`Fixes` reference, refuse it when that reference disagrees with the
   // issue the PR is expected to close (resolved from its branch slug, else its
@@ -307,8 +321,18 @@ export async function editPr(
   // inline so the grill check and buildEditArgs never re-read the exhausted fd 0.
   if (options.body !== undefined || options.bodyFile !== undefined) {
     const guardBody = await resolveBody(options);
+    if (!waiverWriter) {
+      const baseline = typeof currentBody === "string" ? currentBody : (await readPrContext())?.body;
+      if (typeof baseline !== "string") {
+        throw new Error(
+          `ADR-TRIPWIRE-STANDING-WAIVER: cannot read the current body of PR #${options.pr} (gh pr view failed), so its \`adr-tripwire:allow\` lines cannot be compared — refusing on ambiguity (fail closed).`,
+        );
+      }
+      const waiverRefusal = waiverLineChangeRefusal({ currentBody: baseline, nextBody: guardBody, action: "write" });
+      if (waiverRefusal) throw new Error(waiverRefusal);
+    }
     if (!options.allowCrossIssue && detectClosingKeyword(guardBody)) {
-      const ctx = await fetchPrContext(options, { run, ghCommand, env });
+      const ctx = await readPrContext();
       if (ctx === null) {
         throw new Error(
           `CLOSING-REF-BRANCH-MISMATCH: cannot verify the issue PR #${options.pr} is expected to close (gh pr view failed), so the body's closing reference cannot be checked — refusing on ambiguity (fail closed). Pass --allow-cross-issue to record a deliberate cross-issue reference.`,
@@ -321,7 +345,9 @@ export async function editPr(
       });
       if (refusal) throw new Error(refusal);
     }
-    if (options.bodyFile === "-") {
+    // Forward the checked text inline for every source so gh never re-reads a
+    // caller path whose bytes could differ from the ones the guard read.
+    if (options.bodyFile !== undefined) {
       options.body = guardBody;
       options.bodyFile = undefined;
     }

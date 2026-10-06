@@ -21,10 +21,10 @@ the top-level/inline agent (`agent_type: null`) falls under the main-agent bound
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
 `pnpm`, inline — delegate targeted checks to a fresh worker subagent, which reports back a compact
-pass/fail plus any failing-test names; request a local full-repository run only through `dev-loops gate resolve-validation` on a clean commit, or, when checking a pushed commit, prefer CI's structured
+pass/fail plus any failing-test names; request a local full-repository run only through `dev-loops-run cli/index.mjs gate resolve-validation` on a clean commit, or, when checking a pushed commit, prefer CI's structured
 conclusion (`scripts/github/probe-ci-status.mjs` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
 same opt-in `PreToolUse` Bash gate hook and the same `DEVLOOPS_COORDINATOR_READONLY=1` flag; a
-worker subagent's targeted verify/build run is unaffected; a local full-repository run is owned only by `dev-loops gate resolve-validation` per [Validation Policy](validation-policy.md). The draft-gate `gh pr ready`
+worker subagent's targeted verify/build run is unaffected; a local full-repository run is owned only by `dev-loops-run cli/index.mjs gate resolve-validation` per [Validation Policy](validation-policy.md). The draft-gate `gh pr ready`
 guard still applies (harness-agnostic). A separate, stricter main-agent read-only boundary can
 also be re-imposed via the same hook — opt-in with `DEVLOOPS_MAIN_AGENT_READONLY=1` (default
 fail-open) — for repos that want it.
@@ -36,19 +36,21 @@ index of the sanctioned GitHub-operation surface. It maps each operation to its 
 lists the raw commands that are forbidden. Read the index for the current list. This section does
 not copy it.
 
-The `SANCTIONED_COMMANDS` index marks three operations as orchestrator-owned. A spawned `dev-loop`
+The `SANCTIONED_COMMANDS` index marks the orchestrator-owned operations. A spawned `dev-loop`
 subagent routes them to the orchestrator:
 
 - Merge, through `scripts/github/merge-pr.mjs`.
 - Board status transitions, through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs`.
 - Issue creation, through `scripts/github/create-issue.mjs`.
+- Board-item removal, through `scripts/projects/remove-queue-item.mjs` (undo of a wrong queue add only).
+- ADR tripwire waiver, through `scripts/github/waive-adr-tripwire.mjs` (`dev-loops-run cli/index.mjs pr waive-adr-tripwire`).
 
 Known gaps outside this contract's current scope still create issues directly with raw
 `gh issue create`. They include the epic-decomposition step in `skills/docs/issue-intake-procedure.md`,
 the child-issue creation step in `skills/docs/sub-issue-tree-contract.md`, and the issue-creation
 guidance in `AGENTS.md`.
 
-Every `ok: true` result of `dev-loops loop startup` carries an `operatorBriefing` field that points
+Every `ok: true` result of `dev-loops-run cli/index.mjs loop startup` carries an `operatorBriefing` field that points
 to the index and to this section.
 
 ## Filing from runner findings

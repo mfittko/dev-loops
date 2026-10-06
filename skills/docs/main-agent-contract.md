@@ -21,10 +21,10 @@ the top-level/inline agent (`agent_type: null`) falls under the main-agent bound
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
 `pnpm`, inline — delegate targeted checks to a fresh worker subagent, which reports back a compact
-pass/fail plus any failing-test names; request a local full-repository run only through `dev-loops gate resolve-validation` on a clean commit, or, when checking a pushed commit, prefer CI's structured
+pass/fail plus any failing-test names; request a local full-repository run only through `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation` on a clean commit, or, when checking a pushed commit, prefer CI's structured
 conclusion (`scripts/github/probe-ci-status.mjs` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
 same opt-in `PreToolUse` Bash gate hook and the same `DEVLOOPS_COORDINATOR_READONLY=1` flag; a
-worker subagent's targeted verify/build run is unaffected; a local full-repository run is owned only by `dev-loops gate resolve-validation` per [Validation Policy](validation-policy.md). The draft-gate `gh pr ready`
+worker subagent's targeted verify/build run is unaffected; a local full-repository run is owned only by `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation` per [Validation Policy](validation-policy.md). The draft-gate `gh pr ready`
 guard still applies (harness-agnostic). A separate, stricter main-agent read-only boundary can
 also be re-imposed via the same hook — opt-in with `DEVLOOPS_MAIN_AGENT_READONLY=1` (default
 fail-open) — for repos that want it.
@@ -36,19 +36,21 @@ index of the sanctioned GitHub-operation surface. It maps each operation to its 
 lists the raw commands that are forbidden. Read the index for the current list. This section does
 not copy it.
 
-The `SANCTIONED_COMMANDS` index marks three operations as orchestrator-owned. A spawned `dev-loop`
+The `SANCTIONED_COMMANDS` index marks the orchestrator-owned operations. A spawned `dev-loop`
 subagent routes them to the orchestrator:
 
 - Merge, through `scripts/github/merge-pr.mjs`.
 - Board status transitions, through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs`.
 - Issue creation, through `scripts/github/create-issue.mjs`.
+- Board-item removal, through `scripts/projects/remove-queue-item.mjs` (undo of a wrong queue add only).
+- ADR tripwire waiver, through `scripts/github/waive-adr-tripwire.mjs` (`node <dev-loops-package-root>/cli/index.mjs pr waive-adr-tripwire`).
 
 Known gaps outside this contract's current scope still create issues directly with raw
 `gh issue create`. They include the epic-decomposition step in `skills/docs/issue-intake-procedure.md`,
 the child-issue creation step in `skills/docs/sub-issue-tree-contract.md`, and the issue-creation
 guidance in `AGENTS.md`.
 
-Every `ok: true` result of `dev-loops loop startup` carries an `operatorBriefing` field that points
+Every `ok: true` result of `node <dev-loops-package-root>/cli/index.mjs loop startup` carries an `operatorBriefing` field that points
 to the index and to this section.
 
 ## Filing from runner findings
@@ -71,7 +73,7 @@ The main agent is **read-only** for every file tracked by the repository. Every
 write, edit, delete, commit, branch, push, and PR lifecycle operation must flow
 through the `dev-loop` async subagent. The exceptions are the orchestrator-owned
 operations in [Sanctioned tooling](#sanctioned-tooling): merge, board status
-transitions, and issue creation. The main agent performs them through their wrappers.
+transitions, issue creation, board-item removal, and the ADR tripwire waiver. The main agent performs them through their wrappers.
 
 This contract is a hard rule, not a default or guideline. The main agent must
 never rationalize a direct mutation — not because the work is small, not
@@ -85,13 +87,14 @@ because "the user said yes," not because it is running from a worktree.
 - Issue creation through `scripts/github/create-issue.mjs` (orchestrator-owned)
 - Merge through `scripts/github/merge-pr.mjs` (orchestrator-owned)
 - Board status transitions through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs` (orchestrator-owned)
+- Board-item removal through `scripts/projects/remove-queue-item.mjs` and the ADR tripwire waiver through `scripts/github/waive-adr-tripwire.mjs` (orchestrator-owned)
 - Issue close through `scripts/github/edit-issue.mjs --state closed [--reason completed|not_planned]` (GitHub API, not file mutations)
 - PR reads through `scripts/github/view-pr.mjs` (read-only GitHub API)
 - PR listing through `gh pr list` (no sanctioned wrapper exists; read-only GitHub API)
 - Write to `/tmp` or other non-repo paths (e.g., issue body drafts)
 - Delegate to the `dev-loop` agent (async, with worktree cwd)
 - Report findings, ask questions, get confirmation
-- Targeted read-only validation under the repository-pinned Bun 1.4.1 toolchain; local full-repository validation goes only through `dev-loops gate resolve-validation` inside `dev-loop`
+- Targeted read-only validation under the repository-pinned Bun 1.4.1 toolchain; local full-repository validation goes only through `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation` inside `dev-loop`
 
 ## Main agent must NEVER
 
@@ -150,15 +153,15 @@ is the fallback when the resolver inherits (the judge uses it to pin the strong 
 | `subagent fixer` | Allowed only when called from within `dev-loop`. Emit its work order with `scripts/loop/emit-fixer-work-order.mjs` and dispatch the printed `dispatchPayload` unchanged; never a prose brief (ADR 0107) |
 | Claude Code: the `dev-loop` coordinator writes `packages/core/src/foo.mjs` directly | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — must delegate to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) |
 | Claude Code: the `dev-loop` coordinator writes `tmp/gate-findings/...` (gate evidence) | Allowed — ephemeral/gitignored, not a tracked-file mutation |
-| Claude Code: the `dev-loop` coordinator runs `bun run verify` inline | **BREACH** — request full validation through `dev-loops gate resolve-validation` |
+| Claude Code: the `dev-loop` coordinator runs `bun run verify` inline | **BREACH** — request full validation through `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation` |
 | Claude Code: a worker subagent (`developer`/`fixer`/`quality`/`review`) runs a targeted suite | Allowed — targeted verification runs are the worker's job |
-| Claude Code: a worker subagent runs `bun run verify` directly | **BREACH** — request full validation through `dev-loops gate resolve-validation` |
+| Claude Code: a worker subagent runs `bun run verify` directly | **BREACH** — request full validation through `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation` |
 
 ## Dev-loop startup
 
 When a user triggers the dev loop, the main agent must immediately dispatch the
 `dev-loop` async subagent. The subagent owns the startup resolver, route selection,
-and all subsequent implementation steps. The main agent never runs `dev-loops loop startup`
+and all subsequent implementation steps. The main agent never runs `node <dev-loops-package-root>/cli/index.mjs loop startup`
 directly.
 
 ## Async dispatch posture (Pi)
@@ -192,10 +195,10 @@ the full run.
   `COORDINATOR-VERIFY-BOUNDARY`: the dev-loop coordinator MUST NOT run a known
   code-verification/build entrypoint (`bun run verify`/`bun test`/`vitest`/`npm test`/
   `npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/`pnpm`) inline; it
-  MUST delegate targeted runs to a fresh worker subagent (`developer`/`fixer`/`quality`) and request any local full-repository run through `dev-loops gate resolve-validation` instead. Enforced by the
+  MUST delegate targeted runs to a fresh worker subagent (`developer`/`fixer`/`quality`) and request any local full-repository run through `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation` instead. Enforced by the
   `PreToolUse` Bash gate hook (`.claude/hooks/pre-tool-use-bash-gate.mjs`), which denies the
   command when the caller's `agent_type` is a coordinator's own (`dev-loop` or `gate-coordinator`).
-  For a `gate-coordinator` caller, the deny reason names `dev-loops gate resolve-validation` for the
+  For a `gate-coordinator` caller, the deny reason names `gate resolve-validation` for the
   round's validation and a typed observation to the dev-loop coordinator for anything else, because a
   gate coordinator dispatches no worker subagent. Gated by the SAME
   `DEVLOOPS_COORDINATOR_READONLY=1` flag as the write-guard boundary above (default fail-open); a

@@ -30,9 +30,19 @@ export type HarnessContext = {
   hasUI: boolean;
   ui: HarnessUi;
   sendUserMessage?: (message: string, options?: Record<string, unknown>) => unknown;
+  /** The calling session's effective system prompt (Pi only). */
+  getSystemPrompt?: () => string;
+  /** The calling session's own id (Pi only) — the key for required child-extension registration. */
+  getSessionId?: () => string;
 };
 
-export type HarnessLifecycleEvent = 'session_start' | 'tool_result' | 'user_bash' | 'agent_end' | 'tool_call';
+export type HarnessLifecycleEvent =
+  | 'session_start'
+  | 'session_shutdown'
+  | 'tool_result'
+  | 'user_bash'
+  | 'agent_end'
+  | 'tool_call';
 
 export type HarnessCommandConfig = {
   description: string;

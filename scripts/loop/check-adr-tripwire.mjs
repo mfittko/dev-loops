@@ -32,6 +32,14 @@
  *     `worktree.commitMsgGuard.requireClaudeSession` is `true` at base and not
  *     `true` at head (set false, key removed, file removed). Only loosening
  *     fires; opting in is stricter.
+ *  6. standing-authorizations-change: the `standingAuthorizations` block of a
+ *     changed devloops config source differs between base and head. Only a
+ *     docs/decisions record satisfies it; no waiver applies.
+ *
+ * Standing-authorization waiver lines (`adr-tripwire:allow standing-
+ * authorization head=<sha> ... expires=<YYYY-MM-DD> ...`) are valid only when
+ * `head=` equals the evaluated head, `expires=` has not passed (UTC) and every current
+ * trigger is a contract-doc listed in `paths=`.
  *
  * Satisfaction: the diff adds or updates a `docs/decisions/NNNN-*.md` record,
  * or the PR body carries a one-line waiver marker
@@ -53,6 +61,7 @@ import { parse as parseYaml } from "yaml";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
+import { classifyWaiverReason } from "./adr-waiver-markers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: check-adr-tripwire.mjs --base <ref> [--head <ref>] [--pr-body-file <path>]
@@ -75,6 +84,9 @@ Optional:
   --pr-body-file <path> File holding the PR body (waiver surface); default:
                         no body — a waiver can then never be honored
 
+A standingAuthorizations change is satisfied only by a docs/decisions record; a
+standing-authorization waiver line is valid only at its head=, until its expires= day, and when every current trigger is a contract-doc listed in paths=.
+
 Exit codes:
    0  pass (no trigger, or trigger satisfied by an ADR / valid waiver)
    1  block — a decision-shaped surface was touched without an ADR or waiver
@@ -86,9 +98,12 @@ Output (stdout, JSON):
                                // 0 on pass, 2 on a usage error (fail-closed)
     "outcome": "pass"|"block",
     "satisfiedBy": "adr"|"waiver"|null,
-    "triggers": [{ "type": "contract-doc"|"gate-config"|"rule-modality-reversal"|"unresolvable-rule-scan"|"devloops-proportionality"|"commit-msg-guard-loosening"|"unresolvable-devloops-scan", "path": "...", ... }],
+    "triggers": [{ "type": "contract-doc"|"gate-config"|"rule-modality-reversal"|"unresolvable-rule-scan"|"devloops-proportionality"|"commit-msg-guard-loosening"|"standing-authorizations-change"|"unresolvable-devloops-scan", "path": "...", ... }],
     "adrFiles": ["docs/decisions/0052-..."],
     "waiver": { "requested": false, "valid": false, "reason": null },
+                               // a standing-authorization line also sets
+                               // "standing": true, and "stale": true when it
+                               // misses the evaluated head, has expired, or does not list every current trigger in paths=
     "reasons": []
   }
 
@@ -268,12 +283,18 @@ export function unquoteGitPath(p) {
  * @param {Object<string,string>} [input.baseContents] — path → file content at base
  * @param {Object<string,string>} [input.headContents] — path → file content at head
  * @param {string} [input.prBody] — PR body text (the waiver surface)
+ * @param {string|null} [input.headSha] — full head SHA a standing-authorization
+ *   waiver line must name; null makes every such line stale (fail closed)
+ * @param {Date} [input.now] — a standing-authorization line is stale once its
+ *   `expires=` day is before today (UTC) or is not a valid YYYY-MM-DD
  */
 export function computeAdrTripwire({
   nameStatusOutput = "",
   baseContents = {},
   headContents = {},
   prBody = "",
+  headSha = null,
+  now = new Date(),
 } = {}) {
   const files = parseNameStatus(nameStatusOutput);
   const triggers = [];
@@ -329,6 +350,18 @@ export function computeAdrTripwire({
   const touchesFamily = (f) => DEVLOOPS_CONFIG_PATHS_SET.has(f.path) || (f.origPath && DEVLOOPS_CONFIG_PATHS_SET.has(f.origPath));
   const changedFamilyFile = files.find(touchesFamily);
   if (changedFamilyFile) {
+    // standingAuthorizations: the reader takes the effective first-existing
+    // family file, so compare the effective block at base and at head (a
+    // deleted shadowing file can expose a shadowed record). Any change is
+    // decision-shaped and satisfied only by a decision record.
+    const effectiveBlock = (contents) => {
+      const name = DEVLOOPS_CONFIG_PATHS.find((n) => contents[n] != null);
+      if (name === undefined) return "null";
+      try { return JSON.stringify(parseYaml(contents[name])?.standingAuthorizations ?? null); } catch { return `unparseable:${contents[name]}`; }
+    };
+    if (effectiveBlock(baseContents) !== effectiveBlock(headContents)) {
+      triggers.push({ type: "standing-authorizations-change", path: changedFamilyFile.path });
+    }
     const effective = (contents) => {
       const name = DEVLOOPS_CONFIG_PATHS.find((n) => contents[n] != null);
       if (name === undefined) return undefined;
@@ -405,7 +438,19 @@ export function computeAdrTripwire({
       const m = WAIVER_RE.exec(line);
       if (bare || m) {
         const reason = m ? m[1].trim() : "";
-        waiver = { requested: true, valid: reason.length > 0, reason: reason.length > 0 ? reason : null };
+        const kind = classifyWaiverReason(reason);
+        if (kind.standing) {
+          // A standing-authorization line is valid only at the head it names;
+          // a later push makes it stale until the sanctioned writer re-runs.
+          const unexpired = kind.expires !== null && kind.expires >= now.toISOString().slice(0, 10);
+          // The line pins the head, not the base: a base retarget at the same head can add
+          // triggers the writer never saw, so every current trigger must be a listed contract-doc.
+          const inScope = triggers.every((t) => t.type === "contract-doc" && kind.paths.includes(t.path));
+          const atHead = unexpired && inScope && kind.head !== null && typeof headSha === "string" && kind.head === headSha.toLowerCase();
+          waiver = { requested: true, valid: atHead, reason, standing: true, ...(atHead ? {} : { stale: true }) };
+        } else {
+          waiver = { requested: true, valid: reason.length > 0, reason: reason.length > 0 ? reason : null };
+        }
         break;
       }
     }
@@ -419,11 +464,14 @@ export function computeAdrTripwire({
     return { ok: true, outcome: "pass", satisfiedBy: "adr", triggers, adrFiles, waiver, reasons: [] };
   }
 
-  if (waiver.valid) {
+  // A change to the standingAuthorizations block is satisfied only by a record.
+  const policyChange = triggers.some((t) => t.type === "standing-authorizations-change");
+  if (waiver.valid && !policyChange) {
     return { ok: true, outcome: "pass", satisfiedBy: "waiver", triggers, adrFiles, waiver, reasons: [] };
   }
 
   const reasons = triggers.map((t) => {
+    if (t.type === "standing-authorizations-change") return `${t.path}: standingAuthorizations block changed (only a docs/decisions record satisfies; no waiver applies)`;
     if (t.type === "rule-modality-reversal") return `${t.path}: rule ${t.ruleId} modality reversed ${t.from}→${t.to}`;
     if (t.type === "gate-config") return `${t.path}: shared gate config touched`;
     if (t.type === "unresolvable-rule-scan") return `${t.path}: rule-bearing doc changed but base+head content not both readable (fail-closed)`;
@@ -432,8 +480,11 @@ export function computeAdrTripwire({
     if (t.type === "unresolvable-devloops-scan") return `${t.path}: changed but base+head content not both parsable as YAML (fail-closed)`;
     return `${t.path}: decision-shaped contract doc touched`;
   });
+  if (waiver.standing && waiver.stale) {
+    reasons.push(`The standing-authorization waiver line does not name the evaluated head, has expired, or does not list every current trigger as a contract-doc in its paths=${headSha ? ` ${headSha}` : ""}; re-run \`dev-loops pr waive-adr-tripwire\` for the current head.`);
+  }
   reasons.push(
-    "ADR tripwire: a decision-shaped surface was touched without adding/updating a docs/decisions/NNNN-*.md record and without a valid `adr-tripwire:allow <reason>` waiver in the PR body.",
+    "ADR tripwire: a decision-shaped surface was touched without adding/updating a docs/decisions/NNNN-*.md record and without a valid `adr-tripwire:allow <reason>` waiver in the PR body. Do not hand-write the waiver: run `dev-loops pr waive-adr-tripwire` (an operator can still add one in the GitHub UI).",
   );
   return { ok: false, outcome: "block", satisfiedBy: null, triggers, adrFiles, waiver, reasons };
 }
@@ -468,6 +519,7 @@ export async function evaluateAdrTripwire({
   prBody = "",
   repoRoot = process.cwd(),
   env = process.env,
+  now = new Date(),
 } = {}) {
   assertPlausibleRef(base, "--base");
   assertPlausibleRef(head, "--head");
@@ -477,6 +529,9 @@ export async function evaluateAdrTripwire({
   const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
   const nameStatusOutput = runGit(["diff", "--name-status", `${base}...${head}`], { repoRoot, env: gitEnv });
   const files = parseNameStatus(nameStatusOutput);
+  // Read base contents at the merge base so they match the three-dot diff above.
+  let baseRef = base;
+  try { baseRef = runGit(["merge-base", base, head], { repoRoot, env: gitEnv }).trim() || base; } catch { /* keep base tip */ }
   const baseContents = {};
   const headContents = {};
   for (const file of files) {
@@ -484,9 +539,9 @@ export async function evaluateAdrTripwire({
       || DEVLOOPS_CONFIG_PATHS_SET.has(file.path) || (file.origPath && DEVLOOPS_CONFIG_PATHS_SET.has(file.origPath));
     if (!isScannedSurface) continue;
     if (file.origPath) {
-      try { baseContents[file.origPath] = runGit(["show", `${base}:${file.origPath}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
+      try { baseContents[file.origPath] = runGit(["show", `${baseRef}:${file.origPath}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
     } else {
-      try { baseContents[file.path] = runGit(["show", `${base}:${file.path}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
+      try { baseContents[file.path] = runGit(["show", `${baseRef}:${file.path}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
     }
     try { headContents[file.path] = runGit(["show", `${head}:${file.path}`], { repoRoot, env: gitEnv }); } catch { /* absent at head */ }
   }
@@ -494,14 +549,16 @@ export async function evaluateAdrTripwire({
     // The loosening check needs the whole family, changed or not.
     for (const name of DEVLOOPS_CONFIG_PATHS) {
       if (baseContents[name] === undefined) {
-        try { baseContents[name] = runGit(["show", `${base}:${name}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
+        try { baseContents[name] = runGit(["show", `${baseRef}:${name}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
       }
       if (headContents[name] === undefined) {
         try { headContents[name] = runGit(["show", `${head}:${name}`], { repoRoot, env: gitEnv }); } catch { /* absent at head */ }
       }
     }
   }
-  return computeAdrTripwire({ nameStatusOutput, baseContents, headContents, prBody });
+  let headSha = null;
+  try { headSha = runGit(["rev-parse", "--verify", `${head}^{commit}`], { repoRoot, env: gitEnv }).trim().toLowerCase(); } catch { /* unresolvable head: standing lines stay stale */ }
+  return computeAdrTripwire({ nameStatusOutput, baseContents, headContents, prBody, headSha, now });
 }
 
 // ---------------------------------------------------------------------------

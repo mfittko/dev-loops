@@ -62,6 +62,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../loop/_copilot-convergence-carry.mjs";
 import { writeSuppressionMarker } from "../loop/_post-convergence-review-suppression.mjs";
 
@@ -241,7 +242,7 @@ async function collectState(args, { env, runChild }) {
   };
 }
 
-async function main(args, { env = process.env, runChild = defaultRunChild, checkpointDir, delayImpl = delay } = {}) {
+async function main(args, { env = process.env, runChild = defaultRunChild, checkpointDir, delayImpl = delay, repoRoot = process.cwd() } = {}) {
   const state = await collectState(args, { env, runChild });
 
   if (!state.copilotRequested) {
@@ -286,7 +287,7 @@ async function main(args, { env = process.env, runChild = defaultRunChild, check
       };
     }
     deltaClassification = await classifyDeltaSinceLastReview(
-      { repo: args.repo, base: lastReviewedHeadSha, head: state.currentHeadSha },
+      { repo: args.repo, base: lastReviewedHeadSha, head: state.currentHeadSha, rules: resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot })).config) },
       { env, runChild },
     );
     if (!deltaClassification.carryForward) {

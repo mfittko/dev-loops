@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { resolveRoleExtraTools } from "@dev-loops/core/config";
 import extension from "../extension/index.ts";
 import { renderPiAgent } from "../extension/sync-packaged-agents.ts";
-import { AGENT_TYPE_ENV } from "../extension/readonly-role-gate.ts";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const PULL = "dev-loops-run scripts/github/pull-work-order.mjs j1-0123abcd";
@@ -15,14 +14,7 @@ const PULL = "dev-loops-run scripts/github/pull-work-order.mjs j1-0123abcd";
 async function judgeCall(command) {
   const events = new Map();
   extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
-  const prior = process.env[AGENT_TYPE_ENV];
-  process.env[AGENT_TYPE_ENV] = "judge";
-  try {
-    return await events.get("tool_call")({ toolName: "bash", input: { command } }, {});
-  } finally {
-    if (prior === undefined) delete process.env[AGENT_TYPE_ENV];
-    else process.env[AGENT_TYPE_ENV] = prior;
-  }
+  return await events.get("tool_call")({ toolName: "bash", input: { command } }, { getSystemPrompt: () => '<active_agent name="judge"/>' });
 }
 
 // Cross-harness non-regression: extraTools is Claude-only (see skills/docs/cross-harness-regression-contract.md).
