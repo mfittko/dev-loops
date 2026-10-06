@@ -70,7 +70,7 @@ Terminal state with no outgoing transitions: `blocked_needs_user_decision`.
 - `re_review_needed` -> `submitted_review`
   - a fresh review is submitted on the current head without an explicit re-request
 - `re_review_needed` -> `waiting_for_review_request`
-  - no active re-request yet
+  - the PR is converted to draft, closed, or merged
 - `submitted_review` -> `review_requested`
   - author/Copilot pushed a new head and a fresh review was explicitly re-requested
 - `submitted_review` -> `waiting_for_review_request`
