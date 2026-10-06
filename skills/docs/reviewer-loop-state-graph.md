@@ -25,7 +25,7 @@ Implementation:
 | `draft_review_posted` | Pending GitHub review exists for current head but link not yet surfaced |
 | <!-- term: state:waiting_for_user_submit --> `waiting_for_user_submit` | Pending review link is surfaced; wait for submission |
 | `submitted_review` | Internal reviewer pass reached a submitted outcome/verdict; handoff boundary to remediation/fix follow-up |
-| `re_review_needed` | The latest submitted review targets a commit other than the current head and no fresh review is requested; the PR needs a re-review |
+| `re_review_needed` | The latest submitted review targets a commit other than the current head and no fresh review is requested; the PR needs a re-review (external wait, named actor boundary: author/operator re-request of a fresh review on the current head) |
 | <!-- term: state:waiting_for_author_followup --> `waiting_for_author_followup` | Legacy external-wait compatibility state (named actor boundary: author/Copilot follow-up), not an internal reviewer-pass completion target |
 | <!-- term: state:waiting_for_re_request --> `waiting_for_re_request` | Legacy external-wait compatibility state (named actor boundary: author/Copilot re-request action), not an internal reviewer-pass completion target |
 | `review_invalidated` | Pending draft review is stale for current head SHA |
