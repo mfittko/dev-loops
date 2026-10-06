@@ -12,9 +12,10 @@ Ownership/idempotency classification is optional (see
 [Ownership availability note](#ownership-availability-note)).
 
 <!-- rule: ROUTING-EVALUATOR-AUTHORITY -->
-The evaluator **MUST** derive the routing outcome directly from normalized state inputs; it
-**MUST NOT** accept a pre-computed outer-loop action. It is the routing authority, not a
-remapper.
+The routing policy source is the [routing statechart](#routing-statechart), evaluated by
+`evaluateConductorRouting`. The evaluator **MUST** derive the routing outcome directly from
+normalized state inputs; it **MUST NOT** accept a pre-computed outer-loop action. It is the
+routing authority, not a remapper.
 
 ## Boundary
 
@@ -36,7 +37,11 @@ Parent umbrella: [#28](https://github.com/mfittko/dev-loops/issues/28).
 | Component | Location |
 |---|---|
 | Core routing evaluator | `packages/core/src/loop/conductor-routing.mjs` |
+| Routing statechart (policy source) | `packages/core/src/loop/conductor-routing-statechart.json` |
 | Core unit tests | `packages/core/test/conductor-routing.test.mjs` |
+| Statechart structure and coverage tests | `packages/core/test/conductor-routing-statechart.test.mjs` |
+| Golden regression test and fixture | `packages/core/test/conductor-routing-golden.test.mjs`, `packages/core/test/fixtures/conductor-routing-golden.json` |
+| Contract table freshness test | `packages/core/test/conductor-routing-contract-table.test.mjs` |
 | Integration tests (outer-loop adapter) | `test/loop/conductor-routing.test.mjs` |
 | Thin adapter integration | `scripts/loop/outer-loop.mjs` (calls evaluator as routing authority; emits `conductorRouting` in output) |
 
@@ -166,7 +171,10 @@ The evaluator **MUST** apply the following first-match-wins priority order:
 
 | Priority | Condition | Routing outcome |
 |---|---|---|
-| 1 | `ownershipState === "duplicate_local_owners"` | `needs_reconcile` |
+| 0a | `target` is missing or malformed | `needs_reconcile` (`unknown_state`) |
+| 0b | `copilotState` is missing or blank | `needs_reconcile` (`unknown_state`) |
+| 0c | `reviewerState` is missing or blank | `needs_reconcile` (`unknown_state`) |
+| 1 | `ownershipState === "duplicate_local_owners"` | `needs_reconcile` (`ownership_conflict`) |
 | 2 | `copilotState === "done"` | `done_terminal` |
 | 3 | `copilotState === "no_pr"` | `stop_needs_human` (`pr_not_ready`) |
 | 4 | `copilotState === "review_request_unavailable"` | `stop_needs_human` (`review_unavailable`) |
@@ -182,22 +190,36 @@ The evaluator **MUST** apply the following first-match-wins priority order:
 | 14 | copilot wait state OR reviewer wait state | `continue_current_wait` |
 | 15 | copilot weak-active + `ownershipState === "live_owner"` | `stay_with_current_live_owner` |
 | 16 | copilot weak-active | `handoff_to_copilot_loop` |
-| 17 | anything else | `needs_reconcile` |
+| 17 | anything else | `needs_reconcile` (`unknown_state`) |
+
+Rule 17 also catches `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback` and `internal_tooling_direct_gate`: they reach `needs_reconcile` with stop reason `unknown_state`.
 
 **Copilot strong-active states** (win over reviewer wait states): `unresolved_feedback_present`, `already_fixed_needs_reply_resolve`
 
 **Copilot weak-active states** (yield to reviewer wait states): `pr_ready_no_feedback`, `ready_to_rerequest_review`
 
-**Reviewer active states**: `review_requested`, `determine_review_plan`, `reviews_running`, `merge_results`, `draft_review_ready`, `draft_review_posted`, `waiting_for_user_submit`, `submitted_review`, `review_invalidated`
+**Reviewer active states**: `review_requested`, `determine_review_plan`, `reviews_running`, `merge_results`, `draft_review_ready`, `draft_review_posted`, `waiting_for_user_submit`, `review_invalidated`
 
 **Reviewer active states needing local execution**: `review_requested`, `determine_review_plan`, `reviews_running`, `merge_results`, `draft_review_ready`
 
 <!-- rule: ROUTING-LOCAL-ISOLATION-PASSTHROUGH -->
 When `requiresLocalIsolation=true`, those local-execution states **MUST NOT** become terminal stop outcomes by themselves. The routing result **MUST** stay on the owning loop family and **MUST** carry `handoffEnvelope.requiresLocalIsolation=true` so the caller can re-enter from a safe isolated checkout/worktree.
 
-**Copilot/reviewer wait states** (owned by orchestrator): `waiting_for_copilot_review`, `waiting_for_ci` (copilot); `waiting_for_author_followup`, `waiting_for_re_request` (reviewer)
+**Copilot/reviewer wait states** (owned by orchestrator): `waiting_for_copilot_review`, `waiting_for_ci` (copilot); `submitted_review`, `waiting_for_author_followup`, `waiting_for_re_request` (reviewer)
 
 `waiting_for_copilot_review` is a post-request settle gate for the current head: routing stays `continue_current_wait` until that Copilot pass settles, even when reviewer-side state is active (priority 9).
+
+---
+
+## Routing statechart
+
+The priority table above is hand-written. Its policy source is the JSON chart at `packages/core/src/loop/conductor-routing-statechart.json`, which uses the XState v5 key vocabulary (`id`, `initial`, `context`, `states`, `always`, `target`, `guard`, `meta`, `type`) and no runtime dependency.
+
+- The `route` state holds the `always` arrows in first-match order: pre-checks `0a`, `0b`, `0c`, then rules 1 to 17. The runner takes the first arrow whose guard holds. Rule 17 has no guard and is last.
+- Each arrow targets a final state named after a routing outcome. The final state's `meta` supplies `outerAction`, `loopFamily` and `entrypoint`. The arrow's `meta` supplies `rule`, `stopReason` and `preCheck`.
+- The guard predicates and the reason texts, keyed by rule, live in `packages/core/src/loop/conductor-routing.mjs`. `evaluateConductorRouting` normalizes the input, runs the chart and builds the envelope. Pre-check results carry empty `requiredArgs`.
+- Coverage invariants: no arrow is dead over the full input product, and the golden test pins every result of that product (24,480 inputs).
+- A freshness test fails when the `ROUTING-PRIORITY-ORDER` table differs from the chart arrows in row order, rule ids, outcomes or stop reasons.
 
 ---
 

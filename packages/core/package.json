@@ -114,6 +114,7 @@
   "files": [
     "src/**/*.mjs",
     "src/**/*.yaml",
+    "src/**/*.json",
     "bin/**/*.mjs"
   ],
   "scripts": {

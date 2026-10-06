@@ -2,6 +2,10 @@
  * Conductor routing contract: deterministic routing and handoff decisions above
  * family-local state machines. See skills/docs/conductor-routing-contract.md.
  *
+ * Policy source: conductor-routing-statechart.json (next to this file). The chart
+ * lists the routing rules in first-match order; evaluateConductorRouting runs it
+ * with the guard predicates defined below and builds the handoff envelope.
+ *
  * Contract guarantees:
  * - One deterministic routing outcome per normalized input set.
  * - Ambiguous, conflicting, or insufficient inputs return `needs_reconcile`
@@ -18,6 +22,8 @@
  * - Ownership/idempotency rules remain in conductor-ownership.mjs; family-local
  *   state machine semantics remain in copilot-loop-state.mjs etc.
  */
+
+import routingChart from "./conductor-routing-statechart.json" with { type: "json" };
 
 // ---------------------------------------------------------------------------
 // Exported constants
@@ -223,334 +229,82 @@ function buildEnvelope({
 }
 
 // ---------------------------------------------------------------------------
-// Internal: routing helpers
+// Statechart runner: guards and reason texts for conductor-routing-statechart.json
 // ---------------------------------------------------------------------------
 
-/**
- * Build a stay_with_current_live_owner result when an active live owner
- * is already handling this scope; no new handoff is needed.
- */
-function stayWithLiveOwner({
-  normalizedTarget,
-  copilotState,
-  reviewerState,
-  baseArgs,
-  requiresLocalIsolation,
-  confidence,
-}) {
-  return {
-    routingOutcome: ROUTING_OUTCOME.STAY_WITH_CURRENT_LIVE_OWNER,
-    outerAction: "continue_wait",
-    stopReason: null,
-    handoffEnvelope: buildEnvelope({
-      targetIdentity: normalizedTarget,
-      loopFamily: LOOP_FAMILY.OUTER_LOOP,
-      entrypoint: ENTRYPOINT.OUTER_LOOP_WAIT,
-      reason: `A live owner is already active for this scope; no new handoff issued: copilot_state=${copilotState}, reviewer_state=${reviewerState}`,
-      requiredArgs: baseArgs,
-      requiresLocalIsolation,
-      confidence,
-    }),
+const isBlank = (value) => typeof value !== "string" || value.trim().length === 0;
+const isLiveOwner = (c) => c.ownershipState === OWNERSHIP_LIVE_OWNER;
+const isCopilotDraft = (c) => c.copilotState === "pr_draft";
+const isReviewerActive = (c) => REVIEWER_ACTIVE.has(c.reviewerState);
+const isCopilotStrongActive = (c) => COPILOT_STRONG_ACTIVE.has(c.copilotState);
+const isCopilotWeakActive = (c) => COPILOT_WEAK_ACTIVE.has(c.copilotState);
+
+// Guard predicates named by the chart's `guard` keys.
+export const ROUTING_GUARDS = Object.freeze({
+  invalidTarget: (c) => c.targetValid === false,
+  missingCopilotState: (c) => isBlank(c.copilotState),
+  missingReviewerState: (c) => isBlank(c.reviewerState),
+  duplicateOwners: (c) => c.ownershipState === OWNERSHIP_DUPLICATE_LOCAL_OWNERS,
+  copilotDone: (c) => c.copilotState === "done",
+  copilotNoPr: (c) => c.copilotState === "no_pr",
+  reviewUnavailable: (c) => c.copilotState === "review_request_unavailable",
+  copilotBlocked: (c) => c.copilotState === "blocked_needs_user_decision",
+  reviewerBlocked: (c) => c.reviewerState === "blocked_needs_user_decision",
+  copilotDraft: isCopilotDraft,
+  copilotDraftAndLiveOwner: (c) => isCopilotDraft(c) && isLiveOwner(c),
+  waitingForCopilotReview: (c) => c.copilotState === "waiting_for_copilot_review",
+  reviewerActive: isReviewerActive,
+  reviewerActiveAndLiveOwner: (c) => isReviewerActive(c) && isLiveOwner(c),
+  copilotStrongActive: isCopilotStrongActive,
+  copilotStrongActiveAndLiveOwner: (c) => isCopilotStrongActive(c) && isLiveOwner(c),
+  anyWait: (c) => COPILOT_WAIT.has(c.copilotState) || REVIEWER_WAIT.has(c.reviewerState),
+  copilotWeakActive: isCopilotWeakActive,
+  copilotWeakActiveAndLiveOwner: (c) => isCopilotWeakActive(c) && isLiveOwner(c),
+});
+
+const liveOwnerReason = ({ copilotState, reviewerState }) =>
+  `A live owner is already active for this scope; no new handoff issued: copilot_state=${copilotState}, reviewer_state=${reviewerState}`;
+const waitReason = ({ copilotState, reviewerState }) =>
+  `Outer-loop wait state: copilot_state=${copilotState}, reviewer_state=${reviewerState}`;
+const copilotActionReason = ({ copilotState }) => `Copilot loop requires action: copilot_state=${copilotState}`;
+
+// Reason texts keyed by chart arrow rule.
+const REASONS = Object.freeze({
+  "0a": () => "Target identity is missing or malformed; cannot route without a resolved target",
+  "0b": () => "Copilot state is missing or empty; cannot route without family-local state",
+  "0c": () => "Reviewer state is missing or empty; cannot route without family-local state",
+  1: () => "Ownership state indicates duplicate local owners; reconcile ownership before routing",
+  2: () => "PR is merged or closed; conductor loop is complete",
+  3: () => "No open PR exists for this scope; cannot route",
+  4: () => "Copilot review request returned unavailable; human intervention required",
+  5: () => "Copilot loop is blocked and requires human decision",
+  6: () => "Reviewer loop is blocked and requires human decision",
+  7: liveOwnerReason,
+  8: ({ copilotState }) => `PR is in draft state; copilot loop required: copilot_state=${copilotState}`,
+  9: waitReason,
+  10: liveOwnerReason,
+  11: ({ reviewerState }) => `Reviewer loop requires action: reviewer_state=${reviewerState}`,
+  12: liveOwnerReason,
+  13: copilotActionReason,
+  14: waitReason,
+  15: liveOwnerReason,
+  16: copilotActionReason,
+  17: ({ copilotState, reviewerState }) =>
+    `Unrecognized combined state: copilot_state=${copilotState}, reviewer_state=${reviewerState}`,
+});
+
+const ROUTE_ARROWS = routingChart.states[routingChart.initial].always;
+
+// First `always` arrow whose guard holds wins; the last arrow is unguarded.
+// Exported so tests can see which rule fired.
+export function selectRoutingArrow({ target, ownershipState, copilotState, reviewerState }) {
+  const context = {
+    targetValid: normalizeTarget(target) !== null,
+    copilotState,
+    reviewerState,
+    ownershipState: ownershipState ?? null,
   };
-}
-
-function continueCurrentWait({
-  normalizedTarget,
-  copilotState,
-  reviewerState,
-  baseArgs,
-  requiresLocalIsolation,
-  confidence,
-}) {
-  return {
-    routingOutcome: ROUTING_OUTCOME.CONTINUE_CURRENT_WAIT,
-    outerAction: "continue_wait",
-    stopReason: null,
-    handoffEnvelope: buildEnvelope({
-      targetIdentity: normalizedTarget,
-      loopFamily: LOOP_FAMILY.OUTER_LOOP,
-      entrypoint: ENTRYPOINT.OUTER_LOOP_WAIT,
-      reason: `Outer-loop wait state: copilot_state=${copilotState}, reviewer_state=${reviewerState}`,
-      requiredArgs: baseArgs,
-      requiresLocalIsolation,
-      confidence,
-    }),
-  };
-}
-
-/**
- * Core routing policy: derive a routing outcome from normalized states.
- *
- * This function contains the real branch logic. Both evaluateConductorRouting
- * (full contract with target validation) and the thin decideOuterAction adapter
- * (target-agnostic) delegate here.
- *
- * Priority order (first match wins):
- *   1. Ownership conflict (duplicate_local_owners) → needs_reconcile
- *   2. Terminal (done) → done_terminal
- *   3. Missing PR (no_pr) → stop_needs_human / pr_not_ready
- *   4. Hard copilot stop (review_request_unavailable, blocked) → stop_needs_human
- *   5. Hard reviewer stop (blocked) → stop_needs_human
- *   6. pr_draft — live-owner check, then handoff (marking requiresLocalIsolation when needed)
- *   7. Copilot explicit review-settle wait (waiting_for_copilot_review) → continue_current_wait
- *   8. Reviewer active states — live-owner check, handoff (marking requiresLocalIsolation when needed)
- *   9. Copilot strong active states — live-owner check, handoff (marking requiresLocalIsolation when needed)
- *   10. Outer-loop wait states (copilot or reviewer)
- *   11. Copilot weak active states (yield to reviewer wait above)
- *   12. Fallback → needs_reconcile / unknown_state
- *
- * @param {object} params
- * @param {{ repo: string, pr: number }} params.normalizedTarget
- * @param {string} params.copilotState
- * @param {string} params.reviewerState
- * @param {string|undefined} params.ownershipState
- * @param {boolean} params.requiresLocalIsolation
- * @param {string} params.confidence
- * @returns {{ routingOutcome: string, outerAction: string, stopReason: string|null, handoffEnvelope: object }}
- */
-function routeFromStates({
-  normalizedTarget,
-  copilotState,
-  reviewerState,
-  ownershipState,
-  requiresLocalIsolation,
-  confidence,
-}) {
-  const baseArgs = { repo: normalizedTarget.repo, pr: normalizedTarget.pr };
-
-  // 1. Ownership conflict — must reconcile before routing
-  if (ownershipState === OWNERSHIP_DUPLICATE_LOCAL_OWNERS) {
-    return {
-      routingOutcome: ROUTING_OUTCOME.NEEDS_RECONCILE,
-      outerAction: "stop",
-      stopReason: STOP_REASON.OWNERSHIP_CONFLICT,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.NONE,
-        entrypoint: ENTRYPOINT.NONE,
-        reason: "Ownership state indicates duplicate local owners; reconcile ownership before routing",
-        requiredArgs: baseArgs,
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  // 2. Terminal
-  if (copilotState === "done") {
-    return {
-      routingOutcome: ROUTING_OUTCOME.DONE_TERMINAL,
-      outerAction: "done",
-      stopReason: null,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.NONE,
-        entrypoint: ENTRYPOINT.NONE,
-        reason: "PR is merged or closed; conductor loop is complete",
-        requiredArgs: baseArgs,
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  // 3. No PR
-  if (copilotState === "no_pr") {
-    return {
-      routingOutcome: ROUTING_OUTCOME.STOP_NEEDS_HUMAN,
-      outerAction: "stop",
-      stopReason: STOP_REASON.PR_NOT_READY,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.NONE,
-        entrypoint: ENTRYPOINT.NONE,
-        reason: "No open PR exists for this scope; cannot route",
-        requiredArgs: baseArgs,
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  // 4. Hard copilot stops
-  if (copilotState === "review_request_unavailable") {
-    return {
-      routingOutcome: ROUTING_OUTCOME.STOP_NEEDS_HUMAN,
-      outerAction: "stop",
-      stopReason: STOP_REASON.REVIEW_UNAVAILABLE,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.NONE,
-        entrypoint: ENTRYPOINT.NONE,
-        reason: "Copilot review request returned unavailable; human intervention required",
-        requiredArgs: baseArgs,
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  if (copilotState === "blocked_needs_user_decision") {
-    return {
-      routingOutcome: ROUTING_OUTCOME.STOP_NEEDS_HUMAN,
-      outerAction: "stop",
-      stopReason: STOP_REASON.COPILOT_BLOCKED,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.NONE,
-        entrypoint: ENTRYPOINT.NONE,
-        reason: "Copilot loop is blocked and requires human decision",
-        requiredArgs: baseArgs,
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  // 5. Hard reviewer stop
-  if (reviewerState === "blocked_needs_user_decision") {
-    return {
-      routingOutcome: ROUTING_OUTCOME.STOP_NEEDS_HUMAN,
-      outerAction: "stop",
-      stopReason: STOP_REASON.REVIEWER_BLOCKED,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.NONE,
-        entrypoint: ENTRYPOINT.NONE,
-        reason: "Reviewer loop is blocked and requires human decision",
-        requiredArgs: baseArgs,
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  // 6. pr_draft — hand off to the copilot loop; dirty/detached checkouts
-  // are surfaced via handoffEnvelope.requiresLocalIsolation so callers can
-  // re-enter from an isolated checkout/worktree instead of treating the seam
-  // as a terminal stop.
-  if (copilotState === "pr_draft") {
-    if (ownershipState === OWNERSHIP_LIVE_OWNER) {
-      return stayWithLiveOwner({ normalizedTarget, copilotState, reviewerState, baseArgs, requiresLocalIsolation, confidence });
-    }
-    return {
-      routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_COPILOT_LOOP,
-      outerAction: "reenter_copilot_loop",
-      stopReason: null,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.COPILOT_LOOP,
-        entrypoint: ENTRYPOINT.COPILOT_PR_HANDOFF,
-        reason: `PR is in draft state; copilot loop required: copilot_state=${copilotState}`,
-        requiredArgs: baseArgs,
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  // 7. Copilot explicit review-settle wait — keep watch semantics until settled
-  if (copilotState === "waiting_for_copilot_review") {
-    return continueCurrentWait({
-      normalizedTarget,
-      copilotState,
-      reviewerState,
-      baseArgs,
-      requiresLocalIsolation,
-      confidence,
-    });
-  }
-
-  // 8. Reviewer active states
-  if (REVIEWER_ACTIVE.has(reviewerState)) {
-    if (ownershipState === OWNERSHIP_LIVE_OWNER) {
-      return stayWithLiveOwner({ normalizedTarget, copilotState, reviewerState, baseArgs, requiresLocalIsolation, confidence });
-    }
-    return {
-      routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_REVIEWER_LOOP,
-      outerAction: "reenter_reviewer_loop",
-      stopReason: null,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.REVIEWER_LOOP,
-        entrypoint: ENTRYPOINT.REVIEWER_LOOP_HANDLER,
-        reason: `Reviewer loop requires action: reviewer_state=${reviewerState}`,
-        requiredArgs: baseArgs,
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  // 9. Copilot strong active states — win over reviewer wait states
-  if (COPILOT_STRONG_ACTIVE.has(copilotState)) {
-    if (ownershipState === OWNERSHIP_LIVE_OWNER) {
-      return stayWithLiveOwner({ normalizedTarget, copilotState, reviewerState, baseArgs, requiresLocalIsolation, confidence });
-    }
-    return {
-      routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_COPILOT_LOOP,
-      outerAction: "reenter_copilot_loop",
-      stopReason: null,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.COPILOT_LOOP,
-        entrypoint: ENTRYPOINT.COPILOT_PR_HANDOFF,
-        reason: `Copilot loop requires action: copilot_state=${copilotState}`,
-        requiredArgs: baseArgs,
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  // 10. Outer-loop wait states (checked before copilot weak active, since weak yields to reviewer wait)
-  if (COPILOT_WAIT.has(copilotState) || REVIEWER_WAIT.has(reviewerState)) {
-    return continueCurrentWait({
-      normalizedTarget,
-      copilotState,
-      reviewerState,
-      baseArgs,
-      requiresLocalIsolation,
-      confidence,
-    });
-  }
-
-  // 11. Copilot weak active states (yield to reviewer wait states above)
-  if (COPILOT_WEAK_ACTIVE.has(copilotState)) {
-    if (ownershipState === OWNERSHIP_LIVE_OWNER) {
-      return stayWithLiveOwner({ normalizedTarget, copilotState, reviewerState, baseArgs, requiresLocalIsolation, confidence });
-    }
-    return {
-      routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_COPILOT_LOOP,
-      outerAction: "reenter_copilot_loop",
-      stopReason: null,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.COPILOT_LOOP,
-        entrypoint: ENTRYPOINT.COPILOT_PR_HANDOFF,
-        reason: `Copilot loop requires action: copilot_state=${copilotState}`,
-        requiredArgs: baseArgs,
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  // 11. Fallback — unrecognized state combination
-  return {
-    routingOutcome: ROUTING_OUTCOME.NEEDS_RECONCILE,
-    outerAction: "stop",
-    stopReason: STOP_REASON.UNKNOWN_STATE,
-    handoffEnvelope: buildEnvelope({
-      targetIdentity: normalizedTarget,
-      loopFamily: LOOP_FAMILY.NONE,
-      entrypoint: ENTRYPOINT.NONE,
-      reason: `Unrecognized combined state: copilot_state=${copilotState}, reviewer_state=${reviewerState}`,
-      requiredArgs: baseArgs,
-      requiresLocalIsolation,
-      confidence,
-    }),
-  };
+  return ROUTE_ARROWS.find((arrow) => arrow.guard === undefined || ROUTING_GUARDS[arrow.guard](context));
 }
 
 // ---------------------------------------------------------------------------
@@ -597,68 +351,28 @@ export function evaluateConductorRouting({
   requiresLocalIsolation = false,
 }) {
   const confidence = resolveConfidence(sourceMode);
-
-  // --- 1. Validate target identity ---
   const normalizedTarget = normalizeTarget(target);
-  if (!normalizedTarget) {
-    return {
-      routingOutcome: ROUTING_OUTCOME.NEEDS_RECONCILE,
-      outerAction: "stop",
-      stopReason: STOP_REASON.UNKNOWN_STATE,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: describeMalformedTarget(target),
-        loopFamily: LOOP_FAMILY.NONE,
-        entrypoint: ENTRYPOINT.NONE,
-        reason: "Target identity is missing or malformed; cannot route without a resolved target",
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
+  const context = { copilotState, reviewerState };
 
-  // --- 2. Validate required state inputs ---
-  if (typeof copilotState !== "string" || copilotState.trim().length === 0) {
-    return {
-      routingOutcome: ROUTING_OUTCOME.NEEDS_RECONCILE,
-      outerAction: "stop",
-      stopReason: STOP_REASON.UNKNOWN_STATE,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.NONE,
-        entrypoint: ENTRYPOINT.NONE,
-        reason: "Copilot state is missing or empty; cannot route without family-local state",
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  if (typeof reviewerState !== "string" || reviewerState.trim().length === 0) {
-    return {
-      routingOutcome: ROUTING_OUTCOME.NEEDS_RECONCILE,
-      outerAction: "stop",
-      stopReason: STOP_REASON.UNKNOWN_STATE,
-      handoffEnvelope: buildEnvelope({
-        targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.NONE,
-        entrypoint: ENTRYPOINT.NONE,
-        reason: "Reviewer state is missing or empty; cannot route without family-local state",
-        requiresLocalIsolation,
-        confidence,
-      }),
-    };
-  }
-
-  // --- 3. Route from normalized states ---
-  return routeFromStates({
-    normalizedTarget,
-    copilotState,
-    reviewerState,
-    ownershipState,
-    requiresLocalIsolation,
-    confidence,
-  });
+  const arrow = selectRoutingArrow({ target, ownershipState, copilotState, reviewerState });
+  const final = routingChart.states[arrow.target];
+  return {
+    routingOutcome: arrow.target,
+    outerAction: final.meta.outerAction,
+    stopReason: arrow.meta.stopReason ?? null,
+    handoffEnvelope: buildEnvelope({
+      targetIdentity: normalizedTarget ?? describeMalformedTarget(target),
+      loopFamily: final.meta.loopFamily ?? LOOP_FAMILY.NONE,
+      entrypoint: final.meta.entrypoint ?? ENTRYPOINT.NONE,
+      reason: REASONS[arrow.meta.rule](context),
+      // pre-check arrows carry no requiredArgs
+      requiredArgs: arrow.meta.preCheck ? {} : { ...normalizedTarget },
+      requiresLocalIsolation,
+      confidence,
+    }),
+  };
 }
+
 
 /**
  * Deterministic outer-loop graph contract above family-local state machines.
