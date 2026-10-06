@@ -56,6 +56,8 @@ export const REFINEMENT_ARTIFACT_SPEC_SOURCE = Object.freeze({
 export const PR_CHECKPOINT_ACTION = Object.freeze({
   RUN_DRAFT_GATE: "run_draft_gate",
   MARK_READY_FOR_REVIEW: "mark_ready_for_review",
+  RESOLVE_ADR_TRIPWIRE: "resolve_adr_tripwire",
+  RESOLVE_SIZE_BUDGET: "resolve_size_budget",
   REQUEST_COPILOT_REVIEW: "request_copilot_review",
   WAIT_FOR_COPILOT_REVIEW: "wait_for_copilot_review",
   WAIT_FOR_CI: "wait_for_ci",
@@ -840,6 +842,100 @@ function applyDraftGateEvidenceGuard(result, { prDraft = false } = {}) {
 }
 
 /**
+ * ADR-TRIPWIRE-EARLY-SURFACE: the two remedies a blocking tripwire names.
+ */
+export const ADR_TRIPWIRE_REMEDIES = Object.freeze([
+  "add a docs/decisions/NNNN-*.md decision record",
+  "add an `adr-tripwire:allow <reason>` line to the PR body",
+]);
+
+/** Typed `adrTripwire` field from an `evaluateAdrTripwire` result (null = evaluation failed). */
+export function buildAdrTripwireField(evaluation) {
+  if (!evaluation || typeof evaluation.outcome !== "string") {
+    return { outcome: "unknown", satisfiedBy: null, triggers: [], reasons: ["The ADR tripwire could not be evaluated (base or head ref does not resolve locally); run `git fetch origin` and re-run."], remedies: [] };
+  }
+  const outcome = evaluation.outcome === "pass" || evaluation.outcome === "block" ? evaluation.outcome : "unknown";
+  return {
+    outcome,
+    satisfiedBy: evaluation.satisfiedBy ?? null,
+    triggers: evaluation.triggers ?? [],
+    reasons: evaluation.reasons ?? [],
+    remedies: outcome === "block" ? [...ADR_TRIPWIRE_REMEDIES] : [],
+  };
+}
+
+/** Typed `sizeBudget` field from an `evaluatePrSizeBudget` result (null = evaluation failed). */
+export function buildSizeBudgetField(evaluation) {
+  if (!evaluation || typeof evaluation.outcome !== "string") {
+    return { outcome: "unknown", wholeLogicLoc: null, thresholds: null, waivable: false, reasons: ["The size budget could not be evaluated (base or head ref does not resolve locally); run `git fetch origin` and re-run."] };
+  }
+  return {
+    outcome: evaluation.outcome,
+    wholeLogicLoc: evaluation.wholeLogicLoc ?? null,
+    thresholds: evaluation.thresholds ?? null,
+    waivable: evaluation.waivable === true,
+    reasons: evaluation.reasons ?? [],
+  };
+}
+
+/**
+ * ADR-TRIPWIRE-EARLY-SURFACE: attach the typed `adrTripwire` / `sizeBudget`
+ * fields to a draft PR result. They stay advisory until current-head clean
+ * `draft_gate` evidence would otherwise return `mark_ready_for_review`; then a
+ * block, or an unknown outcome, turns that into an operator stop.
+ */
+function applyEarlySurfaceGuard(result, input) {
+  if (!result || typeof result !== "object" || input.prDraft !== true) {
+    return result;
+  }
+  const adr = input.adrTripwire && typeof input.adrTripwire === "object" ? input.adrTripwire : null;
+  const size = input.sizeBudget && typeof input.sizeBudget === "object" ? input.sizeBudget : null;
+  if (!adr && !size) {
+    return result;
+  }
+  const withFields = { ...result, ...(adr ? { adrTripwire: adr } : {}), ...(size ? { sizeBudget: size } : {}) };
+  if (result.nextAction !== PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW) {
+    return withFields;
+  }
+
+  const decisions = [];
+  let stuck = false;
+  if (adr?.outcome === "block") {
+    decisions.push(`ADR tripwire blocks this head: resolve it by choosing exactly one remedy (${ADR_TRIPWIRE_REMEDIES.join("; or ")}).`);
+  } else if (adr?.outcome === "unknown") {
+    stuck = true;
+    decisions.push("The ADR tripwire outcome is unknown (the base or head ref does not resolve locally); run `git fetch origin` and re-run gate coordination.");
+  }
+  if (size?.outcome === "block" && size.waivable === true) {
+    decisions.push(`The size budget blocks this head (whole-PR logic LOC ${size.wholeLogicLoc}); the operator decides a size-budget waiver or a split.`);
+  } else if (size?.outcome === "block") {
+    stuck = true;
+    decisions.push(`The size budget blocks this head (whole-PR logic LOC ${size.wholeLogicLoc}) and no waiver applies; split the PR.`);
+  } else if (size?.outcome === "unknown") {
+    stuck = true;
+    decisions.push("The size budget outcome is unknown (the base or head ref does not resolve locally); run `git fetch origin` and re-run gate coordination.");
+  }
+  if (decisions.length === 0) {
+    return withFields;
+  }
+
+  const nextAction = stuck
+    ? PR_CHECKPOINT_ACTION.REPORT_BLOCKED
+    : (adr?.outcome === "block" ? PR_CHECKPOINT_ACTION.RESOLVE_ADR_TRIPWIRE : PR_CHECKPOINT_ACTION.RESOLVE_SIZE_BUDGET);
+  const forbiddenActions = [...result.forbiddenActions];
+  pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW]);
+  return {
+    ...withFields,
+    lifecycleState: STATE.BLOCKED_NEEDS_USER_DECISION,
+    gateBoundary: PR_CHECKPOINT.BLOCKED,
+    nextAction,
+    allowedNextActions: [nextAction],
+    forbiddenActions,
+    reason: `Clean current-head draft_gate evidence exists, but \`gh pr ready\` is refused: ${decisions.join(" ")}`,
+  };
+}
+
+/**
  * Evaluates PR gate coordination, then re-asserts the merge-blocking title guard
  * at the pre-approval / final-approval boundary for non-draft PRs.
  *
@@ -855,7 +951,7 @@ function applyDraftGateEvidenceGuard(result, { prDraft = false } = {}) {
  * draft_gate evidence is the normal state while draft_gate remediation is in
  * progress, and the PR_DRAFT branch already owns that state.
  */
-export function evaluatePrGateCoordination(input = {}) {
+function evaluateWithTitleGuard(input = {}) {
   const result = evaluatePrGateCoordinationCore(input);
   const prDraft = input.prDraft === true;
 
@@ -889,6 +985,14 @@ export function evaluatePrGateCoordination(input = {}) {
     markers,
     refinementArtifact: result.refinementArtifact ?? null,
   }), { prDraft });
+}
+
+/**
+ * Evaluates PR gate coordination, then applies the ADR-TRIPWIRE-EARLY-SURFACE
+ * guard for draft PRs (skills/docs/decision-record-contract.md).
+ */
+export function evaluatePrGateCoordination(input = {}) {
+  return applyEarlySurfaceGuard(evaluateWithTitleGuard(input), input);
 }
 
 function evaluatePrGateCoordinationCore(input = {}) {

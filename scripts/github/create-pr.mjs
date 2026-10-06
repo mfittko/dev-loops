@@ -17,6 +17,7 @@ import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-b
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
 import { evaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
+import { evaluateEarlySurface } from "../loop/early-surface-checks.mjs";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
@@ -69,6 +70,8 @@ Behavior:
   - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\` without \`--body\`/\`--body-file\`, and \`--recover\`/\`--editor\`/\`--web\` always (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
+  - after a successful create, prints one JSON line \`{"adrTripwire":...,"sizeBudget":...}\` (ADR-TRIPWIRE-EARLY-SURFACE);
+    a block or unknown outcome is advisory and never refuses the already-created PR
 Examples:
   node scripts/github/create-pr.mjs --repo owner/repo --base main --head feature --title "..." --body-file pr.md
   node <resolved-skill-scripts>/github/create-pr.mjs --repo owner/repo --base main --head feature --title "..." --body-file pr.md
@@ -655,6 +658,17 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     }
   }
   const { code, stdout } = await spawnCreatePr(ghArgs, runtime, { captureStdout: issueLess });
+  // ADR-TRIPWIRE-EARLY-SURFACE: report the tripwire and size budget once the PR
+  // exists. Advisory only: a block never refuses creation.
+  if (code === 0 && typeof baseForDiff === "string" && baseForDiff.trim().length > 0) {
+    const earlySurface = await (runtime.evaluateEarlySurface ?? evaluateEarlySurface)({
+      baseRefName: baseForDiff.trim().replace(/^origin\//u, ""),
+      head: "HEAD",
+      prBody: body ?? "",
+      repoRoot: runtime.cwd ?? process.cwd(),
+    });
+    process.stdout.write(`${JSON.stringify(earlySurface)}\n`);
+  }
   if (lightweight && code === 0 && (issueLess || body === null)) {
     const board = issueLess
       ? await enqueueIssuelessLightweightPr({

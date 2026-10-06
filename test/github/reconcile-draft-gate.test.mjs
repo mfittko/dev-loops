@@ -343,7 +343,7 @@ test("reconcile-draft-gate skips CI checks when config disables draft requireCi"
         stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n',
       },
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
         stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc123456789", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [] }) + "\n",
       },
       {
@@ -430,7 +430,7 @@ test("reconcile-draft-gate skips the draft conversion mutation when the PR is al
         stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n',
       },
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
         stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc123456789", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
@@ -518,7 +518,7 @@ test("reconcile-draft-gate does not mark ready when upsert throws and the PR was
         stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n',
       },
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
         stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc123456789", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
@@ -597,7 +597,7 @@ test("reconcile-draft-gate marks the PR ready again if gate-comment upsert throw
         stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n',
       },
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
         stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc123456789", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
@@ -680,7 +680,7 @@ test("reconcile-draft-gate converts to draft, posts clean evidence, and marks re
         stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n',
       },
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
         stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc123456789", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
@@ -789,7 +789,7 @@ test("reconcile-draft-gate refuses a non-light-mode PR with actionable fan-out g
         stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n',
       },
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
         stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc123456789", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {
@@ -924,7 +924,7 @@ test("reconcile-draft-gate succeeds for a light-mode under-threshold PR under ac
         stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_kwDOScHU78000017","isDraft":true}}}}\n',
       },
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
         stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: headSha, body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
       },
       {

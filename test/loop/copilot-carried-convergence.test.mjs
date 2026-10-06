@@ -170,7 +170,7 @@ function detectorEntries({ reviews, shared }, { extra = [], files, formallyReque
   return [
     {
       matchByClaims: true,
-      assertArgs: ["pr", "view", String(PR), "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+      assertArgs: ["pr", "view", String(PR), "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
       stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews, ...(files ? { files } : {}) }),
     },
     { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: line({ users: [], teams: [] }) },
