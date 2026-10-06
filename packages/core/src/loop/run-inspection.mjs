@@ -543,7 +543,7 @@ export function composeRunInspectionSnapshot({
   let lifecyclePhase = null;
   let lifecycleAllowedTransitions = null;
 
-  // Fail closed (#2660): with no dev-loop evidence the phase is not guessed.
+  // Fail closed: with no dev-loop evidence the phase is not guessed.
   // loopIterations is deliberately not an input: the viewer page defers that fan-out
   // while /snapshot.json does not, and lifecyclePhase must not depend on it.
   const devLoopEvidence = hasDevLoopEvidence({

@@ -362,7 +362,7 @@ export function lifecyclePhaseForCopilotState(copilotState) {
 }
 
 // ---------------------------------------------------------------------------
-// Fail-closed phase for PRs without dev-loop evidence (#2660)
+// Fail-closed phase for PRs without dev-loop evidence
 // ---------------------------------------------------------------------------
 
 /** Fail-closed lifecycle phase reported when no dev-loop evidence exists. Not a member of LIFECYCLE_STATE. */
