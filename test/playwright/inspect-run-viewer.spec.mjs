@@ -513,6 +513,14 @@ test("selection, camera and pointer gestures are read-only and preserve authorit
     });
     expect(await camera(graph)).not.toBe(beforeTabs);
     expect(await details.textContent()).toBe(selection);
+    await graph.evaluate((node) => {
+      const fire = (type, x, y) => node.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 12, button: 0, clientX: x, clientY: y }));
+      fire("pointerdown", 100, 100);
+      fire("pointermove", 145, 120);
+      fire("pointercancel", 145, 120);
+      node.querySelector('[data-state-id="draft_gate"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(await details.textContent()).not.toBe(selection);
     const box = await graph.boundingBox();
     await page.mouse.move(box.x + box.width - 10, box.y + box.height - 10);
     await page.mouse.down();

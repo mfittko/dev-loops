@@ -316,7 +316,7 @@ export function mountInspectionGraph(root, graph) {
   });
   function endDrag(event) {
     if (!drag || drag.id !== event.pointerId) return;
-    suppressClick = drag.moved;
+    suppressClick = event.type === "pointerup" && drag.moved; // a canceled drag emits no click
     drag = null;
     if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
   }
