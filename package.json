@@ -87,6 +87,7 @@
     ]
   },
   "dependencies": {
+    "@dagrejs/dagre": "1.1.8",
     "@dev-loops/core": "^1.0.5",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
