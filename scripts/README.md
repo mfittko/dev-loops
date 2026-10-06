@@ -881,7 +881,7 @@ Contract:
 - auto-detect mode calls both inner detectors, interprets their current states, and emits one
   outer action: `continue_wait`, `reenter_copilot_loop`, `reenter_reviewer_loop`, `stop`, or `done`
 - treats draft PRs as a re-entry point into owned draft-stage follow-up rather than a terminal stop
-- treats `waiting_for_copilot_review`, `waiting_for_ci`, and reviewer `submitted_review`
+- treats `waiting_for_copilot_review`, `waiting_for_ci`, and reviewer `submitted_review` and `re_review_needed`
   as outer-loop-owned `continue_wait` states at explicit external/handoff boundaries
 - preserves compatibility for reviewer `waiting_for_author_followup` and `waiting_for_re_request`
   as legacy named external-wait boundaries
