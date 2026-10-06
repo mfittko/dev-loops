@@ -493,6 +493,7 @@ test("createInspectRunViewerServer supports selecting another PR from query para
     assert.match(response.body, /aria-label="PR #77"/);
     assert.match(response.body, /<h1>Selected from inbox<\/h1>/);
     assert.match(response.body, /Selected from inbox/);
+    assert.match(response.body, /href="\/snapshot\.json\?repo=owner%2Frepo&amp;pr=77"/);
     assert.ok(seenTargets.some((target) => target.repo === "owner/repo" && target.pr === 77));
   } finally {
     await new Promise((resolve) => server.close(resolve));

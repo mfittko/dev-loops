@@ -572,6 +572,7 @@ for (const fullscreenMode of ["native", "unsupported", "rejected"]) {
       await expect(toggle).toBeFocused();
       await expect(root.locator("[data-graph-status]")).not.toContainText(/Expanded graph view/);
       await toggle.click();
+      await expect(toggle).toHaveAccessibleName(/Exit (fullscreen|expanded)/i);
       await toggle.click();
       await expect(toggle).toHaveAccessibleName(/Open graph fullscreen/i);
     } finally {
