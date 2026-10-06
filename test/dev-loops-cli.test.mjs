@@ -879,8 +879,9 @@ test("routed subcommands reject an unknown flag exactly like the direct script",
   try {
     const bodyFile = path.join(dir, "body.md");
     await writeFile(bodyFile, "## Problem\nx\n");
+    const judgeFlags = ["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abcdef1", "--findings-file", "x", "--judge-verdict", "y", "--judge-plan", "z"];
     const cases = [
-      { cli: ["gate", "judge-pass", "--prior-approvals-ignore"], script: "scripts/loop/judge-pass.mjs" },
+      { cli: ["gate", "judge-pass", ...judgeFlags, "--prior-approvals-ignore"], script: "scripts/loop/judge-pass.mjs" },
       { cli: ["loop", "spec-lint", "--body-file", bodyFile, "--bogus-flag"], script: "scripts/loop/spec-lint.mjs" },
     ];
     for (const { cli, script } of cases) {
@@ -890,8 +891,9 @@ test("routed subcommands reject an unknown flag exactly like the direct script",
       assert.equal(viaCli.status, direct.status, cli.join(" "));
       assert.equal(viaCli.stderr, direct.stderr, cli.join(" "));
     }
-    const gate = spawnSync("node", ["./cli/index.mjs", "gate", "judge-pass", "--prior-approvals-ignore"], { cwd: repoRoot, encoding: "utf8" });
-    assert.match(gate.stderr, /Unknown argument/);
+    const gate = spawnSync("node", ["./cli/index.mjs", "gate", "judge-pass", ...judgeFlags, "--prior-approvals-ignore"], { cwd: repoRoot, encoding: "utf8" });
+    assert.match(gate.stderr, /Unknown argument: --prior-approvals-ignore/);
+    assert.doesNotMatch(gate.stderr, /ENOENT/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
