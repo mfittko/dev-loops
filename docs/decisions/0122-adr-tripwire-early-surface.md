@@ -16,7 +16,7 @@ We add the rule `ADR-TRIPWIRE-EARLY-SURFACE` to `skills/docs/decision-record-con
 
 - `pr create` adds `adrTripwire` and `sizeBudget` to its JSON output after the PR exists. A block never refuses creation.
 - `loop gate-coordination` reports both fields for a draft PR on every run, from refs that already resolve locally. An unresolvable ref gives outcome `unknown` and no fetch.
-- While the current head has no clean `draft_gate` evidence, a block is advisory and `nextAction` stays `run_draft_gate`. The coordinator reports an advisory hit to the operator in its first draft hand-back, before the first `draft_gate` round.
+- While the current head has no clean `draft_gate` evidence, a block is advisory and does not change `nextAction`, which stays `run_draft_gate`. The coordinator reports an advisory hit to the operator in its first draft hand-back, before the first `draft_gate` round.
 - With clean current-head `draft_gate` evidence, a tripwire block gives `resolve_adr_tripwire`, a waivable size block gives `resolve_size_budget`, and `unknown` or an unwaivable size block gives `report_blocked`. Each forbids `mark_ready_for_review`. A combined block names every decision in one reason.
 - On `resolve_adr_tripwire` or `resolve_size_budget` the coordinator stops and hands back. The orchestrator does not resume it while the result still reports that action at the same head and PR body.
 - The one exit for `resolve_size_budget` is a size waiver. After the operator decides, the orchestrator flips ready at the same head with `pr ready --waive-size-budget --reason <r> [--approved-by <h>]`.

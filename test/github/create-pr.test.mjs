@@ -1919,3 +1919,21 @@ test("create-pr reports a waivable sizeBudget block for a 1961-LOC diff and stil
   assert.equal(sizeBudget.waivable, true);
   assert.equal(sizeBudget.wholeLogicLoc, 1961);
 });
+
+test("create-pr reports adrTripwire unknown and still creates the PR when --head does not resolve", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-early-surface-nohead-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
+    const { env } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "no-such-branch",
+      "--title", "T", "--body", "no closing keyword",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /https:\/\/github\.com\/owner\/repo\/pull\/1/u);
+    const line = result.stdout.split("\n").find((l) => l.startsWith("{\"adrTripwire\""));
+    assert.equal(JSON.parse(line).adrTripwire.outcome, "unknown");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
