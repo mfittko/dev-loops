@@ -67,6 +67,8 @@ Terminal state with no outgoing transitions: `blocked_needs_user_decision`.
   - author/Copilot pushed a new head after the submitted review and no fresh review is requested
 - `re_review_needed` -> `review_requested`
   - a fresh review is explicitly requested on the current head
+- `re_review_needed` -> `submitted_review`
+  - a fresh review is submitted on the current head without an explicit re-request
 - `re_review_needed` -> `waiting_for_review_request`
   - no active re-request yet
 - `submitted_review` -> `review_requested`

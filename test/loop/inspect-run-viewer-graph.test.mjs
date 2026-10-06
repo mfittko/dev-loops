@@ -92,6 +92,7 @@ test('existing focus priority preserves unavailable lifecycle focus without inve
   const unknownLifecycle = buildInspectionGraph(makeSnapshot({ lifecyclePhase: 'unrecognized_phase' }));
   assert.equal(unknownLifecycle.initialLayerId, 'lifecycle_layer');
   assert.equal(unknownLifecycle.layers[3].current.nodeId, null);
+  assert.notEqual(buildInspectionGraph(makeSnapshot({ lifecyclePhase: 'unknown' })).initialLayerId, 'lifecycle_layer');
   assert.equal(buildInspectionGraph(makeSnapshot({ lifecyclePhase: null, outerState: OUTER_STATE.HANDOFF_TO_COPILOT_LOOP })).initialLayerId, 'copilot_layer');
   assert.equal(buildInspectionGraph(makeSnapshot({ lifecyclePhase: null, outerState: OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP })).initialLayerId, 'reviewer_layer');
   assert.equal(buildInspectionGraph(makeSnapshot({ lifecyclePhase: null, outerState: 'unknown', outerAction: 'reenter_reviewer_loop' })).initialLayerId, 'reviewer_layer');
