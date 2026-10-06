@@ -205,7 +205,7 @@ Rule 17 also catches `low_signal_converged`, `round_cap_reached`, `round_cap_cle
 <!-- rule: ROUTING-LOCAL-ISOLATION-PASSTHROUGH -->
 When `requiresLocalIsolation=true`, those local-execution states **MUST NOT** become terminal stop outcomes by themselves. The routing result **MUST** stay on the owning loop family and **MUST** carry `handoffEnvelope.requiresLocalIsolation=true` so the caller can re-enter from a safe isolated checkout/worktree.
 
-**Copilot/reviewer wait states** (owned by orchestrator): `waiting_for_copilot_review`, `waiting_for_ci` (copilot); `submitted_review`, `waiting_for_author_followup`, `waiting_for_re_request` (reviewer)
+**Copilot/reviewer wait states** (owned by orchestrator): `waiting_for_copilot_review`, `waiting_for_ci` (copilot); `submitted_review`, `re_review_needed`, `waiting_for_author_followup`, `waiting_for_re_request` (reviewer)
 
 `waiting_for_copilot_review` is a post-request settle gate for the current head: routing stays `continue_current_wait` until that Copilot pass settles, even when reviewer-side state is active (priority 9).
 

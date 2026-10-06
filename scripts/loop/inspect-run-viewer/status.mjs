@@ -440,6 +440,14 @@ export function summarizeCurrentPrStatus(snapshot) {
     };
   }
 
+  if (reviewerState === "re_review_needed") {
+    return {
+      headline: "Re-review needed",
+      detail: "The latest submitted review predates the current head commit.",
+      nextAction: "Request a fresh review on the current head.",
+    };
+  }
+
   if (reviewerState === "waiting_for_re_request") {
     return {
       headline: "Waiting for reviewer re-request",
@@ -536,6 +544,7 @@ function summarizeCurrentPrMode(snapshot) {
     || copilotState === "waiting_for_ci"
     || reviewerState === "waiting_for_author_followup"
     || reviewerState === "waiting_for_re_request"
+    || reviewerState === "re_review_needed"
     || outerState === OUTER_STATE.CONTINUE_CURRENT_WAIT
     || outerState === OUTER_STATE.STAY_WITH_CURRENT_LIVE_OWNER
     || outerAction === "continue_wait") {
@@ -718,7 +727,8 @@ export function deriveInboxSignalFromSnapshot(snapshot) {
 
   if (copilotState === "waiting_for_copilot_review"
     || reviewerState === "waiting_for_author_followup"
-    || reviewerState === "waiting_for_re_request") {
+    || reviewerState === "waiting_for_re_request"
+    || reviewerState === "re_review_needed") {
     return "waiting";
   }
 

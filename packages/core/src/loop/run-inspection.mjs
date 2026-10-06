@@ -25,7 +25,7 @@
 
 import { summarizeLoopInterpretation } from "./copilot-loop-state.mjs";
 import { isKnownOuterState } from "./conductor-routing.mjs";
-import { getAllowedTransitions, lifecyclePhaseForCopilotState, resolveLifecycleState } from "./lifecycle-state.mjs";
+import { getAllowedTransitions, hasDevLoopEvidence, LIFECYCLE_PHASE_UNKNOWN, lifecyclePhaseForCopilotState, resolveLifecycleState } from "./lifecycle-state.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -543,7 +543,18 @@ export function composeRunInspectionSnapshot({
   let lifecyclePhase = null;
   let lifecycleAllowedTransitions = null;
 
-  if (copilotLiveOk && copilotEvidence !== null) {
+  // Fail closed (#2660): with no dev-loop evidence the phase is not guessed.
+  // loopIterations is deliberately not an input: the viewer page defers that fan-out
+  // while /snapshot.json does not, and lifecyclePhase must not depend on it.
+  const devLoopEvidence = hasDevLoopEvidence({
+    hasCheckpoint: existingCheckpoint !== null && existingCheckpoint !== undefined,
+    hasSteeringEvidence: steeringEvidence !== null && steeringEvidence !== undefined,
+  });
+
+  if (!devLoopEvidence) {
+    lifecyclePhase = LIFECYCLE_PHASE_UNKNOWN;
+    lifecycleAllowedTransitions = [];
+  } else if (copilotLiveOk && copilotEvidence !== null) {
     const copilotState = copilotEvidence.interpretation.state;
     const mappedPhase = lifecyclePhaseForCopilotState(copilotState);
     if (mappedPhase) {

@@ -182,7 +182,7 @@ test("interpretReviewerLoopState lets current PR closure outrank stale local rev
     draftReviewPrepared: true,
     reviewRequested: false,
   });
-  assert.equal(submittedWinsOverPrepared.state, REVIEWER_STATE.SUBMITTED_REVIEW);
+  assert.equal(submittedWinsOverPrepared.state, REVIEWER_STATE.RE_REVIEW_NEEDED);
 });
 
 test("interpretReviewerLoopState treats submitted review as handoff and starts new pass on explicit re-request", () => {
@@ -203,7 +203,7 @@ test("interpretReviewerLoopState treats submitted review as handoff and starts n
     submittedReviewCommitSha: "abc",
     reviewRequested: false,
   });
-  assert.equal(submittedAfterAuthorPush.state, REVIEWER_STATE.SUBMITTED_REVIEW);
+  assert.equal(submittedAfterAuthorPush.state, REVIEWER_STATE.RE_REVIEW_NEEDED);
 
   const rerequested = interpretReviewerLoopState({
     prExists: true,
@@ -256,6 +256,7 @@ test("interpretReviewerLoopState outputs stay reachable via REVIEWER_TRANSITIONS
     { prExists: true, prNumber: 1, prHeadSha: "abc", draftReviewPosted: true, draftReviewCommitSha: "abc", draftReviewNotificationStatus: "notified" },
     { prExists: true, prNumber: 1, prHeadSha: "def", draftReviewPosted: true, draftReviewCommitSha: "abc" },
     { prExists: true, prNumber: 1, prHeadSha: "abc", submittedReviewPresent: true, submittedReviewCommitSha: "abc" },
+    { prExists: true, prNumber: 1, prHeadSha: "def", submittedReviewPresent: true, submittedReviewCommitSha: "abc" },
     { prExists: true, prNumber: 1, localPlanningStatus: "failed" },
   ];
 

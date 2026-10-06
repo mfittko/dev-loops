@@ -145,6 +145,7 @@ const REVIEWER_ACTIVE = new Set([
 // Reviewer wait states owned by the orchestrator
 const REVIEWER_WAIT = new Set([
   "submitted_review",
+  "re_review_needed",
   "waiting_for_author_followup",
   "waiting_for_re_request",
 ]);
