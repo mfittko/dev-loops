@@ -931,7 +931,7 @@ function applyEarlySurfaceGuard(result, input) {
     nextAction,
     allowedNextActions: [nextAction],
     forbiddenActions,
-    reason: `Clean current-head draft_gate evidence exists, but \`gh pr ready\` is refused: ${decisions.join(" ")}`,
+    reason: `Clean current-head draft_gate evidence exists, but \`gh pr ready\` is refused (ADR-TRIPWIRE-EARLY-SURFACE): ${decisions.join(" ")}`,
   };
 }
 

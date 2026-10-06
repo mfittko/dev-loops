@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { initSizeBudgetFixtureRepo } from "../_helpers.mjs";
+import { initSizeBudgetFixtureRepo, runGitFixture } from "../_helpers.mjs";
 import { evaluateEarlySurface } from "../../scripts/loop/early-surface-checks.mjs";
 import { buildGateCoordinationEvaluatorInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { evaluatePrGateCoordination } from "@dev-loops/core/loop/pr-gate-coordination";
 
-const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+const git = (cwd, ...args) => runGitFixture(cwd, args);
 
 test("a decision-shaped change pushed after PR creation is reported as a tripwire block before any ready flip", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-early-surface-"));
@@ -21,7 +20,7 @@ test("a decision-shaped change pushed after PR creation is reported as a tripwir
     await mkdir(path.join(tempDir, "skills/docs"), { recursive: true });
     await writeFile(path.join(tempDir, "skills/docs/sample-contract.md"), "# Sample\n", "utf8");
     git(tempDir, "add", ".");
-    git(tempDir, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "decision-shaped");
+    git(tempDir, "commit", "-q", "-m", "decision-shaped");
     const head = git(tempDir, "rev-parse", "HEAD");
 
     const earlySurface = await evaluateEarlySurface({ baseRefName: "main", head, prBody: "", repoRoot: tempDir });
