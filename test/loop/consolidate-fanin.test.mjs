@@ -4446,3 +4446,42 @@ test("consolidateGateFanin flags reviewer filler as a non-blocking warning and l
     },
   );
 });
+
+// Issue 2511: a carried angle stripped from a mixed grouped unit round-trips
+// through fan-in and the ledger writer. The recorded context keeps the full
+// `design-simplicity` membership (dry + kiss); the emit plan holds ONE dispatch
+// unit with only the uncarried angle (kiss), so no sentinel exists for `dry`,
+// whose carry is recorded as carried provenance.
+test("issue 2511: a mixed-unit carry round-trips through consolidateGateFanin and write-gate-findings-log.mjs", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    const repo = "o/r";
+    const gate = "draft_gate";
+    const headSha = VERIFIED_HEAD;
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  rejectForeignAngles: false\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n      - name: holistic\n        enabled: false\n", "utf8");
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(contextDir, `${gate}-${headSha}.json`), JSON.stringify({
+      fanout: { groups: [{ name: "design-simplicity", angles: ["dry", "kiss"] }], pendingGroups: [{ name: "design-simplicity", angles: ["kiss"] }] },
+    }), "utf8");
+    const emitPlan = path.join(contextDir, `${gate}-${headSha}.emit-plan.json`);
+    await writeFile(emitPlan, JSON.stringify({ ok: true, pending: true, repo, pr: "7", gate, headSha, count: 1, units: [{ angles: ["kiss"], group: null }] }), "utf8");
+    const carried = JSON.parse(carryForwardPlanJson(["dry"], { carriedFromHead: STALE_HEAD })).carried.map((entry) => ({ ...entry, reviewer: "prior-reviewer" }));
+    await withFindingsDir(
+      { "kiss.json": { angle: "kiss", verdict: "clean", findings: [], headSha } },
+      async (dir) => {
+        const ledger = await consolidateLedger(dir, { headSha, gate, repoRoot, repo, pr: 7, carriedAngles: ["dry"], carryForwardPlan: carried, resolvedAngles: ["dry", "kiss"] });
+        assert.equal(ledger.overallVerdict, "clean");
+        const written = await writeGateFindingsLog({
+          repo, pr: 7, gate, headSha, verdict: "clean", findings: "[]", executionMode: "fanout_fanin", emitPlan,
+          tmpRoot: path.join(repoRoot, "tmp"),
+          provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [
+            { angle: "kiss", reviewer: "fresh-reviewer" },
+            { angle: "dry", reviewer: "prior-reviewer", carriedFromHead: STALE_HEAD, carriedVerdict: "clean" },
+          ] }),
+        }, { repoRoot });
+        assert.equal(written.ok, true);
+        assert.deepEqual(written.log.provenance.perAngle.map((e) => e.angle).sort(), ["dry", "kiss"]);
+      },
+    );
+  });
+});

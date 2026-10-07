@@ -163,7 +163,14 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
       const key = normalizeAngleKey(a);
       return completedKeys.has(key) || carriedKeys.has(key);
     });
-  const pendingGroups = groups.filter((g) => !groupIsComplete(g));
+  // GATE-EXEC-ANGLE-CARRY-FORWARD (issue 2511): a carried angle is stripped
+  // per angle from every pending unit, so a mixed unit dispatches only its
+  // uncarried angles. `skippedGroups` and the recorded plan keep full membership.
+  const pendingGroups = groups
+    .filter((g) => !groupIsComplete(g))
+    .map((g) => (g.angles.some((a) => carriedKeys.has(normalizeAngleKey(a)))
+      ? { ...g, angles: g.angles.filter((a) => !carriedKeys.has(normalizeAngleKey(a))) }
+      : g));
   const skippedGroups = groups.filter((g) => groupIsComplete(g));
   // One reviewer per dispatch unit: a group of N angles is one reviewer's
   // scoped dispatch, so the reviewer count is the pending dispatch-unit count,

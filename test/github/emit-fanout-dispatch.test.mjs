@@ -1992,3 +1992,22 @@ test("buildAngleNamingSuffix prints a scaled unit's computed budget, never the f
   assert.match(suffix, /--max-model-turns 70 --max-tool-calls 75 /);
   assert.doesNotMatch(suffix, /\b45 model turns|\b50 tool calls/);
 });
+
+// Issue 2511: a carried angle in a mixed grouped unit is stripped before
+// emission. The unit stays one dispatch unit; its work order briefs only the
+// uncarried angle and the carried angle is never briefed again.
+test("--pending emits a mixed unit's work order without the carried angle (issue 2511)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const config = { version: 1, gates: { fanout: { groups: [{ name: "design-simplicity", angles: ["dry", "kiss"] }] } } };
+    const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), ["dry", "kiss"], { carriedAngles: ["dry"] });
+    await seedBundle(tmpDir, { fanout });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const { units } = JSON.parse(result.stdout);
+    assert.equal(units.length, 1, "dispatch units");
+    assert.deepEqual(units[0].angles, ["kiss"]);
+    const suffix = await readFile(path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.angle-suffix-${units[0].scope}.txt`), "utf8");
+    assert.match(suffix, /kiss/);
+    assert.doesNotMatch(suffix, /\bdry\b/);
+  });
+});

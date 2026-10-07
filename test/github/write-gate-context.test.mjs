@@ -8063,3 +8063,54 @@ test("writeGateContext: a diffPath the call does not write binds the on-disk dif
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+// Issue 2511: carry-forward strips carried angles per angle inside a grouped
+// unit. Counts below are DISPATCH UNITS (pendingGroups entries) under grouped
+// dispatch and ANGLES under per-angle dispatch; a dropped unit writes no sentinel.
+const PR2614_ROUND2_GROUPS = [
+  { name: "docs-surface", angles: ["docs", "link-check"] },
+  { name: "process", angles: ["scope", "pr-checklist-review", "spec-authority"] },
+  { name: "correctness-input", angles: ["correctness", "input-validation"] },
+  { name: "determinism", angles: ["determinism", "idempotence"] },
+  { name: "holistic-coverage", angles: ["holistic"] },
+];
+const pr2614Config = () => ({ version: 1, gates: { fanout: { maxConcurrent: 8, groups: PR2614_ROUND2_GROUPS } } });
+const pr2614Angles = PR2614_ROUND2_GROUPS.flatMap((g) => g.angles);
+const countAngles = (units) => units.reduce((sum, u) => sum + u.angles.length, 0);
+
+test("issue 2511 PR 2614 round 2 replay: 2 carried angles in mixed units dispatch 8 angles in 5 dispatch units", () => {
+  const plan = resolveFanoutDispatch(pr2614Config(), "draft", pr2614Angles, { carriedAngles: ["scope", "input-validation"] });
+  assert.equal(plan.pendingGroups.length, 5, "dispatch units");
+  assert.equal(countAngles(plan.pendingGroups), 8, "dispatched angles");
+  assert.equal(plan.pendingGroups.find((g) => g.name === "process").angles.length, 2);
+  assert.equal(plan.pendingGroups.find((g) => g.name === "correctness-input").angles.length, 1);
+  assert.equal(plan.pendingGroups.flatMap((g) => g.angles).some((a) => a === "scope" || a === "input-validation"), false);
+  assert.equal(plan.preflight.requiredReviewers, 5);
+  // The recorded plan keeps every resolved angle so provenance stays whole.
+  assert.equal(countAngles(plan.groups), 10);
+});
+
+test("issue 2511 a carried set covering every angle of one unit drops that unit (4 dispatch units)", () => {
+  const plan = resolveFanoutDispatch(pr2614Config(), "draft", pr2614Angles, { carriedAngles: ["determinism", "idempotence", "scope"] });
+  assert.equal(plan.pendingGroups.length, 4, "dispatch units");
+  assert.equal(plan.pendingGroups.some((g) => g.name === "determinism"), false);
+  assert.equal(countAngles(plan.pendingGroups), 7);
+});
+
+test("issue 2511 mixed unit keeps the unit and excludes the carried angle from its angle list", () => {
+  const config = { version: 1, gates: { fanout: { groups: [{ name: "g", angles: ["a", "b"] }] } } };
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b"], { carriedAngles: ["a"] });
+  assert.deepEqual(plan.pendingGroups.map((g) => ({ name: g.name, angles: g.angles })), [{ name: "g", angles: ["b"] }]);
+});
+
+test("issue 2511 per-angle dispatch counts angles: carried angles are never dispatched", () => {
+  const config = { version: 1, gates: { fanout: { mode: "per-angle", maxConcurrent: 8 } } };
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c"], { carriedAngles: ["b"] });
+  assert.equal(plan.pendingGroups.length, 2, "per-angle dispatch units equal angles");
+  assert.equal(countAngles(plan.pendingGroups), 2, "dispatched angles");
+});
+
+test("issue 2511 a mandatory angle in a mixed unit is never stripped (carry refused)", () => {
+  const config = { version: 1, gates: { fanout: { groups: [{ name: "g", angles: ["scope", "gate-evidence"] }] } } };
+  assert.throws(() => resolveFanoutDispatch(config, "draft", ["scope", "gate-evidence"], { carriedAngles: ["gate-evidence"] }), /can never legitimately carry forward/);
+});

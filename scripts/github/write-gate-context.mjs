@@ -2099,8 +2099,8 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
       // the completed set (that grows after a partial wave, and re-planning on
       // it recorded a different membership — the round-2 regression this
       // derivation avoids), and never drops carried angles from a group that
-      // still has fresh ones (a partially-carried group is dispatched whole, so
-      // its unit membership must keep every angle).
+      // still has fresh ones (the recorded membership keeps every angle;
+      // reviewerBudgetPreflight strips carried angles from pendingGroups, issue 2511).
       const carriedKeys = new Set(carriedAnglesList.map((a) => baseAngleName(a).trim().toLowerCase()));
       const dispatchableGroups = groups.filter((g) => !(Array.isArray(g?.angles) && g.angles.length > 0 && g.angles.every((a) => carriedKeys.has(baseAngleName(String(a)).trim().toLowerCase()))));
       const dispatchableUnits = expandDispatchUnits(dispatchableGroups, configuredGroupNames);
