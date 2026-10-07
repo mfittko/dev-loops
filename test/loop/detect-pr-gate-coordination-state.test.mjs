@@ -851,6 +851,19 @@ test("ADR-TRIPWIRE-EARLY-SURFACE: a draft PR with clean draft evidence and an AD
   assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
 });
 
+test("ADR-TRIPWIRE-EARLY-SURFACE: a size-budget escalate with clean draft evidence stops with resolve_size_budget", async () => {
+  const result = await runEarlySurfaceFixture({
+    isDraft: true,
+    baseRefName: "main",
+    evaluateEarlySurface: async () => ({
+      adrTripwire: { outcome: "pass", satisfiedBy: null, triggers: [], reasons: [], remedies: [] },
+      sizeBudget: { outcome: "escalate", wholeLogicLoc: 900, thresholds: null, waivable: true, reasons: [] },
+    }),
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_SIZE_BUDGET);
+  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+});
+
 test("ADR-TRIPWIRE-EARLY-SURFACE: the detector passes base ref, PR head SHA and PR body to the evaluator", async () => {
   let received;
   await runEarlySurfaceFixture({ isDraft: true, baseRefName: "main", evaluateEarlySurface: async (args) => { received = args; return PASS_EARLY_SURFACE(); } });

@@ -907,7 +907,9 @@ function applyEarlySurfaceGuard(result, input) {
     stuck = true;
     decisions.push("The ADR tripwire outcome is unknown (the base or head ref does not resolve locally); run `git fetch origin` and re-run gate coordination.");
   }
-  if (size?.outcome === "block" && size.waivable === true) {
+  if (size?.outcome === "escalate") {
+    decisions.push(`The size budget escalates this head (whole-PR logic LOC ${size.wholeLogicLoc}); the operator decides whether to proceed or split before the ready flip.`);
+  } else if (size?.outcome === "block" && size.waivable === true) {
     decisions.push(`The size budget blocks this head (whole-PR logic LOC ${size.wholeLogicLoc}); the operator decides a size-budget waiver (the orchestrator then runs \`pr ready --waive-size-budget\`) or a split.`);
   } else if (size?.outcome === "block") {
     stuck = true;
