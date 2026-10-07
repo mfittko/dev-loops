@@ -136,7 +136,8 @@ export const isFixerPullAttempt = (command) => typeof command === "string" && co
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment` — blocked ONLY
  *     from a SUBAGENT context (`agentType` non-null) on the target repo. Sanctioned external writes
- *     flow through node wrappers; the MAIN AGENT / operator (agentType null) retains direct access.
+ *     flow through node wrappers; the MAIN AGENT / operator (agentType null) retains direct access, except
+ *     `gh issue edit --body`/`--body-file`, which is denied for every actor (ADR-TRIPWIRE-STANDING-WAIVER).
  *
  * The hook computes `gatePassed`/`gateError` from the gate script appropriate to the command kind.
  *
@@ -307,7 +308,7 @@ export function decideBashGate({
     };
   }
 
-  // ADR-TRIPWIRE-STANDING-WAIVER: raw PR/issue body writes (`gh pr edit --body`/`--body-file`, a `gh api`
+  // ADR-TRIPWIRE-STANDING-WAIVER: raw PR/issue body writes (`gh pr edit`/`gh issue edit` `--body`/`--body-file`, a `gh api`
   // write of a body field or --input to pulls/<n> or issues/<n>, a graphql updatePullRequest) are the path that carries an `adr-tripwire:allow` waiver
   // line. Actor-independent defense in depth: the agent and the operator share one GitHub credential,
   // so the sanctioned writers (which refuse a hand-written waiver line) are the only body route.
@@ -315,7 +316,7 @@ export function decideBashGate({
     return {
       decision: "deny",
       reason:
-        "ADR-TRIPWIRE-STANDING-WAIVER: raw `gh pr edit` body writes and `gh api` body writes to pulls/<n> or issues/<n> are blocked. Edit a PR body through the launcher " +
+        "ADR-TRIPWIRE-STANDING-WAIVER: raw `gh pr edit`/`gh issue edit` body writes and `gh api` body writes to pulls/<n> or issues/<n> are blocked. Edit a PR body through the launcher " +
         "(`dev-loops-run cli/index.mjs pr edit`), which refuses a hand-written adr-tripwire:allow line. Edit an issue body " +
         "through `dev-loops-run cli/index.mjs issue edit`. Write the ADR " +
         "tripwire waiver only through the launcher (`dev-loops-run cli/index.mjs pr waive-adr-tripwire`), " +

@@ -839,8 +839,12 @@ function ghBodyWriterRegex(subcmd) {
   return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+${GH_GLOBAL_REPO_FLAGS}${subcmd}\\s+edit(?:\\s|$)`, "i");
 }
 
-/** A `gh pr edit` literal anywhere in a command string, quoted or not. */
+/** A `gh pr edit` or `gh issue edit` literal anywhere in a command string, quoted or not. */
 const GH_BODY_WRITER_LITERAL = new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}(?:pr|issue)\\s+edit(?=[\\s"'\`]|$)`, "i");
+/** A `gh pr edit` literal only; a wrapped one is denied outright. */
+const GH_PR_EDIT_LITERAL = new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}pr\\s+edit(?=[\\s"'\`]|$)`, "i");
+/** A body-flag token anywhere in a command string; gates the wrapped `gh issue edit` deny so non-body issue edits stay allowed. */
+const BODY_FLAG_ANYWHERE = /(?:^|\s)(?:--body(?:-file)?(?=[=\s'"]|$)|-[bF](?=[=\s'"]|\S|$))/;
 
 /** A shell wrapper that hides a command from per-segment inspection: `bash|sh|zsh|dash|ksh -c`, `eval`, `xargs`. */
 const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*-\S*c|eval|xargs)(?=\s)/;
@@ -856,18 +860,20 @@ function unquoteFlagTokens(segment) {
 }
 
 /**
- * ADR-TRIPWIRE-STANDING-WAIVER (CLI half): a raw `gh pr edit` that sets the body
+ * ADR-TRIPWIRE-STANDING-WAIVER (CLI half): a raw `gh pr edit` or `gh issue edit` that sets the body
  * (`--body`, `--body-file`, `-b`, `-F`), with or without `gh` global repo flags before the subcommand
  * (`gh -R o/n pr edit ...`). A body write is the path that carries an `adr-tripwire:allow` waiver
  * line, so it must flow through the launcher's `pr edit` / `pr waive-adr-tripwire`. Quoted values are
- * blanked first, so a flag-looking word inside a title does not match. A `gh pr edit`
- * literal inside `bash -c`/`sh -c`/`eval`/`xargs` is denied outright: the wrapper hides the real
+ * blanked first, so a flag-looking word inside a title does not match. A `gh pr edit` literal
+ * (or a `gh issue edit` literal with a body-flag token) inside `bash -c`/`sh -c`/`eval`/`xargs` is denied outright: the wrapper hides the real
  * flags from segment inspection, so the literal itself is the signal (fail closed). An explicit
  * `--repo`/`-R` that is provably not `managedSlug` passes through (direct, unwrapped forms only).
  * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
  */
 export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
-  if (SHELL_WRAPPER_RE.test(command) && GH_BODY_WRITER_LITERAL.test(command)) return true;
+  // A wrapped `gh issue edit` is denied only with a body-flag token present (non-body issue edits stay allowed).
+  if (SHELL_WRAPPER_RE.test(command)
+    && (GH_PR_EDIT_LITERAL.test(command) || (GH_BODY_WRITER_LITERAL.test(command) && BODY_FLAG_ANYWHERE.test(command)))) return true;
   const res = [ghBodyWriterRegex("(?:pr|issue)")];
   return shellSegments(command).map(unquoteFlagTokens).some((segment) =>
     res.some((re) => {

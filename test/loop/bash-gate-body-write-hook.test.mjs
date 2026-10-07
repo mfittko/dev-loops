@@ -38,6 +38,9 @@ test("raw PR and issue body writes are denied for the main agent and subagents",
       ["gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body=x", "pr edit"],
       ["gh issue edit 5 --body-file i.md", "issue edit"],
       ["gh api -X PATCH repos/mfittko/dev-loops/issues/5 -f body=x", "issue edit"],
+      ["gh issue edit 5 --body 'x'", "issue edit"],
+      ["gh api -X POST repos/mfittko/dev-loops/issues/5 -f body=x", "issue edit"],
+      ["gh api repos/mfittko/dev-loops/issues/5 -f body=x", "issue edit"],
     ];
     for (const subagent of [true, false]) {
       for (const [command, launcher] of denied) {
@@ -52,9 +55,20 @@ test("raw PR and issue body writes are denied for the main agent and subagents",
 test("non-body PR commands pass for the main agent and subagents", async () => {
   await withManagedRepo(async (root) => {
     for (const subagent of [true, false]) {
-      for (const command of ["gh pr view 5", "gh pr edit 5 --add-label x"]) {
+      for (const command of [
+        "gh pr view 5",
+        "gh pr edit 5 --add-label x",
+        `git commit -m "docs: eval and gh issue edit notes"`,
+      ]) {
         assert.equal(bash(root, command, subagent).decision, "allow", `${subagent ? "subagent" : "main"}: ${command}`);
       }
+    }
+    // Raw `gh issue edit` stays denied for subagents; the main agent keeps non-body edits (AC4).
+    for (const command of [
+      "gh issue edit 5 --add-label x",
+      "gh issue list --json number -q .[].number | xargs -I{} gh issue edit {} --add-label x",
+    ]) {
+      assert.equal(bash(root, command, false).decision, "allow", `main: ${command}`);
     }
   });
 });

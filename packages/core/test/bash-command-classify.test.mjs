@@ -1305,6 +1305,8 @@ test("commandContainsRawPrBodyEdit keeps passing title, assignee and read forms"
     "gh -R o/n pr view 5",
     `bash -c "echo hi"`,
     "git commit -m 'gh pr edit notes'",
+    "xargs -I{} gh issue edit {} --add-label x",
+    `git commit -m "docs: eval and gh issue edit notes"`,
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), false, cmd);
   }
