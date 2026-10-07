@@ -83,8 +83,8 @@ registerWorkOrderRole("review", {
 
 // ADR 0117: on a self-hosting PR the emitter wrote the execution index entry in the PR worktree. That
 // checkout is the review root, so its own pull script serves the pull. The marker stops a second hop.
-// The pull never delegates back to the main checkout. A main-anchored entry (the fixer index) can be
-// emitted from any checkout, so its location names no review root and the local toolchain serves it.
+// The pull never delegates back to the main checkout. A main-anchored fixer entry names no review root, so
+// it delegates by the digest-pinned order's mutationAuthority.branch instead (ADR 0123).
 const PULL_DELEGATED_ENV = "DEV_LOOPS_PULL_DELEGATED";
 const PULL_SCRIPT = "scripts/github/pull-work-order.mjs";
 
@@ -105,6 +105,16 @@ function fixerAuthorityWorktree(tmpRoot, execution, mainRoot) {
     return listWorktreeEntries(mainRoot).slice(1).find((entry) => entry.branch === `refs/heads/${branch}`)?.path ?? null;
   } catch {
     return null;
+  }
+}
+
+/** True when a delegated fixer pull refused on a renderer skew, so the pull retries locally once (ADR 0123). */
+export function shouldRetryFixerPullLocally(execution, status, stdout) {
+  if (execution[0] !== "f" || status !== 1) return false;
+  try {
+    return JSON.parse(stdout).refusal === "local_materialization_integrity_failure";
+  } catch {
+    return false;
   }
 }
 
@@ -147,9 +157,14 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       ...(short ? [positionals[0]] : ["--ref", values.ref, "--digest", values.digest, "--execution", values.execution]),
       ...(values["tmp-root"] ? ["--tmp-root", tmpRoots[0]] : []),
     ];
-    const r = spawnSync(process.execPath, [path.join(target, PULL_SCRIPT), ...childArgs], { cwd: target, stdio: "inherit", env: { ...process.env, [PULL_DELEGATED_ENV]: "1" } });
+    const execution = short ? positionals[0] : values.execution;
+    const r = spawnSync(process.execPath, [path.join(target, PULL_SCRIPT), ...childArgs], { cwd: target, stdio: ["inherit", "pipe", "inherit"], encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, [PULL_DELEGATED_ENV]: "1" } });
     if (r.error) process.stderr.write(`pull-work-order: delegated pull failed to start: ${r.error.message}\n`);
-    return r.status ?? 2;
+    // An order emitted from the main checkout can differ from the worktree's renderer: pull locally once.
+    if (!shouldRetryFixerPullLocally(execution, r.status, r.stdout ?? "")) {
+      process.stdout.write(r.stdout ?? "");
+      return r.status ?? 2;
+    }
   }
   try {
     const { workOrderText } = await pullWorkOrder({

@@ -14,6 +14,7 @@ The fixer index entry is main-anchored, so its location names no review root and
 
 - A fixer pull whose execution index entry sits in the main checkout reads the digest-pinned fixer emit plan and takes its `mutationAuthority.branch`. When a linked worktree of the same repository has that branch checked out and is a dev-loops source checkout with `scripts/github/pull-work-order.mjs`, the pull re-runs that worktree's script under the existing delegation rules (same argv, absolute `--tmp-root`, environment marker).
 - When no linked worktree checks out the branch, or the matching worktree is not a dev-loops source checkout, the pull stays local.
+- When the delegated fixer pull exits 1 with `local_materialization_integrity_failure`, the pull retries locally once under the same digest check. This covers an order emitted from the main checkout whose renderer differs from the worktree's. The emit plan shape does not change.
 - The child runs with cwd set to the worktree. Its receipt root still resolves to the main checkout's `tmp/`, so the receipt lands where the ADR 0107 grant reads it, and the grant binding to the pulling `agent_id` is unchanged.
 - The fixer pull boundary hook, the emit format, the work-order digest and the gate pull delegation do not change.
 

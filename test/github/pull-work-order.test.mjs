@@ -10,7 +10,7 @@ import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, exe
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
 import { withTempDir } from "../_helpers.mjs";
-import { main as pullMain, pullDelegationTarget } from "../../scripts/github/pull-work-order.mjs";
+import { main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 import { decideFixerWriteGuard } from "../../packages/core/src/claude/hook-decisions.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -494,9 +494,18 @@ test("pullDelegationTarget: a main-anchored fixer pull delegates to the linked d
     await seedDelegateCheckout(other);
     assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), linked);
     // A branch no worktree checks out stays local.
-    await writeFile(path.join(main, "tmp/gate-fixer/o-r/pr-7/fixer-emit-plan.json"), JSON.stringify({ workOrder: { mutationAuthority: { branch: "gone" } } }), "utf8");
+    await writeFile(path.join(main, "tmp/gate-fixer/o-r/pr-7/fixer-emit-plan.json"), JSON.stringify({ workOrderRef: `fixer:o/r#7:${HEAD}:${FIXER_ID}`, workOrder: { mutationAuthority: { branch: "gone" } } }), "utf8");
     assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
   });
+});
+
+test("shouldRetryFixerPullLocally: only a fixer pull that refused with local_materialization_integrity_failure retries", () => {
+  const skew = JSON.stringify({ ok: false, refusal: "local_materialization_integrity_failure" });
+  assert.equal(shouldRetryFixerPullLocally(FIXER_ID, 1, skew), true);
+  assert.equal(shouldRetryFixerPullLocally(FIXER_ID, 1, JSON.stringify({ refusal: "dispatch_reference_mismatch" })), false);
+  assert.equal(shouldRetryFixerPullLocally(FIXER_ID, 0, "work order text"), false);
+  assert.equal(shouldRetryFixerPullLocally(FIXER_ID, 1, "not json"), false);
+  assert.equal(shouldRetryFixerPullLocally(DELEGATE_ID, 1, skew), false);
 });
 
 test("pullDelegationTarget: a fixer pull stays local for a consumer worktree, the serving toolchain, the marker, and gate pulls are unchanged", async () => {
