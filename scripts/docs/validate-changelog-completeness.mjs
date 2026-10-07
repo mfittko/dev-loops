@@ -92,14 +92,28 @@ export function extractUnreleasedItems(changelog) {
  * classifies as code (`classifyFile()` from the diff analyzer — covers
  * packages/core and scripts source, excludes docs/config/test-only diffs).
  *
- * @param {{ commitSubjects: string[], files: string[], rules?: import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null }} input
+ * @param {{ commitSubjects: string[], files: string[], rules?: import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null, prTitle?: string }} input
  * @returns {boolean}
  */
-export function isNotableChange({ commitSubjects, files, rules }) {
+export function isNotableChange({ commitSubjects, files, rules, prTitle }) {
+  return notableTrigger({ commitSubjects, files, rules, prTitle }) !== null;
+}
+
+/**
+ * Names what makes the change notable, or null. A conventional PR title is the
+ * only subject input (squash merge keeps just the title); otherwise the branch
+ * commit subjects decide. The code-file rule applies in every case.
+ */
+function notableTrigger({ commitSubjects, files, rules, prTitle }) {
   const subjects = Array.isArray(commitSubjects) ? commitSubjects : [];
   const paths = Array.isArray(files) ? files : [];
-  if (subjects.some((s) => NOTABLE_COMMIT_TYPES.has(parseConventionalType(s)))) return true;
-  return paths.some((f) => classifyFile(f, rules) === "code");
+  const title = typeof prTitle === "string" ? prTitle.trim() : "";
+  if (title && parseConventionalType(title) !== null) {
+    if (NOTABLE_COMMIT_TYPES.has(parseConventionalType(title))) return "feat/fix PR title";
+  } else if (subjects.some((s) => NOTABLE_COMMIT_TYPES.has(parseConventionalType(s)))) {
+    return "feat/fix commit";
+  }
+  return paths.some((f) => classifyFile(f, rules) === "code") ? "code-file diff" : null;
 }
 
 /**
@@ -127,6 +141,7 @@ export function isNotableChange({ commitSubjects, files, rules }) {
  *   files: string[],
  *   addedFiles?: string[],
  *   rules?: import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null,
+ *   prTitle?: string,
  * }} input
  * @returns {{ notable: boolean, addedItems: string[], addedFragment: boolean, errors: string[] }}
  */
@@ -137,8 +152,10 @@ export function validateChangelogCompleteness({
   files,
   addedFiles,
   rules,
+  prTitle,
 }) {
-  const notable = isNotableChange({ commitSubjects, files, rules });
+  const trigger = notableTrigger({ commitSubjects, files, rules, prTitle });
+  const notable = trigger !== null;
   if (!notable) return { notable, addedItems: [], addedFragment: false, errors: [] };
 
   const addedPaths = Array.isArray(addedFiles)
@@ -153,7 +170,7 @@ export function validateChangelogCompleteness({
   const errors = [];
   if (!addedFragment && addedItems.length === 0) {
     errors.push(
-      "notable change (feat/fix commit or code-file diff) records no changelog note; the PR is blocked until it either adds a changeset fragment (a new changes/<slug>.md file) or adds a list item under '## Unreleased' in CHANGELOG.md (LIFECYCLE-CHANGELOG-COMPLETENESS, issues #1864/#2293)",
+      `notable change (${trigger}) records no changelog note; the PR is blocked until it either adds a changeset fragment (a new changes/<slug>.md file) or adds a list item under '## Unreleased' in CHANGELOG.md (LIFECYCLE-CHANGELOG-COMPLETENESS, issues #1864/#2293)`,
     );
   }
   return { notable, addedItems, addedFragment, errors };
@@ -223,6 +240,7 @@ export async function main({ root, env = process.env, log = console, git = creat
     commitSubjects,
     files,
     rules: resolveClassifyRules(config),
+    prTitle: env.DEVLOOPS_PR_TITLE,
   });
 
   // A direct `## Unreleased` edit uses the same line format assembly groups by.

@@ -13,9 +13,13 @@ import {
   stripAnsi,
   validateSuiteNames,
   buildValidationArtifact,
+  defaultReadPrTitle,
   classifyPackageSuites,
 } from "../../scripts/loop/run-gate-validation.mjs";
 import { initGitFixture, runNode } from "../_helpers.mjs";
+
+// Hermetic: the default PR title reader would otherwise shell out to gh.
+process.env.DEVLOOPS_SKIP_PR_TITLE_READ = "1";
 
 const SCRIPT = fileURLToPath(new URL("../../scripts/loop/run-gate-validation.mjs", import.meta.url));
 
@@ -212,7 +216,7 @@ test("artifact shape: no outputSha256/durationMs anywhere, and the documented ke
 
     const artifact = JSON.parse(stdout.trim());
     assert.deepEqual(Object.keys(artifact).sort(), [
-      "allPassed", "depState", "gate", "generatedAt", "headSha", "ok", "pr", "repo", "suites",
+      "allPassed", "depState", "gate", "generatedAt", "headSha", "ok", "pr", "prTitle", "repo", "suites",
     ]);
     assert.deepEqual(Object.keys(artifact.suites[0]).sort(), [
       "command", "exitCode", "name", "outputPath", "outputTail",
@@ -624,4 +628,59 @@ test("buildValidationArtifact: stamps depState n-a when there is no package-lock
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+async function runEnvEcho(readPrTitle, env) {
+  const { repoRoot } = await makeFixtureRepo({ envecho: "bun scripts/envecho.mjs" });
+  try {
+    await writeFile(path.join(repoRoot, "scripts", "envecho.mjs"), "console.log('TITLE=' + JSON.stringify(process.env.DEVLOOPS_PR_TITLE ?? null))");
+    return await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: ["envecho"], tmpRoot: "tmp" },
+      { repoRoot, readPrTitle, env },
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+}
+
+test("buildValidationArtifact: passes the PR title to the suite env and records it", async () => {
+  const artifact = await runEnvEcho(async () => "test(x): a title", { ...process.env, DEVLOOPS_PR_TITLE: "stale inherited" });
+  assert.equal(artifact.prTitle, "test(x): a title");
+  assert.match(artifact.suites[0].outputTail, /TITLE="test\(x\): a title"/);
+});
+
+test("buildValidationArtifact: a failed or empty PR title read leaves DEVLOOPS_PR_TITLE unset", async () => {
+  for (const reader of [async () => { throw new Error("gh down"); }, async () => "  "]) {
+    const artifact = await runEnvEcho(reader, { ...process.env, DEVLOOPS_PR_TITLE: "stale inherited" });
+    assert.equal(artifact.prTitle, null);
+    assert.match(artifact.suites[0].outputTail, /TITLE=null/);
+  }
+});
+
+test("defaultReadPrTitle: returns the title, and a never-settling read maps to null within the timeout", async () => {
+  const env = { ...process.env, DEVLOOPS_SKIP_PR_TITLE_READ: "0" };
+  assert.equal(await defaultReadPrTitle({ repo: "o/r", pr: 1 }, env, { read: async () => ({ pr: { title: "t" } }) }), "t");
+  const started = Date.now();
+  const title = await defaultReadPrTitle({ repo: "o/r", pr: 1 }, env, { read: () => new Promise(() => {}), timeoutMs: 50 });
+  assert.equal(title, null);
+  assert.ok(Date.now() - started < 2000);
+});
+
+test("defaultReadPrTitle: the timeout kills the spawned child", async () => {
+  const env = { ...process.env, DEVLOOPS_SKIP_PR_TITLE_READ: "0" };
+  let runRejection;
+  const started = Date.now();
+  const title = await defaultReadPrTitle({ repo: "o/r", pr: 1 }, env, {
+    read: (_opts, { run }) => {
+      const child = run("sleep", ["30"], env);
+      runRejection = child.catch((error) => error);
+      return child;
+    },
+    timeoutMs: 100,
+  });
+  assert.equal(title, null);
+  // The kill itself: execFile rejects with killed=true only when its timeout fired.
+  const error = await runRejection;
+  assert.equal(error.killed, true);
+  assert.ok(Date.now() - started < 5000);
 });
