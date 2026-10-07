@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted — 2026-10-06 ([issue #2622](https://github.com/mfittko/dev-loops/issues/2622))
 
 ## Context
 
