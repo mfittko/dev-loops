@@ -124,7 +124,7 @@ test("judge fixture writes both valid verdicts with read, search, write and a pu
       decisions: checkedFindings.map((_, index) => ({
         index, specDigest, headSha, contentDigest,
         outcome: "valid_compliant", checkedCriteria: specCriterionIds(checkedSpec),
-        rationale: "The fix satisfies the complete fixture spec", authorizedRemediation: "Fix the finding",
+        rationale: "The fix satisfies the complete fixture spec", authorizedRemediation: "Fix the finding", defectClass: "c", siteQuery: "q",
       })),
     });
     assert.equal(validateJudgeVerdict(tools.read(paths[0])).dispositions[0].disposition, "act");

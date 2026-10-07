@@ -44,6 +44,23 @@ const ACT_LIST = [
   },
 ];
 
+test("remediation scope changes the actSetId; legacy lists keep theirs", () => {
+  const plain = startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST });
+  const scoped = (siteQuery) => startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], siteQuery }, ...ACT_LIST.slice(1)] });
+  assert.notEqual(scoped("q1").actSetId, plain.actSetId);
+  assert.notEqual(scoped("q1").actSetId, scoped("q2").actSetId);
+  assert.equal(startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST }).actSetId, plain.actSetId);
+});
+
+test("siblingRemediations of a clustered act item reach the delta input", () => {
+  const sib = [{ fingerprint: "fp2", siteQuery: "q2" }];
+  const withSib = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], siteQuery: "q1", siblingRemediations: sib }, ...ACT_LIST.slice(1)] });
+  assert.deepEqual(withSib.actItems[0].siblingRemediations, sib);
+  const resib = (siteQuery) => startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], siteQuery: "q1", siblingRemediations: [{ fingerprint: "fp2", siteQuery }] }, ...ACT_LIST.slice(1)] });
+  assert.notEqual(resib("q2").actSetId, resib("q3").actSetId);
+  assert.notEqual(resib("q2").actSetId, startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], siteQuery: "q1" }, ...ACT_LIST.slice(1)] }).actSetId);
+});
+
 function sequence() {
   return startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST });
 }
@@ -309,6 +326,6 @@ describe("pre-push results never become gate evidence", () => {
   test("the delta module performs no I/O: no gate artifact, comment or thread can be written", () => {
     const source = fs.readFileSync(new URL("../src/loop/pre-push-delta-review.mjs", import.meta.url), "utf8");
     const imports = [...source.matchAll(/^import .* from "([^"]+)";$/gm)].map((m) => m[1]);
-    assert.deepEqual(imports.sort(), ["./gate-fanin.mjs", "node:crypto"]);
+    assert.deepEqual(imports.sort(), ["./fixer-disposition.mjs", "./gate-fanin.mjs", "node:crypto"]);
   });
 });

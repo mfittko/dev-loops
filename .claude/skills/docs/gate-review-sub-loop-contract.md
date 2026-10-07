@@ -92,7 +92,8 @@ coordinator returns only the round's typed result: the verdict, the execution mo
 (`fanout_fanin` or `inline_single_agent`, plus the inline reason and findings summary when the
 round resolves to `inline_single_agent`), the severity counts, the fan-in output path, the
 durable findings-log path, the act-list path, the spec-authority identity path, and the judge
-summary. Reviewer and judge outputs stay in the gate coordinator's context and never propagate
+summary. The result also carries the optional `escalations[]` that `judge-pass` returned
+and the optional `escalationsSkipped` reason (`GATE-EXEC-RECURRENCE-ESCALATION`). Reviewer and judge outputs stay in the gate coordinator's context and never propagate
 to the dev-loop coordinator. The gate coordinator materializes and binds the round's evidence
 through the context builder's `requiredReads` and emits compact work orders; it never relays bulk
 evidence into a reviewer's task. The gate coordinator never posts the verdict comment, flips ready, pushes, or
@@ -831,7 +832,7 @@ unretired emitted judge invocation with a matching judge pull receipt, both verd
 the plan's `outputRefs` and were written after that pull, the plan is the current emission and
 reproduces the pulled work order, and the ledger the work order pinned is `--findings-file`
 (with `--spec-file`, the spec and content digests must also equal the pinned ones), applies the dispositions via `applyJudgeDispositions`, and
-emits exactly the findings the judge marked `act` (`--out`) plus the enriched ledger
+emits the findings the judge marked `act`, except escalated items and their cluster siblings (`--out`), plus the enriched ledger
 (`--ledger-out`). Every invocation ALSO carries the spec-authority flags derived above —
 `--spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict
 <spec-authority-verdict-path>` — plus `--prior-approvals`/`--approvals-out` across re-entry
@@ -892,6 +893,56 @@ than implicit: the conductor passes the prior-round judge verdict artifacts to
 `emit-judge-work-order.mjs` as `--prior-verdict`, which pins them as hash-bound required
 reads of the work order. Prior-round ledgers are reachable only through the work order's
 widening rule.
+
+<!-- rule: GATE-EXEC-REMEDIATION-SITE-QUERY -->
+`GATE-EXEC-REMEDIATION-SITE-QUERY`: Each `valid_compliant` act item's `authorizedRemediation`
+MUST come with a `defectClass` and a `siteQuery`: a `git grep` pattern or a symbol list that the
+fixer runs at the head. `validateSpecAuthorityDecision` rejects a `valid_compliant` decision
+that lacks either. For a matcher or guard defect (`defectKind: "matcher"`), the decision also lists
+the accepted and rejected input forms (`acceptedForms[]`, `rejectedForms[]`) alongside its
+`siteQuery`, and the fix adds one test per form. For doc, comment or fragment lag (`defectKind: "doc_lag"`), `statedSurfaces[]`
+lists every stated surface of the changed rule: PR body scope, changes fragment, JSDoc, hook
+header and doc comment. A decision that supplies those lists under another `defectKind` is rejected. Before the judge authorizes a remediation, it checks the remedy against
+the repo's registered rules (`skills/docs/required-rules.json`). A clustered act item may carry `siblingRemediations[]`, one entry per sibling with differing remediation text
+(`fingerprint` plus its text fields); the fixer runs each sibling `siteQuery` and covers its sites in the item's record,
+and the delta input carries the entries. The fixer fixes every site the
+query returns, or records a skip reason for each skipped site (`returnedSites[]` and `sites[]`).
+Site coverage is keyed by act-item fingerprint in `siteCoverage[]`, which the `commit_only` and
+`full` handoffs both carry, so a threadless act item is covered too. A query that returns no site records a
+non-empty `noSitesReason` in place of `returnedSites[]`. A doc_lag item needs a fixed or skipped
+site for every `statedSurfaces[]` entry. A matcher item needs one
+`input_form` site per listed accepted and rejected form. `verify-fixer-disposition.mjs` and the
+pre-push delta check fail a record that leaves a returned site neither fixed nor skipped with a
+reason, and `ruleCitations[]` entries MUST be rule IDs in the dev-loops registry `skills/docs/required-rules.json` (no consumer registry is consulted). A fixer that finds a remedy in conflict
+with a registered rule applies the compliant form and cites the rule ID in `ruleCitations[]`.
+
+<!-- rule: GATE-EXEC-RECURRENCE-ESCALATION -->
+`GATE-EXEC-RECURRENCE-ESCALATION`: `judge-pass.mjs` counts, for each act item, the gate rounds
+that flagged the same surface. It computes the count at judge time from the current round's
+judge-enriched findings and the closed prior-round ledgers of the same gate and PR (the
+`readClosedPriorRoundLogs` set), and it persists no counter. Only rounds whose
+`specAuthority.specDigest` equals the current digest count; a ledger without one never counts.
+The surface key is `(file, symbol)`: `file` is the finding's resolved file, and `symbol` is a
+backticked summary identifier that the file defines at the current head, so one finding can carry several keys and any match counts a round (a `function`, `class`,
+`const`, `let` or `var` declaration, or a `<!-- rule: <ID> -->` marker in a markdown file). A
+finding whose summary names no defined symbol gets no key and is not counted. Pre-push delta
+findings and Copilot threads never count, and `draft_gate` and `pre_approval_gate` rounds count
+separately. When one key appears in act items of 3 or more counted rounds, the act item keeps
+its `act` disposition, leaves the fixer act list together with the other members of its
+finding cluster, and lands in the optional `escalations[]` array
+of the round result and of the enriched ledger that `judge-pass --ledger-out` writes (the escalation
+ledger; the earlier durable `write-gate-findings-log` record and the consolidate-fanin ledger never carry it),
+as `{ surfaceKey, rounds, heads, fingerprint, summary, clusterFingerprints }`, where `clusterFingerprints[]` holds the fingerprints of the withheld cluster siblings and is empty when there are none. The round's other
+act items proceed to the fixer. The gate coordinator returns the escalation in its round result,
+and the dev-loop coordinator stops at the human checkpoint for one of two outcomes. The first
+outcome is a design decision recorded in the spec: it changes `specDigest` and resets the count.
+The second outcome is a split into its own issue: the orchestrator files that issue, and the
+item becomes a `defer` that links it. When every act item escalates, the fixer act list is
+empty, `actCount` still counts the escalated items, no fixer is dispatched, and the dev-loop
+coordinator still stops at the human checkpoint. `judge-pass` reads each keyed source from the round head's
+commit object, so the keying is a pure function of the head. It evaluates escalation only when that commit is in the repository, and otherwise returns `escalationsSkipped` with the reason;
+the gate coordinator carries it in the round result and the dev-loop coordinator reports it.
+The threshold is fixed.
 
 ### Phase 4 — Fix
 

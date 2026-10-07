@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
 import {
+  gitShowSource,
   judgePassCli as judgePassCliRaw,
   parseJudgePassCliArgs,
   runJudgePass,
@@ -569,8 +570,8 @@ test("judgePassCli: rejecting a clean+act round posts no deferral comment and wr
   await writeFile(
     path.join(tmpDir, "spec-authority.json"),
     JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
-      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
-      { index: 1, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" },
+      { index: 1, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" },
     ] }),
   );
   const { deps, runCalls, commentCalls } = stubDeferralDeps();
@@ -853,6 +854,8 @@ test("judgePassCli passes when the whole-spec authority verdict is valid", async
           checkedCriteria: criterionIds,
           rationale: "finding valid and remedy compliant with the whole spec",
           authorizedRemediation: "apply voice-preserving dedup",
+          defectClass: "c",
+          siteQuery: "q",
         },
       ],
     },
@@ -871,7 +874,7 @@ test("judge-pass J5: a --spec-file or --content-digest other than the work order
     findings: [finding()],
     decisions: {
       identity: { specDigest, headSha: HEAD, contentDigest },
-      list: [{ index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" }],
+      list: [{ index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" }],
     },
   });
   await writeFile(path.join(tmpDir, "spec-b.json"), JSON.stringify({ ...SPEC_FIXTURE, acceptanceCriteria: [...SPEC_FIXTURE.acceptanceCriteria, "Other"] }));
@@ -1014,7 +1017,7 @@ test("judgePassCli drops a finding_conflicts finding from the act list even if r
     path.join(tmpDir, "spec-authority.json"),
     JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
       { index: 0, outcome: "finding_conflicts", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, conflictingCriteria: ["ng:0"], rationale: "conflicts with the preserve-voice non-goal" },
-      { index: 1, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "valid and compliant", authorizedRemediation: "fix it" },
+      { index: 1, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "valid and compliant", authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q" },
     ] }),
   );
   const payload = await judgePassCli(...specAuthorityArgs(tmpDir, contentDigest));
@@ -1035,7 +1038,7 @@ test("judgePassCli wires resolveCriterionInvalidation: a spec change stales all 
   await writeFile(
     path.join(tmpDir, "spec-authority.json"),
     JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
-      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" },
     ] }),
   );
   // Prior approvals under a DIFFERENT (superseded) specDigest -> all stale.
@@ -1072,7 +1075,7 @@ test("judgePassCli approves the whole criterion set only on a clean round (no ac
   await writeFile(
     path.join(tmpDir, "spec-authority.json"),
     JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
-      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" },
     ] }),
   );
   const payload = await judgePassCli(
@@ -1138,7 +1141,7 @@ test("judgePassCli fails closed on a malformed --prior-approvals record", async 
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict()));
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
-    { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+    { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" },
   ] }));
   await writeFile(path.join(tmpDir, "prior.json"), JSON.stringify({ specDigest, approvedCriteria: "not-an-array" }));
   await assert.rejects(
@@ -1177,7 +1180,7 @@ test("judgePassCli fails closed when the verdict's specDigest mismatches the com
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   // Verdict is internally consistent but pins a DIFFERENT (wrong) specDigest.
   await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest: wrong, headSha: HEAD, contentDigest, decisions: [
-    { index: 0, outcome: "valid_compliant", specDigest: wrong, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+    { index: 0, outcome: "valid_compliant", specDigest: wrong, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" },
   ] }));
   await assert.rejects(judgePassCli(...specAuthorityArgs(tmpDir, contentDigest)), /does not match the current spec digest/);
 });
@@ -1189,7 +1192,7 @@ test("judgePassCli --carry-forward-proof carries an unaffected criterion at the 
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "out" }] })));
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
-    { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+    { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" },
   ] }));
   // Prior approvals at the SAME specDigest; proof carries ac:0, others stale.
   await writeFile(path.join(tmpDir, "prior.json"), JSON.stringify({ specDigest, headSha: "f".repeat(40), contentDigest, approvedCriteria: criterionIds }));
@@ -1260,7 +1263,7 @@ async function writeAffectedCriteriaFixture(tmpDir, { affected, coverage }) {
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "out" }] })));
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
-    { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+    { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" },
   ] }));
   await writeFile(path.join(tmpDir, "prior.json"), JSON.stringify({ specDigest, headSha: "f".repeat(40), contentDigest, approvedCriteria: criterionIds }));
   await writeFile(path.join(tmpDir, "changed.json"), JSON.stringify(affected));
@@ -1439,7 +1442,7 @@ test("judgePassCli AC1: --ledger-out carries the specAuthority stamp when engage
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({
     specDigest, headSha: HEAD, contentDigest, decisions: [
-      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" },
     ],
   }));
   await judgePassCli({
@@ -1576,4 +1579,145 @@ test("judge-pass J5: a round retired after emission refuses at acceptance", asyn
   await writeFile(path.join(retired, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date().toISOString() }));
   await assert.rejects(runPass(), /retired as r1/);
   assert.equal(existsSync(path.join(root, "act.json")), false);
+});
+
+// Recurrence escalation: act items on one (file, symbol) surface in three counted rounds.
+const GUARD_FILE = "src/guard.mjs";
+const REC_REPO = "mfittko/dev-loops";
+const REC_PR = 2000;
+
+async function recurrenceCase({ priorRounds = [], extraAct = true, specFile = "spec.json", sameCluster = false, actFile = GUARD_FILE, hasCommit = async () => true, decisionExtra = {} } = {}) {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-recurrence-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  await mkdir(path.join(tmpDir, "src"), { recursive: true });
+  await writeFile(path.join(tmpDir, GUARD_FILE), "export function isSameDefect(a, b) {}\n");
+  // An out-of-checkout file defines the symbol too, so only the containment guard keeps it out.
+  if (actFile.startsWith("..")) await writeFile(path.resolve(tmpDir, actFile), "export function isSameDefect(a, b) {}\n");
+  const findings = [finding({ file: actFile, summary: "`isSameDefect` still tuned to one fixture" })];
+  if (extraAct) findings.push(finding({ file: "README.md", summary: "a doc line is stale" }));
+  if (sameCluster) for (const f of findings) f.clusterId = 0;
+  const decisions = findings.map((_f, index) => ({
+    index, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds,
+    rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q", ...decisionExtra,
+  }));
+  await writeSpecAuthorityCase(tmpDir, { findings, decisions: { identity: { specDigest, headSha: HEAD, contentDigest }, list: decisions } });
+  const gateDir = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", `pr-${REC_PR}`);
+  await mkdir(gateDir, { recursive: true });
+  for (const [i, prior] of priorRounds.entries()) {
+    const sha = prior.sha ?? String(i + 1).repeat(40);
+    await writeFile(path.join(gateDir, `${prior.gate ?? "pre_approval_gate"}-${sha}.json`), JSON.stringify({
+      repo: prior.repo ?? REC_REPO, pr: prior.pr ?? REC_PR, gate: prior.gate ?? "pre_approval_gate", headSha: sha,
+      verdict: "findings_present", loggedAt: `2026-01-0${i + 1}T00:00:00Z`,
+      ...(prior.withDigest === false ? {} : { specAuthority: { specDigest: prior.specDigest ?? specDigest } }),
+      findings: [{ ...finding({ file: actFile, summary: "`isSameDefect` was flagged" }), judgeDisposition: "act" }],
+    }));
+  }
+  const [options, deps] = specAuthorityArgs(tmpDir, contentDigest);
+  const payload = await judgePassCli({ ...options, specFile: `./${specFile}`, out: "./act.json", ledgerOut: "./out-ledger.json" }, { ...deps, hasCommit, readSource: async (root, sha, file) => (sha === HEAD ? readFile(path.join(root, file), "utf8").catch(() => null) : null) });
+  return { tmpDir, payload };
+}
+
+test("judge-pass recurrence: a third-round repeat lands in escalations[], not the act list; other act items proceed", async () => {
+  const { tmpDir, payload } = await recurrenceCase({ priorRounds: [{}, {}] });
+  assert.equal(payload.ok, true);
+  assert.equal(payload.escalations.length, 1);
+  assert.deepEqual(payload.escalations[0].surfaceKey, { file: GUARD_FILE, symbol: "isSameDefect" });
+  assert.equal(payload.escalations[0].rounds, 3);
+  assert.deepEqual(payload.escalations[0].clusterFingerprints, []);
+  assert.deepEqual(payload.escalations[0].heads, ["1".repeat(40), "2".repeat(40), HEAD]);
+  assert.deepEqual(payload.act.map((f) => f.summary), ["a doc line is stale"]);
+  const actList = JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"));
+  assert.deepEqual(actList.map((f) => f.summary), ["a doc line is stale"]);
+  const ledgerOut = JSON.parse(await readFile(path.join(tmpDir, "out-ledger.json"), "utf8"));
+  assert.equal(ledgerOut.escalations.length, 1);
+  assert.equal(ledgerOut.findings[0].judgeDisposition, "act", "the escalated item keeps its act disposition");
+  assert.equal(payload.counts.act, 2);
+});
+
+test("judge-pass recurrence: a second-round repeat stays in the act list", async () => {
+  const { payload } = await recurrenceCase({ priorRounds: [{}] });
+  assert.equal(payload.escalations, undefined);
+  assert.equal(payload.act.length, 2);
+});
+
+const NOT_COUNTED_AXES = {
+  gate: { gate: "draft_gate" },
+  PR: { pr: 9 },
+  specDigest: { specDigest: "sha256:" + "f".repeat(64) },
+};
+for (const [axis, excluded] of Object.entries(NOT_COUNTED_AXES)) {
+  // One counted prior round plus the excluded one: a broken filter reaches 3 rounds and escalates.
+  test(`judge-pass recurrence: a round of another ${axis} is not counted`, async () => {
+    const { payload } = await recurrenceCase({ priorRounds: [{}, excluded] });
+    assert.equal(payload.escalations, undefined);
+    assert.equal(payload.act.length, 2);
+  });
+}
+
+test("judge-pass recurrence: ledgers written before the new fields count nothing and still pass", async () => {
+  const { payload } = await recurrenceCase({ priorRounds: [{ withDigest: false }, { withDigest: false }] });
+  assert.equal(payload.ok, true);
+  assert.equal(payload.escalations, undefined);
+  assert.equal(payload.act.length, 2);
+});
+
+test("judge-pass recurrence: the act item carries its class and site query to the fixer", async () => {
+  const { payload } = await recurrenceCase({});
+  assert.equal(payload.act[0].defectClass, "c");
+  assert.equal(payload.act[0].siteQuery, "q");
+  assert.equal(payload.act[0].authorizedRemediation, "x");
+});
+
+test("judge-pass recurrence: the cluster siblings of an escalated item leave the fixer act list too", async () => {
+  const { tmpDir, payload } = await recurrenceCase({ priorRounds: [{}, {}], sameCluster: true });
+  assert.equal(payload.escalations.length, 1);
+  assert.deepEqual(payload.act, []);
+  assert.deepEqual(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")), []);
+  assert.equal(payload.actCount, 2, "actCount still counts the escalated items");
+  assert.equal(payload.escalations[0].clusterFingerprints.length, 1, "the withheld sibling is recorded");
+  const ledger = JSON.parse(await readFile(path.join(tmpDir, "out-ledger.json"), "utf8"));
+  assert.deepEqual(ledger.escalations[0].clusterFingerprints, payload.escalations[0].clusterFingerprints);
+});
+
+test("judge-pass recurrence: a finding file outside the checkout is never read, so it keys no escalation", async () => {
+  const outside = `../judge-pass-outside-${process.pid}.mjs`;
+  let tmpDir;
+  try {
+    const out = await recurrenceCase({ priorRounds: [{}, {}], actFile: outside });
+    tmpDir = out.tmpDir;
+    assert.equal(out.payload.ok, true);
+    assert.equal(out.payload.escalations, undefined);
+  } finally {
+    if (tmpDir) await rm(path.resolve(tmpDir, outside), { force: true });
+  }
+});
+
+test("judge-pass recurrence: a round head missing from the repository skips escalation with a marker", async () => {
+  const { payload } = await recurrenceCase({ priorRounds: [{}, {}], hasCommit: async () => false });
+  assert.equal(payload.ok, true);
+  assert.equal(payload.escalations, undefined);
+  assert.match(payload.escalationsSkipped, /is not available in this repository/);
+  assert.equal(payload.act.length, 2);
+});
+
+test("judge-pass recurrence: a matcher decision carries its accepted and rejected forms to the act list", async () => {
+  const { tmpDir, payload } = await recurrenceCase({ decisionExtra: { defectKind: "matcher", acceptedForms: ["a"], rejectedForms: ["r"] } });
+  assert.deepEqual(payload.act[0].acceptedForms, ["a"]);
+  assert.deepEqual(payload.act[0].rejectedForms, ["r"]);
+  const [first] = JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"));
+  assert.deepEqual([first.acceptedForms, first.rejectedForms], [["a"], ["r"]]);
+});
+
+test("judge-pass recurrence: a doc_lag decision carries its stated surfaces to the act list", async () => {
+  const { tmpDir, payload } = await recurrenceCase({ decisionExtra: { defectKind: "doc_lag", statedSurfaces: ["PR body"] } });
+  assert.deepEqual(payload.act[0].statedSurfaces, ["PR body"]);
+  const [first] = JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"));
+  assert.deepEqual(first.statedSurfaces, ["PR body"]);
+});
+
+test("gitShowSource reads a file at a commit and returns null for a missing path or commit", () => {
+  const root = path.resolve(import.meta.dirname, "..", "..");
+  assert.match(gitShowSource(root, "HEAD", "package.json"), /"name"/);
+  assert.equal(gitShowSource(root, "HEAD", "no/such/file.mjs"), null);
+  assert.equal(gitShowSource(root, "f".repeat(40), "package.json"), null);
 });
