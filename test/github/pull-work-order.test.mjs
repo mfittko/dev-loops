@@ -14,7 +14,7 @@ import { withTempDir } from "../_helpers.mjs";
 import { main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 import { decideFixerWriteGuard } from "../../packages/core/src/claude/hook-decisions.mjs";
-import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveMainWorktreeRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 
 const SCRIPTS = path.resolve("scripts/github");
 const HEAD = "c".repeat(40);
@@ -482,7 +482,6 @@ async function seedFixerMain(main, { branch = "issue-9" } = {}) {
   git(["init", "-q"]);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
   await seedDelegateCheckout(main);
-  const workOrderRef = `fixer:o/r#7:${HEAD}:${FIXER_ID}`;
   await seedFixerPlan(main, branch);
   return git;
 }
@@ -634,7 +633,7 @@ test("self-hosting fixer pull: a delegated skew refusal falls through to the loc
 // succeeds returns the worktree renderer's text unchanged, with no local re-render. Both rows share this
 // assertion; only a skew refusal (covered above) falls back to the local pull.
 test("self-hosting fixer pull: a successful delegated pull returns the worktree renderer's text", async () => {
-  const mainRoot = path.dirname(execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: process.cwd(), encoding: "utf8" }).trim());
+  const mainRoot = resolveMainWorktreeRoot(process.cwd());
   // Per-run unique names so concurrent or crashed runs cannot collide on the shared repo.
   const uniq = randomBytes(4).toString("hex");
   const prNumber = 100000 + (parseInt(uniq, 16) % 900000);

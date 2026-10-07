@@ -14,7 +14,7 @@ import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement"
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { EXECUTION_IDENTITY_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole, workOrderDigest } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
-import { buildFixerDir } from "../loop/emit-fixer-work-order.mjs"; // also registers the fixer role adapter
+import { fixerPlanPath } from "../loop/emit-fixer-work-order.mjs"; // also registers the fixer role adapter
 import { TOOLCHAIN_ROOT, isOtherDevLoopsCheckout, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveMainWorktreeRoot } from "../loop/_repo-root-resolver.mjs";
 import "../loop/emit-judge-work-order.mjs"; // registers the judge role adapter
 
@@ -88,17 +88,15 @@ registerWorkOrderRole("review", {
 const PULL_DELEGATED_ENV = "DEV_LOOPS_PULL_DELEGATED";
 const PULL_SCRIPT = "scripts/github/pull-work-order.mjs";
 
-const FIXER_REF_PR_RE = /^fixer:([^/\s#]+\/[^/\s#]+)#(\d+):/;
-
 /** The linked worktree that checks out the fixer order's mutationAuthority.branch, or null. */
 function fixerAuthorityWorktree(tmpRoot, execution, mainRoot) {
   try {
     // Only the toolchain's own main checkout owns a worktree list this lookup may search.
     if (realpathSync(path.dirname(tmpRoot)) !== realpathSync(mainRoot)) return null;
     const { workOrderRef, workOrderDigest: indexedDigest } = JSON.parse(readFileSync(executionIndexPath(tmpRoot, execution), "utf8"));
-    const [, repo, pr] = FIXER_REF_PR_RE.exec(workOrderRef) ?? [];
-    if (!repo) return null;
-    const plan = JSON.parse(readFileSync(path.join(buildFixerDir({ repo, pr, tmpRoot }), "fixer-emit-plan.json"), "utf8"));
+    const planPath = fixerPlanPath(workOrderRef, tmpRoot);
+    if (!planPath) return null;
+    const plan = JSON.parse(readFileSync(planPath, "utf8"));
     // The ref carries no digest: authenticate the plan's order against the indexed digest before trusting its branch.
     if (plan.workOrderRef !== workOrderRef || workOrderDigest(plan.workOrder) !== indexedDigest) return null;
     const branch = plan.workOrder?.mutationAuthority?.branch;

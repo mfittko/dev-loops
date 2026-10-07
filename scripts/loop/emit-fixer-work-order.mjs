@@ -248,6 +248,12 @@ const emittedAt = (executionIdentity) => Number(/^f(\d+)-/.exec(executionIdentit
 // Fixer adapter. The PR's one plan names the current unit; an older ref is superseded.
 // A changed or vanished required read, a retired gate round (act-list source), or an
 // authority branch that no longer contains the head makes the unit stale.
+/** The emit plan path for a fixer ref under `tmpRoot`, or null when the ref is not a fixer ref. */
+export function fixerPlanPath(ref, tmpRoot) {
+  const match = FIXER_REF_RE.exec(ref);
+  return match ? path.join(buildFixerDir({ repo: match[1], pr: match[2], tmpRoot }), PLAN_FILE) : null;
+}
+
 export async function locateFixerUnit({ ref, cwd, tmpRoots }) {
   const match = FIXER_REF_RE.exec(ref);
   if (!match) return null;
