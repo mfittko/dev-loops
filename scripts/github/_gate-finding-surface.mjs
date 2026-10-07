@@ -447,9 +447,28 @@ const DETAILS_TOTAL_MAX_CHARS = 30000;
 const DETAILS_FIELD_MAX_CHARS = 8000;
 // Applied to the text as rendered (already escaped or entity-encoded), so the
 // budget bounds the output length. fenceCode's encoding is idempotent.
-function boundDetailsText(text, fieldCount) {
+// Prose keeps raw `<` inside code spans, so a slice must never end inside one:
+// an unclosed span would render its content as HTML. A span still open at the
+// slice end is dropped whole.
+function dropOpenCodeSpan(text) {
+  let open = null;
+  for (const run of text.matchAll(/`+/g)) {
+    if (open === null) open = { start: run.index, length: run[0].length };
+    else if (run[0].length === open.length) open = null;
+  }
+  return open === null ? text : text.slice(0, open.start).trimEnd();
+}
+
+function boundDetailsText(text, fieldCount, { prose = false } = {}) {
   const max = Math.min(DETAILS_FIELD_MAX_CHARS, Math.floor(DETAILS_TOTAL_MAX_CHARS / fieldCount));
-  return text.length > max ? `${text.slice(0, max)} [cut]` : text;
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  return `${prose ? dropOpenCodeSpan(head) : head} [cut]`;
+}
+
+// Entity-encodes comment delimiters so untrusted text cannot forge a marker.
+function encodeCommentDelimiters(text) {
+  return text.replaceAll("<!--", "&lt;!--").replaceAll("-->", "--&gt;");
 }
 
 // Fence longer than any backtick run in the untrusted content, so the content
@@ -460,7 +479,7 @@ function boundDetailsText(text, fieldCount) {
 function fenceCode(text) {
   const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(Math.max(3, longestRun + 1));
-  return [`  ${fence}`, ...text.trim().split(LINE_BREAK_RE).map((line) => `  ${line.replaceAll("<!--", "&lt;!--").replaceAll("-->", "--&gt;")}`), `  ${fence}`];
+  return [`  ${fence}`, ...text.trim().split(LINE_BREAK_RE).map((line) => `  ${encodeCommentDelimiters(line)}`), `  ${fence}`];
 }
 
 export function renderInlineCommentBody(finding, { round }) {
@@ -558,8 +577,8 @@ export function renderInlineCommentBody(finding, { round }) {
   if (cutFields.length > 0) {
     lines.push("<details><summary>Details</summary>", "");
     for (const field of cutFields) {
-      const rendered = field.code ? field.text.replaceAll("<!--", "&lt;!--").replaceAll("-->", "--&gt;") : escapeProse(field.text);
-      const text = boundDetailsText(rendered, cutFields.length);
+      const rendered = field.code ? encodeCommentDelimiters(field.text) : escapeProse(field.text);
+      const text = boundDetailsText(rendered, cutFields.length, { prose: !field.code });
       // Prose stays on the label line so untrusted text never starts at column 0
       // (it could otherwise forge the header parseRenderedJudgeDisposition reads).
       lines.push(...(field.code ? [`**${field.label}:**`, ...fenceCode(text)] : [`**${field.label}:** ${text}`]), "");

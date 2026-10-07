@@ -415,6 +415,15 @@ test("an escape-heavy finding stays under the GitHub comment limit", () => {
   assert.ok(body.length < 65536, String(body.length));
 });
 
+test("details bound never ends inside a code span, so a straddling span cannot expose raw HTML", () => {
+  const summary = `${"a".repeat(7985)} \`<img src=https://x/p.png>tail\` end`;
+  const body = renderInlineCommentBody({ severity: "high", angle: "a", summary }, { round: 1 });
+  const details = body.slice(body.indexOf("<details>"));
+  assert.match(details, /\[cut\]/);
+  assert.doesNotMatch(details.replace(/`[^`]*`/g, ""), /<img/);
+  assert.equal(details.match(/<\/details>/g).length, 1);
+});
+
 test("merge: shared stopwords and file identifiers do not merge two different defects", () => {
   const a = { ...holistic, summary: "`refresh()` in `Widget.js` skips `applyScale` when the widget mounts" };
   const b = { ...holistic, summary: "`refresh()` in `Widget.js` leaks the listener when the widget mounts" };
