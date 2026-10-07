@@ -864,10 +864,15 @@ function unquoteFlagTokens(segment) {
   return segment.replace(/(['"])(-{1,2}[A-Za-z][\w-]*(?:=(?:(?!\1).)*)?)\1/g, "$2").replace(/(['"])body\1(?==)/g, "body");
 }
 
+/** Blank the body of a quoted-delimiter `$(cat <<'EOF' ...)` heredoc: literal data, only an argument word. Text after the closing delimiter stays visible. */
+function blankCatHeredocBodies(command) {
+  return command.replace(/(\$\(\s*cat\s+<<-?\s*(['"])(\w+)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3[ \t]*(?:\n|$))/g, "$1 $4");
+}
+
 /** Blank quoted spans for the wrapper-word checks only: double quotes honor backslash escapes, unlike `stripQuotedLiterals`. */
 function stripQuotesEscapeAware(command) {
   // The body of a quoted-delimiter heredoc read by `cat` inside `$(...)` is literal data (the substitution output is only an argument word): blank it.
-  command = command.replace(/(\$\(\s*cat\s+<<-?\s*(['"])(\w+)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3[ \t]*(?:\n|$))/g, "$1 $4");
+  command = blankCatHeredocBodies(command);
   // A `$(...)` or backtick substitution runs even inside double quotes, so keep the raw text then (fail closed).
   if (/\$\(|`/.test(command)) return command;
   return command.replace(/\\.|'[^']*'|"(?:\\.|[^"\\])*"/gs, " ");
@@ -903,7 +908,7 @@ export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
     }
   }
   const res = [ghBodyWriterRegex("(?:pr|issue)")];
-  return shellSegments(command).map(unquoteFlagTokens).some((segment) =>
+  return shellSegments(blankCatHeredocBodies(command)).map(unquoteFlagTokens).some((segment) =>
     res.some((re) => {
       if (!re.test(segment)) return false;
       // An explicit --repo/-R that is provably another repo is out of scope (fail closed otherwise).
@@ -931,7 +936,7 @@ export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
     && (/updatePullRequest/.test(command) || (/(?:pulls|issues)\/(?:\d+|\{\})/.test(command) && /body=|--input/.test(command)))) return true;
   const owner = managedSlug ? `(?:${managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}|\\{owner\\}/\\{repo\\})` : "[^/]+/[^/]+";
   const re = new RegExp(`^(?:repos/${owner}/)?(?:pulls|issues)/\\d+$`, "i");
-  return extractGhApiEndpointSegments(command).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
+  return extractGhApiEndpointSegments(blankCatHeredocBodies(command)).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
     if (endpoint && /^graphql$/i.test(endpoint)) return /updatePullRequest/.test(segment);
     if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
     // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).

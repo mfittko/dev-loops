@@ -1743,6 +1743,8 @@ test("decideBashGate denies hardened raw body-write forms in launcher-only wordi
     `gh api -X POST repos/${TARGET}/pulls/5/comments -f body=x`,
     `gh api -X PATCH repos/${TARGET}/issues/5 -f title=x`,
     "gh issue edit 5 --repo other/repo --body-file i.md",
+    `git commit -m "$(cat <<'EOF'\nfix\n\ngh pr edit with --body now reaches the gate\nEOF\n)"`,
+    `git commit -m "$(cat <<'EOF'\nfix\n\ngh issue edit with -b is denied\nEOF\n)"`,
   ]) {
     assert.equal(gate(command).decision, "allow", command);
   }

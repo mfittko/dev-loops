@@ -1321,6 +1321,7 @@ test("commandContainsRawPrBodyEdit denies global-flag and wrapped literal forms"
     `bash -c "$(cat <<'EOF'\ngh pr edit 5 --body x\nEOF\n)"`,
     `bash <<'EOF'\nbash -c "gh pr edit 5 --body x"\nEOF`,
     `bash <<'EOF'\ngh pr edit 5 --body x\nEOF`,
+    `m="$(cat <<'EOF'\nx\nEOF\n)"\ngh pr edit 5 --body x`,
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
   }
@@ -1348,6 +1349,8 @@ test("commandContainsRawPrBodyEdit keeps passing title, assignee and read forms"
     `git commit -m "$(cat <<'EOF'\ndocs: eval and gh issue edit notes\nEOF\n)"`,
     `git commit -m "$(cat <<'EOF'\nfix: deny xargs gh pr edit body writes\nEOF\n)"`,
     `git commit -m "$(cat <<'EOF'\nfix: xargs gh issue edit hole\nEOF\n)"`,
+    `git commit -m "$(cat <<'EOF'\nfix(gate): deny\n\ngh pr edit with --body now reaches the gate\nEOF\n)"`,
+    `git commit -m "$(cat <<'EOF'\nfix\n\ngh issue edit with -b is denied\nEOF\n)"`,
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), false, cmd);
   }
