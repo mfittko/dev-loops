@@ -192,7 +192,9 @@ Claude Code agents carry an explicit `tools:` allowlist, so an MCP tool (for exa
 ```yaml
 extraTools:
   developer:
-    - mcp__codebase-memory      # whole server; also mcp__server__* or mcp__server__tool
+    - mcp__<server>      # whole server; also mcp__<server>__* or mcp__<server>__<tool>
+extraToolsGuidance:
+  mcp__<server>: "Apply this only when mcp__<server>__* tools are in your tool list. Use them first for symbol and caller questions."
 ```
 
 - Each role takes 1 to 16 unique entries that match `mcp__<server>`, `mcp__<server>__*` or `mcp__<server>__<tool>`. Built-in tool names are rejected.
@@ -200,7 +202,12 @@ extraTools:
 - Start Claude Code with `dev-loops loop claude-launch [-- <claude args>]`. The launcher renders the configured roles through `claude --agents`, passes the entries through `--allowedTools` and sets `DEVLOOPS_AGENT_OVERRIDES`. The headless entry does the same. With no `extraTools` entry the launcher runs plain `claude`.
 - The `--agents` render replaces the bare agent name only. The agent guard denies a `dev-loops:<role>` dispatch of a rendered role and names the bare agent type to dispatch.
 - A session started without the launcher needs the same entries in `.claude/settings.local.json` under `permissions.allow`. In auto mode the classifier may still deny an allowed MCP call.
-- Worktree freshness limit: a code-graph index is rooted at the main checkout, while loop work runs in `tmp/worktrees/<slug>/`. A graph answer describes the main checkout at its last index. Confirm the answer with Read or Grep in the worktree before you edit.
+- `extraToolsGuidance` maps an `extraTools` entry to usage guidance text (1 to 2000 characters). A key that no role lists in `extraTools`, an empty, whitespace-only, multi-line or too-long value fails config load and names the key. Pi ignores the key.
+- The launcher and the headless entry append the guidance to the prompt of each role that lists the key, only when the server is detected for the session. Detection reads `mcpServers` in `<config>/.claude.json` (user scope), `projects[<repo root>].mcpServers` in the same file (local scope) and `mcpServers` in `<repo root>/.mcp.json` (project scope). `<config>` is `$CLAUDE_CONFIG_DIR` when set and the home directory otherwise. Servers in `disabledMcpServers` are removed. A missing or malformed file contributes no server. Detection never runs `claude mcp list`.
+- Detection limit: plugin-provided servers, managed MCP config, claude.ai connectors and a `--mcp-config` argument are not seen, so those servers get no guidance. Detected names map characters outside `[A-Za-z0-9_-]` to `_` before matching, as Claude Code does for tool names. A server name that contains `__` never matches its tool prefix and gets no guidance. Detection gates the guidance text only. The tools list and `--allowedTools` stay as configured.
+- The rendered block is a fixed frame, `## Session MCP tool guidance`, followed by one line per qualifying key. The frame tells the worker to apply a line only when tools named `mcp__<server>__*` for that server are in its tool list, because the launcher cannot see whether a server connects.
+- Worktree freshness limit: a graph index describes the checkout it indexed. Guidance can tell the worker to index its own worktree once and to fall back to the main-checkout index. On fallback the worker confirms each answer with Read or Grep in the worktree before an edit. Provisioning does not index.
+- Requires dev-loops 1.0.6 or later. An older CLI fails config load on the `extraToolsGuidance` key.
 
 ### File classification (`classify`)
 
