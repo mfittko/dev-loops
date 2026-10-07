@@ -47,7 +47,7 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-export const SITE_STATUS = Object.freeze({ FIXED: "fixed", SKIPPED: "skipped" });
+const SITE_STATUS = Object.freeze({ FIXED: "fixed", SKIPPED: "skipped" });
 
 const RULE_ID_PATTERN = /^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$/;
 

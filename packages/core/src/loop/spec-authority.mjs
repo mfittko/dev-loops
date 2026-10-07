@@ -292,7 +292,7 @@ function normalizeIdSet(value, label) {
   return set;
 }
 
-export const DEFECT_KINDS = Object.freeze(["matcher", "doc_lag", "other"]);
+const DEFECT_KINDS = Object.freeze(["matcher", "doc_lag", "other"]);
 
 function nonEmptyStringList(value) {
   return Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string" && v.trim().length > 0)
