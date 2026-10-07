@@ -215,3 +215,32 @@ test("ruleCitations must be registered rule IDs when the registry is supplied", 
   assert.throws(() => normalizeFixerDispositionHandoff(withCitation("NO-SUCH-RULE"), { ruleIds }), /does not register: NO-SUCH-RULE/);
   assert.ok(loadKnownRuleIds().has("LOCAL-COMMENT-DISCIPLINE"));
 });
+
+test("a duplicate site name in one coverage record is rejected", () => {
+  const sites = [
+    { site: "--ref x", status: "fixed", kind: "input_form", test: "t1" },
+    { site: "--ref x", status: "skipped", reason: "r" },
+  ];
+  assert.throws(() => record([coverageItem({ returnedSites: ["--ref x"], sites })]), /records site --ref x more than once/);
+});
+
+test("matcher input forms survive startDeltaSequence into the delta coverage check", () => {
+  const matcher = actEntry({ acceptedForms: ["--ref x", "--ref=x"], rejectedForms: ["prose mention"] });
+  const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [matcher] });
+  const sites = [
+    { site: "--ref x", status: "fixed", kind: "input_form", test: "t1" },
+    { site: "--ref=x", status: "fixed", kind: "input_form", test: "t2" },
+  ];
+  const siteCoverage = record([coverageItem({ returnedSites: sites.map((s) => s.site), sites })]);
+  const next = decideDeltaNextStep({ sequence, result: deltaResult(sequence), invocation: 1, currentHead: CANDIDATE, siteCoverage });
+  assert.equal(next.outcome, "needs_fix");
+  assert.ok(next.errors.some((e) => /prose mention/.test(e)));
+});
+
+test("null residueOf and skipReason on an ordinary finding validate", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [actEntry()] });
+  const finding = { severity: "low", summary: "s", evidence: ["e"], residueOf: null, skipReason: null };
+  const siteCoverage = record([coverageItem()]);
+  const next = decideDeltaNextStep({ sequence, result: deltaResult(sequence, { newFindings: [finding] }), invocation: 1, currentHead: CANDIDATE, siteCoverage });
+  assert.deepEqual(next.errors ?? [], []);
+});

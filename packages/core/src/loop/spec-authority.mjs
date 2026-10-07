@@ -317,6 +317,14 @@ function validateRemediationScope(d) {
   if (!DEFECT_KINDS.includes(defectKind)) {
     throw new Error(`spec-authority decision.defectKind must be one of: ${DEFECT_KINDS.join(", ")}`);
   }
+  // A list that does not match the kind would be dropped silently and skip its check, so it is refused.
+  const supplied = (v) => v != null && !(Array.isArray(v) && v.length === 0);
+  if (defectKind !== "matcher" && (supplied(d.acceptedForms) || supplied(d.rejectedForms))) {
+    throw new Error(`spec-authority decision supplies acceptedForms/rejectedForms but its defectKind is ${d.defectKind === undefined ? "absent (other)" : defectKind}; set defectKind "matcher"`);
+  }
+  if (defectKind !== "doc_lag" && supplied(d.statedSurfaces)) {
+    throw new Error(`spec-authority decision supplies statedSurfaces but its defectKind is ${d.defectKind === undefined ? "absent (other)" : defectKind}; set defectKind "doc_lag"`);
+  }
   const scope = { defectClass: d.defectClass.trim(), siteQuery: d.siteQuery.trim(), defectKind };
   if (defectKind === "matcher") {
     const accepted = nonEmptyStringList(d.acceptedForms);

@@ -82,6 +82,10 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
     };
   });
   const disposed = new Set(sites.map((s) => s.site));
+  if (disposed.size !== sites.length) {
+    const dup = sites.find((s, i) => sites.findIndex((o) => o.site === s.site) !== i);
+    throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: ${label} records site ${dup.site} more than once`);
+  }
   const returnedSites = returned.map((site) => {
     if (!isNonEmptyString(site)) throw new Error(`${label} returnedSites entries must be non-empty strings`);
     if (!disposed.has(site.trim())) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: ${label} leaves returned site ${site.trim()} neither fixed nor skipped with a reason`);

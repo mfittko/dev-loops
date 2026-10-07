@@ -230,8 +230,9 @@ export function validateDeltaResult(result, { sequence, siteCoverage } = {}) {
     if (!VALID_SEVERITIES.has(normalizeSeverity(f?.severity))) errors.push(`newFindings[${i}].severity ${JSON.stringify(f?.severity)} is unknown`);
     if (!nonEmpty(f?.summary)) errors.push(`newFindings[${i}].summary is required`);
     if (!nonEmptyStrings(f?.evidence)) errors.push(`newFindings[${i}].evidence[] must be non-empty strings`);
-    if (f?.residueOf !== undefined && !expectedRefs.has(f.residueOf)) errors.push(`newFindings[${i}].residueOf ${JSON.stringify(f.residueOf)} is not in the act set`);
-    if (f?.skipReason !== undefined && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
+    // null is an absent optional field
+    if (f?.residueOf != null && !expectedRefs.has(f.residueOf)) errors.push(`newFindings[${i}].residueOf ${JSON.stringify(f.residueOf)} is not in the act set`);
+    if (f?.skipReason != null && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
     if (siteCoverage !== undefined && nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
       const actItem = sequence.actItems.find((item) => item.ref === f.residueOf);
       const recorded = recordedSkipReason(siteCoverage, actItem.fingerprint ?? actItem.ref, nonEmpty(f.site) ? f.site.trim() : "");

@@ -132,4 +132,16 @@ describe("PR 2586 replay", () => {
     assert.deepEqual(out[0].surfaceKey, { file: TEXT_FILE, symbol: "isSameDefect" });
     assert.deepEqual(out[0].heads, ["c4306cf3", "7e5af716", "19a8ba84"]);
   });
+
+  test("keying does not depend on which defined symbol a summary mentions first", () => {
+    const r1 = round("h1", [actItem("`isSameDefect` misfires")]);
+    const r3 = round("h3", [actItem("`mergeSameDefectFindings` calls `isSameDefect` with a loose threshold")]);
+    const out = findEscalations({
+      actFindings: [actItem("`isSameDefect` still fits one fixture")],
+      priorLogs: [r1, r3], specDigest: DIGEST, headSha: "h4", sources: SOURCES,
+    });
+    assert.equal(out.length, 1);
+    assert.deepEqual(out[0].surfaceKey, { file: TEXT_FILE, symbol: "isSameDefect" });
+    assert.equal(out[0].rounds, 3);
+  });
 });

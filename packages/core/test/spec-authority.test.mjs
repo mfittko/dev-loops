@@ -196,6 +196,15 @@ describe("whole-spec judge disposition", () => {
       assert.equal(out.statedSurfaces.length, 5);
     });
 
+    test("form and surface lists must match the defect kind", () => {
+      assert.throws(() => validate({ acceptedForms: ["--ref x"], rejectedForms: ["prose"] }), /defectKind/);
+      assert.throws(() => validate({ defectKind: "other", acceptedForms: ["--ref x"] }), /defectKind/);
+      assert.throws(() => validate({ defectKind: "doc_lag", statedSurfaces: ["s"], rejectedForms: ["p"] }), /defectKind/);
+      assert.throws(() => validate({ statedSurfaces: ["PR body scope"] }), /defectKind/);
+      assert.throws(() => validate({ defectKind: "matcher", acceptedForms: ["a"], rejectedForms: ["b"], statedSurfaces: ["s"] }), /defectKind/);
+      assert.equal(validate({ defectKind: "other", acceptedForms: [], statedSurfaces: null }).defectKind, "other");
+    });
+
     test("an unknown defect kind is rejected", () => {
       assert.throws(() => validate({ defectKind: "other-ish" }), /defectKind/);
     });

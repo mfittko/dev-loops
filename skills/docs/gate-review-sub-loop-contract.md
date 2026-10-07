@@ -902,7 +902,7 @@ that lacks either. For a matcher or guard defect (`defectKind: "matcher"`), the 
 list of accepted and rejected input forms (`acceptedForms[]`, `rejectedForms[]`), and the fix adds
 one test per form. For doc, comment or fragment lag (`defectKind: "doc_lag"`), `statedSurfaces[]`
 lists every stated surface of the changed rule: PR body scope, changes fragment, JSDoc, hook
-header and doc comment. Before the judge authorizes a remediation, it checks the remedy against
+header and doc comment. A decision that supplies those lists under another `defectKind` is rejected. Before the judge authorizes a remediation, it checks the remedy against
 the repo's registered rules (`skills/docs/required-rules.json`). The fixer fixes every site the
 query returns, or records a skip reason for each skipped site (`returnedSites[]` and `sites[]`).
 Site coverage is keyed by act-item fingerprint in `siteCoverage[]`, which the `commit_only` and
@@ -919,7 +919,7 @@ judge-enriched findings and the closed prior-round ledgers of the same gate and 
 `readClosedPriorRoundLogs` set), and it persists no counter. Only rounds whose
 `specAuthority.specDigest` equals the current digest count; a ledger without one never counts.
 The surface key is `(file, symbol)`: `file` is the finding's resolved file, and `symbol` is a
-backticked summary identifier that the file defines at the current head (a `function`, `class`,
+backticked summary identifier that the file defines at the current head, so one finding can carry several keys and any match counts a round (a `function`, `class`,
 `const`, `let` or `var` declaration, or a `<!-- rule: <ID> -->` marker in a markdown file). A
 finding whose summary names no defined symbol gets no key and is not counted. Pre-push delta
 findings and Copilot threads never count, and `draft_gate` and `pre_approval_gate` rounds count
@@ -928,7 +928,7 @@ its `act` disposition, leaves the fixer act list together with the other members
 finding cluster, and lands in the optional `escalations[]` array
 of the round result and of the enriched ledger that `judge-pass --ledger-out` writes (the escalation
 ledger; the earlier durable `write-gate-findings-log` record and the consolidate-fanin ledger never carry it),
-with the surface key and the round heads. The round's other
+with the surface key, the round heads and the fingerprints of the withheld cluster siblings (`clusterFingerprints[]`). The round's other
 act items proceed to the fixer. The gate coordinator returns the escalation in its round result,
 and the dev-loop coordinator stops at the human checkpoint for one of two outcomes. The first
 outcome is a design decision recorded in the spec: it changes `specDigest` and resets the count.

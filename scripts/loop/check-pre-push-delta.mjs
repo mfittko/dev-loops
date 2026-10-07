@@ -44,6 +44,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --baseline <sha>        reviewBaselineHead: the head the gate round reviewed (hex SHA)
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
   --site-coverage <path>  The fixer's commit_only handback { headSha, siteCoverage: [...] } (the work order's outputRef)
+                          Omitting it in --result mode reports a coverage gap for every act item with a siteQuery
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
   --invocation <n>        1-based delta review invocation in this sequence (max 3)
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)

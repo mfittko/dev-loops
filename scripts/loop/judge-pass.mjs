@@ -83,9 +83,15 @@ Inputs:
   --pr <number>                Echoed onto the result.
   --gate <name>                Echoed onto the result (draft_gate|pre_approval_gate).
   --out <path>                 Write the fixer's ACT list (enriched findings with
-                               judgeDisposition === "act") to this path as JSON.
-  --ledger-out <path>          Write the enriched { overallVerdict, findings, scopeDrift }
-                               to this path as JSON, so the durable disposition ledger
+                               judgeDisposition === "act") to this path as JSON. It
+                               omits escalated act items and their cluster siblings
+                               (recurrence escalation, below).
+  --ledger-out <path>          Write the enriched { overallVerdict, findings, scopeDrift,
+                               escalations? } to this path as JSON; the optional
+                               escalations[] lists each escalated surface (with its
+                               withheld clusterFingerprints) and the stdout result
+                               carries it too, plus escalationsSkipped when the checkout
+                               is not at the round head, so the durable disposition ledger
                                carries what the judge consciously marked act/defer/reject.
                                Every disposed finding also carries a \`fingerprint\`; a
                                \`defer\` finding additionally carries \`followUpIssueNumber\`
@@ -966,10 +972,15 @@ export async function judgePassCli(
   const { escalations, skipped: escalationsSkipped } = await resolveEscalations(result, options, resolvedRoot, pinned.specDigest, { readPriorLogs, readHead });
   // One root cause is one decision: the cluster siblings of an escalated item stay with it.
   const escalatedActs = new Set(escalations.map((e) => e.finding));
+  // The withheld siblings ride the escalation record so the human checkpoint can see them.
+  const siblingFingerprints = new Map();
   for (const cluster of result.clusters) {
-    if (cluster.memberIndices.some((i) => escalatedActs.has(result.enriched[i]))) {
-      for (const i of cluster.memberIndices) escalatedActs.add(result.enriched[i]);
-    }
+    const members = cluster.memberIndices.map((i) => result.enriched[i]);
+    const escalated = members.filter((f) => escalatedActs.has(f));
+    if (escalated.length === 0) continue;
+    for (const f of members) escalatedActs.add(f);
+    const siblings = members.filter((f) => f.judgeDisposition === "act" && !escalated.includes(f)).map((f) => f.fingerprint);
+    if (siblings.length > 0) for (const f of escalated) siblingFingerprints.set(f, siblings);
   }
   const fixerAct = result.act.filter((f) => !escalatedActs.has(f));
 
@@ -993,7 +1004,10 @@ export async function judgePassCli(
   // result.counts above (and the ledger below) still carry every acted
   // finding, one per reviewer report.
   const dedupedAct = dedupeActListByCluster(fixerAct, result.clusters, result.enriched);
-  const escalationRecords = escalations.map(({ finding, ...record }) => record);
+  const escalationRecords = escalations.map(({ finding, ...record }) => ({
+    ...record,
+    ...(siblingFingerprints.has(finding) ? { clusterFingerprints: siblingFingerprints.get(finding) } : {}),
+  }));
 
   const written = new Set();
   if (options.ledgerOut) {

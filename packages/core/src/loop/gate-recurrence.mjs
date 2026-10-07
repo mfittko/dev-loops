@@ -48,18 +48,25 @@ export function definesSymbol(file, source, symbol) {
 }
 
 /**
- * The surface key of a finding, or null when its summary names no symbol the
- * file defines (such a finding is not counted).
+ * Every surface key of a finding: one per backticked summary identifier the
+ * file defines, so keying does not depend on mention order. Empty when the
+ * summary names no defined symbol (such a finding is not counted).
  * @param {object} finding
  * @param {Map<string, string>} sources file path -> content at the current head
- * @returns {{ file: string, symbol: string }|null}
+ * @returns {Array<{ file: string, symbol: string }>}
  */
-export function surfaceKeyOf(finding, sources) {
+export function surfaceKeysOf(finding, sources) {
   const file = recurrenceFile(finding);
-  if (!file) return null;
+  if (!file) return [];
   const source = sources.get(file);
-  const symbol = backtickedIdentifiers(finding?.summary).find((id) => definesSymbol(file, source, id));
-  return symbol ? { file, symbol } : null;
+  return backtickedIdentifiers(finding?.summary)
+    .filter((id) => definesSymbol(file, source, id))
+    .map((symbol) => ({ file, symbol }));
+}
+
+/** The first surface key of a finding, or null when it has none. */
+export function surfaceKeyOf(finding, sources) {
+  return surfaceKeysOf(finding, sources)[0] ?? null;
 }
 
 const keyString = (key) => `${key.file}\u0000${key.symbol}`;
@@ -98,18 +105,20 @@ export function findEscalations({ actFindings, priorLogs, specDigest, headSha, s
     keys: new Set(
       (Array.isArray(log.findings) ? log.findings : [])
         .filter((f) => f?.judgeDisposition === "act")
-        .map((f) => surfaceKeyOf(f, sources))
-        .filter(Boolean)
+        .flatMap((f) => surfaceKeysOf(f, sources))
         .map(keyString),
     ),
   }));
   const escalations = [];
   actFindings.forEach((finding, index) => {
-    const surfaceKey = surfaceKeyOf(finding, sources);
-    if (!surfaceKey) return;
-    const matching = priorKeys.filter((round) => round.keys.has(keyString(surfaceKey)));
-    if (matching.length + 1 >= ESCALATION_THRESHOLD) {
-      escalations.push({ index, surfaceKey, rounds: matching.length + 1, heads: [...matching.map((r) => r.head), headSha] });
+    // The key with the most counted rounds wins; ties keep mention order.
+    let best = null;
+    for (const surfaceKey of surfaceKeysOf(finding, sources)) {
+      const matching = priorKeys.filter((round) => round.keys.has(keyString(surfaceKey)));
+      if (!best || matching.length > best.matching.length) best = { surfaceKey, matching };
+    }
+    if (best && best.matching.length + 1 >= ESCALATION_THRESHOLD) {
+      escalations.push({ index, surfaceKey: best.surfaceKey, rounds: best.matching.length + 1, heads: [...best.matching.map((r) => r.head), headSha] });
     }
   });
   return escalations;

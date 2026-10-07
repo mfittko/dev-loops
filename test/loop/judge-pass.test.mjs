@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -1585,12 +1585,14 @@ const GUARD_FILE = "src/guard.mjs";
 const REC_REPO = "mfittko/dev-loops";
 const REC_PR = 2000;
 
-async function recurrenceCase({ priorRounds = [], extraAct = true, specFile = "spec.json", sameCluster = false, readHead = async () => HEAD } = {}) {
+async function recurrenceCase({ priorRounds = [], extraAct = true, specFile = "spec.json", sameCluster = false, actFile = GUARD_FILE, readHead = async () => HEAD } = {}) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-recurrence-"));
   const { specDigest, contentDigest, criterionIds } = await specDigests();
   await mkdir(path.join(tmpDir, "src"), { recursive: true });
   await writeFile(path.join(tmpDir, GUARD_FILE), "export function isSameDefect(a, b) {}\n");
-  const findings = [finding({ file: GUARD_FILE, summary: "`isSameDefect` still tuned to one fixture" })];
+  // An out-of-checkout file defines the symbol too, so only the containment guard keeps it out.
+  if (actFile.startsWith("..")) await writeFile(path.resolve(tmpDir, actFile), "export function isSameDefect(a, b) {}\n");
+  const findings = [finding({ file: actFile, summary: "`isSameDefect` still tuned to one fixture" })];
   if (extraAct) findings.push(finding({ file: "README.md", summary: "a doc line is stale" }));
   if (sameCluster) for (const f of findings) f.clusterId = 0;
   const decisions = findings.map((_f, index) => ({
@@ -1606,7 +1608,7 @@ async function recurrenceCase({ priorRounds = [], extraAct = true, specFile = "s
       repo: prior.repo ?? REC_REPO, pr: prior.pr ?? REC_PR, gate: prior.gate ?? "pre_approval_gate", headSha: sha,
       verdict: "findings_present", loggedAt: `2026-01-0${i + 1}T00:00:00Z`,
       ...(prior.withDigest === false ? {} : { specAuthority: { specDigest: prior.specDigest ?? specDigest } }),
-      findings: [{ ...finding({ file: GUARD_FILE, summary: "`isSameDefect` was flagged" }), judgeDisposition: "act" }],
+      findings: [{ ...finding({ file: actFile, summary: "`isSameDefect` was flagged" }), judgeDisposition: "act" }],
     }));
   }
   const [options, deps] = specAuthorityArgs(tmpDir, contentDigest);
@@ -1665,6 +1667,22 @@ test("judge-pass recurrence: the cluster siblings of an escalated item leave the
   assert.deepEqual(payload.act, []);
   assert.deepEqual(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")), []);
   assert.equal(payload.actCount, 2, "actCount still counts the escalated items");
+  assert.equal(payload.escalations[0].clusterFingerprints.length, 1, "the withheld sibling is recorded");
+  const ledger = JSON.parse(await readFile(path.join(tmpDir, "out-ledger.json"), "utf8"));
+  assert.deepEqual(ledger.escalations[0].clusterFingerprints, payload.escalations[0].clusterFingerprints);
+});
+
+test("judge-pass recurrence: a finding file outside the checkout is never read, so it keys no escalation", async () => {
+  const outside = `../judge-pass-outside-${process.pid}.mjs`;
+  let tmpDir;
+  try {
+    const out = await recurrenceCase({ priorRounds: [{}, {}], actFile: outside });
+    tmpDir = out.tmpDir;
+    assert.equal(out.payload.ok, true);
+    assert.equal(out.payload.escalations, undefined);
+  } finally {
+    if (tmpDir) await rm(path.resolve(tmpDir, outside), { force: true });
+  }
 });
 
 test("judge-pass recurrence: a checkout that is not at the round head skips escalation with a marker", async () => {
