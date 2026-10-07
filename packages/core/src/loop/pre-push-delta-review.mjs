@@ -52,14 +52,36 @@ function nonEmpty(value) {
 
 /**
  * Trigger predicate. Delta mode runs only for a committed, not yet pushed fix
- * of a non-empty judge act list. Every other push gets no delta review.
- * @param {{ actItemCount?: number, fixCommitted?: boolean, fixPushed?: boolean }} input
+ * of a non-empty judge act list or of a non-empty set of unresolved review
+ * threads (the thread route). Every other push gets no delta review.
+ * @param {{ actItemCount?: number, threadItemCount?: number, fixCommitted?: boolean, fixPushed?: boolean }} input
  * @returns {"delta"|"none"}
  */
-export function resolveDeltaTrigger({ actItemCount = 0, fixCommitted = false, fixPushed = false } = {}) {
-  return Number.isInteger(actItemCount) && actItemCount > 0 && fixCommitted === true && fixPushed !== true
-    ? "delta"
-    : "none";
+export function resolveDeltaTrigger({ actItemCount = 0, threadItemCount = 0, fixCommitted = false, fixPushed = false } = {}) {
+  const hasItems = [actItemCount, threadItemCount].some((count) => Number.isInteger(count) && count > 0);
+  return hasItems && fixCommitted === true && fixPushed !== true ? "delta" : "none";
+}
+
+/**
+ * Thread route: reduce successful `list-review-threads --unresolved-only` output for `repo#pr`
+ * to a judge-act-list-shaped array, one act item per unresolved thread, `ref` = the `threadId`.
+ * @param {unknown} payload
+ * @param {{ repo: string, pr: number|string }} target
+ */
+export function threadsToActList(payload, { repo, pr } = {}) {
+  const threads = /** @type {any} */ (payload)?.threads;
+  if (/** @type {any} */ (payload)?.ok !== true || !Array.isArray(threads) || /** @type {any} */ (payload).repo !== repo || Number(/** @type {any} */ (payload).pr) !== Number(pr)
+    || !threads.every((thread) => thread?.isResolved === false && nonEmpty(thread?.threadId))) {
+    throw new Error(`threads file is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
+  }
+  return threads.map((thread) => ({
+    ref: thread.threadId,
+    angle: "review-thread",
+    summary: nonEmpty(thread.body) ? thread.body.trim() : "",
+    judgeDisposition: "act",
+    ...(nonEmpty(thread.path) ? { file: thread.path } : {}),
+    ...(Number.isInteger(thread.line) ? { line: thread.line } : {}),
+  }));
 }
 
 /**
