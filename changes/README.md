@@ -1,7 +1,7 @@
 # Changeset fragments
 
-Each PR that makes a notable change (a `feat`/`fix` commit or a code-file diff)
-records its changelog note here as a NEW, uniquely named fragment file instead
+Each PR that makes a notable change (a `feat`/`fix` PR title, or commit subjects when no
+conventional title exists, or a code-file diff) records its changelog note here as a NEW, uniquely named fragment file instead
 of editing `CHANGELOG.md` directly. Uniquely named fragments never collide, so
 concurrent PRs stop conflicting on the changelog (issue #2293).
 

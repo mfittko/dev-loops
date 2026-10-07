@@ -589,3 +589,48 @@ test("diffAddedFiles invokes --diff-filter=A --name-only -z and parses NUL-delim
   assert.ok(!call.includes("--no-renames"), "must NOT disable rename detection on the added-only query");
   assert.deepEqual(call.slice(-2), ["base-sha", "HEAD"], "diffs base...HEAD in order");
 });
+
+describe("DEVLOOPS_PR_TITLE notability", () => {
+  async function runWith({ title, subjects, files }) {
+    let result;
+    await withTempChangelog(async (root) => {
+      const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => subjects,
+        diffNameOnly: async () => files,
+        diffAddedFiles: async () => files,
+      });
+      const log = capturingLog();
+      const env = title === undefined ? {} : { DEVLOOPS_PR_TITLE: title };
+      result = { code: await main({ root, git, env, log }), output: log.lines.join("\n") };
+    });
+    return result;
+  }
+  const DOC = ["README.md"];
+  const CODE = ["packages/core/src/x.mjs"];
+
+  it("a test() title ignores a fix() commit when no code file changed", async () => {
+    assert.equal((await runWith({ title: "test(x): cover y", subjects: ["fix(test): z"], files: DOC })).code, 0);
+  });
+
+  for (const title of ["fix(x): a", "feat(x): a", "feat(x)!: a", "fix!: a"]) {
+    it(`a ${title} title requires a note even with non-notable commits`, async () => {
+      const r = await runWith({ title, subjects: ["chore: x"], files: DOC });
+      assert.equal(r.code, 1);
+      assert.match(r.output, /feat\/fix PR title/);
+    });
+  }
+
+  it("a non-notable title still requires a note for a code-file change", async () => {
+    const r = await runWith({ title: "chore(x): a", subjects: ["chore: x"], files: CODE });
+    assert.equal(r.code, 1);
+    assert.match(r.output, /code-file diff/);
+  });
+
+  for (const title of ["", "not conventional"]) {
+    it(`title ${JSON.stringify(title)} falls back to commit subjects`, async () => {
+      const r = await runWith({ title, subjects: ["fix(x): a"], files: DOC });
+      assert.equal(r.code, 1);
+      assert.match(r.output, /feat\/fix commit/);
+    });
+  }
+});

@@ -10,6 +10,9 @@ import { parseResolveValidationArgs, resolveValidation } from "../../scripts/loo
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import { runNode } from "../_helpers.mjs";
 
+// Hermetic: the default PR title reader would otherwise shell out to gh.
+process.env.DEVLOOPS_SKIP_PR_TITLE_READ = "1";
+
 const LEGACY = fileURLToPath(new URL("../../scripts/loop/run-gate-validation.mjs", import.meta.url));
 const CLI = fileURLToPath(new URL("../../cli/index.mjs", import.meta.url));
 const bunVersion = execFileSync("bun", ["--version"], { encoding: "utf8" }).trim();
