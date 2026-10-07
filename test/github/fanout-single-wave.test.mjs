@@ -179,7 +179,7 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
   }
   for (const fresh of [2, 3, 4]) {
     for (const [harness, env] of HARNESS_ENVS) {
-      test(`carry-forward round with ${fresh} fresh angles (${harness}): grouped, one wave`, () => {
+      test(`carry-forward round with ${fresh} fresh angles (${harness}): carried angles stripped per angle, one wave`, () => {
         const { pool } = resolveGateAngleContract(REPO_CONFIG, "draft");
         const carriableAngles = pool.filter((a) => carriable(REPO_CONFIG, "draft", a));
         const freshAngles = ["holistic", ...carriableAngles.slice(0, fresh - 1)];
@@ -188,11 +188,10 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
         const { plan, units } = plannedUnits(REPO_CONFIG, "draft", angles, env(), { carriedAngles: carried });
         assertSingleWave(REPO_CONFIG, units, env(), `carry-forward ${fresh}`);
         assert.ok(units.length >= 1 && units.length <= fresh);
-        // The name says "grouped": assert it, not just the unit/wave bounds —
-        // assertSingleWave alone passes with every fresh angle a singleton.
-        assert.ok(units.some((u) => u.angles.length > 1), "grouped dispatch: at least one emitted unit carries more than one angle");
-        // Every fresh angle is dispatched exactly once; carried units stay out.
+        // Issue 2511: carried angles are stripped per angle, so exactly the fresh
+        // angles are dispatched (a mixed unit no longer re-briefs its carried angle).
         const dispatched = units.flatMap((u) => u.angles);
+        assert.deepEqual([...dispatched].sort(), [...freshAngles].sort(), "only fresh angles dispatch");
         for (const angle of freshAngles) assert.equal(dispatched.filter((a) => a === angle).length, 1);
         assert.equal(new Set(dispatched).size, dispatched.length);
         assert.deepEqual(plan.preflight.carriedAngles.sort(), [...carried].sort());
@@ -204,9 +203,9 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
   // fully-carried base unit. The full resolved set still holds it, but the
   // dispatch plan is packed from the DISPATCHABLE set (resolved units minus
   // fully-carried groups), so a fully-carried group is never merged into a
-  // fresh unit and re-reviewed. A partially-carried group is still dispatched
-  // WHOLE, so its unit membership keeps every angle.
-  test("packed re-gate drops a fully-carried group and keeps a partially-carried group whole", () => {
+  // fresh unit and re-reviewed. A partially-carried group keeps its recorded
+  // membership (`groups`) but its pending unit drops the carried angle (issue 2511).
+  test("packed re-gate drops a fully-carried group and strips the carried angle from a partially-carried group", () => {
     const { pool } = resolveGateAngleContract(REPO_CONFIG, "draft");
     const fullUnits = expandDispatchUnits(resolveFanoutGroups(REPO_CONFIG, "draft", pool), configuredNames(REPO_CONFIG));
     assert.ok(fullUnits.length > 5, "the full resolved round exceeds one wave (6 base units)");
@@ -223,13 +222,15 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
     );
     assertSingleWave(REPO_CONFIG, expandDispatchUnits(dropped.pendingGroups, configuredNames(REPO_CONFIG)), {}, "fully-carried dropped");
 
-    // Carrying only one angle of the group keeps it partially fresh: the unit
-    // is dispatched whole (its carried angle stays in the same unit as the
-    // fresh one), never split.
+    // Carrying only one angle of the group keeps it partially fresh: the
+    // recorded unit keeps both angles, the pending unit holds only the fresh one.
     const partial = resolveFanoutDispatch(REPO_CONFIG, "draft", pool, { env: {}, carriedAngles: ["correctness"] });
     const partialUnit = partial.groups.find((g) => g.angles.includes("input-validation"));
-    assert.ok(partialUnit, "the partially-carried group's fresh angle is dispatched");
-    assert.ok(partialUnit.angles.includes("correctness"), "the partially-carried group is dispatched whole (its carried angle stays in the unit)");
+    assert.ok(partialUnit, "the partially-carried group's fresh angle is planned");
+    assert.ok(partialUnit.angles.includes("correctness"), "the recorded unit keeps its carried angle");
+    const pendingAngles = partial.pendingGroups.flatMap((g) => g.angles);
+    assert.ok(pendingAngles.includes("input-validation"), "the fresh angle is pending");
+    assert.ok(!pendingAngles.includes("correctness"), "pendingGroups excludes the carried angle");
   });
 
   // Act index 2 (round 3): a carry-forward round whose FULL resolved set exceeds
@@ -247,7 +248,8 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
     const plan = resolveFanoutDispatch(null, "draft", angles, { env: {}, carriedAngles: carried });
     const fresh = angles.slice(25);
     assert.deepEqual(plan.groups, [{ name: `group:${fresh.join("+")}`, angles: fresh }], "only the dispatchable unit remains");
-    assert.deepEqual(plan.pendingGroups, plan.groups);
+    // pendingGroups are cap-split dispatch units and also carry their `group`.
+    assert.deepEqual(plan.pendingGroups.map(({ name, angles: a }) => ({ name, angles: a })), plan.groups);
     assertSingleWave(null, plan.pendingGroups, {}, "carry-forward above full capacity");
     // The recorded membership admits the wave's shared reviewer against the
     // ledger's re-derived base units (the fresh angles only).

@@ -1217,6 +1217,23 @@ test("countFreshDispatchUnits counts auto-chunked groups as single units on a ch
 describe("reviewerBudgetPreflight (#1507 — reviewer-budget preflight before fan-out dispatch)", () => {
   const units = (names) => names.map((n) => ({ name: n, angles: [n] }));
 
+  test("a one-angle split tail behind an unstripped full-cap sibling keeps its group", () => {
+    const groups = [
+      { name: "design-solid-part1", angles: ["a", "b", "c", "d", "e"], group: "design-solid" },
+      { name: "dip", angles: ["dip"], group: "design-solid" },
+    ];
+    const preflight = reviewerBudgetPreflight(groups, 10);
+    assert.equal(preflight.pendingGroups[1].group, "design-solid");
+    assert.equal(preflight.requiredReviewers, 2);
+  });
+
+  test("carried angles match unit angles trim+lowercase when stripping a mixed unit", () => {
+    const groups = [{ name: "g", angles: ["scope", "other"], group: "g" }];
+    const preflight = reviewerBudgetPreflight(groups, 10, { carriedAngles: [" Scope "] });
+    assert.deepEqual(preflight.pendingGroups[0].angles, ["other"]);
+    assert.equal(preflight.requiredReviewers, 1);
+  });
+
   test("counts one reviewer per dispatch unit (fresh angles + re-verifications)", () => {
     // 5 dispatch units → 5 required reviewers, regardless of how many angles
     // each unit covers (a group of N angles is one reviewer's scoped dispatch).

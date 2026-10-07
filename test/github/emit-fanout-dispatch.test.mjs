@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -704,6 +704,88 @@ for (const configured of [true, false]) {
     });
   });
 }
+
+// Issue 2511: carried angles strip from the CAP-SPLIT dispatch units, so a
+// configured group above the cap with a carried angle still emits units that
+// are subsets of the recorded `-partN` units and the ledger writer accepts them.
+test("issue 2511: a carried angle in an over-cap configured group strips per cap-split unit through emitter and ledger writer", async () => {
+  await withTmpDir(async (repoRoot) => {
+    // pr-checklist is the gate's mandatory angle; it leads the leftover unit.
+    const angles = ["srp", "soc", "ocp", "lsp", "isp", "dip", "pr-checklist"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: {
+      preApproval: { angles: [{ name: "holistic", enabled: false }] },
+      fanout: { groups: [{ name: "design-solid", angles: angles.slice(0, 6) }], maxAnglesPerGroup: 6 },
+    } }));
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, { carriedAngles: ["srp"] });
+    const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles)]);
+    await writeGateContext({ ...options, config, fanoutDispatch: fanout }, { repoRoot });
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(emitted.stdout);
+    // Recorded membership is design-solid-part1 [srp..isp] + part2 [dip]; each
+    // emitted unit is a subset of one of them.
+    assert.deepEqual(payload.units.map((unit) => unit.angles), [["soc", "ocp", "lsp", "isp"], ["dip"], ["pr-checklist"]]);
+    assert.deepEqual(payload.units.map((unit) => unit.group), ["design-solid", null, null]);
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const provenance = { distinctReviewers: 3, perAngle: [
+      ...payload.units.flatMap((unit, index) => unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, ...(unit.group === null ? {} : { group: unit.group }) }))),
+      { angle: "srp", reviewer: "prior-reviewer", carriedFromHead: "b".repeat(40), carriedVerdict: "clean" },
+    ] };
+    const written = await writeGateFindingsLog({ repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA, verdict: "clean",
+      findings: "[]", executionMode: "fanout_fanin", provenance: JSON.stringify(provenance), emitPlan, tmpRoot }, { repoRoot });
+    assert.deepEqual(written.log.provenance.dispatchUnits.map((unit) => unit.angles), [["srp", "soc", "ocp", "lsp", "isp"], ["dip"], ["pr-checklist"]]);
+  });
+});
+
+// Issue 2511: --pending with an over-cap configured group and NO carry keeps the
+// tail unit's `group` (expandDispatchUnits re-expands the already-split one-angle unit).
+test("issue 2511: --pending without carry keeps group on the over-cap tail unit and the ledger writer accepts it", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const angles = ["srp", "soc", "ocp", "lsp", "isp", "dip", "pr-checklist"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: {
+      preApproval: { angles: [{ name: "holistic", enabled: false }] },
+      fanout: { groups: [{ name: "design-solid", angles: angles.slice(0, 6) }], maxAnglesPerGroup: 6 },
+    } }));
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, {});
+    const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles)]);
+    await writeGateContext({ ...options, config, fanoutDispatch: fanout }, { repoRoot });
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(emitted.stdout);
+    const tail = payload.units.find((unit) => unit.angles.length === 1 && unit.angles[0] === "dip");
+    assert.equal(tail?.group, "design-solid");
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const provenance = { distinctReviewers: payload.units.length, perAngle: payload.units.flatMap((unit, index) => unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, ...(unit.group === null ? {} : { group: unit.group }) }))) };
+    await writeGateFindingsLog({ repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA, verdict: "clean",
+      findings: "[]", executionMode: "fanout_fanin", provenance: JSON.stringify(provenance), emitPlan, tmpRoot }, { repoRoot });
+  });
+});
+
+// Issue 2511: a fully carried group is dropped from --pending: it is absent from
+// the dispatched units (so no reviewer can create a sentinel for its scope), no
+// angle-suffix artifact is written, and the surviving unit is unaffected.
+test("--pending drops a fully carried group from units and writes no suffix artifact for it (issue 2511)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const config = { version: 1, gates: { fanout: { groups: [{ name: "design-simplicity", angles: ["dry", "kiss"] }, { name: "perf-pair", angles: ["perf", "memory"] }] } } };
+    const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), ["dry", "kiss", "perf", "memory"], { carriedAngles: ["dry", "kiss"] });
+    await writeAnglePrompts(tmpDir, ["perf", "memory"]);
+    const dir = await seedBundle(tmpDir, { fanout });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const { units } = JSON.parse(result.stdout);
+    assert.deepEqual(units.map((u) => u.angles), [["perf", "memory"]]);
+    assert.equal(units[0].group, "perf-pair");
+    assert.ok(!units.some((u) => u.angles.includes("dry") || u.angles.includes("kiss") || u.group === "design-simplicity"), "dropped unit is not dispatched");
+    const names = await readdir(dir);
+    assert.deepEqual(names.filter((n) => /(^|[-.])(dry|kiss|design-simplicity)([-.]|$)/.test(n)), [], `no suffix/sentinel artifacts for the dropped unit: ${names.join(", ")}`);
+  });
+});
 
 // AC9 (issue 2180, Path A) end-to-end exact-count fixture: a NO-config-table
 // angle set (no gates.fanout.groups match at all) routed through the REAL
@@ -1991,4 +2073,23 @@ test("buildAngleNamingSuffix prints a scaled unit's computed budget, never the f
   assert.match(suffix, /more than 70 model turns or 75 tool calls/);
   assert.match(suffix, /--max-model-turns 70 --max-tool-calls 75 /);
   assert.doesNotMatch(suffix, /\b45 model turns|\b50 tool calls/);
+});
+
+// Issue 2511: a carried angle in a mixed grouped unit is stripped before
+// emission. The unit stays one dispatch unit; its work order briefs only the
+// uncarried angle and the carried angle is never briefed again.
+test("--pending emits a mixed unit's work order without the carried angle (issue 2511)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const config = { version: 1, gates: { fanout: { groups: [{ name: "design-simplicity", angles: ["dry", "kiss"] }] } } };
+    const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), ["dry", "kiss"], { carriedAngles: ["dry"] });
+    await seedBundle(tmpDir, { fanout });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const { units } = JSON.parse(result.stdout);
+    assert.equal(units.length, 1, "dispatch units");
+    assert.deepEqual(units[0].angles, ["kiss"]);
+    const suffix = await readFile(path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.angle-suffix-${units[0].scope}.txt`), "utf8");
+    assert.match(suffix, /kiss/);
+    assert.doesNotMatch(suffix, /\bdry\b/);
+  });
 });
