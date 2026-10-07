@@ -129,6 +129,7 @@ Resolved bundle output shape:
 {
   "bundleKind": "resolved | needs_reconcile",
   "configError": "optional; only on a config_load_failed needs_reconcile bundle: { reason, errors, unknownKeys, runningVersion, checkoutVersion }",
+  "pendingRetrospectives": "[{ pr, mergeCommit } | { pr: null, mergeCommit: null, reason }]; [] when none pending or workflow.requireRetrospective is off (see retrospective-checkpoint-contract.md)",
   "activeArtifact": {
     "kind": "issue | pr | local_branch | local_phase",
     "issue": 111,
