@@ -862,6 +862,11 @@ function unquoteFlagTokens(segment) {
   return segment.replace(/(['"])(-{1,2}[A-Za-z][\w-]*(?:=(?:(?!\1).)*)?)\1/g, "$2").replace(/(['"])body\1(?==)/g, "body");
 }
 
+/** Blank quoted spans for the wrapper-word checks only: double quotes honor backslash escapes, unlike `stripQuotedLiterals`. */
+function stripQuotesEscapeAware(command) {
+  return command.replace(/'[^']*'|"(?:\\.|[^"\\])*"/gs, " ");
+}
+
 /**
  * ADR-TRIPWIRE-STANDING-WAIVER (CLI half): a raw `gh pr edit` or `gh issue edit` that sets the body
  * (`--body`, `--body-file`, `-b`, `-F`), with or without `gh` global repo flags before the subcommand
@@ -879,13 +884,13 @@ export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
   command = command.replace(/(?<!\\)((?:\\\\)*)\\\r?\n/g, "$1"); // the shell removes (no space) only an unescaped (odd-run) backslash-newline continuation
   // A wrapped `gh issue edit` is judged on its own argv only: the text after the literal up to the next shell separator.
   // Denied with a body-flag token there; under xargs (args may arrive on stdin) also denied without an explicit non-body edit flag.
-  if (SHELL_WRAPPER_RE.test(stripQuotedLiterals(command))) { // wrapper words count only unquoted
+  if (SHELL_WRAPPER_RE.test(stripQuotesEscapeAware(command))) { // wrapper words count only unquoted
     if (GH_PR_EDIT_LITERAL.test(command)) return true;
     for (const m of command.matchAll(new RegExp(GH_BODY_WRITER_LITERAL.source, "gi"))) {
       // Blank quoted values before splitting so a separator inside a quoted title does not truncate the argv.
       const argv = stripQuotedLiterals(unquoteFlagTokens(command.slice(m.index + m[0].length))).split(/[;&|\n]/)[0];
       if (BODY_FLAG_ANYWHERE.test(argv)) return true;
-      if (/(?:^|[\s;&|(])xargs(?=\s)/.test(stripQuotedLiterals(command)) && !NON_BODY_EDIT_FLAG.test(argv)) return true;
+      if (/(?:^|[\s;&|(])xargs(?=\s)/.test(stripQuotesEscapeAware(command)) && !NON_BODY_EDIT_FLAG.test(argv)) return true;
     }
   }
   const res = [ghBodyWriterRegex("(?:pr|issue)")];
@@ -913,7 +918,7 @@ export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
   command = command.replace(/(?<!\\)((?:\\\\)*)\\\r?\n/g, "$1"); // the shell removes (no space) only an unescaped (odd-run) backslash-newline continuation
   // A `gh api` literal inside `bash -c`/`eval`/`xargs` hides its flags from segment inspection: mirror the
   // CLI half and deny the literal when it names a pull/issue path with a body field or `--input`, or `updatePullRequest`.
-  if (SHELL_WRAPPER_RE.test(stripQuotedLiterals(command)) && /\bgh\s+api\b/.test(command)
+  if (SHELL_WRAPPER_RE.test(stripQuotesEscapeAware(command)) && /\bgh\s+api\b/.test(command)
     && (/updatePullRequest/.test(command) || (/(?:pulls|issues)\/(?:\d+|\{\})/.test(command) && /body=|--input/.test(command)))) return true;
   const owner = managedSlug ? `(?:${managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}|\\{owner\\}/\\{repo\\})` : "[^/]+/[^/]+";
   const re = new RegExp(`^(?:repos/${owner}/)?(?:pulls|issues)/\\d+$`, "i");

@@ -1260,6 +1260,7 @@ test("commandContainsRawPrBodyApiWrite detects a gh api write of a body field to
     "gh api -X PATCH https://api.github.com/repos/mfittko/dev-loops/pulls/5 -f 'body=text'",
     "gh api -X PATCH pulls/5 -f body=text",
     'bash -c "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body=x"',
+    'echo "a\\"b" && bash -c "gh api -X PATCH repos/o/r/pulls/5 -f body=x"',
     'eval "gh api repos/mfittko/dev-loops/pulls/5 -f body=x"',
     "echo 5 | xargs -I{} gh api -X PATCH repos/mfittko/dev-loops/pulls/{} -f body=x",
   ]) {
@@ -1285,6 +1286,8 @@ test("commandContainsRawPrBodyEdit denies global-flag and wrapped literal forms"
     "gh issue edit 5 --body-file i.md",
     "gh issue edit 5 -b x",
     `bash -c "gh issue edit 5 --body x"`,
+    'echo "a\\"b" && bash -c "gh pr edit 5 --body x"',
+    'echo "\\"" ; eval "gh pr edit 5 --body x"',
     "gh --repo o/n pr edit 5 --body 'x'",
     "gh --repo=o/n pr edit 5 -b x",
     "gh -Ro/n pr edit 5 -F pr.md",
