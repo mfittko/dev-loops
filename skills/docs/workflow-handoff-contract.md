@@ -142,7 +142,7 @@ interface HandoffEnvelope {
     orchestratorOwned: string[];           // pr merge via merge-pr.mjs (raw `gh pr merge` forbidden), board status transitions — never done by a subagent
   };
 
-  // #2488: copied from the resolved bundle when the resolver sets it (empty array = none pending).
+  // copied from the resolved bundle when the resolver sets it (empty array = none pending).
   // The orchestrator dispatches each entry's retrospective in parallel. A null-identity entry carries a `reason`.
   pendingRetrospectives?: Array<{ pr: number | null; mergeCommit: string | null; reason?: string }>;
 

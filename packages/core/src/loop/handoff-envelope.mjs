@@ -764,7 +764,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     envelope.retrospectiveFindings = retrospectiveFindings;
   }
 
-  // Pending retrospectives (#2488): copied from the resolved bundle so the
+  // Pending retrospectives: copied from the resolved bundle so the
   // orchestrator, which reads the envelope, can dispatch them. Present (even
   // empty) only when the resolver set the field.
   if (Array.isArray(bundle.pendingRetrospectives)) {
@@ -1098,7 +1098,7 @@ export function validateHandoffEnvelope(envelope) {
     }
   }
 
-  // ----- pendingRetrospectives (optional, #2488) -----
+  // ----- pendingRetrospectives (optional) -----
   if (envelope.pendingRetrospectives !== undefined && envelope.pendingRetrospectives !== null) {
     if (!Array.isArray(envelope.pendingRetrospectives)) {
       errors.push({ field: "pendingRetrospectives", reason: "if present, must be an array", got: envelope.pendingRetrospectives });
