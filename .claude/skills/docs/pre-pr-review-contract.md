@@ -119,11 +119,15 @@ ledger, no gate verdict comment.
 
 ## Delta mode
 
-Delta mode is one fresh holistic review of a gate act-list fix before that fix
-is pushed. It checks the cumulative fix delta against the act items the fix
-claims to resolve. It resolves the same `pre-push-reviewer`
+Delta mode is one fresh holistic review of a gate act-list fix or of a
+Copilot-thread fix before that fix is pushed. It checks the cumulative fix delta
+against the act items the fix claims to resolve. It resolves the same `pre-push-reviewer`
 role and tier as full mode (`PRE-PR-MODEL-CONFIG-RESOLVED`) and uses the same
-harness dispatch. The only delta source is the gate judge's act list. The
+harness dispatch. There are two delta sources: the gate judge's act list, and
+the thread route, which takes the captured set of unresolved review threads
+(`list-review-threads --unresolved-only` output, passed with `--threads-file` in
+place of `--act-list`, with `--repo` and `--pr`). On the thread route each
+unresolved thread is one act item and its `ref` is the `threadId`. The
 deterministic checks live in `@dev-loops/core/loop/pre-push-delta-review`; the
 dev-loop coordinator runs them through `dev-loops-run cli/index.mjs loop pre-push-delta`.
 
@@ -154,7 +158,7 @@ fixer and owns the push. The sequence is:
 4. On `nextStep: push` (`locally_clear`) or `nextStep: push_to_gate`
    (`bounded_out`), it emits a `full` work order with `--delta-result <result>`
    and dispatches the fixer to push and reply to each gate thread with the
-   fixing commit. `verify-fixer-disposition.mjs --fixer-plan <plan>` then checks
+   fixing commit. `verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <plan>` then checks
    the handoff that fixer wrote to the work order's outputRef. On
    `locally_clear`, the fixer resolves each thread. On `bounded_out`, the fixer
    resolves only the threads of act items with status `resolved`. For
@@ -169,7 +173,9 @@ invocation. The dev-loop coordinator owns the invocation count and passes it to
 each sequence.
 
 <!-- rule: PRE-PUSH-DELTA-TRIGGER -->
-`PRE-PUSH-DELTA-TRIGGER`: delta mode MUST run after the gate Phase 4 fixer commits a fix for a judge act list and before that fix is pushed. A push with no act-list fix MUST NOT get a delta review, even when a PR exists. Standalone implementation pushes and the full-mode first push are unaffected.
+`PRE-PUSH-DELTA-TRIGGER`: delta mode MUST run after the gate Phase 4 fixer commits a fix for a judge act list, or after a fixer commits a fix for the captured set of unresolved review threads (the thread route), and before that fix is pushed. A push with no act-list fix and no thread-route fix MUST NOT get a delta review, even when a PR exists. Standalone implementation pushes and the full-mode first push are unaffected. A CI-only fix is out of scope.
+
+`check-pre-push-delta.mjs --result` records its decision as local evidence at `<tmp-root>/gate-delta/<reviewBaselineHead>.json` (`reviewBaselineHead`, `candidateHead`, `actSetId`, `invocation`, `outcome`, `nextStep`, `items: [{ ref, status }]`; the last write for a baseline wins). The run without `--result` writes nothing. The emitter and the reply wrappers enforce two refusals from the record. `emit-fixer-work-order.mjs` refuses `--phase full` unless a clearing delta decision exists for the PR head: an act-list source needs `--delta-result` naming a clearing result for the PR head, a threads source needs a record for the PR head whose decision is `nextStep: push` or `nextStep: push_to_gate` and whose item refs are all threads in the threads file, and a record with any other `nextStep` refuses either source. The coordinator emits `--phase commit_only` first, then runs the delta review. A fixed reply (`reply-resolve-review-thread.mjs`, `reply-resolve-review-threads.mjs`, and the `Fixed in commit` reply of `verify-fixer-disposition.mjs`) is refused for a thread that a record marks `not_resolved` or `cannot_verify`, when the fixing commit is the record's `candidateHead` or lies in `reviewBaselineHead..candidateHead`. A thread matches an item by `threadId` or by the fingerprint of its `dev-loops:finding` marker.
 
 <!-- rule: PRE-PUSH-DELTA-PINNED-BASELINE -->
 `PRE-PUSH-DELTA-PINNED-BASELINE`: every delta sequence MUST bind `reviewBaselineHead..candidateHead`, where `reviewBaselineHead` is the head the gate round reviewed and stays pinned for the whole sequence. A second local fix `C` after candidate `B` MUST be reviewed as `A..C`, never only `B..C`, with the same act-set identity. `reviewBaselineHead` MUST be an ancestor of `candidateHead`; otherwise the delta check fails closed. A new gate round starts a new sequence.
