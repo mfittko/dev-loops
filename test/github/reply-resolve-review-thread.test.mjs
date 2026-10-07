@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
@@ -799,4 +799,56 @@ test("reply-resolve-review-thread refuses a fixed reply that cites no SHA at all
   assert.match(result.stderr, /fixed_reply_missing_full_sha/);
   assert.ok(result.stderr.includes(headSha));
   assert.equal(ghLog.length, 1, "only the head lookup ran; no post or resolve");
+});
+
+// A fixture checkout whose HEAD is the fixing commit, with a delta record under its tmp/gate-delta.
+async function runDeltaGuardedReply({ items, candidateOffset = false, rootBody = "please fix" }) {
+  const repoDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-delta-"));
+  try {
+    initGitFixture(repoDir, { commit: "base" });
+    const git = (...args) => execFileSync("git", args, { cwd: repoDir, encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+    const baseline = git("rev-parse", "HEAD");
+    git("commit", "-q", "--allow-empty", "-m", "fix");
+    const fix = git("rev-parse", "HEAD");
+    git("commit", "-q", "--allow-empty", "-m", "later");
+    const head = git("rev-parse", "HEAD");
+    await mkdir(path.join(repoDir, "tmp", "gate-delta"), { recursive: true });
+    await writeFile(path.join(repoDir, "tmp", "gate-delta", `${baseline}.json`), JSON.stringify({
+      reviewBaselineHead: baseline, candidateHead: candidateOffset ? baseline : head, actSetId: "0".repeat(16), invocation: 1,
+      outcome: "needs_fix", nextStep: "fix_and_rereview", items,
+    }));
+    const fingerprintThread = createReviewThreadsPayload([{ id: "THREAD_123", comments: { nodes: [{ id: "PRRC_node_123", databaseId: 123, body: rootBody }] } }]);
+    return await runFixedReply(`Fixed in ${fix} with the missing guard.\n`, [
+      { ...headViewEntry, stdout: `${JSON.stringify({ headRefOid: head })}\n` },
+      { ...threadEntry, stdout: fingerprintThread },
+      { stdout: '{"id":456,"html_url":"https://github.com/owner/repo/pull/17#discussion_r456"}\n' },
+      { stdout: '{"data":{"resolveReviewThread":{"thread":{"id":"THREAD_123","isResolved":true}}}}\n' },
+    ], undefined, repoDir);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+}
+const FINGERPRINT = "0123456789abcdef";
+const markerBody = `<!-- dev-loops:finding ${FINGERPRINT} severity=high angle=correctness round=1 -->\nbody`;
+
+test("reply-resolve-review-thread refuses a fixed reply for a thread the delta record marks not_resolved by threadId and posts nothing", async () => {
+  const { result, ghLog } = await runDeltaGuardedReply({ items: [{ ref: "THREAD_123", status: "not_resolved" }] });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /fixed_reply_delta_not_resolved/);
+  assert.equal(ghLog.length, 2, "only the head lookup and the thread read ran; no post or resolve");
+});
+
+test("reply-resolve-review-thread refuses a cannot_verify item matched by the finding-marker fingerprint, ignoring a duplicate suffix", async () => {
+  const { result, ghLog } = await runDeltaGuardedReply({ items: [{ ref: `${FINGERPRINT}#2`, status: "cannot_verify" }], rootBody: markerBody });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /fixed_reply_delta_cannot_verify/);
+  assert.equal(ghLog.length, 2, "no post or resolve");
+});
+
+test("reply-resolve-review-thread posts a fixed reply for a resolved item and when no record covers the fixing commit", async () => {
+  const resolved = await runDeltaGuardedReply({ items: [{ ref: "THREAD_123", status: "resolved" }] });
+  assert.equal(resolved.result.code, 0, resolved.result.stderr);
+  // The record's candidate is the baseline, so the later fixing commit lies outside baseline..candidate.
+  const uncovered = await runDeltaGuardedReply({ items: [{ ref: "THREAD_123", status: "not_resolved" }], candidateOffset: true });
+  assert.equal(uncovered.result.code, 0, uncovered.result.stderr);
 });

@@ -7,6 +7,7 @@ import { parsePositiveInteger, parseAllowedRefsCsv } from "@dev-loops/core/cli/p
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   assertFixedReplyShas,
+  assertFixedRepliesNotDeltaBlocked,
   REPLY_DISPOSITIONS,
   replyAndMaybeResolve,
   validateResolutionMessage,
@@ -112,7 +113,10 @@ async function run(argv) {
   const rawBody = await readFile(bodyFile, "utf8");
   if (rawBody.trim().length === 0) throw new Error("--body-file must contain non-empty text");
   validateResolutionMessage(rawBody);
-  if (disposition === "fixed") await assertFixedReplyShas([rawBody], { repo: repoSlug, pr }, { env: process.env, ghCommand: "gh" });
+  if (disposition === "fixed") {
+    await assertFixedReplyShas([rawBody], { repo: repoSlug, pr }, { env: process.env, ghCommand: "gh" });
+    await assertFixedRepliesNotDeltaBlocked([{ threadId, body: rawBody }], { repo: repoSlug, pr }, { env: process.env, ghCommand: "gh" });
+  }
 
   const result = await replyAndMaybeResolve(
     { repo: repoSlug, pr, commentId, threadId, body: rawBody, resolve: true, allowedRefs },

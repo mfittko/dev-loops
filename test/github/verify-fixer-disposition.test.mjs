@@ -511,3 +511,33 @@ test("the checkpoint and receipt root default to the main worktree's tmp/ and a 
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// fixed-reply guard: a delta record that marks the thread not_resolved blocks the "Fixed in commit" reply
+// ---------------------------------------------------------------------------
+
+test("a thread the applicable delta record marks not_resolved gets no Fixed reply and is reported incomplete with its delta status", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }]);
+    const recordPath = path.join(repoRoot, "tmp", "gate-delta", `${"c".repeat(40)}.json`);
+    await mkdir(path.dirname(recordPath), { recursive: true });
+    await writeFile(recordPath, JSON.stringify({
+      reviewBaselineHead: "c".repeat(40), candidateHead: FIX_SHA, actSetId: "0".repeat(16), invocation: 1,
+      outcome: "needs_fix", nextStep: "fix_and_rereview", items: [{ ref: "PRRT_T1", status: "not_resolved" }],
+    }));
+    const { deps, calls } = runtime([
+      threadsCallEntry([
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+      ]),
+      compareEntry(FIX_SHA, "ahead"),
+    ], repoRoot);
+
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+
+    assert.equal(result.complete, false);
+    assert.deepEqual(result.incomplete.map((entry) => [entry.threadId, entry.failedStep]), [["PRRT_T1", "not_resolved"]]);
+    assert.equal(result.incomplete[0].deltaRecord, recordPath);
+    assert.deepEqual(result.actions, []);
+    assert.equal(calls.some((call) => call.args.includes("POST")), false, "no reply was posted");
+  });
+});
