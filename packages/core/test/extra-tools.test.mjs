@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
 
-import { DevLoopConfigSchema, FileConfigSchema, loadDevLoopConfigStrict, resolveExtraToolsGuidance, resolveRoleExtraTools } from "../src/config/config.mjs";
+import { DevLoopConfigSchema, FileConfigSchema, resolveExtraToolsGuidance, resolveRoleExtraTools } from "../src/config/config.mjs";
 import { buildAgentOverrides, buildClaudeLaunch, buildHeadlessClaudeInvocation, detectSessionMcpServers } from "../src/claude/headless-entry.mjs";
 import { decideAgentDispatch } from "../src/claude/hook-decisions.mjs";
 
@@ -357,7 +357,7 @@ test("extension README documents extraTools next to models.roleTiers", async () 
   const { readFileSync } = await import("node:fs");
   const readme = readFileSync(path.join(repoRoot, "extension/README.md"), "utf8");
   assert.ok(readme.indexOf("`models.roleTiers`") < readme.indexOf("(`extraTools`)"));
-  for (const text of ["mcp__<server>", "extraToolsGuidance", "## Session MCP tool guidance", "CLAUDE_CONFIG_DIR", "Detection limit", "needs the dev-loops release", "Provisioning does not index", "dev-loops loop claude-launch", ".claude/settings.local.json", "classifier may still deny", "Worktree freshness limit"]) {
+  for (const text of ["mcp__<server>", "extraToolsGuidance", "## Session MCP tool guidance", "CLAUDE_CONFIG_DIR", "Detection limit", "Requires dev-loops 1.0.6 or later", "Provisioning does not index", "dev-loops loop claude-launch", ".claude/settings.local.json", "classifier may still deny", "Worktree freshness limit"]) {
     assert.ok(readme.includes(text), text);
   }
 });

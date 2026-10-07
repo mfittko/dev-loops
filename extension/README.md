@@ -207,7 +207,7 @@ extraToolsGuidance:
 - Detection limit: plugin-provided servers, managed MCP config, claude.ai connectors and a `--mcp-config` argument are not seen, so those servers get no guidance. Detected names map characters outside `[A-Za-z0-9_-]` to `_` before matching, as Claude Code does for tool names. A server name that contains `__` never matches its tool prefix and gets no guidance. Detection gates the guidance text only. The tools list and `--allowedTools` stay as configured.
 - The rendered block is a fixed frame, `## Session MCP tool guidance`, followed by one line per qualifying key. The frame tells the worker to apply a line only when tools named `mcp__<server>__*` for that server are in its tool list, because the launcher cannot see whether a server connects.
 - Worktree freshness limit: a graph index describes the checkout it indexed. Guidance can tell the worker to index its own worktree once and to fall back to the main-checkout index. On fallback the worker confirms each answer with Read or Grep in the worktree before an edit. Provisioning does not index.
-- `extraToolsGuidance` needs the dev-loops release that ships it. An older CLI fails config load on the key.
+- Requires dev-loops 1.0.6 or later. An older CLI fails config load on the `extraToolsGuidance` key.
 
 ### File classification (`classify`)
 
