@@ -560,8 +560,8 @@ export function freshAngleNames(perAngle) {
  * BASE names of DISTINCT angles in a `perAngle` array, fresh AND carried. This
  * is the angle set to pass to `resolveFanoutGroups` when a caller re-derives the
  * round's dispatch units for {@link fanoutReviewerPairingError}: dispatch
- * chunks the full resolved angle set (a partially carried unit is dispatched
- * whole), so re-deriving from fresh angles alone can shift the auto-chunk
+ * chunks the full resolved angle set (recorded unit membership stays whole; the dispatched unit drops
+ * carried angles), so re-deriving from fresh angles alone can shift the auto-chunk
  * boundaries and reject an honest shared reviewer.
  *
  * Auto-chunk boundaries follow input order, so a re-deriving caller passes

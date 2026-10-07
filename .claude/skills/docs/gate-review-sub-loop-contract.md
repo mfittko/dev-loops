@@ -267,7 +267,7 @@ same `gates.requireFanoutEvidence` condition as the durable-ledger refusal. When
 
 To resume at the same head, rerun `write-gate-context.mjs` with the refreshed budget. Its reviews-directory scan supplies `completedAngles`: angles with CLEAN findings artifacts stamped for that head. Prior-head artifacts require the separate [fail-closed carry-forward seam](#angle-carry-forward-fail-closed); pass only its proven carried names through `--carried-angles <json>`. That seam permits eligible `clean` or `findings_present` verdicts and rejects equal `--prev-head` / `--head-sha`; same-head scanning does not use it.
 
-`preflight.carriedAngles` is always emitted, including when empty. The preflight excludes a unit from `requiredReviewers` and `pendingGroups` only when ALL its angles are complete or carried. Dispatch only pending groups through the emitter below; never redispatch a completed-or-carried group. Completed artifacts remain valid for their own head.
+`preflight.carriedAngles` is always emitted, including when empty. The preflight excludes a unit from `requiredReviewers` and `pendingGroups` only when ALL its angles are complete or carried, and strips carried angles from a mixed unit (recorded membership stays whole). Dispatch only pending groups through the emitter below; never redispatch a completed-or-carried group. Completed artifacts remain valid for their own head.
 
 **No gate exemption.** `preflight.verdict` and `preflight.executionMode` remain `null`: shortfall is resumable state, never a clean verdict or permission to use `inline_single_agent`. `buildPreMergeGateCheck` / `evaluateInlineFanoutMode` retain the fail-closed merge requirements for a clean current-head marker and qualified `fanout_fanin` execution.
 
