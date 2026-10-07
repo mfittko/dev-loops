@@ -1,7 +1,7 @@
 // dev-loops gate wait-for-units: the read-only join for a gate round's dispatched units.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, readdir, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
@@ -253,5 +253,56 @@ test("the command is read-only", async () => {
     const source = await readFile(SCRIPT, "utf8");
     assert.doesNotMatch(source, /child_process/);
     assert.doesNotMatch(source, /\b(writeFile|mkdir|rename|rm|unlink|appendFile|copyFile)\b\s*\(/);
+  });
+});
+
+test("--fields prints the tab-separated scalar fields instead of JSON", async () => {
+  await withDir(async (root) => {
+    assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const cli = spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout-ms", "1", "--fields", "outcome,unitCount"], { encoding: "utf8" });
+    assert.equal(cli.stdout.trim(), "timeout\t1");
+  });
+});
+
+test("a 64-hex head SHA in a plan is accepted", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    plan.headSha = "b".repeat(64);
+    await writeJson(planPath, plan);
+    const result = await run(root, planPath, { timeoutMs: 1 });
+    assert.equal(result.ok, true);
+    assert.equal(result.headSha, "b".repeat(64));
+    assert.equal(result.outcome, "timeout");
+  });
+});
+
+test("a non-ENOENT stat failure propagates instead of reading as retired", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    // tmpRoot below a regular file makes the sentinel stat fail with ENOTDIR (not ENOENT).
+    const blocker = path.join(root, "blocker");
+    await writeFile(blocker, "");
+    const outcome = await run(root, planPath, { tmpRoot: blocker, timeoutMs: 1 }).then((r) => r, (error) => error);
+    assert.notEqual(outcome?.outcome, "round_retired");
+    assert.match(String(outcome?.code ?? outcome?.message), /ENOTDIR/);
+  });
+});
+
+test("a round retired while the unit checks are in flight is round_retired, not all_done", async () => {
+  await withDir(async (root) => {
+    // Zero-angle unit: its only check is one receipt read, which blocks on a FIFO until the test releases it.
+    const { planPath, fixtures } = await seedPlan(root, [["g", []]]);
+    await setMtime(planPath, 100);
+    const receipt = pullReceiptPath(path.join(root, "tmp"), fixtures[0].identity.workOrderRef);
+    await mkdir(path.dirname(receipt), { recursive: true });
+    assert.equal(spawnSync("mkfifo", [receipt]).status, 0);
+    const pending = run(root, planPath);
+    const writer = await open(receipt, "w"); // resolves once the check's reader has opened the FIFO
+    await writeJson(path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json"), { gate: GATE, retiredAt: new Date(200000).toISOString() });
+    await writer.writeFile(JSON.stringify({ ...fixtures[0].identity, role: "review" }));
+    await writer.close();
+    assert.equal((await pending).outcome, "round_retired");
   });
 });
