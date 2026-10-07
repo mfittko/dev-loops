@@ -845,6 +845,9 @@ const GH_PR_EDIT_LITERAL = new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}pr\\s+edi
 /** A body-flag token anywhere in a command string; gates the wrapped `gh issue edit` deny so non-body issue edits stay allowed. */
 const BODY_FLAG_ANYWHERE = /(?:^|\s)(?:--body(?:-file)?(?=[=\s'"]|$)|-[bF](?=[=\s'"]|\S|$))/;
 
+/** An explicit non-body `gh issue edit` flag; an xargs-fed edit without one may take its body flag from stdin. */
+const NON_BODY_EDIT_FLAG = /(?:^|\s)--(?:(?:add|remove)-(?:label|assignee|project)|title|milestone|remove-milestone)(?=[=\s]|$)/;
+
 /** A shell wrapper that hides a command from per-segment inspection: `bash|sh|zsh|dash|ksh -c`, `eval`, `xargs`. */
 const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*-\S*c|eval|xargs)(?=\s)/;
 
@@ -870,9 +873,17 @@ function unquoteFlagTokens(segment) {
  * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
  */
 export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
-  // A wrapped `gh issue edit` is denied only with a body-flag token present (non-body issue edits stay allowed).
-  if (SHELL_WRAPPER_RE.test(command)
-    && (GH_PR_EDIT_LITERAL.test(command) || (GH_BODY_WRITER_LITERAL.test(command) && BODY_FLAG_ANYWHERE.test(unquoteFlagTokens(command))))) return true;
+  // A wrapped `gh issue edit` is judged on its own argv only: the text after the literal up to the next shell separator.
+  // Denied with a body-flag token there; under xargs (args may arrive on stdin) also denied without an explicit non-body edit flag.
+  if (SHELL_WRAPPER_RE.test(command)) {
+    if (GH_PR_EDIT_LITERAL.test(command)) return true;
+    const m = GH_BODY_WRITER_LITERAL.exec(command);
+    if (m) {
+      const argv = unquoteFlagTokens(command.slice(m.index + m[0].length)).split(/[;&|\n]/)[0];
+      if (BODY_FLAG_ANYWHERE.test(argv)) return true;
+      if (/(?:^|[\s;&|(])xargs(?=\s)/.test(command) && !NON_BODY_EDIT_FLAG.test(argv)) return true;
+    }
+  }
   const res = [ghBodyWriterRegex("(?:pr|issue)")];
   return shellSegments(command).map(unquoteFlagTokens).some((segment) =>
     res.some((re) => {

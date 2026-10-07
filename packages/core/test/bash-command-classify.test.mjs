@@ -1294,6 +1294,8 @@ test("commandContainsRawPrBodyEdit denies global-flag and wrapped literal forms"
     `echo "--body=x" | xargs gh issue edit 5`,
     `bash -c 'gh issue edit 5 "--body" x'`,
     `eval "gh issue edit 5 '-b' x"`,
+    `echo "--body x" | xargs gh issue edit 5`,
+    "cat args.txt | xargs gh issue edit 5",
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
   }
@@ -1309,6 +1311,8 @@ test("commandContainsRawPrBodyEdit keeps passing title, assignee and read forms"
     `bash -c "echo hi"`,
     "git commit -m 'gh pr edit notes'",
     "xargs -I{} gh issue edit {} --add-label x",
+    `bash -c "gh issue edit 5 --add-label x" ; ls -F`,
+    "gh issue list | grep -F foo | xargs -I{} gh issue edit {} --add-label x",
     `git commit -m "docs: eval and gh issue edit notes"`,
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), false, cmd);
