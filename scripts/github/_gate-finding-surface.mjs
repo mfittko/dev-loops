@@ -560,7 +560,9 @@ export function renderInlineCommentBody(finding, { round }) {
     for (const field of cutFields) {
       const rendered = field.code ? field.text.replaceAll("<!--", "&lt;!--").replaceAll("-->", "--&gt;") : escapeProse(field.text);
       const text = boundDetailsText(rendered, cutFields.length);
-      lines.push(`**${field.label}:**`, ...(field.code ? fenceCode(text) : [text]), "");
+      // Prose stays on the label line so untrusted text never starts at column 0
+      // (it could otherwise forge the header parseRenderedJudgeDisposition reads).
+      lines.push(...(field.code ? [`**${field.label}:**`, ...fenceCode(text)] : [`**${field.label}:** ${text}`]), "");
     }
     lines.push("</details>");
   }

@@ -566,3 +566,11 @@ test("summary-comment findings carry no ledger line, no cut fields and file:line
   assert.ok(!block.includes("<details>"), "the summary block never cuts a field");
   assert.ok(block.includes("x".repeat(900)), "the summary block carries the full summary");
 });
+
+test("a cut summary shaped like a header cannot forge the judge disposition", () => {
+  const summary = `**question** · x · ${"word ".repeat(120)} · judge: reject`;
+  const body = renderInlineCommentBody({ severity: "question", angle: "a", summary, files: ["src/Widget.js"], line: 3 }, { round: 1 });
+  assert.notEqual(parseRenderedJudgeDisposition(body), "reject");
+  const details = body.slice(body.indexOf("<details>")).split("\n");
+  assert.ok(details.some((l) => l.startsWith("**Problem:** ")), body);
+});
