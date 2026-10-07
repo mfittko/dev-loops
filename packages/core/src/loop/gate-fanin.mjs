@@ -165,12 +165,21 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
     });
   // GATE-EXEC-ANGLE-CARRY-FORWARD (issue 2511): a carried angle is stripped
   // per angle from every pending unit, so a mixed unit dispatches only its
-  // uncarried angles. `skippedGroups` and the recorded plan keep full membership.
-  const pendingGroups = groups
+  // uncarried angles. Callers pass cap-split dispatch units, so each stripped
+  // unit stays a subset of one recorded unit. A one-angle unit keeps a shared
+  // `group` only as the tail of a full-cap same-group sibling (the ledger
+  // writer's rule); otherwise it drops it. `skippedGroups` and the recorded
+  // plan keep full membership.
+  const stripped = groups
     .filter((g) => !groupIsComplete(g))
     .map((g) => (g.angles.some((a) => carriedKeys.has(normalizeAngleKey(a)))
       ? { ...g, angles: g.angles.filter((a) => !carriedKeys.has(normalizeAngleKey(a))) }
       : g));
+  const pendingGroups = stripped.map((g, i) => {
+    const prev = stripped[i - 1];
+    const validTail = prev?.angles.length === REVIEWER_UNIT_MAX_ANGLES && prev.group === g.group;
+    return g.angles.length === 1 && typeof g.group === "string" && !validTail ? { ...g, group: null } : g;
+  });
   const skippedGroups = groups.filter((g) => groupIsComplete(g));
   // One reviewer per dispatch unit: a group of N angles is one reviewer's
   // scoped dispatch, so the reviewer count is the pending dispatch-unit count,

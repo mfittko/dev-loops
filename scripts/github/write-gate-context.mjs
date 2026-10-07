@@ -2137,7 +2137,11 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
       // zero-unit path keys on `fanout.groups` seeing every angle.
     }
   }
-  const preflight = reviewerBudgetPreflight(groups, availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
+  // Issue 2511: the preflight strips carried angles per unit, so it must see the
+  // cap-split dispatch units (each a subset of one recorded unit), never the
+  // unsplit group: stripping before the split moved angles across a part boundary.
+  const dispatchGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
+  const preflight = reviewerBudgetPreflight(expandDispatchUnits(groups, dispatchGroupNames), availableReviewers, { completedAngles, carriedAngles: carriedAnglesList });
   const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   const pendingGroups = preflight.pendingGroups;
   const pendingWavePlan = scheduleFanoutWaves(pendingGroups, effectiveConcurrency);

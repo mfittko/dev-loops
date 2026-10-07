@@ -13,6 +13,8 @@ import {
   parseConsolidateFaninCliArgs,
 } from "../../scripts/loop/consolidate-fanin.mjs";
 import { execFileSync } from "node:child_process";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { buildGateEmitPlanPath, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
@@ -4458,13 +4460,18 @@ test("issue 2511: a mixed-unit carry round-trips through consolidateGateFanin an
     const gate = "draft_gate";
     const headSha = VERIFIED_HEAD;
     await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  rejectForeignAngles: false\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n      - name: holistic\n        enabled: false\n", "utf8");
-    const contextDir = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7");
-    await mkdir(contextDir, { recursive: true });
-    await writeFile(path.join(contextDir, `${gate}-${headSha}.json`), JSON.stringify({
-      fanout: { groups: [{ name: "design-simplicity", angles: ["dry", "kiss"] }], pendingGroups: [{ name: "design-simplicity", angles: ["kiss"] }] },
-    }), "utf8");
-    const emitPlan = path.join(contextDir, `${gate}-${headSha}.emit-plan.json`);
-    await writeFile(emitPlan, JSON.stringify({ ok: true, pending: true, repo, pr: "7", gate, headSha, count: 1, units: [{ angles: ["kiss"], group: null }] }), "utf8");
+    // Real plan: resolveFanoutDispatch builds the fan-out, writeGateContext
+    // records the bundle, and the emitter CLI persists the keyed emit plan.
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const fanout = resolveFanoutDispatch(config, "draft", ["dry", "kiss"], { carriedAngles: ["dry"] });
+    const contextOptions = parseWriteGateContextCliArgs(["--repo", repo, "--pr", "7", "--gate", gate, "--head-sha", headSha, "--angles", JSON.stringify(["dry", "kiss"])]);
+    await writeGateContext({ ...contextOptions, config, fanoutDispatch: fanout }, { repoRoot });
+    const emitted = await runNode(path.resolve("scripts/github/emit-fanout-dispatch.mjs"), ["--repo", repo, "--pr", "7", "--gate", gate, "--head-sha", headSha, "--pending"], { cwd: repoRoot });
+    assert.equal(emitted.code, 0, emitted.stderr || emitted.stdout);
+    const emitPlan = buildGateEmitPlanPath({ repo, pr: "7", gate, headSha, tmpRoot: path.join(repoRoot, "tmp") });
+    const plan = JSON.parse(await readFile(emitPlan, "utf8"));
+    assert.deepEqual(plan.units.map((unit) => unit.angles), [["kiss"]]);
     const carried = JSON.parse(carryForwardPlanJson(["dry"], { carriedFromHead: STALE_HEAD })).carried.map((entry) => ({ ...entry, reviewer: "prior-reviewer" }));
     await withFindingsDir(
       { "kiss.json": { angle: "kiss", verdict: "clean", findings: [], headSha } },

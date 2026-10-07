@@ -5929,7 +5929,8 @@ test("#2414 resolveFanoutDispatch: units above the cap pack first-fit decreasing
   const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, env: {} });
   // 3 base units (2, 2, 1 angles) above cap 2: FFD fills the first unit to 5.
   assert.deepEqual(plan.groups, [{ name: packedUnitName(["e", "group:a+b", "group:c+d"]), angles: ["e", "a", "b", "c", "d"] }]);
-  assert.deepEqual(plan.pendingGroups, plan.groups);
+  // pendingGroups are cap-split dispatch units and also carry their `group`.
+  assert.deepEqual(plan.pendingGroups.map(({ name, angles }) => ({ name, angles })), plan.groups);
   assert.equal(plan.wavePlan.length, 1);
   assert.equal(plan.pendingWavePlan.length, 1);
 });
@@ -8088,6 +8089,14 @@ test("issue 2511 PR 2614 round 2 replay: 2 carried angles in mixed units dispatc
   assert.equal(plan.preflight.requiredReviewers, 5);
   // The recorded plan keeps every resolved angle so provenance stays whole.
   assert.equal(countAngles(plan.groups), 10);
+});
+
+test("issue 2511 PR 2614 round 2 replay under per-angle dispatch: 8 fresh angles are 8 dispatch units", () => {
+  const config = { version: 1, gates: { fanout: { mode: "per-angle", maxConcurrent: 8 } } };
+  const plan = resolveFanoutDispatch(config, "draft", pr2614Angles, { carriedAngles: ["scope", "input-validation"] });
+  assert.equal(plan.pendingGroups.length, 8, "dispatch units equal angles");
+  assert.equal(countAngles(plan.pendingGroups), 8, "dispatched angles");
+  assert.equal(plan.pendingGroups.flatMap((g) => g.angles).some((a) => a === "scope" || a === "input-validation"), false);
 });
 
 test("issue 2511 a carried set covering every angle of one unit drops that unit (4 dispatch units)", () => {
