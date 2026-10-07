@@ -15,7 +15,7 @@ import path from "node:path";
 import { resolveFindingFile } from "./gate-fanin.mjs";
 
 /** Act items on one surface in this many counted rounds escalate. */
-export const ESCALATION_THRESHOLD = 3;
+const ESCALATION_THRESHOLD = 3;
 
 const NON_CODE = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`/g;
 
