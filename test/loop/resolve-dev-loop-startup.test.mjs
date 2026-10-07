@@ -575,7 +575,8 @@ test("buildResolveDevLoopStartupResult does not mention a retrospective in nextA
     });
 
     // RETRO-ENFORCEMENT-CONFIG-GATED (#1628): opt in via `.devloops` so the
-    // gated checkpoint read path is exercised (absent file fails closed).
+    // gated checkpoint read path is exercised (an absent file maps to NONE, so
+    // the retrospective gate does not fire and the worktree-isolation check decides).
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
 
     const result = await runNode(["--input", inputPath], { cwd: tempDir });
@@ -583,6 +584,9 @@ test("buildResolveDevLoopStartupResult does not mention a retrospective in nextA
     assert.equal(result.code, 0, `expected exit 0, got stderr: ${result.stderr}`);
     const parsed = JSON.parse(result.stdout.trim());
     assert.equal(parsed.ok, true);
+    assert.equal(parsed.bundleKind, "needs_reconcile");
+    assert.equal(parsed.selectedStrategy, "none");
+    assert.match(parsed.nextAction ?? "", /worktree isolation/i);
     assert.doesNotMatch(parsed.nextAction ?? "", /retrospective/i);
   }, { prefix: "resolve-dev-loop-startup-" });
 });

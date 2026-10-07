@@ -79,7 +79,8 @@ Optional:
 
 Preconditions (each refuses with a machine-readable reason naming the failing one):
   human_approver, mergeable, ci_green, title_markers, gate_evidence,
-  copilot_convergence, size_budget_human_approval, merge_approval.
+  copilot_convergence, size_budget_human_approval, merge_approval,
+  retrospective_checkpoint (only when workflow.requireRetrospective is true).
   copilot_convergence refuses a current-head Copilot "Changes recommended" (🟡)
   or unrecognized non-approval disposition (🔵 "Needs a closer look" is
   conductor-overridable; unresolved threads still gate it). A trusted

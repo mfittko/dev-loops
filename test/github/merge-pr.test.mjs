@@ -943,7 +943,7 @@ test("retrospective_checkpoint: an empty pendingRetrospectives result (evaluator
   }
 });
 
-test("retrospective_checkpoint: a stale record or failed lookup surfaces the helper's pending entries", async () => {
+test("retrospective_checkpoint: a failed association lookup surfaces the helper's pending entry", async () => {
   const { runtime } = makeRuntime({ configExtra: RETRO_CONFIG });
   runtime.resolvePendingRetrospectives = () => ({ checkpointState: "missing", pendingRetrospectives: [{ pr: null, mergeCommit: null, reason: "ancestry_or_association_unverifiable" }] });
   const threw = await refusal(runtime);
