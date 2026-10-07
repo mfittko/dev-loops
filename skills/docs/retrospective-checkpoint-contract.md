@@ -270,13 +270,13 @@ provenance** (issue #1870). Retrospective *findings* (`behavioralReview`, `rawCa
 }
 ```
 
-### Explicit skip with reason
+### Discharge without a pass
 
 ```json
 {
   "state": "skipped",
   "skippedAt": "2026-05-29T16:30:00.000Z",
-  "reason": "Trivial documentation-only change; no post-run audit needed.",
+  "reason": "Retrospective obligation for PR 1613 discharged without a pass: documentation-only change.",
   "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c" }
 }
 ```

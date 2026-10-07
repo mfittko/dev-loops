@@ -560,7 +560,7 @@ test("buildResolveDevLoopStartupResult auto-injects retrospectiveCheckpointState
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 
-test("buildResolveDevLoopStartupResult fails closed when no checkpoint file exists and cwd is not a worktree", async () => {
+test("buildResolveDevLoopStartupResult does not mention a retrospective in nextAction when no checkpoint file exists and cwd is not a worktree", async () => {
   await withTempDir(async (tempDir) => {
     const inputPath = await writeTempJson(tempDir, "startup.json", {
       currentState: {
@@ -3754,10 +3754,10 @@ test("buildResolveDevLoopStartupResult: two parallel units both start while one 
 });
 
 test("buildResolveDevLoopStartupResult: none, complete and skipped checkpoints report no pending retrospective (#2488)", () => {
-  for (const state of ["complete", "skipped"]) {
+  for (const state of ["none", "complete", "skipped"]) {
     const tempDir = stampRepoWithOrigin();
     try {
-      writeCheckpoint(tempDir, {
+      writeCheckpoint(tempDir, state === "none" ? { state } : {
         state,
         completedAt: "2026-08-08T01:00:00.000Z",
         identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: "cafef00d" },
