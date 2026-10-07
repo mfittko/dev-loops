@@ -370,6 +370,7 @@ test("decideBashGate denies raw gh issue edit from a subagent on the target repo
 test("decideBashGate denies raw gh issue edit body writes from the MAIN agent but allows non-body edits (#2689)", () => {
   const gate = (command) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision;
   assert.equal(gate("gh issue edit 5 --body-file x"), "deny");
+  assert.equal(gate("gh issue edit 5 \\\n  --body-file x"), "deny");
   assert.equal(gate("gh issue edit 5 --add-label bug"), "allow");
   assert.equal(gate(`eval "gh issue edit 5 --add-label x"; eval "gh issue edit 5 --body y"`), "deny");
   assert.equal(gate(`bash -c "gh issue edit 5 --title 'a; b' --body x"`), "deny");

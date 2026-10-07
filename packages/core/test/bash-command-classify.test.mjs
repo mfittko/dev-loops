@@ -1298,6 +1298,9 @@ test("commandContainsRawPrBodyEdit denies global-flag and wrapped literal forms"
     "cat args.txt | xargs gh issue edit 5",
     `eval "gh issue edit 5 --add-label x"; eval "gh issue edit 5 --body y"`,
     `bash -c "gh issue edit 5 --title 'a; b' --body x"`,
+    "gh issue edit 5 \\\n  --body-file x",
+    "gh pr edit 5 \\\n  --body-file x",
+    `bash -c "gh issue edit 5 \\\n  --body-file x"`,
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
   }
