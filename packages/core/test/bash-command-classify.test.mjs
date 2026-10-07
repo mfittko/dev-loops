@@ -1262,6 +1262,7 @@ test("commandContainsRawPrBodyApiWrite detects a gh api write of a body field to
     'bash -c "gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body=x"',
     'echo "a\\"b" && bash -c "gh api -X PATCH repos/o/r/pulls/5 -f body=x"',
     'echo \\" && bash -c "gh api -X PATCH repos/o/r/pulls/5 -f body=x"',
+    `echo "$(bash -c 'gh api -X PATCH repos/o/r/pulls/5 -f body=x')"`,
     'eval "gh api repos/mfittko/dev-loops/pulls/5 -f body=x"',
     "echo 5 | xargs -I{} gh api -X PATCH repos/mfittko/dev-loops/pulls/{} -f body=x",
   ]) {
@@ -1310,6 +1311,9 @@ test("commandContainsRawPrBodyEdit denies global-flag and wrapped literal forms"
     "echo a\\\\\ngh pr edit 5 --body x",
     "echo a\\\\\ngh issue edit 5 --body-file x",
     "gh pr edit 5 --bo\\\ndy x",
+    `echo "$(bash -c 'gh pr edit 5 --body x')"`,
+    `echo "$(eval 'gh pr edit 5 --body x')"`,
+    `echo "$(echo 5 | xargs -I{} gh pr edit {} --body x)"`,
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
   }
@@ -1325,6 +1329,8 @@ test("commandContainsRawPrBodyEdit keeps passing title, assignee and read forms"
     `bash -c "echo hi"`,
     "git commit -m 'gh pr edit notes'",
     "xargs -I{} gh issue edit {} --add-label x",
+    "echo 5 | xargs -I{} gh issue edit {} -t new",
+    "echo 5 | xargs -I{} gh issue edit {} -m v1",
     `bash -c "gh issue edit 5 --add-label x" ; ls -F`,
     "gh issue list | grep -F foo | xargs -I{} gh issue edit {} --add-label x",
     `git commit -m "docs: eval and gh issue edit notes"`,

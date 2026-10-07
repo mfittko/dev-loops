@@ -847,7 +847,7 @@ const GH_PR_EDIT_LITERAL = new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}pr\\s+edi
 const BODY_FLAG_ANYWHERE = /(?:^|\s)(?:--body(?:-file)?(?=[=\s'"]|$)|-[bF](?=[=\s'"]|\S|$))/;
 
 /** An explicit non-body `gh issue edit` flag; an xargs-fed edit without one may take its body flag from stdin. */
-const NON_BODY_EDIT_FLAG = /(?:^|\s)--(?:(?:add|remove)-(?:label|assignee|project)|title|milestone|remove-milestone)(?=[=\s]|$)/;
+const NON_BODY_EDIT_FLAG = /(?:^|\s)(?:--(?:(?:add|remove)-(?:label|assignee|project)|title|milestone|remove-milestone)(?=[=\s]|$)|-[tm](?=[=\s]|\S|$))/;
 
 /** A shell wrapper that hides a command from per-segment inspection: `bash|sh|zsh|dash|ksh -c`, `eval`, `xargs`. */
 const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*-\S*c|eval|xargs)(?=\s)/;
@@ -864,6 +864,8 @@ function unquoteFlagTokens(segment) {
 
 /** Blank quoted spans for the wrapper-word checks only: double quotes honor backslash escapes, unlike `stripQuotedLiterals`. */
 function stripQuotesEscapeAware(command) {
+  // A `$(...)` or backtick substitution runs even inside double quotes, so keep the raw text then (fail closed).
+  if (/\$\(|`/.test(command)) return command;
   return command.replace(/\\.|'[^']*'|"(?:\\.|[^"\\])*"/gs, " ");
 }
 
