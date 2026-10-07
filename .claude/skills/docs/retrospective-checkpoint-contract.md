@@ -24,7 +24,7 @@ Provenance shape:
 `skipped` records are not provenance-gated: no retro ran, so there is nothing to have provenance.
 
 <!-- rule: RETRO-ENFORCEMENT-CONFIG-GATED -->
-Whether a missing checkpoint blocks the next qualifying start/resume MUST be controlled by `.devloops` at repo root `workflow.requireRetrospective`; shipped defaults remain permissive and this repo opts in.
+Whether the checkpoint is evaluated MUST be controlled by `.devloops` at repo root `workflow.requireRetrospective`; shipped defaults remain permissive and this repo opts in. With the flag unset or `false`, startup reports no `pendingRetrospectives`, `merge-pr` does not evaluate `retrospective_checkpoint`, and neither site reads the checkpoint file or runs the ancestry lookup.
 
 ## Relationship to formal dev mode
 
@@ -90,10 +90,9 @@ evaluateRetrospectiveGate({
 ### Outputs
 
 - **Pass-through** (proposed routing returned unchanged) when:
-  - `checkpointState` is `none`, `complete`, or `skipped`
+  - `checkpointState` is `none`, `complete`, `skipped`, or `missing` (a `missing` state routes normally; the obligation is reported as `pendingRetrospectives` and enforced at merge by `merge-pr`, ADR 0125)
   - `proposedRouting` is already `stop`, `needs_reconcile`, or `inspect`
 - **Fail-closed** (`needs_reconcile` result) when:
-  - `checkpointState` is `missing`
   - `checkpointState` is unrecognized
 
 ### Caller contract
@@ -108,7 +107,7 @@ Callers have two supported integration options:
    - `evaluatePublicDevLoopRouting(...)`
    - `resolveAuthoritativeStartupResumeBundle(...)`
    - `resolveAuthoritativeDevLoopStatus(...)`
-4. Use the returned result directly. When enforcement is enabled and the checkpoint is missing, these helpers fail closed to `needs_reconcile`.
+4. Use the returned result directly. A missing checkpoint does not change the routing; report it as `pendingRetrospectives` (see "Pending retrospectives and the merge precondition").
 
 #### Option B — explicit manual gate composition
 
@@ -116,10 +115,32 @@ Callers have two supported integration options:
 2. Map the file contents to a `RETROSPECTIVE_CHECKPOINT_STATE` value.
 3. Call `evaluatePublicDevLoopRouting(...)` to get the proposed routing.
 4. Call `evaluateRetrospectiveGate({ checkpointState, proposedRouting })`.
-5. Use the gate result (not the raw routing result) as the effective routing decision when enforcement is enabled; otherwise keep the raw routing result and treat the checkpoint artifact as advisory context only.
+5. Use the gate result as the effective routing decision. A `missing` state passes through unchanged and an unrecognized state returns `needs_reconcile`.
 
 <!-- rule: RETRO-GATE-FAIL-CLOSED -->
-If the gate result is `needs_reconcile`, the caller MUST NOT proceed with the proposed routing. The `nextAction` field instructs the operator to complete or explicitly skip the retrospective.
+If the gate result is `needs_reconcile` (an unrecognized checkpoint state or an invalid routing input), the caller MUST NOT proceed with the proposed routing. A `missing` checkpoint does not stop startup. It is enforced fail-closed at merge: `merge-pr` refuses while an earlier qualifying merge has no `complete` or `skipped` checkpoint (ADR 0125).
+
+### Pending retrospectives and the merge precondition
+
+One shared evaluator, `resolvePendingRetrospectives` in `scripts/loop/resolve-dev-loop-startup.mjs`, reads the checkpoint through `RETRO-CHECKPOINT-REPO-ROOT`, runs the repo-identity check and the qualifying-merge rule, and maps the record to a state. Startup and `merge-pr` both call it. It returns `{ checkpointState, pendingRetrospectives }`.
+
+- Each `pendingRetrospectives` entry is `{ pr, mergeCommit }`. A `required` or `missing` record with an identity names that identity. A stale `complete` or `skipped` record names the first qualifying newer merge.
+- An entry whose merge cannot be identified has `pr: null`, `mergeCommit: null` and a `reason` code: `checkpoint_unreadable`, `checkpoint_malformed`, `checkpoint_identity_missing`, `checkpoint_foreign_repo`, `ancestry_or_association_unverifiable`, or `newer_merge_unidentified`.
+- A `none`, `complete` or `skipped` state yields `pendingRetrospectives: []`.
+- Startup routes the unit normally and carries `pendingRetrospectives` in the bundle. The orchestrator dispatches each reported retrospective in parallel with the unit.
+- `merge-pr` fails the `retrospective_checkpoint` precondition when the list is not empty. The refusal names the PR number and full merge commit of each entry, or the reason code and recorded checkpoint state for an entry with no identity. The PR being merged is not merged yet, so the rule never counts it.
+
+### Recording a discharge
+
+When a retrospective has run, record it with the `complete` command under "Cycle scoping". When the obligation for a cycle is discharged without a retrospective pass, record that fact with factual wording:
+
+```sh
+node scripts/loop/checkpoint-contract.mjs --state skipped \
+  --reason "Retrospective obligation for PR <number> discharged without a pass: <factual reason>" \
+  --repo <owner/name> --pr <number> --merge-commit <full merge commit oid>
+```
+
+The record names one cycle and is not a standing exemption. The command needs no standing-authorization key.
 
 ## Advisory findings — never a merge gate (issue #1077, Reading B)
 
@@ -127,7 +148,9 @@ If the gate result is `needs_reconcile`, the caller MUST NOT proceed with the pr
 The retrospective is **advisory**: it runs, records flagged raw-call / discipline
 observations honestly, and passes them back to the conductor (main agent) to
 **decide** what to do with them — but it MUST NOT block a merge or any PR-lifecycle
-transition of the current run. The pre-merge retrospective gate (`evaluateRetrospectiveMergeApproval`
+transition of the current run on account of its findings. The only blocking input is the
+completion state of an earlier merge's checkpoint (`retrospective_checkpoint` in
+`merge-pr`, ADR 0125, which amends ADR 0024). The pre-merge retrospective gate (`evaluateRetrospectiveMergeApproval`
 and the `requireRetrospectiveGate` / `requireRetrospectiveInternalTooling` config
 keys) has been **removed**. There is no `retrospective_gate_pending` / `blocked`
 disposition on account of the internal-tooling raw-call record.
@@ -265,7 +288,7 @@ provenance** (issue #1870). Retrospective *findings* (`behavioralReview`, `rawCa
 | Artifact | Location |
 |---|---|
 | Checkpoint state machine (identity normalization, ancestry-scoped state resolution) | `packages/core/src/loop/retrospective-checkpoint.mjs` (internal core module; `normalizeCheckpointCycleIdentity`/`resolveCheckpointStateFromArtifact` are re-exported through `public-dev-loop-routing.mjs` for script-layer callers) |
-| Read-time derivation (ancestry check, repo-root path resolution) | `scripts/loop/resolve-dev-loop-startup.mjs` (`buildResolveDevLoopStartupResult`, `resolveHasNewerMergeSinceCheckpoint`) |
+| Read-time derivation (ancestry check, repo-root path resolution) | `scripts/loop/resolve-dev-loop-startup.mjs` (`buildResolveDevLoopStartupResult`, `resolvePendingRetrospectives`, `resolveHasNewerMergeSinceCheckpoint`; also called by `scripts/github/merge-pr.mjs`) |
 | Manual write CLI | `scripts/loop/checkpoint-contract.mjs` (`resolveCheckpointRepoRoot`) |
 | Internal-tooling verifier (findings-producer) | `scripts/loop/check-retro-tooling.mjs` |
 | Advisory findings envelope field | `packages/core/src/loop/handoff-envelope.mjs` — `retrospectiveFindings` |
