@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-10-07 ([issue 2581](https://github.com/mfittko/dev-loops/issues/2581))
+Proposed
 
 ## Context
 
@@ -18,7 +18,7 @@ The fixer index entry is main-anchored, so its location names no review root and
 - The child runs with cwd set to the worktree. Its receipt root still resolves to the main checkout's `tmp/`, so the receipt lands where the ADR 0107 grant reads it, and the grant binding to the pulling `agent_id` is unchanged.
 - The fixer pull boundary hook, the emit format, the work-order digest and the gate pull delegation do not change.
 
-Trust: the digest check runs in the delegated script against the same pinned digest. The branch comes from the emit plan that the digest-pinned work order was written from, and the branch must be a linked worktree of the same repository.
+Trust: the digest check runs in the delegated script against the same pinned digest. The branch comes from the emit plan that the digest-pinned work order was written from, and the branch must be a linked worktree of the same repository. The pull recomputes the digest of the plan's work order and requires it to equal the indexed `workOrderDigest` before it reads the branch; a mismatch stays local.
 
 ## Consequences
 

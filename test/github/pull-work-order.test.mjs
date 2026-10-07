@@ -466,6 +466,16 @@ test("self-hosting pull: a relative --tmp-root delegates as the absolute path, s
 // ADR 0124: a main-anchored fixer entry delegates to the linked worktree whose checked-out branch is the
 // digest-pinned order's mutationAuthority.branch. The stub in that worktree stands in for its renderer.
 const FIXER_ID = "f1790000000001-abcdef12";
+// The plan's order and the index entry share one digest, as the emitter writes them.
+async function seedFixerPlan(main, branch) {
+  const workOrderRef = `fixer:o/r#7:${HEAD}:${FIXER_ID}`;
+  const workOrder = { mutationAuthority: { branch, allowedPaths: ["."] } };
+  await writeExecutionIndex(path.join(main, "tmp"), { executionIdentity: FIXER_ID, workOrderRef, workOrderDigest: workOrderDigest(workOrder) });
+  const dir = path.join(main, "tmp", "gate-fixer", "o-r", "pr-7");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "fixer-emit-plan.json"), JSON.stringify({ workOrderRef, workOrder }), "utf8");
+}
+
 async function seedFixerMain(main, { branch = "issue-9" } = {}) {
   await mkdir(main);
   const git = (args, cwd = main) => execFileSync("git", args, { cwd, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
@@ -473,10 +483,7 @@ async function seedFixerMain(main, { branch = "issue-9" } = {}) {
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
   await seedDelegateCheckout(main);
   const workOrderRef = `fixer:o/r#7:${HEAD}:${FIXER_ID}`;
-  await writeExecutionIndex(path.join(main, "tmp"), { executionIdentity: FIXER_ID, workOrderRef, workOrderDigest: `sha256:${"0".repeat(64)}` });
-  const dir = path.join(main, "tmp", "gate-fixer", "o-r", "pr-7");
-  await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, "fixer-emit-plan.json"), JSON.stringify({ workOrderRef, workOrder: { mutationAuthority: { branch, allowedPaths: ["."] } } }), "utf8");
+  await seedFixerPlan(main, branch);
   return git;
 }
 
@@ -494,8 +501,14 @@ test("pullDelegationTarget: a main-anchored fixer pull delegates to the linked d
     await seedDelegateCheckout(linked);
     await seedDelegateCheckout(other);
     assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), linked);
-    // A branch no worktree checks out stays local.
-    await writeFile(path.join(main, "tmp/gate-fixer/o-r/pr-7/fixer-emit-plan.json"), JSON.stringify({ workOrderRef: `fixer:o/r#7:${HEAD}:${FIXER_ID}`, workOrder: { mutationAuthority: { branch: "gone" } } }), "utf8");
+    // A tampered plan branch with the ref and index digest preserved fails the digest check and stays local.
+    const planPath = path.join(main, "tmp/gate-fixer/o-r/pr-7/fixer-emit-plan.json");
+    const good = await readFile(planPath, "utf8");
+    await writeFile(planPath, JSON.stringify({ ...JSON.parse(good), workOrder: { mutationAuthority: { branch: "issue-10", allowedPaths: ["."] } } }), "utf8");
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+    // A digest-authentic order whose branch no worktree checks out stays local.
+    await rm(executionIndexPath(path.join(main, "tmp"), FIXER_ID));
+    await seedFixerPlan(main, "gone");
     assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
   });
 });
@@ -637,9 +650,10 @@ test("self-hosting fixer pull: a successful delegated pull returns the worktree 
     try {
       await seedDelegateCheckout(linked);
       await writeFile(path.join(linked, "scripts/github/pull-work-order.mjs"), `console.log("WORKTREE TEXT");\nprocess.exit(0);\n`, "utf8");
-      await writeExecutionIndex(mainTmp, { executionIdentity: id, workOrderRef, workOrderDigest: `sha256:${"0".repeat(64)}` });
+      const workOrder = { mutationAuthority: { branch, allowedPaths: ["."] } };
+      await writeExecutionIndex(mainTmp, { executionIdentity: id, workOrderRef, workOrderDigest: workOrderDigest(workOrder) });
       await mkdir(planDir, { recursive: true });
-      await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrderRef, workOrder: { mutationAuthority: { branch, allowedPaths: ["."] } } }), "utf8");
+      await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrderRef, workOrder }), "utf8");
       const pulled = pullShort(id, mainRoot);
       assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
       assert.equal(pulled.stdout, "WORKTREE TEXT\n");

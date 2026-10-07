@@ -12,7 +12,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
-import { EXECUTION_IDENTITY_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole } from "./_work-order-protocol.mjs";
+import { EXECUTION_IDENTITY_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole, workOrderDigest } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { buildFixerDir } from "../loop/emit-fixer-work-order.mjs"; // also registers the fixer role adapter
 import { TOOLCHAIN_ROOT, isOtherDevLoopsCheckout, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveMainWorktreeRoot } from "../loop/_repo-root-resolver.mjs";
@@ -95,11 +95,12 @@ function fixerAuthorityWorktree(tmpRoot, execution, mainRoot) {
   try {
     // Only the toolchain's own main checkout owns a worktree list this lookup may search.
     if (realpathSync(path.dirname(tmpRoot)) !== realpathSync(mainRoot)) return null;
-    const { workOrderRef } = JSON.parse(readFileSync(executionIndexPath(tmpRoot, execution), "utf8"));
+    const { workOrderRef, workOrderDigest: indexedDigest } = JSON.parse(readFileSync(executionIndexPath(tmpRoot, execution), "utf8"));
     const [, repo, pr] = FIXER_REF_PR_RE.exec(workOrderRef) ?? [];
     if (!repo) return null;
     const plan = JSON.parse(readFileSync(path.join(buildFixerDir({ repo, pr, tmpRoot }), "fixer-emit-plan.json"), "utf8"));
-    if (plan.workOrderRef !== workOrderRef) return null;
+    // The ref carries no digest: authenticate the plan's order against the indexed digest before trusting its branch.
+    if (plan.workOrderRef !== workOrderRef || workOrderDigest(plan.workOrder) !== indexedDigest) return null;
     const branch = plan.workOrder?.mutationAuthority?.branch;
     if (typeof branch !== "string" || !branch) return null;
     return listWorktreeEntries(mainRoot).slice(1).find((entry) => entry.branch === `refs/heads/${branch}`)?.path ?? null;
