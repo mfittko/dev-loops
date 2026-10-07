@@ -405,7 +405,14 @@ test("a recommendation with more than MAX_FIX_STEPS sentences renders five steps
   const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short.", recommendation }, { round: 1 });
   assert.equal(body.split("\n").filter((line) => /^\d+\. /.test(line)).length, 5);
   assert.match(body, /<details><summary>Details<\/summary>/);
+  assert.match(body.slice(body.indexOf("<details>")), /Do six\./);
   assert.doesNotMatch(body, /ledger entry/);
+});
+
+test("an escape-heavy finding stays under the GitHub comment limit", () => {
+  const heavy = "[<".repeat(20000);
+  const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: heavy, failingCase: heavy, recommendation: heavy }, { round: 1 });
+  assert.ok(body.length < 65536, String(body.length));
 });
 
 test("merge: shared stopwords and file identifiers do not merge two different defects", () => {

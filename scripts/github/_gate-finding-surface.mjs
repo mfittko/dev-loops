@@ -437,7 +437,7 @@ function neutralizeHeaderSeparator(angle) {
 // `()` is common in prose that names a call, so neither counts.
 const LINE_BREAK_RE = /\r\n|[\r\n\u2028\u2029]/;
 function isCodeLike(text) {
-  return LINE_BREAK_RE.test(text.trim()) || /^\s*[$>]\s/.test(text) || /[{}]|=>/.test(text);
+  return LINE_BREAK_RE.test(text.trim()) || /^\s*[$>]\s/.test(text) || /[{}]/.test(text);
 }
 
 // The details block shares one budget well under GITHUB_COMMENT_MAX_CHARS
@@ -445,6 +445,8 @@ function isCodeLike(text) {
 // round's review. A field above its share is cut and marked.
 const DETAILS_TOTAL_MAX_CHARS = 30000;
 const DETAILS_FIELD_MAX_CHARS = 8000;
+// Applied to the text as rendered (already escaped or entity-encoded), so the
+// budget bounds the output length. fenceCode's encoding is idempotent.
 function boundDetailsText(text, fieldCount) {
   const max = Math.min(DETAILS_FIELD_MAX_CHARS, Math.floor(DETAILS_TOTAL_MAX_CHARS / fieldCount));
   return text.length > max ? `${text.slice(0, max)} [cut]` : text;
@@ -556,8 +558,9 @@ export function renderInlineCommentBody(finding, { round }) {
   if (cutFields.length > 0) {
     lines.push("<details><summary>Details</summary>", "");
     for (const field of cutFields) {
-      const text = boundDetailsText(field.text, cutFields.length);
-      lines.push(`**${field.label}:**`, ...(field.code ? fenceCode(text) : [escapeProse(text)]), "");
+      const rendered = field.code ? field.text.replaceAll("<!--", "&lt;!--").replaceAll("-->", "--&gt;") : escapeProse(field.text);
+      const text = boundDetailsText(rendered, cutFields.length);
+      lines.push(`**${field.label}:**`, ...(field.code ? fenceCode(text) : [text]), "");
     }
     lines.push("</details>");
   }
