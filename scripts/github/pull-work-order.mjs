@@ -7,15 +7,15 @@
  * write is the pull receipt.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
-import { EXECUTION_IDENTITY_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole } from "./_work-order-protocol.mjs";
+import { EXECUTION_IDENTITY_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole, workOrderDigest } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
-import { TOOLCHAIN_ROOT, isOtherDevLoopsCheckout, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveMainWorktreeRoot } from "../loop/_repo-root-resolver.mjs";
-import "../loop/emit-fixer-work-order.mjs"; // registers the fixer role adapter
+import { fixerPlanPath } from "../loop/emit-fixer-work-order.mjs"; // also registers the fixer role adapter
+import { TOOLCHAIN_ROOT, isOtherDevLoopsCheckout, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveMainWorktreeRoot } from "../loop/_repo-root-resolver.mjs";
 import "../loop/emit-judge-work-order.mjs"; // registers the judge role adapter
 
 const USAGE = `Usage: pull-work-order.mjs <executionIdentity> [--tmp-root <path>]
@@ -83,18 +83,49 @@ registerWorkOrderRole("review", {
 
 // ADR 0117: on a self-hosting PR the emitter wrote the execution index entry in the PR worktree. That
 // checkout is the review root, so its own pull script serves the pull. The marker stops a second hop.
-// The pull never delegates back to the main checkout. A main-anchored entry (the fixer index) can be
-// emitted from any checkout, so its location names no review root and the local toolchain serves it.
+// The pull never delegates back to the main checkout. A main-anchored fixer entry names no review root, so
+// it delegates by the digest-pinned order's mutationAuthority.branch instead (ADR 0124).
 const PULL_DELEGATED_ENV = "DEV_LOOPS_PULL_DELEGATED";
 const PULL_SCRIPT = "scripts/github/pull-work-order.mjs";
+
+/** The linked worktree that checks out the fixer order's mutationAuthority.branch, or null. */
+function fixerAuthorityWorktree(tmpRoot, execution, mainRoot) {
+  try {
+    // Only the toolchain's own main checkout owns a worktree list this lookup may search.
+    if (realpathSync(path.dirname(tmpRoot)) !== realpathSync(mainRoot)) return null;
+    const { workOrderRef, workOrderDigest: indexedDigest } = JSON.parse(readFileSync(executionIndexPath(tmpRoot, execution), "utf8"));
+    const planPath = fixerPlanPath(workOrderRef, tmpRoot);
+    if (!planPath) return null;
+    const plan = JSON.parse(readFileSync(planPath, "utf8"));
+    // The ref carries no digest: authenticate the plan's order against the indexed digest before trusting its branch.
+    if (plan.workOrderRef !== workOrderRef || workOrderDigest(plan.workOrder) !== indexedDigest) return null;
+    const branch = plan.workOrder?.mutationAuthority?.branch;
+    if (typeof branch !== "string" || !branch) return null;
+    return listWorktreeEntries(mainRoot).slice(1).find((entry) => entry.branch === `refs/heads/${branch}`)?.path ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when a delegated fixer pull refused on a renderer skew, so the pull retries locally once (ADR 0124). */
+export function shouldRetryFixerPullLocally(execution, status, stdout) {
+  if (execution[0] !== "f" || status !== 1) return false;
+  try {
+    return JSON.parse(stdout).refusal === "local_materialization_integrity_failure";
+  } catch {
+    return false;
+  }
+}
 
 /** The dev-loops checkout whose pull script must serve `execution`, or null to pull locally. */
 export function pullDelegationTarget(execution, tmpRoots, { toolchainRoot = TOOLCHAIN_ROOT, env = process.env } = {}) {
   if (env[PULL_DELEGATED_ENV] || !EXECUTION_IDENTITY_RE.test(String(execution))) return null;
   const tmpRoot = tmpRoots.find((root) => existsSync(executionIndexPath(root, execution)));
-  const checkout = tmpRoot ? path.dirname(tmpRoot) : null;
-  if (!checkout || !existsSync(path.join(checkout, PULL_SCRIPT)) || !isOtherDevLoopsCheckout(checkout, toolchainRoot)) return null;
+  let checkout = tmpRoot ? path.dirname(tmpRoot) : null;
   const mainRoot = resolveMainWorktreeRoot(toolchainRoot);
+  // A main-anchored fixer entry delegates by the digest-pinned order's authority branch (ADR 0124).
+  if (checkout && execution[0] === "f" && !isOtherDevLoopsCheckout(checkout, mainRoot)) checkout = fixerAuthorityWorktree(tmpRoot, execution, mainRoot);
+  if (!checkout || !existsSync(path.join(checkout, PULL_SCRIPT)) || !isOtherDevLoopsCheckout(checkout, toolchainRoot)) return null;
   if (!isOtherDevLoopsCheckout(checkout, mainRoot)) return null;
   // Only a linked worktree of this same repository may serve the pull, never an unrelated checkout.
   if (realpathSync(resolveMainWorktreeRoot(checkout)) !== realpathSync(mainRoot)) return null;
@@ -119,15 +150,21 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   // An injected receiptTmpRoot pins where the receipt lands, which the child cannot honor: pull locally.
   const target = receiptTmpRoot ? null : pullDelegationTarget(short ? positionals[0] : values.execution, tmpRoots);
   if (target) {
-    // stdout, stderr and the exit code pass through unchanged. The child runs under cwd `target`, so a
+    // The child's stdout is buffered and stderr passes through; stdout and the exit code are relayed unless a fixer
+    // skew refusal triggers one local retry below. The child runs under cwd `target`, so a
     // --tmp-root goes over as the absolute path this process resolved.
     const childArgs = [
       ...(short ? [positionals[0]] : ["--ref", values.ref, "--digest", values.digest, "--execution", values.execution]),
       ...(values["tmp-root"] ? ["--tmp-root", tmpRoots[0]] : []),
     ];
-    const r = spawnSync(process.execPath, [path.join(target, PULL_SCRIPT), ...childArgs], { cwd: target, stdio: "inherit", env: { ...process.env, [PULL_DELEGATED_ENV]: "1" } });
+    const execution = short ? positionals[0] : values.execution;
+    const r = spawnSync(process.execPath, [path.join(target, PULL_SCRIPT), ...childArgs], { cwd: target, stdio: ["inherit", "pipe", "inherit"], encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, [PULL_DELEGATED_ENV]: "1" } });
     if (r.error) process.stderr.write(`pull-work-order: delegated pull failed to start: ${r.error.message}\n`);
-    return r.status ?? 2;
+    // An order emitted from the main checkout can differ from the worktree's renderer: pull locally once.
+    if (!shouldRetryFixerPullLocally(execution, r.status, r.stdout ?? "")) {
+      process.stdout.write(r.stdout ?? "");
+      return r.status ?? 2;
+    }
   }
   try {
     const { workOrderText } = await pullWorkOrder({

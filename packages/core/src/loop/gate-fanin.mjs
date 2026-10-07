@@ -129,14 +129,14 @@ export function planDispatchRetry(attempt, errorClass) {
  * returned `verdict` and `executionMode` are ALWAYS null: a shortfall is not a
  * verdict, and it fails closed at merge rather than yielding a clean/inline one.
  *
- * @param {{ name: string, angles: string[] }[]} dispatchGroups — `resolveFanoutGroups` output (fresh angles + re-verifications)
+ * @param {{ name: string, angles: string[] }[]} dispatchGroups — cap-split dispatch units (`expandDispatchUnits` of `resolveFanoutGroups` output: fresh angles + re-verifications); carried angles are stripped per angle from each unit and an emptied unit is dropped
  * @param {number|null} [availableReviewers] — harness remaining reviewer budget; null/non-finite = unknown/unexposed
  * @param {{ completedAngles?: Iterable<string>, carriedAngles?: Iterable<string> }} [options] — angle names
  *   already resolved for THIS head: `completedAngles` have a clean per-angle artifact stamped for it,
  *   `carriedAngles` are proven carried forward from a prior clean head (that carry-forward runs AFTER this
- *   preflight, so a head-bump re-gate must feed its result back in). A group whose angles are ALL
- *   complete-or-carried is excluded from the required count and `pendingGroups`, so a later session
- *   dispatches only unresolved groups. Membership is matched trim+lowercase (mirrors consolidate-fanin.mjs's
+ *   preflight, so a head-bump re-gate must feed its result back in). A unit whose angles are ALL
+ *   complete-or-carried is excluded from the required count and `pendingGroups`; a carried angle in a
+ *   mixed unit is stripped from it, so a later session dispatches only unresolved angles. Membership is matched trim+lowercase (mirrors consolidate-fanin.mjs's
  *   carried-key normalization) so a case difference still excludes the right group.
  * @returns {{ ok: boolean, dispatch: boolean, requiredReviewers: number, availableReviewers: number|null, shortfall: number|null, reason: string, verdict: null, executionMode: null, pendingGroups: { name: string, angles: string[] }[], skippedGroups: { name: string, angles: string[] }[], completedAngles: string[], carriedAngles: string[] }}
  */
@@ -163,7 +163,23 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
       const key = normalizeAngleKey(a);
       return completedKeys.has(key) || carriedKeys.has(key);
     });
-  const pendingGroups = groups.filter((g) => !groupIsComplete(g));
+  // GATE-EXEC-ANGLE-CARRY-FORWARD (issue 2511): a carried angle is stripped
+  // per angle from every pending unit, so a mixed unit dispatches only its
+  // uncarried angles. Callers pass cap-split dispatch units, so each stripped
+  // unit stays a subset of one recorded unit. A one-angle unit keeps a shared
+  // `group` only as the tail of a full-cap same-group sibling (the ledger
+  // writer's rule); otherwise it drops it. `skippedGroups` holds the whole
+  // complete units and the recorded plan keeps full membership.
+  const stripped = groups
+    .filter((g) => !groupIsComplete(g))
+    .map((g) => (g.angles.some((a) => carriedKeys.has(normalizeAngleKey(a)))
+      ? { ...g, angles: g.angles.filter((a) => !carriedKeys.has(normalizeAngleKey(a))) }
+      : g));
+  const pendingGroups = stripped.map((g, i) => {
+    const prev = stripped[i - 1];
+    const validTail = prev?.angles.length === REVIEWER_UNIT_MAX_ANGLES && prev.group === g.group;
+    return g.angles.length === 1 && typeof g.group === "string" && !validTail ? { ...g, group: null } : g;
+  });
   const skippedGroups = groups.filter((g) => groupIsComplete(g));
   // One reviewer per dispatch unit: a group of N angles is one reviewer's
   // scoped dispatch, so the reviewer count is the pending dispatch-unit count,
@@ -544,8 +560,8 @@ export function freshAngleNames(perAngle) {
  * BASE names of DISTINCT angles in a `perAngle` array, fresh AND carried. This
  * is the angle set to pass to `resolveFanoutGroups` when a caller re-derives the
  * round's dispatch units for {@link fanoutReviewerPairingError}: dispatch
- * chunks the full resolved angle set (a partially carried unit is dispatched
- * whole), so re-deriving from fresh angles alone can shift the auto-chunk
+ * chunks the full resolved angle set (recorded unit membership stays whole; the dispatched unit drops
+ * carried angles), so re-deriving from fresh angles alone can shift the auto-chunk
  * boundaries and reject an honest shared reviewer.
  *
  * Auto-chunk boundaries follow input order, so a re-deriving caller passes

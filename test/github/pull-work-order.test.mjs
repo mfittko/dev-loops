@@ -2,6 +2,7 @@
 // verified work order + pull receipt under the MAIN checkout's tmp root.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -10,9 +11,10 @@ import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, exe
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
 import { withTempDir } from "../_helpers.mjs";
-import { main as pullMain, pullDelegationTarget } from "../../scripts/github/pull-work-order.mjs";
+import { main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
-import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { decideFixerWriteGuard } from "../../packages/core/src/claude/hook-decisions.mjs";
+import { resolveGateArtifactTmpRoot, resolveMainWorktreeRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 
 const SCRIPTS = path.resolve("scripts/github");
 const HEAD = "c".repeat(40);
@@ -459,4 +461,206 @@ test("self-hosting pull: a relative --tmp-root delegates as the absolute path, s
       assert.equal(r.stdout, `${path.join(linked, "tmp")}\n`);
     }
   }));
+});
+
+// ADR 0124: a main-anchored fixer entry delegates to the linked worktree whose checked-out branch is the
+// digest-pinned order's mutationAuthority.branch. The stub in that worktree stands in for its renderer.
+const FIXER_ID = "f1790000000001-abcdef12";
+// The plan's order and the index entry share one digest, as the emitter writes them.
+async function seedFixerPlan(main, branch) {
+  const workOrderRef = `fixer:o/r#7:${HEAD}:${FIXER_ID}`;
+  const workOrder = { mutationAuthority: { branch, allowedPaths: ["."] } };
+  await writeExecutionIndex(path.join(main, "tmp"), { executionIdentity: FIXER_ID, workOrderRef, workOrderDigest: workOrderDigest(workOrder) });
+  const dir = path.join(main, "tmp", "gate-fixer", "o-r", "pr-7");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "fixer-emit-plan.json"), JSON.stringify({ workOrderRef, workOrder }), "utf8");
+}
+
+async function seedFixerMain(main, { branch = "issue-9" } = {}) {
+  await mkdir(main);
+  const git = (args, cwd = main) => execFileSync("git", args, { cwd, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+  git(["init", "-q"]);
+  git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+  await seedDelegateCheckout(main);
+  await seedFixerPlan(main, branch);
+  return git;
+}
+
+test("pullDelegationTarget: a main-anchored fixer pull delegates to the linked dev-loops worktree on the order's authority branch", async () => {
+  await withDir(async (base) => {
+    const main = path.join(base, "main");
+    const git = await seedFixerMain(main);
+    const linked = path.join(base, "unit");
+    const other = path.join(base, "other");
+    git(["worktree", "add", "-q", "-b", "issue-9", linked]);
+    git(["worktree", "add", "-q", "-b", "issue-10", other]);
+    const tmp = [path.join(main, "tmp")];
+    // No dev-loops source checkout at the matching branch: the pull stays local.
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+    await seedDelegateCheckout(linked);
+    await seedDelegateCheckout(other);
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), linked);
+    // A tampered plan branch with the ref and index digest preserved fails the digest check and stays local.
+    const planPath = path.join(main, "tmp/gate-fixer/o-r/pr-7/fixer-emit-plan.json");
+    const good = await readFile(planPath, "utf8");
+    await writeFile(planPath, JSON.stringify({ ...JSON.parse(good), workOrder: { mutationAuthority: { branch: "issue-10", allowedPaths: ["."] } } }), "utf8");
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+    // A digest-authentic order whose branch no worktree checks out stays local.
+    await rm(executionIndexPath(path.join(main, "tmp"), FIXER_ID));
+    await seedFixerPlan(main, "gone");
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+  });
+});
+
+test("shouldRetryFixerPullLocally: only a fixer pull that refused with local_materialization_integrity_failure retries", () => {
+  const skew = JSON.stringify({ ok: false, refusal: "local_materialization_integrity_failure" });
+  assert.equal(shouldRetryFixerPullLocally(FIXER_ID, 1, skew), true);
+  assert.equal(shouldRetryFixerPullLocally(FIXER_ID, 1, JSON.stringify({ refusal: "dispatch_reference_mismatch" })), false);
+  assert.equal(shouldRetryFixerPullLocally(FIXER_ID, 0, "work order text"), false);
+  assert.equal(shouldRetryFixerPullLocally(FIXER_ID, 1, "not json"), false);
+  assert.equal(shouldRetryFixerPullLocally(DELEGATE_ID, 1, skew), false);
+});
+
+test("pullDelegationTarget: a fixer pull stays local for a consumer worktree, the serving toolchain, the marker, and gate pulls are unchanged", async () => {
+  await withDir(async (base) => {
+    const main = path.join(base, "main");
+    const git = await seedFixerMain(main);
+    const linked = path.join(base, "unit");
+    git(["worktree", "add", "-q", "-b", "issue-9", linked]);
+    await seedDelegateCheckout(linked, { name: "some-consumer-app" });
+    const tmp = [path.join(main, "tmp")];
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+    await seedDelegateCheckout(linked);
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: linked, env: {} }), null);
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: { DEV_LOOPS_PULL_DELEGATED: "1" } }), null);
+    // A main-anchored gate (r) entry still never delegates to the main checkout or by branch.
+    assert.equal(pullDelegationTarget(DELEGATE_ID, tmp, { toolchainRoot: linked, env: {} }), null);
+    assert.equal(pullDelegationTarget(DELEGATE_ID, tmp, { toolchainRoot: main, env: {} }), null);
+  });
+});
+
+test("pullDelegationTarget: a fixer entry under a foreign tmp root or a consumer repo checkout stays local", async () => {
+  await withDir(async (base) => {
+    const main = path.join(base, "main");
+    const git = await seedFixerMain(main);
+    const linked = path.join(base, "unit");
+    git(["worktree", "add", "-q", "-b", "issue-9", linked]);
+    await seedDelegateCheckout(linked);
+    const tmp = [path.join(main, "tmp")];
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), linked);
+    const entry = await readFile(executionIndexPath(tmp[0], FIXER_ID), "utf8");
+    const plan = await readFile(path.join(main, "tmp/gate-fixer/o-r/pr-7/fixer-emit-plan.json"), "utf8");
+    // A consumer repo (its own git repo) and a custom tmp root hold the same entry and branch name.
+    const consumer = path.join(base, "consumer");
+    await mkdir(consumer);
+    execFileSync("git", ["init", "-q"], { cwd: consumer, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+    for (const checkout of [consumer, path.join(base, "elsewhere")]) {
+      const dir = path.join(checkout, "tmp", "gate-fixer", "o-r", "pr-7");
+      await mkdir(dir, { recursive: true });
+      await mkdir(path.dirname(executionIndexPath(path.join(checkout, "tmp"), FIXER_ID)), { recursive: true });
+      await writeFile(executionIndexPath(path.join(checkout, "tmp"), FIXER_ID), entry, "utf8");
+      await writeFile(path.join(dir, "fixer-emit-plan.json"), plan, "utf8");
+      assert.equal(pullDelegationTarget(FIXER_ID, [path.join(checkout, "tmp")], { toolchainRoot: main, env: {} }), null);
+    }
+  });
+});
+
+test("pullDelegationTarget: a fixer plan with a different workOrderRef, a missing or malformed plan, or a detached HEAD stays local", async () => {
+  await withDir(async (base) => {
+    const main = path.join(base, "main");
+    const git = await seedFixerMain(main);
+    const linked = path.join(base, "unit");
+    git(["worktree", "add", "-q", "-b", "issue-9", linked]);
+    await seedDelegateCheckout(linked);
+    const tmp = [path.join(main, "tmp")];
+    const planPath = path.join(main, "tmp/gate-fixer/o-r/pr-7/fixer-emit-plan.json");
+    const good = await readFile(planPath, "utf8");
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), linked);
+    await writeFile(planPath, JSON.stringify({ ...JSON.parse(good), workOrderRef: `fixer:o/r#7:${HEAD}:other` }), "utf8");
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+    await writeFile(planPath, "{ truncated", "utf8");
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+    await rm(planPath);
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+    await writeFile(planPath, good, "utf8");
+    git(["checkout", "-q", "--detach"], linked);
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+  });
+});
+
+test("fixer delegation keeps the receipt under the main checkout and the Edit/Write grant working", async () => {
+  await withDir(async (base) => {
+    const main = path.join(base, "main");
+    const git = await seedFixerMain(main);
+    const linked = path.join(base, "unit");
+    git(["worktree", "add", "-q", "-b", "issue-9", linked]);
+    // The delegated child runs under cwd = the worktree; its receipt root resolves to the main checkout's tmp.
+    assert.equal(resolveGateArtifactTmpRoot(linked), path.join(main, "tmp"));
+    const output = `${main}/tmp/gate-fixer/o-r/pr-7/${FIXER_ID}/fixer-disposition.json`;
+    const decision = decideFixerWriteGuard({
+      agentType: "fixer", targetPath: `${linked}/src/x.mjs`,
+      checkouts: [{ root: main, branch: "main" }, { root: linked, branch: "issue-9" }],
+      grants: [{ branch: "issue-9", allowedPaths: ["."], outputRef: output }],
+    });
+    assert.equal(decision.decision, "allow");
+  });
+});
+
+test("self-hosting fixer pull: a delegated skew refusal falls through to the local pull; any other outcome passes through unchanged", async () => {
+  await withDir(async (base) => {
+    const main = process.cwd();
+    await withRealLinkedWorktree(base, "linked", async (linked) => {
+      await seedDelegateCheckout(linked);
+      await writeExecutionIndex(path.join(linked, "tmp"), { executionIdentity: FIXER_ID, workOrderRef: `fixer:o/r#7:${HEAD}:${FIXER_ID}`, workOrderDigest: `sha256:${"0".repeat(64)}` });
+      const stub = path.join(linked, "scripts/github/pull-work-order.mjs");
+      const skew = { ok: false, refusal: "local_materialization_integrity_failure", error: "STUB_SKEW" };
+      await writeFile(stub, `console.log(${JSON.stringify(JSON.stringify(skew))});\nprocess.exit(1);\n`, "utf8");
+      const retried = pullShort(FIXER_ID, main);
+      // The local pull ran: its own refusal replaces the stub's output.
+      assert.equal(retried.status, 1, retried.stderr);
+      assert.ok(!retried.stdout.includes("STUB_SKEW"), retried.stdout);
+      assert.equal(typeof refusal(retried).refusal, "string");
+      await writeFile(stub, `console.log("STUB_PASSTHROUGH");\nprocess.exit(7);\n`, "utf8");
+      const passed = pullShort(FIXER_ID, main);
+      assert.equal(passed.status, 7, passed.stderr);
+      assert.equal(passed.stdout, "STUB_PASSTHROUGH\n");
+    });
+  });
+});
+
+// Issue 2581 DoD rows 0 and 1: an order emitted from the main checkout can differ from the linked worktree's
+// renderer (PR 2580 mismatch), or that renderer can predate main's (PR 2576 skew). A delegated pull that
+// succeeds returns the worktree renderer's text unchanged, with no local re-render. Both rows share this
+// assertion; only a skew refusal (covered above) falls back to the local pull.
+test("self-hosting fixer pull: a successful delegated pull returns the worktree renderer's text", async () => {
+  const mainRoot = resolveMainWorktreeRoot(process.cwd());
+  // Per-run unique names so concurrent or crashed runs cannot collide on the shared repo.
+  const uniq = randomBytes(4).toString("hex");
+  const prNumber = 100000 + (parseInt(uniq, 16) % 900000);
+  const id = `f1790000000002-${uniq}`;
+  const workOrderRef = `fixer:o/r#${prNumber}:${HEAD}:${id}`;
+  const mainTmp = path.join(mainRoot, "tmp");
+  const planDir = path.join(mainTmp, "gate-fixer", "o-r", `pr-${prNumber}`);
+  const branch = `issue-2581-dod-test-${uniq}`;
+  await withDir(async (base) => {
+    const linked = path.join(base, "unit");
+    const git = (args) => execFileSync("git", args, { cwd: mainRoot, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+    git(["worktree", "add", "-q", "--no-checkout", "-b", branch, linked]);
+    try {
+      await seedDelegateCheckout(linked);
+      await writeFile(path.join(linked, "scripts/github/pull-work-order.mjs"), `console.log("WORKTREE TEXT");\nprocess.exit(0);\n`, "utf8");
+      const workOrder = { mutationAuthority: { branch, allowedPaths: ["."] } };
+      await writeExecutionIndex(mainTmp, { executionIdentity: id, workOrderRef, workOrderDigest: workOrderDigest(workOrder) });
+      await mkdir(planDir, { recursive: true });
+      await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrderRef, workOrder }), "utf8");
+      const pulled = pullShort(id, mainRoot);
+      assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+      assert.equal(pulled.stdout, "WORKTREE TEXT\n");
+    } finally {
+      await rm(planDir, { recursive: true, force: true });
+      await rm(executionIndexPath(mainTmp, id), { force: true });
+      git(["worktree", "remove", "--force", linked]);
+      git(["branch", "-D", branch]);
+    }
+  });
 });
