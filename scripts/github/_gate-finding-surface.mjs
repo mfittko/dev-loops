@@ -484,6 +484,15 @@ export function renderInlineCommentBody(finding, { round }) {
     ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}`
     : "";
   const lines = [...markers, `**${sanitizeInline(severity)}** · ${angles}${judge}`];
+  // File and line references render as inline code right under the header.
+  // The line ref belongs to the first file, the anchor the comment sits on.
+  const refFiles = Array.isArray(finding.files) && finding.files.length > 0
+    ? finding.files
+    : typeof finding.file === "string" && finding.file.length > 0 ? [finding.file] : [];
+  if (refFiles.length > 0) {
+    const lineRef = Number.isInteger(finding.line) ? `:${finding.line}` : "";
+    lines.push(refFiles.map((f, i) => `\`${sanitizeCodeSpan(f)}${i === 0 ? lineRef : ""}\``).join(", "));
+  }
   // A cut field keeps its capped text visible; its full text goes into one
   // collapsed details block at the end of the comment.
   const cutFields = [];

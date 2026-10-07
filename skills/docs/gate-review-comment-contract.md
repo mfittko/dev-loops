@@ -91,7 +91,7 @@ corrected on its own surface (back-compat read).
 
 <!-- rule: GATE-COMMENT-INLINE-LAYOUT -->
 `GATE-COMMENT-INLINE-LAYOUT`: an inline finding renders in a fixed layout. The header line reads
-`**<severity>** · <angle>[, <angle>][ · judge: <disposition>]`. The body lines are `**Problem:**`,
+`**<severity>** · <angle>[, <angle>][ · judge: <disposition>]`. A line of `file:line` references in inline code follows the header when the finding has a file. The body lines are `**Problem:**`,
 `**Failing case:**` (when the finding carries `failingCase`) and `**Fix:**` (numbered steps when
 the recommendation holds more than one action). The renderer bounds each field at a sentence
 boundary, never inside a code span or fence, and puts the full text of every cut field into one

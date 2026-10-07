@@ -64,6 +64,7 @@ const noOpKeyed = { ...noOp, defectKey: "AC-late-scale" };
 
 const AFTER_LINES = [
   "**medium** · holistic, no-op · judge: act",
+  "`src/Widget.js:69`",
   "**Problem:** `update()` never scales a widget that renders after the asset pack loads. `applyScale` only runs in `mount()` (`Widget.js:69`).",
   "**Failing case:** the widget mounts before the pack is ready, renders unscaled, and overflows choice buttons and sort items.",
   "**Fix:**",
@@ -109,11 +110,12 @@ test("layout: header, Problem, Failing case, Fix in fixed order with no preamble
   const lines = body.split("\n");
   assert.match(lines[0], FINDING_MARKER_RE);
   assert.equal(lines[1], "**medium** · holistic · judge: act");
-  assert.match(lines[2], /^\*\*Problem:\*\* /);
-  assert.match(lines[3], /^\*\*Failing case:\*\* /);
-  assert.equal(lines[4], "**Fix:**");
-  assert.match(lines[5], /^1\. /);
-  assert.equal(lines.length, 8);
+  assert.equal(lines[2], "`src/Widget.js:69`");
+  assert.match(lines[3], /^\*\*Problem:\*\* /);
+  assert.match(lines[4], /^\*\*Failing case:\*\* /);
+  assert.equal(lines[5], "**Fix:**");
+  assert.match(lines[6], /^1\. /);
+  assert.equal(lines.length, 9);
 });
 
 test("layout: one action renders inline after Fix, no recommendation omits Fix, no judge omits the judge segment", () => {
@@ -501,4 +503,24 @@ test("a fence outgrows any backtick run in code-like content", () => {
   const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short.", failingCase }, { round: 1 });
   assert.ok(body.includes("  `````\n  run();"), body);
   assert.ok(body.includes("inside\n  `````"), body);
+});
+
+test("an inline finding shows file and line as inline code under the header", () => {
+  const body = renderInlineCommentBody({ ...holistic, files: ["src/Widget.js", "src/Other.js"] }, { round: 1 });
+  const lines = body.split("\n");
+  const header = lines.findIndex((line) => line.startsWith("**medium** · holistic"));
+  assert.equal(lines[header + 1], "`src/Widget.js:69`, `src/Other.js`");
+  assert.ok(!renderInlineCommentBody({ ...holistic, files: undefined, line: undefined }, { round: 1 }).includes("`src/"));
+});
+
+test("summary-comment findings carry no ledger line, no cut fields and file:line as inline code", () => {
+  const finding = { ...holistic, summary: "x".repeat(900), failingCase: "y".repeat(900), files: ["src/Widget.js"] };
+  const block = renderNonLocatableBlock(finding, { round: 1 });
+  const folded = renderFoldedFindingsBlock([finding], { round: 1 });
+  for (const text of [block, folded]) {
+    assert.doesNotMatch(text, /ledger entry|Full text|tmp\//);
+    assert.ok(text.includes("`src/Widget.js:69`"));
+  }
+  assert.ok(!block.includes("<details>"), "the summary block never cuts a field");
+  assert.ok(block.includes("x".repeat(900)), "the summary block carries the full summary");
 });
