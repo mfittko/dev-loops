@@ -90,7 +90,7 @@ Contract:
 - self-assigns by default (defaults `--assignee @me` when no `--assignee` is provided); honors an explicit `--assignee <login>` when one is given
 - rejects `--ready` before invoking `gh`; use `gh pr ready` later after draft-gate approval
 - forwards every other argument to `gh pr create` unchanged and in order
-- preserves the underlying `gh pr create` stdout, stderr, and exit code without wrapping success output
+- preserves the underlying `gh pr create` stdout (the PR URL line comes first), stderr, and exit code; after a successful create it then prints, when a base resolves, one JSON line `{"adrTripwire":...,"sizeBudget":...}` (advisory, never refuses the created PR), and on the lightweight issue-less path or a lightweight create with no body a further `{"board":...}` line
 - stays intentionally narrow: this is the prevention layer for draft-first creation, while `scripts/github/reconcile-draft-gate.mjs` remains the separate recovery path for already-open non-draft PRs — that recovery only completes for a PR under the light-mode threshold (it posts an inline verdict); a larger PR must convert to draft and run the real fan-out gate instead
 
 Failure behavior:

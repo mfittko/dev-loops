@@ -261,6 +261,8 @@ Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/a
 - an ADR tripwire trip (`check-adr-tripwire.mjs`), except that on `nextAction: resolve_adr_tripwire` the coordinator stops and reports, and the orchestrator runs `dev-loops-run cli/index.mjs pr waive-adr-tripwire` (orchestrator-owned) per `ADR-TRIPWIRE-STANDING-WAIVER` in [Decision record contract](../docs/decision-record-contract.md), quoting the typed refusal reason if the writer refuses;
 - a harness permission or classifier denial, or an interruption.
 
+The size-budget `block` and tripwire stops apply at the ready boundary (`nextAction` `resolve_adr_tripwire`, `resolve_size_budget` or `report_blocked`). Advisory `adrTripwire`/`sizeBudget` hits in a draft round (`nextAction: run_draft_gate`) are reported in the draft hand-back per `ADR-TRIPWIRE-EARLY-SURFACE` in [Decision record contract](../docs/decision-record-contract.md) and are not a stop condition. During draft rounds a size-budget `escalate` is advisory (reported in the hand-back). After the ready flip the existing runner stop on `escalate` applies, and merge-pr's `size_budget_human_approval` enforces the approve-merge marker.
+
 On a denial the coordinator quotes the denial text verbatim in its report and does not retry the denied call in any command form.
 
 ## Shorthand issue-based auto trigger contract
