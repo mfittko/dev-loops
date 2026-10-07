@@ -625,9 +625,9 @@ test("evaluateMergePreconditions: retrospective_checkpoint is skipped when enfor
   const failure = named.failures.find((f) => f.precondition === "retrospective_checkpoint");
   assert.ok(failure.reason.includes("#2679") && failure.reason.includes(merge), failure.reason);
 
-  const unknown = evaluateMergePreconditions(greenFacts({ retrospective: { checkpointState: "missing", pendingRetrospectives: [{ pr: null, mergeCommit: null, reason: "checkpoint_malformed" }] } }));
+  const unknown = evaluateMergePreconditions(greenFacts({ retrospective: { checkpointState: "missing", recordedState: "malformed", pendingRetrospectives: [{ pr: null, mergeCommit: null, reason: "checkpoint_malformed" }] } }));
   const reason = unknown.failures.find((f) => f.precondition === "retrospective_checkpoint").reason;
-  assert.ok(reason.includes("checkpoint_malformed") && reason.includes("state missing"), reason);
+  assert.ok(reason.includes("checkpoint_malformed") && reason.includes("state malformed"), reason);
 
   // A malformed evaluator result fails closed.
   assert.equal(evaluateMergePreconditions(greenFacts({ retrospective: {} })).ok, false);

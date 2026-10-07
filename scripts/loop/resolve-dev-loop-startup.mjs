@@ -448,7 +448,7 @@ function isStrictGitHubRfc3339Timestamp(value) {
 }
 
 /**
- * True when a commit after `mergeCommit` on `origin/<baseBranch>` is
+ * Reports whether a commit after `mergeCommit` on `origin/<baseBranch>` is
  * authoritatively associated with a PR merged into that configured base.
  * Local ancestry bounds the candidate commits; GitHub association facts
  * distinguish squash-merged PR commits from direct/release commits.
@@ -458,7 +458,7 @@ function isStrictGitHubRfc3339Timestamp(value) {
  * the fetch failing is not fatal on its own — an already-current local
  * `origin/<baseBranch>` still answers correctly without it.
  *
- * Returns `true` (fail closed) when `mergeCommit` cannot be resolved against
+ * Returns `stale: true` (fail closed) when `mergeCommit` cannot be resolved against
  * `origin/<baseBranch>` at all — unfetched, a shallow clone missing the
  * history, or a garbage value. An unverifiable discharge claim must not be
  * trusted, so "cannot tell" collapses to the same outcome as "yes, something
@@ -469,7 +469,9 @@ function isStrictGitHubRfc3339Timestamp(value) {
  * lookup is unverifiable and therefore fails closed.
  *
  * @param {{mergeCommit: string, baseBranch: string, cwd: string, repo?: string, env?: NodeJS.ProcessEnv, resolveCommitPullRequests?: Function}} params
- * @returns {boolean}
+ * @returns {{stale: boolean, pending: {pr: number, mergeCommit: string}|null, reason: string|null}}
+ *   `stale: true` is the fail-closed outcome; `pending` names the qualifying
+ *   merge when one is identified, `reason` is set when the lookup is unverifiable.
  */
 export function inspectNewerMergeSinceCheckpoint({
   mergeCommit,
@@ -547,7 +549,10 @@ export function inspectNewerMergeSinceCheckpoint({
           || mergeCommitSha.length === 0
         ) return UNVERIFIABLE_NEWER_MERGE;
         if (associationBase === baseBranch && mergeCommitSha === commitSha) {
-          return { stale: true, pending: { pr: Number.isInteger(association.number) && association.number > 0 ? association.number : null, mergeCommit: commitSha }, reason: null };
+          if (!Number.isInteger(association.number) || association.number <= 0) {
+            return { stale: true, pending: null, reason: "association_number_invalid" };
+          }
+          return { stale: true, pending: { pr: association.number, mergeCommit: commitSha }, reason: null };
         }
       } else if (mergedAt !== null || (mergeCommitSha !== null && mergeCommitSha !== undefined)) {
         return UNVERIFIABLE_NEWER_MERGE;
@@ -575,7 +580,11 @@ const UNVERIFIABLE_NEWER_MERGE = Object.freeze({ stale: true, pending: null, rea
  * entries are `{ pr, mergeCommit }`; an entry whose merge cannot be identified
  * carries `pr: null, mergeCommit: null` and a machine-readable `reason`.
  *
- * @returns {{ checkpointState: string|undefined, pendingRetrospectives: Array<{pr: number|null, mergeCommit: string|null, reason?: string}> }}
+ * `recordedState` is the state the checkpoint file itself records (lowercased),
+ * `unreadable`/`malformed` for a broken file, or null when it is absent; `checkpointState` is the
+ * mapped state after the recency check.
+ *
+ * @returns {{ checkpointState: string|undefined, recordedState?: string|null, pendingRetrospectives: Array<{pr: number|null, mergeCommit: string|null, reason?: string}> }}
  */
 export function resolvePendingRetrospectives({ config, cwd, env = process.env, resolveHasNewerMerge = inspectNewerMergeSinceCheckpoint }) {
   if (resolveWorkflowConfig(config, "requireRetrospective") !== true) {
@@ -622,10 +631,12 @@ export function resolvePendingRetrospectives({ config, cwd, env = process.env, r
       }
     }
   }
+  const recordedState = durableState
+    ?? (checkpointReadFailed ? "unreadable" : durableCheckpoint === undefined ? null : "malformed");
   const checkpointState = checkpointReadFailed
     ? "missing"
     : resolveCheckpointStateFromArtifact(durableCheckpoint, { hasNewerMergeSinceCheckpoint: staleness.stale });
-  if (checkpointState !== "missing") return { checkpointState, pendingRetrospectives: [] };
+  if (checkpointState !== "missing") return { checkpointState, recordedState, pendingRetrospectives: [] };
 
   let entry;
   if (checkpointReadFailed) {
@@ -642,11 +653,14 @@ export function resolvePendingRetrospectives({ config, cwd, env = process.env, r
       entry = { pr: identity.prNumber, mergeCommit: identity.mergeCommit };
     }
   } else if ((durableState === "required" || durableState === "missing") && identity !== null) {
-    entry = { pr: identity.prNumber, mergeCommit: identity.mergeCommit };
+    const foreign = detectRepoSlug(checkpointRepoRoot) !== identity.repo;
+    entry = foreign
+      ? { pr: null, mergeCommit: null, reason: "checkpoint_foreign_repo" }
+      : { pr: identity.prNumber, mergeCommit: identity.mergeCommit };
   } else {
     entry = { pr: null, mergeCommit: null, reason: durableState === "required" || durableState === "missing" ? "checkpoint_identity_missing" : "checkpoint_malformed" };
   }
-  return { checkpointState, pendingRetrospectives: [entry] };
+  return { checkpointState, recordedState, pendingRetrospectives: [entry] };
 }
 function mapGhState(ghState) {
   const s = String(ghState).toUpperCase();
@@ -655,7 +669,7 @@ function mapGhState(ghState) {
   if (s === "MERGED") return "merged";
   throw new Error(`Unknown GitHub state: "${ghState}"`);
 }
-function buildNeedsReconcileStartupResult(bundle, nextAction) {
+function buildNeedsReconcileStartupResult(bundle, nextAction, pendingRetrospectives) {
   const reconciliationBundle = {
     ...bundle,
     bundleKind: "needs_reconcile",
@@ -663,6 +677,7 @@ function buildNeedsReconcileStartupResult(bundle, nextAction) {
     selectedGate: "fail_closed_reconcile",
     selectedStrategy: null,
     nextAction,
+    pendingRetrospectives,
   };
   return {
     ok: true,
@@ -1393,7 +1408,7 @@ export function buildResolveDevLoopStartupResult(input, {
     const effectiveAsyncStartMode = resolveEffectiveAsyncStartMode(asyncStartMode, effectiveEnv);
     const validation = validateAsyncStartContext({ env: effectiveEnv, asyncStartMode: effectiveAsyncStartMode });
     if (validation.status === ASYNC_START_STATUS.REJECTED) {
-      return buildAsyncStartRejection(validation);
+      return { ...buildAsyncStartRejection(validation), pendingRetrospectives };
     }
   }
   const DEVLOOPS_WORKTREE_BYPASS_VAR = "DEVLOOPS_WORKTREE_BYPASS";
@@ -1423,12 +1438,13 @@ export function buildResolveDevLoopStartupResult(input, {
           fake_worktree: `Local implementation requires worktree isolation. Current directory is under tmp/worktrees/ but is not listed as a git worktree by \`git worktree list\`. Create a proper worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run.`,
           core_escapes: `Local implementation requires worktree isolation. node_modules/@dev-loops/core in this worktree resolves OUTSIDE its own packages/core (WORKTREE-DEPS-ISOLATED / WORKTREE-CREATE-PROVISION), so it would test the main checkout's core instead of this branch's. Re-provision the worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run from there.`,
         };
-        return buildNeedsReconcileStartupResult(bundle, REASON[decision.detail]);
+        return buildNeedsReconcileStartupResult(bundle, REASON[decision.detail], pendingRetrospectives);
       }
     } catch {
       return buildNeedsReconcileStartupResult(
         bundle,
         "Local implementation requires worktree isolation but git worktree list failed. Verify the repository and re-run from a worktree under tmp/worktrees/.",
+        pendingRetrospectives,
       );
     }
   }

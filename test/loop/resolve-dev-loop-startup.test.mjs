@@ -18,6 +18,7 @@ import {
   summarizeCanonicalState,
   resolveIssuelessLightweightEligibility,
   resolveHasNewerMergeSinceCheckpoint,
+  inspectNewerMergeSinceCheckpoint,
   STRATEGY_OWNERSHIP_GATE,
   ownershipGateAppliesToStrategy,
   runCli,
@@ -968,6 +969,7 @@ test("resolver returns needs_reconcile for local_implementation from main checko
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "resolver-main-"));
   try {
     writeWorktreeEnv(tempDir);
+    writeCheckpoint(tempDir, { state: "required" });
     const env = {
       ...process.env,
       PATH: `${tempDir}${path.delimiter}${process.env.PATH || ""}`,
@@ -986,12 +988,13 @@ test("resolver returns needs_reconcile for local_implementation from main checko
         artifactState: "not_applicable",
         issueLinkageResolution: "not_applicable",
       },
-      { env, cwd: tempDir },
+      { env, cwd: tempDir, config: RETROSPECTIVE_CONFIG },
     );
 
     assert.equal(result.ok, true);
     assert.equal(result.bundleKind, "needs_reconcile");
     assert.equal(result.selectedStrategy, "none");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
     assert.equal(result.bundle.bundleKind, "needs_reconcile");
     assert.equal(result.bundle.routeKind, "needs_reconcile");
     assert.equal(result.bundle.selectedStrategy, null);
@@ -2899,6 +2902,7 @@ test("buildResolveDevLoopStartupResult: THE ORIGINAL BUG, fixed — a complete c
     });
 
     assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "newer_merge_unidentified" }]);
     // The checkpoint on disk is byte-identical to what was seeded — a
     // read-time derivation never writes anything back.
     assert.deepEqual(readCheckpointIfPresent(tempDir), staleCheckpoint);
@@ -2988,6 +2992,7 @@ test("buildResolveDevLoopStartupResult: skipped is cycle-scoped exactly like com
       resolveHasNewerMerge: fixedHasNewerMerge(false),
     });
     assert.notEqual(noNewerMerge.bundleKind, "needs_reconcile");
+    assert.deepEqual(noNewerMerge.bundle.pendingRetrospectives, []);
 
     // Something merged since — not covered by the old skip.
     const newerMerge = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
@@ -2995,6 +3000,7 @@ test("buildResolveDevLoopStartupResult: skipped is cycle-scoped exactly like com
       resolveHasNewerMerge: fixedHasNewerMerge(true),
     });
     assert.notEqual(newerMerge.bundleKind, "needs_reconcile");
+    assert.deepEqual(newerMerge.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "newer_merge_unidentified" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3008,6 +3014,7 @@ test("buildResolveDevLoopStartupResult: no checkpoint file passes through (NONE)
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
     assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, []);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3022,6 +3029,7 @@ test("buildResolveDevLoopStartupResult: a present-but-non-object checkpoint file
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
     assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_malformed" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3038,6 +3046,7 @@ test("buildResolveDevLoopStartupResult: an unparseable checkpoint file fails clo
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
     assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_unreadable" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3054,6 +3063,7 @@ test("buildResolveDevLoopStartupResult: a checkpoint file containing the JSON li
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
     assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_malformed" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3072,6 +3082,7 @@ test("buildResolveDevLoopStartupResult: complete with no recorded identity at al
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
     assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3086,6 +3097,7 @@ test("buildResolveDevLoopStartupResult: skipped with no recorded identity at all
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
     assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3165,6 +3177,8 @@ test("buildResolveDevLoopStartupResult: a checkpoint written only at the main ch
 
     assert.notEqual(fromMain.bundleKind, "needs_reconcile");
     assert.notEqual(fromWorktree.bundleKind, "needs_reconcile");
+    assert.deepEqual(fromMain.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
+    assert.deepEqual(fromWorktree.bundle.pendingRetrospectives, fromMain.bundle.pendingRetrospectives);
     assert.deepEqual(fromWorktree.bundleKind, fromMain.bundleKind);
   } finally {
     try { execFileSync("git", ["worktree", "remove", "--force", worktreeDir], { cwd: mainDir, stdio: "ignore" }); } catch { /* best-effort */ }
@@ -3756,5 +3770,42 @@ test("buildResolveDevLoopStartupResult: none, complete and skipped checkpoints r
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  }
+});
+
+test("buildResolveDevLoopStartupResult: a required record naming another repo yields checkpoint_foreign_repo with null identity", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    writeCheckpoint(tempDir, { state: "required", identity: { repo: "other/elsewhere", prNumber: 7, mergeCommit: "a786237ad6f7e9bc4facdc64c14a0dbf3e1c5f2c" } });
+    for (const state of ["required", "missing"]) {
+      writeCheckpoint(tempDir, { state, identity: { repo: "other/elsewhere", prNumber: 7, mergeCommit: "a786237ad6f7e9bc4facdc64c14a0dbf3e1c5f2c" } });
+      const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+        env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+        resolveHasNewerMerge: unreachableHasNewerMerge(),
+      });
+      assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_foreign_repo" }], state);
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inspectNewerMergeSinceCheckpoint: an association number that is not a positive integer is unidentifiable with a reason", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "retro-association-number-"));
+  try {
+    const { initialSha } = await initLocalOriginRepo(tempDir);
+    const mergedSha = pushAnotherCommit(tempDir, "fix: squash merged PR (#44)");
+    for (const number of [0, -1, 1.5, "44", null, undefined]) {
+      const inspected = inspectNewerMergeSinceCheckpoint({
+        mergeCommit: initialSha,
+        baseBranch: "main",
+        cwd: tempDir,
+        resolveCommitPullRequests: () => [{ number, state: "MERGED", merged_at: "2026-09-07T10:00:00Z", base: { ref: "main" }, merge_commit_sha: mergedSha }],
+      });
+      assert.deepEqual(inspected, { stale: true, pending: null, reason: "association_number_invalid" }, String(number));
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });

@@ -424,7 +424,7 @@ export function evaluateMergePreconditions({
       const named = pending.map((entry) => (
         Number.isInteger(entry?.pr) && typeof entry?.mergeCommit === "string" && entry.mergeCommit.length > 0
           ? `PR #${entry.pr} (merge commit ${entry.mergeCommit})`
-          : `an unidentified earlier merge (reason ${entry?.reason ?? "unknown"}, recorded checkpoint state ${retrospective.checkpointState ?? "unknown"})`
+          : `an unidentified earlier merge (reason ${entry?.reason ?? "unknown"}, recorded checkpoint state ${retrospective.recordedState ?? "unknown"})`
       ));
       failures.push({ precondition: "retrospective_checkpoint", reason: `earlier merge has no complete or skipped retrospective checkpoint: ${named.join("; ")}; run the retrospective or record its discharge before merging` });
     }
