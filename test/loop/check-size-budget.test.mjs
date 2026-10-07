@@ -177,6 +177,7 @@ test("block, no waiver possible: whole-PR logic LOC over absoluteHardLoc even wh
   });
   assert.equal(result.outcome, "block");
   assert.ok(result.reasons.some((r) => r.includes("absoluteHardLoc") && r.includes("no waiver possible")));
+  assert.equal(result.waivable, false);
   // Output-contract: waiver.*Valid must not read true under an unwaivable
   // ceiling, even though --waived/--approved-by were both given and wholeLoc
   // (2500) also exceeds default.waiverLoc (1500).

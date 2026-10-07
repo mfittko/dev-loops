@@ -95,7 +95,7 @@ test("convert-to-draft -> fan-out draft_gate post -> restore-ready composes with
       // --- Phase 2: upsert-checkpoint-verdict.mjs (--execution-mode
       // fanout_fanin) coordination-state fetch + the review POST. ---
       {
-        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
         stdout: JSON.stringify({
           number: PR,
           state: "OPEN",

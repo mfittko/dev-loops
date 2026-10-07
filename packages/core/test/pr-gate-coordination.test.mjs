@@ -6,6 +6,9 @@ import {
   PR_CHECKPOINT_ACTION,
   PR_CHECKPOINT,
   shouldGuardCopilotReviewRequest,
+  ADR_TRIPWIRE_REMEDIES,
+  buildAdrTripwireField,
+  buildSizeBudgetField,
 } from "../src/loop/pr-gate-coordination.mjs";
 import { DISPOSITION, interpretLoopState, STATE } from "../src/loop/copilot-loop-state.mjs";
 import { FIXER_DISPOSITION_FORBIDDEN_ACTIONS } from "../src/loop/fixer-disposition.mjs";
@@ -4530,4 +4533,126 @@ test("a ready PR with an advanced head re-requests Copilot review and never adve
 
   assert.equal(readyState.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
   assert(!readyState.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+});
+
+// ADR-TRIPWIRE-EARLY-SURFACE
+const ADR_BLOCK = {
+  outcome: "block", satisfiedBy: null, triggers: [{ type: "contract-doc", path: "skills/docs/x-contract.md" }],
+  reasons: ["x"], remedies: [...ADR_TRIPWIRE_REMEDIES],
+};
+const SIZE_BLOCK = { outcome: "block", wholeLogicLoc: 1961, thresholds: { absoluteHardLoc: 2000 }, waivable: true, reasons: ["over"] };
+function draftAt({ clean, ...extra }) {
+  const verdictGate = clean
+    ? [gate({ visible: true, headSha: "abc1234", verdict: "clean" }), gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true })]
+    : [gate(), gate()];
+  return evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success",
+    draftGate: verdictGate[0],
+    draftGateMarker: verdictGate[1],
+    ...extra,
+  });
+}
+
+test("early surface: blocking tripwire and size budget stay advisory without clean draft evidence", () => {
+  const result = draftAt({ clean: false, adrTripwire: ADR_BLOCK, sizeBudget: SIZE_BLOCK });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+  assert.equal(result.adrTripwire.outcome, "block");
+  assert.deepEqual(result.adrTripwire.remedies, ADR_TRIPWIRE_REMEDIES);
+  assert.equal(result.sizeBudget.outcome, "block");
+  assert.equal(result.sizeBudget.waivable, true);
+});
+
+test("early surface: tripwire block at the ready boundary resolves through the operator", () => {
+  const result = draftAt({ clean: true, adrTripwire: ADR_BLOCK });
+  assert.equal(result.lifecycleState, STATE.BLOCKED_NEEDS_USER_DECISION);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.BLOCKED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_ADR_TRIPWIRE);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert.match(result.reason, /decision record/u);
+  assert.match(result.reason, /adr-tripwire:allow/u);
+
+  const satisfied = draftAt({ clean: true, adrTripwire: { ...ADR_BLOCK, outcome: "pass", satisfiedBy: "waiver", remedies: [] } });
+  assert.equal(satisfied.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+});
+
+test("early surface: unknown tripwire at the ready boundary reports blocked and names git fetch origin", () => {
+  const result = draftAt({ clean: true, adrTripwire: { outcome: "unknown", satisfiedBy: null, triggers: [], reasons: [], remedies: [] } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(result.reason, /git fetch origin/u);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+});
+
+test("early surface: size budget block at the ready boundary is waivable or unwaivable", () => {
+  const waivable = draftAt({ clean: true, sizeBudget: SIZE_BLOCK });
+  assert.equal(waivable.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_SIZE_BUDGET);
+  assert.equal(waivable.lifecycleState, STATE.BLOCKED_NEEDS_USER_DECISION);
+  assert(waivable.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+
+  const unwaivable = draftAt({ clean: true, sizeBudget: { ...SIZE_BLOCK, waivable: false } });
+  assert.equal(unwaivable.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(unwaivable.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+});
+
+test("early surface: a combined tripwire and size block names both decisions in one reason", () => {
+  const result = draftAt({ clean: true, adrTripwire: ADR_BLOCK, sizeBudget: SIZE_BLOCK });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_ADR_TRIPWIRE);
+  assert.match(result.reason, /ADR tripwire/u);
+  assert.match(result.reason, /size budget/u);
+});
+
+test("early surface: passing outcomes and non-draft PRs change nothing", () => {
+  const pass = draftAt({ clean: true, adrTripwire: { ...ADR_BLOCK, outcome: "pass", remedies: [] }, sizeBudget: { ...SIZE_BLOCK, outcome: "pass" } });
+  assert.equal(pass.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  const ready = draftAt({ clean: true, prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, adrTripwire: ADR_BLOCK });
+  assert.equal(ready.adrTripwire, undefined);
+});
+
+test("early surface: an ADR block with an unwaivable size block reports blocked naming both decisions", () => {
+  const result = draftAt({ clean: true, adrTripwire: ADR_BLOCK, sizeBudget: { ...SIZE_BLOCK, waivable: false } });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(result.reason, /ADR tripwire/u);
+  assert.match(result.reason, /no waiver applies/u);
+});
+
+test("early surface: an unknown size budget alone reports blocked", () => {
+  const result = draftAt({ clean: true, sizeBudget: buildSizeBudgetField(null) });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(result.reason, /size budget outcome is unknown/u);
+});
+
+test("early surface: an unexpected size budget outcome maps to unknown", () => {
+  assert.equal(buildSizeBudgetField({ outcome: "error" }).outcome, "unknown");
+});
+
+test("early surface: an unexpected tripwire outcome maps to unknown with no remedies", () => {
+  const field = buildAdrTripwireField({ outcome: "error" });
+  assert.equal(field.outcome, "unknown");
+  assert.deepEqual(field.remedies, []);
+});
+
+const SIZE_ESCALATE = { outcome: "escalate", wholeLogicLoc: null, thresholds: {}, waivable: false, reasons: ["near"] };
+
+test("early surface: size escalate is advisory in a draft round without clean draft evidence", () => {
+  const result = draftAt({ clean: false, sizeBudget: SIZE_ESCALATE });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+  assert.equal(result.sizeBudget.outcome, "escalate");
+});
+
+test("early surface: size escalate is advisory at the ready boundary and reports the field", () => {
+  const result = draftAt({ clean: true, sizeBudget: SIZE_ESCALATE });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  assert.equal(result.sizeBudget.outcome, "escalate");
+});
+
+test("early surface: size escalate combined with ADR block or unknown keeps the ADR precedence", () => {
+  const block = draftAt({ clean: true, adrTripwire: ADR_BLOCK, sizeBudget: SIZE_ESCALATE });
+  assert.equal(block.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_ADR_TRIPWIRE);
+  const unknown = draftAt({ clean: true, adrTripwire: { outcome: "unknown", satisfiedBy: null, triggers: [], reasons: [], remedies: [] }, sizeBudget: SIZE_ESCALATE });
+  assert.equal(unknown.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
 });
