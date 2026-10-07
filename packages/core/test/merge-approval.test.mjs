@@ -614,3 +614,21 @@ test("evaluateCopilotConvergence: a headerless non-error body stays current_head
   assert.equal(res.state, COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN);
   assert.equal(res.disposition, "none");
 });
+
+test("evaluateMergePreconditions: retrospective_checkpoint is skipped when enforcement is off and refuses on pending entries", () => {
+  assert.equal(evaluateMergePreconditions(greenFacts({ retrospective: null })).ok, true);
+  assert.equal(evaluateMergePreconditions(greenFacts({ retrospective: { checkpointState: "complete", pendingRetrospectives: [] } })).ok, true);
+
+  const merge = "bbbb1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
+  const named = evaluateMergePreconditions(greenFacts({ retrospective: { checkpointState: "missing", pendingRetrospectives: [{ pr: 2679, mergeCommit: merge }] } }));
+  assert.equal(named.ok, false);
+  const failure = named.failures.find((f) => f.precondition === "retrospective_checkpoint");
+  assert.ok(failure.reason.includes("#2679") && failure.reason.includes(merge), failure.reason);
+
+  const unknown = evaluateMergePreconditions(greenFacts({ retrospective: { checkpointState: "missing", pendingRetrospectives: [{ pr: null, mergeCommit: null, reason: "checkpoint_malformed" }] } }));
+  const reason = unknown.failures.find((f) => f.precondition === "retrospective_checkpoint").reason;
+  assert.ok(reason.includes("checkpoint_malformed") && reason.includes("state missing"), reason);
+
+  // A malformed evaluator result fails closed.
+  assert.equal(evaluateMergePreconditions(greenFacts({ retrospective: {} })).ok, false);
+});

@@ -471,7 +471,7 @@ function isStrictGitHubRfc3339Timestamp(value) {
  * @param {{mergeCommit: string, baseBranch: string, cwd: string, repo?: string, env?: NodeJS.ProcessEnv, resolveCommitPullRequests?: Function}} params
  * @returns {boolean}
  */
-export function resolveHasNewerMergeSinceCheckpoint({
+export function inspectNewerMergeSinceCheckpoint({
   mergeCommit,
   baseBranch,
   cwd,
@@ -498,7 +498,7 @@ export function resolveHasNewerMergeSinceCheckpoint({
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
-    return true;
+    return UNVERIFIABLE_NEWER_MERGE;
   }
   let revisionList;
   try {
@@ -509,26 +509,26 @@ export function resolveHasNewerMergeSinceCheckpoint({
     });
   } catch {
     // mergeCommit is unresolvable locally — fail closed.
-    return true;
+    return UNVERIFIABLE_NEWER_MERGE;
   }
   const candidateCommits = revisionList.trim().split("\n").filter(Boolean);
   for (const commitSha of candidateCommits) {
     let associations;
     try {
       associations = resolveCommitPullRequests({ repo, commitSha, cwd, env });
-      if (!Array.isArray(associations)) return true;
+      if (!Array.isArray(associations)) return UNVERIFIABLE_NEWER_MERGE;
     } catch {
-      return true;
+      return UNVERIFIABLE_NEWER_MERGE;
     }
     for (const association of associations) {
       if (!association || typeof association !== "object" || !("merged_at" in association)) {
-        return true;
+        return UNVERIFIABLE_NEWER_MERGE;
       }
       const associationState = association.state;
-      if (!["OPEN", "CLOSED", "MERGED"].includes(associationState)) return true;
+      if (!["OPEN", "CLOSED", "MERGED"].includes(associationState)) return UNVERIFIABLE_NEWER_MERGE;
       const mergedAt = association.merged_at;
       if (mergedAt !== null && !isStrictGitHubRfc3339Timestamp(mergedAt)) {
-        return true;
+        return UNVERIFIABLE_NEWER_MERGE;
       }
       const associationBase = association.base?.ref;
       if (
@@ -536,7 +536,7 @@ export function resolveHasNewerMergeSinceCheckpoint({
         || associationBase.trim() !== associationBase
         || associationBase.length === 0
       ) {
-        return true;
+        return UNVERIFIABLE_NEWER_MERGE;
       }
       const mergeCommitSha = association.merge_commit_sha;
       if (associationState === "MERGED") {
@@ -545,14 +545,108 @@ export function resolveHasNewerMergeSinceCheckpoint({
           || typeof mergeCommitSha !== "string"
           || mergeCommitSha.trim() !== mergeCommitSha
           || mergeCommitSha.length === 0
-        ) return true;
-        if (associationBase === baseBranch && mergeCommitSha === commitSha) return true;
+        ) return UNVERIFIABLE_NEWER_MERGE;
+        if (associationBase === baseBranch && mergeCommitSha === commitSha) {
+          return { stale: true, pending: { pr: Number.isInteger(association.number) && association.number > 0 ? association.number : null, mergeCommit: commitSha }, reason: null };
+        }
       } else if (mergedAt !== null || (mergeCommitSha !== null && mergeCommitSha !== undefined)) {
-        return true;
+        return UNVERIFIABLE_NEWER_MERGE;
       }
     }
   }
-  return false;
+  return { stale: false, pending: null, reason: null };
+}
+
+/** Boolean form of {@link inspectNewerMergeSinceCheckpoint}. */
+export function resolveHasNewerMergeSinceCheckpoint(params) {
+  return inspectNewerMergeSinceCheckpoint(params).stale;
+}
+
+const UNVERIFIABLE_NEWER_MERGE = Object.freeze({ stale: true, pending: null, reason: "ancestry_or_association_unverifiable" });
+
+/**
+ * The one shared retrospective-checkpoint evaluator (RETRO-GATE-FAIL-CLOSED).
+ * Startup and merge-pr both call it, so the two gates read the same record
+ * through the same repo-root resolution, repo-identity check and
+ * qualifying-merge rule. Gated on workflow.requireRetrospective: when unset or
+ * false it reads nothing and runs no lookup.
+ *
+ * `checkpointState` stays `undefined` when not enforced. `pendingRetrospectives`
+ * entries are `{ pr, mergeCommit }`; an entry whose merge cannot be identified
+ * carries `pr: null, mergeCommit: null` and a machine-readable `reason`.
+ *
+ * @returns {{ checkpointState: string|undefined, pendingRetrospectives: Array<{pr: number|null, mergeCommit: string|null, reason?: string}> }}
+ */
+export function resolvePendingRetrospectives({ config, cwd, env = process.env, resolveHasNewerMerge = inspectNewerMergeSinceCheckpoint }) {
+  if (resolveWorkflowConfig(config, "requireRetrospective") !== true) {
+    return { checkpointState: undefined, pendingRetrospectives: [] };
+  }
+  const checkpointRepoRoot = resolveCheckpointRepoRoot(cwd);
+  const checkpointPath = path.join(checkpointRepoRoot, CHECKPOINT_FILE);
+  let durableCheckpoint;
+  let checkpointReadFailed = false;
+  try {
+    durableCheckpoint = JSON.parse(readFileSync(checkpointPath, "utf8"));
+  } catch (err) {
+    if (err?.code !== "ENOENT") checkpointReadFailed = true;
+  }
+  // Only a `complete`/`skipped` checkpoint needs a recency check. An
+  // unresolvable/absent recorded identity is an unverifiable discharge claim
+  // and fails closed exactly like a confirmed newer merge.
+  let staleness = { stale: false, pending: null, reason: null };
+  const durableState = typeof durableCheckpoint?.state === "string"
+    ? durableCheckpoint.state.trim().toLowerCase()
+    : null;
+  const identity = normalizeCheckpointCycleIdentity(durableCheckpoint?.identity);
+  if (durableState === "complete" || durableState === "skipped") {
+    if (identity === null) {
+      staleness = { stale: true, pending: null, reason: "checkpoint_identity_missing" };
+    } else {
+      const currentRepo = detectRepoSlug(checkpointRepoRoot);
+      if (currentRepo === null || identity.repo !== currentRepo) {
+        // A checkpoint for any other repository cannot authorize association
+        // lookups or discharge a cycle here.
+        staleness = { stale: true, pending: null, reason: "checkpoint_foreign_repo" };
+      } else {
+        const inspected = resolveHasNewerMerge({
+          mergeCommit: identity.mergeCommit,
+          baseBranch: resolveBaseBranch(config, { cwd }),
+          cwd,
+          repo: currentRepo,
+          env,
+        });
+        // Injected seams may still return a bare boolean.
+        staleness = typeof inspected === "boolean"
+          ? { stale: inspected, pending: null, reason: inspected ? "newer_merge_unidentified" : null }
+          : inspected;
+      }
+    }
+  }
+  const checkpointState = checkpointReadFailed
+    ? "missing"
+    : resolveCheckpointStateFromArtifact(durableCheckpoint, { hasNewerMergeSinceCheckpoint: staleness.stale });
+  if (checkpointState !== "missing") return { checkpointState, pendingRetrospectives: [] };
+
+  let entry;
+  if (checkpointReadFailed) {
+    entry = { pr: null, mergeCommit: null, reason: "checkpoint_unreadable" };
+  } else if (durableCheckpoint === null || typeof durableCheckpoint !== "object" || Array.isArray(durableCheckpoint)) {
+    entry = { pr: null, mergeCommit: null, reason: "checkpoint_malformed" };
+  } else if (durableState === "complete" || durableState === "skipped") {
+    if (staleness.pending) {
+      entry = { pr: staleness.pending.pr, mergeCommit: staleness.pending.mergeCommit };
+    } else if (staleness.stale) {
+      entry = { pr: null, mergeCommit: null, reason: staleness.reason ?? "newer_merge_unidentified" };
+    } else {
+      // complete without fresh-context provenance: the record still names the cycle.
+      entry = { pr: identity.prNumber, mergeCommit: identity.mergeCommit };
+    }
+  } else if ((durableState === "required" || durableState === "missing") && identity !== null) {
+    entry = { pr: identity.prNumber, mergeCommit: identity.mergeCommit };
+  } else {
+    entry = { pr: null, mergeCommit: null, reason: durableState === "required" || durableState === "missing" ? "checkpoint_identity_missing" : "checkpoint_malformed" };
+  }
+  return { checkpointState, pendingRetrospectives: [entry] };
 }
 function mapGhState(ghState) {
   const s = String(ghState).toUpperCase();
@@ -1231,7 +1325,7 @@ export function buildResolveDevLoopStartupResult(input, {
   cwd,
   asyncStartMode = "required",
   config,
-  resolveHasNewerMerge = resolveHasNewerMergeSinceCheckpoint,
+  resolveHasNewerMerge = inspectNewerMergeSinceCheckpoint,
 } = {}) {
   const effectiveEnv = env ?? adapter.getEnv();
   const effectiveCwd = cwd ?? adapter.getCwd();
@@ -1270,57 +1364,17 @@ export function buildResolveDevLoopStartupResult(input, {
   // once per worktree. `checkpoint-contract.mjs`'s write path resolves the
   // exact same root via `resolveCheckpointRepoRoot`, so a worktree, a
   // subdirectory, and the main checkout all address one file.
-  const retrospectiveEnforced = resolveWorkflowConfig(config, "requireRetrospective") === true;
-  if (retrospectiveEnforced) {
-    const checkpointPath = path.join(resolveCheckpointRepoRoot(effectiveCwd), CHECKPOINT_FILE);
-    let durableCheckpoint;
-    let checkpointReadFailed = false;
-    try {
-      durableCheckpoint = JSON.parse(readFileSync(checkpointPath, "utf8"));
-    } catch (err) {
-      if (err?.code !== "ENOENT") {
-        checkpointReadFailed = true;
-      }
-    }
-    // Only a `complete`/`skipped` checkpoint needs a recency check — every
-    // other state ignores `hasNewerMergeSinceCheckpoint` (see
-    // resolveCheckpointStateFromArtifact). An unresolvable/absent recorded
-    // `mergeCommit` is an unverifiable discharge claim — it must not be
-    // trusted, so it fails closed exactly like a confirmed newer merge.
-    let hasNewerMergeSinceCheckpoint = false;
-    const durableState = typeof durableCheckpoint?.state === "string"
-      ? durableCheckpoint.state.trim().toLowerCase()
-      : null;
-    if (durableState === "complete" || durableState === "skipped") {
-      const identity = normalizeCheckpointCycleIdentity(durableCheckpoint.identity);
-      if (identity === null) {
-        hasNewerMergeSinceCheckpoint = true;
-      } else {
-        const checkpointRepoRoot = resolveCheckpointRepoRoot(effectiveCwd);
-        const currentRepo = detectRepoSlug(checkpointRepoRoot);
-        if (currentRepo === null || identity.repo !== currentRepo) {
-          // The local base history belongs to `currentRepo`; a checkpoint for
-          // any other repository cannot authorize GitHub association lookups
-          // or discharge a cycle here. Fail closed before inspecting ancestry.
-          hasNewerMergeSinceCheckpoint = true;
-        } else {
-          const baseBranch = resolveBaseBranch(config, { cwd: effectiveCwd });
-          hasNewerMergeSinceCheckpoint = resolveHasNewerMerge({
-            mergeCommit: identity.mergeCommit,
-            baseBranch,
-            cwd: effectiveCwd,
-            repo: currentRepo,
-            env: effectiveEnv,
-          });
-        }
-      }
-    }
-    input = {
-      ...input,
-      retrospectiveCheckpointState: checkpointReadFailed
-        ? "missing"
-        : resolveCheckpointStateFromArtifact(durableCheckpoint, { hasNewerMergeSinceCheckpoint }),
-    };
+  // A missing checkpoint no longer blocks routing: it is reported as a typed
+  // obligation the orchestrator dispatches in parallel, and merge-pr enforces
+  // it fail-closed at merge time (ADR 0125).
+  const { checkpointState, pendingRetrospectives } = resolvePendingRetrospectives({
+    config,
+    cwd: effectiveCwd,
+    env: effectiveEnv,
+    resolveHasNewerMerge,
+  });
+  if (checkpointState !== undefined) {
+    input = { ...input, retrospectiveCheckpointState: checkpointState };
   }
   const bundle = resolveAuthoritativeStartupResumeBundle(input);
   const strategyKey = bundle.selectedStrategy ?? "none";
@@ -1380,7 +1434,7 @@ export function buildResolveDevLoopStartupResult(input, {
   }
   // Draft-start route: only the plain PR follow-up route carries it.
   const draftStartApplies = draftStart !== null && strategyKey === "copilot_pr_followup";
-  const routedBundle = draftStartApplies ? { ...bundle, nextAction: draftStart.nextAction } : bundle;
+  const routedBundle = { ...bundle, ...(draftStartApplies ? { nextAction: draftStart.nextAction } : {}), pendingRetrospectives };
   return {
     ok: true,
     bundleKind: bundle.bundleKind,

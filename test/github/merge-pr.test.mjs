@@ -872,3 +872,82 @@ test("merge-pr default evidence probe shells the same detect-checkpoint-evidence
   const source = await readFile(new URL("../../scripts/github/merge-pr.mjs", import.meta.url), "utf8");
   assert.match(source, /new URL\("\.\/detect-checkpoint-evidence\.mjs", import\.meta\.url\)/u);
 });
+
+// ---- retrospective_checkpoint precondition (#2488) ----
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const RETRO_MERGE_COMMIT = "bbbb1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
+const RETRO_CONFIG = { workflow: { requireRetrospective: true } };
+
+function retroRuntime({ configExtra = RETRO_CONFIG, record } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "merge-pr-retro-"));
+  if (record !== undefined) {
+    mkdirSync(join(dir, ".pi"), { recursive: true });
+    writeFileSync(join(dir, ".pi", "dev-loop-retrospective-checkpoint.json"), typeof record === "string" ? record : JSON.stringify(record));
+  }
+  const made = makeRuntime({ configExtra });
+  made.runtime.cwd = dir;
+  return { ...made, dir };
+}
+
+async function refusal(runtime) {
+  let threw = null;
+  try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+  assert.ok(threw, "merge must be refused");
+  return threw;
+}
+
+test("retrospective_checkpoint: an undischarged earlier retro refuses and names the PR and full merge commit", async () => {
+  const { runtime, calls, dir } = retroRuntime({ record: { state: "required", identity: { repo: "mfittko/dev-loops", prNumber: 2679, mergeCommit: RETRO_MERGE_COMMIT } } });
+  try {
+    const threw = await refusal(runtime);
+    const failure = threw.mergePrFailure.failures.find((f) => f.precondition === "retrospective_checkpoint");
+    assert.ok(failure, JSON.stringify(threw.mergePrFailure));
+    assert.ok(failure.reason.includes("#2679") && failure.reason.includes(RETRO_MERGE_COMMIT), failure.reason);
+    assert.ok(!calls.runChild.some((c) => c.args[0] === "pr" && c.args[1] === "merge"), "no gh pr merge call");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("retrospective_checkpoint: identity-less and malformed records refuse naming the reason and recorded state", async () => {
+  const cases = [
+    [{ state: "required" }, "checkpoint_identity_missing", "missing"],
+    ["{not json", "checkpoint_unreadable", "missing"],
+    [[], "checkpoint_malformed", "missing"],
+  ];
+  for (const [record, reason, state] of cases) {
+    const { runtime, dir } = retroRuntime({ record });
+    try {
+      const threw = await refusal(runtime);
+      const failure = threw.mergePrFailure.failures.find((f) => f.precondition === "retrospective_checkpoint");
+      assert.ok(failure && failure.reason.includes(reason) && failure.reason.includes(`state ${state}`), JSON.stringify(failure));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("retrospective_checkpoint: a complete or skipped record for the earlier merge allows the merge", async () => {
+  for (const checkpointState of ["complete", "skipped"]) {
+    const { runtime, calls } = makeRuntime({ configExtra: RETRO_CONFIG });
+    runtime.resolvePendingRetrospectives = () => ({ checkpointState, pendingRetrospectives: [] });
+    const result = await mergePr(baseOptions(), runtime);
+    assert.equal(result.merged, true);
+    assert.equal(calls.runChild.length, 1);
+  }
+});
+
+test("retrospective_checkpoint: a stale record or failed lookup surfaces the helper's pending entries", async () => {
+  const { runtime } = makeRuntime({ configExtra: RETRO_CONFIG });
+  runtime.resolvePendingRetrospectives = () => ({ checkpointState: "missing", pendingRetrospectives: [{ pr: null, mergeCommit: null, reason: "ancestry_or_association_unverifiable" }] });
+  const threw = await refusal(runtime);
+  assert.match(threw.mergePrFailure.failures.find((f) => f.precondition === "retrospective_checkpoint").reason, /ancestry_or_association_unverifiable/);
+});
+
+test("retrospective_checkpoint: with requireRetrospective unset or false nothing is read and no precondition is evaluated", async () => {
+  for (const configExtra of [{}, { workflow: { requireRetrospective: false } }]) {
+    const { runtime } = makeRuntime({ configExtra });
+    runtime.resolvePendingRetrospectives = () => { throw new Error("must not be called"); };
+    const result = await mergePr(baseOptions(), runtime);
+    assert.equal(result.merged, true);
+  }
+});

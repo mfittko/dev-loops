@@ -8,7 +8,7 @@ import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun } from 
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { ghJson as defaultGhJson } from "@dev-loops/core/github/gh";
-import { loadDevLoopConfig, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly, resolveRequireCopilotConvergenceAtLatestHead, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { resolveMainWorktreeRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { cleanupWorktree } from "../loop/cleanup-worktree.mjs";
@@ -31,6 +31,7 @@ import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { resolveNamedContextState, LOOP_DERIVED_CI_CHECK_NAME } from "@dev-loops/core/loop/copilot-ci-status";
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
+import { resolvePendingRetrospectives as defaultResolvePendingRetrospectives } from "../loop/resolve-dev-loop-startup.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const VALID_METHODS = new Set(["squash", "merge", "rebase"]);
@@ -504,6 +505,7 @@ export async function mergePr(options, runtime = {}) {
     detectEvidence = defaultDetectEvidence,
     loadConfig = loadDevLoopConfig,
     detectInternalOnlyPr = detectInternalOnly,
+    resolvePendingRetrospectives = defaultResolvePendingRetrospectives,
     postMergeSteps = {},
     stderr = process.stderr,
   } = runtime;
@@ -617,6 +619,10 @@ export async function mergePr(options, runtime = {}) {
     copilotAbsentReviewDisposition,
     copilotBodyDisposition,
     copilotLaterReviewRefusal,
+    // Null when workflow.requireRetrospective is unset/false: nothing is read then.
+    retrospective: resolveWorkflowConfig(configLoad?.config, "requireRetrospective") === true
+      ? resolvePendingRetrospectives({ config: configLoad.config, cwd, env })
+      : null,
   });
 
   if (!verdict.ok) {
