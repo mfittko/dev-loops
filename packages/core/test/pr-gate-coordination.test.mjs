@@ -4644,13 +4644,10 @@ test("early surface: size escalate is advisory in a draft round without clean dr
   assert.equal(result.sizeBudget.outcome, "escalate");
 });
 
-test("early surface: size escalate at the ready boundary names its exit and renders null LOC safely", () => {
+test("early surface: size escalate is advisory at the ready boundary and reports the field", () => {
   const result = draftAt({ clean: true, sizeBudget: SIZE_ESCALATE });
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_SIZE_BUDGET);
-  assert.equal(result.lifecycleState, STATE.BLOCKED_NEEDS_USER_DECISION);
-  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
-  assert.match(result.reason, /size_budget_human_approval/u);
-  assert.doesNotMatch(result.reason, /LOC null/u);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  assert.equal(result.sizeBudget.outcome, "escalate");
 });
 
 test("early surface: size escalate combined with ADR block or unknown keeps the ADR precedence", () => {

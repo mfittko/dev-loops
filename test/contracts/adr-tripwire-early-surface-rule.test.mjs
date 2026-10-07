@@ -29,9 +29,11 @@ test("the rule pins the orchestrator-owned size waiver as the sole exit from res
   assert.match(row, /only case where the no-resume rule yields/u);
 });
 
-test("the rule maps a ready-boundary size-budget escalate to resolve_size_budget and names its exit", () => {
+test("the rule keeps a size-budget escalate advisory and enforced at merge", () => {
   const row = doc.split("\n").find((line) => line.includes("<!-- rule: ADR-TRIPWIRE-EARLY-SURFACE -->"));
-  assert.match(row, /size-budget `escalate` it is `resolve_size_budget` \(`blocked_needs_user_decision`, `mark_ready_for_review` forbidden\)/u);
-  assert.match(row, /exit for a size-budget `escalate` is the operator's head-pinned `approve merge <headSha>` marker \(the `merge-pr` `size_budget_human_approval` precondition/u);
-  assert.match(read("skills/dev-loop/SKILL.md"), /`escalate` stops at the ready boundary as `resolve_size_budget`[^.]*`size_budget_human_approval`/u);
+  const wording = /size-budget `block` stops; an `escalate` is reported in the hand-back and is enforced at merge by the approve-merge marker \(merge-pr size_budget_human_approval\)/u;
+  assert.match(row, wording);
+  assert.match(read("skills/dev-loop/SKILL.md"), wording);
+  assert.match(read("docs/decisions/0123-adr-tripwire-early-surface.md"), wording);
+  assert.doesNotMatch(row, /escalate. (stops|it is `resolve_size_budget`)/u);
 });
