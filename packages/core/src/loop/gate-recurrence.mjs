@@ -68,11 +68,6 @@ export function surfaceKeysOf(finding, sources) {
     .map((symbol) => ({ file, symbol }));
 }
 
-/** The first surface key of a finding, or null when it has none. */
-export function surfaceKeyOf(finding, sources) {
-  return surfaceKeysOf(finding, sources)[0] ?? null;
-}
-
 const keyString = (key) => `${key.file}\u0000${key.symbol}`;
 
 /** Every file a recurrence check needs to read: the act items' and the prior act items' files. */

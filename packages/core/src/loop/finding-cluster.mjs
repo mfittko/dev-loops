@@ -267,17 +267,18 @@ const SCOPE_LIST_FIELDS = ["acceptedForms", "rejectedForms", "statedSurfaces"];
 
 /**
  * Fold a dropped sibling's remediation scope into the kept cluster member:
- * list fields union, a text field the member lacks is adopted, and two
- * different text values reject the cluster rather than silently drop one.
+ * list fields union, a text field the member lacks is adopted, and a
+ * differing sibling text is kept on the member as `siblingRemediations[]`.
  */
 function mergeRemediationScope(kept, sibling) {
   let merged = kept;
+  const siblings = [];
   const set = (key, value) => { if (merged === kept) merged = { ...kept }; merged[key] = value; };
   for (const key of SCOPE_TEXT_FIELDS) {
     const a = typeof kept[key] === "string" ? kept[key].trim() : "";
     const b = typeof sibling[key] === "string" ? sibling[key].trim() : "";
     if (!b || a === b) continue;
-    if (a) throw new Error(`cluster members carry incompatible ${key}: ${JSON.stringify(a)} vs ${JSON.stringify(b)}`);
+    if (a) { siblings.push({ [key]: sibling[key] }); continue; }
     set(key, sibling[key]);
   }
   for (const key of SCOPE_LIST_FIELDS) {
@@ -285,6 +286,7 @@ function mergeRemediationScope(kept, sibling) {
     const extra = (Array.isArray(sibling[key]) ? sibling[key] : []).filter((v) => !a.includes(v));
     if (extra.length > 0) set(key, [...a, ...extra]);
   }
+  if (siblings.length > 0) set("siblingRemediations", [...(Array.isArray(kept.siblingRemediations) ? kept.siblingRemediations : []), ...siblings]);
   return merged;
 }
 

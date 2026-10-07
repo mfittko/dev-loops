@@ -6,7 +6,7 @@ import {
   definesSymbol,
   findEscalations,
   recurrenceFiles,
-  surfaceKeyOf,
+  surfaceKeysOf,
 } from "../src/loop/gate-recurrence.mjs";
 
 const TEXT_FILE = "scripts/github/_gate-finding-text.mjs";
@@ -16,51 +16,52 @@ const SOURCES = new Map([
 ]);
 const DIGEST = "sha256:" + "a".repeat(64);
 
+const firstKey = (finding, sources) => surfaceKeysOf(finding, sources)[0] ?? null;
 const actItem = (summary, file = TEXT_FILE) => ({ file, summary, judgeDisposition: "act" });
 const round = (head, findings, specDigest = DIGEST) => ({ headSha: head, findings, specAuthority: { specDigest } });
 
 describe("surface key", () => {
   test("a backticked name the file declares keys", () => {
-    assert.deepEqual(surfaceKeyOf(actItem("the overlap in `isSameDefect` is tuned to one fixture"), SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
-    assert.deepEqual(surfaceKeyOf(actItem("`THRESHOLD` is too low"), SOURCES), { file: TEXT_FILE, symbol: "THRESHOLD" });
+    assert.deepEqual(firstKey(actItem("the overlap in `isSameDefect` is tuned to one fixture"), SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
+    assert.deepEqual(firstKey(actItem("`THRESHOLD` is too low"), SOURCES), { file: TEXT_FILE, symbol: "THRESHOLD" });
   });
 
   test("a backticked token the file does not define does not key", () => {
-    assert.equal(surfaceKeyOf(actItem("returns `null` for an empty list"), SOURCES), null);
+    assert.equal(firstKey(actItem("returns `null` for an empty list"), SOURCES), null);
   });
 
   test("a trailing () on a backticked name is stripped", () => {
     assert.deepEqual(backtickedIdentifiers("`isSameDefect()` and `THRESHOLD`"), ["isSameDefect", "THRESHOLD"]);
-    assert.deepEqual(surfaceKeyOf(actItem("`isSameDefect()` is tuned to one fixture"), SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
+    assert.deepEqual(firstKey(actItem("`isSameDefect()` is tuned to one fixture"), SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
   });
 
   test("the file keys in one posix form", () => {
-    assert.deepEqual(surfaceKeyOf(actItem("`isSameDefect` misfires", `./${TEXT_FILE}`), SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
-    assert.deepEqual(surfaceKeyOf(actItem("`isSameDefect` misfires", TEXT_FILE.replaceAll("/", "\\")), SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
+    assert.deepEqual(firstKey(actItem("`isSameDefect` misfires", `./${TEXT_FILE}`), SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
+    assert.deepEqual(firstKey(actItem("`isSameDefect` misfires", TEXT_FILE.replaceAll("/", "\\")), SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
     assert.deepEqual(recurrenceFiles([actItem("x", `./${TEXT_FILE}`)], []), [TEXT_FILE]);
   });
 
   test("a call-only mention is not a definition", () => {
     const sources = new Map([[TEXT_FILE, "isSameDefect(a, b);\n"]]);
-    assert.equal(surfaceKeyOf(actItem("`isSameDefect` misfires"), sources), null);
+    assert.equal(firstKey(actItem("`isSameDefect` misfires"), sources), null);
   });
 
   test("a markdown rule marker keys", () => {
-    assert.deepEqual(surfaceKeyOf(actItem("`SOME-RULE-ID` lags the code", "skills/docs/rules.md"), SOURCES), { file: "skills/docs/rules.md", symbol: "SOME-RULE-ID" });
+    assert.deepEqual(firstKey(actItem("`SOME-RULE-ID` lags the code", "skills/docs/rules.md"), SOURCES), { file: "skills/docs/rules.md", symbol: "SOME-RULE-ID" });
   });
 
   test("a markdown file with only a heading or inline code mention does not key", () => {
     const sources = new Map([["a.md", "## SOME-RULE-ID\n`SOME-RULE-ID`\n"]]);
-    assert.equal(surfaceKeyOf(actItem("`SOME-RULE-ID` lags", "a.md"), sources), null);
+    assert.equal(firstKey(actItem("`SOME-RULE-ID` lags", "a.md"), sources), null);
   });
 
   test("a finding without a file or without a summary symbol gets no key", () => {
-    assert.equal(surfaceKeyOf({ summary: "`isSameDefect` is wrong" }, SOURCES), null);
-    assert.equal(surfaceKeyOf(actItem("no identifier here"), SOURCES), null);
+    assert.equal(firstKey({ summary: "`isSameDefect` is wrong" }, SOURCES), null);
+    assert.equal(firstKey(actItem("no identifier here"), SOURCES), null);
   });
 
   test("files[0] resolves when file is absent", () => {
-    assert.deepEqual(surfaceKeyOf({ files: [TEXT_FILE], summary: "`isSameDefect`" }, SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
+    assert.deepEqual(firstKey({ files: [TEXT_FILE], summary: "`isSameDefect`" }, SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
   });
 
   test("helpers", () => {
