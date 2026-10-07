@@ -140,6 +140,28 @@ const ExtraToolsConfig = z
     }
   });
 
+const ExtraToolsGuidanceConfig = z.record(
+  z.string().regex(EXTRA_TOOL_ENTRY_RE, "extraToolsGuidance keys must be MCP tool entries: mcp__<server>, mcp__<server>__* or mcp__<server>__<tool>"),
+  z.string().min(1, "extraToolsGuidance values must be non-empty").max(2000, "extraToolsGuidance values must be at most 2000 characters")
+    .refine((value) => value === "" || value.trim().length > 0, "extraToolsGuidance values must be non-empty")
+    .refine((value) => !/[\r\n\v\f\u0085\u2028\u2029]/.test(value), "extraToolsGuidance values must be a single line"),
+);
+
+/** Each guidance key must equal an `extraTools` entry that at least one role lists. */
+function refineExtraToolsGuidanceKeys(config, ctx) {
+  const guidance = config.extraToolsGuidance;
+  if (!guidance) return;
+  const listed = new Set(Object.values(config.extraTools ?? {}).flat());
+  for (const key of Object.keys(guidance)) {
+    if (listed.has(key)) continue;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["extraToolsGuidance", key],
+      message: `extraToolsGuidance key "${key}" matches no extraTools entry`,
+    });
+  }
+}
+
 const LowSignalConfig = z.strictObject({
   enabled: z.boolean().default(false).describe("Stop Copilot rounds early once they stop producing signal."),
   roundThreshold: z.number().int().nonnegative().default(3).describe("Rounds counted toward the low-signal stop decision."),
@@ -933,6 +955,7 @@ export const DevLoopConfigSchema = z.strictObject({
   inputSource: InputSourceConfig.optional(),
   models: ModelsConfig.optional(),
   extraTools: ExtraToolsConfig.optional(),
+  extraToolsGuidance: ExtraToolsGuidanceConfig.optional(),
   refinement: RefinementConfig.optional(),
   gates: GatesConfig.optional(),
   autonomy: AutonomyConfig.optional(),
@@ -947,7 +970,7 @@ export const DevLoopConfigSchema = z.strictObject({
   postMerge: PostMergeConfig.optional(),
   standingAuthorizations: StandingAuthorizationsConfig.optional(),
   classify: ClassifyConfig.optional(),
-});
+}).superRefine(refineExtraToolsGuidanceKeys);
 
 // ============================================================================
 // Built-in defaults — frozen canonical single source of truth
@@ -1010,6 +1033,7 @@ export const FileConfigSchema = z.strictObject({
   inputSource: InputSourceConfig.optional().describe("Spec source for local-first work."),
   models: ModelsConfigBase.partial().superRefine(refineRoleTiers).describe("Model routing: conductor override, per-role overrides, tier aliases, and role→tier policy.").optional(),
   extraTools: ExtraToolsConfig.describe("Claude-only: role (developer, fixer, refiner) → MCP tool entries appended to that role's tools list by `dev-loops loop claude-launch` (session-scoped; Pi ignores it).").optional(),
+  extraToolsGuidance: ExtraToolsGuidanceConfig.describe("Claude-only: `extraTools` entry → usage guidance appended to the prompt of each role that lists the entry, when that MCP server is detected for the session (Pi ignores it).").optional(),
   refinement: RefinementConfig.partial().describe("Refinement fan-out and Copilot review-round behavior.").optional(),
   gates: FileGatesConfig.describe("Gate review configuration: per-gate angle sets plus fan-out enforcement knobs.").optional(),
   autonomy: AutonomyConfig.partial().describe("How far the loop proceeds without operator confirmation.").optional(),
@@ -3317,6 +3341,17 @@ export function resolveUiReviewRunRecipe(config) {
 export function resolveRoleExtraTools(config, role) {
   const entries = config?.extraTools?.[role];
   return Array.isArray(entries) ? [...entries] : [];
+}
+
+/**
+ * Resolve the `extraToolsGuidance` map (entry → guidance text); `{}` when none.
+ * Single source for every consumer.
+ * @param {DevLoopConfig} config
+ * @returns {Record<string, string>}
+ */
+export function resolveExtraToolsGuidance(config) {
+  const guidance = config?.extraToolsGuidance;
+  return guidance && typeof guidance === "object" ? { ...guidance } : {};
 }
 
 /**

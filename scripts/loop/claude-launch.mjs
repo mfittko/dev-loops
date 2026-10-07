@@ -42,7 +42,7 @@ const passthroughArgs = argv[i] === "--" ? argv.slice(i + 1) : argv.slice(i);
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const result = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
 if (result.errors?.length > 0) fail(`invalid .devloops config: ${result.errors.map((e) => e.message ?? JSON.stringify(e)).join("; ")}`);
-const { command, args, env } = buildClaudeLaunch({ config: result.config ?? result, repoRoot, passthroughArgs, claudeBin });
+const { command, args, env } = buildClaudeLaunch({ config: result.config ?? result, repoRoot, projectRoot: resolveRepoRoot(process.cwd()), passthroughArgs, claudeBin });
 
 if (dryRun) {
   process.stdout.write(JSON.stringify({ ok: true, dryRun: true, command, args, DEVLOOPS_AGENT_OVERRIDES: env.DEVLOOPS_AGENT_OVERRIDES ?? null }, null, 2) + "\n");
