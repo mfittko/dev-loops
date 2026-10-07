@@ -964,6 +964,7 @@ Dispatch the current resolved set minus proven carries; touched, mandatory/alway
 and ambiguously attributed angles re-run. No prior head, an ineligible prior-log verdict
 or any whole-plan refusal means full re-dispatch. Context-builder and consolidation
 always run fresh at B; this never exempts a round from `GATE-EXEC-REGATE-MANDATORY`.
+Same-head resume also works at cap-split dispatch unit granularity: a unit whose angles are all complete or carried is skipped, and a carried angle is stripped from a mixed unit.
 
 Eligibility is decided PER ANGLE by the delta against that angle's review surface: `clean` OR `findings_present` both carry when the delta provably misses the surface. The prior round's overall verdict never gates carry-forward, and a re-gate NEVER skips the resolver. The one and only skip is a gate's genuine FIRST round (no prior findings-log at any head); every subsequent head bump runs the resolver, enforced below.
 

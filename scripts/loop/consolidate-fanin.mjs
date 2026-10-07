@@ -190,7 +190,7 @@ Optional:
                                  --gate is given (default: process.cwd()) — makes the overall verdict
                                  deterministic regardless of the CLI's invocation directory
   --expected-dispatch-units <n>  The number of fresh dispatch units the conductor spawned reviewers for
-                                 this round (groups for grouped dispatch; angle count for per-angle
+                                 this round (cap-split dispatch units for grouped dispatch; angle count for per-angle
                                  dispatch — write-gate-context.mjs's fanout.pendingGroups.length).
                                  Whether that already excludes carry-forward-carried angles depends on
                                  whether the Phase 1 artifact was built with write-gate-context.mjs
