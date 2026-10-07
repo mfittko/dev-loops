@@ -592,3 +592,25 @@ test("fixer delegation keeps the receipt under the main checkout and the Edit/Wr
     assert.equal(decision.decision, "allow");
   });
 });
+
+test("self-hosting fixer pull: a delegated skew refusal falls through to the local pull; any other outcome passes through unchanged", async () => {
+  await withDir(async (base) => {
+    const main = process.cwd();
+    await withRealLinkedWorktree(base, "linked", async (linked) => {
+      await seedDelegateCheckout(linked);
+      await writeExecutionIndex(path.join(linked, "tmp"), { executionIdentity: FIXER_ID, workOrderRef: `fixer:o/r#7:${HEAD}:${FIXER_ID}`, workOrderDigest: `sha256:${"0".repeat(64)}` });
+      const stub = path.join(linked, "scripts/github/pull-work-order.mjs");
+      const skew = { ok: false, refusal: "local_materialization_integrity_failure", error: "STUB_SKEW" };
+      await writeFile(stub, `console.log(${JSON.stringify(JSON.stringify(skew))});\nprocess.exit(1);\n`, "utf8");
+      const retried = pullShort(FIXER_ID, main);
+      // The local pull ran: its own refusal replaces the stub's output.
+      assert.equal(retried.status, 1, retried.stderr);
+      assert.ok(!retried.stdout.includes("STUB_SKEW"), retried.stdout);
+      assert.equal(typeof refusal(retried).refusal, "string");
+      await writeFile(stub, `console.log("STUB_PASSTHROUGH");\nprocess.exit(7);\n`, "utf8");
+      const passed = pullShort(FIXER_ID, main);
+      assert.equal(passed.status, 7, passed.stderr);
+      assert.equal(passed.stdout, "STUB_PASSTHROUGH\n");
+    });
+  });
+});
