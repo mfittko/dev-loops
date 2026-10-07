@@ -222,7 +222,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     }
     const coverage = [
       ...(handoff.siteCoverage ?? []),
-      ...handoff.dispositions.filter((entry) => entry.fingerprint && (entry.sites || entry.returnedSites)),
+      ...handoff.dispositions.filter((entry) => entry.fingerprint && (entry.sites || entry.returnedSites || entry.noSitesReason)),
     ];
     const gaps = siteCoverageGaps(toDeltaActItems(actList), coverage);
     if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
