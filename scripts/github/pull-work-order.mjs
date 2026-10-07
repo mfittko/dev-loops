@@ -151,7 +151,8 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   // An injected receiptTmpRoot pins where the receipt lands, which the child cannot honor: pull locally.
   const target = receiptTmpRoot ? null : pullDelegationTarget(short ? positionals[0] : values.execution, tmpRoots);
   if (target) {
-    // stdout, stderr and the exit code pass through unchanged. The child runs under cwd `target`, so a
+    // The child's stdout is buffered and stderr passes through; stdout and the exit code are relayed unless a fixer
+    // skew refusal triggers one local retry below. The child runs under cwd `target`, so a
     // --tmp-root goes over as the absolute path this process resolved.
     const childArgs = [
       ...(short ? [positionals[0]] : ["--ref", values.ref, "--digest", values.digest, "--execution", values.execution]),

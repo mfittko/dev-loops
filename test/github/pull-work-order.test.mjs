@@ -614,3 +614,36 @@ test("self-hosting fixer pull: a delegated skew refusal falls through to the loc
     });
   });
 });
+
+// Issue 2581 DoD rows 0 and 1: an order emitted from the main checkout can differ from the linked worktree's
+// renderer (PR 2580 mismatch), or that renderer can predate main's (PR 2576 skew). A delegated pull that
+// succeeds returns the worktree renderer's text unchanged, with no local re-render. Both rows share this
+// assertion; only a skew refusal (covered above) falls back to the local pull.
+test("self-hosting fixer pull: a successful delegated pull returns the worktree renderer's text", async () => {
+  const mainRoot = path.dirname(execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: process.cwd(), encoding: "utf8" }).trim());
+  const id = "f1790000000002-25810abc";
+  const workOrderRef = `fixer:o/r#99987:${HEAD}:${id}`;
+  const mainTmp = path.join(mainRoot, "tmp");
+  const planDir = path.join(mainTmp, "gate-fixer", "o-r", "pr-99987");
+  const branch = "issue-2581-dod-test";
+  await withDir(async (base) => {
+    const linked = path.join(base, "unit");
+    const git = (args) => execFileSync("git", args, { cwd: mainRoot, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+    git(["worktree", "add", "-q", "--no-checkout", "-b", branch, linked]);
+    try {
+      await seedDelegateCheckout(linked);
+      await writeFile(path.join(linked, "scripts/github/pull-work-order.mjs"), `console.log("WORKTREE TEXT");\nprocess.exit(0);\n`, "utf8");
+      await writeExecutionIndex(mainTmp, { executionIdentity: id, workOrderRef, workOrderDigest: `sha256:${"0".repeat(64)}` });
+      await mkdir(planDir, { recursive: true });
+      await writeFile(path.join(planDir, "fixer-emit-plan.json"), JSON.stringify({ workOrderRef, workOrder: { mutationAuthority: { branch, allowedPaths: ["."] } } }), "utf8");
+      const pulled = pullShort(id, mainRoot);
+      assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+      assert.equal(pulled.stdout, "WORKTREE TEXT\n");
+    } finally {
+      await rm(planDir, { recursive: true, force: true });
+      await rm(executionIndexPath(mainTmp, id), { force: true });
+      git(["worktree", "remove", "--force", linked]);
+      git(["branch", "-D", branch]);
+    }
+  });
+});
