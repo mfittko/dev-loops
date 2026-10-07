@@ -44,6 +44,8 @@ function wholeSpecDecision(spec, overrides = {}) {
     checkedCriteria: specCriterionIds(spec),
     rationale: "evaluated against the whole spec",
     authorizedRemediation: "apply the compliant fix",
+    defectClass: "stale wording",
+    siteQuery: "git grep -n 'old wording'",
     ...overrides,
   };
 }
@@ -155,6 +157,66 @@ describe("whole-spec judge disposition", () => {
     const id = identities();
     const decision = { ...wholeSpecDecision(SPEC), ...id, authorizedRemediation: "" };
     assert.throws(() => validateSpecAuthorityDecision(decision, { ...id, criterionIds: specCriterionIds(SPEC) }), /authorizedRemediation/);
+  });
+
+  describe("remediation scope (defect class and site query)", () => {
+    const validate = (overrides) => {
+      const id = identities();
+      return validateSpecAuthorityDecision({ ...wholeSpecDecision(SPEC, overrides), ...id }, { ...id, criterionIds: specCriterionIds(SPEC) });
+    };
+
+    test("rejects an act remediation without a defect class", () => {
+      assert.throws(() => validate({ defectClass: undefined }), /defectClass/);
+      assert.throws(() => validate({ defectClass: "  " }), /defectClass/);
+    });
+
+    test("rejects an act remediation without a site query", () => {
+      assert.throws(() => validate({ siteQuery: undefined }), /siteQuery/);
+      assert.throws(() => validate({ siteQuery: "" }), /siteQuery/);
+    });
+
+    test("carries the class and query onto the normalized decision", () => {
+      const out = validate({});
+      assert.equal(out.defectClass, "stale wording");
+      assert.equal(out.siteQuery, "git grep -n 'old wording'");
+      assert.equal(out.defectKind, "other");
+    });
+
+    test("a matcher defect lists accepted and rejected input forms", () => {
+      assert.throws(() => validate({ defectKind: "matcher" }), /acceptedForms/);
+      assert.throws(() => validate({ defectKind: "matcher", acceptedForms: ["--ref x"] }), /rejectedForms/);
+      const out = validate({ defectKind: "matcher", acceptedForms: ["--ref x", "--ref=x"], rejectedForms: ["prose mention"] });
+      assert.deepEqual(out.acceptedForms, ["--ref x", "--ref=x"]);
+      assert.deepEqual(out.rejectedForms, ["prose mention"]);
+    });
+
+    test("doc lag lists every stated surface of the changed rule", () => {
+      assert.throws(() => validate({ defectKind: "doc_lag" }), /statedSurfaces/);
+      const out = validate({ defectKind: "doc_lag", statedSurfaces: ["PR body scope", "changes fragment", "JSDoc", "hook header", "doc comment"] });
+      assert.equal(out.statedSurfaces.length, 5);
+    });
+
+    test("form and surface lists must match the defect kind", () => {
+      assert.throws(() => validate({ acceptedForms: ["--ref x"], rejectedForms: ["prose"] }), /defectKind/);
+      assert.throws(() => validate({ defectKind: "other", acceptedForms: ["--ref x"] }), /defectKind/);
+      assert.throws(() => validate({ defectKind: "doc_lag", statedSurfaces: ["s"], rejectedForms: ["p"] }), /defectKind/);
+      assert.throws(() => validate({ statedSurfaces: ["PR body scope"] }), /defectKind/);
+      assert.throws(() => validate({ defectKind: "matcher", acceptedForms: ["a"], rejectedForms: ["b"], statedSurfaces: ["s"] }), /defectKind/);
+      assert.equal(validate({ defectKind: "other", acceptedForms: [], statedSurfaces: null }).defectKind, "other");
+    });
+
+    test("an unknown defect kind is rejected", () => {
+      assert.throws(() => validate({ defectKind: "other-ish" }), /defectKind/);
+    });
+
+    test("conflict outcomes need no site query", () => {
+      const out = validate({
+        outcome: SPEC_AUTHORITY_OUTCOMES.FINDING_CONFLICTS,
+        conflictingCriteria: [specCriterionIds(SPEC)[0]],
+        authorizedRemediation: undefined, defectClass: undefined, siteQuery: undefined,
+      });
+      assert.equal(out.siteQuery, undefined);
+    });
   });
 
   test("conflict outcomes require explicit conflicting criteria", () => {
@@ -301,7 +363,7 @@ describe("verdict-level coverage and escalation", () => {
     // Submit out of order: index 2 (human), then 0, then 1.
     const decisions = [
       mk(2, SPEC_AUTHORITY_OUTCOMES.SPEC_CANNOT_DECIDE),
-      mk(0, SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT, { authorizedRemediation: "x" }),
+      mk(0, SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT, { authorizedRemediation: "x", defectClass: "c", siteQuery: "q" }),
       mk(1, SPEC_AUTHORITY_OUTCOMES.SPEC_CANNOT_DECIDE),
     ];
     const out = validateSpecAuthorityVerdict({ ...id, decisions }, { findingsCount: 3, criterionIds: specCriterionIds(SPEC) });
