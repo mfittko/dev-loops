@@ -13,7 +13,7 @@
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
  *   - raw PR/issue body writes (`gh pr edit`/`gh issue edit` with --body/--body-file, `gh api` body
- *     PATCH to pulls/<n> or issues/<n>) — blocked for every actor (ADR-TRIPWIRE-STANDING-WAIVER, #2689);
+ *     writes (PATCH/POST, --input, graphql updatePullRequest) to pulls/<n> or issues/<n>) — blocked for every actor (ADR-TRIPWIRE-STANDING-WAIVER, #2689);
  *     use the launcher's `pr edit` / `issue edit`.
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
  *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).

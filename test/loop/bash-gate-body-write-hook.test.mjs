@@ -46,13 +46,14 @@ test("raw PR and issue body writes are denied for the main agent and subagents",
       for (const [command, launcher] of denied) {
         const { decision, reason } = bash(root, command, subagent);
         assert.equal(decision, "deny", `${subagent ? "subagent" : "main"}: ${command}`);
+        assert.ok(reason.startsWith("ADR-TRIPWIRE-STANDING-WAIVER"), reason);
         assert.ok(reason.includes(`cli/index.mjs ${launcher}`), reason);
       }
     }
   });
 });
 
-test("non-body PR commands pass for the main agent and subagents", async () => {
+test("non-body commands pass for the main agent and subagents", async () => {
   await withManagedRepo(async (root) => {
     for (const subagent of [true, false]) {
       for (const command of [
@@ -64,6 +65,7 @@ test("non-body PR commands pass for the main agent and subagents", async () => {
       }
     }
     // Raw `gh issue edit` stays denied for subagents; the main agent keeps non-body edits (AC4).
+    assert.equal(bash(root, "gh issue edit 5 --add-label x", true).decision, "deny");
     for (const command of [
       "gh issue edit 5 --add-label x",
       "gh issue list --json number -q .[].number | xargs -I{} gh issue edit {} --add-label x",
