@@ -221,8 +221,10 @@ describe("extraToolsGuidance render", () => {
   });
 });
 
-test("the repo .devloops guidance renders for developer, fixer and refiner when the server is detected", async () => {
-  const { config } = await loadDevLoopConfigStrict({ repoRoot });
+test("four-statement guidance renders for developer, fixer and refiner when the server is detected", () => {
+  const guidance = "Apply this only when mcp__codebase-memory__* tools are in your tool list. (1) Use the graph tools first. (2) Before the first graph query, call index_repository once on your worktree path with persistence off, and use that project. (3) If indexing fails or the tool is missing, use the main-checkout project and confirm each answer with Read or Grep in the worktree before an edit. (4) If you indexed your worktree, call delete_project for that project before your hand-back.";
+  const tools = ["mcp__codebase-memory"];
+  const config = { version: 1, extraTools: { developer: tools, fixer: tools, refiner: tools }, extraToolsGuidance: { "mcp__codebase-memory": guidance } };
   const overrides = buildAgentOverrides(config, repoRoot, new Set(["codebase-memory"]));
   for (const role of ["developer", "fixer", "refiner"]) {
     const prompt = overrides[role].prompt;
