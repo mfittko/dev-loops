@@ -576,7 +576,7 @@ test("representative translation: 'prefer the local path for issue 42' → start
 });
 
 
-test("retrospective checkpoint gating blocks routed start/resume when checkpoint is missing", () => {
+test("retrospective checkpoint gating routes start/resume normally when checkpoint is missing", () => {
   const result = evaluatePublicDevLoopRouting({
     intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_ON_PR,
     target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
@@ -591,10 +591,9 @@ test("retrospective checkpoint gating blocks routed start/resume when checkpoint
     targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
-  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE);
-  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.NONE);
-  assert.match(result.nextAction, /retrospective/i);
+  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.notEqual(result.selectedGate, DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE);
 });
 
 test("retrospective checkpoint gating does not block inspect_state answers", () => {
@@ -654,7 +653,7 @@ test("authoritative startup/resume bundle preserves the read-only review route d
   assert.equal(bundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.REVIEW);
 });
 
-test("authoritative startup/resume bundle applies retrospective gating when checkpoint is missing", () => {
+test("authoritative startup/resume bundle routes normally when checkpoint is missing", () => {
   const bundle = resolveAuthoritativeStartupResumeBundle({
     currentState: {
       target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
@@ -669,10 +668,9 @@ test("authoritative startup/resume bundle applies retrospective gating when chec
     retrospectiveCheckpointState: RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
   });
 
-  assert.equal(bundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.NEEDS_RECONCILE);
-  assert.equal(bundle.selectedGate, DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE);
-  assert.match(bundle.nextAction, /retrospective/i);
-  assert.match(bundle.reason, /retrospective/i);
+  assert.equal(bundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.RESOLVED);
+  assert.equal(bundle.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.doesNotMatch(bundle.nextAction, /Complete or explicitly skip/i);
 });
 
 test("authoritative startup/resume bundle preserves inspect semantics despite missing retrospective checkpoint", () => {
@@ -717,7 +715,7 @@ test("authoritative status fails closed when retrospective checkpoint input is i
 });
 
 
-test("authoritative startup/resume bundle preserves the retrospective gate nextAction", () => {
+test("authoritative startup/resume bundle keeps the routed nextAction on a missing retrospective checkpoint", () => {
   const bundle = resolveAuthoritativeStartupResumeBundle({
     currentState: {
       target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
@@ -732,14 +730,14 @@ test("authoritative startup/resume bundle preserves the retrospective gate nextA
     retrospectiveCheckpointState: RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
   });
 
-  assert.equal(bundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.NEEDS_RECONCILE);
-  assert.match(bundle.nextAction, /Complete or explicitly skip/i);
+  assert.equal(bundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.RESOLVED);
+  assert.doesNotMatch(bundle.nextAction, /Complete or explicitly skip/i);
   assert.equal(bundle.contractTrace.stateRefresh.loopState, "copilot_followup_active");
   assert.equal(bundle.contractTrace.stateRefresh.artifactState, DEV_LOOP_ARTIFACT_STATE.OPEN);
   assert.equal(bundle.contractTrace.stateRefresh.issueLinkageResolution, DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.NOT_APPLICABLE);
 });
 
-test("authoritative status preserves the retrospective gate nextAction", () => {
+test("authoritative status keeps the routed nextAction on a missing retrospective checkpoint", () => {
   const report = resolveAuthoritativeDevLoopStatus({
     currentState: {
       target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
@@ -754,16 +752,17 @@ test("authoritative status preserves the retrospective gate nextAction", () => {
     retrospectiveCheckpointState: RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
   });
 
-  assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.NEEDS_RECONCILE);
-  assert.match(report.nextAction, /Complete or explicitly skip/i);
+  assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.RESOLVED);
+  assert.doesNotMatch(report.nextAction, /Complete or explicitly skip/i);
   assert.equal(report.contractTrace.stateRefresh.loopState, "copilot_followup_active");
   assert.equal(report.contractTrace.stateRefresh.artifactState, DEV_LOOP_ARTIFACT_STATE.OPEN);
   assert.equal(report.contractTrace.stateRefresh.issueLinkageResolution, DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.NOT_APPLICABLE);
 });
 
-test("retrospective gate rewrites contract trace classification to reconcile", () => {
+test("missing retrospective checkpoint leaves the contract trace classification unchanged", () => {
   const result = evaluatePublicDevLoopRouting({
-    intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT,
+    intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_ON_PR,
+    target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
     currentState: {
       target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
       ownership: DEV_LOOP_ACTOR.COPILOT,
@@ -772,11 +771,13 @@ test("retrospective gate rewrites contract trace classification to reconcile", (
       authorization: DEV_LOOP_AUTHORIZATION.AUTHORIZED,
     },
     retrospectiveCheckpointState: RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
-  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
-  assert.equal(result.contractTrace.stopReason.classification, DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.RECONCILE);
-  assert.equal(result.contractTrace.decision.selectedGate, DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE);
+  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.notEqual(result.contractTrace.stopReason.classification, DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.RECONCILE);
+  assert.notEqual(result.contractTrace.decision.selectedGate, DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE);
 });
 
 test("authoritative startup/resume bundle carries refreshed wait-state trace context", () => {
@@ -821,7 +822,7 @@ test("authoritative status carries resolved wait-state trace context", () => {
   assert.equal(report.contractTrace.stateRefresh.artifactState, DEV_LOOP_ARTIFACT_STATE.OPEN);
 });
 
-test("authoritative status reconcile carries contract trace classification", () => {
+test("authoritative status carries contract trace classification on a missing retrospective checkpoint", () => {
   const report = resolveAuthoritativeDevLoopStatus({
     currentState: {
       target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 },
@@ -836,7 +837,7 @@ test("authoritative status reconcile carries contract trace classification", () 
     retrospectiveCheckpointState: RETROSPECTIVE_CHECKPOINT_STATE.MISSING,
   });
 
-  assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.NEEDS_RECONCILE);
-  assert.equal(report.contractTrace.stopReason.classification, DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.RECONCILE);
+  assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.RESOLVED);
+  assert.notEqual(report.contractTrace.stopReason.classification, DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.RECONCILE);
   assert.equal(report.contractTrace.stateRefresh.boundaryKind, "authoritative_status_refresh");
 });
