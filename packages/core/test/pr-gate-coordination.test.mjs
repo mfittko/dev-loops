@@ -4626,6 +4626,10 @@ test("early surface: an unknown size budget alone reports blocked", () => {
   assert.match(result.reason, /size budget outcome is unknown/u);
 });
 
+test("early surface: an unexpected size budget outcome maps to unknown", () => {
+  assert.equal(buildSizeBudgetField({ outcome: "error" }).outcome, "unknown");
+});
+
 test("early surface: an unexpected tripwire outcome maps to unknown with no remedies", () => {
   const field = buildAdrTripwireField({ outcome: "error" });
   assert.equal(field.outcome, "unknown");

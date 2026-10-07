@@ -851,6 +851,14 @@ test("ADR-TRIPWIRE-EARLY-SURFACE: a draft PR with clean draft evidence and an AD
   assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
 });
 
+test("ADR-TRIPWIRE-EARLY-SURFACE: the detector passes base ref, PR head SHA and PR body to the evaluator", async () => {
+  let received;
+  await runEarlySurfaceFixture({ isDraft: true, baseRefName: "main", evaluateEarlySurface: async (args) => { received = args; return PASS_EARLY_SURFACE(); } });
+  assert.equal(received.baseRefName, "main");
+  assert.equal(received.head, "abc1234567");
+  assert.match(received.prBody, /## Objective\n\nShip\./u);
+});
+
 test("ADR-TRIPWIRE-EARLY-SURFACE: a non-draft PR never evaluates the early surface", async () => {
   let calls = 0;
   const result = await runEarlySurfaceFixture({ isDraft: false, baseRefName: "main", evaluateEarlySurface: async () => { calls += 1; return PASS_EARLY_SURFACE(); } });

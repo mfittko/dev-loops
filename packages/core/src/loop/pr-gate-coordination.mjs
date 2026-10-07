@@ -869,8 +869,9 @@ export function buildSizeBudgetField(evaluation) {
   if (!evaluation || typeof evaluation.outcome !== "string") {
     return { outcome: "unknown", wholeLogicLoc: null, thresholds: null, waivable: false, reasons: ["The size budget could not be evaluated (base or head ref does not resolve locally); run `git fetch origin` and re-run."] };
   }
+  const outcome = ["pass", "escalate", "block"].includes(evaluation.outcome) ? evaluation.outcome : "unknown";
   return {
-    outcome: evaluation.outcome,
+    outcome,
     wholeLogicLoc: evaluation.wholeLogicLoc ?? null,
     thresholds: evaluation.thresholds ?? null,
     waivable: evaluation.waivable === true,
