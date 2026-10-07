@@ -2,6 +2,7 @@
 // verified work order + pull receipt under the MAIN checkout's tmp root.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -621,11 +622,14 @@ test("self-hosting fixer pull: a delegated skew refusal falls through to the loc
 // assertion; only a skew refusal (covered above) falls back to the local pull.
 test("self-hosting fixer pull: a successful delegated pull returns the worktree renderer's text", async () => {
   const mainRoot = path.dirname(execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: process.cwd(), encoding: "utf8" }).trim());
-  const id = "f1790000000002-25810abc";
-  const workOrderRef = `fixer:o/r#99987:${HEAD}:${id}`;
+  // Per-run unique names so concurrent or crashed runs cannot collide on the shared repo.
+  const uniq = randomBytes(4).toString("hex");
+  const prNumber = 100000 + (parseInt(uniq, 16) % 900000);
+  const id = `f1790000000002-${uniq}`;
+  const workOrderRef = `fixer:o/r#${prNumber}:${HEAD}:${id}`;
   const mainTmp = path.join(mainRoot, "tmp");
-  const planDir = path.join(mainTmp, "gate-fixer", "o-r", "pr-99987");
-  const branch = "issue-2581-dod-test";
+  const planDir = path.join(mainTmp, "gate-fixer", "o-r", `pr-${prNumber}`);
+  const branch = `issue-2581-dod-test-${uniq}`;
   await withDir(async (base) => {
     const linked = path.join(base, "unit");
     const git = (args) => execFileSync("git", args, { cwd: mainRoot, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
