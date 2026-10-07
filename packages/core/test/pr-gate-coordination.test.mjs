@@ -4635,3 +4635,27 @@ test("early surface: an unexpected tripwire outcome maps to unknown with no reme
   assert.equal(field.outcome, "unknown");
   assert.deepEqual(field.remedies, []);
 });
+
+const SIZE_ESCALATE = { outcome: "escalate", wholeLogicLoc: null, thresholds: {}, waivable: false, reasons: ["near"] };
+
+test("early surface: size escalate is advisory in a draft round without clean draft evidence", () => {
+  const result = draftAt({ clean: false, sizeBudget: SIZE_ESCALATE });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+  assert.equal(result.sizeBudget.outcome, "escalate");
+});
+
+test("early surface: size escalate at the ready boundary names its exit and renders null LOC safely", () => {
+  const result = draftAt({ clean: true, sizeBudget: SIZE_ESCALATE });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_SIZE_BUDGET);
+  assert.equal(result.lifecycleState, STATE.BLOCKED_NEEDS_USER_DECISION);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert.match(result.reason, /size_budget_human_approval/u);
+  assert.doesNotMatch(result.reason, /LOC null/u);
+});
+
+test("early surface: size escalate combined with ADR block or unknown keeps the ADR precedence", () => {
+  const block = draftAt({ clean: true, adrTripwire: ADR_BLOCK, sizeBudget: SIZE_ESCALATE });
+  assert.equal(block.nextAction, PR_CHECKPOINT_ACTION.RESOLVE_ADR_TRIPWIRE);
+  const unknown = draftAt({ clean: true, adrTripwire: { outcome: "unknown", satisfiedBy: null, triggers: [], reasons: [], remedies: [] }, sizeBudget: SIZE_ESCALATE });
+  assert.equal(unknown.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+});
