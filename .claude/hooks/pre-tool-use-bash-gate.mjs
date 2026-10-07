@@ -12,7 +12,7 @@
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
- *   - raw PR/issue body writes (`gh pr edit`/`gh issue edit` with --body/--body-file, `gh api` body
+ *   - raw PR/issue body writes (`gh pr edit`/`gh issue edit` with --body/--body-file/-b/-F, every wrapped `gh pr edit`, an xargs-fed `gh issue edit` without an explicit non-body flag, `gh api` body
  *     writes (PATCH/POST, --input, graphql updatePullRequest) to pulls/<n> or issues/<n>) — blocked for every actor (ADR-TRIPWIRE-STANDING-WAIVER, #2689);
  *     use the launcher's `pr edit` / `issue edit`.
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this

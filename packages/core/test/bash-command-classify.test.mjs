@@ -1303,6 +1303,7 @@ test("commandContainsRawPrBodyEdit denies global-flag and wrapped literal forms"
     `bash -c "gh issue edit 5 \\\n  --body-file x"`,
     "echo a\\\\\ngh pr edit 5 --body x",
     "echo a\\\\\ngh issue edit 5 --body-file x",
+    "gh pr edit 5 --bo\\\ndy x",
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
   }
@@ -1321,6 +1322,8 @@ test("commandContainsRawPrBodyEdit keeps passing title, assignee and read forms"
     `bash -c "gh issue edit 5 --add-label x" ; ls -F`,
     "gh issue list | grep -F foo | xargs -I{} gh issue edit {} --add-label x",
     `git commit -m "docs: eval and gh issue edit notes"`,
+    `git commit -m "fix: deny xargs gh pr edit body writes"`,
+    `git commit -m "fix: xargs gh issue edit hole"`,
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), false, cmd);
   }
@@ -1368,5 +1371,6 @@ test("raw PR body denies see through quoted flag tokens", () => {
   assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 "-F" body.md'), true);
   assert.equal(commandContainsRawPrBodyApiWrite('gh api -X PATCH repos/o/n/pulls/5 -f "body"=x'), true);
   assert.equal(commandContainsRawPrBodyApiWrite("echo a\\\\\ngh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body=x"), true);
+  assert.equal(commandContainsRawPrBodyApiWrite("gh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f bo\\\ndy=x"), true);
   assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 --title 'a title'"), false);
 });
