@@ -126,7 +126,13 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
   if (!nonEmpty(reviewBaselineHead)) throw new Error("delta sequence requires reviewBaselineHead");
   const actItems = toDeltaActItems(actList);
   const actSetId = createHash("sha256")
-    .update(JSON.stringify(actItems.map(({ ref, angle, severity, file, line, summary }) => [ref, angle, severity, file ?? null, line ?? null, summary])))
+    .update(JSON.stringify(actItems.map((item) => {
+      const { ref, angle, severity, file, line, summary } = item;
+      const base = [ref, angle, severity, file ?? null, line ?? null, summary];
+      // Scope fields join the hash only when present, so a legacy act list keeps its id.
+      const scope = [...REMEDIATION_TEXT_FIELDS, ...REMEDIATION_LIST_FIELDS].filter((key) => item[key] !== undefined).map((key) => [key, item[key]]);
+      return scope.length > 0 ? [...base, scope] : base;
+    })))
     .digest("hex")
     .slice(0, 16);
   return Object.freeze({ reviewBaselineHead: reviewBaselineHead.trim(), actSetId, actItems });

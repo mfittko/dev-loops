@@ -132,3 +132,13 @@ test("--site-coverage fails on a headSha mismatch or malformed JSON", () => {
   fs.writeFileSync(coverage, "{not json");
   assert.throws(() => runCli(args, headAt(B)), SyntaxError);
 });
+
+test("with --result a coverage record for an older head is discarded and the stale result is routed", () => {
+  const { dir, actList, result } = fixture();
+  const coverage = path.join(dir, "coverage.json");
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [] }));
+  const args = ["--act-list", actList, "--baseline", A, "--result", result, "--invocation", "1", "--site-coverage", coverage];
+  assert.equal(runCli(args, headAt("ccccccc3333333")).nextStep, "rereview_current_head");
+  args[args.indexOf("1")] = "3";
+  assert.equal(runCli(args, headAt("ccccccc3333333")).outcome, "bounded_out");
+});

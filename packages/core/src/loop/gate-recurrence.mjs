@@ -17,6 +17,8 @@ import { resolveFindingFile } from "./gate-fanin.mjs";
 /** Act items on one surface in this many counted rounds escalate. */
 export const ESCALATION_THRESHOLD = 3;
 
+const NON_CODE = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`/g;
+
 const BACKTICKED = /`([A-Za-z_$][\w$-]*)(?:\(\))?`/g;
 
 /** The finding's file in one posix form, so `./a\b.mjs` and `a/b.mjs` key alike; null when it has none. */
@@ -44,7 +46,9 @@ export function definesSymbol(file, source, symbol) {
   if (typeof source !== "string") return false;
   const name = escapeRegExp(symbol);
   if (/\.md$/i.test(file)) return new RegExp(`<!--\\s*rule:\\s*${name}\\s*-->`).test(source);
-  return new RegExp(`\\b(?:function\\*?|class|const|let|var)\\s+${name}(?![\\w$])`).test(source);
+  // ponytail: naive scrub (no regex literals); comments and quoted strings never declare a binding.
+  const code = source.replace(NON_CODE, " ");
+  return new RegExp(`\\b(?:function\\*?|class|const|let|var)\\s+${name}(?![\\w$])`).test(code);
 }
 
 /**

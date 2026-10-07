@@ -44,6 +44,14 @@ const ACT_LIST = [
   },
 ];
 
+test("remediation scope changes the actSetId; legacy lists keep theirs", () => {
+  const plain = startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST });
+  const scoped = (siteQuery) => startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], siteQuery }, ...ACT_LIST.slice(1)] });
+  assert.notEqual(scoped("q1").actSetId, plain.actSetId);
+  assert.notEqual(scoped("q1").actSetId, scoped("q2").actSetId);
+  assert.equal(startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST }).actSetId, plain.actSetId);
+});
+
 function sequence() {
   return startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST });
 }

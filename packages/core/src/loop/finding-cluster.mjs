@@ -241,6 +241,7 @@ export function dedupeActListByCluster(actFindings, clusters, allFindings) {
   }
 
   const seenClusters = new Set();
+  const keptSlot = new Map();
   const kept = [];
   for (const finding of actFindings) {
     const position = findingsList.indexOf(finding);
@@ -249,11 +250,42 @@ export function dedupeActListByCluster(actFindings, clusters, allFindings) {
       kept.push(finding); // Fail-open: unresolvable membership always passes through.
       continue;
     }
-    if (seenClusters.has(representativeIndex)) continue;
+    if (seenClusters.has(representativeIndex)) {
+      const slot = keptSlot.get(representativeIndex);
+      kept[slot] = mergeRemediationScope(kept[slot], finding);
+      continue;
+    }
     seenClusters.add(representativeIndex);
+    keptSlot.set(representativeIndex, kept.length);
     kept.push(finding);
   }
   return kept;
+}
+
+const SCOPE_TEXT_FIELDS = ["authorizedRemediation", "defectClass", "siteQuery", "defectKind"];
+const SCOPE_LIST_FIELDS = ["acceptedForms", "rejectedForms", "statedSurfaces"];
+
+/**
+ * Fold a dropped sibling's remediation scope into the kept cluster member:
+ * list fields union, a text field the member lacks is adopted, and two
+ * different text values reject the cluster rather than silently drop one.
+ */
+function mergeRemediationScope(kept, sibling) {
+  let merged = kept;
+  const set = (key, value) => { if (merged === kept) merged = { ...kept }; merged[key] = value; };
+  for (const key of SCOPE_TEXT_FIELDS) {
+    const a = typeof kept[key] === "string" ? kept[key].trim() : "";
+    const b = typeof sibling[key] === "string" ? sibling[key].trim() : "";
+    if (!b || a === b) continue;
+    if (a) throw new Error(`cluster members carry incompatible ${key}: ${JSON.stringify(a)} vs ${JSON.stringify(b)}`);
+    set(key, sibling[key]);
+  }
+  for (const key of SCOPE_LIST_FIELDS) {
+    const a = Array.isArray(kept[key]) ? kept[key] : [];
+    const extra = (Array.isArray(sibling[key]) ? sibling[key] : []).filter((v) => !a.includes(v));
+    if (extra.length > 0) set(key, [...a, ...extra]);
+  }
+  return merged;
 }
 
 /**

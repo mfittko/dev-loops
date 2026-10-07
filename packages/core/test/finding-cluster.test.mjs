@@ -398,6 +398,20 @@ describe("dedupeActListByCluster — context-size before/after evidence", () => 
     assert.equal(deduped[1], allFindings[2]);
   });
 
+  test("sibling remediation scope folds into the kept member; conflicting text rejects", () => {
+    const mk = (extra) => ({ ...disposedFinding(locatedFinding({ angle: "x" }), "act"), ...extra });
+    const allFindings = [mk({ acceptedForms: ["a"], siteQuery: "q" }), mk({ acceptedForms: ["a", "b"], statedSurfaces: ["s"] })];
+    const { clusters } = clusterFindings(allFindings, { headSha: HEAD });
+    const [kept, ...rest] = dedupeActListByCluster(allFindings, clusters, allFindings);
+    assert.equal(rest.length, 0);
+    assert.deepEqual(kept.acceptedForms, ["a", "b"]);
+    assert.deepEqual(kept.statedSurfaces, ["s"]);
+    assert.equal(kept.siteQuery, "q");
+    const bad = [mk({ siteQuery: "q1" }), mk({ siteQuery: "q2" })];
+    const c2 = clusterFindings(bad, { headSha: HEAD }).clusters;
+    assert.throws(() => dedupeActListByCluster(bad, c2, bad), /incompatible siteQuery/);
+  });
+
   test("prefers the representative when it is itself an act member", () => {
     const allFindings = [
       disposedFinding(locatedFinding(), "act"), // representative, index 0

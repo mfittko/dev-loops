@@ -67,6 +67,9 @@ describe("surface key", () => {
     assert.deepEqual(backtickedIdentifiers("`a` and `a` and `b-c` and `1x`"), ["a", "b-c"]);
     assert.equal(definesSymbol("x.mjs", "let value = 1", "value"), true);
     assert.equal(definesSymbol("x.mjs", "const valueX = 1", "value"), false);
+    assert.equal(definesSymbol("x.mjs", "// function ghost() {}", "ghost"), false);
+    assert.equal(definesSymbol("x.mjs", 'const example = "function ghost() {}";', "ghost"), false);
+    assert.equal(definesSymbol("x.mjs", "/* class ghost {} */\nfunction real() {}", "real"), true);
   });
 });
 

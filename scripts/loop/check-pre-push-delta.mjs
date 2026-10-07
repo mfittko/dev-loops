@@ -164,10 +164,11 @@ export function runCli(
   let siteCoverage = [];
   if (options.siteCoverage) {
     const record = normalizeFixerDispositionHandoff(JSON.parse(readFileSync(options.siteCoverage, "utf8")), { ruleIds: loadKnownRuleIds() });
-    if (record.headSha !== currentHead) {
+    if (record.headSha !== currentHead && !options.result) {
       throw new Error(`site coverage record names head ${record.headSha}, not the worktree HEAD ${currentHead}: the fixer must record coverage for its latest commit`);
     }
-    siteCoverage = record.siteCoverage ?? [];
+    // Result mode discards coverage for an older head; decideDeltaNextStep routes the stale result.
+    siteCoverage = record.headSha === currentHead ? record.siteCoverage ?? [] : [];
   }
   const payload = options.result
     ? {
