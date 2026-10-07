@@ -309,6 +309,6 @@ describe("pre-push results never become gate evidence", () => {
   test("the delta module performs no I/O: no gate artifact, comment or thread can be written", () => {
     const source = fs.readFileSync(new URL("../src/loop/pre-push-delta-review.mjs", import.meta.url), "utf8");
     const imports = [...source.matchAll(/^import .* from "([^"]+)";$/gm)].map((m) => m[1]);
-    assert.deepEqual(imports.sort(), ["./gate-fanin.mjs", "node:crypto"]);
+    assert.deepEqual(imports.sort(), ["./fixer-disposition.mjs", "./gate-fanin.mjs", "node:crypto"]);
   });
 });

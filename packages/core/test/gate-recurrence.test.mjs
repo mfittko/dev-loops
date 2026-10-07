@@ -29,6 +29,17 @@ describe("surface key", () => {
     assert.equal(surfaceKeyOf(actItem("returns `null` for an empty list"), SOURCES), null);
   });
 
+  test("a trailing () on a backticked name is stripped", () => {
+    assert.deepEqual(backtickedIdentifiers("`isSameDefect()` and `THRESHOLD`"), ["isSameDefect", "THRESHOLD"]);
+    assert.deepEqual(surfaceKeyOf(actItem("`isSameDefect()` is tuned to one fixture"), SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
+  });
+
+  test("the file keys in one posix form", () => {
+    assert.deepEqual(surfaceKeyOf(actItem("`isSameDefect` misfires", `./${TEXT_FILE}`), SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
+    assert.deepEqual(surfaceKeyOf(actItem("`isSameDefect` misfires", TEXT_FILE.replaceAll("/", "\\")), SOURCES), { file: TEXT_FILE, symbol: "isSameDefect" });
+    assert.deepEqual(recurrenceFiles([actItem("x", `./${TEXT_FILE}`)], []), [TEXT_FILE]);
+  });
+
   test("a call-only mention is not a definition", () => {
     const sources = new Map([[TEXT_FILE, "isSameDefect(a, b);\n"]]);
     assert.equal(surfaceKeyOf(actItem("`isSameDefect` misfires"), sources), null);

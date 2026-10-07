@@ -7,6 +7,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { captureParsedReviewThreads, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
@@ -202,7 +203,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     if (!contained.contained) throw new Error(`the work order head ${order.headSha} is not contained by the observed head ${options.headSha}: ${contained.reason}`);
   }
   return {
-    handoff: normalizeFixerDispositionHandoff(raw),
+    handoff: normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() }),
     delivery: { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity },
   };
 }

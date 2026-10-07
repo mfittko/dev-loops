@@ -10,12 +10,20 @@
  *
  * Pure and offline: the caller injects file sources and the prior ledgers.
  */
+import path from "node:path";
+
 import { resolveFindingFile } from "./gate-fanin.mjs";
 
 /** Act items on one surface in this many counted rounds escalate. */
 export const ESCALATION_THRESHOLD = 3;
 
-const BACKTICKED = /`([A-Za-z_$][\w$-]*)`/g;
+const BACKTICKED = /`([A-Za-z_$][\w$-]*)(?:\(\))?`/g;
+
+/** The finding's file in one posix form, so `./a\b.mjs` and `a/b.mjs` key alike; null when it has none. */
+function recurrenceFile(finding) {
+  const file = resolveFindingFile(finding);
+  return file ? path.posix.normalize(file.replaceAll("\\", "/")) : null;
+}
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
@@ -47,7 +55,7 @@ export function definesSymbol(file, source, symbol) {
  * @returns {{ file: string, symbol: string }|null}
  */
 export function surfaceKeyOf(finding, sources) {
-  const file = resolveFindingFile(finding);
+  const file = recurrenceFile(finding);
   if (!file) return null;
   const source = sources.get(file);
   const symbol = backtickedIdentifiers(finding?.summary).find((id) => definesSymbol(file, source, id));
@@ -59,10 +67,10 @@ const keyString = (key) => `${key.file}\u0000${key.symbol}`;
 /** Every file a recurrence check needs to read: the act items' and the prior act items' files. */
 export function recurrenceFiles(actFindings, priorLogs) {
   const files = new Set();
-  for (const f of actFindings) if (resolveFindingFile(f)) files.add(resolveFindingFile(f));
+  for (const f of actFindings) if (recurrenceFile(f)) files.add(recurrenceFile(f));
   for (const log of priorLogs) {
     for (const f of Array.isArray(log?.findings) ? log.findings : []) {
-      if (f?.judgeDisposition === "act" && resolveFindingFile(f)) files.add(resolveFindingFile(f));
+      if (f?.judgeDisposition === "act" && recurrenceFile(f)) files.add(recurrenceFile(f));
     }
   }
   return [...files];

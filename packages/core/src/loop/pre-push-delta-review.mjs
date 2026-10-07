@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 
 import { severityRank, VALID_SEVERITIES, normalizeSeverity } from "./gate-fanin.mjs";
+import { recordedSkipReason, siteCoverageGaps } from "./fixer-disposition.mjs";
 
 /** At most this many delta review invocations per sequence. */
 export const DELTA_MAX_INVOCATIONS = 3;
@@ -86,6 +87,8 @@ export function toDeltaActItems(actList) {
       judgeDisposition: "act",
     };
     if (nonEmpty(entry.judgeRationale)) item.judgeRationale = entry.judgeRationale.trim();
+    // The site coverage record keys on the ledger fingerprint, which a repeated-fingerprint ref suffix would hide.
+    if (nonEmpty(entry.fingerprint)) item.fingerprint = entry.fingerprint.trim();
     for (const key of REMEDIATION_TEXT_FIELDS) if (nonEmpty(entry[key])) item[key] = entry[key].trim();
     for (const key of REMEDIATION_LIST_FIELDS) if (Array.isArray(entry[key]) && entry[key].length > 0) item[key] = entry[key].filter(nonEmpty).map((v) => v.trim());
     if (nonEmpty(entry.file)) item.file = entry.file.trim();
@@ -133,9 +136,11 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
  * Build the reviewer input for one invocation. The range is always
  * `reviewBaselineHead..candidateHead` (cumulative), never the last fix only.
  * The reviewer reads the diff from the worktree; the input carries no diff.
- * @param {{ sequence: ReturnType<typeof startDeltaSequence>, candidateHead: string, specIdentity?: string|null }} input
+ * `siteCoverage` is the fixer's normalized site coverage record from the `commit_only` handback;
+ * the reviewer reads the recorded skip reasons from it.
+ * @param {{ sequence: ReturnType<typeof startDeltaSequence>, candidateHead: string, specIdentity?: string|null, siteCoverage?: object[] }} input
  */
-export function buildDeltaInput({ sequence, candidateHead, specIdentity = null } = {}) {
+export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, siteCoverage = [] } = {}) {
   if (!sequence || !nonEmpty(sequence.reviewBaselineHead)) throw new Error("buildDeltaInput requires a delta sequence");
   if (!nonEmpty(candidateHead)) throw new Error("buildDeltaInput requires candidateHead");
   const head = candidateHead.trim();
@@ -147,6 +152,7 @@ export function buildDeltaInput({ sequence, candidateHead, specIdentity = null }
     actSetId: sequence.actSetId,
     actItems: sequence.actItems.map((item) => ({ ...item })),
     specIdentity: nonEmpty(specIdentity) ? specIdentity.trim() : null,
+    siteCoverage,
     surfaceHints: [...new Set(sequence.actItems.map((item) => item.angle).filter(Boolean))],
     checklist: [...DELTA_CHECKLIST],
     // The DeltaPrePushReviewResult template the reviewer fills in; validateDeltaResult checks it.
@@ -159,8 +165,9 @@ export function buildDeltaInput({ sequence, candidateHead, specIdentity = null }
         severity: [...VALID_SEVERITIES].join("|"),
         summary: "<non-empty string>",
         evidence: ["<non-empty string>"],
-        // Set for a same-class site of an act item; skipReason copies the fixer disposition's reason for that site.
+        // Set for a same-class site of an act item; skipReason copies the reason that input.siteCoverage records for that site.
         residueOf: "<act item ref, optional>",
+        site: "<site name in input.siteCoverage, required with skipReason>",
         skipReason: "<non-empty string, optional>",
       }],
       widenedReads: [{ path: "<widened path>", reason: "<why the read was needed>" }],
@@ -187,10 +194,12 @@ export function deriveDeltaOutcome(result) {
  * Validate a DeltaPrePushReviewResult against its sequence. Returns the list of
  * problems; an empty list means the result is well formed.
  * @param {unknown} result
- * @param {{ sequence: ReturnType<typeof startDeltaSequence> }} context
+ * When `siteCoverage` is passed (the pre-push check always passes it), every act item with a site
+ * query needs a coverage record, and each `skipReason` must equal the reason recorded for its site.
+ * @param {{ sequence: ReturnType<typeof startDeltaSequence>, siteCoverage?: object[] }} context
  * @returns {string[]}
  */
-export function validateDeltaResult(result, { sequence } = {}) {
+export function validateDeltaResult(result, { sequence, siteCoverage } = {}) {
   const errors = [];
   if (!result || typeof result !== "object") return ["result must be an object"];
   if (result.reviewBaselineHead !== sequence?.reviewBaselineHead) {
@@ -223,7 +232,15 @@ export function validateDeltaResult(result, { sequence } = {}) {
     if (!nonEmptyStrings(f?.evidence)) errors.push(`newFindings[${i}].evidence[] must be non-empty strings`);
     if (f?.residueOf !== undefined && !expectedRefs.has(f.residueOf)) errors.push(`newFindings[${i}].residueOf ${JSON.stringify(f.residueOf)} is not in the act set`);
     if (f?.skipReason !== undefined && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
+    if (siteCoverage !== undefined && nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
+      const actItem = sequence.actItems.find((item) => item.ref === f.residueOf);
+      const recorded = recordedSkipReason(siteCoverage, actItem.fingerprint ?? actItem.ref, nonEmpty(f.site) ? f.site.trim() : "");
+      if (recorded !== f.skipReason.trim()) {
+        errors.push(`PRE-PUSH-DELTA-RESIDUE: newFindings[${i}].skipReason must equal the reason recorded for site ${JSON.stringify(f.site)} of act item ${f.residueOf}: ${JSON.stringify(recorded)}`);
+      }
+    }
   }
+  if (siteCoverage !== undefined) errors.push(...siteCoverageGaps(sequence?.actItems ?? [], siteCoverage));
 
   if (!Array.isArray(result.widenedReads)) errors.push("widenedReads[] is required (empty when nothing was widened)");
   else for (const [i, read] of result.widenedReads.entries()) {
@@ -254,13 +271,13 @@ export function isDeltaResultFresh(result, currentHead) {
  *   normal gate path with the residual evidence. No fourth review runs. The
  *   bound takes precedence over freshness: a stale result at the bound also
  *   ends bounded_out, which authorizes nothing and claims no success.
- * @param {{ sequence: ReturnType<typeof startDeltaSequence>, result: unknown, invocation: number, currentHead: string }} input
+ * @param {{ sequence: ReturnType<typeof startDeltaSequence>, result: unknown, invocation: number, currentHead: string, siteCoverage?: object[] }} input
  */
-export function decideDeltaNextStep({ sequence, result, invocation, currentHead } = {}) {
+export function decideDeltaNextStep({ sequence, result, invocation, currentHead, siteCoverage } = {}) {
   if (!Number.isInteger(invocation) || invocation < 1 || invocation > DELTA_MAX_INVOCATIONS) {
     throw new Error(`invocation must be an integer in 1..${DELTA_MAX_INVOCATIONS}`);
   }
-  const errors = validateDeltaResult(result, { sequence });
+  const errors = validateDeltaResult(result, { sequence, siteCoverage });
   const fresh = isDeltaResultFresh(/** @type {any} */ (result), currentHead);
   const clear = errors.length === 0 && fresh && /** @type {any} */ (result).outcome === "locally_clear";
   if (clear) return { outcome: "locally_clear", nextStep: "push", locallyClear: true, errors, fresh };

@@ -41,7 +41,10 @@ test("the pre-push delta contract lists the remedy fields and states the residue
   const input = ruleText(PUSH_CONTRACT, "PRE-PUSH-DELTA-INPUT");
   assert.ok(input.includes("authorizedRemediation") && input.includes("siteQuery"));
   const residue = ruleText(PUSH_CONTRACT, "PRE-PUSH-DELTA-RESIDUE");
-  for (const needle of ["residueOf", "never defers", "rationale", "same fix commit", "skipReason", "blocks"]) assert.ok(residue.includes(needle), `residue rule names ${needle}`);
+  for (const needle of ["residueOf", "never defers", "rationale", "same fix commit", "skipReason", "blocks", "siteCoverage", "commit_only", "MUST equal the reason"]) assert.ok(residue.includes(needle), `residue rule names ${needle}`);
+  assert.ok(ruleText(PUSH_CONTRACT, "PRE-PUSH-DELTA-EXIT-BOUND").includes("PRE-PUSH-DELTA-RESIDUE"));
+  const conflictEvidence = ruleText("skills/docs/spec-authority-contract.md", "SPEC-AUTHORITY-CONFLICT-EVIDENCE");
+  assert.ok(conflictEvidence.includes("defectClass") && conflictEvidence.includes("siteQuery"));
 });
 
 test("the recurrence escalation rule names the key, the threshold, the stop and both outcomes", () => {

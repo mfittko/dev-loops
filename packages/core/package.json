@@ -43,7 +43,7 @@
     "./loop/gate-evidence-reconcile": "./src/loop/gate-evidence-reconcile.mjs",
     "./loop/gate-fanin": "./src/loop/gate-fanin.mjs",
     "./loop/gate-recurrence": "./src/loop/gate-recurrence.mjs",
-    "./loop/gate-round-retirement":"./src/loop/gate-round-retirement.mjs",
+    "./loop/gate-round-retirement": "./src/loop/gate-round-retirement.mjs",
     "./loop/handoff-envelope": "./src/loop/handoff-envelope.mjs",
     "./loop/lifecycle-state": "./src/loop/lifecycle-state.mjs",
     "./loop/markdown-sections": "./src/loop/markdown-sections.mjs",

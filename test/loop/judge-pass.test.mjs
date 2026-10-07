@@ -1585,13 +1585,14 @@ const GUARD_FILE = "src/guard.mjs";
 const REC_REPO = "mfittko/dev-loops";
 const REC_PR = 2000;
 
-async function recurrenceCase({ priorRounds = [], extraAct = true, specFile = "spec.json" } = {}) {
+async function recurrenceCase({ priorRounds = [], extraAct = true, specFile = "spec.json", sameCluster = false, readHead = async () => HEAD } = {}) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-recurrence-"));
   const { specDigest, contentDigest, criterionIds } = await specDigests();
   await mkdir(path.join(tmpDir, "src"), { recursive: true });
   await writeFile(path.join(tmpDir, GUARD_FILE), "export function isSameDefect(a, b) {}\n");
   const findings = [finding({ file: GUARD_FILE, summary: "`isSameDefect` still tuned to one fixture" })];
   if (extraAct) findings.push(finding({ file: "README.md", summary: "a doc line is stale" }));
+  if (sameCluster) for (const f of findings) f.clusterId = 0;
   const decisions = findings.map((_f, index) => ({
     index, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds,
     rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q",
@@ -1609,7 +1610,7 @@ async function recurrenceCase({ priorRounds = [], extraAct = true, specFile = "s
     }));
   }
   const [options, deps] = specAuthorityArgs(tmpDir, contentDigest);
-  const payload = await judgePassCli({ ...options, specFile: `./${specFile}`, out: "./act.json", ledgerOut: "./out-ledger.json" }, deps);
+  const payload = await judgePassCli({ ...options, specFile: `./${specFile}`, out: "./act.json", ledgerOut: "./out-ledger.json" }, { ...deps, readHead });
   return { tmpDir, payload };
 }
 
@@ -1656,4 +1657,20 @@ test("judge-pass recurrence: the act item carries its class and site query to th
   assert.equal(payload.act[0].defectClass, "c");
   assert.equal(payload.act[0].siteQuery, "q");
   assert.equal(payload.act[0].authorizedRemediation, "x");
+});
+
+test("judge-pass recurrence: the cluster siblings of an escalated item leave the fixer act list too", async () => {
+  const { tmpDir, payload } = await recurrenceCase({ priorRounds: [{}, {}], sameCluster: true });
+  assert.equal(payload.escalations.length, 1);
+  assert.deepEqual(payload.act, []);
+  assert.deepEqual(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")), []);
+  assert.equal(payload.actCount, 2, "actCount still counts the escalated items");
+});
+
+test("judge-pass recurrence: a checkout that is not at the round head skips escalation with a marker", async () => {
+  const { payload } = await recurrenceCase({ priorRounds: [{}, {}], readHead: async () => "f".repeat(40) });
+  assert.equal(payload.ok, true);
+  assert.equal(payload.escalations, undefined);
+  assert.match(payload.escalationsSkipped, /is not the round head/);
+  assert.equal(payload.act.length, 2);
 });

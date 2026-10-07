@@ -663,7 +663,7 @@
     {
       "id": "PRE-PUSH-DELTA-RESIDUE",
       "enforcement": "runtime",
-      "enforcementNote": "deriveDeltaOutcome (packages/core/src/loop/pre-push-delta-review.mjs) blocks locally_clear on a residueOf finding without a skipReason at any severity"
+      "enforcementNote": "deriveDeltaOutcome (packages/core/src/loop/pre-push-delta-review.mjs) blocks locally_clear on a residueOf finding without a skipReason at any severity, and validateDeltaResult requires each skipReason to equal the reason that the fixer's site coverage record holds for that site"
     },
     {
       "id": "PRE-PUSH-DELTA-RESULT",

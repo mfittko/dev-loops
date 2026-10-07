@@ -27,20 +27,23 @@ import {
   resolveDeltaTrigger,
   startDeltaSequence,
 } from "@dev-loops/core/loop/pre-push-delta-review";
+import { normalizeFixerDispositionHandoff } from "@dev-loops/core/loop/fixer-disposition";
 import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> [--worktree <dir>]
-       check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> [--worktree <dir>]
+const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> [--site-coverage <path>] [--worktree <dir>]
+       check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> [--site-coverage <path>] [--worktree <dir>]
 
 Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
   --act-list <path>       The judge-pass --out act list the fix resolves
   --baseline <sha>        reviewBaselineHead: the head the gate round reviewed (hex SHA)
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
+  --site-coverage <path>  The fixer's commit_only handback { headSha, siteCoverage: [...] } (the work order's outputRef)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
   --invocation <n>        1-based delta review invocation in this sequence (max 3)
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
@@ -52,7 +55,7 @@ Output (stdout, JSON):
 Result JSON (--result, DeltaPrePushReviewResult):
   { "reviewBaselineHead": "<sha>", "candidateHead": "<sha>", "actSetId": "<input.actSetId>",
     "actionableItems": [{ "ref", "status": "resolved|not_resolved|cannot_verify", "evidence": ["..."] }],
-    "newFindings": [{ "severity", "summary", "evidence": ["..."] }],
+    "newFindings": [{ "severity", "summary", "evidence": ["..."], "residueOf"?, "site"?, "skipReason"? }],
     "widenedReads": [{ "path": "...", "reason": "..." }],   (objects, not strings; [] when none)
     "outcome": "locally_clear|needs_fix|bounded_out" }
 
@@ -77,6 +80,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
         "act-list": { type: "string" },
         baseline: { type: "string" },
         "spec-identity": { type: "string" },
+        "site-coverage": { type: "string" },
         result: { type: "string" },
         invocation: { type: "string" },
         worktree: { type: "string" },
@@ -104,6 +108,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
     actList: values["act-list"],
     baseline,
     specIdentity,
+    siteCoverage: values["site-coverage"] ?? null,
     result: values.result ?? null,
     invocation,
     worktree: values.worktree ?? process.cwd(),
@@ -154,6 +159,15 @@ export function runCli(
       `baseline ${sequence.reviewBaselineHead} is not an ancestor of worktree HEAD ${currentHead}: the delta range must extend the reviewed head`,
     );
   }
+  // The fixer's commit_only handback. Without it every act item with a site query reports a coverage gap.
+  let siteCoverage = [];
+  if (options.siteCoverage) {
+    const record = normalizeFixerDispositionHandoff(JSON.parse(readFileSync(options.siteCoverage, "utf8")), { ruleIds: loadKnownRuleIds() });
+    if (record.headSha !== currentHead) {
+      throw new Error(`site coverage record names head ${record.headSha}, not the worktree HEAD ${currentHead}: the fixer must record coverage for its latest commit`);
+    }
+    siteCoverage = record.siteCoverage ?? [];
+  }
   const payload = options.result
     ? {
         ok: true,
@@ -162,9 +176,10 @@ export function runCli(
           result: JSON.parse(readFileSync(options.result, "utf8")),
           invocation: options.invocation,
           currentHead,
+          siteCoverage,
         }),
       }
-    : { ok: true, input: buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity }) };
+    : { ok: true, input: buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage }) };
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;
 }

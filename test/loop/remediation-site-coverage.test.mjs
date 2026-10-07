@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { normalizeFixerDispositionHandoff } from "@dev-loops/core/loop/fixer-disposition";
+import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
+import { loadKnownRuleIds } from "../../scripts/lib/known-rule-ids.mjs";
 import { buildDeltaInput, decideDeltaNextStep, startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { computeCommentDiscipline } from "../../scripts/loop/check-comment-discipline.mjs";
 
@@ -145,4 +146,72 @@ test("a remediation that breaks LOCAL-COMMENT-DISCIPLINE: the fixer cites the ru
   const [normalized] = normalizeFixerDispositionHandoff(handoff({ ruleCitations: ["LOCAL-COMMENT-DISCIPLINE"] })).dispositions;
   assert.deepEqual(normalized.ruleCitations, ["LOCAL-COMMENT-DISCIPLINE"]);
   assert.throws(() => normalizeFixerDispositionHandoff(handoff({ ruleCitations: ["not a rule id"] })), /ruleCitations/);
+});
+
+// Site coverage keyed by act-item fingerprint: the commit_only handback and threadless act items.
+const record = (items) => normalizeFixerDispositionHandoff({ headSha: CANDIDATE, siteCoverage: items }).siteCoverage;
+const coverageItem = (over = {}) => ({
+  fingerprint: "fp1",
+  returnedSites: SIBLINGS,
+  sites: SIBLINGS.map((site) => ({ site, status: "fixed" })),
+  ...over,
+});
+
+test("a commit_only handback carries site coverage for a threadless act item", () => {
+  const [normalized] = record([coverageItem()]);
+  assert.equal(normalized.fingerprint, "fp1");
+  assert.equal(normalized.sites.length, 3);
+  assert.deepEqual(siteCoverageGaps([actEntry()], record([coverageItem()])), []);
+  assert.throws(() => record([coverageItem({ sites: [] })]), /neither fixed nor skipped/);
+  assert.throws(() => record([coverageItem(), coverageItem()]), /duplicate fingerprint/);
+});
+
+test("an act item with a site query and no record, or no returned sites, is a gap", () => {
+  assert.deepEqual(siteCoverageGaps([actEntry()], undefined), ["act item fp1 has a site query and no site coverage record"]);
+  assert.match(siteCoverageGaps([actEntry()], record([coverageItem({ returnedSites: [], sites: [] })]))[0], /no returned sites/);
+  assert.deepEqual(siteCoverageGaps([{ ...actEntry(), siteQuery: undefined }], []), []);
+});
+
+test("a matcher act item needs one input_form site per accepted and rejected form", () => {
+  const matcher = actEntry({ acceptedForms: ["--ref x", "--ref=x"], rejectedForms: ["prose mention"] });
+  const sites = [
+    { site: "--ref x", status: "fixed", kind: "input_form", test: "t1" },
+    { site: "--ref=x", status: "fixed", kind: "input_form", test: "t2" },
+  ];
+  const partial = record([coverageItem({ returnedSites: ["--ref x", "--ref=x"], sites })]);
+  assert.deepEqual(siteCoverageGaps([matcher], partial), ['act item fp1 records no input_form site for form "prose mention"']);
+  const full = record([coverageItem({
+    returnedSites: [...sites.map((s) => s.site), "prose mention"],
+    sites: [...sites, { site: "prose mention", status: "skipped", kind: "input_form", reason: "prose is never a flag" }],
+  })]);
+  assert.deepEqual(siteCoverageGaps([matcher], full), []);
+});
+
+test("the delta check requires a skipReason to equal the recorded reason for that residueOf site", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [actEntry()] });
+  const siteCoverage = record([coverageItem({
+    sites: [...SIBLINGS.slice(0, 2).map((site) => ({ site, status: "fixed" })), { site: SIBLINGS[2], status: "skipped", reason: "generated file; the generator owns it" }],
+  })]);
+  const residue = (over = {}) => ({ severity: "low", summary: "same guard", evidence: ["src/c.mjs:12"], residueOf: "fp1", site: SIBLINGS[2], skipReason: "generated file; the generator owns it", ...over });
+  const run = (finding) => decideDeltaNextStep({ sequence, result: deltaResult(sequence, { newFindings: [finding] }), invocation: 1, currentHead: CANDIDATE, siteCoverage });
+  assert.equal(run(residue()).outcome, "locally_clear");
+  assert.equal(run(residue({ skipReason: "I decided it is fine" })).outcome, "needs_fix");
+  assert.ok(run(residue({ skipReason: "I decided it is fine" })).errors.some((e) => /must equal the reason recorded/.test(e)));
+  assert.equal(run(residue({ site: SIBLINGS[0] })).outcome, "needs_fix", "a fixed site has no recorded skip reason");
+  assert.equal(run(residue({ site: undefined })).outcome, "needs_fix");
+});
+
+test("the delta check reports a coverage gap for an act item with no record", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [actEntry()] });
+  const next = decideDeltaNextStep({ sequence, result: deltaResult(sequence), invocation: 1, currentHead: CANDIDATE, siteCoverage: [] });
+  assert.equal(next.outcome, "needs_fix");
+  assert.ok(next.errors.some((e) => /no site coverage record/.test(e)));
+});
+
+test("ruleCitations must be registered rule IDs when the registry is supplied", () => {
+  const ruleIds = new Set(["LOCAL-COMMENT-DISCIPLINE"]);
+  const withCitation = (id) => ({ headSha: CANDIDATE, siteCoverage: [coverageItem({ ruleCitations: [id] })] });
+  assert.doesNotThrow(() => normalizeFixerDispositionHandoff(withCitation("LOCAL-COMMENT-DISCIPLINE"), { ruleIds }));
+  assert.throws(() => normalizeFixerDispositionHandoff(withCitation("NO-SUCH-RULE"), { ruleIds }), /does not register: NO-SUCH-RULE/);
+  assert.ok(loadKnownRuleIds().has("LOCAL-COMMENT-DISCIPLINE"));
 });

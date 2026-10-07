@@ -744,7 +744,10 @@ export async function readContextDispatchUnits({ repo, pr, gate, headSha, contex
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   // The ledger write resolves against repoRoot (process.cwd() on the CLI), so the guard does too.
   if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
-  const { findings: rawFindings, overallVerdict, provenance: wrapperProvenance, verifiedItems: rawVerifiedItems } = await resolveFindings(options);
+  const { findings: rawFindings, overallVerdict, provenance: wrapperProvenance, verifiedItems: rawVerifiedItems, escalations } = await resolveFindings(options);
+  if (escalations !== undefined && (!Array.isArray(escalations) || escalations.some((e) => !e || typeof e !== "object" || Array.isArray(e)))) {
+    throw parseError('findings wrapper "escalations" must be an array of objects');
+  }
   // The wrapper's reviewer-verified AC/DoD labels (consolidate-fanin's union).
   // Fail closed on a malformed value; persisted trimmed and deduplicated.
   let verifiedItems;
@@ -953,6 +956,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // and additive.
   if (scopeDrift !== undefined) {
     log.scopeDrift = scopeDrift;
+  }
+  // judge-pass escalations (GATE-EXEC-RECURRENCE-ESCALATION), carried by the --ledger-out wrapper; optional and additive.
+  if (Array.isArray(escalations) && escalations.length > 0) {
+    log.escalations = escalations;
   }
   // AC1 (issue 2008 / ADR 0061): optional --spec-authority stamps the pinned
   // revision identity + checked criteria onto the log via the ONE shared

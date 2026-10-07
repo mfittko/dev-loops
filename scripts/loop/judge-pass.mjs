@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -35,7 +36,7 @@ import { materializationHash, verifyPulledResult, workOrderDigest } from "../git
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
-import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
+import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
   JQ_OUTPUT_USAGE,
@@ -840,10 +841,16 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
 /**
  * Escalations for this round's act items (see gate-recurrence.mjs). Prior ledgers
  * come from the same reader the gate context uses; file sources are read at the
- * current head. An unreadable file simply defines no symbol.
+ * current head. An unreadable file simply defines no symbol. The sources are only the
+ * head's when the checkout sits at that head; otherwise escalation is skipped and the
+ * returned `skipped` text names why.
  */
-async function resolveEscalations(result, options, resolvedRoot, specDigest, readPriorLogs) {
-  if (result.act.length === 0) return [];
+async function resolveEscalations(result, options, resolvedRoot, specDigest, { readPriorLogs, readHead }) {
+  if (result.act.length === 0) return { escalations: [] };
+  const checkoutHead = await readHead(resolvedRoot);
+  if (String(checkoutHead).trim().toLowerCase() !== result.headSha.trim().toLowerCase()) {
+    return { escalations: [], skipped: `GATE-EXEC-RECURRENCE-ESCALATION cannot read the head's sources: checkout HEAD ${checkoutHead ?? "(unreadable)"} is not the round head ${result.headSha}, so escalation was not evaluated` };
+  }
   const priorLogs = await readPriorLogs(
     { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot) },
     { repoRoot: resolvedRoot },
@@ -855,14 +862,20 @@ async function resolveEscalations(result, options, resolvedRoot, specDigest, rea
     const content = await readFile(absolute, "utf8").catch(() => null);
     if (content !== null) sources.set(file, content);
   }
-  return findEscalations({ actFindings: result.act, priorLogs, specDigest, headSha: result.headSha, sources }).map(
+  const escalations = findEscalations({ actFindings: result.act, priorLogs, specDigest, headSha: result.headSha, sources }).map(
     ({ index, ...key }) => ({ ...key, fingerprint: result.act[index].fingerprint, summary: result.act[index].summary, finding: result.act[index] }),
   );
+  return { escalations };
+}
+
+function gitHead(cwd) {
+  const out = spawnSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+  return out.status === 0 ? out.stdout.trim() : null;
 }
 
 export async function judgePassCli(
   options,
-  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs } = {},
+  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs, readHead = gitHead } = {},
 ) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
   const pinned = await verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot ?? resolveGateArtifactTmpRoot(resolvedRoot));
@@ -950,8 +963,14 @@ export async function judgePassCli(
   // Recurrence escalation: an act item whose surface appears in act items of three counted
   // rounds is withheld from the fixer and surfaced for a human decision. The count is derived
   // here from the closed prior-round ledgers and persisted nowhere.
-  const escalations = await resolveEscalations(result, options, resolvedRoot, pinned.specDigest, readPriorLogs);
+  const { escalations, skipped: escalationsSkipped } = await resolveEscalations(result, options, resolvedRoot, pinned.specDigest, { readPriorLogs, readHead });
+  // One root cause is one decision: the cluster siblings of an escalated item stay with it.
   const escalatedActs = new Set(escalations.map((e) => e.finding));
+  for (const cluster of result.clusters) {
+    if (cluster.memberIndices.some((i) => escalatedActs.has(result.enriched[i]))) {
+      for (const i of cluster.memberIndices) escalatedActs.add(result.enriched[i]);
+    }
+  }
   const fixerAct = result.act.filter((f) => !escalatedActs.has(f));
 
   // ADR 0061 AC1: when spec-authority is engaged, both the
@@ -1019,6 +1038,7 @@ export async function judgePassCli(
     actCount: result.counts.act,
     act: fixerAct,
     ...(escalationRecords.length > 0 ? { escalations: escalationRecords } : {}),
+    ...(escalationsSkipped ? { escalationsSkipped } : {}),
     ledgerOut: options.ledgerOut || undefined,
     out: options.out || undefined,
     specAuthority: specAuthority || undefined,
