@@ -33,6 +33,9 @@
       "enforcement": "doc"
     },
     {
+      "id": "ADR-TRIPWIRE-EARLY-SURFACE"
+    },
+    {
       "id": "ADR-TRIPWIRE-STANDING-WAIVER"
     },
     {

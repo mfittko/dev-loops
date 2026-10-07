@@ -6,6 +6,8 @@ import { test } from "bun:test";
 import { main, enqueueBoardItem, enqueueIssuelessLightweightPr } from "../../scripts/github/create-pr.mjs";
 import { runNode as runNodeHelper, writeGhStub } from "../_helpers.mjs";
 
+// ADR-TRIPWIRE-EARLY-SURFACE appends one `{adrTripwire,sizeBudget}` JSON line after gh stdout.
+const withoutEarlySurface = (stdout) => stdout.split("\n").filter((line) => !line.startsWith("{\"adrTripwire\"")).join("\n");
 const scriptPath = path.resolve("scripts/github/create-pr.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
 
@@ -326,7 +328,7 @@ test("create-pr --lightweight with a Closes #N body is tracker-backed and byte-i
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/42\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/42\n");
     const ghCalls = (await readFile(ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
     // linked-PR probe + gh pr create — no board calls
     assert.equal(ghCalls.length, 2);
@@ -429,7 +431,7 @@ test("create-pr without --lightweight never calls the board and never prints a b
     );
 
     assert.equal(result.code, 0);
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/42\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/42\n");
     const ghCalls = (await readFile(ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
     assert.equal(ghCalls.length, 1); // gh pr create only — no board calls
   });
@@ -464,7 +466,7 @@ test("create-pr --lightweight=true enables the lightweight path (inline boolean 
 test("create-pr --lightweight=false disables the lightweight path and is NOT forwarded to gh", async () => {
   await withTempDir(async (tempDir) => {
     const stdout = await runLightweightForms(tempDir, ["--lightweight=false"]);
-    assert.equal(stdout, "https://github.com/owner/repo/pull/42\n");
+    assert.equal(withoutEarlySurface(stdout), "https://github.com/owner/repo/pull/42\n");
   });
 });
 
@@ -478,6 +480,6 @@ test("create-pr --lightweight=false then bare --lightweight: last occurrence win
 test("create-pr bare --lightweight then --lightweight=false: last occurrence wins (disabled)", async () => {
   await withTempDir(async (tempDir) => {
     const stdout = await runLightweightForms(tempDir, ["--lightweight", "--lightweight=false"]);
-    assert.equal(stdout, "https://github.com/owner/repo/pull/42\n");
+    assert.equal(withoutEarlySurface(stdout), "https://github.com/owner/repo/pull/42\n");
   });
 });

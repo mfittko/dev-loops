@@ -13,6 +13,8 @@ import {
   parseConsolidateFaninCliArgs,
 } from "../../scripts/loop/consolidate-fanin.mjs";
 import { execFileSync } from "node:child_process";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { buildGateEmitPlanPath, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
@@ -4445,4 +4447,48 @@ test("consolidateGateFanin flags reviewer filler as a non-blocking warning and l
       assert.equal(result.findings[0].summary, summary);
     },
   );
+});
+
+// Issue 2511: a carried angle stripped from a mixed grouped unit round-trips
+// through fan-in and the ledger writer. The recorded context keeps the full
+// `design-simplicity` membership (dry + kiss); the emit plan holds ONE dispatch
+// unit with only the uncarried angle (kiss), so no sentinel exists for `dry`,
+// whose carry is recorded as carried provenance.
+test("issue 2511: a mixed-unit carry round-trips through consolidateGateFanin and write-gate-findings-log.mjs", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    const repo = "o/r";
+    const gate = "draft_gate";
+    const headSha = VERIFIED_HEAD;
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  rejectForeignAngles: false\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n      - name: holistic\n        enabled: false\n", "utf8");
+    // Real plan: resolveFanoutDispatch builds the fan-out, writeGateContext
+    // records the bundle, and the emitter CLI persists the keyed emit plan.
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const fanout = resolveFanoutDispatch(config, "draft", ["dry", "kiss"], { carriedAngles: ["dry"] });
+    const contextOptions = parseWriteGateContextCliArgs(["--repo", repo, "--pr", "7", "--gate", gate, "--head-sha", headSha, "--angles", JSON.stringify(["dry", "kiss"])]);
+    await writeGateContext({ ...contextOptions, config, fanoutDispatch: fanout }, { repoRoot });
+    const emitted = await runNode(path.resolve("scripts/github/emit-fanout-dispatch.mjs"), ["--repo", repo, "--pr", "7", "--gate", gate, "--head-sha", headSha, "--pending"], { cwd: repoRoot });
+    assert.equal(emitted.code, 0, emitted.stderr || emitted.stdout);
+    const emitPlan = buildGateEmitPlanPath({ repo, pr: "7", gate, headSha, tmpRoot: path.join(repoRoot, "tmp") });
+    const plan = JSON.parse(await readFile(emitPlan, "utf8"));
+    assert.deepEqual(plan.units.map((unit) => unit.angles), [["kiss"]]);
+    const carried = JSON.parse(carryForwardPlanJson(["dry"], { carriedFromHead: STALE_HEAD })).carried.map((entry) => ({ ...entry, reviewer: "prior-reviewer" }));
+    await withFindingsDir(
+      { "kiss.json": { angle: "kiss", verdict: "clean", findings: [], headSha } },
+      async (dir) => {
+        const ledger = await consolidateLedger(dir, { headSha, gate, repoRoot, repo, pr: 7, carriedAngles: ["dry"], carryForwardPlan: carried, resolvedAngles: ["dry", "kiss"] });
+        assert.equal(ledger.overallVerdict, "clean");
+        const written = await writeGateFindingsLog({
+          repo, pr: 7, gate, headSha, verdict: "clean", findings: "[]", executionMode: "fanout_fanin", emitPlan,
+          tmpRoot: path.join(repoRoot, "tmp"),
+          provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [
+            { angle: "kiss", reviewer: "fresh-reviewer" },
+            { angle: "dry", reviewer: "prior-reviewer", carriedFromHead: STALE_HEAD, carriedVerdict: "clean" },
+          ] }),
+        }, { repoRoot });
+        assert.equal(written.ok, true);
+        assert.deepEqual(written.log.provenance.perAngle.map((e) => e.angle).sort(), ["dry", "kiss"]);
+      },
+    );
+  });
 });
