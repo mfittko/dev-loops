@@ -137,7 +137,7 @@ export const isFixerPullAttempt = (command) => typeof command === "string" && co
  *   - raw `gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment` — blocked ONLY
  *     from a SUBAGENT context (`agentType` non-null) on the target repo. Sanctioned external writes
  *     flow through node wrappers; the MAIN AGENT / operator (agentType null) retains direct access, except
- *     `gh issue edit` with `--body`/`--body-file`/`-b`/`-F` (including wrapped forms), which is denied for every actor (ADR-TRIPWIRE-STANDING-WAIVER).
+ *     `gh issue edit` with `--body`/`--body-file`/`-b`/`-F` (including wrapped forms) and an xargs-fed `gh issue edit` without an explicit non-body flag, which is denied for every actor (ADR-TRIPWIRE-STANDING-WAIVER).
  *
  * The hook computes `gatePassed`/`gateError` from the gate script appropriate to the command kind.
  *

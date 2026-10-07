@@ -1301,6 +1301,8 @@ test("commandContainsRawPrBodyEdit denies global-flag and wrapped literal forms"
     "gh issue edit 5 \\\n  --body-file x",
     "gh pr edit 5 \\\n  --body-file x",
     `bash -c "gh issue edit 5 \\\n  --body-file x"`,
+    "echo a\\\\\ngh pr edit 5 --body x",
+    "echo a\\\\\ngh issue edit 5 --body-file x",
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
   }
@@ -1365,5 +1367,6 @@ test("raw PR body denies see through quoted flag tokens", () => {
   assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 "--body=x"'), true);
   assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 "-F" body.md'), true);
   assert.equal(commandContainsRawPrBodyApiWrite('gh api -X PATCH repos/o/n/pulls/5 -f "body"=x'), true);
+  assert.equal(commandContainsRawPrBodyApiWrite("echo a\\\\\ngh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body=x"), true);
   assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 --title 'a title'"), false);
 });

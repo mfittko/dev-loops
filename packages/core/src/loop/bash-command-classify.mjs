@@ -875,7 +875,7 @@ function unquoteFlagTokens(segment) {
  * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
  */
 export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
-  command = command.replace(/\\\r?\n/g, " "); // the shell joins backslash-newline continuations
+  command = command.replace(/(?<!\\)((?:\\\\)*)\\\r?\n/g, "$1 "); // the shell joins only an unescaped (odd-run) backslash-newline continuation
   // A wrapped `gh issue edit` is judged on its own argv only: the text after the literal up to the next shell separator.
   // Denied with a body-flag token there; under xargs (args may arrive on stdin) also denied without an explicit non-body edit flag.
   if (SHELL_WRAPPER_RE.test(command)) {
@@ -909,7 +909,7 @@ export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
  * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
  */
 export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
-  command = command.replace(/\\\r?\n/g, " "); // the shell joins backslash-newline continuations
+  command = command.replace(/(?<!\\)((?:\\\\)*)\\\r?\n/g, "$1 "); // the shell joins only an unescaped (odd-run) backslash-newline continuation
   // A `gh api` literal inside `bash -c`/`eval`/`xargs` hides its flags from segment inspection: mirror the
   // CLI half and deny the literal when it names a pull/issue path with a body field or `--input`, or `updatePullRequest`.
   if (SHELL_WRAPPER_RE.test(command) && /\bgh\s+api\b/.test(command)
