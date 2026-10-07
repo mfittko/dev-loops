@@ -433,19 +433,32 @@ function neutralizeHeaderSeparator(angle) {
   return angle.replace(MIDDLE_DOT_ENTITY_RE, HEADER_SEPARATOR_TOKEN).replace(/\u00b7/g, HEADER_SEPARATOR_TOKEN);
 }
 
-// Code-like content: multi-line text, a shell prompt, or braces, semicolons,
-// arrows and empty call parens that prose does not use.
+// Code-like content: multi-line text, a shell prompt, or braces. A bare `;` or
+// `()` is common in prose that names a call, so neither counts.
+const LINE_BREAK_RE = /\r\n|[\r\n\u2028\u2029]/;
 function isCodeLike(text) {
-  return /\n/.test(text.trim()) || /^\s*[$>]\s/.test(text) || /[{};]|=>|\(\)/.test(text);
+  return LINE_BREAK_RE.test(text.trim()) || /^\s*[$>]\s/.test(text) || /[{}]|=>/.test(text);
+}
+
+// The details block shares one budget well under GITHUB_COMMENT_MAX_CHARS
+// (65536): one oversized inline body would make GitHub reject the whole
+// round's review. A field above its share is cut and marked.
+const DETAILS_TOTAL_MAX_CHARS = 30000;
+const DETAILS_FIELD_MAX_CHARS = 8000;
+function boundDetailsText(text, fieldCount) {
+  const max = Math.min(DETAILS_FIELD_MAX_CHARS, Math.floor(DETAILS_TOTAL_MAX_CHARS / fieldCount));
+  return text.length > max ? `${text.slice(0, max)} [cut]` : text;
 }
 
 // Fence longer than any backtick run in the untrusted content, so the content
 // cannot close the block. Every line is indented so no content line starts at
-// column 0, where line-anchored marker and field regexes read.
+// column 0, where line-anchored marker and field regexes read. Lines split on
+// every line terminator the m-flag `^` honors, and comment delimiters are
+// entity-encoded so a forged marker cannot start inside the block.
 function fenceCode(text) {
   const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(Math.max(3, longestRun + 1));
-  return [`  ${fence}`, ...text.trim().split("\n").map((line) => `  ${line}`), `  ${fence}`];
+  return [`  ${fence}`, ...text.trim().split(LINE_BREAK_RE).map((line) => `  ${line.replaceAll("<!--", "&lt;!--").replaceAll("-->", "--&gt;")}`), `  ${fence}`];
 }
 
 export function renderInlineCommentBody(finding, { round }) {
@@ -543,7 +556,8 @@ export function renderInlineCommentBody(finding, { round }) {
   if (cutFields.length > 0) {
     lines.push("<details><summary>Details</summary>", "");
     for (const field of cutFields) {
-      lines.push(`**${field.label}:**`, ...(field.code ? fenceCode(field.text) : [escapeProse(field.text)]), "");
+      const text = boundDetailsText(field.text, cutFields.length);
+      lines.push(`**${field.label}:**`, ...(field.code ? fenceCode(text) : [escapeProse(text)]), "");
     }
     lines.push("</details>");
   }

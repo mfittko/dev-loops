@@ -95,10 +95,12 @@ corrected on its own surface (back-compat read).
 `**Failing case:**` (when the finding carries `failingCase`) and `**Fix:**` (numbered steps when
 the recommendation holds more than one action). The renderer bounds each field at a sentence
 boundary, never inside a code span or fence, and puts the full text of every cut field into one
-collapsed `<details><summary>Details</summary>` block in the same comment. A comment never names a
-local artifact. Code-like content (multi-line text, commands, payloads) renders in a fenced block
-longer than any backtick run in the content. The ledger keeps the full text. Reviewer inline code spans survive into the thread,
-and every other backtick is escaped as an entity. Findings from different angles that describe the
+collapsed `<details><summary>Details</summary>` block in the same comment. The block bounds each
+full field so the comment stays under GitHub's size limit, and marks a cut. A comment never names a
+local artifact. A code-like `**Failing case:**` (multi-line text, a shell prompt or braces) renders in a
+fenced block longer than any backtick run in the content, with comment delimiters entity-encoded.
+The ledger keeps the full text. Reviewer inline code spans survive into the thread, and every other
+backtick outside that fenced block is escaped as an entity. Findings from different angles that describe the
 same defect post as one comment. Two findings describe the same defect only when they resolve the
 same file, their lines are equal or both absent, both or neither are questions, they carry the same
 judge disposition, and their keys match. Keys match when both findings carry an equal `defectKey`,

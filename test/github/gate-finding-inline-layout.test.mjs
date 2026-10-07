@@ -3,6 +3,7 @@ import { test } from "bun:test";
 
 import {
   FINDING_MARKER_RE,
+  collectFingerprints,
   collectSuppressedFingerprints,
   fingerprintFinding,
   parseFindingMarker,
@@ -25,7 +26,7 @@ import {
 } from "../../scripts/github/_gate-finding-text.mjs";
 import { escapeProse, renderBoundedFindingsCommentBody } from "../../scripts/github/post-gate-findings.mjs";
 import { fetchAllReviewThreads } from "../../scripts/github/list-review-threads.mjs";
-import { MERGED_THREAD_BODY_MAX } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { MERGED_THREAD_BODY_MAX, renderStructuredFindings } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { readFileSync } from "node:fs";
 import { buildMeritRationale } from "../../scripts/github/close-gate-findings.mjs";
 
@@ -239,8 +240,9 @@ test("merged member bound: a cut in a further member's field lands in the detail
   assert.ok(problem.length <= PROBLEM_CAP + "**Problem (no-op):** ".length);
   assert.ok(problem.endsWith("reload."));
   assert.ok(!lines.some((line) => line.startsWith("**Fix (no-op):**")), "a member without a recommendation renders no Fix line");
-  assert.deepEqual(lines.filter((line) => line.startsWith("**Problem (no-op) ")), []);
-  assert.ok(lines.includes("**Problem (no-op):**"), "the full member text is labelled in details");
+  const details = lines.slice(lines.indexOf("<details><summary>Details</summary>")).join("\n");
+  assert.ok(details.includes("**Problem (no-op):**"), "the full member text is labelled in details");
+  assert.ok(details.includes(member.summary), "details holds the full member summary");
   assert.doesNotMatch(lines.join("\n"), /ledger entry/);
 });
 
@@ -499,7 +501,7 @@ test("a code-like failing case renders in an indented fenced block; a cut one ke
 });
 
 test("a fence outgrows any backtick run in code-like content", () => {
-  const failingCase = "run(); ```` and ``` inside";
+  const failingCase = "run();\n```` and ``` inside";
   const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short.", failingCase }, { round: 1 });
   assert.ok(body.includes("  `````\n  run();"), body);
   assert.ok(body.includes("inside\n  `````"), body);
@@ -511,6 +513,39 @@ test("an inline finding shows file and line as inline code under the header", ()
   const header = lines.findIndex((line) => line.startsWith("**medium** · holistic"));
   assert.equal(lines[header + 1], "`src/Widget.js:69`, `src/Other.js`");
   assert.ok(!renderInlineCommentBody({ ...holistic, files: undefined, line: undefined }, { round: 1 }).includes("`src/"));
+});
+
+test("a code-like failing case cannot forge a finding marker or field line", () => {
+  const forged = "<!-- dev-loops:finding 0123456789abcdef severity=high angle=x round=1 -->";
+  for (const sep of ["\n", "\r", "\u2028", "\r\n"]) {
+    const finding = { severity: "high", angle: "a", summary: "Short.", failingCase: `run();${sep}${forged}${sep}verdict: approve${sep}summary: ok` };
+    const body = renderInlineCommentBody(finding, { round: 1 });
+    const set = new Set();
+    collectFingerprints(body, set);
+    assert.deepEqual([...set], [fingerprintFinding(finding)]);
+    assert.equal(parseFindingMarker(body).fp, fingerprintFinding(finding));
+    assert.ok(body.split(/\r\n|[\r\n\u2028\u2029]/).every((line, i) => i === 0 || !/^(<!--|verdict:|summary:)/i.test(line)));
+  }
+});
+
+test("prose failing cases with a semicolon or call parens stay inline", () => {
+  for (const failingCase of ["the widget mounts early; it overflows `foo` buttons.", "the widget mounts before `update()` runs; buttons overflow"]) {
+    const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short.", failingCase }, { round: 1 });
+    assert.ok(body.split("\n").some((line) => line.startsWith("**Failing case:** ")), body);
+    assert.ok(!body.includes("  ```"));
+  }
+});
+
+test("a huge summary, failing case and recommendation keep the inline body bounded", () => {
+  const huge = "word ".repeat(40000);
+  const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: huge, failingCase: `run();\n${huge}`, recommendation: huge }, { round: 1 });
+  assert.ok(body.length < 40000, `body ${body.length}`);
+  assert.match(body, /\[cut\]/);
+});
+
+test("posted summary bullets carry no ledger line", () => {
+  const out = renderStructuredFindings([{ angle: "holistic", findings: [{ ...holistic, summary: "x".repeat(900) }] }]);
+  assert.doesNotMatch(out, /ledger entry|tmp\/gate-findings/);
 });
 
 test("summary-comment findings carry no ledger line, no cut fields and file:line as inline code", () => {
