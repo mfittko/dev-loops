@@ -517,6 +517,55 @@ test("pullDelegationTarget: a fixer pull stays local for a consumer worktree, th
   });
 });
 
+test("pullDelegationTarget: a fixer entry under a foreign tmp root or a consumer repo checkout stays local", async () => {
+  await withDir(async (base) => {
+    const main = path.join(base, "main");
+    const git = await seedFixerMain(main);
+    const linked = path.join(base, "unit");
+    git(["worktree", "add", "-q", "-b", "issue-9", linked]);
+    await seedDelegateCheckout(linked);
+    const tmp = [path.join(main, "tmp")];
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), linked);
+    const entry = await readFile(executionIndexPath(tmp[0], FIXER_ID), "utf8");
+    const plan = await readFile(path.join(main, "tmp/gate-fixer/o-r/pr-7/fixer-emit-plan.json"), "utf8");
+    // A consumer repo (its own git repo) and a custom tmp root hold the same entry and branch name.
+    const consumer = path.join(base, "consumer");
+    await mkdir(consumer);
+    execFileSync("git", ["init", "-q"], { cwd: consumer, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+    for (const checkout of [consumer, path.join(base, "elsewhere")]) {
+      const dir = path.join(checkout, "tmp", "gate-fixer", "o-r", "pr-7");
+      await mkdir(dir, { recursive: true });
+      await mkdir(path.dirname(executionIndexPath(path.join(checkout, "tmp"), FIXER_ID)), { recursive: true });
+      await writeFile(executionIndexPath(path.join(checkout, "tmp"), FIXER_ID), entry, "utf8");
+      await writeFile(path.join(dir, "fixer-emit-plan.json"), plan, "utf8");
+      assert.equal(pullDelegationTarget(FIXER_ID, [path.join(checkout, "tmp")], { toolchainRoot: main, env: {} }), null);
+    }
+  });
+});
+
+test("pullDelegationTarget: a fixer plan with a different workOrderRef, a missing or malformed plan, or a detached HEAD stays local", async () => {
+  await withDir(async (base) => {
+    const main = path.join(base, "main");
+    const git = await seedFixerMain(main);
+    const linked = path.join(base, "unit");
+    git(["worktree", "add", "-q", "-b", "issue-9", linked]);
+    await seedDelegateCheckout(linked);
+    const tmp = [path.join(main, "tmp")];
+    const planPath = path.join(main, "tmp/gate-fixer/o-r/pr-7/fixer-emit-plan.json");
+    const good = await readFile(planPath, "utf8");
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), linked);
+    await writeFile(planPath, JSON.stringify({ ...JSON.parse(good), workOrderRef: `fixer:o/r#7:${HEAD}:other` }), "utf8");
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+    await writeFile(planPath, "{ truncated", "utf8");
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+    await rm(planPath);
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+    await writeFile(planPath, good, "utf8");
+    git(["checkout", "-q", "--detach"], linked);
+    assert.equal(pullDelegationTarget(FIXER_ID, tmp, { toolchainRoot: main, env: {} }), null);
+  });
+});
+
 test("fixer delegation keeps the receipt under the main checkout and the Edit/Write grant working", async () => {
   await withDir(async (base) => {
     const main = path.join(base, "main");

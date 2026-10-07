@@ -15,7 +15,6 @@ import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "..
 import { EXECUTION_IDENTITY_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { buildFixerDir } from "../loop/emit-fixer-work-order.mjs"; // also registers the fixer role adapter
-import "../loop/emit-fixer-work-order.mjs"; // registers the fixer role adapter
 import { TOOLCHAIN_ROOT, isOtherDevLoopsCheckout, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveMainWorktreeRoot } from "../loop/_repo-root-resolver.mjs";
 import "../loop/emit-judge-work-order.mjs"; // registers the judge role adapter
 
@@ -94,10 +93,13 @@ const FIXER_REF_PR_RE = /^fixer:([^/\s#]+\/[^/\s#]+)#(\d+):/;
 /** The linked worktree that checks out the fixer order's mutationAuthority.branch, or null. */
 function fixerAuthorityWorktree(tmpRoot, execution, mainRoot) {
   try {
+    // Only the toolchain's own main checkout owns a worktree list this lookup may search.
+    if (realpathSync(path.dirname(tmpRoot)) !== realpathSync(mainRoot)) return null;
     const { workOrderRef } = JSON.parse(readFileSync(executionIndexPath(tmpRoot, execution), "utf8"));
     const [, repo, pr] = FIXER_REF_PR_RE.exec(workOrderRef) ?? [];
     if (!repo) return null;
     const plan = JSON.parse(readFileSync(path.join(buildFixerDir({ repo, pr, tmpRoot }), "fixer-emit-plan.json"), "utf8"));
+    if (plan.workOrderRef !== workOrderRef) return null;
     const branch = plan.workOrder?.mutationAuthority?.branch;
     if (typeof branch !== "string" || !branch) return null;
     return listWorktreeEntries(mainRoot).slice(1).find((entry) => entry.branch === `refs/heads/${branch}`)?.path ?? null;
