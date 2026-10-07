@@ -323,6 +323,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "GATE-EXEC-HARNESS-JOIN",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-DISPOSITION-LEDGER"
     },
     {

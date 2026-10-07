@@ -118,6 +118,7 @@ because "the user said yes," not because it is running from a worktree.
   itself. The `subagent-stop-uncommitted-guard` hook stays fully enforced for every editing role
   (#1936).
   See [Delegation contract](../local-implementation/SKILL.md#delegation-contract).
+- On Claude Code a gate coordinator's completion notification is the join signal for its round and is never dismissed as a repeat (`GATE-EXEC-HARNESS-JOIN` in [Gate Review Sub-Loop Contract](gate-review-sub-loop-contract.md)).
 
 ## Model tier at dispatch (Pi)
 

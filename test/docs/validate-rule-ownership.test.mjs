@@ -80,36 +80,20 @@ test("validateRuleOwnership fails unresolved reference", async () => {
   }
 });
 
-test("FORWARD_RULE_REFERENCES allowlists exactly GATE-EXEC-HARNESS-JOIN", () => {
-  assert.deepEqual([...FORWARD_RULE_REFERENCES], ["GATE-EXEC-HARNESS-JOIN"]);
+test("FORWARD_RULE_REFERENCES is empty", () => {
+  assert.deepEqual([...FORWARD_RULE_REFERENCES], []);
 });
 
-test("validateRuleOwnership accepts the allowlisted forward reference but still fails any other undefined cited ID", async () => {
+test("validateRuleOwnership fails every undefined cited ID", async () => {
   const dir = await fixture({
     "skills/docs/a.md": "Cite <!-- rule-ref: GATE-EXEC-HARNESS-JOIN --> and [OTHER-UNDEFINED-RULE](x.md).",
-    "scripts/tool.mjs": 'throw new Error("refused under GATE-EXEC-HARNESS-JOIN");',
   });
   try {
     const result = await validateRuleOwnership(dir);
     assert.equal(result.ok, false);
     assert.deepEqual(
       result.errors.filter((e) => e.kind !== "dead_allowlist_entry").map((e) => `${e.kind}:${e.id}`),
-      ["unresolved_rule_reference:OTHER-UNDEFINED-RULE"],
-    );
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("validateRuleOwnership flags a forward-reference entry once its rule is defined", async () => {
-  const dir = await fixture({
-    "skills/docs/a.md": "<!-- rule: GATE-EXEC-HARNESS-JOIN --> The coordinator joins children by the completion wake.",
-  }, ["GATE-EXEC-HARNESS-JOIN"]);
-  try {
-    const result = await validateRuleOwnership(dir);
-    assert.deepEqual(
-      result.errors.filter((e) => e.kind !== "dead_allowlist_entry").map((e) => `${e.kind}:${e.id}`),
-      ["resolved_forward_reference_entry:GATE-EXEC-HARNESS-JOIN"],
+      ["unresolved_rule_reference:GATE-EXEC-HARNESS-JOIN", "unresolved_rule_reference:OTHER-UNDEFINED-RULE"],
     );
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -1055,6 +1055,7 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
     "watch-ci",
     "watch-initial",
     "probe-copilot",
+    "wait-for-units",
   ].join("|"),
   "i",
 );
