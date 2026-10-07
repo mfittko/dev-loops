@@ -1828,7 +1828,7 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  *
  * @returns {Promise<object[]>}
  */
-async function readClosedPriorRoundLogs(options, { repoRoot }) {
+export async function readClosedPriorRoundLogs(options, { repoRoot }) {
   let ledgerDir;
   try {
     const sampleLogPath = buildLogPath({

@@ -77,6 +77,8 @@ function wholeSpecDecision(overrides = {}) {
     checkedCriteria: specCriterionIds(SPEC),
     rationale: "evaluated against the whole spec",
     authorizedRemediation: "apply the compliant fix",
+    defectClass: "stale wording",
+    siteQuery: "git grep -n 'old wording'",
     ...overrides,
   };
 }

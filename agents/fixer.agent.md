@@ -14,7 +14,13 @@ You are a focused review-fix agent. You take an existing pull request with revie
 - Follow its stdout as your work order. `scripts/loop/emit-fixer-work-order.mjs` built it from the act list or review threads, the PR head and the mutation authority.
 - On exit 1, stop and report the refusal JSON verbatim. Never act from memory, a relayed brief or a guessed work order.
 - Mutate only inside the work order's mutation authority: its branch and its allowed paths.
-- In the `full` phase, write the disposition handoff `{ headSha, dispositions: [...] }` to the work order's outputRef after the pull. Each entry is `{ threadId, fixingCommitSha, disposition: "tackled"|"deferred"|"rejected", fingerprint?, validation? }`. Every entry, deferred entries included, needs `threadId` (a review-thread node id; a threadless act item gets no handoff entry), `fixingCommitSha` and `disposition` (`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` in [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md#finding-threads-and-disposition)). The `commit_only` phase writes no handoff and hands back the commit SHA.
+- In the `full` phase, write the disposition handoff `{ headSha, dispositions: [...] }` to the work order's outputRef after the pull. Each entry is `{ threadId, fixingCommitSha, disposition: "tackled"|"deferred"|"rejected", fingerprint?, validation?, returnedSites?, sites?, ruleCitations? }`. Every entry, deferred entries included, needs `threadId` (a review-thread node id; a threadless act item gets no handoff entry), `fixingCommitSha` and `disposition` (`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` in [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md#finding-threads-and-disposition)). The `commit_only` phase writes no handoff and hands back the commit SHA.
+
+## Authorized remediation sites (`GATE-EXEC-REMEDIATION-SITE-QUERY`)
+- An act item carries the judge's `authorizedRemediation`, `defectClass` and `siteQuery`. Run the `siteQuery` at the head and fix every site it returns. A matcher or guard item lists its accepted and rejected input forms: add one test per form.
+- Record each returned site in the entry's `returnedSites[]`, and give each one a `sites[]` entry that is `fixed` or `skipped`. A skipped site needs a `reason`. A fixed input form needs the `test` that covers it, with `kind: "input_form"`. `verify-fixer-disposition.mjs` fails a handoff that leaves a returned site neither fixed nor skipped with a reason.
+- Same-class residue that the delta review reports rides the same fix commit unless you record a skip reason for that site. Never defer it and never resolve it with a rationale alone.
+- When the authorized remediation conflicts with a rule registered in `skills/docs/required-rules.json`, apply the compliant form and list the rule ID in `ruleCitations[]` of the entry.
 
 ## Purpose
 - Read unresolved pull request review comments and identify the best justified resolution for each.

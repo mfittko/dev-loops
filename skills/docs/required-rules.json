@@ -402,7 +402,17 @@
       "enforcementNote": "enforceExecutionUnitRecord (packages/core/src/loop/execution-record.mjs) fails closed on a malformed/dishonest execution-unit record; scripts/loop/run-watch-cycle.mjs buildWatchCycleExecutionRecord is the one live producer today"
     },
     {
+      "id": "GATE-EXEC-RECURRENCE-ESCALATION",
+      "enforcement": "runtime",
+      "enforcementNote": "scripts/loop/judge-pass.mjs withholds an act item from the fixer act list and records it in escalations[] when packages/core/src/loop/gate-recurrence.mjs finds its (file, symbol) surface in act items of 3 counted rounds"
+    },
+    {
       "id": "GATE-EXEC-REGATE-MANDATORY"
+    },
+    {
+      "id": "GATE-EXEC-REMEDIATION-SITE-QUERY",
+      "enforcement": "runtime",
+      "enforcementNote": "validateSpecAuthorityDecision rejects a valid_compliant decision without defectClass and siteQuery (and the matcher or doc_lag lists), and normalizeFixerDispositionHandoff rejects a returned site that is neither fixed nor skipped with a reason"
     },
     {
       "id": "GATE-EXEC-RESOLVED-ANGLE-EVIDENCE",
@@ -649,6 +659,11 @@
     {
       "id": "PRE-PUSH-DELTA-PINNED-BASELINE",
       "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PUSH-DELTA-RESIDUE",
+      "enforcement": "runtime",
+      "enforcementNote": "deriveDeltaOutcome (packages/core/src/loop/pre-push-delta-review.mjs) blocks locally_clear on a residueOf finding without a skipReason at any severity"
     },
     {
       "id": "PRE-PUSH-DELTA-RESULT",

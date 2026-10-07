@@ -131,6 +131,8 @@ for (const [name, setup, expected] of [
   ["a handoff written before the pull (stale or replayed)", { receiptMtime: new Date(Date.now() + 60_000) }, /result_predates_pull/],
   ["a handoff whose head is not the observed head", { handoffHead: FIX_SHA }, /not the observed head/],
   ["a commit_only plan", { phase: "commit_only" }, /not a full-phase fixer work order/],
+  ["a handoff leaving a returned site neither fixed nor skipped", { handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: [{ threadId: "PRRT_kwDOabc", fixingCommitSha: FIX_SHA, disposition: "tackled", returnedSites: ["src/a.mjs:guard", "src/b.mjs:guard"], sites: [{ site: "src/a.mjs:guard", status: "fixed" }] }] }) }, /leaves returned site src\/b\.mjs:guard neither fixed nor skipped/],
+  ["a handoff skipping a returned site without a reason", { handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: [{ threadId: "PRRT_kwDOabc", fixingCommitSha: FIX_SHA, disposition: "tackled", returnedSites: ["src/a.mjs:guard"], sites: [{ site: "src/a.mjs:guard", status: "skipped" }] }] }) }, /records no skip reason/],
 ]) {
   test(`F6: ${name} refuses and writes no checkpoint`, async () => {
     await withRepoRoot(async (repoRoot) => {

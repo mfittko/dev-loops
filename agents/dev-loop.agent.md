@@ -72,6 +72,8 @@ Respect repository contract routing posture:
 - route to the local implementation strategy only when the user explicitly requests a local phase-based path
 - keep any specialized Copilot behavior behind `dev-loop` as internal routed logic, helper modules, or non-user-facing implementation details
 
+When a gate round result carries `escalations[]` (`GATE-EXEC-RECURRENCE-ESCALATION` in [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md)), stop at the human checkpoint after the round's other act items reach the fixer, and ask for one of two outcomes: a design decision recorded in the spec, or a split into its own issue that the orchestrator files and the item defers to.
+
 If the current issue/PR/local state is materially unclear, contradictory, off-trail, or not cleanly covered by deterministic guidance, stop and ask for human direction rather than guessing.
 
 If local facts, GitHub facts, and helper/state-machine output do not agree well enough to choose the next step confidently, stop and ask for human direction.

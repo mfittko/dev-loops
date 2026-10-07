@@ -47,6 +47,58 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+export const SITE_STATUS = Object.freeze({ FIXED: "fixed", SKIPPED: "skipped" });
+
+const RULE_ID_PATTERN = /^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$/;
+
+/**
+ * Optional site coverage of an act item's authorized remediation. `returnedSites`
+ * are the sites the site query returned at the head. Every one needs a `sites`
+ * entry that is `fixed`, or `skipped` with a reason. An `input_form` site that is
+ * fixed names the test that covers that form. `ruleCitations` are the rule IDs
+ * the fixer applied in place of a conflicting remediation.
+ */
+function normalizeSiteCoverage(entry, threadId) {
+  const out = {};
+  const label = `Fixer disposition handoff entry for thread ${threadId}`;
+  const rawSites = entry.sites === undefined ? [] : entry.sites;
+  const returned = entry.returnedSites === undefined ? [] : entry.returnedSites;
+  if (!Array.isArray(rawSites) || !Array.isArray(returned)) {
+    throw new Error(`${label} sites and returnedSites must be arrays`);
+  }
+  const sites = rawSites.map((site, i) => {
+    if (!site || typeof site !== "object" || !isNonEmptyString(site.site)) throw new Error(`${label} sites[${i}] needs a site`);
+    const status = typeof site.status === "string" ? site.status.trim().toLowerCase() : "";
+    if (!Object.values(SITE_STATUS).includes(status)) throw new Error(`${label} site ${site.site} has status ${JSON.stringify(site.status)}, expected fixed or skipped`);
+    if (status === SITE_STATUS.SKIPPED && !isNonEmptyString(site.reason)) throw new Error(`${label} skipped site ${site.site} records no skip reason`);
+    if (status === SITE_STATUS.FIXED && site.kind === "input_form" && !isNonEmptyString(site.test)) {
+      throw new Error(`${label} fixed input form ${site.site} names no test`);
+    }
+    return {
+      site: site.site.trim(),
+      status,
+      ...(isNonEmptyString(site.reason) ? { reason: site.reason.trim() } : {}),
+      ...(site.kind === "input_form" ? { kind: "input_form" } : {}),
+      ...(isNonEmptyString(site.test) ? { test: site.test.trim() } : {}),
+    };
+  });
+  const disposed = new Set(sites.map((s) => s.site));
+  const returnedSites = returned.map((site) => {
+    if (!isNonEmptyString(site)) throw new Error(`${label} returnedSites entries must be non-empty strings`);
+    if (!disposed.has(site.trim())) throw new Error(`${label} leaves returned site ${site.trim()} neither fixed nor skipped with a reason`);
+    return site.trim();
+  });
+  if (sites.length > 0) out.sites = sites;
+  if (returnedSites.length > 0) out.returnedSites = returnedSites;
+  if (entry.ruleCitations !== undefined) {
+    if (!Array.isArray(entry.ruleCitations) || !entry.ruleCitations.every((id) => typeof id === "string" && RULE_ID_PATTERN.test(id.trim()))) {
+      throw new Error(`${label} ruleCitations must be rule IDs such as LOCAL-COMMENT-DISCIPLINE`);
+    }
+    out.ruleCitations = entry.ruleCitations.map((id) => id.trim());
+  }
+  return out;
+}
+
 /**
  * Validate + normalize a raw fixer-disposition handoff. Throws on any
  * structural gap the evaluator must never silently tolerate: a missing
@@ -108,6 +160,7 @@ export function normalizeFixerDispositionHandoff(raw) {
       fixingCommitSha: entry.fixingCommitSha.trim(),
       disposition,
       validation: isNonEmptyString(entry.validation) ? entry.validation.trim() : null,
+      ...normalizeSiteCoverage(entry, threadId),
     };
   });
   return {

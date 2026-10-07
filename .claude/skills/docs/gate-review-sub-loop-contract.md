@@ -893,6 +893,41 @@ than implicit: the conductor passes the prior-round judge verdict artifacts to
 reads of the work order. Prior-round ledgers are reachable only through the work order's
 widening rule.
 
+<!-- rule: GATE-EXEC-REMEDIATION-SITE-QUERY -->
+`GATE-EXEC-REMEDIATION-SITE-QUERY`: Each `valid_compliant` act item's `authorizedRemediation`
+MUST come with a `defectClass` and a `siteQuery`: a `git grep` pattern or a symbol list that the
+fixer runs at the head. `validateSpecAuthorityDecision` rejects a `valid_compliant` decision
+that lacks either. For a matcher or guard defect (`defectKind: "matcher"`), the site query is the
+list of accepted and rejected input forms (`acceptedForms[]`, `rejectedForms[]`), and the fix adds
+one test per form. For doc, comment or fragment lag (`defectKind: "doc_lag"`), `statedSurfaces[]`
+lists every stated surface of the changed rule: PR body scope, changes fragment, JSDoc, hook
+header and doc comment. Before the judge authorizes a remediation, it checks the remedy against
+the repo's registered rules (`skills/docs/required-rules.json`). The fixer fixes every site the
+query returns, or records a skip reason for each skipped site in its disposition handoff
+(`returnedSites[]` and `sites[]`; `verify-fixer-disposition.mjs` fails a handoff that leaves a
+returned site neither fixed nor skipped with a reason). A fixer that finds a remedy in conflict
+with a registered rule applies the compliant form and cites the rule ID in `ruleCitations[]`.
+
+<!-- rule: GATE-EXEC-RECURRENCE-ESCALATION -->
+`GATE-EXEC-RECURRENCE-ESCALATION`: `judge-pass.mjs` counts, for each act item, the gate rounds
+that flagged the same surface. It computes the count at judge time from the current round's
+judge-enriched findings and the closed prior-round ledgers of the same gate and PR (the
+`readClosedPriorRoundLogs` set), and it persists no counter. Only rounds whose
+`specAuthority.specDigest` equals the current digest count; a ledger without one never counts.
+The surface key is `(file, symbol)`: `file` is the finding's resolved file, and `symbol` is a
+backticked summary identifier that the file defines at the current head (a `function`, `class`,
+`const`, `let` or `var` declaration, or a `<!-- rule: <ID> -->` marker in a markdown file). A
+finding whose summary names no defined symbol gets no key and is not counted. Pre-push delta
+findings and Copilot threads never count, and `draft_gate` and `pre_approval_gate` rounds count
+separately. When one key appears in act items of 3 or more counted rounds, the act item keeps
+its `act` disposition, leaves the fixer act list, and lands in the optional `escalations[]` array
+of the ledger and the round result, with the surface key and the round heads. The round's other
+act items proceed to the fixer. The gate coordinator returns the escalation in its round result,
+and the dev-loop coordinator stops at the human checkpoint for one of two outcomes. The first
+outcome is a design decision recorded in the spec: it changes `specDigest` and resets the count.
+The second outcome is a split into its own issue: the orchestrator files that issue, and the
+item becomes a `defer` that links it. The threshold is fixed.
+
 ### Phase 4 — Fix
 
 If findings with a severity in the gate's `blockCleanOnFindingSeverities` list are present:

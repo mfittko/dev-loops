@@ -30,7 +30,20 @@ export const DELTA_CHECKLIST = Object.freeze([
   "path normalization (relative, absolute, .., trailing slash)",
 ]);
 
+/**
+ * The judge's authorized remediation and its site query ride each act item into
+ * the delta input, so the reviewer checks the edit against the remedy text and
+ * reports a same-class site as residue of the act item.
+ */
+const REMEDIATION_TEXT_FIELDS = Object.freeze(["authorizedRemediation", "defectClass", "siteQuery", "defectKind"]);
+const REMEDIATION_LIST_FIELDS = Object.freeze(["acceptedForms", "rejectedForms", "statedSurfaces"]);
+
 const MEDIUM_RANK = severityRank("medium");
+
+// Residue of an act item rides the same fix commit. It blocks until a skip reason is recorded for that site.
+function isOpenResidue(finding) {
+  return nonEmpty(finding?.residueOf) && !nonEmpty(finding?.skipReason);
+}
 
 function nonEmpty(value) {
   return typeof value === "string" && value.trim().length > 0;
@@ -73,6 +86,8 @@ export function toDeltaActItems(actList) {
       judgeDisposition: "act",
     };
     if (nonEmpty(entry.judgeRationale)) item.judgeRationale = entry.judgeRationale.trim();
+    for (const key of REMEDIATION_TEXT_FIELDS) if (nonEmpty(entry[key])) item[key] = entry[key].trim();
+    for (const key of REMEDIATION_LIST_FIELDS) if (Array.isArray(entry[key]) && entry[key].length > 0) item[key] = entry[key].filter(nonEmpty).map((v) => v.trim());
     if (nonEmpty(entry.file)) item.file = entry.file.trim();
     if (Number.isInteger(entry.line)) item.line = entry.line;
     return item;
@@ -140,7 +155,14 @@ export function buildDeltaInput({ sequence, candidateHead, specIdentity = null }
       candidateHead: head,
       actSetId: sequence.actSetId,
       actionableItems: [{ ref: "<act item ref>", status: DELTA_ITEM_STATUSES.join("|"), evidence: ["<non-empty string>"] }],
-      newFindings: [{ severity: [...VALID_SEVERITIES].join("|"), summary: "<non-empty string>", evidence: ["<non-empty string>"] }],
+      newFindings: [{
+        severity: [...VALID_SEVERITIES].join("|"),
+        summary: "<non-empty string>",
+        evidence: ["<non-empty string>"],
+        // Set for a same-class site of an act item; skipReason copies the fixer disposition's reason for that site.
+        residueOf: "<act item ref, optional>",
+        skipReason: "<non-empty string, optional>",
+      }],
       widenedReads: [{ path: "<widened path>", reason: "<why the read was needed>" }],
       outcome: DELTA_OUTCOMES.join("|"),
     },
@@ -157,7 +179,7 @@ export function deriveDeltaOutcome(result) {
   const items = Array.isArray(result?.actionableItems) ? result.actionableItems : [];
   const findings = Array.isArray(result?.newFindings) ? result.newFindings : [];
   const allResolved = items.length > 0 && items.every((item) => item?.status === "resolved");
-  const blockingFinding = findings.some((f) => severityRank(f?.severity) <= MEDIUM_RANK);
+  const blockingFinding = findings.some((f) => isOpenResidue(f) || (!nonEmpty(f?.residueOf) && severityRank(f?.severity) <= MEDIUM_RANK));
   return allResolved && !blockingFinding ? "locally_clear" : "needs_fix";
 }
 
@@ -199,6 +221,8 @@ export function validateDeltaResult(result, { sequence } = {}) {
     if (!VALID_SEVERITIES.has(normalizeSeverity(f?.severity))) errors.push(`newFindings[${i}].severity ${JSON.stringify(f?.severity)} is unknown`);
     if (!nonEmpty(f?.summary)) errors.push(`newFindings[${i}].summary is required`);
     if (!nonEmptyStrings(f?.evidence)) errors.push(`newFindings[${i}].evidence[] must be non-empty strings`);
+    if (f?.residueOf !== undefined && !expectedRefs.has(f.residueOf)) errors.push(`newFindings[${i}].residueOf ${JSON.stringify(f.residueOf)} is not in the act set`);
+    if (f?.skipReason !== undefined && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
   }
 
   if (!Array.isArray(result.widenedReads)) errors.push("widenedReads[] is required (empty when nothing was widened)");

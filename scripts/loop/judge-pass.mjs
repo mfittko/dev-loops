@@ -26,7 +26,9 @@ import {
   stampSpecAuthorityIdentity,
   validateSpecAuthorityVerdict,
 } from "@dev-loops/core/loop/spec-authority";
+import { findEscalations, recurrenceFiles } from "@dev-loops/core/loop/gate-recurrence";
 import { commentDeferredFindings, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
+import { readClosedPriorRoundLogs } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -686,11 +688,21 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
     .filter((d) => d.outcome === SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT)
     .map((d) => ({ index: d.index, checkedCriteria: d.checkedCriteria, authorizedRemediation: d.authorizedRemediation }));
 
+  // The defect class and site query ride the act item to the fixer and the delta review.
+  const remediationScopes = validated.decisions
+    .filter((d) => d.outcome === SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT)
+    .map(({ index, authorizedRemediation, defectClass, siteQuery, defectKind, acceptedForms, rejectedForms, statedSurfaces }) => ({
+      index, authorizedRemediation, defectClass, siteQuery, defectKind,
+      ...(acceptedForms ? { acceptedForms, rejectedForms } : {}),
+      ...(statedSurfaces ? { statedSurfaces } : {}),
+    }));
+
   return {
     specDigest,
     headSha,
     contentDigest,
     criterionIds,
+    remediationScopes,
     outcomeCounts: validated.outcomeCounts,
     humanDecisionRequired: validated.humanDecisionRequired,
     humanDecisionIndices: validated.humanDecisionIndices,
@@ -825,9 +837,32 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   return order.authority;
 }
 
+/**
+ * Escalations for this round's act items (see gate-recurrence.mjs). Prior ledgers
+ * come from the same reader the gate context uses; file sources are read at the
+ * current head. An unreadable file simply defines no symbol.
+ */
+async function resolveEscalations(result, options, resolvedRoot, specDigest, readPriorLogs) {
+  if (result.act.length === 0) return [];
+  const priorLogs = await readPriorLogs(
+    { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot) },
+    { repoRoot: resolvedRoot },
+  );
+  const sources = new Map();
+  for (const file of recurrenceFiles(result.act, priorLogs)) {
+    const absolute = path.resolve(resolvedRoot, file);
+    if (path.relative(resolvedRoot, absolute).startsWith("..")) continue;
+    const content = await readFile(absolute, "utf8").catch(() => null);
+    if (content !== null) sources.set(file, content);
+  }
+  return findEscalations({ actFindings: result.act, priorLogs, specDigest, headSha: result.headSha, sources }).map(
+    ({ index, ...key }) => ({ ...key, fingerprint: result.act[index].fingerprint, summary: result.act[index].summary, finding: result.act[index] }),
+  );
+}
+
 export async function judgePassCli(
   options,
-  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot } = {},
+  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs } = {},
 ) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
   const pinned = await verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot ?? resolveGateArtifactTmpRoot(resolvedRoot));
@@ -875,6 +910,7 @@ export async function judgePassCli(
         f.judgeRationale = `spec-authority remediation_conflicts: finding valid, proposed remedy rejected — route to a spec-compliant alternative. ${f.judgeRationale ?? ""}`.trim();
       }
     }
+    for (const { index, ...scope } of specAuthority.remediationScopes) Object.assign(result.enriched[index], scope);
     result.act = result.enriched.filter((f) => f.judgeDisposition === "act");
     result.counts = countByDisposition(result.enriched);
   }
@@ -911,6 +947,13 @@ export async function judgePassCli(
     { env, ghCommand, run, commentIssue },
   );
 
+  // Recurrence escalation: an act item whose surface appears in act items of three counted
+  // rounds is withheld from the fixer and surfaced for a human decision. The count is derived
+  // here from the closed prior-round ledgers and persisted nowhere.
+  const escalations = await resolveEscalations(result, options, resolvedRoot, pinned.specDigest, readPriorLogs);
+  const escalatedActs = new Set(escalations.map((e) => e.finding));
+  const fixerAct = result.act.filter((f) => !escalatedActs.has(f));
+
   // ADR 0061 AC1: when spec-authority is engaged, both the
   // enriched ledger and the fixer act list carry the pinned revision identity +
   // the whole checked criterion set, via the ONE shared stamp helper — never
@@ -930,13 +973,17 @@ export async function judgePassCli(
   // fixer remediations. This is a --out-only reduction — result.act /
   // result.counts above (and the ledger below) still carry every acted
   // finding, one per reviewer report.
-  const dedupedAct = dedupeActListByCluster(result.act, result.clusters, result.enriched);
+  const dedupedAct = dedupeActListByCluster(fixerAct, result.clusters, result.enriched);
+  const escalationRecords = escalations.map(({ finding, ...record }) => record);
 
   const written = new Set();
   if (options.ledgerOut) {
     const ledgerPath = path.resolve(resolvedRoot, options.ledgerOut);
     await mkdir(path.dirname(ledgerPath), { recursive: true });
-    const ledgerRecord = { overallVerdict, findings: result.enriched, scopeDrift: result.scopeDrift };
+    const ledgerRecord = {
+      overallVerdict, findings: result.enriched, scopeDrift: result.scopeDrift,
+      ...(escalationRecords.length > 0 ? { escalations: escalationRecords } : {}),
+    };
     await writeFile(
       ledgerPath,
       JSON.stringify(
@@ -970,7 +1017,8 @@ export async function judgePassCli(
     scopeDrift: result.scopeDrift,
     counts: result.counts,
     actCount: result.counts.act,
-    act: result.act,
+    act: fixerAct,
+    ...(escalationRecords.length > 0 ? { escalations: escalationRecords } : {}),
     ledgerOut: options.ledgerOut || undefined,
     out: options.out || undefined,
     specAuthority: specAuthority || undefined,

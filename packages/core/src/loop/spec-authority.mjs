@@ -292,6 +292,50 @@ function normalizeIdSet(value, label) {
   return set;
 }
 
+export const DEFECT_KINDS = Object.freeze(["matcher", "doc_lag", "other"]);
+
+function nonEmptyStringList(value) {
+  return Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string" && v.trim().length > 0)
+    ? value.map((v) => v.trim())
+    : null;
+}
+
+/**
+ * A valid_compliant remediation names the defect class and a site query the
+ * fixer runs at the head: a `git grep` pattern or symbol list. A matcher or
+ * guard defect also lists its accepted and rejected input forms. Doc, comment
+ * or fragment lag lists every stated surface of the changed rule.
+ */
+function validateRemediationScope(d) {
+  if (typeof d.defectClass !== "string" || d.defectClass.trim().length === 0) {
+    throw new Error("spec-authority valid_compliant decision requires a non-empty defectClass (the class of defect the remediation closes)");
+  }
+  if (typeof d.siteQuery !== "string" || d.siteQuery.trim().length === 0) {
+    throw new Error("spec-authority valid_compliant decision requires a non-empty siteQuery (a git grep pattern or symbol list the fixer runs at the head)");
+  }
+  const defectKind = d.defectKind === undefined ? "other" : d.defectKind;
+  if (!DEFECT_KINDS.includes(defectKind)) {
+    throw new Error(`spec-authority decision.defectKind must be one of: ${DEFECT_KINDS.join(", ")}`);
+  }
+  const scope = { defectClass: d.defectClass.trim(), siteQuery: d.siteQuery.trim(), defectKind };
+  if (defectKind === "matcher") {
+    const accepted = nonEmptyStringList(d.acceptedForms);
+    const rejected = nonEmptyStringList(d.rejectedForms);
+    if (!accepted || !rejected) {
+      throw new Error("spec-authority matcher decision requires non-empty acceptedForms[] and rejectedForms[] (the input forms, one test each)");
+    }
+    return { ...scope, acceptedForms: accepted, rejectedForms: rejected };
+  }
+  if (defectKind === "doc_lag") {
+    const surfaces = nonEmptyStringList(d.statedSurfaces);
+    if (!surfaces) {
+      throw new Error("spec-authority doc_lag decision requires non-empty statedSurfaces[] (PR body scope, changes fragment, JSDoc, hook header, doc comment)");
+    }
+    return { ...scope, statedSurfaces: surfaces };
+  }
+  return scope;
+}
+
 /**
  * Validate ONE judge decision for a single finding against the complete spec.
  * Pure and fail-closed: throws (never returns a partial decision) unless every
@@ -308,6 +352,8 @@ function normalizeIdSet(value, label) {
  *   conflictingCriteria: [<ids>],         // required + non-empty for the two conflict outcomes
  *   rationale: "<non-empty>",
  *   authorizedRemediation: "<...>",       // required for valid_compliant
+ *   defectClass: "<...>", siteQuery: "<...>", // required for valid_compliant
+ *   defectKind?: "matcher"|"doc_lag"|"other", // matcher: acceptedForms[] + rejectedForms[]; doc_lag: statedSurfaces[]
  *   rejectedRemediations: ["<...>"]       // optional audit of rejected options
  * }
  * ```
@@ -405,6 +451,7 @@ export function validateSpecAuthorityDecision(decision, { specDigest, headSha, c
     }
     authorizedRemediation = d.authorizedRemediation.trim();
   }
+  const remediationScope = d.outcome === SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT ? validateRemediationScope(d) : {};
 
   const rejectedRemediations = Array.isArray(d.rejectedRemediations)
     ? d.rejectedRemediations.filter((r) => typeof r === "string" && r.trim().length > 0).map((r) => r.trim())
@@ -420,6 +467,7 @@ export function validateSpecAuthorityDecision(decision, { specDigest, headSha, c
     conflictingCriteria,
     rationale: d.rationale.trim(),
     ...(authorizedRemediation ? { authorizedRemediation } : {}),
+    ...remediationScope,
     ...(rejectedRemediations.length > 0 ? { rejectedRemediations } : {}),
     requiresHumanDecision: outcomeRequiresHumanDecision(d.outcome),
   };
