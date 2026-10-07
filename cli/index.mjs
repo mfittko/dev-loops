@@ -290,6 +290,7 @@ export const SUBCOMMAND_ROUTES = {
     "size-budget":        "scripts/loop/check-size-budget.mjs",
     "resolve-role":       "scripts/loop/resolve-reviewer-role.mjs",
     "resolve-validation": "scripts/loop/resolve-validation.mjs",
+    "wait-for-units":     "scripts/loop/wait-for-gate-units.mjs",
   },
   loop: {
     startup:        "scripts/loop/resolve-dev-loop-startup.mjs",
@@ -406,6 +407,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "size-budget": "Compute PR size/tier budget outcome (pass/escalate/block; pure computation, no enforcement)",
     "resolve-role": "Resolve a review-operation angle's authoritative reviewer role (persona/prompt/model)",
     "resolve-validation": "Run full local validation at an exact head with the pinned Bun toolchain",
+    "wait-for-units": "Block until a gate round's dispatched reviewer or judge units are done (read-only)",
   },
   loop: {
     startup: "Resolve dev-loop startup bundle",

@@ -127,7 +127,7 @@ export function isRefusalPathCitation(line, tokenIndex) {
 // phantom_rule_citation); once it is defined the entry is stale and gates
 // (resolved_forward_reference_entry) until removed. Every other undefined
 // cited ID still fails.
-export const FORWARD_RULE_REFERENCES = Object.freeze(new Set(["GATE-EXEC-HARNESS-JOIN"]));
+export const FORWARD_RULE_REFERENCES = Object.freeze(new Set());
 
 // Registry-ID-shaped tokens that appear in runtime source but are ordinary
 // English/technical/placeholder tokens, not rule citations. Mirrors the

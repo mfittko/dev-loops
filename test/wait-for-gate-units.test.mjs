@@ -1,0 +1,308 @@
+// dev-loops gate wait-for-units: the read-only join for a gate round's dispatched units.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdir, open, readFile, readdir, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { test } from "bun:test";
+import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
+import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
+import { parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
+import { withTempDir } from "./_helpers.mjs";
+
+const SCRIPT = fileURLToPath(new URL("../scripts/loop/wait-for-gate-units.mjs", import.meta.url));
+const HEAD = "a".repeat(40);
+const GATE = "pre_approval_gate";
+const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-wait-units-" });
+const writeJson = async (file, value) => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, JSON.stringify(value)); };
+const setMtime = (file, seconds) => utimes(file, seconds, seconds);
+
+function fakeClock() {
+  let t = 0;
+  return { now: () => t, delay: async (ms) => { t += ms; } };
+}
+
+function unitFixture(root, scope, angles, index) {
+  const identity = { workOrderRef: `review:o/r#7:${GATE}:${HEAD}:${scope}`, workOrderDigest: `sha256:${scope}`, executionIdentity: `r1-u${index}` };
+  const outputRefs = angles.map((angle) => path.join(root, "tmp", "findings", `${angle}.json`));
+  return { unit: { scope, angles, ...identity, workOrder: { outputRefs } }, identity, outputRefs };
+}
+
+async function seedReceipt(root, identity, role = "review", seconds = 100) {
+  const file = pullReceiptPath(path.join(root, "tmp"), identity.workOrderRef);
+  await writeJson(file, { ...identity, role });
+  await setMtime(file, seconds);
+}
+
+async function seedResult(file, seconds = 200) {
+  await writeJson(file, { verdict: "clean" });
+  await setMtime(file, seconds);
+}
+
+async function seedPlan(root, specs) {
+  const fixtures = specs.map(([scope, angles], index) => unitFixture(root, scope, angles, index));
+  const planPath = path.join(root, "tmp", "plans", `${GATE}-${HEAD}.emit-plan.json`);
+  await writeJson(planPath, { ok: true, gate: GATE, headSha: HEAD, units: fixtures.map((f) => f.unit) });
+  return { planPath, fixtures };
+}
+
+const run = (root, planPath, extra = {}) => waitForUnits({ emitPlan: planPath, tmpRoot: path.join(root, "tmp"), receiptTmpRoot: path.join(root, "tmp"), timeoutMs: 10000, ...fakeClock(), ...extra });
+
+async function snapshot(dir) {
+  const out = [];
+  for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
+    const full = path.join(entry.parentPath, entry.name);
+    const s = await stat(full);
+    out.push(`${full}:${s.size}:${s.mtimeMs}`);
+  }
+  return out.sort();
+}
+
+test("routes the gate subcommand to the script", () => {
+  assert.equal(SUBCOMMAND_ROUTES.gate["wait-for-units"], "scripts/loop/wait-for-gate-units.mjs");
+});
+
+test("invalid input is rejected", async () => {
+  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--judge-plan", "b", "--tmp-root", "t"]), /exactly one/);
+  assert.throws(() => parseWaitArgs(["--tmp-root", "t"]), /exactly one/);
+  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "570001"]), /--timeout-ms/);
+  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "0"]), /--timeout-ms/);
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t"]).timeoutMs, 540000);
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g1", ["a"]]]);
+    await assert.rejects(run(root, planPath, { units: ["nope"] }), /unknown --unit/);
+    const bad = path.join(root, "bad.json");
+    await writeFile(bad, "{not json");
+    await assert.rejects(run(root, bad), /malformed/);
+    const cli = spawnSync(process.execPath, [SCRIPT, "--emit-plan", bad, "--tmp-root", path.join(root, "tmp")], { encoding: "utf8" });
+    assert.equal(cli.status, 1);
+    assert.equal(JSON.parse(cli.stdout).ok, false);
+    const badJq = spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout-ms", "1", "--jq", ".bad["], { encoding: "utf8" });
+    assert.equal(badJq.status, 1);
+    const noExecution = await seedPlan(root, [["g2", ["b"]]]);
+    const broken = JSON.parse(await readFile(noExecution.planPath, "utf8"));
+    delete broken.units[0].executionIdentity;
+    await writeJson(noExecution.planPath, broken);
+    await assert.rejects(run(root, noExecution.planPath), /executionIdentity/);
+  });
+});
+
+test("CLI exit codes: timeout 2, round_retired 3", async () => {
+  await withDir(async (root) => {
+    assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    await setMtime(planPath, 100);
+    const cli = () => spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout-ms", "1"], { encoding: "utf8" });
+    const timeout = cli();
+    assert.equal(timeout.status, 2);
+    assert.equal(JSON.parse(timeout.stdout).outcome, "timeout");
+    await writeJson(path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json"), { gate: GATE, retiredAt: new Date(200000).toISOString() });
+    const retired = cli();
+    assert.equal(retired.status, 3);
+    assert.equal(JSON.parse(retired.stdout).outcome, "round_retired");
+  });
+});
+
+test("grouped unit: partial until every covered angle has a post-pull result", async () => {
+  await withDir(async (root) => {
+    const { planPath, fixtures } = await seedPlan(root, [["group-1", ["a", "b", "c"]]]);
+    const [{ identity, outputRefs }] = fixtures;
+    await seedReceipt(root, identity);
+    await seedResult(outputRefs[0]);
+    await seedResult(outputRefs[1]);
+    const partial = await run(root, planPath);
+    assert.equal(partial.outcome, "timeout");
+    assert.equal(partial.unitCount, 1);
+    assert.deepEqual(partial.missing, [{ scope: "group-1", executionIdentity: "r1-u0", state: "partial", missingAngles: ["c"] }]);
+    await seedResult(outputRefs[2]);
+    const done = await run(root, planPath);
+    assert.equal(done.outcome, "all_done");
+    assert.deepEqual(done.done, ["group-1"]);
+  });
+});
+
+test("per-angle units: unitCount is the unit count and --unit narrows the wait", async () => {
+  await withDir(async (root) => {
+    const { planPath, fixtures } = await seedPlan(root, [["a", ["a"]], ["b", ["b"]], ["c", ["c"]]]);
+    for (const f of fixtures.slice(0, 2)) { await seedReceipt(root, f.identity); await seedResult(f.outputRefs[0]); }
+    const all = await run(root, planPath);
+    assert.equal(all.unitCount, 3);
+    assert.deepEqual(all.missing.map((m) => [m.scope, m.state]), [["c", "not_started"]]);
+    const wave = await run(root, planPath, { units: ["a", "b"] });
+    assert.equal(wave.outcome, "all_done");
+    assert.equal(wave.unitCount, 2);
+  });
+});
+
+test("a result older than its pull receipt never counts", async () => {
+  await withDir(async (root) => {
+    const { planPath, fixtures } = await seedPlan(root, [["g", ["a"]]]);
+    const [{ identity, outputRefs }] = fixtures;
+    await seedResult(outputRefs[0], 50);
+    await seedReceipt(root, identity, "review", 100);
+    const result = await run(root, planPath);
+    assert.equal(result.outcome, "timeout");
+    assert.equal(result.missing[0].state, "running");
+  });
+});
+
+test("a unit completing mid-wait gives all_done", async () => {
+  await withDir(async (root) => {
+    const { planPath, fixtures } = await seedPlan(root, [["g", ["a"]]]);
+    const [{ identity, outputRefs }] = fixtures;
+    await writeJson(path.join(root, "tmp", `checkpoint-context-sentinel-g-${HEAD}.json`), {});
+    const clock = fakeClock();
+    let calls = 0;
+    const delay = async (ms) => {
+      await clock.delay(ms);
+      if (++calls === 2) { await seedReceipt(root, identity); await seedResult(outputRefs[0]); }
+    };
+    const result = await run(root, planPath, { now: clock.now, delay });
+    assert.equal(result.outcome, "all_done");
+    assert.equal(result.elapsedMs, 4000);
+    const early = await run(root, planPath, { timeoutMs: 1 });
+    assert.equal(early.outcome, "all_done");
+  });
+});
+
+test("timeout reports the pending unit with a sentinel as running", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    await writeJson(path.join(root, "tmp", `checkpoint-context-sentinel-g-${HEAD}.json`), {});
+    const result = await run(root, planPath, { timeoutMs: 5000 });
+    assert.equal(result.outcome, "timeout");
+    assert.equal(result.elapsedMs, 5000);
+    assert.equal(result.missing[0].state, "running");
+  });
+});
+
+test("round_retired: removed plan and a newer retirement record for the gate", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    await setMtime(planPath, 100);
+    const record = path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json");
+    await writeJson(record, { gate: "draft_gate", retiredAt: new Date(200000).toISOString() });
+    assert.equal((await run(root, planPath, { timeoutMs: 1 })).outcome, "timeout");
+    await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString() });
+    assert.equal((await run(root, planPath)).outcome, "round_retired");
+    await rm(path.join(root, "tmp", "retired-gate-rounds"), { recursive: true });
+    const beforeRetired = await snapshot(root);
+    assert.equal((await run(root, planPath, { timeoutMs: 1 })).outcome, "timeout");
+    await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString() });
+    const retiredSnapshot = await snapshot(root);
+    assert.equal((await run(root, planPath)).outcome, "round_retired");
+    assert.deepEqual(await snapshot(root), retiredSnapshot);
+    assert.notDeepEqual(beforeRetired, retiredSnapshot);
+    await rm(path.join(root, "tmp", "retired-gate-rounds"), { recursive: true });
+    const removing = run(root, planPath, { delay: async () => { await rm(planPath); } });
+    assert.equal((await removing).outcome, "round_retired");
+  });
+});
+
+test("a partially written retirement record is not retired yet and is re-checked", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    await setMtime(planPath, 100);
+    const record = path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json");
+    await mkdir(path.dirname(record), { recursive: true });
+    await writeFile(record, '{"gate":');
+    const clock = fakeClock();
+    let calls = 0;
+    const delay = async (ms) => {
+      await clock.delay(ms);
+      if (++calls === 1) await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString() });
+    };
+    const result = await run(root, planPath, { now: clock.now, delay });
+    assert.equal(result.outcome, "round_retired");
+    assert.ok(calls >= 1);
+  });
+});
+
+test("judge plan waits on the single judge unit with role judge", async () => {
+  await withDir(async (root) => {
+    const verdict = path.join(root, "tmp", "judge", "judge-verdict.json");
+    const specAuthority = path.join(root, "tmp", "judge", "spec-authority-verdict.json");
+    const identity = { workOrderRef: `judge:o/r#7:${GATE}:${HEAD}:r1`, workOrderDigest: "sha256:j", executionIdentity: "r1" };
+    const planPath = path.join(root, "tmp", "judge", "judge-emit-plan.json");
+    await writeJson(planPath, { ...identity, workOrder: { roundIdentity: { gate: GATE, headSha: HEAD }, outputRefs: [verdict, specAuthority] } });
+    const opts = { judgePlan: planPath, tmpRoot: path.join(root, "tmp"), receiptTmpRoot: path.join(root, "tmp"), timeoutMs: 4000, ...fakeClock() };
+    assert.equal((await waitForUnits(opts)).outcome, "timeout");
+    await seedReceipt(root, identity, "judge");
+    await seedResult(verdict);
+    assert.equal((await waitForUnits({ ...opts, ...fakeClock() })).outcome, "timeout");
+    await seedResult(specAuthority);
+    const done =await waitForUnits({ ...opts, ...fakeClock() });
+    assert.equal(done.outcome, "all_done");
+    assert.equal(done.unitCount, 1);
+  });
+});
+
+test("the command is read-only", async () => {
+  await withDir(async (root) => {
+    const { planPath, fixtures } = await seedPlan(root, [["g", ["a", "b"]]]);
+    await seedReceipt(root, fixtures[0].identity);
+    await seedResult(fixtures[0].outputRefs[0]);
+    const before = await snapshot(root);
+    assert.equal((await run(root, planPath, { timeoutMs: 5000 })).outcome, "timeout");
+    assert.deepEqual(await snapshot(root), before);
+    await seedResult(fixtures[0].outputRefs[1]);
+    const mid = await snapshot(root);
+    assert.equal((await run(root, planPath)).outcome, "all_done");
+    assert.deepEqual(await snapshot(root), mid);
+    assert.notDeepEqual(before, mid);
+    const source = await readFile(SCRIPT, "utf8");
+    assert.doesNotMatch(source, /child_process/);
+    assert.doesNotMatch(source, /\b(writeFile|mkdir|rename|rm|unlink|appendFile|copyFile)\b\s*\(/);
+  });
+});
+
+test("--fields prints the tab-separated scalar fields instead of JSON", async () => {
+  await withDir(async (root) => {
+    assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const cli = spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout-ms", "1", "--fields", "outcome,unitCount"], { encoding: "utf8" });
+    assert.equal(cli.stdout.trim(), "timeout\t1");
+  });
+});
+
+test("a 64-hex head SHA in a plan is accepted", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    plan.headSha = "b".repeat(64);
+    await writeJson(planPath, plan);
+    const result = await run(root, planPath, { timeoutMs: 1 });
+    assert.equal(result.ok, true);
+    assert.equal(result.headSha, "b".repeat(64));
+    assert.equal(result.outcome, "timeout");
+  });
+});
+
+test("a non-ENOENT stat failure propagates instead of reading as retired", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    // tmpRoot below a regular file makes the sentinel stat fail with ENOTDIR (not ENOENT).
+    const blocker = path.join(root, "blocker");
+    await writeFile(blocker, "");
+    const outcome = await run(root, planPath, { tmpRoot: blocker, timeoutMs: 1 }).then((r) => r, (error) => error);
+    assert.notEqual(outcome?.outcome, "round_retired");
+    assert.match(String(outcome?.code ?? outcome?.message), /ENOTDIR/);
+  });
+});
+
+test("a round retired while the unit checks are in flight is round_retired, not all_done", async () => {
+  await withDir(async (root) => {
+    // Zero-angle unit: its only check is one receipt read, which blocks on a FIFO until the test releases it.
+    const { planPath, fixtures } = await seedPlan(root, [["g", []]]);
+    await setMtime(planPath, 100);
+    const receipt = pullReceiptPath(path.join(root, "tmp"), fixtures[0].identity.workOrderRef);
+    await mkdir(path.dirname(receipt), { recursive: true });
+    assert.equal(spawnSync("mkfifo", [receipt]).status, 0);
+    const pending = run(root, planPath);
+    const writer = await open(receipt, "w"); // resolves once the check's reader has opened the FIFO
+    await writeJson(path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json"), { gate: GATE, retiredAt: new Date(200000).toISOString() });
+    await writer.writeFile(JSON.stringify({ ...fixtures[0].identity, role: "review" }));
+    await writer.close();
+    assert.equal((await pending).outcome, "round_retired");
+  });
+});

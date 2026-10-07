@@ -1131,6 +1131,22 @@ test("decideBashGate denies a backgrounded probe even when paired with a lifecyc
   assert.match(d2.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
 });
 
+test("decideBashGate denies an &-detached wait-for-units call and allows the foreground call for the gate coordinator", () => {
+  const base = "dev-loops-run cli/index.mjs gate wait-for-units --emit-plan /r/tmp/p.json --tmp-root /w/tmp";
+  const common = { repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "gate-coordinator" };
+  const detached = decideBashGate({ command: `${base} > /tmp/w.log 2>&1 &`, ...common });
+  assert.equal(detached.decision, "deny");
+  assert.match(detached.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+  assert.equal(decideBashGate({ command: base, ...common }).decision, "allow");
+  for (const script of ["dev-loops-run scripts/loop/wait-for-gate-units.mjs", "node /pkg/scripts/loop/wait-for-gate-units.mjs"]) {
+    const direct = `${script} --emit-plan /r/tmp/p.json --tmp-root /w/tmp`;
+    const denied = decideBashGate({ command: `${direct} > /tmp/w.log 2>&1 &`, ...common });
+    assert.equal(denied.decision, "deny");
+    assert.match(denied.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+    assert.equal(decideBashGate({ command: direct, ...common }).decision, "allow");
+  }
+});
+
 // #2065 AC2/AC3 (OPTION-C, prevention-only): the coarse fail-closed classifier denies a
 // backgrounded wait/probe command through every wrapper form below — none can hide the
 // wait/probe FAMILY reference from the coarse whole-string scan — for BOTH a main/coordinator
