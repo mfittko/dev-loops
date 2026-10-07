@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -26,14 +27,16 @@ import {
   stampSpecAuthorityIdentity,
   validateSpecAuthorityVerdict,
 } from "@dev-loops/core/loop/spec-authority";
+import { findEscalations, recurrenceFiles } from "@dev-loops/core/loop/gate-recurrence";
 import { commentDeferredFindings, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
+import { readClosedPriorRoundLogs } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
-import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
+import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
   JQ_OUTPUT_USAGE,
@@ -80,9 +83,17 @@ Inputs:
   --pr <number>                Echoed onto the result.
   --gate <name>                Echoed onto the result (draft_gate|pre_approval_gate).
   --out <path>                 Write the fixer's ACT list (enriched findings with
-                               judgeDisposition === "act") to this path as JSON.
-  --ledger-out <path>          Write the enriched { overallVerdict, findings, scopeDrift }
-                               to this path as JSON, so the durable disposition ledger
+                               judgeDisposition === "act") to this path as JSON. It
+                               omits escalated act items and their cluster siblings
+                               (recurrence escalation, below).
+  --ledger-out <path>          Write the enriched { overallVerdict, findings, scopeDrift,
+                               escalations? } to this path as JSON; the optional
+                               escalations[] lists each escalated surface as
+                               { surfaceKey, rounds, heads, fingerprint, summary,
+                               clusterFingerprints } (clusterFingerprints is [] when
+                               no sibling was withheld) and the stdout result
+                               carries it too, plus escalationsSkipped when the round head
+                               commit is not in the repository, so the durable disposition ledger
                                carries what the judge consciously marked act/defer/reject.
                                Every disposed finding also carries a \`fingerprint\`; a
                                \`defer\` finding additionally carries \`followUpIssueNumber\`
@@ -686,11 +697,21 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
     .filter((d) => d.outcome === SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT)
     .map((d) => ({ index: d.index, checkedCriteria: d.checkedCriteria, authorizedRemediation: d.authorizedRemediation }));
 
+  // The defect class and site query ride the act item to the fixer and the delta review.
+  const remediationScopes = validated.decisions
+    .filter((d) => d.outcome === SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT)
+    .map(({ index, authorizedRemediation, defectClass, siteQuery, defectKind, acceptedForms, rejectedForms, statedSurfaces }) => ({
+      index, authorizedRemediation, defectClass, siteQuery, defectKind,
+      ...(acceptedForms ? { acceptedForms, rejectedForms } : {}),
+      ...(statedSurfaces ? { statedSurfaces } : {}),
+    }));
+
   return {
     specDigest,
     headSha,
     contentDigest,
     criterionIds,
+    remediationScopes,
     outcomeCounts: validated.outcomeCounts,
     humanDecisionRequired: validated.humanDecisionRequired,
     humanDecisionIndices: validated.humanDecisionIndices,
@@ -825,9 +846,49 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   return order.authority;
 }
 
+/**
+ * Escalations for this round's act items (see gate-recurrence.mjs). Prior ledgers
+ * come from the same reader the gate context uses; file sources are read from the
+ * round head's commit object, never the working tree, so the keying is a pure function
+ * of the round head. A path the head does not hold defines no symbol. When the head
+ * commit is not in the repository, escalation is skipped and the returned `skipped`
+ * text names why.
+ */
+async function resolveEscalations(result, options, resolvedRoot, specDigest, { readPriorLogs, hasCommit, readSource }) {
+  if (result.act.length === 0) return { escalations: [] };
+  if (!(await hasCommit(resolvedRoot, result.headSha))) {
+    return { escalations: [], skipped: `GATE-EXEC-RECURRENCE-ESCALATION cannot read the head's sources: round head ${result.headSha} is not available in this repository, so escalation was not evaluated` };
+  }
+  const priorLogs = await readPriorLogs(
+    { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot) },
+    { repoRoot: resolvedRoot },
+  );
+  const sources = new Map();
+  for (const file of recurrenceFiles(result.act, priorLogs)) {
+    const absolute = path.resolve(resolvedRoot, file);
+    if (path.relative(resolvedRoot, absolute).startsWith("..")) continue;
+    const content = await readSource(resolvedRoot, result.headSha, path.relative(resolvedRoot, absolute).split(path.sep).join("/"));
+    if (content !== null) sources.set(file, content);
+  }
+  const escalations = findEscalations({ actFindings: result.act, priorLogs, specDigest, headSha: result.headSha, sources }).map(
+    ({ index, ...key }) => ({ ...key, fingerprint: result.act[index].fingerprint, summary: result.act[index].summary, finding: result.act[index] }),
+  );
+  return { escalations };
+}
+
+function hasCommitInRepo(cwd, sha) {
+  return spawnSync("git", ["-C", cwd, "cat-file", "-e", `${sha}^{commit}`], { env: gitEnvNoDirOverrides() }).status === 0;
+}
+
+/** A file's content at a commit (`git show <sha>:<file>`), or null when the commit or path is absent. */
+export function gitShowSource(cwd, sha, file) {
+  const out = spawnSync("git", ["-C", cwd, "show", `${sha}:${file}`], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+  return out.status === 0 ? out.stdout : null;
+}
+
 export async function judgePassCli(
   options,
-  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot } = {},
+  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs, hasCommit = hasCommitInRepo, readSource = gitShowSource } = {},
 ) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
   const pinned = await verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot ?? resolveGateArtifactTmpRoot(resolvedRoot));
@@ -875,6 +936,7 @@ export async function judgePassCli(
         f.judgeRationale = `spec-authority remediation_conflicts: finding valid, proposed remedy rejected — route to a spec-compliant alternative. ${f.judgeRationale ?? ""}`.trim();
       }
     }
+    for (const { index, ...scope } of specAuthority.remediationScopes) Object.assign(result.enriched[index], scope);
     result.act = result.enriched.filter((f) => f.judgeDisposition === "act");
     result.counts = countByDisposition(result.enriched);
   }
@@ -911,6 +973,24 @@ export async function judgePassCli(
     { env, ghCommand, run, commentIssue },
   );
 
+  // Recurrence escalation: an act item whose surface appears in act items of three counted
+  // rounds is withheld from the fixer and surfaced for a human decision. The count is derived
+  // here from the closed prior-round ledgers and persisted nowhere.
+  const { escalations, skipped: escalationsSkipped } = await resolveEscalations(result, options, resolvedRoot, pinned.specDigest, { readPriorLogs, hasCommit, readSource });
+  // One root cause is one decision: the cluster siblings of an escalated item stay with it.
+  const escalatedActs = new Set(escalations.map((e) => e.finding));
+  // The withheld siblings ride the escalation record so the human checkpoint can see them.
+  const siblingFingerprints = new Map();
+  for (const cluster of result.clusters) {
+    const members = cluster.memberIndices.map((i) => result.enriched[i]);
+    const escalated = members.filter((f) => escalatedActs.has(f));
+    if (escalated.length === 0) continue;
+    for (const f of members) escalatedActs.add(f);
+    const siblings = members.filter((f) => f.judgeDisposition === "act" && !escalated.includes(f)).map((f) => f.fingerprint);
+    if (siblings.length > 0) for (const f of escalated) siblingFingerprints.set(f, siblings);
+  }
+  const fixerAct = result.act.filter((f) => !escalatedActs.has(f));
+
   // ADR 0061 AC1: when spec-authority is engaged, both the
   // enriched ledger and the fixer act list carry the pinned revision identity +
   // the whole checked criterion set, via the ONE shared stamp helper — never
@@ -930,13 +1010,20 @@ export async function judgePassCli(
   // fixer remediations. This is a --out-only reduction — result.act /
   // result.counts above (and the ledger below) still carry every acted
   // finding, one per reviewer report.
-  const dedupedAct = dedupeActListByCluster(result.act, result.clusters, result.enriched);
+  const dedupedAct = dedupeActListByCluster(fixerAct, result.clusters, result.enriched);
+  const escalationRecords = escalations.map(({ finding, ...record }) => ({
+    ...record,
+    clusterFingerprints: siblingFingerprints.get(finding) ?? [],
+  }));
 
   const written = new Set();
   if (options.ledgerOut) {
     const ledgerPath = path.resolve(resolvedRoot, options.ledgerOut);
     await mkdir(path.dirname(ledgerPath), { recursive: true });
-    const ledgerRecord = { overallVerdict, findings: result.enriched, scopeDrift: result.scopeDrift };
+    const ledgerRecord = {
+      overallVerdict, findings: result.enriched, scopeDrift: result.scopeDrift,
+      ...(escalationRecords.length > 0 ? { escalations: escalationRecords } : {}),
+    };
     await writeFile(
       ledgerPath,
       JSON.stringify(
@@ -970,7 +1057,9 @@ export async function judgePassCli(
     scopeDrift: result.scopeDrift,
     counts: result.counts,
     actCount: result.counts.act,
-    act: result.act,
+    act: fixerAct,
+    ...(escalationRecords.length > 0 ? { escalations: escalationRecords } : {}),
+    ...(escalationsSkipped ? { escalationsSkipped } : {}),
     ledgerOut: options.ledgerOut || undefined,
     out: options.out || undefined,
     specAuthority: specAuthority || undefined,

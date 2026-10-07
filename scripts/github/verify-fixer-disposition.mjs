@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -7,6 +8,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { captureParsedReviewThreads, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
@@ -18,7 +20,9 @@ import {
   FIXER_DISPOSITION_FAILED_STEP,
   FIXER_DISPOSITION_KIND,
   normalizeFixerDispositionHandoff,
+  siteCoverageGaps,
 } from "@dev-loops/core/loop/fixer-disposition";
+import { toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
 
 const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> --fixer-plan <path> [--tmp-root <path>]
 Enforce GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: verify every review thread a fixer
@@ -201,8 +205,30 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: order.headSha, headSha: options.headSha }, runtime);
     if (!contained.contained) throw new Error(`the work order head ${order.headSha} is not contained by the observed head ${options.headSha}: ${contained.reason}`);
   }
+  const handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
+  // GATE-EXEC-REMEDIATION-SITE-QUERY: an act-list work order's items with a siteQuery need a coverage record.
+  const actRead = (order.requiredReads ?? []).find((read) => read?.kind === "act-list");
+  if (actRead) {
+    let actList;
+    try {
+      const actBytes = await readFile(actRead.path);
+      if (createHash("sha256").update(actBytes).digest("hex") !== String(actRead.sha256 ?? "").replace(/^sha256:/, "")) {
+        throw new Error(`the work order's act list ${actRead.path} differs from the sha256 the work order binds; it was rewritten after emission`);
+      }
+      actList = JSON.parse(actBytes.toString("utf8"));
+    } catch (error) {
+      if (/differs from the sha256/.test(error.message)) throw error;
+      throw new Error(`Cannot read the work order's act list ${actRead.path}`);
+    }
+    const coverage = [
+      ...(handoff.siteCoverage ?? []),
+      ...handoff.dispositions.filter((entry) => entry.fingerprint && (entry.sites || entry.returnedSites || entry.noSitesReason)),
+    ];
+    const gaps = siteCoverageGaps(toDeltaActItems(actList), coverage);
+    if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
+  }
   return {
-    handoff: normalizeFixerDispositionHandoff(raw),
+    handoff,
     delivery: { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity },
   };
 }

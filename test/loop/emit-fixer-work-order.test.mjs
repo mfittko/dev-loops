@@ -20,7 +20,7 @@ const PULL = path.resolve("scripts/github/pull-work-order.mjs");
 const HOOK = path.resolve(".claude/hooks/pre-tool-use-write-guard.mjs");
 const REPO = "o/r";
 const PR = 7;
-const ACT = [{ severity: "high", angle: "correctness", summary: "null deref", file: "src/a.mjs", line: 3, judgeDisposition: "act" }];
+const ACT = [{ severity: "high", angle: "correctness", summary: "null deref", file: "src/a.mjs", line: 3, judgeDisposition: "act", siteQuery: "git grep -n deref -- src" }];
 const THREADS = { ok: true, repo: REPO, pr: PR, threads: [{ threadId: "T1", commentId: 1, body: "fix", isResolved: false, isOutdated: false, path: "src/a.mjs", line: 3 }] };
 
 // An inherited GIT_DIR/GIT_WORK_TREE (a git hook of another repo) must not change a decision.
@@ -609,7 +609,7 @@ test("F7: emit, pull, mutate in authority and verify the disposition; missing ma
     const [outputRef] = unit.workOrder.outputRefs;
     assert.equal(hook(wt, outputRef), "allow");
     await mkdir(path.dirname(outputRef), { recursive: true });
-    await writeFile(outputRef, JSON.stringify({ headSha: head, dispositions: [] }));
+    await writeFile(outputRef, JSON.stringify({ headSha: head, dispositions: [], siteCoverage: [{ fingerprint: "act-1", returnedSites: ["src/a.mjs"], sites: [{ site: "src/a.mjs", status: "fixed" }] }] }));
     const { runChild } = makeGhMock([{ assertArgs: ["pr", "view"], stdout: `${JSON.stringify({ headRefOid: head })}\n` }, { assertArgs: ["api", "graphql"], stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } })}\n` }]);
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath }, { env: runIdFreeEnv(), runChild, repoRoot: wt });
     assert.equal(result.complete, true);
@@ -652,6 +652,7 @@ test("F1: the rendered work order says a threadless act item gets no disposition
   await withFixture(async ({ emit }) => {
     const { promptPath } = await emit({});
     assert.match(await readFile(promptPath, "utf8"), /threadless act item gets no disposition handoff entry/);
+    assert.match(await readFile(promptPath, "utf8"), /siteCoverage: \[\{ fingerprint, returnedSites, sites, ruleCitations\?, noSitesReason\? \}\]/);
   });
 });
 

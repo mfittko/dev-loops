@@ -113,3 +113,32 @@ test("argument errors fail closed", () => {
     assert.throws(() => parseCheckPrePushDeltaArgs(["--act-list", "x", "--baseline", A, "--result", "r", "--invocation", n]), /1\.\.3/, n);
   }
 });
+
+test("--site-coverage threads a valid record into the delta input", () => {
+  const { dir, actList } = fixture();
+  const coverage = path.join(dir, "coverage.json");
+  const item = { fingerprint: "fp1", returnedSites: ["s1"], sites: [{ site: "s1", status: "fixed" }] };
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [item] }));
+  const out = runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--site-coverage", coverage], headAt(B));
+  assert.equal(out.input.siteCoverage[0].fingerprint, "fp1");
+});
+
+test("--site-coverage fails on a headSha mismatch or malformed JSON", () => {
+  const { dir, actList } = fixture();
+  const coverage = path.join(dir, "coverage.json");
+  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--site-coverage", coverage];
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: A, siteCoverage: [] }));
+  assert.throws(() => runCli(args, headAt(B)), /site coverage record names head/);
+  fs.writeFileSync(coverage, "{not json");
+  assert.throws(() => runCli(args, headAt(B)), SyntaxError);
+});
+
+test("with --result a coverage record for an older head is discarded and the stale result is routed", () => {
+  const { dir, actList, result } = fixture();
+  const coverage = path.join(dir, "coverage.json");
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [] }));
+  const args = ["--act-list", actList, "--baseline", A, "--result", result, "--invocation", "1", "--site-coverage", coverage];
+  assert.equal(runCli(args, headAt("ccccccc3333333")).nextStep, "rereview_current_head");
+  args[args.indexOf("1")] = "3";
+  assert.equal(runCli(args, headAt("ccccccc3333333")).outcome, "bounded_out");
+});

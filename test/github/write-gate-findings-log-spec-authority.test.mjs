@@ -57,7 +57,7 @@ const VERDICT = {
   specDigest, headSha: HEAD, contentDigest,
   decisions: [
     decision(0, "finding_conflicts", { conflictingCriteria: [criterionIds[0]] }),
-    decision(1, "valid_compliant", { authorizedRemediation: "fix it" }),
+    decision(1, "valid_compliant", { authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q" }),
   ],
 };
 

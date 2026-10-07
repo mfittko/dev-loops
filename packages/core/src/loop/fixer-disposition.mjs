@@ -47,6 +47,127 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+const SITE_STATUS = Object.freeze({ FIXED: "fixed", SKIPPED: "skipped" });
+
+const RULE_ID_PATTERN = /^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$/;
+
+/**
+ * Optional site coverage of an act item's authorized remediation. `returnedSites`
+ * are the sites the site query returned at the head. Every one needs a `sites`
+ * entry that is `fixed`, or `skipped` with a reason. An `input_form` site that is
+ * fixed names the test that covers that form. A query that returned nothing records a
+ * `noSitesReason` instead of `returnedSites`. `ruleCitations` are the rule IDs
+ * the fixer applied in place of a conflicting remediation.
+ */
+function normalizeSiteCoverage(entry, label, ruleIds) {
+  const out = {};
+  const rawSites = entry.sites === undefined ? [] : entry.sites;
+  const returned = entry.returnedSites === undefined ? [] : entry.returnedSites;
+  if (!Array.isArray(rawSites) || !Array.isArray(returned)) {
+    throw new Error(`${label} sites and returnedSites must be arrays`);
+  }
+  const sites = rawSites.map((site, i) => {
+    if (!site || typeof site !== "object" || !isNonEmptyString(site.site)) throw new Error(`${label} sites[${i}] needs a site`);
+    const status = typeof site.status === "string" ? site.status.trim().toLowerCase() : "";
+    if (!Object.values(SITE_STATUS).includes(status)) throw new Error(`${label} site ${site.site} has status ${JSON.stringify(site.status)}, expected fixed or skipped`);
+    if (status === SITE_STATUS.SKIPPED && !isNonEmptyString(site.reason)) throw new Error(`${label} skipped site ${site.site} records no skip reason`);
+    if (status === SITE_STATUS.FIXED && site.kind === "input_form" && !isNonEmptyString(site.test)) {
+      throw new Error(`${label} fixed input form ${site.site} names no test`);
+    }
+    return {
+      site: site.site.trim(),
+      status,
+      ...(isNonEmptyString(site.reason) ? { reason: site.reason.trim() } : {}),
+      ...(site.kind === "input_form" ? { kind: "input_form" } : {}),
+      ...(isNonEmptyString(site.test) ? { test: site.test.trim() } : {}),
+    };
+  });
+  const disposed = new Set(sites.map((s) => s.site));
+  if (disposed.size !== sites.length) {
+    const dup = sites.find((s, i) => sites.findIndex((o) => o.site === s.site) !== i);
+    throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: ${label} records site ${dup.site} more than once`);
+  }
+  const returnedSites = returned.map((site) => {
+    if (!isNonEmptyString(site)) throw new Error(`${label} returnedSites entries must be non-empty strings`);
+    if (!disposed.has(site.trim())) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: ${label} leaves returned site ${site.trim()} neither fixed nor skipped with a reason`);
+    return site.trim();
+  });
+  if (sites.length > 0) out.sites = sites;
+  if (returnedSites.length > 0) out.returnedSites = returnedSites;
+  if (entry.noSitesReason !== undefined) {
+    if (!isNonEmptyString(entry.noSitesReason)) throw new Error(`${label} noSitesReason must be a non-empty string`);
+    out.noSitesReason = entry.noSitesReason.trim();
+  }
+  if (entry.ruleCitations !== undefined) {
+    if (!Array.isArray(entry.ruleCitations) || !entry.ruleCitations.every((id) => typeof id === "string" && RULE_ID_PATTERN.test(id.trim()))) {
+      throw new Error(`${label} ruleCitations must be rule IDs such as LOCAL-COMMENT-DISCIPLINE`);
+    }
+    out.ruleCitations = entry.ruleCitations.map((id) => id.trim());
+    const unknown = ruleIds ? out.ruleCitations.filter((id) => !ruleIds.has(id)) : [];
+    if (unknown.length > 0) throw new Error(`${label} cites rule IDs that skills/docs/required-rules.json does not register: ${unknown.join(", ")}`);
+  }
+  return out;
+}
+
+/**
+ * Site coverage keyed by act-item fingerprint. It covers threadless act items and rides
+ * the `commit_only` handback, where no thread entry exists: `{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }`.
+ */
+function normalizeSiteCoverageRecords(raw, ruleIds) {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) throw new Error("Fixer handoff siteCoverage must be an array");
+  const seen = new Set();
+  return raw.map((item, index) => {
+    if (!item || typeof item !== "object" || !isNonEmptyString(item.fingerprint)) {
+      throw new Error(`Fixer handoff siteCoverage[${index}] is missing fingerprint`);
+    }
+    const fingerprint = item.fingerprint.trim();
+    if (seen.has(fingerprint)) throw new Error(`Fixer handoff siteCoverage has a duplicate fingerprint: ${fingerprint}`);
+    seen.add(fingerprint);
+    return { fingerprint, ...normalizeSiteCoverage(item, `Fixer site coverage for ${fingerprint}`, ruleIds) };
+  });
+}
+
+/**
+ * Gaps between the act items' authorized remediations and a normalized site coverage record.
+ * An act item with a `siteQuery` needs a record that lists the sites the query returned, or a `noSitesReason`.
+ * A doc_lag item needs a fixed or skipped site for every `statedSurfaces` entry. A matcher
+ * item (`acceptedForms` / `rejectedForms`) needs one fixed `input_form` site with a test per listed form.
+ * @param {Array<object>} actItems delta act items (each with `fingerprint` or `ref`)
+ * @param {Array<object>|undefined} siteCoverage normalized `siteCoverage` of a handoff
+ * @returns {string[]}
+ */
+export function siteCoverageGaps(actItems, siteCoverage) {
+  const byFingerprint = new Map((siteCoverage ?? []).map((record) => [record.fingerprint, record]));
+  const gaps = [];
+  for (const item of actItems) {
+    if (!isNonEmptyString(item.siteQuery)) continue;
+    const key = item.fingerprint ?? item.ref;
+    const record = byFingerprint.get(key);
+    if (!record) {
+      gaps.push(`act item ${key} has a site query and no site coverage record`);
+      continue;
+    }
+    if (!record.returnedSites?.length && !record.noSitesReason) gaps.push(`act item ${key} records no returned sites and no noSitesReason for its site query`);
+    const disposed = new Map((record.sites ?? []).map((site) => [site.site, site]));
+    for (const surface of item.statedSurfaces ?? []) {
+      if (!disposed.has(surface)) gaps.push(`act item ${key} records no fixed or skipped site for stated surface ${JSON.stringify(surface)}`);
+    }
+    for (const form of [...(item.acceptedForms ?? []), ...(item.rejectedForms ?? [])]) {
+      const site = disposed.get(form);
+      if (site?.kind !== "input_form") gaps.push(`act item ${key} records no input_form site for form ${JSON.stringify(form)}`);
+      else if (site.status !== SITE_STATUS.FIXED || !isNonEmptyString(site.test)) gaps.push(`act item ${key} input_form site ${JSON.stringify(form)} needs a fixed status and a test`);
+    }
+  }
+  return gaps;
+}
+
+/** The recorded skip reason for a site of an act item, or null. */
+export function recordedSkipReason(siteCoverage, fingerprint, site) {
+  const found = (siteCoverage ?? []).find((record) => record.fingerprint === fingerprint)?.sites?.find((s) => s.site === site && s.status === SITE_STATUS.SKIPPED);
+  return found?.reason ?? null;
+}
+
 /**
  * Validate + normalize a raw fixer-disposition handoff. Throws on any
  * structural gap the evaluator must never silently tolerate: a missing
@@ -54,10 +175,14 @@ function isNonEmptyString(value) {
  * threadId/fixingCommitSha/disposition on any entry, an unrecognized
  * disposition value, or a duplicate threadId/fingerprint across entries.
  *
+ * Each entry also carries the optional site coverage fields `sites`, `returnedSites`, `noSitesReason` and
+ * `ruleCitations`; the handoff may carry a top-level `siteCoverage[]`.
+ *
  * @param {object} raw
- * @returns {{ headSha: string, dispositions: Array<{ threadId: string, fingerprint: string|null, fixingCommitSha: string, disposition: string, validation: string|null }> }}
+ * @param {{ ruleIds?: Set<string> }} [options] ruleIds: the known rule ids that `ruleCitations` are checked against
+ * @returns {{ headSha: string, dispositions: Array<{ threadId: string, fingerprint: string|null, fixingCommitSha: string, disposition: string, validation: string|null, sites?: object[], returnedSites?: string[], ruleCitations?: string[], noSitesReason?: string }>, siteCoverage?: Array<{ fingerprint: string, returnedSites: string[], sites: object[], ruleCitations?: string[], noSitesReason?: string }> }}
  */
-export function normalizeFixerDispositionHandoff(raw) {
+export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
   if (!raw || typeof raw !== "object") {
     throw new Error("Fixer disposition handoff must be an object");
   }
@@ -108,11 +233,14 @@ export function normalizeFixerDispositionHandoff(raw) {
       fixingCommitSha: entry.fixingCommitSha.trim(),
       disposition,
       validation: isNonEmptyString(entry.validation) ? entry.validation.trim() : null,
+      ...normalizeSiteCoverage(entry, `Fixer disposition handoff entry for thread ${threadId}`, ruleIds),
     };
   });
+  const siteCoverage = normalizeSiteCoverageRecords(raw.siteCoverage, ruleIds);
   return {
     headSha: raw.headSha.trim(),
     dispositions,
+    ...(siteCoverage.length > 0 ? { siteCoverage } : {}),
   };
 }
 
