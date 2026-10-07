@@ -12,7 +12,7 @@ Two comment lines are operator-owned: `approve merge <sha>` and `adr-tripwire:al
 
 ## Decision
 
-`comment-issue.mjs` and `edit-comment.mjs` refuse a body with a line that opens with `approve merge` or `adr-tripwire:allow`. The refusal exits 1 with `OPERATOR-OWNED-LINE` and makes no GitHub call. The wrappers have no override flag. Operators post these lines themselves.
+`comment-issue.mjs` and `edit-comment.mjs` refuse a body with a line that opens with `approve merge` or `adr-tripwire:allow`. The refusal exits 1 with `OPERATOR-OWNED-LINE` and makes no GitHub call. The wrappers have no override flag. Operators post the approval line themselves. Waiver lines also come from `dev-loops pr waive-adr-tripwire` under ADR 0119 standing authorization, which writes the PR body and not a comment, so the wrappers refuse them too.
 
 Rejected alternative: an override flag for orchestrators (an agent-usable flag defeats the refusal).
 
