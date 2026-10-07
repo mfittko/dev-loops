@@ -52,6 +52,12 @@ test("remediation scope changes the actSetId; legacy lists keep theirs", () => {
   assert.equal(startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST }).actSetId, plain.actSetId);
 });
 
+test("siblingRemediations of a clustered act item reach the delta input", () => {
+  const sib = [{ fingerprint: "fp2", siteQuery: "q2" }];
+  const withSib = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], siteQuery: "q1", siblingRemediations: sib }, ...ACT_LIST.slice(1)] });
+  assert.deepEqual(withSib.actItems[0].siblingRemediations, sib);
+});
+
 function sequence() {
   return startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST });
 }

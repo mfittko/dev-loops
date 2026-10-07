@@ -407,11 +407,11 @@ describe("dedupeActListByCluster — context-size before/after evidence", () => 
     assert.deepEqual(kept.acceptedForms, ["a", "b"]);
     assert.deepEqual(kept.statedSurfaces, ["s"]);
     assert.equal(kept.siteQuery, "q");
-    const bad = [mk({ siteQuery: "q1" }), mk({ siteQuery: "q2" })];
+    const bad = [mk({ siteQuery: "q1" }), mk({ siteQuery: "q2", fingerprint: "fp2" })];
     const c2 = clusterFindings(bad, { headSha: HEAD }).clusters;
     const [k2] = dedupeActListByCluster(bad, c2, bad);
     assert.equal(k2.siteQuery, "q1");
-    assert.deepEqual(k2.siblingRemediations, [{ siteQuery: "q2" }]);
+    assert.deepEqual(k2.siblingRemediations, [{ fingerprint: "fp2", siteQuery: "q2" }]);
   });
 
   test("prefers the representative when it is itself an act member", () => {

@@ -91,6 +91,7 @@ export function toDeltaActItems(actList) {
     if (nonEmpty(entry.fingerprint)) item.fingerprint = entry.fingerprint.trim();
     for (const key of REMEDIATION_TEXT_FIELDS) if (nonEmpty(entry[key])) item[key] = entry[key].trim();
     for (const key of REMEDIATION_LIST_FIELDS) if (Array.isArray(entry[key]) && entry[key].length > 0) item[key] = entry[key].filter(nonEmpty).map((v) => v.trim());
+    if (Array.isArray(entry.siblingRemediations) && entry.siblingRemediations.length > 0) item.siblingRemediations = entry.siblingRemediations;
     if (nonEmpty(entry.file)) item.file = entry.file.trim();
     if (Number.isInteger(entry.line)) item.line = entry.line;
     return item;

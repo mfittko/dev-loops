@@ -903,7 +903,9 @@ the accepted and rejected input forms (`acceptedForms[]`, `rejectedForms[]`) alo
 `siteQuery`, and the fix adds one test per form. For doc, comment or fragment lag (`defectKind: "doc_lag"`), `statedSurfaces[]`
 lists every stated surface of the changed rule: PR body scope, changes fragment, JSDoc, hook
 header and doc comment. A decision that supplies those lists under another `defectKind` is rejected. Before the judge authorizes a remediation, it checks the remedy against
-the repo's registered rules (`skills/docs/required-rules.json`). The fixer fixes every site the
+the repo's registered rules (`skills/docs/required-rules.json`). A clustered act item may carry `siblingRemediations[]`, one entry per sibling with differing remediation text
+(`fingerprint` plus its text fields); the fixer runs each sibling `siteQuery` and covers its sites in the item's record,
+and the delta input carries the entries. The fixer fixes every site the
 query returns, or records a skip reason for each skipped site (`returnedSites[]` and `sites[]`).
 Site coverage is keyed by act-item fingerprint in `siteCoverage[]`, which the `commit_only` and
 `full` handoffs both carry, so a threadless act item is covered too. A query that returns no site records a
