@@ -147,7 +147,7 @@ export function expandDispatchUnits(units, configuredGroupNames) {
       // emitter can derive the packed bin's scope from the same identity;
       // ordinary singleton units retain the historical angle-name scope.
       // An already-expanded one-angle tail keeps its recorded `group`.
-      const group = typeof unit.group === "string" ? unit.group : null;
+      const group = typeof unit?.group === "string" ? unit.group : null;
       for (const angle of angles) out.push({ name: isPackedUnitName(unit.name) ? unit.name : angle, angles: [angle], group });
     }
   }
