@@ -14,7 +14,8 @@ import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as def
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
-import { evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
+import { evaluateEarlySurface } from "./early-surface-checks.mjs";
+import { buildAdrTripwireField, buildSizeBudgetField, evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
@@ -57,6 +58,8 @@ export const TERMINAL_RUNNER_RELEASE_ACTIONS = new Set([
   PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
   PR_CHECKPOINT_ACTION.REPORT_DONE,
   PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+  PR_CHECKPOINT_ACTION.RESOLVE_ADR_TRIPWIRE,
+  PR_CHECKPOINT_ACTION.RESOLVE_SIZE_BUDGET,
 ]);
 const UNMERGED_GIT_STATUS_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 const USAGE = `Usage: detect-pr-gate-coordination-state.mjs --repo <owner/name> --pr <number>
@@ -239,7 +242,7 @@ export function parseGitStatusConflictFiles(text) {
 async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
-    ["pr", "view", String(pr), "--repo", repo, "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+    ["pr", "view", String(pr), "--repo", repo, "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
     env,
   );
   if (result.code !== 0) {
@@ -1079,6 +1082,7 @@ export function buildGateCoordinationEvaluatorInput({
   postConvergenceSignificantChange,
   designerReviewExempt = false,
   designerReviewEvidence = null,
+  earlySurface = null,
 }) {
   return {
     repo: context.repo,
@@ -1145,6 +1149,7 @@ export function buildGateCoordinationEvaluatorInput({
     // returns null otherwise), so a PR with no recorded fixer handoff behaves
     // exactly as before this boundary existed.
     ...(context.fixerDisposition ? { fixerDisposition: context.fixerDisposition } : {}),
+    ...(earlySurface ?? {}),
   };
 }
 
@@ -1203,6 +1208,18 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const evaluatorContext = reopenedInterpretation
     ? { ...context, interpretation: reopenedInterpretation, disposition: summarizeLoopInterpretation(reopenedInterpretation) }
     : context;
+  // ADR-TRIPWIRE-EARLY-SURFACE: draft PRs only; a payload without baseRefName yields unknown.
+  // An injected runChild (hermetic runtime) must never reach real git: it defaults to unknown.
+  const unknownEarlySurface = async () => ({ adrTripwire: buildAdrTripwireField(null), sizeBudget: buildSizeBudgetField(null) });
+  const prBaseRefName = typeof context.prData?.baseRefName === "string" ? context.prData.baseRefName.trim() : "";
+  const earlySurface = context.prData?.isDraft !== true ? null : prBaseRefName.length === 0
+    ? { adrTripwire: buildAdrTripwireField(null), sizeBudget: buildSizeBudgetField(null) }
+    : await (runtime.evaluateEarlySurface ?? (runtime.runChild ? unknownEarlySurface : evaluateEarlySurface))({
+        baseRefName: prBaseRefName,
+        head: context.currentHeadSha,
+        prBody: typeof context.prData?.body === "string" ? context.prData.body : "",
+        repoRoot,
+      });
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1217,6 +1234,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       config,
     }),
     designerReviewEvidence,
+    earlySurface,
   }));
   // Copilot review request guard: when Copilot has reviewed the PR but no
   // formal review request was made, block pre-approval gate entry. Only

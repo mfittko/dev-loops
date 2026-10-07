@@ -414,6 +414,7 @@ export function computeSizeBudget({
     ok: outcome === "pass",
     outcome,
     wholeLogicLoc: wholeLoc,
+    waivable: outcome === "block" && !unwaivableBlock,
     t1SliceLoc,
     tierLogicLoc,
     thresholds: {

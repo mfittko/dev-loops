@@ -4,11 +4,13 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo } from "../_helpers.mjs";
+import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo, repeatedLinesContent } from "../_helpers.mjs";
 
 import { buildCreatePrArgs, detectClosingKeyword, extractClosingIssueNumber, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
 import { resolveBaseBranch } from "@dev-loops/core/config";
 
+// ADR-TRIPWIRE-EARLY-SURFACE appends one `{adrTripwire,sizeBudget}` JSON line after gh stdout.
+const withoutEarlySurface = (stdout) => stdout.split("\n").filter((line) => !line.startsWith("{\"adrTripwire\"")).join("\n");
 const scriptPath = path.resolve("scripts/github/create-pr.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
 
@@ -316,7 +318,7 @@ test("create-pr --body with closing keyword emits no stderr warning", async () =
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/1\n");
     assert.equal(result.stderr, "");
     assert.equal((await readGhCalls(ghLogPath)).length, 2);
   } finally {
@@ -342,7 +344,7 @@ test("create-pr --body without closing keyword emits no warning when --issue is 
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/1\n");
     // #1626: without --issue the closing keyword is not enforced, so the old
     // advisory warning is gone (a warning is invisible under --jq).
     assert.equal(result.stderr, "");
@@ -374,7 +376,7 @@ test("create-pr --body-file with closing keyword emits no stderr warning", async
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/1\n");
     assert.equal(result.stderr, "");
     assert.equal((await readGhCalls(ghLogPath)).length, 2);
   } finally {
@@ -403,7 +405,7 @@ test("create-pr --body-file without closing keyword emits no warning when --issu
     ], { env });
 
     assert.equal(result.code, 0);
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/1\n");
     assert.equal(result.stderr, "");
     assert.equal((await readGhCalls(ghLogPath)).length, 1);
   } finally {
@@ -790,7 +792,7 @@ test("create-pr forwards args in order and preserves gh stdout on success", asyn
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/17\n");
     const ghCalls = await readGhCalls(ghLogPath);
     assert.equal(ghCalls.length, 2);
     assert.deepEqual(ghCalls[1], [
@@ -866,7 +868,7 @@ test("create-pr preserves an existing --draft without adding another copy", asyn
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
       "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--base", INHERITED_BASE_DEFAULT, "--body", "",
     ]]);
@@ -889,7 +891,7 @@ test("create-pr appends --draft after --draft=false so draft-first still wins", 
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
       "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft", "--body", "",
     ]]);
@@ -912,7 +914,7 @@ test("create-pr re-appends --draft when a later token disables it", async () => 
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
       "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft", "--body", "",
     ]]);
@@ -935,7 +937,7 @@ test("create-pr treats --draft=true as already supplied and avoids a duplicate",
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
       "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=true", "--base", INHERITED_BASE_DEFAULT, "--body", "",
     ]]);
@@ -1032,7 +1034,7 @@ test("create-pr --allow-replacement-pr <prior> matching the open linked PR lets 
       "--allow-replacement-pr", "90",
     ], { env });
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/91\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/91\n");
     assert.match(result.stderr, /replacing linked PR #90/);
     const ghCalls = await readGhCalls(ghLogPath);
     assert.equal(ghCalls.length, 2);
@@ -1223,7 +1225,7 @@ test("create-pr accepts a correct-match body derived from the --head branch (no 
       "--body", conformantBody("Closes #2110"),
     ], { env });
     assert.equal(result.code, 0);
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/1\n");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1410,7 +1412,7 @@ test("create-pr admits a diff whose issue-citing comment carries the comment-dis
       "--body", "no closing keyword",
     ], { env, cwd: tempDir });
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/1\n");
     assert.equal((await readGhCalls(ghLogPath)).length, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1441,7 +1443,7 @@ test("create-pr skips the LOCAL-COMMENT-DISCIPLINE preflight (only) when --base 
       "--body", "no closing keyword",
     ], { env, cwd: tempDir });
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/1\n");
     assert.equal((await readGhCalls(ghLogPath)).length, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1623,7 +1625,7 @@ test("create-pr admits a conformant tracker-backed body through create unchanged
       "--body", conformantBody("Closes #77"),
     ], { env });
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    assert.equal(withoutEarlySurface(result.stdout), "https://github.com/owner/repo/pull/1\n");
     // Passed the spec check, ran the linked-PR probe, then created.
     assert.equal((await readGhCalls(ghLogPath)).length, 2);
   } finally {
@@ -1873,6 +1875,64 @@ test("create-pr refuses --editor and --web even with an explicit --body", async 
       assert.match(JSON.parse(result.stderr).error, /ADR-TRIPWIRE-STANDING-WAIVER/);
     }
     assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ADR-TRIPWIRE-EARLY-SURFACE: creation succeeds and reports advisory outcomes.
+async function createPrEarlySurface(headFiles) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-early-surface-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, { headFiles });
+    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
+    const { env } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+      "--title", "T", "--body", "no closing keyword",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const line = result.stdout.split("\n").find((l) => l.startsWith("{\"adrTripwire\""));
+    return JSON.parse(line);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("create-pr reports adrTripwire block with both remedies and still creates the PR", async () => {
+  const { adrTripwire, sizeBudget } = await createPrEarlySurface([
+    { path: "skills/docs/sample-contract.md", content: "# Sample\n" },
+  ]);
+  assert.equal(adrTripwire.outcome, "block");
+  assert.equal(adrTripwire.remedies.length, 2);
+  assert.match(adrTripwire.remedies.join("\n"), /docs\/decisions\/NNNN-\*\.md/u);
+  assert.match(adrTripwire.remedies.join("\n"), /adr-tripwire:allow/u);
+  assert.equal(sizeBudget.outcome, "pass");
+});
+
+test("create-pr reports a waivable sizeBudget block for a 1961-LOC diff and still creates the PR", async () => {
+  const { adrTripwire, sizeBudget } = await createPrEarlySurface([
+    { path: "scripts/big.mjs", content: repeatedLinesContent(1961) },
+  ]);
+  assert.equal(adrTripwire.outcome, "pass");
+  assert.equal(sizeBudget.outcome, "block");
+  assert.equal(sizeBudget.waivable, true);
+  assert.equal(sizeBudget.wholeLogicLoc, 1961);
+});
+
+test("create-pr reports adrTripwire unknown and still creates the PR when --head does not resolve", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-early-surface-nohead-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
+    const { env } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "no-such-branch",
+      "--title", "T", "--body", "no closing keyword",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /https:\/\/github\.com\/owner\/repo\/pull\/1/u);
+    const line = result.stdout.split("\n").find((l) => l.startsWith("{\"adrTripwire\""));
+    assert.equal(JSON.parse(line).adrTripwire.outcome, "unknown");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
