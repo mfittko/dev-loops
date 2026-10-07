@@ -62,6 +62,11 @@ test("non-body commands pass for the main agent and subagents", async () => {
         `git commit -m "docs: eval and gh issue edit notes"`,
         `git commit -m "fix: deny xargs gh pr edit body writes"`,
         `git commit -m "fix: xargs gh issue edit hole"`,
+        `rg -l "gh issue edit" skills | xargs wc -l`,
+        `rg -l "gh pr edit" skills | xargs wc -l`,
+        `git commit -m "$(cat <<'EOF'\ndocs: eval and gh issue edit notes\nEOF\n)"`,
+        `git commit -m "$(cat <<'EOF'\nfix: deny xargs gh pr edit body writes\nEOF\n)"`,
+        `git commit -m "$(cat <<'EOF'\nfix: xargs gh issue edit hole\nEOF\n)"`,
       ]) {
         assert.equal(bash(root, command, subagent).decision, "allow", `${subagent ? "subagent" : "main"}: ${command}`);
       }

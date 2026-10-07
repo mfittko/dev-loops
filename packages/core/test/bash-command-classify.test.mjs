@@ -1314,6 +1314,13 @@ test("commandContainsRawPrBodyEdit denies global-flag and wrapped literal forms"
     `echo "$(bash -c 'gh pr edit 5 --body x')"`,
     `echo "$(eval 'gh pr edit 5 --body x')"`,
     `echo "$(echo 5 | xargs -I{} gh pr edit {} --body x)"`,
+    "echo 5 | xargs gh pr edit --add-label x",
+    `echo 5 | xargs gh issue edit "--body" x`,
+    "echo 5 | xargs -I{} gh issue edit {} --body x",
+    `echo 5 | xargs sh -c "gh pr edit 5 --body x"`,
+    `bash -c "$(cat <<'EOF'\ngh pr edit 5 --body x\nEOF\n)"`,
+    `bash <<'EOF'\nbash -c "gh pr edit 5 --body x"\nEOF`,
+    `bash <<'EOF'\ngh pr edit 5 --body x\nEOF`,
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
   }
@@ -1336,6 +1343,11 @@ test("commandContainsRawPrBodyEdit keeps passing title, assignee and read forms"
     `git commit -m "docs: eval and gh issue edit notes"`,
     `git commit -m "fix: deny xargs gh pr edit body writes"`,
     `git commit -m "fix: xargs gh issue edit hole"`,
+    `rg -l "gh issue edit" skills | xargs wc -l`,
+    `rg -l "gh pr edit" skills | xargs wc -l`,
+    `git commit -m "$(cat <<'EOF'\ndocs: eval and gh issue edit notes\nEOF\n)"`,
+    `git commit -m "$(cat <<'EOF'\nfix: deny xargs gh pr edit body writes\nEOF\n)"`,
+    `git commit -m "$(cat <<'EOF'\nfix: xargs gh issue edit hole\nEOF\n)"`,
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), false, cmd);
   }

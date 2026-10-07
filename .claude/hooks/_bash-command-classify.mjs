@@ -852,6 +852,9 @@ const NON_BODY_EDIT_FLAG = /(?:^|\s)(?:--(?:(?:add|remove)-(?:label|assignee|pro
 /** A shell wrapper that hides a command from per-segment inspection: `bash|sh|zsh|dash|ksh -c`, `eval`, `xargs`. */
 const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*-\S*c|eval|xargs)(?=\s)/;
 
+/** `SHELL_WRAPPER_RE` without `xargs`: the wrappers that run a quoted string as shell code. */
+const SHELL_EXEC_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*-\S*c|eval)(?=\s)/;
+
 /**
  * Shell-word unquoting for flag tokens: the shell strips the quotes, so `'--body'`, `"-F"` and
  * `-f "body"=x` reach gh as `--body`, `-F` and `-f body=x`. Only a quoted token that is a bare
@@ -864,6 +867,8 @@ function unquoteFlagTokens(segment) {
 
 /** Blank quoted spans for the wrapper-word checks only: double quotes honor backslash escapes, unlike `stripQuotedLiterals`. */
 function stripQuotesEscapeAware(command) {
+  // The body of a quoted-delimiter heredoc read by `cat` inside `$(...)` is literal data (the substitution output is only an argument word): blank it.
+  command = command.replace(/(\$\(\s*cat\s+<<-?\s*(['"])(\w+)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3[ \t]*(?:\n|$))/g, "$1 $4");
   // A `$(...)` or backtick substitution runs even inside double quotes, so keep the raw text then (fail closed).
   if (/\$\(|`/.test(command)) return command;
   return command.replace(/\\.|'[^']*'|"(?:\\.|[^"\\])*"/gs, " ");
@@ -886,13 +891,16 @@ export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
   command = command.replace(/(?<!\\)((?:\\\\)*)\\\r?\n/g, "$1"); // the shell removes (no space) only an unescaped (odd-run) backslash-newline continuation
   // A wrapped `gh issue edit` is judged on its own argv only: the text after the literal up to the next shell separator.
   // Denied with a body-flag token there; under xargs (args may arrive on stdin) also denied without an explicit non-body edit flag.
-  if (SHELL_WRAPPER_RE.test(stripQuotesEscapeAware(command))) { // wrapper words count only unquoted
-    if (GH_PR_EDIT_LITERAL.test(command)) return true;
-    for (const m of command.matchAll(new RegExp(GH_BODY_WRITER_LITERAL.source, "gi"))) {
+  const unquotedWords = stripQuotesEscapeAware(command);
+  if (SHELL_WRAPPER_RE.test(unquotedWords)) { // wrapper words count only unquoted
+    // With xargs as the only wrapper nothing quoted is executed, so a quoted `gh pr edit` literal is data: match on the quote-stripped text.
+    const text = SHELL_EXEC_WRAPPER_RE.test(unquotedWords) ? command : stripQuotesEscapeAware(unquoteFlagTokens(command));
+    if (GH_PR_EDIT_LITERAL.test(text)) return true;
+    for (const m of text.matchAll(new RegExp(GH_BODY_WRITER_LITERAL.source, "gi"))) {
       // Blank quoted values before splitting so a separator inside a quoted title does not truncate the argv.
-      const argv = stripQuotedLiterals(unquoteFlagTokens(command.slice(m.index + m[0].length))).split(/[;&|\n]/)[0];
+      const argv = stripQuotedLiterals(unquoteFlagTokens(text.slice(m.index + m[0].length))).split(/[;&|\n]/)[0];
       if (BODY_FLAG_ANYWHERE.test(argv)) return true;
-      if (/(?:^|[\s;&|(])xargs(?=\s)/.test(stripQuotesEscapeAware(command)) && !NON_BODY_EDIT_FLAG.test(argv)) return true;
+      if (/(?:^|[\s;&|(])xargs(?=\s)/.test(unquotedWords) && !NON_BODY_EDIT_FLAG.test(argv)) return true;
     }
   }
   const res = [ghBodyWriterRegex("(?:pr|issue)")];
