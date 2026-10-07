@@ -18,6 +18,7 @@ import {
   summarizeCanonicalState,
   resolveIssuelessLightweightEligibility,
   resolveHasNewerMergeSinceCheckpoint,
+  inspectNewerMergeSinceCheckpoint,
   STRATEGY_OWNERSHIP_GATE,
   ownershipGateAppliesToStrategy,
   runCli,
@@ -551,16 +552,15 @@ test("buildResolveDevLoopStartupResult auto-injects retrospectiveCheckpointState
     const result = await runNode(["--input", inputPath], { cwd: tempDir });
 
     // The resolver auto-reads the checkpoint file, maps "required" → "missing",
-    // and returns needs_reconcile because the retrospective is pending.
+    // and reports the pending retrospective without blocking startup.
     assert.equal(result.code, 0, `expected exit 0, got stderr: ${result.stderr}`);
     const parsed = JSON.parse(result.stdout.trim());
     assert.equal(parsed.ok, true);
-    assert.equal(parsed.bundleKind, "needs_reconcile");
-    assert.equal(parsed.selectedStrategy, "none");
+    assert.doesNotMatch(parsed.nextAction ?? "", /retrospective/i);
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 
-test("buildResolveDevLoopStartupResult fails closed when no checkpoint file exists and cwd is not a worktree", async () => {
+test("buildResolveDevLoopStartupResult does not mention a retrospective in nextAction when no checkpoint file exists and cwd is not a worktree", async () => {
   await withTempDir(async (tempDir) => {
     const inputPath = await writeTempJson(tempDir, "startup.json", {
       currentState: {
@@ -575,7 +575,8 @@ test("buildResolveDevLoopStartupResult fails closed when no checkpoint file exis
     });
 
     // RETRO-ENFORCEMENT-CONFIG-GATED (#1628): opt in via `.devloops` so the
-    // gated checkpoint read path is exercised (absent file fails closed).
+    // gated checkpoint read path is exercised (an absent file maps to NONE, so
+    // the retrospective gate does not fire and the worktree-isolation check decides).
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
 
     const result = await runNode(["--input", inputPath], { cwd: tempDir });
@@ -585,6 +586,8 @@ test("buildResolveDevLoopStartupResult fails closed when no checkpoint file exis
     assert.equal(parsed.ok, true);
     assert.equal(parsed.bundleKind, "needs_reconcile");
     assert.equal(parsed.selectedStrategy, "none");
+    assert.match(parsed.nextAction ?? "", /worktree isolation/i);
+    assert.doesNotMatch(parsed.nextAction ?? "", /retrospective/i);
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 
@@ -618,11 +621,10 @@ test("buildResolveDevLoopStartupResult maps durable-artifact 'required' to check
     );
 
     // The resolver auto-reads the checkpoint file and maps "required" → "missing".
-    // A missing retrospective checkpoint causes the resolver to return needs_reconcile
-    // regardless of the route type — the retrospective must be completed first.
+    // A missing retrospective checkpoint is reported as pending
+    // regardless of the route type; routing itself is unchanged.
     assert.equal(result.ok, true);
-    assert.equal(result.bundleKind, "needs_reconcile");
-    assert.equal(result.selectedStrategy, "none");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 
@@ -631,7 +633,7 @@ test("buildResolveDevLoopStartupResult fails closed when the checkpoint identity
     // Current repo resolves to mfittko/dev-loops via the origin remote, but the
     // checkpoint was recorded for a DIFFERENT repository. A foreign checkpoint
     // must not authorize an association lookup against this repo's base history:
-    // fail closed to needs_reconcile before resolveHasNewerMerge is ever called.
+    // fail closed before resolveHasNewerMerge is ever called.
     execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
     execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
     const piDir = path.join(tempDir, ".pi");
@@ -669,8 +671,7 @@ test("buildResolveDevLoopStartupResult fails closed when the checkpoint identity
 
     assert.equal(called, false, "resolveHasNewerMerge must not be called for a foreign-repo checkpoint");
     assert.equal(result.ok, true);
-    assert.equal(result.bundleKind, "needs_reconcile");
-    assert.equal(result.selectedStrategy, "none");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_foreign_repo" }]);
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 
@@ -679,7 +680,7 @@ test("buildResolveDevLoopStartupResult fails closed when the current repo cannot
     // No git remote → detectRepoSlug returns null, so the current repo cannot be
     // resolved. An unresolvable repo identity cannot authorize an association
     // lookup even when the recorded identity.repo would otherwise match: fail
-    // closed to needs_reconcile without calling resolveHasNewerMerge.
+    // closed without calling resolveHasNewerMerge.
     const piDir = path.join(tempDir, ".pi");
     await mkdir(piDir, { recursive: true });
     await writeFile(
@@ -715,8 +716,7 @@ test("buildResolveDevLoopStartupResult fails closed when the current repo cannot
 
     assert.equal(called, false, "resolveHasNewerMerge must not be called when the current repo is unresolvable");
     assert.equal(result.ok, true);
-    assert.equal(result.bundleKind, "needs_reconcile");
-    assert.equal(result.selectedStrategy, "none");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_foreign_repo" }]);
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 
@@ -748,10 +748,9 @@ test("buildResolveDevLoopStartupResult overrides caller-provided state with on-d
     );
 
     // On-disk "required" overrides caller-provided "complete". The resolver
-    // returns needs_reconcile because the retrospective is still pending.
+    // reports the retrospective as pending.
     assert.equal(result.ok, true);
-    assert.equal(result.bundleKind, "needs_reconcile");
-    assert.equal(result.selectedStrategy, "none");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 test("buildResolveDevLoopStartupResult fails closed when checkpoint file is malformed", async () => {
@@ -780,10 +779,9 @@ test("buildResolveDevLoopStartupResult fails closed when checkpoint file is malf
       { env: resolverTestEnv(), cwd: tempDir, config: { workflow: { requireRetrospective: true } } },
     );
 
-    // Malformed file -> fail closed with missing checkpoint state -> needs_reconcile.
+    // Malformed file -> fail closed with missing checkpoint state, reported as pending.
     assert.equal(result.ok, true);
-    assert.equal(result.bundleKind, "needs_reconcile");
-    assert.equal(result.selectedStrategy, "none");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_unreadable" }]);
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 
@@ -812,10 +810,9 @@ test("buildResolveDevLoopStartupResult fails closed when checkpoint file has unr
       { env: resolverTestEnv(), cwd: tempDir, config: { workflow: { requireRetrospective: true } } },
     );
 
-    // Unrecognized state -> fail closed with missing -> needs_reconcile.
+    // Unrecognized state -> fail closed with missing, reported as pending.
     assert.equal(result.ok, true);
-    assert.equal(result.bundleKind, "needs_reconcile");
-    assert.equal(result.selectedStrategy, "none");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_malformed" }]);
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 
@@ -976,6 +973,7 @@ test("resolver returns needs_reconcile for local_implementation from main checko
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "resolver-main-"));
   try {
     writeWorktreeEnv(tempDir);
+    writeCheckpoint(tempDir, { state: "required" });
     const env = {
       ...process.env,
       PATH: `${tempDir}${path.delimiter}${process.env.PATH || ""}`,
@@ -994,12 +992,13 @@ test("resolver returns needs_reconcile for local_implementation from main checko
         artifactState: "not_applicable",
         issueLinkageResolution: "not_applicable",
       },
-      { env, cwd: tempDir },
+      { env, cwd: tempDir, config: RETROSPECTIVE_CONFIG },
     );
 
     assert.equal(result.ok, true);
     assert.equal(result.bundleKind, "needs_reconcile");
     assert.equal(result.selectedStrategy, "none");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
     assert.equal(result.bundle.bundleKind, "needs_reconcile");
     assert.equal(result.bundle.routeKind, "needs_reconcile");
     assert.equal(result.bundle.selectedStrategy, null);
@@ -2906,7 +2905,8 @@ test("buildResolveDevLoopStartupResult: THE ORIGINAL BUG, fixed — a complete c
       resolveHasNewerMerge: fixedHasNewerMerge(true),
     });
 
-    assert.equal(result.bundleKind, "needs_reconcile");
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "newer_merge_unidentified" }]);
     // The checkpoint on disk is byte-identical to what was seeded — a
     // read-time derivation never writes anything back.
     assert.deepEqual(readCheckpointIfPresent(tempDir), staleCheckpoint);
@@ -2973,8 +2973,8 @@ test("buildResolveDevLoopStartupResult: complete WITHOUT fresh-context provenanc
       config: RETROSPECTIVE_CONFIG,
       resolveHasNewerMerge: fixedHasNewerMerge(false),
     });
-    assert.equal(result.bundleKind, "needs_reconcile");
-    assert.match(result.nextAction ?? "", /retrospective/i);
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: 9002, mergeCommit: "cafef00d" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2996,13 +2996,15 @@ test("buildResolveDevLoopStartupResult: skipped is cycle-scoped exactly like com
       resolveHasNewerMerge: fixedHasNewerMerge(false),
     });
     assert.notEqual(noNewerMerge.bundleKind, "needs_reconcile");
+    assert.deepEqual(noNewerMerge.bundle.pendingRetrospectives, []);
 
     // Something merged since — not covered by the old skip.
     const newerMerge = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
       env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
       resolveHasNewerMerge: fixedHasNewerMerge(true),
     });
-    assert.equal(newerMerge.bundleKind, "needs_reconcile");
+    assert.notEqual(newerMerge.bundleKind, "needs_reconcile");
+    assert.deepEqual(newerMerge.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "newer_merge_unidentified" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3016,6 +3018,7 @@ test("buildResolveDevLoopStartupResult: no checkpoint file passes through (NONE)
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
     assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, []);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3029,7 +3032,8 @@ test("buildResolveDevLoopStartupResult: a present-but-non-object checkpoint file
       env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
-    assert.equal(result.bundleKind, "needs_reconcile");
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_malformed" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3045,7 +3049,8 @@ test("buildResolveDevLoopStartupResult: an unparseable checkpoint file fails clo
       env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
-    assert.equal(result.bundleKind, "needs_reconcile");
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_unreadable" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3061,7 +3066,8 @@ test("buildResolveDevLoopStartupResult: a checkpoint file containing the JSON li
       env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
-    assert.equal(result.bundleKind, "needs_reconcile");
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_malformed" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3079,7 +3085,8 @@ test("buildResolveDevLoopStartupResult: complete with no recorded identity at al
       env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
-    assert.equal(result.bundleKind, "needs_reconcile");
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3093,7 +3100,8 @@ test("buildResolveDevLoopStartupResult: skipped with no recorded identity at all
       env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
       resolveHasNewerMerge: unreachableHasNewerMerge(),
     });
-    assert.equal(result.bundleKind, "needs_reconcile");
+    assert.notEqual(result.bundleKind, "needs_reconcile");
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3171,8 +3179,10 @@ test("buildResolveDevLoopStartupResult: a checkpoint written only at the main ch
       config: { workflow: { requireRetrospective: true } },
     });
 
-    assert.equal(fromMain.bundleKind, "needs_reconcile");
-    assert.equal(fromWorktree.bundleKind, "needs_reconcile");
+    assert.notEqual(fromMain.bundleKind, "needs_reconcile");
+    assert.notEqual(fromWorktree.bundleKind, "needs_reconcile");
+    assert.deepEqual(fromMain.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
+    assert.deepEqual(fromWorktree.bundle.pendingRetrospectives, fromMain.bundle.pendingRetrospectives);
     assert.deepEqual(fromWorktree.bundleKind, fromMain.bundleKind);
   } finally {
     try { execFileSync("git", ["worktree", "remove", "--force", worktreeDir], { cwd: mainDir, stdio: "ignore" }); } catch { /* best-effort */ }
@@ -3475,22 +3485,10 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: a squash-merged PR associati
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout.trim());
-    assert.equal(parsed.bundleKind, "needs_reconcile");
-    assert.match(parsed.nextAction ?? JSON.stringify(parsed), /retrospective/i);
-
-    const resolverPath = await writeTempJson(tempDir, "stale-resolver-output.json", parsed);
-    const cliPath = path.resolve("cli/index.mjs");
-    const envelopeResult = await runNodeHelper(cliPath, [
-      "loop", "build-envelope", "--input", resolverPath, "--repo", "mfittko/dev-loops",
-    ], { cwd: tempDir, env: { ...ghStub.env, ...resolverTestEnv() } });
-    assert.equal(envelopeResult.code, 0, envelopeResult.stderr);
-    const envelope = JSON.parse(envelopeResult.stdout.trim());
-    assert.equal(envelope.currentGate, "fail_closed_reconcile");
-    assert.equal(envelope.routeKind, "needs_reconcile");
-    assert.equal(envelope.selectedStrategy, null);
-    assert.equal(envelope.nextAction, parsed.bundle.nextAction);
-    assert.deepEqual(envelope.requiredReads, parsed.requiredReads);
-    assert.ok(envelope.stopRules.includes("reconcile"));
+    assert.notEqual(parsed.bundleKind, "needs_reconcile");
+    // The stale checkpoint no longer blocks routing; the first qualifying newer
+    // merge is reported as the pending obligation.
+    assert.deepEqual(parsed.bundle.pendingRetrospectives, [{ pr: 9005, mergeCommit: mergedSha }]);
 
     // No write occurred: the checkpoint on disk is untouched.
     const checkpoint = JSON.parse(await readFile(path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json"), "utf8"));
@@ -3575,7 +3573,9 @@ test("resolve-dev-loop-startup.mjs --pr: incomplete GraphQL association paginati
         env: { ...ghStub.env, ...resolverTestEnv() },
       });
       assert.equal(result.code, 0, `${scenario.name}: ${result.stderr}`);
-      assert.equal(JSON.parse(result.stdout.trim()).bundleKind, "needs_reconcile", scenario.name);
+      const unverifiable = JSON.parse(result.stdout.trim());
+      assert.notEqual(unverifiable.bundleKind, "needs_reconcile", scenario.name);
+      assert.deepEqual(unverifiable.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "ancestry_or_association_unverifiable" }], scenario.name);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
       rmSync(`${tempDir}-remote`, { recursive: true, force: true });
@@ -3732,5 +3732,151 @@ test("resolver returns needs_reconcile for local_implementation when the worktre
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: two parallel units both start while one retro is pending and both carry the same obligation (#2488)", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    writeCheckpoint(tempDir, {
+      state: "required",
+      identity: { repo: "mfittko/dev-loops", prNumber: 2679, mergeCommit: "d3adb33f" },
+    });
+    const pending = [{ pr: 2679, mergeCommit: "d3adb33f" }];
+    const baseline = buildResolveDevLoopStartupResult(unrelatedLocalInput(), { env: resolverTestEnv(), cwd: tempDir, config: {} });
+    for (let unit = 0; unit < 2; unit += 1) {
+      const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), { env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG });
+      assert.equal(result.bundleKind, baseline.bundleKind);
+      assert.equal(result.selectedStrategy, baseline.selectedStrategy);
+      assert.deepEqual(result.bundle.pendingRetrospectives, pending);
+    }
+    // Enforcement off: no obligation is reported.
+    assert.deepEqual(baseline.bundle.pendingRetrospectives, []);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: none, complete and skipped checkpoints report no pending retrospective (#2488)", () => {
+  for (const state of ["none", "complete", "skipped"]) {
+    const tempDir = stampRepoWithOrigin();
+    try {
+      writeCheckpoint(tempDir, state === "none" ? { state } : {
+        state,
+        completedAt: "2026-08-08T01:00:00.000Z",
+        identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: "cafef00d" },
+        ...(state === "complete" ? { provenance: VALID_PROVENANCE } : { reason: "no findings" }),
+      });
+      const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+        env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG, resolveHasNewerMerge: fixedHasNewerMerge(false),
+      });
+      assert.deepEqual(result.bundle.pendingRetrospectives, [], state);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("buildResolveDevLoopStartupResult: a required record whose repo differs only in case keeps its identity", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    writeCheckpoint(tempDir, { state: "required", identity: { repo: "MFittko/dev-loops", prNumber: 7, mergeCommit: "a786237ad6f7e9bc4facdc64c14a0dbf3e1c5f2c" } });
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+      resolveHasNewerMerge: unreachableHasNewerMerge(),
+    });
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: 7, mergeCommit: "a786237ad6f7e9bc4facdc64c14a0dbf3e1c5f2c" }]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: a required record naming another repo yields checkpoint_foreign_repo with null identity", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    for (const state of ["required", "missing"]) {
+      writeCheckpoint(tempDir, { state, identity: { repo: "other/elsewhere", prNumber: 7, mergeCommit: "a786237ad6f7e9bc4facdc64c14a0dbf3e1c5f2c" } });
+      const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+        env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+        resolveHasNewerMerge: unreachableHasNewerMerge(),
+      });
+      assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_foreign_repo" }], state);
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inspectNewerMergeSinceCheckpoint: an association number that is not a positive integer is unidentifiable with a reason", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "retro-association-number-"));
+  try {
+    const { initialSha } = await initLocalOriginRepo(tempDir);
+    const mergedSha = pushAnotherCommit(tempDir, "fix: squash merged PR (#44)");
+    for (const number of [0, -1, 1.5, "44", null, undefined]) {
+      const inspected = inspectNewerMergeSinceCheckpoint({
+        mergeCommit: initialSha,
+        baseBranch: "main",
+        cwd: tempDir,
+        resolveCommitPullRequests: () => [{ number, state: "MERGED", merged_at: "2026-09-07T10:00:00Z", base: { ref: "main" }, merge_commit_sha: mergedSha }],
+      });
+      assert.deepEqual(inspected, { stale: true, pending: null, reason: "association_number_invalid" }, String(number));
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
+  }
+});
+
+test("buildResolveDevLoopStartupResult: an async-start rejection carries pendingRetrospectives at the top level, not under bundle", async () => {
+  await withTempDir(async (tempDir) => {
+    const piDir = path.join(tempDir, ".pi");
+    await mkdir(piDir, { recursive: true });
+    await writeFile(path.join(piDir, "dev-loop-retrospective-checkpoint.json"), JSON.stringify({ state: "required" }), "utf8");
+    const result = buildResolveDevLoopStartupResult(
+      {
+        currentState: {
+          target: { kind: "issue", issue: 89, linkedPr: 92 },
+          ownership: "copilot",
+          nextActor: "copilot",
+          status: "active",
+          authorization: "needs_confirmation",
+        },
+        artifactState: "open",
+        issueLinkageResolution: "resolved_linked_pr",
+        loopState: "unresolved_feedback_present",
+      },
+      { env: resolverTestEnv({ DEVLOOPS_RUN_ID: undefined }), cwd: tempDir, config: { workflow: { requireRetrospective: true } } },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.asyncStartContract, "rejected");
+    assert.deepEqual(result.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
+    assert.equal(result.bundle, undefined);
+  }, { prefix: "resolve-dev-loop-startup-" });
+});
+
+test("inspectNewerMergeSinceCheckpoint: names the oldest newer merge, in git rev-list --reverse order", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "retro-oldest-merge-"));
+  try {
+    const { initialSha } = await initLocalOriginRepo(tempDir);
+    const firstSha = pushAnotherCommit(tempDir, "fix: first merged PR (#51)");
+    const secondSha = pushAnotherCommit(tempDir, "fix: second merged PR (#52)");
+    const merged = new Map([[firstSha, 51], [secondSha, 52]]);
+    const lookedUp = [];
+    const result = inspectNewerMergeSinceCheckpoint({
+      mergeCommit: initialSha,
+      baseBranch: "main",
+      cwd: tempDir,
+      resolveCommitPullRequests: ({ commitSha }) => {
+        lookedUp.push(commitSha);
+        return merged.has(commitSha)
+          ? [{ number: merged.get(commitSha), state: "MERGED", merged_at: "2026-09-07T10:00:00Z", base: { ref: "main" }, merge_commit_sha: commitSha }]
+          : [];
+      },
+    });
+    assert.deepEqual(result.pending, { pr: 51, mergeCommit: firstSha });
+    assert.deepEqual(lookedUp, [firstSha]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });

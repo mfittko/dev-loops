@@ -142,6 +142,10 @@ interface HandoffEnvelope {
     orchestratorOwned: string[];           // pr merge via merge-pr.mjs (raw `gh pr merge` forbidden), board status transitions — never done by a subagent
   };
 
+  // copied from the resolved bundle when the resolver sets it (empty array = none pending).
+  // The orchestrator dispatches each entry's retrospective in parallel. A null-identity entry carries a `reason`.
+  pendingRetrospectives?: Array<{ pr: number | null; mergeCommit: string | null; reason?: string }>;
+
   // #1462: the ONLY per-round-varying block, ALWAYS LAST. Treat gateState as
   // volatile: read it last, or re-derive it fresh via detectors. Never add a
   // per-round-varying field above this block.

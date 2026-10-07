@@ -1173,7 +1173,7 @@
         },
         "requireRetrospective": {
           "type": "boolean",
-          "description": "Require a retrospective checkpoint for the previous qualifying async completion before the next dev-loop start/resume."
+          "description": "Require the retrospective checkpoint to be discharged before the next merge. Startup reports pendingRetrospectives without blocking; merge-pr refuses while one is pending."
         },
         "requireDraftFirst": {
           "type": "boolean",

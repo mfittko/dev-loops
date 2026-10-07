@@ -123,9 +123,9 @@ test("evaluateRetrospectiveGate: NONE checkpoint passes through the proposed rou
   assert.deepEqual(result, proposed);
 });
 
-// ── Missing retrospective checkpoint: fails closed on start/resume ────────────
+// ── Missing retrospective checkpoint: routes normally (merge-pr enforces) ─────
 
-test("evaluateRetrospectiveGate: MISSING checkpoint blocks a copilot_pr_followup start/resume and fails closed", () => {
+test("evaluateRetrospectiveGate: MISSING checkpoint routes a copilot_pr_followup start/resume unchanged", () => {
   const proposed = makeCopilotPrFollowupResult();
   assert.equal(proposed.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
 
@@ -134,14 +134,10 @@ test("evaluateRetrospectiveGate: MISSING checkpoint blocks a copilot_pr_followup
     proposedRouting: proposed,
   });
 
-  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
-  assert.equal(result.selectedGate, "fail_closed_reconcile");
-  assert.equal(result.selectedStrategy, null);
-  assert.match(result.nextAction, /retrospective/i);
-  assert.match(result.reason, /missing/i);
+  assert.deepEqual(result, proposed);
 });
 
-test("evaluateRetrospectiveGate: MISSING checkpoint blocks an issue_intake start and fails closed", () => {
+test("evaluateRetrospectiveGate: MISSING checkpoint routes an issue_intake start unchanged", () => {
   const proposed = evaluatePublicDevLoopRouting({
     intent: DEV_LOOP_PUBLIC_INTENT.START_ON_ISSUE,
     target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 112 },
@@ -154,9 +150,20 @@ test("evaluateRetrospectiveGate: MISSING checkpoint blocks an issue_intake start
     proposedRouting: proposed,
   });
 
-  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
-  assert.equal(result.selectedGate, "fail_closed_reconcile");
-  assert.match(result.nextAction, /retrospective/i);
+  assert.deepEqual(result, proposed);
+});
+
+test("evaluateRetrospectiveGate: two parallel units both route normally under one MISSING checkpoint", () => {
+  const unitA = makeCopilotPrFollowupResult();
+  const unitB = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.START_ON_ISSUE,
+    target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 113 },
+    targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
+  });
+  for (const proposed of [unitA, unitB]) {
+    const result = evaluateRetrospectiveGate({ checkpointState: RETROSPECTIVE_CHECKPOINT_STATE.MISSING, proposedRouting: proposed });
+    assert.deepEqual(result, proposed);
+  }
 });
 
 // ── Pass-through for terminal results ────────────────────────────────────────

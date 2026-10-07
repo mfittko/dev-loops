@@ -1667,3 +1667,32 @@ test("retrospectiveFindings validation (#1077): malformed field fails validation
   assert.ok(result.errors.some((e) => e.field === "retrospectiveFindings.internalToolingOnly"));
   assert.ok(result.errors.some((e) => e.field === "retrospectiveFindings.rawCallViolations"));
 });
+
+test("pendingRetrospectives (#2488): present, empty and null-identity entries are copied into the envelope", () => {
+  const withBundle = (pendingRetrospectives) => {
+    const input = issueBundle(42);
+    input.bundle.pendingRetrospectives = pendingRetrospectives;
+    return buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions);
+  };
+  const present = withBundle([{ pr: 7, mergeCommit: "abc123" }]);
+  assert.deepEqual(present.pendingRetrospectives, [{ pr: 7, mergeCommit: "abc123" }]);
+  assert.equal(validateHandoffEnvelope(present).ok, true);
+
+  const empty = withBundle([]);
+  assert.deepEqual(empty.pendingRetrospectives, []);
+  assert.equal(validateHandoffEnvelope(empty).ok, true);
+
+  const nullIdentity = withBundle([{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
+  assert.deepEqual(nullIdentity.pendingRetrospectives, [{ pr: null, mergeCommit: null, reason: "checkpoint_identity_missing" }]);
+  assert.equal(validateHandoffEnvelope(nullIdentity).ok, true);
+
+  assert.equal(Object.hasOwn(buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions), "pendingRetrospectives"), false);
+});
+
+test("pendingRetrospectives validation (#2488): malformed entries fail validation", () => {
+  const env = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
+  const result = validateHandoffEnvelope({ ...env, pendingRetrospectives: [{ pr: "7", mergeCommit: 5 }] });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.field === "pendingRetrospectives[0].pr"));
+  assert.ok(result.errors.some((e) => e.field === "pendingRetrospectives[0].mergeCommit"));
+});

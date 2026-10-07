@@ -872,3 +872,138 @@ test("merge-pr default evidence probe shells the same detect-checkpoint-evidence
   const source = await readFile(new URL("../../scripts/github/merge-pr.mjs", import.meta.url), "utf8");
   assert.match(source, /new URL\("\.\/detect-checkpoint-evidence\.mjs", import\.meta\.url\)/u);
 });
+
+// ---- retrospective_checkpoint precondition (#2488) ----
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { buildResolveDevLoopStartupResult, resolvePendingRetrospectives } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
+import { resolverTestEnv } from "../_helpers.mjs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const RETRO_MERGE_COMMIT = "bbbb1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
+const RETRO_CONFIG = { workflow: { requireRetrospective: true } };
+
+function retroRuntime({ configExtra = RETRO_CONFIG, record } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "merge-pr-retro-"));
+  // Hermetic: the fixture is its own git repo with a known origin, so repo-root
+  // and repo-slug resolution never depend on the host checkout.
+  execFileSync("git", ["init", "--quiet"], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: dir, stdio: "ignore" });
+  if (record !== undefined) {
+    mkdirSync(join(dir, ".pi"), { recursive: true });
+    writeFileSync(join(dir, ".pi", "dev-loop-retrospective-checkpoint.json"), typeof record === "string" ? record : JSON.stringify(record));
+  }
+  const made = makeRuntime({ configExtra });
+  made.runtime.cwd = dir;
+  return { ...made, dir };
+}
+
+async function refusal(runtime) {
+  let threw = null;
+  try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+  assert.ok(threw, "merge must be refused");
+  return threw;
+}
+
+test("retrospective_checkpoint: an undischarged earlier retro refuses and names the PR and full merge commit", async () => {
+  const { runtime, calls, dir } = retroRuntime({ record: { state: "required", identity: { repo: "mfittko/dev-loops", prNumber: 2679, mergeCommit: RETRO_MERGE_COMMIT } } });
+  try {
+    const threw = await refusal(runtime);
+    const failure = threw.mergePrFailure.failures.find((f) => f.precondition === "retrospective_checkpoint");
+    assert.ok(failure, JSON.stringify(threw.mergePrFailure));
+    assert.ok(failure.reason.includes("#2679") && failure.reason.includes(RETRO_MERGE_COMMIT), failure.reason);
+    assert.ok(!calls.runChild.some((c) => c.args[0] === "pr" && c.args[1] === "merge"), "no gh pr merge call");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("retrospective_checkpoint: identity-less and malformed records refuse naming the reason and recorded state", async () => {
+  const cases = [
+    [{ state: "required" }, "checkpoint_identity_missing", "required"],
+    ["{not json", "checkpoint_unreadable", "unreadable"],
+    [[], "checkpoint_malformed", "malformed"],
+  ];
+  for (const [record, reason, state] of cases) {
+    const { runtime, dir } = retroRuntime({ record });
+    try {
+      const threw = await refusal(runtime);
+      const failure = threw.mergePrFailure.failures.find((f) => f.precondition === "retrospective_checkpoint");
+      assert.ok(failure && failure.reason.includes(reason) && failure.reason.includes(`state ${state}`), JSON.stringify(failure));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("retrospective_checkpoint: an empty pendingRetrospectives result (evaluator stubbed) allows the merge", async () => {
+  for (const checkpointState of ["complete", "skipped"]) {
+    const { runtime, calls } = makeRuntime({ configExtra: RETRO_CONFIG });
+    runtime.resolvePendingRetrospectives = () => ({ checkpointState, pendingRetrospectives: [] });
+    const result = await mergePr(baseOptions(), runtime);
+    assert.equal(result.merged, true);
+    assert.equal(calls.runChild.length, 1);
+  }
+});
+
+test("retrospective_checkpoint: a failed association lookup surfaces the helper's pending entry", async () => {
+  const { runtime } = makeRuntime({ configExtra: RETRO_CONFIG });
+  runtime.resolvePendingRetrospectives = () => ({ checkpointState: "missing", pendingRetrospectives: [{ pr: null, mergeCommit: null, reason: "ancestry_or_association_unverifiable" }] });
+  const threw = await refusal(runtime);
+  assert.match(threw.mergePrFailure.failures.find((f) => f.precondition === "retrospective_checkpoint").reason, /ancestry_or_association_unverifiable/);
+});
+
+test("retrospective_checkpoint: with requireRetrospective unset or false nothing is read and no precondition is evaluated", async () => {
+  for (const configExtra of [{}, { workflow: { requireRetrospective: false } }]) {
+    const { runtime } = makeRuntime({ configExtra });
+    runtime.resolvePendingRetrospectives = () => { throw new Error("must not be called"); };
+    const result = await mergePr(baseOptions(), runtime);
+    assert.equal(result.merged, true);
+  }
+});
+
+test("retrospective_checkpoint: startup and merge-pr report the same pending entry for one record", async () => {
+  const records = [
+    { state: "required", identity: { repo: "mfittko/dev-loops", prNumber: 2679, mergeCommit: RETRO_MERGE_COMMIT } },
+    { state: "required", identity: { repo: "other/elsewhere", prNumber: 7, mergeCommit: RETRO_MERGE_COMMIT } },
+    { state: "required" },
+  ];
+  for (const record of records) {
+    const { runtime, dir } = retroRuntime({ record });
+    try {
+      const startup = buildResolveDevLoopStartupResult({
+        currentState: { target: { kind: "local_branch", branch: "feature/x" }, ownership: "local", nextActor: "local", status: "active", authorization: "needs_confirmation" },
+        artifactState: "not_applicable",
+        loopState: "active",
+      }, { env: resolverTestEnv(), cwd: dir, config: RETRO_CONFIG });
+      const threw = await refusal(runtime);
+      const failure = threw.mergePrFailure.failures.find((f) => f.precondition === "retrospective_checkpoint");
+      const [entry] = startup.bundle.pendingRetrospectives;
+      assert.equal(startup.bundle.pendingRetrospectives.length, 1);
+      const expected = entry.pr === null
+        ? `reason ${entry.reason}, recorded checkpoint state required`
+        : `PR #${entry.pr} (merge commit ${entry.mergeCommit})`;
+      assert.ok(failure.reason.includes(expected), `${expected} :: ${failure.reason}`);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("retrospective_checkpoint: a real complete record runs through the shared evaluator", async () => {
+  const record = {
+    state: "complete",
+    identity: { repo: "mfittko/dev-loops", prNumber: 2679, mergeCommit: RETRO_MERGE_COMMIT },
+    provenance: { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "tmp/record.json" },
+  };
+  for (const [stale, merged] of [[false, true], [true, false]]) {
+    const { runtime, dir } = retroRuntime({ record });
+    runtime.resolvePendingRetrospectives = (args) => resolvePendingRetrospectives({
+      ...args,
+      resolveHasNewerMerge: () => ({ stale, pending: null, reason: stale ? "newer_merge_unidentified" : null }),
+    });
+    try {
+      if (merged) {
+        assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
+      } else {
+        const threw = await refusal(runtime);
+        assert.match(threw.mergePrFailure.failures.find((f) => f.precondition === "retrospective_checkpoint").reason, /newer_merge_unidentified/);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});

@@ -558,7 +558,7 @@ const WorkflowConfig = z.strictObject({
   // string is echoed verbatim into the persisted handoff-envelope contract
   // field (workflow-handoff-contract.test.mjs / inspect-run viewer), so
   // renaming it means renaming a shipped artifact contract. Out of scope.
-  requireRetrospective: z.boolean().describe("Require a retrospective checkpoint for the previous qualifying async completion before the next dev-loop start/resume."),
+  requireRetrospective: z.boolean().describe("Require the retrospective checkpoint to be discharged before the next merge. Startup reports pendingRetrospectives without blocking; merge-pr refuses while one is pending."),
   requireDraftFirst: z.boolean().describe("Open pull requests as drafts and promote via the draft gate."),
   devModeDefault: z.boolean().describe("Default new loops to dev mode."),
   // Agent-level stall detection: a child with no turn progress for

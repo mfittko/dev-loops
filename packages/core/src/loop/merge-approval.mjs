@@ -409,8 +409,26 @@ export function evaluateMergePreconditions({
   // verdict review sits on an earlier commit and is not converged (the latest
   // review decides); null otherwise.
   copilotLaterReviewRefusal = null,
+  // Result of the shared retrospective-checkpoint evaluator, `{ checkpointState,
+  // pendingRetrospectives }`. null means enforcement is off
+  // (workflow.requireRetrospective unset/false): no precondition is evaluated.
+  retrospective = null,
 } = {}) {
   const failures = [];
+
+  if (retrospective !== null) {
+    const pending = retrospective?.pendingRetrospectives;
+    if (!Array.isArray(pending)) {
+      failures.push({ precondition: "retrospective_checkpoint", reason: "retrospective checkpoint evaluation returned no pendingRetrospectives list; cannot verify the earlier merge's retrospective" });
+    } else if (pending.length > 0) {
+      const named = pending.map((entry) => (
+        Number.isInteger(entry?.pr) && typeof entry?.mergeCommit === "string" && entry.mergeCommit.length > 0
+          ? `PR #${entry.pr} (merge commit ${entry.mergeCommit})`
+          : `an unidentified earlier merge (reason ${entry?.reason ?? "unknown"}, recorded checkpoint state ${retrospective.recordedState ?? "unknown"})`
+      ));
+      failures.push({ precondition: "retrospective_checkpoint", reason: `earlier merge has no complete or skipped retrospective checkpoint: ${named.join("; ")}; run the retrospective or record its discharge before merging` });
+    }
+  }
 
   if (!isValidGithubLogin(humanApprovedBy)) {
     failures.push({ precondition: "human_approver", reason: "--human-approved-by must be a real GitHub login (not empty, a boolean, or free text)" });

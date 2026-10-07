@@ -521,7 +521,7 @@ node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover \
 
 ### Mandatory post-merge retrospective checkpoint write
 
-After merge (or an authorized retrospective skip), write the durable checkpoint before
+After merge (or an operator-recorded retrospective discharge), write the durable checkpoint before
 exiting. Under `RETRO-FRESH-CONTEXT-MANDATORY` in [Retrospective Checkpoint Contract](../docs/retrospective-checkpoint-contract.md),
 the retrospective MUST be an independent fresh-context pass over the cycle's full
 agent/subagent tool-call record, dispatched like a gate reviewer, never self-authored inline.
@@ -537,14 +537,14 @@ node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state complete --no
   --repo <owner/name> --pr <number> --merge-commit <full merge commit oid>
 ```
 
-For an explicit skip:
+To record a discharge without a retrospective pass:
 
 ```sh
-node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state skipped --reason "<why retrospective is skipped>" \
+node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state skipped --reason "Retrospective obligation for PR <number> discharged without a pass: <factual reason>" \
   --repo <owner/name> --pr <number> --merge-commit <full merge commit oid>
 ```
 
-Do not report completion or advance to the next PR queue item until `.pi/dev-loop-retrospective-checkpoint.json` is updated to `complete` or `skipped` carrying this cycle's identity.
+Loop startup reports an undischarged retrospective as `pendingRetrospectives`, and the orchestrator dispatches each one in parallel with the unit. `merge-pr` refuses (`retrospective_checkpoint`) until `.pi/dev-loop-retrospective-checkpoint.json` is updated to `complete` or `skipped` carrying that cycle's identity.
 
 ### Post-merge board sync (best-effort)
 
