@@ -223,11 +223,11 @@ export function resolveCheckpointStateFromArtifact(artifact, { hasNewerMergeSinc
  * - checkpoint state is NONE (no qualifying completion has happened; no requirement exists)
  * - checkpoint state is COMPLETE (retrospective was recorded; requirement satisfied)
  * - checkpoint state is SKIPPED (explicitly skipped with reason; requirement satisfied)
+ * - checkpoint state is MISSING (routes normally; merge-pr enforces the obligation at merge)
  * - proposed routing is already a stop or needs_reconcile result
  * - proposed routing is an inspect-only result
  *
  * Fail-closed case:
- * - checkpoint state is MISSING: returns a needs_reconcile result that blocks start/resume
  * - unrecognized checkpoint state: returns a needs_reconcile result
  *
  * @param {object} input
@@ -269,20 +269,11 @@ export function evaluateRetrospectiveGate({ checkpointState, proposedRouting } =
     return proposedRouting;
   }
 
-  // Missing retrospective checkpoint — fail closed.
+  // Missing retrospective checkpoint — routes normally. The obligation is
+  // reported as `pendingRetrospectives` and enforced fail-closed at merge by
+  // merge-pr's `retrospective_checkpoint` precondition (ADR 0125).
   if (checkpointState === RETROSPECTIVE_CHECKPOINT_STATE.MISSING) {
-    return {
-      ...proposedRouting,
-      routeKind: "needs_reconcile",
-      selectedGate: "fail_closed_reconcile",
-      selectedStrategy: null,
-      waitSemantics: proposedRouting.waitSemantics ?? "default",
-      issueAssignmentSeam: proposedRouting.issueAssignmentSeam ?? "not_applicable",
-      nextAction:
-        "Complete or explicitly skip the required post-run behavioral retrospective before starting or resuming the next dev-loop run.",
-      reason:
-        "The previous qualifying async dev-loop completion is missing its required behavioral retrospective checkpoint.",
-    };
+    return proposedRouting;
   }
 
   // Unrecognized checkpoint state — fail closed.
