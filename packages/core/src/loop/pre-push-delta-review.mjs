@@ -131,7 +131,7 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
       const { ref, angle, severity, file, line, summary } = item;
       const base = [ref, angle, severity, file ?? null, line ?? null, summary];
       // Scope fields join the hash only when present, so a legacy act list keeps its id.
-      const scope = [...REMEDIATION_TEXT_FIELDS, ...REMEDIATION_LIST_FIELDS].filter((key) => item[key] !== undefined).map((key) => [key, item[key]]);
+      const scope = [...REMEDIATION_TEXT_FIELDS, ...REMEDIATION_LIST_FIELDS, "siblingRemediations"].filter((key) => item[key] !== undefined).map((key) => [key, item[key]]);
       return scope.length > 0 ? [...base, scope] : base;
     })))
     .digest("hex")

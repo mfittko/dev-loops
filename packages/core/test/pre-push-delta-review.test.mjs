@@ -56,6 +56,9 @@ test("siblingRemediations of a clustered act item reach the delta input", () => 
   const sib = [{ fingerprint: "fp2", siteQuery: "q2" }];
   const withSib = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], siteQuery: "q1", siblingRemediations: sib }, ...ACT_LIST.slice(1)] });
   assert.deepEqual(withSib.actItems[0].siblingRemediations, sib);
+  const resib = (siteQuery) => startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], siteQuery: "q1", siblingRemediations: [{ fingerprint: "fp2", siteQuery }] }, ...ACT_LIST.slice(1)] });
+  assert.notEqual(resib("q2").actSetId, resib("q3").actSetId);
+  assert.notEqual(resib("q2").actSetId, startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], siteQuery: "q1" }, ...ACT_LIST.slice(1)] }).actSetId);
 });
 
 function sequence() {

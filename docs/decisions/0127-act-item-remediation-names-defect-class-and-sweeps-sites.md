@@ -6,9 +6,9 @@ Accepted — 2026-10-07 ([PR 2684](https://github.com/mfittko/dev-loops/pull/268
 
 ## Context
 
-Amends [0060](./0060-immutable-spec-authority.md): spec authority still decides whether an act item is valid and compliant, as 0060 defines. This record only adds what an authorized remediation must carry and how its coverage is checked. Record 0060 stays unedited.
+Amends [0060](./0060-immutable-spec-authority.md): spec authority still decides whether an act item is valid and compliant, as 0060 defines. Amends [0094](./0094-pre-push-reviewer-delta-mode.md): the delta input also carries remediation text, `siteQuery`, sibling remediations and the fixer's `siteCoverage[]`, and a residue finding of any severity blocks `locally_clear` unless it carries the recorded skip reason. This record also adds what an authorized remediation must carry, how its coverage is checked, and recurrence escalation. Records 0060 and 0094 stay unedited.
 
-A fixer that repaired only the named site left same-class sites behind. The next gate round flagged the same surface again, and the loop repeated without a bound. See [issue 2556](https://github.com/mfittko/dev-loops/issues/2556).
+A fixer that repaired only the named site left same-class sites behind. Each gate round flagged the same surface again and spent its bounded round budget on residue of one defect class. See [issue 2556](https://github.com/mfittko/dev-loops/issues/2556).
 
 ## Decision
 
