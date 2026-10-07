@@ -19,8 +19,10 @@ import { buildAdrTripwireField, buildSizeBudgetField, evaluatePrGateCoordination
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
+import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import {
   evaluateFixerDisposition,
+  FIXER_DISPOSITION_FAILED_STEP,
   FIXER_DISPOSITION_KIND,
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
@@ -768,7 +770,28 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // No checkpoint recorded for this head means nothing to enforce here (a PR
 // with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
-async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
+// A full-phase fixer handoff for the live head that lists a tackled thread, with no checkpoint, means
+// verify-fixer-disposition never completed (a failed run writes none): fail closed as not_verified.
+async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot }) {
+  const planPath = path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`, "fixer-emit-plan.json");
+  let handoff;
+  try {
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    if (plan?.workOrder?.phase !== "full" || !/^f\d+-[0-9a-f]{8}$/.test(plan.executionIdentity)) return null;
+    // The handoff path is derived from the plan location, as verify-fixer-disposition derives it.
+    handoff = JSON.parse(await readFile(path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json"), "utf8"));
+  } catch {
+    return null;
+  }
+  if (handoff?.headSha !== currentHeadSha) return null;
+  const incomplete = (Array.isArray(handoff.dispositions) ? handoff.dispositions : [])
+    .filter((entry) => entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.threadId === "string")
+    .map((entry) => ({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED }));
+  return incomplete.length > 0 ? { complete: false, incomplete } : null;
+}
+
+// The one fixer-disposition input: detect-pr-gate-coordination-state and request-copilot-review both read it here.
+export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // Same main-anchored default verify-fixer-disposition.mjs writes under.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
@@ -800,7 +823,7 @@ async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedTh
       };
     }
   }
-  if (raw === null) return null;
+  if (raw === null) return resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot });
   let handoff;
   try {
     handoff = normalizeFixerDispositionHandoff(JSON.parse(raw));
@@ -823,10 +846,12 @@ async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedTh
       .map((entry) => entry.fixingCommitSha),
   )];
   const containment = await buildContainmentMap(tackledShas, { repo, headSha: currentHeadSha }, runtime);
-  const liveThreads = parsedThreads.threads.map((thread) => ({
+  // A caller that has not read the threads yet passes a loader, so a PR with no checkpoint costs no read.
+  const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
+  const liveThreads = threads.threads.map((thread) => ({
     threadId: thread.id,
     isResolved: thread.isResolved,
-    replyBodies: parsedThreads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body),
+    replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body),
   }));
   const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment });
   return { complete: evaluation.ok, incomplete: evaluation.incomplete };

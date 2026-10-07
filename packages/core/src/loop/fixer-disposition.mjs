@@ -19,6 +19,8 @@ export const FIXER_DISPOSITION_FAILED_STEP = Object.freeze({
   COMMIT_NOT_CONTAINED: "commit_not_contained",
   REPLY_MISSING: "reply_missing",
   NOT_RESOLVED: "not_resolved",
+  // A delivered tackled handoff for the live head with no verification checkpoint: verify-fixer-disposition never completed.
+  NOT_VERIFIED: "not_verified",
 });
 
 // The only legal next action while disposition is incomplete. Kept as a plain

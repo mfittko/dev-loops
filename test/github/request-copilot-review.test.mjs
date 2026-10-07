@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -2783,4 +2783,58 @@ describe("converged-once mode suppresses a post-convergence request as suppresse
     assert.equal(result.status, "requested");
     assert.equal(calls.some(isCopilotRequestCall), true);
   });
+});
+
+// GATE-EXEC-FIXER-DISPOSITION-BOUNDARY (PR 2647 replay): a verify that failed on missing arguments wrote no
+// checkpoint, then the request ran. A delivered tackled handoff with no checkpoint for the live head blocks it.
+const FIXER_HEAD = "abc9988776";
+async function withFixerHandoff(fn, { checkpoint = false } = {}) {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-fixer-"));
+  try {
+    const { initGitFixture } = await import("../_helpers.mjs");
+    initGitFixture(repoRoot);
+    const fixerDir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", "pr-17");
+    await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
+    await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ executionIdentity: "f1-0000abcd", workOrder: { phase: "full" } }));
+    const handoff = { headSha: FIXER_HEAD, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543", disposition: "tackled" }] };
+    await writeFile(path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json"), JSON.stringify(handoff));
+    if (checkpoint) {
+      const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
+      const logPath = path.join(repoRoot, buildLogPath({ repo: "owner/repo", pr: 17, gate: "fixer-disposition", headSha: FIXER_HEAD, tmpRoot: "tmp" }));
+      await mkdir(path.dirname(logPath), { recursive: true });
+      // A deferred entry needs no live evidence, so the recorded checkpoint is complete.
+      await writeFile(logPath, JSON.stringify({ headSha: FIXER_HEAD, dispositions: [{ ...handoff.dispositions[0], disposition: "deferred" }] }));
+    }
+    return await fn(repoRoot);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+}
+const FIXER_PR_VIEW = { assertArgs: PR_VIEW_ARGS, stdout: `${JSON.stringify({ headRefOid: FIXER_HEAD, isDraft: false, reviews: [] })}\n` };
+const FIXER_REQUESTED = { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' };
+
+test("request-copilot-review refuses while a delivered tackled fixer handoff has no checkpoint for the live head, and requests nothing", async () => {
+  await withFixerHandoff(async (repoRoot) => {
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [FIXER_REQUESTED, FIXER_PR_VIEW], { repoRoot });
+    assert.equal(result.status, "blocked_by_fixer_disposition");
+    assert.equal(result.nextAction, "complete_fixer_disposition");
+    assert.match(result.detail, /GATE-EXEC-FIXER-DISPOSITION-BOUNDARY/);
+    assert.match(result.detail, /PRRT_T1: not_verified/);
+    assert.equal(calls.some(isCopilotRequestCall), false);
+  });
+});
+
+test("request-copilot-review proceeds once the fixer-disposition checkpoint for the live head is complete", async () => {
+  await withFixerHandoff(async (repoRoot) => {
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      FIXER_REQUESTED,
+      FIXER_PR_VIEW,
+      { assertArgs: GRAPHQL_ARGS, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: REQUEST_COPILOT_ARGS, stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      FIXER_PR_VIEW,
+    ], { repoRoot });
+    assert.notEqual(result.status, "blocked_by_fixer_disposition");
+    assert.equal(calls.some(isCopilotRequestCall), true);
+  }, { checkpoint: true });
 });
