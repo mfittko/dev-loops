@@ -148,7 +148,7 @@ owns the corresponding tracker metadata requirement.
 
 Use `create-pr.mjs` only after authoritative issue↔PR resolution finds no open linked
 PR; otherwise reuse/update that PR. The wrapper preserves `gh pr create`'s stdout
-(the PR URL line first), appends the early-surface JSON line when a base resolves (plus a `{board}` line on the lightweight issue-less path), and defaults to self-assignment (`--assignee @me`).
+(the PR URL line first), appends the early-surface JSON line when a base resolves (plus a `{board}` line on the lightweight issue-less or body-less path), and defaults to self-assignment (`--assignee @me`).
 
 A session that creates the branch and PR itself MUST run the pre-PR review per
 `PRE-PR-BEFORE-FIRST-PUSH` in [Pre-push review contract](./pre-pr-review-contract.md)
