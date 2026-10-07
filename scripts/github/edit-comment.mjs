@@ -3,6 +3,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { parsePositiveInteger, parseAllowedRefsCsv, requireTokenValue, resolveBodyOrFile, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { operatorOwnedCommentLineRefusal } from "../loop/adr-waiver-markers.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -24,6 +25,9 @@ Optional:
   --allowed-refs <csv>          Comma-separated numeric issue/PR ids to allow as
                                 deliberate cross-references in the body (the
                                 no-ids-in-comments guard refuses any other #<digits>)
+Refusal: a body with a line that opens with \`approve merge\` (operator-owned merge
+approval) or an \`adr-tripwire:allow\` line (ADR tripwire waiver) is refused with
+OPERATOR-OWNED-LINE, exit 1, no PATCH. There is no override flag.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "commentId": 123, "commentUrl": "https://github.com/owner/repo/issues/17#issuecomment-123" }
 Error output (stderr, JSON):
@@ -129,6 +133,8 @@ async function resolveBody(options) {
 // single call covers editing either kind without needing to know which one it is.
 export async function editComment(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
   const body = await resolveBody(options);
+  const refusal = operatorOwnedCommentLineRefusal(body);
+  if (refusal !== null) throw new Error(refusal);
   // ISSUE/PR-ID GUARD (#1731): a modified comment body must never carry a raw
   // issue/PR id (fail-closed unless explicitly allowlisted), mirroring
   // commentIssue in issue-ops.mjs. `allowedRefs` is the ONLY sanctioned escape

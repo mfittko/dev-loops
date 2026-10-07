@@ -84,3 +84,29 @@ export function replaceStandingWaiverLine(body, line) {
   const kept = withoutStandingWaiverLines(body).replace(/\s+$/u, "");
   return `${kept}\n\n${line}\n`;
 }
+
+const APPROVE_MERGE_LINE_RE = /^[ \t>*-]*approve\s+merge(?:\s|$)/imu;
+
+/**
+ * Refusal text when a comment body carries an operator-owned line (a line that
+ * opens with `approve merge`, or an `adr-tripwire:allow` marker line); null
+ * otherwise. Mid-line mentions pass. There is no override.
+ */
+export function operatorOwnedCommentLineRefusal(body) {
+  if (typeof body !== "string") return null;
+  if (APPROVE_MERGE_LINE_RE.test(body)) {
+    return (
+      "OPERATOR-OWNED-LINE: refusing a comment with a line that opens with `approve merge`. " +
+      "That line is the operator's per-merge approval and no agent writes it. " +
+      "The operator types `approve merge <headSha>` on the PR."
+    );
+  }
+  if (extractWaiverLines(body).length > 0) {
+    return (
+      `OPERATOR-OWNED-LINE: refusing a comment with an \`${WAIVER_MARKER}\` line. ` +
+      `That line is the ADR tripwire waiver and no agent hand-writes it. ` +
+      `Only \`${WAIVER_WRITER_COMMAND}\` writes it, or the operator in the GitHub UI.`
+    );
+  }
+  return null;
+}

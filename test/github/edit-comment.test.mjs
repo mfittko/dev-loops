@@ -169,3 +169,38 @@ test("runCli: missing --comment-id fails closed with an actionable error", async
   assert.equal(code, 1);
   assert.match(stderr.get(), /requires both/);
 });
+
+const OWNED_BODIES = [
+  `approve merge ${"a".repeat(40)}`, "Approve Merge", "> approve merge x", "- approve merge", "approve merge",
+  "adr-tripwire:allow standing-authorization head=x", "adr-tripwire:allow hand written reason",
+];
+const ALLOWED_BODIES = ["disapprove merge", "not approve merge", "the operator must type approve merge <sha>", "see `adr-tripwire:allow` in docs"];
+
+test("runCli: refuses operator-owned lines via --body and --body-file with no PATCH", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ec-owned-"));
+  try {
+    for (const body of OWNED_BODIES) {
+      const file = join(dir, "b.md");
+      await writeFile(file, body);
+      for (const input of [["--body", body], ["--body-file", file]]) {
+        const { run, calls } = stubGh([]);
+        const stderr = captureStream();
+        const code = await runCli(["--repo", "o/n", "--comment-id", "7", ...input], { run, stderr, stdout: captureStream() });
+        assert.equal(code, 1, body);
+        assert.equal(calls.length, 0);
+        assert.match(JSON.parse(stderr.get()).error, /^OPERATOR-OWNED-LINE: .*(approve merge|adr-tripwire:allow)/s);
+      }
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runCli: mid-line mentions patch", async () => {
+  for (const body of ALLOWED_BODIES) {
+    const { run, calls } = stubGh([{ stdout: JSON.stringify({ html_url: COMMENT_URL }) }]);
+    const code = await runCli(["--repo", "o/n", "--comment-id", "7", "--body", body], { run, stdout: captureStream(), stderr: captureStream() });
+    assert.equal(code, 0, body);
+    assert.equal(calls.length, 1);
+  }
+});
