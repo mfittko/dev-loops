@@ -832,7 +832,7 @@ unretired emitted judge invocation with a matching judge pull receipt, both verd
 the plan's `outputRefs` and were written after that pull, the plan is the current emission and
 reproduces the pulled work order, and the ledger the work order pinned is `--findings-file`
 (with `--spec-file`, the spec and content digests must also equal the pinned ones), applies the dispositions via `applyJudgeDispositions`, and
-emits exactly the findings the judge marked `act` (`--out`) plus the enriched ledger
+emits the findings the judge marked `act`, except escalated items and their cluster siblings (`--out`), plus the enriched ledger
 (`--ledger-out`). Every invocation ALSO carries the spec-authority flags derived above —
 `--spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict
 <spec-authority-verdict-path>` — plus `--prior-approvals`/`--approvals-out` across re-entry
