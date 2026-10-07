@@ -57,7 +57,7 @@ replied with its commit's evidence is never replied to twice, and a thread
 already resolved live is left alone.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": 17, "headSha": "...", "checkpointPath": "...",
-    "complete": true|false, "incomplete": [{ threadId, expectedCommit, failedStep }],
+    "complete": true|false, "incomplete": [{ threadId, expectedCommit, failedStep, deltaStatus?, deltaRecord? }],
     "forbiddenActions": [...], "nextAction": "..."|null, "reason": "..."|null,
     "actions": [{ threadId, ok, step? , error? }] }
 Error output (stderr, JSON):
@@ -286,7 +286,7 @@ export async function verifyFixerDisposition(
   const deltaBlocked = new Map();
   for (const entry of evaluation.incomplete.filter((e) => e.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING)) {
     const blocked = await findDeltaBlockedFixedReply(
-      [{ threadId: entry.threadId, body: `Fixed in commit ${entry.expectedCommit}.` }],
+      [{ threadId: entry.threadId, body: `Fixed in commit ${entry.expectedCommit}.`, commit: entry.expectedCommit }],
       { repo: options.repo, pr: options.pr, parsed: initialSnapshot, tmpRoot: path.resolve(repoRoot, tmpRoot) },
       runtime,
     );
@@ -360,7 +360,7 @@ export async function verifyFixerDisposition(
     checkpointPath: logPath,
     complete: evaluation.ok,
     incomplete: evaluation.incomplete.map((entry) => (deltaBlocked.has(entry.threadId)
-      ? { ...entry, failedStep: deltaBlocked.get(entry.threadId).status, deltaRecord: deltaBlocked.get(entry.threadId).recordPath }
+      ? { ...entry, failedStep: FIXER_DISPOSITION_FAILED_STEP.DELTA_BLOCKED, deltaStatus: deltaBlocked.get(entry.threadId).status, deltaRecord: deltaBlocked.get(entry.threadId).recordPath }
       : entry)),
     forbiddenActions: evaluation.forbiddenActions,
     nextAction: evaluation.nextAction,

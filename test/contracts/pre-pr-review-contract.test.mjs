@@ -275,6 +275,16 @@ test("delta mode states the decision record, the full-phase refusal and the fixe
   assert.doesNotMatch(readRepo("scripts/loop/check-pre-push-delta.mjs"), /Read-only:/, "the --result run is no longer read-only");
 });
 
+test("the Copilot follow-up skill emits commit_only, runs the thread-route delta review, then emits full", () => {
+  const skill = readRepo("skills/copilot-pr-followup/SKILL.md");
+  const line = skill.split("\n").find((l) => l.includes("--phase commit_only --threads-file")) ?? "";
+  for (const text of ["check-pre-push-delta.mjs --threads-file", "`--result` run", "`PRE-PUSH-DELTA-TRIGGER`", "`--phase full`"]) {
+    assert.ok(line.includes(text), `follow-up skill must state: ${text}`);
+  }
+  assert.doesNotMatch(skill, /--phase full --threads-file/);
+  assert.match(skill, /`blocked_by_fixer_disposition`: no request was placed/);
+});
+
 test("every verify-fixer-disposition.mjs invocation under skills/ shows the full required synopsis", () => {
   const out = spawnSync("git", ["grep", "-n", "verify-fixer-disposition\\.mjs\\s\\+-", "--", "skills"], { cwd: repoRoot, encoding: "utf8" });
   assert.equal(out.status, 0, `git grep failed: ${out.stderr}`);

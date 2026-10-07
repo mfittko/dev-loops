@@ -434,7 +434,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "ui-review-teardown": "Tear down the UI-review worktree/app and emit the side-effect ledger",
     "visual-grill-capture": "Drive a headless browser to a described screen and capture it for loop-grill",
     "audit-session": "Audit Pi or Claude Code session transcripts to measure token efficiency and context snowballing",
-    "pre-push-delta": "Build the delta-mode pre-push review input or check its result before an act-list fix push",
+    "pre-push-delta": "Build the delta-mode pre-push review input or check its result before an act-list or thread-route fix push",
     "spec-lint": "Lint an issue body offline against required-rules.json and docs/decisions",
   },
   pr: {

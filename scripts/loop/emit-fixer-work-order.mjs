@@ -135,9 +135,14 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads }) {
   }
   if (!record) throw new Refusal(`--phase full with --threads-file needs a delta record at ${recordPath} from a thread-route delta review: ${next}`);
   const threadIds = new Set(threads.map((thread) => thread.threadId));
-  const unbound = (Array.isArray(record.items) ? record.items : []).map((item) => item?.ref).filter((ref) => !threadIds.has(ref));
+  const refs = (Array.isArray(record.items) ? record.items : []).map((item) => item?.ref);
+  const unbound = refs.filter((ref) => !threadIds.has(ref));
   if (unbound.length > 0) {
     throw new Refusal(`--phase full refused: the delta record ${recordPath} covers refs that are not threads in the threads file (${unbound.map((ref) => JSON.stringify(ref)).join(", ")}); review the current threads (${next})`);
+  }
+  const uncovered = [...threadIds].filter((id) => !refs.includes(id));
+  if (uncovered.length > 0) {
+    throw new Refusal(`--phase full refused: the threads file holds threads the delta record ${recordPath} never reviewed (${uncovered.map((id) => JSON.stringify(id)).join(", ")}); review the current threads (${next})`);
   }
 }
 

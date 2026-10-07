@@ -21,6 +21,8 @@ export const FIXER_DISPOSITION_FAILED_STEP = Object.freeze({
   NOT_RESOLVED: "not_resolved",
   // A delivered tackled handoff for the live head with no verification checkpoint: verify-fixer-disposition never completed.
   NOT_VERIFIED: "not_verified",
+  // The delta review of the fix left the thread not_resolved or cannot_verify; the status rides in `deltaStatus`.
+  DELTA_BLOCKED: "delta_blocked",
 });
 
 // The only legal next action while disposition is incomplete. Kept as a plain

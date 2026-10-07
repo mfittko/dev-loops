@@ -535,9 +535,133 @@ test("a thread the applicable delta record marks not_resolved gets no Fixed repl
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
 
     assert.equal(result.complete, false);
-    assert.deepEqual(result.incomplete.map((entry) => [entry.threadId, entry.failedStep]), [["PRRT_T1", "not_resolved"]]);
+    assert.deepEqual(result.incomplete.map((entry) => [entry.threadId, entry.failedStep]), [["PRRT_T1", "delta_blocked"]]);
+    assert.equal(result.incomplete[0].deltaStatus, "not_resolved");
     assert.equal(result.incomplete[0].deltaRecord, recordPath);
     assert.deepEqual(result.actions, []);
     assert.equal(calls.some((call) => call.args.includes("POST")), false, "no reply was posted");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fixed-reply guard on the verifier: acceptance side, abbreviated SHAs, git failures
+// ---------------------------------------------------------------------------
+
+async function writeDeltaRecord(repoRoot, { baseline = "c".repeat(40), candidate = FIX_SHA, items }) {
+  const recordPath = path.join(repoRoot, "tmp", "gate-delta", `${baseline}.json`);
+  await mkdir(path.dirname(recordPath), { recursive: true });
+  await writeFile(recordPath, JSON.stringify({
+    reviewBaselineHead: baseline, candidateHead: candidate, actSetId: "0".repeat(16), invocation: 1,
+    outcome: "needs_fix", nextStep: "fix_and_rereview", items,
+  }));
+  return recordPath;
+}
+
+// Wraps the gh mock with a scripted git: `git(args)` returns { code, stdout } for rev-parse / merge-base.
+function runtimeWithGit(entries, repoRoot, git) {
+  const { deps, calls } = runtime(entries, repoRoot);
+  const inner = deps.runChild;
+  deps.runChild = async (cmd, args = [], ...rest) => {
+    if (cmd === "git" && (args[0] === "rev-parse" || args[0] === "merge-base")) {
+      calls.push({ command: cmd, args: [...args], stdinText: "" });
+      return { stderr: "", stdout: "", ...git(args) };
+    }
+    return inner(cmd, args, ...rest);
+  };
+  return { deps, calls };
+}
+
+const unresolvedT1 = () => threadsCallEntry([
+  { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+]);
+const hasPost = (calls) => calls.some((call) => call.args.includes("POST"));
+
+test("an abbreviated fixingCommitSha resolving to a commit a not_resolved record covers gets no Fixed reply", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const short = FIX_SHA.slice(0, 10);
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: short, disposition: "tackled" }]);
+    await writeDeltaRecord(repoRoot, { items: [{ ref: "PRRT_T1", status: "not_resolved" }] });
+    const { deps, calls } = runtimeWithGit([unresolvedT1(), compareEntry(short, "ahead")], repoRoot, (args) => (
+      args[0] === "rev-parse" ? { code: 0, stdout: `${FIX_SHA}\n` } : { code: 0 }
+    ));
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.equal(result.complete, false);
+    assert.deepEqual(result.incomplete.map((entry) => [entry.threadId, entry.failedStep, entry.deltaStatus]), [["PRRT_T1", "delta_blocked", "not_resolved"]]);
+    assert.equal(hasPost(calls), false);
+  });
+});
+
+test("a cannot_verify record blocks the Fixed reply and reports the delta status", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }]);
+    await writeDeltaRecord(repoRoot, { items: [{ ref: "PRRT_T1", status: "cannot_verify" }] });
+    const { deps, calls } = runtimeWithGit([unresolvedT1(), compareEntry(FIX_SHA, "ahead")], repoRoot, () => ({ code: 0, stdout: `${FIX_SHA}\n` }));
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.deepEqual(result.incomplete.map((entry) => [entry.failedStep, entry.deltaStatus]), [["delta_blocked", "cannot_verify"]]);
+    assert.equal(hasPost(calls), false);
+  });
+});
+
+test("a fixingCommitSha git cannot resolve fails closed while a blocking record exists", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }]);
+    await writeDeltaRecord(repoRoot, { candidate: "d".repeat(40), items: [{ ref: "PRRT_T1", status: "not_resolved" }] });
+    const { deps, calls } = runtimeWithGit([unresolvedT1(), compareEntry(FIX_SHA, "ahead")], repoRoot, (args) => (
+      args[0] === "rev-parse" ? { code: 1 } : { code: 0 }
+    ));
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.equal(result.incomplete[0]?.failedStep, "delta_blocked");
+    assert.equal(hasPost(calls), false);
+  });
+});
+
+test("git merge-base exit 128 (object missing) fails closed instead of reading as not covered", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }]);
+    await writeDeltaRecord(repoRoot, { candidate: "d".repeat(40), items: [{ ref: "PRRT_T1", status: "not_resolved" }] });
+    const { deps, calls } = runtimeWithGit([unresolvedT1(), compareEntry(FIX_SHA, "ahead")], repoRoot, (args) => (
+      args[0] === "rev-parse" ? { code: 0, stdout: `${FIX_SHA}\n` } : { code: 128 }
+    ));
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.equal(result.incomplete[0]?.failedStep, "delta_blocked");
+    assert.equal(hasPost(calls), false);
+  });
+});
+
+test("a record whose baseline..candidate range excludes the fixing commit still lets the Fixed reply post", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }]);
+    await writeDeltaRecord(repoRoot, { candidate: "d".repeat(40), items: [{ ref: "PRRT_T1", status: "not_resolved" }] });
+    const { deps, calls } = runtimeWithGit([
+      unresolvedT1(),
+      compareEntry(FIX_SHA, "ahead"),
+      { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
+      threadsCallEntry([
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+      ]),
+    ], repoRoot, (args) => (args[0] === "rev-parse" ? { code: 0, stdout: `${FIX_SHA}\n` } : { code: 1 }));
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.equal(result.complete, true);
+    assert.equal(hasPost(calls), true);
+  });
+});
+
+test("a resolved delta item for the thread still lets the Fixed reply post", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }]);
+    await writeDeltaRecord(repoRoot, { items: [{ ref: "PRRT_T1", status: "resolved" }, { ref: "PRRT_T2", status: "not_resolved" }] });
+    const { deps, calls } = runtimeWithGit([
+      unresolvedT1(),
+      compareEntry(FIX_SHA, "ahead"),
+      { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
+      threadsCallEntry([
+        { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+      ]),
+    ], repoRoot, () => ({ code: 0, stdout: `${FIX_SHA}\n` }));
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.equal(result.complete, true);
+    assert.equal(hasPost(calls), true);
   });
 });

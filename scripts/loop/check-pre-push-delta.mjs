@@ -4,7 +4,7 @@
  *
  * Shell entry for the pre-push reviewer's delta mode
  * (skills/docs/pre-pr-review-contract.md, PRE-PUSH-DELTA-* rules). The dev-loop
- * coordinator runs it between the fixer's act-list fix commit and its push:
+ * coordinator runs it between the fixer's act-list or thread-route fix commit and its push:
  *
  * - without --result: prints the neutral reviewer input for the current
  *   worktree head (cumulative baseline..candidate range, act refs, spec
@@ -175,7 +175,7 @@ export function runCli(
   const fixCommitted = currentHead !== sequence.reviewBaselineHead;
   const itemCounts = options.threadsFile ? { threadItemCount: sequence.actItems.length } : { actItemCount: sequence.actItems.length };
   if (resolveDeltaTrigger({ ...itemCounts, fixCommitted }) !== "delta") {
-    throw new Error(`worktree HEAD ${currentHead} equals the baseline: commit the act-list fix before the delta review`);
+    throw new Error(`worktree HEAD ${currentHead} equals the baseline: commit the act-list or thread-route fix before the delta review`);
   }
   if (!isAncestor(options.worktree, sequence.reviewBaselineHead, currentHead)) {
     throw new Error(

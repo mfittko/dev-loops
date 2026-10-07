@@ -198,6 +198,14 @@ test("delta gate: a threads --phase full refuses a record whose refs are not all
   });
 });
 
+test("delta gate: a threads --phase full refuses a threads file holding a thread the record never reviewed", async () => {
+  await withFixture(async ({ files, emit, writeRecord }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [...THREADS.threads, { ...THREADS.threads[0], threadId: "T2", commentId: 2 }] }));
+    await writeRecord({ items: [{ ref: "T1", status: "resolved" }] });
+    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), /never reviewed[^]*"T2"/);
+  });
+});
+
 test("delta gate: a threads --phase full with a thread-bound clearing record emits", async () => {
   await withFixture(async ({ files, emit, writeRecord }) => {
     for (const nextStep of ["push", "push_to_gate"]) {

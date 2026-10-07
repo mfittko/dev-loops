@@ -90,6 +90,8 @@ async function deltaRecordCoversCommit(record, sha, { gitEnv, runChild }) {
   if (sha === record.candidateHead) return true;
   const inCandidate = await runChild("git", ["merge-base", "--is-ancestor", sha, record.candidateHead], gitEnv);
   const inBaseline = await runChild("git", ["merge-base", "--is-ancestor", sha, record.reviewBaselineHead], gitEnv);
+  // Only exit 0/1 are determinate; any other code (e.g. 128, object missing) fails closed as covering.
+  if (![0, 1].includes(inCandidate.code) || ![0, 1].includes(inBaseline.code)) return true;
   return inCandidate.code === 0 && inBaseline.code === 1;
 }
 
@@ -108,10 +110,18 @@ export async function findDeltaBlockedFixedReply(
   const gitEnv = { ...env };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete gitEnv[key];
   let snapshot = parsed;
-  for (const { threadId, body } of replies) {
-    const shas = (body.match(FULL_SHA_PATTERN) ?? []).map((sha) => sha.toLowerCase());
+  for (const { threadId, body, commit } of replies) {
+    let shas = (body.match(FULL_SHA_PATTERN) ?? []).map((sha) => sha.toLowerCase());
+    let unresolved = false;
+    // An explicit `commit` (any git rev) replaces body extraction; one git cannot resolve covers every record (fail closed).
+    if (commit) {
+      const resolved = await runChild("git", ["rev-parse", "--verify", "--quiet", `${commit}^{commit}`], gitEnv);
+      const full = resolved.stdout.trim().toLowerCase();
+      unresolved = resolved.code !== 0 || !/^[0-9a-f]{40}$/.test(full);
+      shas = unresolved ? [] : [full];
+    }
     for (const record of records) {
-      const covers = await Promise.all(shas.map((sha) => deltaRecordCoversCommit(record, sha, { gitEnv, runChild })));
+      const covers = unresolved ? [true] : await Promise.all(shas.map((sha) => deltaRecordCoversCommit(record, sha, { gitEnv, runChild })));
       if (!covers.includes(true)) continue;
       snapshot ??= await captureParsedReviewThreads({ repo, pr }, { env, ghCommand, runChild });
       const rootBody = snapshot.comments.find((comment) => comment.threadId === threadId)?.body;
