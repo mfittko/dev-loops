@@ -26,9 +26,9 @@ import { readFile } from "node:fs/promises";
 // way, unvalidated here.
 function unwrapFindingsPayload(parsed) {
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Array.isArray(parsed.findings)) {
-    return { findings: parsed.findings, overallVerdict: parsed.overallVerdict, provenance: parsed.provenance, verifiedItems: parsed.verifiedItems, escalations: parsed.escalations };
+    return { findings: parsed.findings, overallVerdict: parsed.overallVerdict, provenance: parsed.provenance, verifiedItems: parsed.verifiedItems };
   }
-  return { findings: parsed, overallVerdict: undefined, provenance: undefined, verifiedItems: undefined, escalations: undefined };
+  return { findings: parsed, overallVerdict: undefined, provenance: undefined, verifiedItems: undefined };
 }
 
 /**
@@ -76,6 +76,6 @@ export async function resolveFindingsInput(options, { parseError, validate }) {
     }
     flagLabel = "--findings";
   }
-  const { findings: payload, overallVerdict, provenance, verifiedItems, escalations } = unwrapFindingsPayload(parsed);
-  return { findings: validate(payload, flagLabel), overallVerdict, provenance, verifiedItems, escalations };
+  const { findings: payload, overallVerdict, provenance, verifiedItems } = unwrapFindingsPayload(parsed);
+  return { findings: validate(payload, flagLabel), overallVerdict, provenance, verifiedItems };
 }

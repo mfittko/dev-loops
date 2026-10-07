@@ -57,3 +57,14 @@ test("the recurrence escalation rule names the key, the threshold, the stop and 
   const devLoop = readRepo("agents/dev-loop.agent.md");
   assert.ok(devLoop.includes("GATE-EXEC-RECURRENCE-ESCALATION") && devLoop.includes("human checkpoint"));
 });
+
+test("residue is exempt from the fixer's severity and regression-range limits, and escalationsSkipped reaches the coordinators", () => {
+  for (const file of ["agents/fixer.agent.md", "skills/docs/pre-pr-review-contract.md"]) {
+    const text = readRepo(file);
+    assert.ok(text.includes("residueOf") && text.includes("any severity"), `${file} gives the fixer residue at any severity`);
+  }
+  assert.ok(readRepo("agents/gate-coordinator.agent.md").includes("escalationsSkipped"));
+  const rule = ruleText(GATE_CONTRACT, "GATE-EXEC-GATE-COORDINATOR");
+  assert.ok(rule.includes("escalationsSkipped"));
+  assert.ok(ruleText(GATE_CONTRACT, "GATE-EXEC-RECURRENCE-ESCALATION").includes("--ledger-out"));
+});

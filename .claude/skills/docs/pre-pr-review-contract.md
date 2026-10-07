@@ -146,7 +146,9 @@ fixer and owns the push. The sequence is:
    it dispatches a fresh fixer again, commit-only, and returns to step 2. It
    emits a new work order with `--delta-result <result>` at the PR head.
    That fixer receives the delta result's `not_resolved` and `cannot_verify` act
-   refs with their evidence, plus the result's medium-or-higher `newFindings`.
+   refs with their evidence, plus the result's medium-or-higher `newFindings` and every
+   `residueOf` finding at any severity (`PRE-PUSH-DELTA-RESIDUE`; residue is exempt from the
+   medium-or-higher and regression-range limits).
    On `nextStep: rereview_current_head`, the result is stale for the current
    head; the coordinator returns to step 2 without a fixer.
 4. On `nextStep: push` (`locally_clear`) or `nextStep: push_to_gate`

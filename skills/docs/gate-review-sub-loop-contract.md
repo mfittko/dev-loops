@@ -93,7 +93,7 @@ coordinator returns only the round's typed result: the verdict, the execution mo
 round resolves to `inline_single_agent`), the severity counts, the fan-in output path, the
 durable findings-log path, the act-list path, the spec-authority identity path, and the judge
 summary. The result also carries the optional `escalations[]` that `judge-pass` returned
-(`GATE-EXEC-RECURRENCE-ESCALATION`). Reviewer and judge outputs stay in the gate coordinator's context and never propagate
+and the optional `escalationsSkipped` reason (`GATE-EXEC-RECURRENCE-ESCALATION`). Reviewer and judge outputs stay in the gate coordinator's context and never propagate
 to the dev-loop coordinator. The gate coordinator materializes and binds the round's evidence
 through the context builder's `requiredReads` and emits compact work orders; it never relays bulk
 evidence into a reviewer's task. The gate coordinator never posts the verdict comment, flips ready, pushes, or
@@ -909,7 +909,7 @@ Site coverage is keyed by act-item fingerprint in `siteCoverage[]`, which the `c
 `full` handoffs both carry, so a threadless act item is covered too. A matcher item needs one
 `input_form` site per listed accepted and rejected form. `verify-fixer-disposition.mjs` and the
 pre-push delta check fail a record that leaves a returned site neither fixed nor skipped with a
-reason, and `ruleCitations[]` entries MUST be rule IDs in `skills/docs/required-rules.json`. A fixer that finds a remedy in conflict
+reason, and `ruleCitations[]` entries MUST be rule IDs in the dev-loops registry `skills/docs/required-rules.json` (no consumer registry is consulted). A fixer that finds a remedy in conflict
 with a registered rule applies the compliant form and cites the rule ID in `ruleCitations[]`.
 
 <!-- rule: GATE-EXEC-RECURRENCE-ESCALATION -->
@@ -926,7 +926,9 @@ findings and Copilot threads never count, and `draft_gate` and `pre_approval_gat
 separately. When one key appears in act items of 3 or more counted rounds, the act item keeps
 its `act` disposition, leaves the fixer act list together with the other members of its
 finding cluster, and lands in the optional `escalations[]` array
-of the ledger and the round result, with the surface key and the round heads. The round's other
+of the round result and of the enriched ledger that `judge-pass --ledger-out` writes (the escalation
+ledger; the earlier durable `write-gate-findings-log` record and the consolidate-fanin ledger never carry it),
+with the surface key and the round heads. The round's other
 act items proceed to the fixer. The gate coordinator returns the escalation in its round result,
 and the dev-loop coordinator stops at the human checkpoint for one of two outcomes. The first
 outcome is a design decision recorded in the spec: it changes `specDigest` and resets the count.
@@ -934,7 +936,8 @@ The second outcome is a split into its own issue: the orchestrator files that is
 item becomes a `defer` that links it. When every act item escalates, the fixer act list is
 empty, `actCount` still counts the escalated items, no fixer is dispatched, and the dev-loop
 coordinator still stops at the human checkpoint. `judge-pass` evaluates escalation only when the
-checkout HEAD equals the round head, and otherwise returns `escalationsSkipped` with the reason.
+checkout HEAD equals the round head, and otherwise returns `escalationsSkipped` with the reason;
+the gate coordinator carries it in the round result and the dev-loop coordinator reports it.
 The threshold is fixed.
 
 ### Phase 4 — Fix
