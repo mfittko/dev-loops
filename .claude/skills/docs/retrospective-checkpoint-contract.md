@@ -24,7 +24,7 @@ Provenance shape:
 `skipped` records are not provenance-gated: no retro ran, so there is nothing to have provenance.
 
 <!-- rule: RETRO-ENFORCEMENT-CONFIG-GATED -->
-Whether a missing checkpoint blocks the next qualifying start/resume MUST be controlled by `.devloops` at repo root `workflow.requireRetrospective`; shipped defaults remain permissive and this repo opts in.
+Whether the checkpoint is evaluated MUST be controlled by `.devloops` at repo root `workflow.requireRetrospective`; shipped defaults remain permissive and this repo opts in. With the flag unset or `false`, startup reports no `pendingRetrospectives`, `merge-pr` does not evaluate `retrospective_checkpoint`, and neither site reads the checkpoint file or runs the ancestry lookup.
 
 ## Relationship to formal dev mode
 
@@ -35,7 +35,7 @@ Formal local dev mode and the required post-run behavioral retrospective are rel
 | **Formal local dev mode** | Local implementation/self-improvement work; explicitly scoped in [Dev Loop Skill](../dev-loop/SKILL.md) |
 | **Required post-run behavioral retrospective** | Every qualifying async GitHub-first `dev-loop` completion in this repo |
 
-Routed GitHub-first async `dev-loop` runs do **not** need to be in full formal local dev mode. When `workflow.requireRetrospective` is enabled, they **do** require the retrospective checkpoint before the next qualifying start/resume.
+Routed GitHub-first async `dev-loop` runs do **not** need to be in full formal local dev mode. When `workflow.requireRetrospective` is enabled, they **do** require the retrospective checkpoint to be discharged before the next merge. A pending retrospective does not block start or resume (ADR 0125).
 
 ## Qualifying completions
 
@@ -54,13 +54,13 @@ Qualifying gates:
 
 ## Checkpoint states
 
-A fresh session determines the status of the required retrospective by reading `.pi/dev-loop-retrospective-checkpoint.json` and, for a `complete`/`skipped` record, checking whether a newer PR has merged into the configured base branch since the recorded discharge point (see "Cycle scoping" below):
+A fresh session determines the status of the required retrospective by reading `.pi/dev-loop-retrospective-checkpoint.json` and, for a `complete`/`skipped` record, checking whether a newer PR has merged into the configured base branch since the recorded discharge point (see [Cycle scoping](#cycle-scoping--a-checkpoint-discharges-exactly-one-qualifying-completion) below):
 
 | File state | Mapped checkpoint state | Meaning |
 |---|---|---|
 | File absent (ENOENT) | `RETROSPECTIVE_CHECKPOINT_STATE.NONE` | No checkpoint requirement recorded in this repo's shared main-root file |
 | `{ "state": "none" }` | `RETROSPECTIVE_CHECKPOINT_STATE.NONE` | Explicitly recorded as no requirement |
-| `{ "state": "required" }` or `{ "state": "missing" }` | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Retrospective pending; blocks the next qualifying start/resume |
+| `{ "state": "required" }` or `{ "state": "missing" }` | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Retrospective pending; reported as `pendingRetrospectives` and refused at merge by `merge-pr` |
 | `{ "state": "complete", "identity": {...}, "provenance": {...} }`, no newer PR has merged into the configured base | `RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE` | Retrospective recorded for the current cycle as a fresh-context pass over the tool-call record; requirement satisfied |
 | `{ "state": "complete", "identity": {...} }` with no/invalid/inline `provenance`, no newer PR merged into the configured base | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Inline or unverifiable retro — fails closed (see [RETRO-FRESH-CONTEXT-MANDATORY](#fresh-context-neutral-retrospective-issue-1870)); re-discharge with `--retro-context fresh --record-source <path>` |
 | `{ "state": "complete", "identity": {...} }`, a newer PR merged into the configured base (or ancestry/association cannot be verified) | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Stale completion; a newer cycle has not been discharged |
@@ -74,7 +74,7 @@ An **absent** checkpoint file or an explicit `{ "state": "none" }` resolves to `
 
 ## Enforcement gate
 
-The enforcement seam is the pure function `evaluateRetrospectiveGate` in `packages/core/src/loop/retrospective-checkpoint.mjs`. The checkpoint artifact may still exist even when enforcement is disabled; callers must first consult `workflow.requireRetrospective` to decide whether the checkpoint should block the next qualifying routed start/resume or remain advisory-only.
+The enforcement seam is the pure function `evaluateRetrospectiveGate` in `packages/core/src/loop/retrospective-checkpoint.mjs`. The checkpoint artifact may still exist even when enforcement is disabled; callers must first consult `workflow.requireRetrospective` to decide whether the checkpoint is evaluated at all. A `missing` state never blocks routed start/resume; `merge-pr` enforces it at merge time.
 
 The public routing helpers in `packages/core/src/loop/public-dev-loop-routing.mjs` also accept an optional `retrospectiveCheckpointState` input and apply the same gate internally before returning routed start/resume/status results. Callers should only pass that input when `workflow.requireRetrospective` is enabled for the active repo/workflow posture.
 
@@ -90,10 +90,9 @@ evaluateRetrospectiveGate({
 ### Outputs
 
 - **Pass-through** (proposed routing returned unchanged) when:
-  - `checkpointState` is `none`, `complete`, or `skipped`
+  - `checkpointState` is `none`, `complete`, `skipped`, or `missing` (a `missing` state routes normally; the obligation is reported as `pendingRetrospectives` and enforced at merge by `merge-pr`, ADR 0125)
   - `proposedRouting` is already `stop`, `needs_reconcile`, or `inspect`
 - **Fail-closed** (`needs_reconcile` result) when:
-  - `checkpointState` is `missing`
   - `checkpointState` is unrecognized
 
 ### Caller contract
@@ -108,7 +107,7 @@ Callers have two supported integration options:
    - `evaluatePublicDevLoopRouting(...)`
    - `resolveAuthoritativeStartupResumeBundle(...)`
    - `resolveAuthoritativeDevLoopStatus(...)`
-4. Use the returned result directly. When enforcement is enabled and the checkpoint is missing, these helpers fail closed to `needs_reconcile`.
+4. Use the returned result directly. A missing checkpoint does not change the routing; report it as `pendingRetrospectives` (see [Pending retrospectives and the merge precondition](#pending-retrospectives-and-the-merge-precondition)).
 
 #### Option B — explicit manual gate composition
 
@@ -116,10 +115,32 @@ Callers have two supported integration options:
 2. Map the file contents to a `RETROSPECTIVE_CHECKPOINT_STATE` value.
 3. Call `evaluatePublicDevLoopRouting(...)` to get the proposed routing.
 4. Call `evaluateRetrospectiveGate({ checkpointState, proposedRouting })`.
-5. Use the gate result (not the raw routing result) as the effective routing decision when enforcement is enabled; otherwise keep the raw routing result and treat the checkpoint artifact as advisory context only.
+5. Use the gate result as the effective routing decision. A `missing` state passes through unchanged and an unrecognized state returns `needs_reconcile`.
 
 <!-- rule: RETRO-GATE-FAIL-CLOSED -->
-If the gate result is `needs_reconcile`, the caller MUST NOT proceed with the proposed routing. The `nextAction` field instructs the operator to complete or explicitly skip the retrospective.
+If the gate result is `needs_reconcile` (an unrecognized checkpoint state or an invalid routing input), the caller MUST NOT proceed with the proposed routing. A `missing` checkpoint does not stop startup. It is enforced fail-closed at merge: `merge-pr` refuses while an earlier qualifying merge has no `complete` or `skipped` checkpoint (ADR 0125).
+
+### Pending retrospectives and the merge precondition
+
+One shared evaluator, `resolvePendingRetrospectives` in `scripts/loop/resolve-dev-loop-startup.mjs`, reads the checkpoint through `RETRO-CHECKPOINT-REPO-ROOT`, runs the repo-identity check and the qualifying-merge rule, and maps the record to a state. Startup and `merge-pr` both call it. It returns `{ checkpointState, recordedState, pendingRetrospectives }`; `recordedState` is the state the file records (lowercased), `unreadable` for a file that cannot be read or parsed as JSON, `malformed` for parsed JSON that is not a checkpoint object, or null for an absent file. It is absent from the result when enforcement is off.
+
+- Each `pendingRetrospectives` entry is `{ pr, mergeCommit }`. A `required` or `missing` record with an identity for this repo names that identity. A stale `complete` or `skipped` record names the oldest qualifying newer merge (`git rev-list --reverse` order). A non-stale `complete` record without fresh-context provenance maps to `missing` and names its own recorded identity.
+- An entry whose merge cannot be identified has `pr: null`, `mergeCommit: null` and a `reason` code: `checkpoint_unreadable`, `checkpoint_malformed`, `checkpoint_identity_missing`, `checkpoint_foreign_repo` (any record whose identity names another repo, or any record with an identity when the current repo slug cannot be resolved from the origin remote), `association_number_invalid`, `ancestry_or_association_unverifiable`, or `newer_merge_unidentified`.
+- A `none`, `complete` or `skipped` state yields `pendingRetrospectives: []`.
+- Startup routes the unit normally and carries `pendingRetrospectives` in the bundle. When the async-start contract rejects the start, the rejection result carries `pendingRetrospectives` at its top level, not under `bundle`. The orchestrator dispatches each reported retrospective in parallel with the unit.
+- `merge-pr` fails the `retrospective_checkpoint` precondition when the list is not empty. The refusal names the PR number and full merge commit of each entry, or the reason code and the recorded checkpoint state (`recordedState`) for an entry with no identity. The PR being merged is not merged yet, so the rule never counts it.
+
+### Recording a discharge
+
+When a retrospective has run, record it with the `complete` command under [Cycle scoping](#cycle-scoping--a-checkpoint-discharges-exactly-one-qualifying-completion). When the obligation for a cycle is discharged without a retrospective pass, record that fact with factual wording:
+
+```sh
+node scripts/loop/checkpoint-contract.mjs --state skipped \
+  --reason "Retrospective obligation for PR <number> discharged without a pass: <factual reason>" \
+  --repo <owner/name> --pr <number> --merge-commit <full merge commit oid>
+```
+
+The record names one cycle and is not a standing exemption. The command needs no standing-authorization key.
 
 ## Advisory findings — never a merge gate (issue #1077, Reading B)
 
@@ -127,7 +148,9 @@ If the gate result is `needs_reconcile`, the caller MUST NOT proceed with the pr
 The retrospective is **advisory**: it runs, records flagged raw-call / discipline
 observations honestly, and passes them back to the conductor (main agent) to
 **decide** what to do with them — but it MUST NOT block a merge or any PR-lifecycle
-transition of the current run. The pre-merge retrospective gate (`evaluateRetrospectiveMergeApproval`
+transition of the current run on account of its findings. The only blocking input is the
+completion state of an earlier merge's checkpoint (`retrospective_checkpoint` in
+`merge-pr`, ADR 0125, which amends ADR 0024). The pre-merge retrospective gate (`evaluateRetrospectiveMergeApproval`
 and the `requireRetrospectiveGate` / `requireRetrospectiveInternalTooling` config
 keys) has been **removed**. There is no `retrospective_gate_pending` / `blocked`
 disposition on account of the internal-tooling raw-call record.
@@ -217,7 +240,7 @@ single-line, single-purpose commands in transcripts.
 `resolve-dev-loop-startup.mjs` only reads this file. The file is written by:
 
 - **`.pi/extensions/dev-loop-behavioral-review.ts`** (best-effort, Pi-harness-specific): fires when it observes the standard async `dev-loop` completion message and writes a `required` marker without a cycle identity; `required` maps to `MISSING` regardless of identity.
-- **`scripts/loop/checkpoint-contract.mjs`** (operator/skill-driven): records `complete`/`skipped`/`required`/`missing`/`none`, carrying the cycle identity via `--repo`/`--pr`/`--merge-commit` — MUST for `complete`/`skipped` (see "Cycle scoping" above), optional for `required`/`missing`, rejected for `none`.
+- **`scripts/loop/checkpoint-contract.mjs`** (operator/skill-driven): records `complete`/`skipped`/`required`/`missing`/`none`, carrying the cycle identity via `--repo`/`--pr`/`--merge-commit` — MUST for `complete`/`skipped` (see [Cycle scoping](#cycle-scoping--a-checkpoint-discharges-exactly-one-qualifying-completion) above), optional for `required`/`missing`, rejected for `none`.
 
 ### The `required` marker (written by the extension, best-effort)
 
@@ -247,13 +270,13 @@ provenance** (issue #1870). Retrospective *findings* (`behavioralReview`, `rawCa
 }
 ```
 
-### Explicit skip with reason
+### Discharge without a pass
 
 ```json
 {
   "state": "skipped",
   "skippedAt": "2026-05-29T16:30:00.000Z",
-  "reason": "Trivial documentation-only change; no post-run audit needed.",
+  "reason": "Retrospective obligation for PR 1613 discharged without a pass: documentation-only change.",
   "identity": { "repo": "owner/name", "prNumber": 1613, "mergeCommit": "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c" }
 }
 ```
@@ -265,7 +288,7 @@ provenance** (issue #1870). Retrospective *findings* (`behavioralReview`, `rawCa
 | Artifact | Location |
 |---|---|
 | Checkpoint state machine (identity normalization, ancestry-scoped state resolution) | `packages/core/src/loop/retrospective-checkpoint.mjs` (internal core module; `normalizeCheckpointCycleIdentity`/`resolveCheckpointStateFromArtifact` are re-exported through `public-dev-loop-routing.mjs` for script-layer callers) |
-| Read-time derivation (ancestry check, repo-root path resolution) | `scripts/loop/resolve-dev-loop-startup.mjs` (`buildResolveDevLoopStartupResult`, `resolveHasNewerMergeSinceCheckpoint`) |
+| Read-time derivation (ancestry check, repo-root path resolution) | `scripts/loop/resolve-dev-loop-startup.mjs` (`buildResolveDevLoopStartupResult`, `resolvePendingRetrospectives`, `resolveHasNewerMergeSinceCheckpoint`; also called by `scripts/github/merge-pr.mjs`) |
 | Manual write CLI | `scripts/loop/checkpoint-contract.mjs` (`resolveCheckpointRepoRoot`) |
 | Internal-tooling verifier (findings-producer) | `scripts/loop/check-retro-tooling.mjs` |
 | Advisory findings envelope field | `packages/core/src/loop/handoff-envelope.mjs` — `retrospectiveFindings` |
