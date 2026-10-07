@@ -92,8 +92,8 @@ Inputs:
                                { surfaceKey, rounds, heads, fingerprint, summary,
                                clusterFingerprints } (clusterFingerprints is [] when
                                no sibling was withheld) and the stdout result
-                               carries it too, plus escalationsSkipped when the checkout
-                               is not at the round head, so the durable disposition ledger
+                               carries it too, plus escalationsSkipped when the round head
+                               commit is not in the repository, so the durable disposition ledger
                                carries what the judge consciously marked act/defer/reject.
                                Every disposed finding also carries a \`fingerprint\`; a
                                \`defer\` finding additionally carries \`followUpIssueNumber\`
@@ -848,16 +848,16 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
 
 /**
  * Escalations for this round's act items (see gate-recurrence.mjs). Prior ledgers
- * come from the same reader the gate context uses; file sources are read at the
- * current head. An unreadable file simply defines no symbol. The sources are only the
- * head's when the checkout sits at that head; otherwise escalation is skipped and the
- * returned `skipped` text names why.
+ * come from the same reader the gate context uses; file sources are read from the
+ * round head's commit object, never the working tree, so the keying is a pure function
+ * of the round head. A path the head does not hold defines no symbol. When the head
+ * commit is not in the repository, escalation is skipped and the returned `skipped`
+ * text names why.
  */
-async function resolveEscalations(result, options, resolvedRoot, specDigest, { readPriorLogs, readHead }) {
+async function resolveEscalations(result, options, resolvedRoot, specDigest, { readPriorLogs, hasCommit, readSource }) {
   if (result.act.length === 0) return { escalations: [] };
-  const checkoutHead = await readHead(resolvedRoot);
-  if (String(checkoutHead).trim().toLowerCase() !== result.headSha.trim().toLowerCase()) {
-    return { escalations: [], skipped: `GATE-EXEC-RECURRENCE-ESCALATION cannot read the head's sources: checkout HEAD ${checkoutHead ?? "(unreadable)"} is not the round head ${result.headSha}, so escalation was not evaluated` };
+  if (!(await hasCommit(resolvedRoot, result.headSha))) {
+    return { escalations: [], skipped: `GATE-EXEC-RECURRENCE-ESCALATION cannot read the head's sources: round head ${result.headSha} is not available in this repository, so escalation was not evaluated` };
   }
   const priorLogs = await readPriorLogs(
     { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot) },
@@ -867,7 +867,7 @@ async function resolveEscalations(result, options, resolvedRoot, specDigest, { r
   for (const file of recurrenceFiles(result.act, priorLogs)) {
     const absolute = path.resolve(resolvedRoot, file);
     if (path.relative(resolvedRoot, absolute).startsWith("..")) continue;
-    const content = await readFile(absolute, "utf8").catch(() => null);
+    const content = await readSource(resolvedRoot, result.headSha, path.relative(resolvedRoot, absolute).split(path.sep).join("/"));
     if (content !== null) sources.set(file, content);
   }
   const escalations = findEscalations({ actFindings: result.act, priorLogs, specDigest, headSha: result.headSha, sources }).map(
@@ -876,14 +876,19 @@ async function resolveEscalations(result, options, resolvedRoot, specDigest, { r
   return { escalations };
 }
 
-function gitHead(cwd) {
-  const out = spawnSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
-  return out.status === 0 ? out.stdout.trim() : null;
+function hasCommitInRepo(cwd, sha) {
+  return spawnSync("git", ["-C", cwd, "cat-file", "-e", `${sha}^{commit}`], { env: gitEnvNoDirOverrides() }).status === 0;
+}
+
+/** A file's content at a commit (`git show <sha>:<file>`), or null when the commit or path is absent. */
+export function gitShowSource(cwd, sha, file) {
+  const out = spawnSync("git", ["-C", cwd, "show", `${sha}:${file}`], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+  return out.status === 0 ? out.stdout : null;
 }
 
 export async function judgePassCli(
   options,
-  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs, readHead = gitHead } = {},
+  { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs, hasCommit = hasCommitInRepo, readSource = gitShowSource } = {},
 ) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
   const pinned = await verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot ?? resolveGateArtifactTmpRoot(resolvedRoot));
@@ -971,7 +976,7 @@ export async function judgePassCli(
   // Recurrence escalation: an act item whose surface appears in act items of three counted
   // rounds is withheld from the fixer and surfaced for a human decision. The count is derived
   // here from the closed prior-round ledgers and persisted nowhere.
-  const { escalations, skipped: escalationsSkipped } = await resolveEscalations(result, options, resolvedRoot, pinned.specDigest, { readPriorLogs, readHead });
+  const { escalations, skipped: escalationsSkipped } = await resolveEscalations(result, options, resolvedRoot, pinned.specDigest, { readPriorLogs, hasCommit, readSource });
   // One root cause is one decision: the cluster siblings of an escalated item stay with it.
   const escalatedActs = new Set(escalations.map((e) => e.finding));
   // The withheld siblings ride the escalation record so the human checkpoint can see them.

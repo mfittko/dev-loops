@@ -164,8 +164,12 @@ export function recordedSkipReason(siteCoverage, fingerprint, site) {
  * threadId/fixingCommitSha/disposition on any entry, an unrecognized
  * disposition value, or a duplicate threadId/fingerprint across entries.
  *
+ * Each entry also carries the optional site coverage fields `sites`, `returnedSites` and
+ * `ruleCitations`; the handoff may carry a top-level `siteCoverage[]`.
+ *
  * @param {object} raw
- * @returns {{ headSha: string, dispositions: Array<{ threadId: string, fingerprint: string|null, fixingCommitSha: string, disposition: string, validation: string|null }> }}
+ * @param {{ ruleIds?: Set<string> }} [options] ruleIds: the known rule ids that `ruleCitations` are checked against
+ * @returns {{ headSha: string, dispositions: Array<{ threadId: string, fingerprint: string|null, fixingCommitSha: string, disposition: string, validation: string|null, sites?: object[], returnedSites?: string[], ruleCitations?: string[] }>, siteCoverage?: Array<{ fingerprint: string, returnedSites: string[], sites: object[], ruleCitations?: string[] }> }}
  */
 export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
   if (!raw || typeof raw !== "object") {

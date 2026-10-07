@@ -935,8 +935,8 @@ outcome is a design decision recorded in the spec: it changes `specDigest` and r
 The second outcome is a split into its own issue: the orchestrator files that issue, and the
 item becomes a `defer` that links it. When every act item escalates, the fixer act list is
 empty, `actCount` still counts the escalated items, no fixer is dispatched, and the dev-loop
-coordinator still stops at the human checkpoint. `judge-pass` evaluates escalation only when the
-checkout HEAD equals the round head, and otherwise returns `escalationsSkipped` with the reason;
+coordinator still stops at the human checkpoint. `judge-pass` reads each keyed source from the round head's
+commit object, so the keying is a pure function of the head. It evaluates escalation only when that commit is in the repository, and otherwise returns `escalationsSkipped` with the reason;
 the gate coordinator carries it in the round result and the dev-loop coordinator reports it.
 The threshold is fixed.
 

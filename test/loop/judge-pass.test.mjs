@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import {
+  gitShowSource,
   judgePassCli as judgePassCliRaw,
   parseJudgePassCliArgs,
   runJudgePass,
@@ -1585,7 +1586,7 @@ const GUARD_FILE = "src/guard.mjs";
 const REC_REPO = "mfittko/dev-loops";
 const REC_PR = 2000;
 
-async function recurrenceCase({ priorRounds = [], extraAct = true, specFile = "spec.json", sameCluster = false, actFile = GUARD_FILE, readHead = async () => HEAD } = {}) {
+async function recurrenceCase({ priorRounds = [], extraAct = true, specFile = "spec.json", sameCluster = false, actFile = GUARD_FILE, hasCommit = async () => true, decisionExtra = {} } = {}) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-recurrence-"));
   const { specDigest, contentDigest, criterionIds } = await specDigests();
   await mkdir(path.join(tmpDir, "src"), { recursive: true });
@@ -1597,7 +1598,7 @@ async function recurrenceCase({ priorRounds = [], extraAct = true, specFile = "s
   if (sameCluster) for (const f of findings) f.clusterId = 0;
   const decisions = findings.map((_f, index) => ({
     index, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds,
-    rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q",
+    rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q", ...decisionExtra,
   }));
   await writeSpecAuthorityCase(tmpDir, { findings, decisions: { identity: { specDigest, headSha: HEAD, contentDigest }, list: decisions } });
   const gateDir = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", `pr-${REC_PR}`);
@@ -1612,7 +1613,7 @@ async function recurrenceCase({ priorRounds = [], extraAct = true, specFile = "s
     }));
   }
   const [options, deps] = specAuthorityArgs(tmpDir, contentDigest);
-  const payload = await judgePassCli({ ...options, specFile: `./${specFile}`, out: "./act.json", ledgerOut: "./out-ledger.json" }, { ...deps, readHead });
+  const payload = await judgePassCli({ ...options, specFile: `./${specFile}`, out: "./act.json", ledgerOut: "./out-ledger.json" }, { ...deps, hasCommit, readSource: async (root, sha, file) => (sha === HEAD ? readFile(path.join(root, file), "utf8").catch(() => null) : null) });
   return { tmpDir, payload };
 }
 
@@ -1691,10 +1692,32 @@ test("judge-pass recurrence: a finding file outside the checkout is never read, 
   }
 });
 
-test("judge-pass recurrence: a checkout that is not at the round head skips escalation with a marker", async () => {
-  const { payload } = await recurrenceCase({ priorRounds: [{}, {}], readHead: async () => "f".repeat(40) });
+test("judge-pass recurrence: a round head missing from the repository skips escalation with a marker", async () => {
+  const { payload } = await recurrenceCase({ priorRounds: [{}, {}], hasCommit: async () => false });
   assert.equal(payload.ok, true);
   assert.equal(payload.escalations, undefined);
-  assert.match(payload.escalationsSkipped, /is not the round head/);
+  assert.match(payload.escalationsSkipped, /is not available in this repository/);
   assert.equal(payload.act.length, 2);
+});
+
+test("judge-pass recurrence: a matcher decision carries its accepted and rejected forms to the act list", async () => {
+  const { tmpDir, payload } = await recurrenceCase({ decisionExtra: { defectKind: "matcher", acceptedForms: ["a"], rejectedForms: ["r"] } });
+  assert.deepEqual(payload.act[0].acceptedForms, ["a"]);
+  assert.deepEqual(payload.act[0].rejectedForms, ["r"]);
+  const [first] = JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"));
+  assert.deepEqual([first.acceptedForms, first.rejectedForms], [["a"], ["r"]]);
+});
+
+test("judge-pass recurrence: a doc_lag decision carries its stated surfaces to the act list", async () => {
+  const { tmpDir, payload } = await recurrenceCase({ decisionExtra: { defectKind: "doc_lag", statedSurfaces: ["PR body"] } });
+  assert.deepEqual(payload.act[0].statedSurfaces, ["PR body"]);
+  const [first] = JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"));
+  assert.deepEqual(first.statedSurfaces, ["PR body"]);
+});
+
+test("gitShowSource reads a file at a commit and returns null for a missing path or commit", () => {
+  const root = path.resolve(import.meta.dirname, "..", "..");
+  assert.match(gitShowSource(root, "HEAD", "package.json"), /"name"/);
+  assert.equal(gitShowSource(root, "HEAD", "no/such/file.mjs"), null);
+  assert.equal(gitShowSource(root, "f".repeat(40), "package.json"), null);
 });
