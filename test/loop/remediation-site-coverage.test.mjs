@@ -267,3 +267,25 @@ test("null residueOf and skipReason on an ordinary finding validate", () => {
   const next = decideDeltaNextStep({ sequence, result: deltaResult(sequence, { newFindings: [finding] }), invocation: 1, currentHead: CANDIDATE, siteCoverage });
   assert.deepEqual(next.errors ?? [], []);
 });
+
+test("an empty site query result needs a noSitesReason, and the verify path accepts it", () => {
+  const empty = { returnedSites: [], sites: [] };
+  assert.match(siteCoverageGaps([actEntry()], record([coverageItem(empty)]))[0], /no noSitesReason/);
+  assert.deepEqual(siteCoverageGaps([actEntry()], record([coverageItem({ ...empty, noSitesReason: "the query returned nothing at the head" })])), []);
+  assert.throws(() => record([coverageItem({ ...empty, noSitesReason: " " })]), /noSitesReason must be a non-empty string/);
+});
+
+test("a delta with an empty site query result and a noSitesReason is locally_clear", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [actEntry()] });
+  const siteCoverage = record([coverageItem({ returnedSites: [], sites: [], noSitesReason: "the query returned nothing at the head" })]);
+  const next = decideDeltaNextStep({ sequence, result: deltaResult(sequence), invocation: 1, currentHead: CANDIDATE, siteCoverage });
+  assert.equal(next.outcome, "locally_clear");
+});
+
+test("a doc_lag item needs a fixed or skipped site for every stated surface", () => {
+  const item = actEntry({ statedSurfaces: ["JSDoc", "changes fragment"] });
+  const partial = record([coverageItem({ returnedSites: ["JSDoc"], sites: [{ site: "JSDoc", status: "fixed" }] })]);
+  assert.deepEqual(siteCoverageGaps([item], partial), ['act item fp1 records no fixed or skipped site for stated surface "changes fragment"']);
+  const full = record([coverageItem({ returnedSites: ["JSDoc", "changes fragment"], sites: [{ site: "JSDoc", status: "fixed" }, { site: "changes fragment", status: "skipped", reason: "no fragment for this change" }] })]);
+  assert.deepEqual(siteCoverageGaps([item], full), []);
+});

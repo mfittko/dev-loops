@@ -898,15 +898,17 @@ widening rule.
 `GATE-EXEC-REMEDIATION-SITE-QUERY`: Each `valid_compliant` act item's `authorizedRemediation`
 MUST come with a `defectClass` and a `siteQuery`: a `git grep` pattern or a symbol list that the
 fixer runs at the head. `validateSpecAuthorityDecision` rejects a `valid_compliant` decision
-that lacks either. For a matcher or guard defect (`defectKind: "matcher"`), the site query is the
-list of accepted and rejected input forms (`acceptedForms[]`, `rejectedForms[]`), and the fix adds
-one test per form. For doc, comment or fragment lag (`defectKind: "doc_lag"`), `statedSurfaces[]`
+that lacks either. For a matcher or guard defect (`defectKind: "matcher"`), the decision also lists
+the accepted and rejected input forms (`acceptedForms[]`, `rejectedForms[]`) alongside its
+`siteQuery`, and the fix adds one test per form. For doc, comment or fragment lag (`defectKind: "doc_lag"`), `statedSurfaces[]`
 lists every stated surface of the changed rule: PR body scope, changes fragment, JSDoc, hook
 header and doc comment. A decision that supplies those lists under another `defectKind` is rejected. Before the judge authorizes a remediation, it checks the remedy against
 the repo's registered rules (`skills/docs/required-rules.json`). The fixer fixes every site the
 query returns, or records a skip reason for each skipped site (`returnedSites[]` and `sites[]`).
 Site coverage is keyed by act-item fingerprint in `siteCoverage[]`, which the `commit_only` and
-`full` handoffs both carry, so a threadless act item is covered too. A matcher item needs one
+`full` handoffs both carry, so a threadless act item is covered too. A query that returns no site records a
+non-empty `noSitesReason` in place of `returnedSites[]`. A doc_lag item needs a fixed or skipped
+site for every `statedSurfaces[]` entry. A matcher item needs one
 `input_form` site per listed accepted and rejected form. `verify-fixer-disposition.mjs` and the
 pre-push delta check fail a record that leaves a returned site neither fixed nor skipped with a
 reason, and `ruleCitations[]` entries MUST be rule IDs in the dev-loops registry `skills/docs/required-rules.json` (no consumer registry is consulted). A fixer that finds a remedy in conflict

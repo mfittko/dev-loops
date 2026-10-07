@@ -55,7 +55,8 @@ const RULE_ID_PATTERN = /^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$/;
  * Optional site coverage of an act item's authorized remediation. `returnedSites`
  * are the sites the site query returned at the head. Every one needs a `sites`
  * entry that is `fixed`, or `skipped` with a reason. An `input_form` site that is
- * fixed names the test that covers that form. `ruleCitations` are the rule IDs
+ * fixed names the test that covers that form. A query that returned nothing records a
+ * `noSitesReason` instead of `returnedSites`. `ruleCitations` are the rule IDs
  * the fixer applied in place of a conflicting remediation.
  */
 function normalizeSiteCoverage(entry, label, ruleIds) {
@@ -93,6 +94,10 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
   });
   if (sites.length > 0) out.sites = sites;
   if (returnedSites.length > 0) out.returnedSites = returnedSites;
+  if (entry.noSitesReason !== undefined) {
+    if (!isNonEmptyString(entry.noSitesReason)) throw new Error(`${label} noSitesReason must be a non-empty string`);
+    out.noSitesReason = entry.noSitesReason.trim();
+  }
   if (entry.ruleCitations !== undefined) {
     if (!Array.isArray(entry.ruleCitations) || !entry.ruleCitations.every((id) => typeof id === "string" && RULE_ID_PATTERN.test(id.trim()))) {
       throw new Error(`${label} ruleCitations must be rule IDs such as LOCAL-COMMENT-DISCIPLINE`);
@@ -125,7 +130,8 @@ function normalizeSiteCoverageRecords(raw, ruleIds) {
 
 /**
  * Gaps between the act items' authorized remediations and a normalized site coverage record.
- * An act item with a `siteQuery` needs a record that lists the sites the query returned. A matcher
+ * An act item with a `siteQuery` needs a record that lists the sites the query returned, or a `noSitesReason`.
+ * A doc_lag item needs a fixed or skipped site for every `statedSurfaces` entry. A matcher
  * item (`acceptedForms` / `rejectedForms`) needs one fixed `input_form` site with a test per listed form.
  * @param {Array<object>} actItems delta act items (each with `fingerprint` or `ref`)
  * @param {Array<object>|undefined} siteCoverage normalized `siteCoverage` of a handoff
@@ -142,8 +148,11 @@ export function siteCoverageGaps(actItems, siteCoverage) {
       gaps.push(`act item ${key} has a site query and no site coverage record`);
       continue;
     }
-    if (!record.returnedSites?.length) gaps.push(`act item ${key} records no returned sites for its site query`);
+    if (!record.returnedSites?.length && !record.noSitesReason) gaps.push(`act item ${key} records no returned sites and no noSitesReason for its site query`);
     const disposed = new Map((record.sites ?? []).map((site) => [site.site, site]));
+    for (const surface of item.statedSurfaces ?? []) {
+      if (!disposed.has(surface)) gaps.push(`act item ${key} records no fixed or skipped site for stated surface ${JSON.stringify(surface)}`);
+    }
     for (const form of [...(item.acceptedForms ?? []), ...(item.rejectedForms ?? [])]) {
       const site = disposed.get(form);
       if (site?.kind !== "input_form") gaps.push(`act item ${key} records no input_form site for form ${JSON.stringify(form)}`);
