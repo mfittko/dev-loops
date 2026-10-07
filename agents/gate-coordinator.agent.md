@@ -18,7 +18,7 @@ You are the gate coordinator. You own one gate review round for one gate at one 
 
 ## Result
 
-Return only the typed round result that `GATE-EXEC-GATE-COORDINATOR` lists, leaving out the fields it omits on a `review` round. Return it once, after `wait-for-units` returns `all_done` or you stop with `units_stalled` or `round_retired`. Never hand back an interim completion while a dispatched unit is pending. On a stop condition of the rule, return the typed observation instead. Reviewer and judge outputs stay in your context.
+Return only the typed round result that `GATE-EXEC-GATE-COORDINATOR` lists, leaving out the fields it omits on a `review` round. Return it once, after your wave join completes (Pi: the blocking join; Claude Code: `wait-for-units` returns `all_done`) or you stop with `units_stalled` or `round_retired`. Never hand back an interim completion while a dispatched unit is pending. On a stop condition of the rule, return the typed observation instead. Reviewer and judge outputs stay in your context.
 
 When `judge-pass` returns `escalations[]` (`GATE-EXEC-RECURRENCE-ESCALATION`), include it in the round result and keep the round's other act items in the act list, except the escalated item's cluster siblings, which the escalation withholds (see `clusterFingerprints[]`). The fixer act list is empty when every act item escalated or is a withheld sibling. When it returns `escalationsSkipped`, include that reason in the round result too. The dev-loop coordinator owns the human checkpoint that follows and reports the skip.
 

@@ -58,7 +58,7 @@ export function parseWaitArgs(argv) {
   const timeoutText = values["timeout-ms"] ?? String(DEFAULT_TIMEOUT_MS);
   const timeoutMs = Number(timeoutText);
   if (!/^\d+$/u.test(timeoutText) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) throw new Error(`--timeout-ms must be an integer from 1 to ${MAX_TIMEOUT_MS}`);
-  return { emitPlan: values["emit-plan"], judgePlan: values["judge-plan"], units: values.unit, tmpRoot: values["tmp-root"], timeoutMs, jq: values.jq, silent: values.silent };
+  return { emitPlan: values["emit-plan"], judgePlan: values["judge-plan"], units: values.unit, tmpRoot: values["tmp-root"], timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
 }
 
 async function readPlan(planPath) {
@@ -76,7 +76,7 @@ function requireIdentity(source, label) {
 }
 function requireRound(gate, headSha) {
   if (!nonEmpty(gate)) throw new Error("plan carries no gate");
-  if (typeof headSha !== "string" || !/^[0-9a-f]{40}$/u.test(headSha)) throw new Error("plan carries no 40-hex headSha");
+  if (typeof headSha !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(headSha)) throw new Error("plan carries no 40- or 64-hex headSha");
 }
 
 /** Normalize a plan into { gate, headSha, role, units: [{ scope, angles, outputRefs, receipt query }] }. */
@@ -110,7 +110,8 @@ function retiredNow(...args) {
   try { return findRetirementAfter(...args) !== null; } catch (error) { if (error instanceof SyntaxError) return false; throw error; }
 }
 
-const exists = (file) => stat(file).then(() => true, () => false);
+// Only ENOENT means absent; any other stat failure propagates to the error path.
+const exists = (file) => stat(file).then(() => true, (error) => { if (error?.code === "ENOENT") return false; throw error; });
 
 async function checkUnit(unit, { role, receiptTmpRoot, tmpRoot, headSha }) {
   const query = { receiptTmpRoot, role, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity };
@@ -134,6 +135,8 @@ export async function waitForUnits({ emitPlan, judgePlan, units: wanted, tmpRoot
     const result = (outcome, missing = [], done = []) => ({ ok: true, outcome, gate, headSha, unitCount: units.length, done, missing, elapsedMs: now() - started });
     if (!await exists(planPath) || retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs)) return result("round_retired");
     const checks = await Promise.all(units.map((unit) => checkUnit(unit, { role, receiptTmpRoot: receipts, tmpRoot, headSha })));
+    // A round retired while the checks were in flight must not advance on their stale result.
+    if (!await exists(planPath) || retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs)) return result("round_retired");
     const missing = checks.filter(Boolean);
     const done = units.filter((_, index) => checks[index] === null).map((unit) => unit.scope);
     if (missing.length === 0) return result("all_done", [], done);
@@ -153,7 +156,7 @@ export async function main(argv = process.argv.slice(2)) {
   } catch (error) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
-  const emitted = emitResult(result, { jq: options?.jq, silent: options?.silent, ok: true });
+  const emitted = emitResult(result, { jq: options?.jq, fields: options?.fields, silent: options?.silent, ok: true });
   process.exitCode = emitted === 2 ? 1 : result.ok ? EXIT[result.outcome] : 1;
 }
 

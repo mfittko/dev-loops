@@ -42,7 +42,7 @@ test("the rule forbids every non-command wait by purpose", async () => {
 test("the gate coordinator hands back once, after the join", async () => {
   assert.match(await rule(), /hands back its round result once.*never hands back an interim completion while a dispatched unit is pending/s);
   for (const file of ["agents/gate-coordinator.agent.md", ".claude/agents/gate-coordinator.md"]) {
-    assert.match(await readRepo(file), /Return it once, after `wait-for-units` returns `all_done` or you stop with `units_stalled` or `round_retired`\. Never hand back an interim completion/);
+    assert.match(await readRepo(file), /Return it once, after your wave join completes \(Pi: the blocking join; Claude Code: `wait-for-units` returns `all_done`\) or you stop with `units_stalled` or `round_retired`\. Never hand back an interim completion/);
   }
 });
 
