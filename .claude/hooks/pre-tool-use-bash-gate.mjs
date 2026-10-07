@@ -12,6 +12,9 @@
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
+ *   - raw PR/issue body writes (`gh pr edit`/`gh issue edit` with --body/--body-file, `gh api` body
+ *     PATCH to pulls/<n> or issues/<n>) — blocked for every actor (ADR-TRIPWIRE-STANDING-WAIVER, #2689);
+ *     use the launcher's `pr edit` / `issue edit`.
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
  *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
  *   - `bun run verify` / `bun test` / `vitest` / `npm test` / `npm run test` / `bun run build` /
@@ -36,6 +39,8 @@ import {
   commandContainsGhPrMerge,
   commandContainsGhPrCreate,
   commandContainsRawExternalWrite,
+  commandContainsRawPrBodyEdit,
+  commandContainsRawPrBodyApiWrite,
   commandContainsGitStash,
   commandContainsInlineInterpreter,
   commandContainsSubIssueAdHocBypass,
@@ -102,6 +107,11 @@ const isMerge = typeof command === "string" && commandContainsGhPrMerge(command)
 const isCreate = typeof command === "string" && commandContainsGhPrCreate(command);
 const isExternalWrite = typeof command === "string" && commandContainsRawExternalWrite(command);
 const isStash = typeof command === "string" && commandContainsGitStash(command);
+// ADR-TRIPWIRE-STANDING-WAIVER: raw PR/issue body writes (`gh pr|issue edit --body*`, `gh api` body
+// PATCH) are denied for every actor inside decideBashGate; the pre-check must not allow them first.
+const isBodyWrite =
+  typeof command === "string" &&
+  (commandContainsRawPrBodyEdit(command, managedRepoSlug) || commandContainsRawPrBodyApiWrite(command, managedRepoSlug));
 // The six-guard-rule predicates (#1622) — each is decided (with scope + actor policy) inside
 // decideBashGate, so the hook must not short-circuit to allow before deciding them.
 const isInline = typeof command === "string" && commandContainsInlineInterpreter(command);
@@ -121,7 +131,7 @@ const isJudge = normalizeAgentType(agentType) === JUDGE_AGENT_TYPE;
 // A fixer pull attempt reaches the decider, which denies any line other than the exact one.
 const isFixerPull = isFixer && isFixerPullAttempt(command);
 if (
-  !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
+  !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash && !isBodyWrite &&
   !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool &&
   !isVerifyEntrypoint && !isJudge && !isFixerPull
 ) {

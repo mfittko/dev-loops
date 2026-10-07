@@ -1282,6 +1282,9 @@ test("commandContainsRawPrBodyApiWrite passes reads, non-body fields, sub-paths 
 test("commandContainsRawPrBodyEdit denies global-flag and wrapped literal forms", () => {
   for (const cmd of [
     "gh -R o/n pr edit 5 --body-file pr.md",
+    "gh issue edit 5 --body-file i.md",
+    "gh issue edit 5 -b x",
+    `bash -c "gh issue edit 5 --body x"`,
     "gh --repo o/n pr edit 5 --body 'x'",
     "gh --repo=o/n pr edit 5 -b x",
     "gh -Ro/n pr edit 5 -F pr.md",
@@ -1298,7 +1301,6 @@ test("commandContainsRawPrBodyEdit keeps passing title, assignee and read forms"
     `gh pr edit 5 --title "fix --body flag"`,
     "gh -R o/n pr edit 5 --add-assignee me",
     "gh issue edit 5 --add-label bug",
-    "gh issue edit 5 --body-file i.md",
     "gh issue edit 5 --title 'a -b b'",
     "gh -R o/n pr view 5",
     `bash -c "echo hi"`,

@@ -840,7 +840,7 @@ function ghBodyWriterRegex(subcmd) {
 }
 
 /** A `gh pr edit` literal anywhere in a command string, quoted or not. */
-const GH_BODY_WRITER_LITERAL = new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}pr\\s+edit(?=[\\s"'\`]|$)`, "i");
+const GH_BODY_WRITER_LITERAL = new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}(?:pr|issue)\\s+edit(?=[\\s"'\`]|$)`, "i");
 
 /** A shell wrapper that hides a command from per-segment inspection: `bash|sh|zsh|dash|ksh -c`, `eval`, `xargs`. */
 const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*-\S*c|eval|xargs)(?=\s)/;
@@ -868,7 +868,7 @@ function unquoteFlagTokens(segment) {
  */
 export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
   if (SHELL_WRAPPER_RE.test(command) && GH_BODY_WRITER_LITERAL.test(command)) return true;
-  const res = [ghBodyWriterRegex("pr")];
+  const res = [ghBodyWriterRegex("(?:pr|issue)")];
   return shellSegments(command).map(unquoteFlagTokens).some((segment) =>
     res.some((re) => {
       if (!re.test(segment)) return false;
