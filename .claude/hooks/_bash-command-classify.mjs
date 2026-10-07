@@ -864,7 +864,7 @@ function unquoteFlagTokens(segment) {
 
 /** Blank quoted spans for the wrapper-word checks only: double quotes honor backslash escapes, unlike `stripQuotedLiterals`. */
 function stripQuotesEscapeAware(command) {
-  return command.replace(/'[^']*'|"(?:\\.|[^"\\])*"/gs, " ");
+  return command.replace(/\\.|'[^']*'|"(?:\\.|[^"\\])*"/gs, " ");
 }
 
 /**
