@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -64,17 +65,17 @@ const REF = `fixer:${REPO}#${PR}:${HEAD_SHA}:f1-0000abcd`;
 // receipt under <repoRoot>/tmp, and the disposition handoff at the plan's outputRef.
 async function deliver(repoRoot, dispositions, {
   handoffHead = HEAD_SHA, orderHead = HEAD_SHA, phase = "full", receipt = {}, writeReceipt = true, writeHandoff = true, pulledAt = new Date(Date.now() - 1000).toISOString(),
-  receiptMtime = null, handoffText = null, actList = null,
+  receiptMtime = null, handoffText = null, actList = null, editActListAfter = false,
 } = {}) {
   const dir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
   const outputRef = path.join(dir, "f1-0000abcd", "fixer-disposition.json");
   const actListPath = path.join(dir, "act-list.json");
-  const workOrder = { role: "fixer", phase, target: { repo: REPO, pr: PR }, headSha: orderHead, mutationAuthority: { branch: "issue-1" }, outputRefs: [outputRef], ...(actList ? { requiredReads: [{ kind: "act-list", path: actListPath }] } : {}) };
+  const workOrder = { role: "fixer", phase, target: { repo: REPO, pr: PR }, headSha: orderHead, mutationAuthority: { branch: "issue-1" }, outputRefs: [outputRef], ...(actList ? { requiredReads: [{ kind: "act-list", path: actListPath, sha256: createHash("sha256").update(JSON.stringify(actList)).digest("hex") }] } : {}) };
   const plan = { workOrderRef: REF, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "f1-0000abcd", workOrder };
   const planPath = path.join(dir, "fixer-emit-plan.json");
   await mkdir(path.dirname(outputRef), { recursive: true });
   await writeFile(planPath, JSON.stringify(plan));
-  if (actList) await writeFile(actListPath, JSON.stringify(actList));
+  if (actList) await writeFile(actListPath, JSON.stringify(editActListAfter ? [] : actList));
   if (writeReceipt) {
     const receiptPath = pullReceiptPath(path.join(repoRoot, "tmp"), REF);
     await mkdir(path.dirname(receiptPath), { recursive: true });
@@ -134,6 +135,7 @@ for (const [name, setup, expected] of [
   ["a handoff whose head is not the observed head", { handoffHead: FIX_SHA }, /not the observed head/],
   ["a commit_only plan", { phase: "commit_only" }, /not a full-phase fixer work order/],
   ["an act item with a siteQuery and no coverage record", { actList: [{ fingerprint: "fp1", severity: "high", summary: "s", judgeDisposition: "act", siteQuery: "git grep -n x" }] }, /act item fp1 has a site query and no site coverage record/],
+  ["an act list edited after emission", { editActListAfter: true, actList: [{ fingerprint: "fp1", severity: "high", summary: "s", judgeDisposition: "act", siteQuery: "git grep -n x" }] }, /differs from the sha256 the work order binds/],
   ["a handoff leaving a returned site neither fixed nor skipped", { handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: [{ threadId: "PRRT_kwDOabc", fixingCommitSha: FIX_SHA, disposition: "tackled", returnedSites: ["src/a.mjs:guard", "src/b.mjs:guard"], sites: [{ site: "src/a.mjs:guard", status: "fixed" }] }] }) }, /leaves returned site src\/b\.mjs:guard neither fixed nor skipped/],
   ["a handoff skipping a returned site without a reason", { handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: [{ threadId: "PRRT_kwDOabc", fixingCommitSha: FIX_SHA, disposition: "tackled", returnedSites: ["src/a.mjs:guard"], sites: [{ site: "src/a.mjs:guard", status: "skipped" }] }] }) }, /records no skip reason/],
 ]) {

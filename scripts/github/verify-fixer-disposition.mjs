@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -210,8 +211,13 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   if (actRead) {
     let actList;
     try {
-      actList = JSON.parse(await readFile(actRead.path, "utf8"));
-    } catch {
+      const actBytes = await readFile(actRead.path);
+      if (createHash("sha256").update(actBytes).digest("hex") !== String(actRead.sha256 ?? "").replace(/^sha256:/, "")) {
+        throw new Error(`the work order's act list ${actRead.path} differs from the sha256 the work order binds; it was rewritten after emission`);
+      }
+      actList = JSON.parse(actBytes.toString("utf8"));
+    } catch (error) {
+      if (/differs from the sha256/.test(error.message)) throw error;
       throw new Error(`Cannot read the work order's act list ${actRead.path}`);
     }
     const coverage = [

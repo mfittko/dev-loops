@@ -202,7 +202,12 @@ test("a matcher act item needs one input_form site per accepted and rejected for
     returnedSites: [...sites.map((s) => s.site), "prose mention"],
     sites: [...sites, { site: "prose mention", status: "skipped", kind: "input_form", reason: "prose is never a flag" }],
   })]);
-  assert.deepEqual(siteCoverageGaps([matcher], full), []);
+  assert.deepEqual(siteCoverageGaps([matcher], full), ['act item fp1 input_form site "prose mention" needs a fixed status and a test']);
+  const tested = record([coverageItem({
+    returnedSites: [...sites.map((s) => s.site), "prose mention"],
+    sites: [...sites, { site: "prose mention", status: "fixed", kind: "input_form", test: "t3" }],
+  })]);
+  assert.deepEqual(siteCoverageGaps([matcher], tested), []);
 });
 
 test("the delta check requires a skipReason to equal the recorded reason for that residueOf site", () => {

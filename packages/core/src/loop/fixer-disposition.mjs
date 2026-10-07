@@ -126,7 +126,7 @@ function normalizeSiteCoverageRecords(raw, ruleIds) {
 /**
  * Gaps between the act items' authorized remediations and a normalized site coverage record.
  * An act item with a `siteQuery` needs a record that lists the sites the query returned. A matcher
- * item (`acceptedForms` / `rejectedForms`) needs one `input_form` site per listed form.
+ * item (`acceptedForms` / `rejectedForms`) needs one fixed `input_form` site with a test per listed form.
  * @param {Array<object>} actItems delta act items (each with `fingerprint` or `ref`)
  * @param {Array<object>|undefined} siteCoverage normalized `siteCoverage` of a handoff
  * @returns {string[]}
@@ -145,7 +145,9 @@ export function siteCoverageGaps(actItems, siteCoverage) {
     if (!record.returnedSites?.length) gaps.push(`act item ${key} records no returned sites for its site query`);
     const disposed = new Map((record.sites ?? []).map((site) => [site.site, site]));
     for (const form of [...(item.acceptedForms ?? []), ...(item.rejectedForms ?? [])]) {
-      if (disposed.get(form)?.kind !== "input_form") gaps.push(`act item ${key} records no input_form site for form ${JSON.stringify(form)}`);
+      const site = disposed.get(form);
+      if (site?.kind !== "input_form") gaps.push(`act item ${key} records no input_form site for form ${JSON.stringify(form)}`);
+      else if (site.status !== SITE_STATUS.FIXED || !isNonEmptyString(site.test)) gaps.push(`act item ${key} input_form site ${JSON.stringify(form)} needs a fixed status and a test`);
     }
   }
   return gaps;
