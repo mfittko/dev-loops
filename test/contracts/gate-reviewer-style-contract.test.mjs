@@ -37,9 +37,9 @@ test("the reviewer agent points at the style rule", () => {
   assert.match(read("agents/review.agent.md"), /GATE-COMMENT-REVIEWER-STYLE/);
 });
 
-test("the inline layout rule names the layout, the pointer and the merge", () => {
+test("the inline layout rule names the layout, the details block and the merge", () => {
   const block = ruleBlock(read("skills/docs/gate-review-comment-contract.md"), "GATE-COMMENT-INLINE-LAYOUT");
-  for (const phrase of ["**Problem:**", "**Failing case:**", "**Fix:**", "Full text: ledger entry", "one marker per merged finding"]) {
+  for (const phrase of ["**Problem:**", "**Failing case:**", "**Fix:**", "<details><summary>Details</summary>", "one marker per merged finding"]) {
     assert.ok(block.includes(phrase), `missing: ${phrase}`);
   }
 });

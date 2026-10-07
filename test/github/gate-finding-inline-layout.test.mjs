@@ -214,17 +214,20 @@ test("cutAtSentence cuts at the last sentence boundary that fits and never insid
   assert.ok(!noBoundary.text.includes("`keep"), noBoundary.text);
 });
 
-test("summary bound: an over-length summary is cut at a sentence and points at the ledger", () => {
+test("summary bound: an over-length summary is cut at a sentence and the full text moves into details", () => {
   const sentence = "The handler drops the retry counter on every reload.";
   const summary = Array.from({ length: 30 }, () => sentence).join(" ");
   const body = renderInlineCommentBody({ severity: "high", angle: "correctness", summary }, { round: 1 });
   const problem = body.split("\n").find((line) => line.startsWith("**Problem:**"));
   assert.ok(problem.length <= PROBLEM_CAP + "**Problem:** ".length);
   assert.ok(problem.endsWith("reload."));
-  assert.equal(body.split("\n").at(-1), `Full text: ledger entry ${fingerprintFinding({ summary })}`);
+  assert.doesNotMatch(body, /ledger entry|tmp\/gate-findings/);
+  assert.equal(body.match(/<details><summary>Details<\/summary>/g).length, 1);
+  assert.ok(body.includes(summary), "the details block holds the full text");
+  assert.equal(body.split("\n").at(-1), "</details>");
 });
 
-test("merged member bound: a cut in a further member's field points at that member's ledger entry", () => {
+test("merged member bound: a cut in a further member's field lands in the details block", () => {
   const sentence = "The handler drops the retry counter on every reload.";
   const member = { ...noOpKeyed, recommendation: undefined, summary: Array.from({ length: 30 }, () => sentence).join(" ") };
   const merged = mergeSameDefectFindings([holisticKeyed, member]);
@@ -234,18 +237,20 @@ test("merged member bound: a cut in a further member's field points at that memb
   assert.ok(problem.length <= PROBLEM_CAP + "**Problem (no-op):** ".length);
   assert.ok(problem.endsWith("reload."));
   assert.ok(!lines.some((line) => line.startsWith("**Fix (no-op):**")), "a member without a recommendation renders no Fix line");
-  assert.deepEqual(lines.filter((line) => line.startsWith("Full text:")), [`Full text: ledger entry ${fingerprintFinding(member)}`]);
+  assert.deepEqual(lines.filter((line) => line.startsWith("**Problem (no-op) ")), []);
+  assert.ok(lines.includes("**Problem (no-op):**"), "the full member text is labelled in details");
+  assert.doesNotMatch(lines.join("\n"), /ledger entry/);
 });
 
-test("caps: failing case cuts at its own bound; a short comment has no pointer", () => {
+test("caps: failing case cuts at its own bound; a short comment has no details block", () => {
   const long = (n) => Array.from({ length: n }, (_, i) => `Sentence number ${i} is here.`).join(" ");
   assert.ok(FAILING_CASE_CAP !== RECOMMENDATION_CAP && RECOMMENDATION_CAP !== PROBLEM_CAP);
   const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short.", failingCase: long(40), recommendation: long(2) }, { round: 1 });
   const failing = body.split("\n").find((line) => line.startsWith("**Failing case:**"));
   assert.ok(failing.length <= FAILING_CASE_CAP + "**Failing case:** ".length);
   assert.match(failing, /\.$/);
-  assert.match(body, /Full text: ledger entry/);
-  assert.doesNotMatch(renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short." }, { round: 1 }), /Full text/);
+  assert.match(body, /<details><summary>Details<\/summary>/);
+  assert.doesNotMatch(renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short." }, { round: 1 }), /details/);
 });
 
 test("recommendation bound is separate from the summary bound", () => {
@@ -391,11 +396,12 @@ test("cutAtSentence does not pair a stray backtick with the next real span", () 
   assert.equal(cutAtSentence("a ` b. `c. d` e. more text here", 12).text, "a ` b.");
 });
 
-test("a recommendation with more than MAX_FIX_STEPS sentences renders five steps and the ledger pointer", () => {
+test("a recommendation with more than MAX_FIX_STEPS sentences renders five steps and a details block", () => {
   const recommendation = "Do one. Do two. Do three. Do four. Do five. Do six.";
   const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short.", recommendation }, { round: 1 });
   assert.equal(body.split("\n").filter((line) => /^\d+\. /.test(line)).length, 5);
-  assert.match(body, /Full text: ledger entry/);
+  assert.match(body, /<details><summary>Details<\/summary>/);
+  assert.doesNotMatch(body, /ledger entry/);
 });
 
 test("merge: shared stopwords and file identifiers do not merge two different defects", () => {
@@ -475,4 +481,24 @@ test("merge: MAX_MERGED_MEMBERS markers all fit inside the merged thread excerpt
   const markerBlockLength = markerLines.join("\n").length;
   assert.ok(markerBlockLength < MERGED_THREAD_BODY_MAX, `markers use ${markerBlockLength} of ${MERGED_THREAD_BODY_MAX}`);
   assert.ok(body.indexOf(markerLines.at(-1)) + markerLines.at(-1).length <= MERGED_THREAD_BODY_MAX);
+});
+
+test("a code-like failing case renders in an indented fenced block; a cut one keeps the full text in details", () => {
+  const failingCase = `const q = "SELECT * FROM t WHERE id = " + id;\n${Array.from({ length: 40 }, (_, i) => `run(q${i});`).join("\n")}`;
+  const body = renderInlineCommentBody({ severity: "high", angle: "security", summary: "Injection.", failingCase, recommendation: "Bind it." }, { round: 1 });
+  const lines = body.split("\n");
+  assert.ok(lines.includes("**Failing case:**"));
+  assert.equal(lines[lines.indexOf("**Failing case:**") + 1], "  ```");
+  assert.equal(body.match(/<details><summary>Details<\/summary>/g).length, 1);
+  assert.ok(body.slice(body.indexOf("<details>")).includes("run(q39);"), "details holds the full text");
+  assert.ok(!body.slice(0, body.indexOf("<details>")).includes("run(q39);"), "the visible part is capped");
+  assert.doesNotMatch(body, /ledger entry|tmp\//);
+  assert.ok(lines.every((line, i) => i === 0 || !/^(gate|verdict|summary|head sha):/i.test(line)));
+});
+
+test("a fence outgrows any backtick run in code-like content", () => {
+  const failingCase = "run(); ```` and ``` inside";
+  const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short.", failingCase }, { round: 1 });
+  assert.ok(body.includes("  `````\n  run();"), body);
+  assert.ok(body.includes("inside\n  `````"), body);
 });

@@ -82,7 +82,7 @@ verdict is computed upstream from the ledger, never from which track a finding r
 Every clean (zero-finding) angle is collapsed into one trailing comma-joined `**Clean (N):**`
 line, never a list/table row. A finding's full text always lives in EXACTLY ONE reader-reachable
 carrier — its own inline review comment (locatable) or its own body-list bullet (non-locatable) —
-never both, never neither, and never only the on-disk disposition ledger. The two exceptions are in `GATE-COMMENT-INLINE-LAYOUT`: a capped field points at its ledger entry, and a same-defect merged comment or bullet carries its members together and renders each distinct summary once, so a non-primary member's Failing case and any repeated text live in the ledger. Budget pressure on an
+never both, never neither, and never only the on-disk disposition ledger. The two exceptions are in `GATE-COMMENT-INLINE-LAYOUT`: a capped field keeps its full text in a collapsed details block, and a same-defect merged comment or bullet carries its members together and renders each distinct summary once, so a non-primary member's Failing case and any repeated text live in the ledger. Budget pressure on an
 over-long round SHORTENS a body-only finding's rendered text rather than degrading it to an
 omitted-count/ledger pointer. Both tracks render at TOP LEVEL, never through the
 `--findings-summary`/`--findings-file` blockquoted continuation-line path. Verdict evidence
@@ -94,8 +94,10 @@ corrected on its own surface (back-compat read).
 `**<severity>** · <angle>[, <angle>][ · judge: <disposition>]`. The body lines are `**Problem:**`,
 `**Failing case:**` (when the finding carries `failingCase`) and `**Fix:**` (numbered steps when
 the recommendation holds more than one action). The renderer bounds each field at a sentence
-boundary, never inside a code span or fence, and appends `Full text: ledger entry <fingerprint>`
-after a cut. The ledger keeps the full text. Reviewer inline code spans survive into the thread,
+boundary, never inside a code span or fence, and puts the full text of every cut field into one
+collapsed `<details><summary>Details</summary>` block in the same comment. A comment never names a
+local artifact. Code-like content (multi-line text, commands, payloads) renders in a fenced block
+longer than any backtick run in the content. The ledger keeps the full text. Reviewer inline code spans survive into the thread,
 and every other backtick is escaped as an entity. Findings from different angles that describe the
 same defect post as one comment. Two findings describe the same defect only when they resolve the
 same file, their lines are equal or both absent, both or neither are questions, they carry the same

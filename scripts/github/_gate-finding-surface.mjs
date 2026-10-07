@@ -433,6 +433,21 @@ function neutralizeHeaderSeparator(angle) {
   return angle.replace(MIDDLE_DOT_ENTITY_RE, HEADER_SEPARATOR_TOKEN).replace(/\u00b7/g, HEADER_SEPARATOR_TOKEN);
 }
 
+// Code-like content: multi-line text, a shell prompt, or braces, semicolons,
+// arrows and empty call parens that prose does not use.
+function isCodeLike(text) {
+  return /\n/.test(text.trim()) || /^\s*[$>]\s/.test(text) || /[{};]|=>|\(\)/.test(text);
+}
+
+// Fence longer than any backtick run in the untrusted content, so the content
+// cannot close the block. Every line is indented so no content line starts at
+// column 0, where line-anchored marker and field regexes read.
+function fenceCode(text) {
+  const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return [`  ${fence}`, ...text.trim().split("\n").map((line) => `  ${line}`), `  ${fence}`];
+}
+
 export function renderInlineCommentBody(finding, { round }) {
   // Normalized ONCE and reused for both the marker and the header (mirrors
   // renderNonLocatableBlock below): a legacy-spelled severity must never
@@ -469,28 +484,33 @@ export function renderInlineCommentBody(finding, { round }) {
     ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}`
     : "";
   const lines = [...markers, `**${sanitizeInline(severity)}** · ${angles}${judge}`];
-  // Each cut records the fingerprint of the member whose field was cut, so
-  // every pointer names the ledger entry that holds the full text.
-  const cutFingerprints = new Set();
-  const primaryFp = fingerprintFinding(finding);
-  const capped = (text, cap, fp) => {
+  // A cut field keeps its capped text visible; its full text goes into one
+  // collapsed details block at the end of the comment.
+  const cutFields = [];
+  const capped = (text, cap, label) => {
     const result = cutAtSentence(text, cap);
-    if (result.cut) cutFingerprints.add(fp);
+    if (result.cut) cutFields.push({ label, text });
     return escapeProse(result.text);
   };
-  lines.push(`**Problem:** ${capped(finding.summary, PROBLEM_CAP, primaryFp)}`);
+  lines.push(`**Problem:** ${capped(finding.summary, PROBLEM_CAP, "Problem")}`);
   if (typeof finding.failingCase === "string" && finding.failingCase.trim().length > 0) {
-    lines.push(`**Failing case:** ${capped(finding.failingCase, FAILING_CASE_CAP, primaryFp)}`);
+    if (isCodeLike(finding.failingCase)) {
+      const result = cutAtSentence(finding.failingCase, FAILING_CASE_CAP);
+      if (result.cut) cutFields.push({ label: "Failing case", text: finding.failingCase, code: true });
+      lines.push("**Failing case:**", ...fenceCode(result.text));
+    } else {
+      lines.push(`**Failing case:** ${capped(finding.failingCase, FAILING_CASE_CAP, "Failing case")}`);
+    }
   }
-  const fixSteps = (text, fp) => {
+  const fixSteps = (text, label) => {
     const recommendation = cutAtSentence(text, RECOMMENDATION_CAP);
     const allSteps = splitSentences(recommendation.text).map((step) => step.replace(/^\d+[.)]\s+/, ""));
     const steps = allSteps.slice(0, MAX_FIX_STEPS);
-    if (recommendation.cut || steps.length < allSteps.length) cutFingerprints.add(fp);
+    if (recommendation.cut || steps.length < allSteps.length) cutFields.push({ label, text });
     return steps;
   };
   if (hasRecommendation(finding)) {
-    const steps = fixSteps(finding.recommendation, primaryFp);
+    const steps = fixSteps(finding.recommendation, "Fix");
     if (steps.length === 1) {
       lines.push(`**Fix:** ${escapeProse(steps[0])}`);
     } else {
@@ -506,13 +526,18 @@ export function renderInlineCommentBody(finding, { round }) {
     if (renderedSummaries.has(normalized)) continue;
     renderedSummaries.add(normalized);
     const angle = neutralizeHeaderSeparator(escapeProse(member.angle));
-    const memberFp = fingerprintFinding(member);
-    lines.push(`**Problem (${angle}):** ${capped(member.summary, PROBLEM_CAP, memberFp)}`);
+    lines.push(`**Problem (${angle}):** ${capped(member.summary, PROBLEM_CAP, `Problem (${angle})`)}`);
     if (hasRecommendation(member)) {
-      lines.push(`**Fix (${angle}):** ${fixSteps(member.recommendation, memberFp).map((step) => escapeProse(step)).join(" ")}`);
+      lines.push(`**Fix (${angle}):** ${fixSteps(member.recommendation, `Fix (${angle})`).map((step) => escapeProse(step)).join(" ")}`);
     }
   }
-  for (const fp of cutFingerprints) lines.push(`Full text: ledger entry ${fp}`);
+  if (cutFields.length > 0) {
+    lines.push("<details><summary>Details</summary>", "");
+    for (const field of cutFields) {
+      lines.push(`**${field.label}:**`, ...(field.code ? fenceCode(field.text) : [escapeProse(field.text)]), "");
+    }
+    lines.push("</details>");
+  }
   return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 
