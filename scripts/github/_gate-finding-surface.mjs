@@ -433,6 +433,55 @@ function neutralizeHeaderSeparator(angle) {
   return angle.replace(MIDDLE_DOT_ENTITY_RE, HEADER_SEPARATOR_TOKEN).replace(/\u00b7/g, HEADER_SEPARATOR_TOKEN);
 }
 
+// Code-like content: multi-line text, a shell prompt, or braces. A bare `;` or
+// `()` is common in prose that names a call, so neither counts.
+const LINE_BREAK_RE = /\r\n|[\r\n\u2028\u2029]/;
+function isCodeLike(text) {
+  return LINE_BREAK_RE.test(text.trim()) || /^\s*[$>]\s/.test(text) || /[{}]/.test(text);
+}
+
+// The details block shares one budget well under GITHUB_COMMENT_MAX_CHARS
+// (65536): one oversized inline body would make GitHub reject the whole
+// round's review. A field above its share is cut and marked.
+const DETAILS_TOTAL_MAX_CHARS = 30000;
+const DETAILS_FIELD_MAX_CHARS = 8000;
+// Applied to the text as rendered (already escaped or entity-encoded), so the
+// budget bounds the output length. fenceCode's encoding is idempotent.
+// Prose keeps raw `<` inside code spans, so a slice must never end inside one:
+// an unclosed span would render its content as HTML. A span still open at the
+// slice end is dropped whole.
+function dropOpenCodeSpan(text) {
+  let open = null;
+  for (const run of text.matchAll(/`+/g)) {
+    if (open === null) open = { start: run.index, length: run[0].length };
+    else if (run[0].length === open.length) open = null;
+  }
+  return open === null ? text : text.slice(0, open.start).trimEnd();
+}
+
+function boundDetailsText(text, fieldCount, { prose = false } = {}) {
+  const max = Math.min(DETAILS_FIELD_MAX_CHARS, Math.floor(DETAILS_TOTAL_MAX_CHARS / fieldCount));
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  return `${prose ? dropOpenCodeSpan(head) : head} [cut]`;
+}
+
+// Entity-encodes comment delimiters so untrusted text cannot forge a marker.
+function encodeCommentDelimiters(text) {
+  return text.replaceAll("<!--", "&lt;!--").replaceAll("-->", "--&gt;");
+}
+
+// Fence longer than any backtick run in the untrusted content, so the content
+// cannot close the block. Every line is indented so no content line starts at
+// column 0, where line-anchored marker and field regexes read. Lines split on
+// every line terminator the m-flag `^` honors, and comment delimiters are
+// entity-encoded so a forged marker cannot start inside the block.
+function fenceCode(text) {
+  const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return [`  ${fence}`, ...text.trim().split(LINE_BREAK_RE).map((line) => `  ${encodeCommentDelimiters(line)}`), `  ${fence}`];
+}
+
 export function renderInlineCommentBody(finding, { round }) {
   // Normalized ONCE and reused for both the marker and the header (mirrors
   // renderNonLocatableBlock below): a legacy-spelled severity must never
@@ -469,28 +518,42 @@ export function renderInlineCommentBody(finding, { round }) {
     ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}`
     : "";
   const lines = [...markers, `**${sanitizeInline(severity)}** · ${angles}${judge}`];
-  // Each cut records the fingerprint of the member whose field was cut, so
-  // every pointer names the ledger entry that holds the full text.
-  const cutFingerprints = new Set();
-  const primaryFp = fingerprintFinding(finding);
-  const capped = (text, cap, fp) => {
+  // File and line references render as inline code right under the header.
+  // The line ref belongs to the first file, the anchor the comment sits on.
+  const refFiles = Array.isArray(finding.files) && finding.files.length > 0
+    ? finding.files
+    : typeof finding.file === "string" && finding.file.length > 0 ? [finding.file] : [];
+  if (refFiles.length > 0) {
+    const lineRef = Number.isInteger(finding.line) ? `:${finding.line}` : "";
+    lines.push(refFiles.map((f, i) => `\`${sanitizeCodeSpan(f)}${i === 0 ? lineRef : ""}\``).join(", "));
+  }
+  // A cut field keeps its capped text visible; its full text goes into one
+  // collapsed details block at the end of the comment.
+  const cutFields = [];
+  const capped = (text, cap, label) => {
     const result = cutAtSentence(text, cap);
-    if (result.cut) cutFingerprints.add(fp);
+    if (result.cut) cutFields.push({ label, text });
     return escapeProse(result.text);
   };
-  lines.push(`**Problem:** ${capped(finding.summary, PROBLEM_CAP, primaryFp)}`);
+  lines.push(`**Problem:** ${capped(finding.summary, PROBLEM_CAP, "Problem")}`);
   if (typeof finding.failingCase === "string" && finding.failingCase.trim().length > 0) {
-    lines.push(`**Failing case:** ${capped(finding.failingCase, FAILING_CASE_CAP, primaryFp)}`);
+    if (isCodeLike(finding.failingCase)) {
+      const result = cutAtSentence(finding.failingCase, FAILING_CASE_CAP);
+      if (result.cut) cutFields.push({ label: "Failing case", text: finding.failingCase, code: true });
+      lines.push("**Failing case:**", ...fenceCode(result.text));
+    } else {
+      lines.push(`**Failing case:** ${capped(finding.failingCase, FAILING_CASE_CAP, "Failing case")}`);
+    }
   }
-  const fixSteps = (text, fp) => {
+  const fixSteps = (text, label) => {
     const recommendation = cutAtSentence(text, RECOMMENDATION_CAP);
     const allSteps = splitSentences(recommendation.text).map((step) => step.replace(/^\d+[.)]\s+/, ""));
     const steps = allSteps.slice(0, MAX_FIX_STEPS);
-    if (recommendation.cut || steps.length < allSteps.length) cutFingerprints.add(fp);
+    if (recommendation.cut || steps.length < allSteps.length) cutFields.push({ label, text });
     return steps;
   };
   if (hasRecommendation(finding)) {
-    const steps = fixSteps(finding.recommendation, primaryFp);
+    const steps = fixSteps(finding.recommendation, "Fix");
     if (steps.length === 1) {
       lines.push(`**Fix:** ${escapeProse(steps[0])}`);
     } else {
@@ -506,13 +569,22 @@ export function renderInlineCommentBody(finding, { round }) {
     if (renderedSummaries.has(normalized)) continue;
     renderedSummaries.add(normalized);
     const angle = neutralizeHeaderSeparator(escapeProse(member.angle));
-    const memberFp = fingerprintFinding(member);
-    lines.push(`**Problem (${angle}):** ${capped(member.summary, PROBLEM_CAP, memberFp)}`);
+    lines.push(`**Problem (${angle}):** ${capped(member.summary, PROBLEM_CAP, `Problem (${angle})`)}`);
     if (hasRecommendation(member)) {
-      lines.push(`**Fix (${angle}):** ${fixSteps(member.recommendation, memberFp).map((step) => escapeProse(step)).join(" ")}`);
+      lines.push(`**Fix (${angle}):** ${fixSteps(member.recommendation, `Fix (${angle})`).map((step) => escapeProse(step)).join(" ")}`);
     }
   }
-  for (const fp of cutFingerprints) lines.push(`Full text: ledger entry ${fp}`);
+  if (cutFields.length > 0) {
+    lines.push("<details><summary>Details</summary>", "");
+    for (const field of cutFields) {
+      const rendered = field.code ? encodeCommentDelimiters(field.text) : escapeProse(field.text);
+      const text = boundDetailsText(rendered, cutFields.length, { prose: !field.code });
+      // Prose stays on the label line so untrusted text never starts at column 0
+      // (it could otherwise forge the header parseRenderedJudgeDisposition reads).
+      lines.push(...(field.code ? [`**${field.label}:**`, ...fenceCode(text)] : [`**${field.label}:** ${text}`]), "");
+    }
+    lines.push("</details>");
+  }
   return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 
