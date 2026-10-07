@@ -864,9 +864,18 @@ function unquoteFlagTokens(segment) {
   return segment.replace(/(['"])(-{1,2}[A-Za-z][\w-]*(?:=(?:(?!\1).)*)?)\1/g, "$2").replace(/(['"])body\1(?==)/g, "body");
 }
 
-/** Blank the body of a quoted-delimiter `$(cat <<'EOF' ...)` heredoc: literal data, only an argument word. Text after the closing delimiter stays visible. */
+/**
+ * Blank the body of a quoted-delimiter `$(cat <<'EOF' ...)` heredoc: literal data only when the substitution is an
+ * argument word. A substitution at command position, or a command piped into a shell interpreter, executes the body: keep it (fail closed).
+ * Text after the closing delimiter stays visible.
+ */
 function blankCatHeredocBodies(command) {
-  return command.replace(/(\$\(\s*cat\s+<<-?\s*(['"])(\w+)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3[ \t]*(?:\n|$))/g, "$1 $4");
+  if (/\|&?\s*(?:\S*\/)?(?:ba|z|da|k)?sh(?=\s|$)/.test(command)) return command;
+  return command.replace(/(\$\(\s*cat\s+<<-?\s*(['"])(\w+)\2[ \t]*\n)((?:[\s\S]*?\n)??)([ \t]*\3[ \t]*(?:\n|$))/g, (m, open, _q, _d, _body, close, offset) => {
+    const before = command.slice(0, offset);
+    const arg = /(?:=|[^\s;&|()][ \t]+)"?$/.test(before) && !/(?:^|[\s;&|(])(?:then|do|else|elif|if|while|until|exec)[ \t]+"?$/.test(before);
+    return arg ? `${open}${close}` : m;
+  });
 }
 
 /** Blank quoted spans for the wrapper-word checks only: double quotes honor backslash escapes, unlike `stripQuotedLiterals`. */

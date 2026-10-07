@@ -1322,6 +1322,10 @@ test("commandContainsRawPrBodyEdit denies global-flag and wrapped literal forms"
     `bash <<'EOF'\nbash -c "gh pr edit 5 --body x"\nEOF`,
     `bash <<'EOF'\ngh pr edit 5 --body x\nEOF`,
     `m="$(cat <<'EOF'\nx\nEOF\n)"\ngh pr edit 5 --body x`,
+    `$(cat <<'EOF'\ngh pr edit 5 --body x\nEOF\n)`,
+    `echo "$(cat <<'EOF'\ngh pr edit 5 --body x\nEOF\n)" | bash`,
+    `git commit -m "$(cat <<'EOF' | sh\ngh pr edit 5 --body x\nEOF\n)"`,
+    `m="$(cat <<'EOF'\nEOF\n)"; gh pr edit 5 --body y\necho "$(cat <<'EOF'\nz\nEOF\n)"`,
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), true, cmd);
   }
@@ -1351,6 +1355,7 @@ test("commandContainsRawPrBodyEdit keeps passing title, assignee and read forms"
     `git commit -m "$(cat <<'EOF'\nfix: xargs gh issue edit hole\nEOF\n)"`,
     `git commit -m "$(cat <<'EOF'\nfix(gate): deny\n\ngh pr edit with --body now reaches the gate\nEOF\n)"`,
     `git commit -m "$(cat <<'EOF'\nfix\n\ngh issue edit with -b is denied\nEOF\n)"`,
+    `git commit -m "$(cat <<'EOF'\nEOF\n)"`,
   ]) {
     assert.equal(commandContainsRawPrBodyEdit(cmd), false, cmd);
   }
@@ -1371,6 +1376,8 @@ test("commandContainsRawPrBodyApiWrite denies issues/<n>, --input, placeholder, 
     "gh api -X PATCH pulls/5?x=1 -f body=x",
     "gh api -X PATCH repos/{owner}/{repo}/issues/5 --input p.json",
     `gh api graphql -f query='mutation { updatePullRequest(input:{pullRequestId:"X", body:"b"}) { clientMutationId } }'`,
+    `$(cat <<'EOF'\ngh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body=x\nEOF\n)`,
+    `echo "$(cat <<'EOF'\ngh api -X PATCH repos/mfittko/dev-loops/pulls/5 -f body=x\nEOF\n)" | sh`,
   ]) {
     assert.equal(commandContainsRawPrBodyApiWrite(cmd, MANAGED_SLUG), true, cmd);
   }
