@@ -2,7 +2,8 @@
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, parseAllowedRefsCsv, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { commentIssue as coreCommentIssue } from "@dev-loops/core/github/issue-ops";
+import { commentIssue as coreCommentIssue, resolveCommentBody } from "@dev-loops/core/github/issue-ops";
+import { operatorOwnedCommentLineRefusal } from "../loop/adr-waiver-markers.mjs";
 import { parseArgs } from "node:util";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -26,6 +27,9 @@ Optional:
   --allowed-refs <csv>          Comma-separated numeric issue/PR ids to allow as
                                 deliberate cross-references in the body (the
                                 no-ids-in-comments guard refuses any other #<digits>)
+Refusal: a body with a line that opens with \`approve merge\` (operator-owned merge
+approval) or an \`adr-tripwire:allow\` line (ADR tripwire waiver) is refused with
+OPERATOR-OWNED-LINE, exit 1, no gh call. There is no override flag.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "issue": 17, "commentUrl": "https://github.com/owner/repo/issues/17#issuecomment-123" }
 Error output (stderr, JSON):
@@ -122,7 +126,11 @@ export function parseCommentIssueCliArgs(argv) {
 // `gh issue comment` output. `gh issue comment` prints the new comment URL on
 // success — capture it so callers don't need a follow-up read.
 export async function commentIssue(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
-  return coreCommentIssue(options, { env, ghCommand, run });
+  // Resolve once here so the check sees the same text that is posted (stdin reads once).
+  const body = await resolveCommentBody(options);
+  const refusal = operatorOwnedCommentLineRefusal(body);
+  if (refusal !== null) throw new Error(refusal);
+  return coreCommentIssue({ ...options, body, bodyFile: undefined }, { env, ghCommand, run });
 }
 
 export async function runCli(

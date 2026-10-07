@@ -105,7 +105,9 @@ draft_gate / current-head pre_approval_gate / threads / runner-lock / fan-out-pr
 - **Fresh per-merge approval** is verified against an agent-unforgeable, head-pinned
   record, in preference order: a genuine `APPROVED` review by `<login>` on the current
   head SHA (a Copilot/bot review never satisfies it), else a head-pinned operator comment
-  marker `approve merge <headSha>` authored by `<login>`. It fails closed on a stale
+  marker `approve merge <headSha>` authored by `<login>`. No agent writes that marker:
+  the comment wrappers (`comment-issue.mjs`, `edit-comment.mjs`) refuse any body line that
+  opens with `approve merge` (`OPERATOR-OWNED-LINE`, no override). It fails closed on a stale
   (earlier-commit), agent/bot-authored, or wrong-login approval, and re-gates on every
   head bump.
 - **Stable-release safety.** The wrapper only merges the PR to its base. It NEVER tags
