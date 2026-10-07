@@ -764,6 +764,13 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     envelope.retrospectiveFindings = retrospectiveFindings;
   }
 
+  // Pending retrospectives (#2488): copied from the resolved bundle so the
+  // orchestrator, which reads the envelope, can dispatch them. Present (even
+  // empty) only when the resolver set the field.
+  if (Array.isArray(bundle.pendingRetrospectives)) {
+    envelope.pendingRetrospectives = bundle.pendingRetrospectives.map((e) => ({ ...e }));
+  }
+
   // Canonical spec source. Optional: only set when the resolver
   // marks a lightweight PR-body-as-spec session, so the default (phase-doc) path
   // carries no specSource field and its envelope stays byte-identical.
@@ -1088,6 +1095,29 @@ export function validateHandoffEnvelope(envelope) {
       if (!Array.isArray(rf.allowedWriteOps) || rf.allowedWriteOps.some((v) => typeof v !== "string")) {
         errors.push({ field: "retrospectiveFindings.allowedWriteOps", reason: "must be an array of strings", got: rf.allowedWriteOps });
       }
+    }
+  }
+
+  // ----- pendingRetrospectives (optional, #2488) -----
+  if (envelope.pendingRetrospectives !== undefined && envelope.pendingRetrospectives !== null) {
+    if (!Array.isArray(envelope.pendingRetrospectives)) {
+      errors.push({ field: "pendingRetrospectives", reason: "if present, must be an array", got: envelope.pendingRetrospectives });
+    } else {
+      envelope.pendingRetrospectives.forEach((e, i) => {
+        if (!e || typeof e !== "object") {
+          errors.push({ field: `pendingRetrospectives[${i}]`, reason: "must be an object", got: e });
+          return;
+        }
+        if (e.pr !== null && !Number.isInteger(e.pr)) {
+          errors.push({ field: `pendingRetrospectives[${i}].pr`, reason: "must be an integer or null", got: e.pr });
+        }
+        if (e.mergeCommit !== null && typeof e.mergeCommit !== "string") {
+          errors.push({ field: `pendingRetrospectives[${i}].mergeCommit`, reason: "must be a string or null", got: e.mergeCommit });
+        }
+        if (e.reason !== undefined && typeof e.reason !== "string") {
+          errors.push({ field: `pendingRetrospectives[${i}].reason`, reason: "must be a string when present", got: e.reason });
+        }
+      });
     }
   }
 
