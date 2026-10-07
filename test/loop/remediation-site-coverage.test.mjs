@@ -62,7 +62,11 @@ test("one act item with three sibling sites: the fixer covers all three and the 
   }));
   assert.equal(normalized.dispositions[0].sites.filter((s) => s.status === "fixed").length, 3);
   const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [actEntry()] });
-  const next = decideDeltaNextStep({ sequence, result: deltaResult(sequence), invocation: 1, currentHead: CANDIDATE });
+  const siteCoverage = normalizeFixerDispositionHandoff({
+    headSha: CANDIDATE,
+    siteCoverage: [{ fingerprint: "fp1", returnedSites: SIBLINGS, sites: SIBLINGS.map((site) => ({ site, status: "fixed" })) }],
+  }).siteCoverage;
+  const next = decideDeltaNextStep({ sequence, result: deltaResult(sequence), invocation: 1, currentHead: CANDIDATE, siteCoverage });
   assert.equal(next.outcome, "locally_clear");
 });
 
@@ -105,13 +109,27 @@ test("same-class residue without a recorded skip reason blocks the push", () => 
   const blocked = decideDeltaNextStep({ sequence, result: deltaResult(sequence, { newFindings: [residue] }), invocation: 1, currentHead: CANDIDATE });
   assert.equal(blocked.outcome, "needs_fix");
   assert.ok(blocked.errors.some((e) => /locally_clear requires/.test(e)));
+  const reason = "generated file; the generator owns it";
+  const siteCoverage = normalizeFixerDispositionHandoff({
+    headSha: CANDIDATE,
+    siteCoverage: [{ fingerprint: "fp1", returnedSites: ["src/c.mjs"], sites: [{ site: "src/c.mjs", status: "skipped", reason }] }],
+  }).siteCoverage;
   const skipped = decideDeltaNextStep({
     sequence,
-    result: deltaResult(sequence, { newFindings: [{ ...residue, skipReason: "generated file; the generator owns it" }] }),
+    result: deltaResult(sequence, { newFindings: [{ ...residue, site: "src/c.mjs", skipReason: reason }] }),
+    invocation: 1,
+    currentHead: CANDIDATE,
+    siteCoverage,
+  });
+  assert.equal(skipped.outcome, "locally_clear");
+  // An omitted siteCoverage is [] : an unrecorded skipReason does not unblock the residue.
+  const unrecorded = decideDeltaNextStep({
+    sequence,
+    result: deltaResult(sequence, { newFindings: [{ ...residue, skipReason: "anything" }] }),
     invocation: 1,
     currentHead: CANDIDATE,
   });
-  assert.equal(skipped.outcome, "locally_clear");
+  assert.notEqual(unrecorded.outcome, "locally_clear");
 });
 
 test("residue must name an act item of the sequence", () => {

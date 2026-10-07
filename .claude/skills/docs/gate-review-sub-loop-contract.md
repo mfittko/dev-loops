@@ -928,7 +928,7 @@ its `act` disposition, leaves the fixer act list together with the other members
 finding cluster, and lands in the optional `escalations[]` array
 of the round result and of the enriched ledger that `judge-pass --ledger-out` writes (the escalation
 ledger; the earlier durable `write-gate-findings-log` record and the consolidate-fanin ledger never carry it),
-with the surface key, the round heads and the fingerprints of the withheld cluster siblings (`clusterFingerprints[]`). The round's other
+as `{ surfaceKey, rounds, heads, fingerprint, summary, clusterFingerprints }`, where `clusterFingerprints[]` holds the fingerprints of the withheld cluster siblings and is empty when there are none. The round's other
 act items proceed to the fixer. The gate coordinator returns the escalation in its round result,
 and the dev-loop coordinator stops at the human checkpoint for one of two outcomes. The first
 outcome is a design decision recorded in the spec: it changes `specDigest` and resets the count.

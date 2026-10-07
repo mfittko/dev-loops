@@ -199,7 +199,7 @@ export function deriveDeltaOutcome(result) {
  * @param {{ sequence: ReturnType<typeof startDeltaSequence>, siteCoverage?: object[] }} context
  * @returns {string[]}
  */
-export function validateDeltaResult(result, { sequence, siteCoverage } = {}) {
+export function validateDeltaResult(result, { sequence, siteCoverage = [] } = {}) {
   const errors = [];
   if (!result || typeof result !== "object") return ["result must be an object"];
   if (result.reviewBaselineHead !== sequence?.reviewBaselineHead) {
@@ -233,7 +233,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage } = {}) {
     // null is an absent optional field
     if (f?.residueOf != null && !expectedRefs.has(f.residueOf)) errors.push(`newFindings[${i}].residueOf ${JSON.stringify(f.residueOf)} is not in the act set`);
     if (f?.skipReason != null && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
-    if (siteCoverage !== undefined && nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
+    if (nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
       const actItem = sequence.actItems.find((item) => item.ref === f.residueOf);
       const recorded = recordedSkipReason(siteCoverage, actItem.fingerprint ?? actItem.ref, nonEmpty(f.site) ? f.site.trim() : "");
       if (recorded !== f.skipReason.trim()) {
@@ -241,7 +241,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage } = {}) {
       }
     }
   }
-  if (siteCoverage !== undefined) errors.push(...siteCoverageGaps(sequence?.actItems ?? [], siteCoverage));
+  errors.push(...siteCoverageGaps(sequence?.actItems ?? [], siteCoverage));
 
   if (!Array.isArray(result.widenedReads)) errors.push("widenedReads[] is required (empty when nothing was widened)");
   else for (const [i, read] of result.widenedReads.entries()) {

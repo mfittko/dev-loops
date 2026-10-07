@@ -88,8 +88,10 @@ Inputs:
                                (recurrence escalation, below).
   --ledger-out <path>          Write the enriched { overallVerdict, findings, scopeDrift,
                                escalations? } to this path as JSON; the optional
-                               escalations[] lists each escalated surface (with its
-                               withheld clusterFingerprints) and the stdout result
+                               escalations[] lists each escalated surface as
+                               { surfaceKey, rounds, heads, fingerprint, summary,
+                               clusterFingerprints } (clusterFingerprints is [] when
+                               no sibling was withheld) and the stdout result
                                carries it too, plus escalationsSkipped when the checkout
                                is not at the round head, so the durable disposition ledger
                                carries what the judge consciously marked act/defer/reject.
@@ -1006,7 +1008,7 @@ export async function judgePassCli(
   const dedupedAct = dedupeActListByCluster(fixerAct, result.clusters, result.enriched);
   const escalationRecords = escalations.map(({ finding, ...record }) => ({
     ...record,
-    ...(siblingFingerprints.has(finding) ? { clusterFingerprints: siblingFingerprints.get(finding) } : {}),
+    clusterFingerprints: siblingFingerprints.get(finding) ?? [],
   }));
 
   const written = new Set();

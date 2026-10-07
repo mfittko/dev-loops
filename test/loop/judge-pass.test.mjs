@@ -1622,6 +1622,7 @@ test("judge-pass recurrence: a third-round repeat lands in escalations[], not th
   assert.equal(payload.escalations.length, 1);
   assert.deepEqual(payload.escalations[0].surfaceKey, { file: GUARD_FILE, symbol: "isSameDefect" });
   assert.equal(payload.escalations[0].rounds, 3);
+  assert.deepEqual(payload.escalations[0].clusterFingerprints, []);
   assert.deepEqual(payload.escalations[0].heads, ["1".repeat(40), "2".repeat(40), HEAD]);
   assert.deepEqual(payload.act.map((f) => f.summary), ["a doc line is stale"]);
   const actList = JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"));
@@ -1638,14 +1639,19 @@ test("judge-pass recurrence: a second-round repeat stays in the act list", async
   assert.equal(payload.act.length, 2);
 });
 
-test("judge-pass recurrence: rounds of another gate, PR or specDigest are not counted", async () => {
-  const other = "sha256:" + "f".repeat(64);
-  const { payload } = await recurrenceCase({
-    priorRounds: [{ gate: "draft_gate" }, { pr: 9 }, { specDigest: other }],
+const NOT_COUNTED_AXES = {
+  gate: { gate: "draft_gate" },
+  PR: { pr: 9 },
+  specDigest: { specDigest: "sha256:" + "f".repeat(64) },
+};
+for (const [axis, excluded] of Object.entries(NOT_COUNTED_AXES)) {
+  // One counted prior round plus the excluded one: a broken filter reaches 3 rounds and escalates.
+  test(`judge-pass recurrence: a round of another ${axis} is not counted`, async () => {
+    const { payload } = await recurrenceCase({ priorRounds: [{}, excluded] });
+    assert.equal(payload.escalations, undefined);
+    assert.equal(payload.act.length, 2);
   });
-  assert.equal(payload.escalations, undefined);
-  assert.equal(payload.act.length, 2);
-});
+}
 
 test("judge-pass recurrence: ledgers written before the new fields count nothing and still pass", async () => {
   const { payload } = await recurrenceCase({ priorRounds: [{ withDigest: false }, { withDigest: false }] });

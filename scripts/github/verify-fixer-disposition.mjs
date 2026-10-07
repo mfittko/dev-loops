@@ -19,7 +19,9 @@ import {
   FIXER_DISPOSITION_FAILED_STEP,
   FIXER_DISPOSITION_KIND,
   normalizeFixerDispositionHandoff,
+  siteCoverageGaps,
 } from "@dev-loops/core/loop/fixer-disposition";
+import { toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
 
 const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> --fixer-plan <path> [--tmp-root <path>]
 Enforce GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: verify every review thread a fixer
@@ -202,8 +204,25 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: order.headSha, headSha: options.headSha }, runtime);
     if (!contained.contained) throw new Error(`the work order head ${order.headSha} is not contained by the observed head ${options.headSha}: ${contained.reason}`);
   }
+  const handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
+  // GATE-EXEC-REMEDIATION-SITE-QUERY: an act-list work order's items with a siteQuery need a coverage record.
+  const actRead = (order.requiredReads ?? []).find((read) => read?.kind === "act-list");
+  if (actRead) {
+    let actList;
+    try {
+      actList = JSON.parse(await readFile(actRead.path, "utf8"));
+    } catch {
+      throw new Error(`Cannot read the work order's act list ${actRead.path}`);
+    }
+    const coverage = [
+      ...(handoff.siteCoverage ?? []),
+      ...handoff.dispositions.filter((entry) => entry.fingerprint && (entry.sites || entry.returnedSites)),
+    ];
+    const gaps = siteCoverageGaps(toDeltaActItems(actList), coverage);
+    if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
+  }
   return {
-    handoff: normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() }),
+    handoff,
     delivery: { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity },
   };
 }
