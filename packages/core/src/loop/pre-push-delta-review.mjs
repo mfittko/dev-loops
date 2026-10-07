@@ -193,13 +193,14 @@ export function deriveDeltaOutcome(result) {
 /**
  * Validate a DeltaPrePushReviewResult against its sequence. Returns the list of
  * problems; an empty list means the result is well formed.
+ * Every act item with a site query needs a coverage record, and each `skipReason` must equal the
+ * reason recorded for its site. An omitted `siteCoverage` counts as []. `membershipOnly` skips both
+ * checks, for callers that only confirm the result belongs to the act list and head.
  * @param {unknown} result
- * When `siteCoverage` is passed (the pre-push check always passes it), every act item with a site
- * query needs a coverage record, and each `skipReason` must equal the reason recorded for its site.
- * @param {{ sequence: ReturnType<typeof startDeltaSequence>, siteCoverage?: object[] }} context
+ * @param {{ sequence: ReturnType<typeof startDeltaSequence>, siteCoverage?: object[], membershipOnly?: boolean }} context
  * @returns {string[]}
  */
-export function validateDeltaResult(result, { sequence, siteCoverage = [] } = {}) {
+export function validateDeltaResult(result, { sequence, siteCoverage = [], membershipOnly = false } = {}) {
   const errors = [];
   if (!result || typeof result !== "object") return ["result must be an object"];
   if (result.reviewBaselineHead !== sequence?.reviewBaselineHead) {
@@ -233,7 +234,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [] } = {}
     // null is an absent optional field
     if (f?.residueOf != null && !expectedRefs.has(f.residueOf)) errors.push(`newFindings[${i}].residueOf ${JSON.stringify(f.residueOf)} is not in the act set`);
     if (f?.skipReason != null && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
-    if (nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
+    if (!membershipOnly && nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
       const actItem = sequence.actItems.find((item) => item.ref === f.residueOf);
       const recorded = recordedSkipReason(siteCoverage, actItem.fingerprint ?? actItem.ref, nonEmpty(f.site) ? f.site.trim() : "");
       if (recorded !== f.skipReason.trim()) {
@@ -241,7 +242,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [] } = {}
       }
     }
   }
-  errors.push(...siteCoverageGaps(sequence?.actItems ?? [], siteCoverage));
+  if (!membershipOnly) errors.push(...siteCoverageGaps(sequence?.actItems ?? [], siteCoverage));
 
   if (!Array.isArray(result.widenedReads)) errors.push("widenedReads[] is required (empty when nothing was widened)");
   else for (const [i, read] of result.widenedReads.entries()) {
