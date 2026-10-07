@@ -116,7 +116,7 @@ export function renderWorkOrder(workOrder) {
   // headRefName is PR-supplied: JSON-quote it (and paths) so a backtick cannot close a span and inject prose.
   const { branch, allowedPaths } = workOrder.mutationAuthority;
   const task = workOrder.phase === "commit_only"
-    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery. Start from the \`siteCoverage\` skeleton in the work order JSON below: set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site, and change nothing else.`
+    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery. Start from the \`siteCoverage\` skeleton in the work order JSON below: set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site, and change nothing else except replacing each \`FILL:\` noSitesReason with the outcome of running that act item's siteQuery.`
     : `Apply and commit any fixes not yet committed, then push, reply to and resolve the addressed threads per agents/fixer.agent.md (pass \`--disposition fixed\` and the full 40-character SHA of the fixing commit in each fixed reply), then write the disposition handoff \`{ headSha, dispositions: [...] }\` (headSha = the pushed PR head) to \`${dispositionPath}\`. Also write \`siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }]\` in that handoff, one entry per act item that has a siteQuery (threadless items included): verify-fixer-disposition refuses a handoff without it. A threadless act item gets no disposition handoff entry; every entry's \`threadId\` is a review-thread node id.`;
   return `# Fixer work order (ADR 0106)
 
@@ -150,9 +150,9 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads }) {
   }
   if (!threads) {
     if (!delta) throw new Refusal(`--phase full with --act-list-file needs --delta-result naming a clearing delta result: ${next}`);
-    const clears = delta.outcome === "locally_clear"
-      || (delta.outcome === "bounded_out" && record?.nextStep === "push_to_gate" && record.candidateHead === delta.candidateHead);
-    if (!clears) throw new Refusal(`--phase full refused: the delta result's outcome ${JSON.stringify(delta.outcome)} does not clear the push; ${next}`);
+    // The decided nextStep in the record for this head clears the push, not the result file's outcome.
+    const clears = record && record.candidateHead === delta.candidateHead && record.actSetId === delta.actSetId;
+    if (!clears) throw new Refusal(`--phase full refused: no delta record at ${recordPath} holds a clearing nextStep for the --delta-result's candidate and act set; ${next}`);
     return;
   }
   if (!record) throw new Refusal(`--phase full with --threads-file needs a delta record at ${recordPath} from a thread-route delta review: ${next}`);

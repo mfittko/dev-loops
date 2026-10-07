@@ -101,6 +101,7 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
   if (entry.noSitesReason !== undefined) {
     if (!isNonEmptyString(entry.noSitesReason)) throw new Error(`${label} noSitesReason must be a non-empty string`);
     out.noSitesReason = entry.noSitesReason.trim();
+    if (out.noSitesReason.startsWith("FILL:")) throw new Error(`${label} noSitesReason is the unedited skeleton placeholder; replace it with the outcome of running the siteQuery`);
   }
   if (entry.ruleCitations !== undefined) {
     if (!Array.isArray(entry.ruleCitations) || !entry.ruleCitations.every((id) => typeof id === "string" && RULE_ID_PATTERN.test(id.trim()))) {

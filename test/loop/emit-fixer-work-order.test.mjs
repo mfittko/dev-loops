@@ -81,7 +81,7 @@ async function withFixture(fn) {
     const writeRecord = async (over = {}) => {
       await mkdir(path.dirname(recordPath), { recursive: true });
       await writeFile(recordPath, JSON.stringify({
-        reviewBaselineHead: head, candidateHead: "c".repeat(40), actSetId: "0".repeat(16), invocation: 1,
+        reviewBaselineHead: head, candidateHead: "c".repeat(40), actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: ACT }).actSetId, invocation: 1,
         outcome: "locally_clear", nextStep: "push", items: [{ ref: "T1", status: "resolved" }], ...over,
       }));
     };
@@ -154,25 +154,29 @@ test("delta gate: an act-list --phase full with a push-clearing delta result at 
 });
 
 test("delta gate: an act-list --phase full refuses a non-clearing or other-head delta result", async () => {
-  await withFixture(async ({ head, files, emit }) => {
+  await withFixture(async ({ head, files, emit, recordPath }) => {
+    await rm(recordPath);
     for (const bad of [
       deltaResultFor(head, { outcome: "needs_fix" }),
       deltaResultFor(head, { actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["e"] }] }),
       clearingDeltaFor("b".repeat(40)),
     ]) {
       await writeFile(files.delta, JSON.stringify(bad));
-      await assert.rejects(emit({ deltaResult: files.delta }), /does not belong to this act list|does not clear the push/, JSON.stringify(bad.outcome));
+      await assert.rejects(emit({ deltaResult: files.delta }), /does not belong to this act list|no delta record[^]*commit_only/, JSON.stringify(bad.outcome));
     }
   });
 });
 
-test("delta gate: a bounded_out delta result clears only with a push_to_gate record for its candidate", async () => {
-  await withFixture(async ({ head, files, emit, writeRecord }) => {
-    await writeFile(files.delta, JSON.stringify(deltaResultFor(head)));
+test("delta gate: the decided nextStep in the record clears, whatever outcome the result file states", async () => {
+  await withFixture(async ({ head, files, emit, writeRecord, recordPath }) => {
+    await writeFile(files.delta, JSON.stringify(deltaResultFor(head, { outcome: "needs_fix" })));
     await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", invocation: 3 });
     assert.equal((await emit({ deltaResult: files.delta })).workOrder.phase, "full");
-    await rm(path.join(path.dirname(files.actList), "..", "gate-delta"), { recursive: true });
-    await assert.rejects(emit({ deltaResult: files.delta }), /does not clear the push/);
+    // A record for another candidate does not clear this result.
+    await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", invocation: 3, candidateHead: "d".repeat(40) });
+    await assert.rejects(emit({ deltaResult: files.delta }), (err) => err.message.includes(recordPath) && /commit_only/.test(err.message));
+    await rm(recordPath);
+    await assert.rejects(emit({ deltaResult: files.delta }), (err) => err.message.includes(recordPath) && /commit_only/.test(err.message));
   });
 });
 
@@ -295,6 +299,7 @@ test("F1/F4: changing act list, threads, allowed paths, branch, phase or head ch
       actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: widened }).actSetId,
       actionableItems: ["act-1", "act-2"].map((ref) => ({ ref, status: "resolved", evidence: ["guarded"] })),
     })));
+    await writeRecord({ actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: widened }).actSetId });
     variants.push(await emit());
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [] }));
     await writeRecord({ items: [] });
@@ -498,13 +503,15 @@ test("F3: delta mode emits at the PR head; after a local fix commit a second com
 // ---------------------------------------------------------------------------
 
 test("F4: two checkout roots emit equal digests with independently valid materializations", async () => {
-  await withFixture(async ({ root, wt, head, files, emit }) => {
+  await withFixture(async ({ root, wt, head, files, emit, recordPath }) => {
     const clone = path.join(path.dirname(root), "clone");
     git(path.dirname(root), "clone", "-q", root, clone);
     git(clone, "branch", "-q", "issue-1", `origin/issue-1`);
     const cloneAct = path.join(clone, "tmp", "act.json");
     await mkdir(path.dirname(cloneAct), { recursive: true });
     await writeFile(cloneAct, await readFile(files.actList));
+    await mkdir(path.join(clone, "tmp", "gate-delta"), { recursive: true });
+    await writeFile(path.join(clone, "tmp", "gate-delta", `${head}.json`), await readFile(recordPath));
     const a = await emit();
     const b = await emit({ cwd: clone, actListFile: cloneAct });
     assert.equal(a.workOrderDigest, b.workOrderDigest);
@@ -877,12 +884,16 @@ test("a handback made by filling the skeleton passes check-pre-push-delta input 
       if (site.kind === "input_form") Object.assign(site, { status: "fixed", test: "test/a.test.mjs" });
       else Object.assign(site, { status: "skipped", reason: "out of scope" });
     }
-    siteCoverage[2].noSitesReason = "the query returned nothing";
     const candidate = "b".repeat(40);
     const coverage = path.join(path.dirname(files.actList), "coverage.json");
     await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage }));
     const seam = { stdout: { write: () => {} }, tmpRoot: path.dirname(files.actList), revParse: (_w, rev) => (rev === "HEAD" ? candidate : rev), isAncestor: () => true };
-    const out = runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--site-coverage", coverage], seam);
+    const args = ["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--site-coverage", coverage];
+    // An entry whose FILL placeholder is unedited is refused.
+    assert.throws(() => runCli(args, seam), /replace it with the outcome of running the siteQuery/);
+    siteCoverage[2].noSitesReason = "the query returned nothing";
+    await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage }));
+    const out = runCli(args, seam);
     assert.equal(out.input.siteCoverage.length, 3);
     // The unfilled skeleton is refused.
     await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage: workOrder.siteCoverage }));

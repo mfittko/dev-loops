@@ -344,3 +344,9 @@ test("normalizeFixerDispositionHandoff refuses a count-valued returnedSites and 
     /not counts; expected returnedSites: \["<site>", \.\.\.\] and sites: \[\{ "site": "<site>", "status": "fixed"\|"skipped"/,
   );
 });
+
+test("normalizeFixerDispositionHandoff refuses an unedited FILL noSitesReason and accepts a real one", () => {
+  const handoff = (noSitesReason) => ({ headSha: SHA, siteCoverage: [{ fingerprint: "fp", noSitesReason }] });
+  assert.throws(() => normalizeFixerDispositionHandoff(handoff("FILL: run the siteQuery")), /replace it with the outcome of running the siteQuery/);
+  assert.equal(normalizeFixerDispositionHandoff(handoff("the query returned nothing")).siteCoverage[0].noSitesReason, "the query returned nothing");
+});
