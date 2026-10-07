@@ -29,11 +29,15 @@ test("the rule pins the orchestrator-owned size waiver as the sole exit from res
   assert.match(row, /only case where the no-resume rule yields/u);
 });
 
-test("the rule keeps a size-budget escalate advisory and enforced at merge", () => {
+test("the escalate wording aligns to the existing runner rule on the rule row, the ADR and the SKILL.md paragraph", () => {
   const row = doc.split("\n").find((line) => line.includes("<!-- rule: ADR-TRIPWIRE-EARLY-SURFACE -->"));
-  const wording = /size-budget `block` stops; an `escalate` is reported in the hand-back and is enforced at merge by the approve-merge marker \(merge-pr size_budget_human_approval\)/u;
-  assert.match(row, wording);
-  assert.match(read("skills/dev-loop/SKILL.md"), wording);
-  assert.match(read("docs/decisions/0123-adr-tripwire-early-surface.md"), wording);
-  assert.doesNotMatch(row, /escalate. (stops|it is `resolve_size_budget`)/u);
+  const adr = read("docs/decisions/0123-adr-tripwire-early-surface.md");
+  const paragraph = read("skills/dev-loop/SKILL.md").split("\n").find((line) => line.startsWith("The size-budget `block` and tripwire stops apply at the ready boundary"));
+  assert.ok(paragraph);
+  const wording = /During draft rounds a size-budget `escalate` is advisory \(reported in the hand-back\)\. After the ready flip the existing runner stop on `escalate` applies, and merge-pr's `size_budget_human_approval` enforces the approve-merge marker\./u;
+  const contradiction = /escalate`? (is advisory (at every boundary|after the ready flip)|(stops|maps to `?resolve_size_budget|it is `resolve_size_budget)|[^.]*waiver)|advisory at every boundary|stops at the ready boundary|escalate`[^.]*(waive|waiver)/u;
+  for (const surface of [row, adr, paragraph]) {
+    assert.match(surface, wording);
+    assert.doesNotMatch(surface, contradiction);
+  }
 });
