@@ -123,6 +123,7 @@ export function expandDispatchUnits(units, configuredGroupNames) {
   for (const unit of unitList) {
     if (typeof unit?.name === "string" && unit.name.length > 0) collisionNames.add(unit.name);
   }
+  const hasGroup = (u) => typeof u?.group === "string" && u.group.trim().length > 0;
   const out = [];
   for (const unit of unitList) {
     const angles = normalizeUnitAngles(unit);
@@ -133,7 +134,7 @@ export function expandDispatchUnits(units, configuredGroupNames) {
       // records the RESOLVED unit's own name as `group`.
       if (angles.length <= REVIEWER_UNIT_MAX_ANGLES) {
         // An already-expanded unit (a pending sub-unit) keeps its recorded `group`.
-        out.push({ name: unit.name, angles, group: typeof unit.group === "string" ? unit.group : unit.name });
+        out.push({ name: unit.name, angles, group: hasGroup(unit) ? unit.group : unit.name });
       } else {
         for (let i = 0; i < angles.length; i += REVIEWER_UNIT_MAX_ANGLES) {
           const chunk = angles.slice(i, i + REVIEWER_UNIT_MAX_ANGLES);
@@ -147,7 +148,7 @@ export function expandDispatchUnits(units, configuredGroupNames) {
       // emitter can derive the packed bin's scope from the same identity;
       // ordinary singleton units retain the historical angle-name scope.
       // An already-expanded one-angle tail keeps its recorded `group`.
-      const group = typeof unit?.group === "string" ? unit.group : null;
+      const group = hasGroup(unit) ? unit.group : null;
       for (const angle of angles) out.push({ name: isPackedUnitName(unit.name) ? unit.name : angle, angles: [angle], group });
     }
   }
