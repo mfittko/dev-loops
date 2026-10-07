@@ -740,9 +740,37 @@ test("issue 2511: a carried angle in an over-cap configured group strips per cap
   });
 });
 
-// Issue 2511: a fully carried group is dropped from --pending: no angle-suffix
-// file and no sentinel is written for it, and the surviving unit is unaffected.
-test("--pending writes no suffix or sentinel for a fully carried group (issue 2511)", async () => {
+// Issue 2511: --pending with an over-cap configured group and NO carry keeps the
+// tail unit's `group` (expandDispatchUnits re-expands the already-split one-angle unit).
+test("issue 2511: --pending without carry keeps group on the over-cap tail unit and the ledger writer accepts it", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const angles = ["srp", "soc", "ocp", "lsp", "isp", "dip", "pr-checklist"];
+    await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: {
+      preApproval: { angles: [{ name: "holistic", enabled: false }] },
+      fanout: { groups: [{ name: "design-solid", angles: angles.slice(0, 6) }], maxAnglesPerGroup: 6 },
+    } }));
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, {});
+    const options = parseWriteGateContextCliArgs(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--angles", JSON.stringify(angles)]);
+    await writeGateContext({ ...options, config, fanoutDispatch: fanout }, { repoRoot });
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(emitted.stdout);
+    const tail = payload.units.find((unit) => unit.angles.length === 1 && unit.angles[0] === "dip");
+    assert.equal(tail?.group, "design-solid");
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const provenance = { distinctReviewers: payload.units.length, perAngle: payload.units.flatMap((unit, index) => unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, ...(unit.group === null ? {} : { group: unit.group }) }))) };
+    await writeGateFindingsLog({ repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA, verdict: "clean",
+      findings: "[]", executionMode: "fanout_fanin", provenance: JSON.stringify(provenance), emitPlan, tmpRoot }, { repoRoot });
+  });
+});
+
+// Issue 2511: a fully carried group is dropped from --pending: it is absent from
+// the dispatched units (so no reviewer can create a sentinel for its scope), no
+// angle-suffix artifact is written, and the surviving unit is unaffected.
+test("--pending drops a fully carried group from units and writes no suffix artifact for it (issue 2511)", async () => {
   await withTmpDir(async (tmpDir) => {
     const config = { version: 1, gates: { fanout: { groups: [{ name: "design-simplicity", angles: ["dry", "kiss"] }, { name: "perf-pair", angles: ["perf", "memory"] }] } } };
     const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), ["dry", "kiss", "perf", "memory"], { carriedAngles: ["dry", "kiss"] });
@@ -753,6 +781,7 @@ test("--pending writes no suffix or sentinel for a fully carried group (issue 25
     const { units } = JSON.parse(result.stdout);
     assert.deepEqual(units.map((u) => u.angles), [["perf", "memory"]]);
     assert.equal(units[0].group, "perf-pair");
+    assert.ok(!units.some((u) => u.angles.includes("dry") || u.angles.includes("kiss") || u.group === "design-simplicity"), "dropped unit is not dispatched");
     const names = await readdir(dir);
     assert.deepEqual(names.filter((n) => /(^|[-.])(dry|kiss|design-simplicity)([-.]|$)/.test(n)), [], `no suffix/sentinel artifacts for the dropped unit: ${names.join(", ")}`);
   });
