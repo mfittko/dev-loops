@@ -39,6 +39,9 @@
       "id": "ADR-TRIPWIRE-STANDING-WAIVER"
     },
     {
+      "id": "OPERATOR-OWNED-LINE"
+    },
+    {
       "id": "ADR-WORTHY-PERSIST",
       "enforcement": "doc"
     },
