@@ -933,7 +933,7 @@ test("retrospective_checkpoint: identity-less and malformed records refuse namin
   }
 });
 
-test("retrospective_checkpoint: a complete or skipped record for the earlier merge allows the merge", async () => {
+test("retrospective_checkpoint: an empty pendingRetrospectives result (evaluator stubbed) allows the merge", async () => {
   for (const checkpointState of ["complete", "skipped"]) {
     const { runtime, calls } = makeRuntime({ configExtra: RETRO_CONFIG });
     runtime.resolvePendingRetrospectives = () => ({ checkpointState, pendingRetrospectives: [] });

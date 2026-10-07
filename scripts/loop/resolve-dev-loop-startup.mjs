@@ -23,7 +23,7 @@ import {
   resolveEffectiveAsyncStartMode,
   ASYNC_START_STATUS,
 } from "@dev-loops/core/loop/async-start-contract";
-import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { detectRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
 import {
   OWNERSHIP_STATE,
@@ -612,7 +612,7 @@ export function resolvePendingRetrospectives({ config, cwd, env = process.env, r
       staleness = { stale: true, pending: null, reason: "checkpoint_identity_missing" };
     } else {
       const currentRepo = detectRepoSlug(checkpointRepoRoot);
-      if (currentRepo === null || identity.repo !== currentRepo) {
+      if (!repoSlugEquals(identity.repo, currentRepo)) {
         // A checkpoint for any other repository cannot authorize association
         // lookups or discharge a cycle here.
         staleness = { stale: true, pending: null, reason: "checkpoint_foreign_repo" };
@@ -653,7 +653,7 @@ export function resolvePendingRetrospectives({ config, cwd, env = process.env, r
       entry = { pr: identity.prNumber, mergeCommit: identity.mergeCommit };
     }
   } else if ((durableState === "required" || durableState === "missing") && identity !== null) {
-    const foreign = detectRepoSlug(checkpointRepoRoot) !== identity.repo;
+    const foreign = !repoSlugEquals(identity.repo, detectRepoSlug(checkpointRepoRoot));
     entry = foreign
       ? { pr: null, mergeCommit: null, reason: "checkpoint_foreign_repo" }
       : { pr: identity.prNumber, mergeCommit: identity.mergeCommit };

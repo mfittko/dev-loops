@@ -3773,10 +3773,23 @@ test("buildResolveDevLoopStartupResult: none, complete and skipped checkpoints r
   }
 });
 
+test("buildResolveDevLoopStartupResult: a required record whose repo differs only in case keeps its identity", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    writeCheckpoint(tempDir, { state: "required", identity: { repo: "MFittko/dev-loops", prNumber: 7, mergeCommit: "a786237ad6f7e9bc4facdc64c14a0dbf3e1c5f2c" } });
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(), cwd: tempDir, config: RETROSPECTIVE_CONFIG,
+      resolveHasNewerMerge: unreachableHasNewerMerge(),
+    });
+    assert.deepEqual(result.bundle.pendingRetrospectives, [{ pr: 7, mergeCommit: "a786237ad6f7e9bc4facdc64c14a0dbf3e1c5f2c" }]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("buildResolveDevLoopStartupResult: a required record naming another repo yields checkpoint_foreign_repo with null identity", () => {
   const tempDir = stampRepoWithOrigin();
   try {
-    writeCheckpoint(tempDir, { state: "required", identity: { repo: "other/elsewhere", prNumber: 7, mergeCommit: "a786237ad6f7e9bc4facdc64c14a0dbf3e1c5f2c" } });
     for (const state of ["required", "missing"]) {
       writeCheckpoint(tempDir, { state, identity: { repo: "other/elsewhere", prNumber: 7, mergeCommit: "a786237ad6f7e9bc4facdc64c14a0dbf3e1c5f2c" } });
       const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {

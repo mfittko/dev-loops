@@ -1,4 +1,4 @@
-# 0125. The retrospective checkpoint is enforced at merge, not at startup
+# 0125. The retrospective checkpoint is enforced at merge
 
 ## Status
 
@@ -6,7 +6,7 @@ Accepted — 2026-10-07 ([issue 2488](https://github.com/mfittko/dev-loops/issue
 
 ## Context
 
-Amends [0024](./0024-retrospective-advisory-reversal.md). Record 0024 decided that the retrospective never blocks merge or any PR-lifecycle transition, and that a future blocking proposal must supersede it. This record narrows 0024 and does not supersede it. Retrospective findings stay advisory. Record 0024 stays unedited.
+Amends [0024](./0024-retrospective-advisory-reversal.md). Record 0024 decided that the retrospective never blocks merge or any PR-lifecycle transition, and that a future blocking proposal must supersede it. This record amends 0024 by narrowing its never-block rule; 0024 stays in force. Retrospective findings stay advisory. Record 0024 stays unedited.
 
 The checkpoint gate was repo-global and sat at loop startup. One merged unit with an undischarged retrospective returned `needs_reconcile` for every other unit, although the units were independent. Evidence is in [issue 2488](https://github.com/mfittko/dev-loops/issues/2488): the pending retrospective for PR 2679 stopped startup for PRs 2686 and 2687. A retrospective can run in parallel with unrelated work, so the startup block bought no safety.
 
@@ -20,10 +20,10 @@ We move enforcement of the checkpoint completion state from startup to `merge-pr
 - Both sites stay gated on `workflow.requireRetrospective`. With the flag unset or `false`, neither site reads the checkpoint file or runs the ancestry lookup.
 - The qualifying-merge rule is unchanged: a PR merged into the configured base branch after the recorded merge commit.
 
-The gate is not weaker overall. The obligation moves from the start of the next unit to the merge of the next unit, so retrospectives run in parallel but cannot pile up.
+The obligation moves from the start of the next unit to the merge of the next unit, so retrospectives run in parallel and cannot pile up.
 
 Rejected alternatives: keep the startup block (idles independent units), and drop enforcement (lets retrospectives lapse silently).
 
 ## Consequences
 
-Independent units start in parallel while a retrospective runs. A merge waits for the previous merge's retrospective to be recorded as `complete` or `skipped`. Retrospective findings remain advisory and never block a merge. Only the completion state of the earlier merge's checkpoint does. A record that cannot be read, parsed, or tied to this repository blocks the merge until it is re-recorded.
+Independent units start in parallel while a retrospective runs. A merge waits for the previous merge's retrospective to be recorded as `complete` or `skipped`. The completion state of the earlier merge's checkpoint is the only retrospective input that blocks a merge. Retrospective findings remain advisory. A record that cannot be read, parsed, or tied to this repository blocks the merge until it is re-recorded.
