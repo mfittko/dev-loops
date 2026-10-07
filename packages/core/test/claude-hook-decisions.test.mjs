@@ -1138,6 +1138,13 @@ test("decideBashGate denies an &-detached wait-for-units call and allows the for
   assert.equal(detached.decision, "deny");
   assert.match(detached.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
   assert.equal(decideBashGate({ command: base, ...common }).decision, "allow");
+  for (const script of ["dev-loops-run scripts/loop/wait-for-gate-units.mjs", "node /pkg/scripts/loop/wait-for-gate-units.mjs"]) {
+    const direct = `${script} --emit-plan /r/tmp/p.json --tmp-root /w/tmp`;
+    const denied = decideBashGate({ command: `${direct} > /tmp/w.log 2>&1 &`, ...common });
+    assert.equal(denied.decision, "deny");
+    assert.match(denied.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+    assert.equal(decideBashGate({ command: direct, ...common }).decision, "allow");
+  }
 });
 
 // #2065 AC2/AC3 (OPTION-C, prevention-only): the coarse fail-closed classifier denies a

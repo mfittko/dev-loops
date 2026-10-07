@@ -68,24 +68,38 @@ async function readPlan(planPath) {
   return plan;
 }
 
+const nonEmpty = (value) => typeof value === "string" && value.length > 0;
+function requireIdentity(source, label) {
+  for (const field of ["workOrderRef", "workOrderDigest", "executionIdentity"]) {
+    if (!nonEmpty(source?.[field])) throw new Error(`${label} carries no compact work-order ${field}`);
+  }
+}
+function requireRound(gate, headSha) {
+  if (!nonEmpty(gate)) throw new Error("plan carries no gate");
+  if (typeof headSha !== "string" || !/^[0-9a-f]{40}$/u.test(headSha)) throw new Error("plan carries no 40-hex headSha");
+}
+
 /** Normalize a plan into { gate, headSha, role, units: [{ scope, angles, outputRefs, receipt query }] }. */
 function selectUnits({ plan, judge, wanted }) {
   const compact = (unit) => ({ workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity });
   if (judge) {
     const { gate, headSha } = plan.workOrder?.roundIdentity ?? {};
     const refs = plan.workOrder?.outputRefs;
-    if (typeof plan.workOrderRef !== "string" || !Array.isArray(refs) || refs.length === 0 || !refs.every((ref) => typeof ref === "string")) throw new Error("judge plan carries no compact work-order reference or verdict outputRefs");
+    requireIdentity(plan, "judge plan");
+    requireRound(gate, headSha);
+    if (!Array.isArray(refs) || refs.length === 0 || !refs.every((ref) => typeof ref === "string")) throw new Error("judge plan carries no compact work-order reference or verdict outputRefs");
     const angles = refs.map((_, index) => (index === 0 ? "judge" : index === 1 ? "spec-authority" : `artifact-${index}`));
     return { gate, headSha, role: "judge", units: [{ scope: "judge", angles, outputRefs: refs, ...compact(plan) }] };
   }
   if (!Array.isArray(plan.units)) throw new Error("emit plan has no units array");
   const units = plan.units.map((unit) => {
-    if (typeof unit?.workOrderRef !== "string") throw new Error(`emit-plan unit ${JSON.stringify(unit?.scope)} carries no compact work-order reference`);
+    requireIdentity(unit, `emit-plan unit ${JSON.stringify(unit?.scope)}`);
     const angles = Array.isArray(unit.angles) ? unit.angles : [];
     const outputRefs = unit.workOrder?.outputRefs ?? unit.outputRefs;
     if (!Array.isArray(outputRefs) || outputRefs.length !== angles.length) throw new Error(`emit-plan unit ${unit.scope} names no result path for each covered angle`);
     return { scope: unit.scope, angles, outputRefs, ...compact(unit) };
   });
+  requireRound(plan.gate, plan.headSha);
   const unknown = (wanted ?? []).filter((scope) => !units.some((unit) => unit.scope === scope));
   if (unknown.length > 0) throw new Error(`unknown --unit scope(s): ${unknown.join(", ")}`);
   return { gate: plan.gate, headSha: plan.headSha, role: "review", units: wanted === undefined ? units : units.filter((unit) => wanted.includes(unit.scope)) };

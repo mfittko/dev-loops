@@ -79,6 +79,11 @@ test("invalid input is rejected", async () => {
     assert.equal(JSON.parse(cli.stdout).ok, false);
     const badJq = spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout-ms", "1", "--jq", ".bad["], { encoding: "utf8" });
     assert.equal(badJq.status, 1);
+    const noExecution = await seedPlan(root, [["g2", ["b"]]]);
+    const broken = JSON.parse(await readFile(noExecution.planPath, "utf8"));
+    delete broken.units[0].executionIdentity;
+    await writeJson(noExecution.planPath, broken);
+    await assert.rejects(run(root, noExecution.planPath), /executionIdentity/);
   });
 });
 
@@ -141,7 +146,7 @@ test("a result older than its pull receipt never counts", async () => {
   });
 });
 
-test("a unit completing mid-wait gives all_done and a sentinel marks running", async () => {
+test("a unit completing mid-wait gives all_done", async () => {
   await withDir(async (root) => {
     const { planPath, fixtures } = await seedPlan(root, [["g", ["a"]]]);
     const [{ identity, outputRefs }] = fixtures;
