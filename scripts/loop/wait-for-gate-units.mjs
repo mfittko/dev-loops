@@ -3,13 +3,14 @@
  * wait-for-gate-units.mjs — the Claude Code join for a gate round's dispatched
  * units (GATE-EXEC-HARNESS-JOIN). One foreground, read-only process: it
  * re-checks every pending unit every 2 s until all are done, the round is
- * retired, or the timeout is reached. It writes no file, spawns no process and
- * makes no network call.
+ * retired, or the timeout is reached. It writes no file and makes no network
+ * call. Its one spawn is the read-only `git worktree list` behind
+ * resolveGateArtifactTmpRoot when no receipt root is injected.
  *
  * The count unit is the dispatch unit (one entry of the emit plan's `units`).
  * A review unit is done when its pull receipt verifies and every covered angle
  * has a post-pull result (the verification consolidate-fanin.mjs applies). The
- * judge unit is done when its verdict result verifies with role `judge`.
+ * judge unit is done when every one of its outputRefs verifies with role `judge`.
  */
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
@@ -72,9 +73,10 @@ function selectUnits({ plan, judge, wanted }) {
   const compact = (unit) => ({ workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity });
   if (judge) {
     const { gate, headSha } = plan.workOrder?.roundIdentity ?? {};
-    const [verdictPath] = plan.workOrder?.outputRefs ?? [];
-    if (typeof plan.workOrderRef !== "string" || typeof verdictPath !== "string") throw new Error("judge plan carries no compact work-order reference or verdict outputRef");
-    return { gate, headSha, role: "judge", units: [{ scope: "judge", angles: ["judge"], outputRefs: [verdictPath], ...compact(plan) }] };
+    const refs = plan.workOrder?.outputRefs;
+    if (typeof plan.workOrderRef !== "string" || !Array.isArray(refs) || refs.length === 0 || !refs.every((ref) => typeof ref === "string")) throw new Error("judge plan carries no compact work-order reference or verdict outputRefs");
+    const angles = refs.map((_, index) => (index === 0 ? "judge" : index === 1 ? "spec-authority" : `artifact-${index}`));
+    return { gate, headSha, role: "judge", units: [{ scope: "judge", angles, outputRefs: refs, ...compact(plan) }] };
   }
   if (!Array.isArray(plan.units)) throw new Error("emit plan has no units array");
   const units = plan.units.map((unit) => {
@@ -87,6 +89,11 @@ function selectUnits({ plan, judge, wanted }) {
   const unknown = (wanted ?? []).filter((scope) => !units.some((unit) => unit.scope === scope));
   if (unknown.length > 0) throw new Error(`unknown --unit scope(s): ${unknown.join(", ")}`);
   return { gate: plan.gate, headSha: plan.headSha, role: "review", units: wanted === undefined ? units : units.filter((unit) => wanted.includes(unit.scope)) };
+}
+
+// A partially written retirement.json (non-atomic writer) counts as not retired on this tick.
+function retiredNow(...args) {
+  try { return findRetirementAfter(...args) !== null; } catch (error) { if (error instanceof SyntaxError) return false; throw error; }
 }
 
 const exists = (file) => stat(file).then(() => true, () => false);
@@ -111,7 +118,7 @@ export async function waitForUnits({ emitPlan, judgePlan, units: wanted, tmpRoot
   const started = now();
   for (;;) {
     const result = (outcome, missing = [], done = []) => ({ ok: true, outcome, gate, headSha, unitCount: units.length, done, missing, elapsedMs: now() - started });
-    if (!await exists(planPath) || findRetirementAfter(tmpRoot, gate, headSha, planStat.mtimeMs) !== null) return result("round_retired");
+    if (!await exists(planPath) || retiredNow(tmpRoot, gate, headSha, planStat.mtimeMs)) return result("round_retired");
     const checks = await Promise.all(units.map((unit) => checkUnit(unit, { role, receiptTmpRoot: receipts, tmpRoot, headSha })));
     const missing = checks.filter(Boolean);
     const done = units.filter((_, index) => checks[index] === null).map((unit) => unit.scope);
@@ -133,7 +140,7 @@ export async function main(argv = process.argv.slice(2)) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
   const emitted = emitResult(result, { jq: options?.jq, silent: options?.silent, ok: true });
-  process.exitCode = emitted === 2 ? 2 : result.ok ? EXIT[result.outcome] : 1;
+  process.exitCode = emitted === 2 ? 1 : result.ok ? EXIT[result.outcome] : 1;
 }
 
 if (isDirectCliRun(import.meta.url)) await main();

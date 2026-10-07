@@ -15,7 +15,7 @@ On Claude Code, a gate coordinator that dispatched a round's units had no sancti
 On Claude Code the join is the read-only, bounded `dev-loops gate wait-for-units`. The coordinator runs it after dispatch and advances only when it reports every unit complete.
 
 - A completion notification is a trigger to run the check. It is never proof that a unit completed.
-- `GATE-EXEC-HARNESS-JOIN` forbids unbounded hand-written waits in the gate coordinator.
+- `GATE-EXEC-HARNESS-JOIN` forbids every wait in the gate coordinator other than the command, whatever its bound or test form.
 - Pi keeps its blocking join.
 
 Rejected alternative: keep joining on completion notifications and hand-written waits (the status quo, which advances on incomplete units or hangs without a bound).

@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, readdir, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
 import { parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
 import { withTempDir } from "./_helpers.mjs";
 
+const SCRIPT = fileURLToPath(new URL("../scripts/loop/wait-for-gate-units.mjs", import.meta.url));
 const HEAD = "a".repeat(40);
 const GATE = "pre_approval_gate";
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-wait-units-" });
@@ -72,9 +74,27 @@ test("invalid input is rejected", async () => {
     const bad = path.join(root, "bad.json");
     await writeFile(bad, "{not json");
     await assert.rejects(run(root, bad), /malformed/);
-    const cli = spawnSync("node", [path.resolve("scripts/loop/wait-for-gate-units.mjs"), "--emit-plan", bad, "--tmp-root", path.join(root, "tmp")], { encoding: "utf8" });
+    const cli = spawnSync(process.execPath, [SCRIPT, "--emit-plan", bad, "--tmp-root", path.join(root, "tmp")], { encoding: "utf8" });
     assert.equal(cli.status, 1);
     assert.equal(JSON.parse(cli.stdout).ok, false);
+    const badJq = spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout-ms", "1", "--jq", ".bad["], { encoding: "utf8" });
+    assert.equal(badJq.status, 1);
+  });
+});
+
+test("CLI exit codes: timeout 2, round_retired 3", async () => {
+  await withDir(async (root) => {
+    assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    await setMtime(planPath, 100);
+    const cli = () => spawnSync(process.execPath, [SCRIPT, "--emit-plan", planPath, "--tmp-root", path.join(root, "tmp"), "--timeout-ms", "1"], { encoding: "utf8" });
+    const timeout = cli();
+    assert.equal(timeout.status, 2);
+    assert.equal(JSON.parse(timeout.stdout).outcome, "timeout");
+    await writeJson(path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json"), { gate: GATE, retiredAt: new Date(200000).toISOString() });
+    const retired = cli();
+    assert.equal(retired.status, 3);
+    assert.equal(JSON.parse(retired.stdout).outcome, "round_retired");
   });
 });
 
@@ -161,22 +181,52 @@ test("round_retired: removed plan and a newer retirement record for the gate", a
     await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString() });
     assert.equal((await run(root, planPath)).outcome, "round_retired");
     await rm(path.join(root, "tmp", "retired-gate-rounds"), { recursive: true });
+    const beforeRetired = await snapshot(root);
+    assert.equal((await run(root, planPath, { timeoutMs: 1 })).outcome, "timeout");
+    await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString() });
+    const retiredSnapshot = await snapshot(root);
+    assert.equal((await run(root, planPath)).outcome, "round_retired");
+    assert.deepEqual(await snapshot(root), retiredSnapshot);
+    assert.notDeepEqual(beforeRetired, retiredSnapshot);
+    await rm(path.join(root, "tmp", "retired-gate-rounds"), { recursive: true });
     const removing = run(root, planPath, { delay: async () => { await rm(planPath); } });
     assert.equal((await removing).outcome, "round_retired");
+  });
+});
+
+test("a partially written retirement record is not retired yet and is re-checked", async () => {
+  await withDir(async (root) => {
+    const { planPath } = await seedPlan(root, [["g", ["a"]]]);
+    await setMtime(planPath, 100);
+    const record = path.join(root, "tmp", "retired-gate-rounds", HEAD, "round-1", "retirement.json");
+    await mkdir(path.dirname(record), { recursive: true });
+    await writeFile(record, '{"gate":');
+    const clock = fakeClock();
+    let calls = 0;
+    const delay = async (ms) => {
+      await clock.delay(ms);
+      if (++calls === 1) await writeJson(record, { gate: GATE, retiredAt: new Date(200000).toISOString() });
+    };
+    const result = await run(root, planPath, { now: clock.now, delay });
+    assert.equal(result.outcome, "round_retired");
+    assert.ok(calls >= 1);
   });
 });
 
 test("judge plan waits on the single judge unit with role judge", async () => {
   await withDir(async (root) => {
     const verdict = path.join(root, "tmp", "judge", "judge-verdict.json");
+    const specAuthority = path.join(root, "tmp", "judge", "spec-authority-verdict.json");
     const identity = { workOrderRef: `judge:o/r#7:${GATE}:${HEAD}:r1`, workOrderDigest: "sha256:j", executionIdentity: "r1" };
     const planPath = path.join(root, "tmp", "judge", "judge-emit-plan.json");
-    await writeJson(planPath, { ...identity, workOrder: { roundIdentity: { gate: GATE, headSha: HEAD }, outputRefs: [verdict, "x"] } });
+    await writeJson(planPath, { ...identity, workOrder: { roundIdentity: { gate: GATE, headSha: HEAD }, outputRefs: [verdict, specAuthority] } });
     const opts = { judgePlan: planPath, tmpRoot: path.join(root, "tmp"), receiptTmpRoot: path.join(root, "tmp"), timeoutMs: 4000, ...fakeClock() };
     assert.equal((await waitForUnits(opts)).outcome, "timeout");
     await seedReceipt(root, identity, "judge");
     await seedResult(verdict);
-    const done = await waitForUnits({ ...opts, ...fakeClock() });
+    assert.equal((await waitForUnits({ ...opts, ...fakeClock() })).outcome, "timeout");
+    await seedResult(specAuthority);
+    const done =await waitForUnits({ ...opts, ...fakeClock() });
     assert.equal(done.outcome, "all_done");
     assert.equal(done.unitCount, 1);
   });
@@ -189,12 +239,13 @@ test("the command is read-only", async () => {
     await seedResult(fixtures[0].outputRefs[0]);
     const before = await snapshot(root);
     assert.equal((await run(root, planPath, { timeoutMs: 5000 })).outcome, "timeout");
+    assert.deepEqual(await snapshot(root), before);
     await seedResult(fixtures[0].outputRefs[1]);
     const mid = await snapshot(root);
     assert.equal((await run(root, planPath)).outcome, "all_done");
     assert.deepEqual(await snapshot(root), mid);
     assert.notDeepEqual(before, mid);
-    const source = await readFile(path.resolve("scripts/loop/wait-for-gate-units.mjs"), "utf8");
+    const source = await readFile(SCRIPT, "utf8");
     assert.doesNotMatch(source, /child_process/);
     assert.doesNotMatch(source, /\b(writeFile|mkdir|rename|rm|unlink|appendFile|copyFile)\b\s*\(/);
   });
