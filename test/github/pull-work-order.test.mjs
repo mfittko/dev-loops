@@ -462,7 +462,7 @@ test("self-hosting pull: a relative --tmp-root delegates as the absolute path, s
   }));
 });
 
-// ADR 0123: a main-anchored fixer entry delegates to the linked worktree whose checked-out branch is the
+// ADR 0124: a main-anchored fixer entry delegates to the linked worktree whose checked-out branch is the
 // digest-pinned order's mutationAuthority.branch. The stub in that worktree stands in for its renderer.
 const FIXER_ID = "f1790000000001-abcdef12";
 async function seedFixerMain(main, { branch = "issue-9" } = {}) {

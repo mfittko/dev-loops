@@ -84,7 +84,7 @@ registerWorkOrderRole("review", {
 // ADR 0117: on a self-hosting PR the emitter wrote the execution index entry in the PR worktree. That
 // checkout is the review root, so its own pull script serves the pull. The marker stops a second hop.
 // The pull never delegates back to the main checkout. A main-anchored fixer entry names no review root, so
-// it delegates by the digest-pinned order's mutationAuthority.branch instead (ADR 0123).
+// it delegates by the digest-pinned order's mutationAuthority.branch instead (ADR 0124).
 const PULL_DELEGATED_ENV = "DEV_LOOPS_PULL_DELEGATED";
 const PULL_SCRIPT = "scripts/github/pull-work-order.mjs";
 
@@ -108,7 +108,7 @@ function fixerAuthorityWorktree(tmpRoot, execution, mainRoot) {
   }
 }
 
-/** True when a delegated fixer pull refused on a renderer skew, so the pull retries locally once (ADR 0123). */
+/** True when a delegated fixer pull refused on a renderer skew, so the pull retries locally once (ADR 0124). */
 export function shouldRetryFixerPullLocally(execution, status, stdout) {
   if (execution[0] !== "f" || status !== 1) return false;
   try {
@@ -124,7 +124,7 @@ export function pullDelegationTarget(execution, tmpRoots, { toolchainRoot = TOOL
   const tmpRoot = tmpRoots.find((root) => existsSync(executionIndexPath(root, execution)));
   let checkout = tmpRoot ? path.dirname(tmpRoot) : null;
   const mainRoot = resolveMainWorktreeRoot(toolchainRoot);
-  // A main-anchored fixer entry delegates by the digest-pinned order's authority branch (ADR 0123).
+  // A main-anchored fixer entry delegates by the digest-pinned order's authority branch (ADR 0124).
   if (checkout && execution[0] === "f" && !isOtherDevLoopsCheckout(checkout, mainRoot)) checkout = fixerAuthorityWorktree(tmpRoot, execution, mainRoot);
   if (!checkout || !existsSync(path.join(checkout, PULL_SCRIPT)) || !isOtherDevLoopsCheckout(checkout, toolchainRoot)) return null;
   if (!isOtherDevLoopsCheckout(checkout, mainRoot)) return null;

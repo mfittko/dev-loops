@@ -1,4 +1,4 @@
-# 0123. A fixer pull delegates to the worktree on the work order's authority branch
+# 0124. A fixer pull delegates to the worktree on the work order's authority branch
 
 ## Status
 
