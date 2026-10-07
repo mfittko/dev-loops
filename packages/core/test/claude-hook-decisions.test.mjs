@@ -371,6 +371,10 @@ test("decideBashGate denies raw gh issue edit body writes from the MAIN agent bu
   const gate = (command) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision;
   assert.equal(gate("gh issue edit 5 --body-file x"), "deny");
   assert.equal(gate("gh issue edit 5 --add-label bug"), "allow");
+  assert.equal(gate(`eval "gh issue edit 5 --add-label x"; eval "gh issue edit 5 --body y"`), "deny");
+  assert.equal(gate(`bash -c "gh issue edit 5 --title 'a; b' --body x"`), "deny");
+  // A wrapped `gh pr edit` is denied for every actor as a consequence of routing matched commands to the gate.
+  assert.equal(gate("echo 5 | xargs -I{} gh pr edit {} --add-label x"), "deny");
 });
 
 test("decideBashGate allows subagent gh issue edit with an explicit non-target --repo", () => {

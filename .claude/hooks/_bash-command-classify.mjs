@@ -868,8 +868,10 @@ function unquoteFlagTokens(segment) {
  * (`gh -R o/n pr edit ...`). A body write is the path that carries an `adr-tripwire:allow` waiver
  * line, so it must flow through the launcher's `pr edit` (PR bodies), `issue edit` (issue bodies) or `pr waive-adr-tripwire` (the waiver). Quoted values are
  * blanked first, so a flag-looking word inside a title does not match. A `gh pr edit` literal
- * (or a `gh issue edit` literal with a body-flag token) inside `bash -c`/`sh -c`/`eval`/`xargs` is denied outright: the wrapper hides the real
- * flags from segment inspection, so the literal itself is the signal (fail closed). An explicit
+ * inside `bash -c`/`sh -c`/`eval`/`xargs` is denied outright: the wrapper hides the real flags from segment
+ * inspection, so the literal itself is the signal (fail closed). Every wrapped `gh issue edit` literal is judged on its
+ * own argv (quoted values blanked, cut at the next shell separator): denied with a body-flag token, and under `xargs`
+ * (args may arrive on stdin) also denied without an explicit non-body edit flag. An explicit
  * `--repo`/`-R` that is provably not `managedSlug` passes through (direct, unwrapped forms only).
  * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
  */
@@ -878,9 +880,9 @@ export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
   // Denied with a body-flag token there; under xargs (args may arrive on stdin) also denied without an explicit non-body edit flag.
   if (SHELL_WRAPPER_RE.test(command)) {
     if (GH_PR_EDIT_LITERAL.test(command)) return true;
-    const m = GH_BODY_WRITER_LITERAL.exec(command);
-    if (m) {
-      const argv = unquoteFlagTokens(command.slice(m.index + m[0].length)).split(/[;&|\n]/)[0];
+    for (const m of command.matchAll(new RegExp(GH_BODY_WRITER_LITERAL.source, "gi"))) {
+      // Blank quoted values before splitting so a separator inside a quoted title does not truncate the argv.
+      const argv = stripQuotedLiterals(unquoteFlagTokens(command.slice(m.index + m[0].length))).split(/[;&|\n]/)[0];
       if (BODY_FLAG_ANYWHERE.test(argv)) return true;
       if (/(?:^|[\s;&|(])xargs(?=\s)/.test(command) && !NON_BODY_EDIT_FLAG.test(argv)) return true;
     }
