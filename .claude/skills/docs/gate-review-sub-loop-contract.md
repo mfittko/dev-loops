@@ -526,23 +526,38 @@ node scripts/github/retire-gate-round.mjs --gate <gate> --head-sha <sha> --reaso
   [--findings-dir <round artifacts dir>] [--repo <owner/name> --pr <N> | --no-findings-artifacts]
 ```
 
-Use the FULL 40-character sentinel-key SHA. Retirement moves only that gate+head's
-sentinels and supplied findings directory into
-`tmp/retired-gate-rounds/<sha>/round-<n>/`, with `retirement.json` for audit.
-The other gate's live same-head round is untouched. Then rebuild and dispatch a FRESH
+Use the FULL 40- or 64-character head SHA. Retirement moves only that gate+head's
+regular sentinel files, matching
+`checkpoint-dispatch-prompt-<gate-prefixed-scope>-<headSha>.json` records, and supplied
+findings directory into `tmp/retired-gate-rounds/<sha>/round-<n>/`, with
+`retirement.json` for audit. Dispatch records match by gate prefix and full-head
+filename suffix, independently of surviving sentinels or JSON contents; their
+original bytes are preserved, including malformed JSON. Records for other gates
+or heads and unrelated files remain untouched. Then rebuild and dispatch a FRESH
 fan-out whose reviewers all use the new hash.
+
+The success result and retirement audit add `dispatchPromptRecords`, a sorted
+array of successfully archived dispatch-record basenames; a no-op result returns
+an empty array. The legacy `retired` result remains the sentinel count, not a
+total artifact count. A dispatch-only retirement is non-noop even with
+`retired: 0`; repeating retirement with no matching live evidence is a no-op.
+Failures expose `partiallyRetiredDispatchPromptRecords` for dispatch records
+successfully moved before failure; partial audits list only successfully archived
+records, never failed moves.
 
 The caller MUST pass `--findings-dir` whenever the retired round wrote artifacts:
 same-head stamps alone would otherwise let stale findings enter the new fan-in.
 Without that flag or `--no-findings-artifacts`, retirement REFUSES when the canonical
 `tmp/gate-reviews/<slug>/pr-<N>/<gate>-<headSha>/` exists. Supply `--repo` and `--pr`
 to check that path; `--no-findings-artifacts` is the explicit operator opt-out accepting
-live-artifact risk. Even a no-sentinel/no-artifact no-op performs that check first.
+live-artifact risk. Even a no-sentinel/no-dispatch/no-artifact no-op performs that check first.
 
 Retired evidence stays recoverable for audit, never as input to the new fan-in.
 The carry resolver also refuses equal prior/current heads, so retirement cannot
-re-seed its own verdict through carry-forward. Retired sentinels sit outside the
-verifier's flat live scan; divergent hashes within a live round still fail closed.
+re-seed its own verdict through carry-forward. Retired sentinels and dispatch records
+sit outside the verifiers' flat live scans; divergent prefix hashes and invalid
+live dispatch bindings still fail closed. Retirement does not weaken verification
+or authorize reuse of retired reviewer evidence.
 
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 
