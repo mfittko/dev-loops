@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
 import { retireGateRound, parseRetireGateRoundArgs } from "../../scripts/github/retire-gate-round.mjs";
+import { verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
+import { dispatchPromptLayoutRecordPath, recordDispatchPromptLayout } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
+import { bindCompactReference } from "../_helpers.mjs";
 
 const HEAD_A = "a1".repeat(20);
 const HEAD_B = "b2".repeat(20);
@@ -78,10 +81,56 @@ test("retire-then-refan: retirement clears the round's sentinels so a fresh run 
   });
 });
 
+test("retire-then-refan: changed prefix and grouped correctness scope pass the real dispatch verifier", async () => {
+  await withTmpRoot(async (tmpRoot) => {
+    const contextDir = path.join(tmpRoot, "gate-context", "o-r", "pr-1");
+    await mkdir(contextDir, { recursive: true });
+    const prefixPath = path.join(contextDir, `draft_gate-${HEAD_A}.briefing-prefix.txt`);
+    const emittedPath = (scope) => path.join(contextDir, `draft_gate-${HEAD_A}.dispatch-prompt-${scope}.txt`);
+    // Match the existing verifier fixtures: canonical emitted-unit bytes plus
+    // the real recorder and the emitter's compact-reference binding.
+    const writeUnit = async (scope, prefix) => {
+      const promptText = `${prefix}## Scope: ${scope}\n`;
+      await writeFile(emittedPath(scope), promptText);
+      const captured = await recordDispatchPromptLayout({ scope, headSha: HEAD_A, prefixPath, promptText, tmpRoot });
+      assert.equal(captured.recorded, true);
+      await bindCompactReference(tmpRoot, scope, HEAD_A);
+    };
+    const oldScope = "draft-gate-correctness";
+    const freshScope = "draft-gate-group-correctness-input";
+    await writeFile(prefixPath, "## Invariant prefix\nPR body: old\n");
+    await writeUnit(oldScope, "## Invariant prefix\nPR body: old\n");
+    await writeFile(path.join(tmpRoot, sentinelName(oldScope, HEAD_A)), "{}\n");
+    const original = await readFile(dispatchPromptLayoutRecordPath(tmpRoot, oldScope, HEAD_A));
+    const before = await verifyDispatchPromptLayoutForHead(tmpRoot, HEAD_A);
+    assert.equal(before.verified, true, JSON.stringify(before));
+    assert.equal(before.recordCount, 1);
+
+    const retired = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "PR body corrected; grouped unit plan rebuilt", noFindingsArtifacts: true, tmpRoot });
+    await writeFile(prefixPath, "## Invariant prefix\nPR body: corrected\n");
+    await rm(emittedPath(oldScope));
+    await writeUnit(freshScope, "## Invariant prefix\nPR body: corrected\n");
+    const fresh = await verifyDispatchPromptLayoutForHead(tmpRoot, HEAD_A);
+    assert.equal(fresh.verified, true, JSON.stringify(fresh));
+    assert.equal(fresh.recordCount, 1); // Never a vacuous zero-record pass.
+    const oldName = path.basename(dispatchPromptLayoutRecordPath(tmpRoot, oldScope, HEAD_A));
+    assert.deepEqual(retired.dispatchPromptRecords, [oldName]);
+    assert.deepEqual(await readFile(path.join(retired.retirementDir, oldName)), original);
+
+    // Retirement must not weaken verification of invalid NEW provenance.
+    await writeFile(emittedPath(freshScope), "## Invariant prefix\nPR body: corrected\nALTERED\n");
+    const invalid = await verifyDispatchPromptLayoutForHead(tmpRoot, HEAD_A);
+    assert.equal(invalid.verified, false);
+    assert.equal(invalid.recordCount, 1);
+    assert.equal(invalid.misaligned[0].scope, freshScope);
+    assert.match(invalid.misaligned[0].reason, /recorded prompt bytes do not match/);
+  });
+});
+
 test("retirement of a head with no sentinels is a no-op, not an error", async () => {
   await withTmpRoot(async (tmpRoot) => {
     const result = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "nothing to do", noFindingsArtifacts: true, tmpRoot });
-    assert.deepEqual(result, { ok: true, gate: "draft_gate", headSha: HEAD_A, retired: 0, sentinels: [], findingsDirRetired: false, retirementDir: null, noop: true });
+    assert.deepEqual(result, { ok: true, gate: "draft_gate", headSha: HEAD_A, retired: 0, sentinels: [], dispatchPromptRecords: [], findingsDirRetired: false, retirementDir: null, noop: true });
   });
 });
 
@@ -178,15 +227,20 @@ test("CLI entry point: help, arg errors, success, and invalid --jq map to the do
     const help = run(["--help"], tmpRoot);
     assert.equal(help.status, 0);
     assert.match(help.stdout, /rebuild-and-retire/);
+    assert.match(help.stdout, /dispatchPromptRecords/);
+    assert.match(help.stdout, /partiallyRetiredDispatchPromptRecords/);
 
     const argErr = run(["--head-sha", HEAD_A, "--reason", "x"], tmpRoot);
     assert.equal(argErr.status, 1);
     assert.match(argErr.stderr, /--gate/);
 
     await writeFile(path.join(tmpRoot, sentinelName("draft-gate-scope", HEAD_A)), "{}\n", "utf8");
+    const dispatchPath = dispatchPromptLayoutRecordPath(tmpRoot, "draft-gate-correctness", HEAD_A);
+    await writeFile(dispatchPath, "{ malformed but recoverable\n");
     const okRun = run(["--gate", "draft_gate", "--head-sha", HEAD_A, "--reason", "cli test", "--no-findings-artifacts", "--tmp-root", "."], tmpRoot);
     assert.equal(okRun.status, 0, okRun.stderr);
     assert.equal(JSON.parse(okRun.stdout).retired, 1);
+    assert.deepEqual(JSON.parse(okRun.stdout).dispatchPromptRecords, [path.basename(dispatchPath)]);
 
     const badJq = run(["--gate", "draft_gate", "--head-sha", HEAD_A, "--reason", "x", "--no-findings-artifacts", "--tmp-root", ".", "--jq", "((("], tmpRoot);
     assert.equal(badJq.status, 2);
@@ -330,5 +384,165 @@ test("retiring sentinels without --findings-dir no longer carries a warning (ref
     const result = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "rebuilt", noFindingsArtifacts: true, tmpRoot });
     assert.equal(result.retired, 1);
     assert.equal(result.warning, undefined);
+  });
+});
+
+for (const [gate, scopePrefix, otherPrefix] of [
+  ["draft_gate", "draft-gate-", "pre-approval-gate-"],
+  ["pre_approval_gate", "pre-approval-gate-", "draft-gate-"],
+]) {
+  for (const headSha of [HEAD_A, "c3".repeat(32)]) {
+    test(`dispatch-only ${gate} retirement matches regular files at a normalized full ${headSha.length}-hex head and preserves original bytes`, async () => {
+      await withTmpRoot(async (tmpRoot) => {
+        const correctness = path.basename(dispatchPromptLayoutRecordPath(tmpRoot, `${scopePrefix}correctness`, headSha));
+        const yagni = path.basename(dispatchPromptLayoutRecordPath(tmpRoot, `${scopePrefix}yagni`, headSha));
+        const originals = new Map([
+          [yagni, Buffer.from([0xff, 0x00, 0x7b, 0x0d, 0x0a])], // Malformed UTF-8/JSON remains auditable.
+          [correctness, Buffer.from('{\r\n  "capturedAt": "original", "unknown": true\r\n}\r\n')],
+        ]);
+        for (const [name, bytes] of originals) await writeFile(path.join(tmpRoot, name), bytes);
+        const preserved = [
+          path.basename(dispatchPromptLayoutRecordPath(tmpRoot, `${otherPrefix}correctness`, headSha)),
+          path.basename(dispatchPromptLayoutRecordPath(tmpRoot, `${scopePrefix}correctness`, HEAD_B)),
+          path.basename(dispatchPromptLayoutRecordPath(tmpRoot, `${scopePrefix}correctness`, headSha.slice(0, 7))),
+          path.basename(dispatchPromptLayoutRecordPath(tmpRoot, `${scopePrefix}correctness`, `f${headSha}`)),
+          path.basename(dispatchPromptLayoutRecordPath(tmpRoot, `${scopePrefix.replace(/-$/, "x-")}correctness`, headSha)),
+          `${correctness}.bak`,
+          `unrelated-${headSha}.json`,
+          "link-target.bin",
+        ];
+        const untouched = Buffer.from("unrelated evidence\r\n");
+        for (const name of preserved) await writeFile(path.join(tmpRoot, name), untouched);
+        const directoryName = path.basename(dispatchPromptLayoutRecordPath(tmpRoot, `${scopePrefix}directory`, headSha));
+        const symlinkName = path.basename(dispatchPromptLayoutRecordPath(tmpRoot, `${scopePrefix}symlink`, headSha));
+        await mkdir(path.join(tmpRoot, directoryName));
+        await writeFile(path.join(tmpRoot, directoryName, "nested.json"), untouched);
+        await symlink("link-target.bin", path.join(tmpRoot, symlinkName));
+
+        const result = await retireGateRound({ gate, headSha: headSha.toUpperCase(), reason: "dispatch-only stale evidence", noFindingsArtifacts: true, tmpRoot });
+        assert.equal(result.headSha, headSha);
+        assert.equal(result.retired, 0); // Legacy sentinel count, not dispatch count.
+        assert.equal(result.noop, false);
+        assert.deepEqual(result.sentinels, []);
+        assert.deepEqual(result.dispatchPromptRecords, [correctness, yagni]);
+        const audit = JSON.parse(await readFile(path.join(result.retirementDir, "retirement.json"), "utf8"));
+        assert.deepEqual(audit.dispatchPromptRecords, [correctness, yagni]);
+        assert.deepEqual(audit.sentinels, []);
+        assert.equal(audit.partial, false);
+        assert.equal(audit.findingsDirRetired, false);
+        for (const [name, bytes] of originals) {
+          await assert.rejects(readFile(path.join(tmpRoot, name)), { code: "ENOENT" });
+          assert.deepEqual(await readFile(path.join(result.retirementDir, name)), bytes);
+        }
+        for (const name of preserved) assert.deepEqual(await readFile(path.join(tmpRoot, name)), untouched);
+        assert.ok((await lstat(path.join(tmpRoot, directoryName))).isDirectory());
+        assert.deepEqual(await readFile(path.join(tmpRoot, directoryName, "nested.json")), untouched);
+        assert.ok((await lstat(path.join(tmpRoot, symlinkName))).isSymbolicLink());
+        assert.equal(await readlink(path.join(tmpRoot, symlinkName)), "link-target.bin");
+        assert.deepEqual(await readFile(path.join(tmpRoot, symlinkName)), untouched);
+
+        const repeated = await retireGateRound({ gate, headSha, reason: "already retired", noFindingsArtifacts: true, tmpRoot });
+        assert.deepEqual(repeated, { ok: true, gate, headSha, retired: 0, sentinels: [], dispatchPromptRecords: [], findingsDirRetired: false, retirementDir: null, noop: true });
+        assert.deepEqual(await readdir(path.dirname(result.retirementDir)), ["round-1"]);
+      });
+    });
+  }
+}
+
+test("dispatch records stay live and byte-identical through every retirement preflight refusal", async () => {
+  await withTmpRoot(async (tmpRoot) => {
+    const dispatchPath = dispatchPromptLayoutRecordPath(tmpRoot, "draft-gate-correctness", HEAD_A);
+    const sentinelPath = path.join(tmpRoot, sentinelName("draft-gate-correctness", HEAD_A));
+    const bytes = Buffer.from("{ unparsed preflight evidence\r\n");
+    await writeFile(dispatchPath, bytes);
+    await writeFile(sentinelPath, bytes);
+    const unrelatedDir = path.join(tmpRoot, "unrelated-findings");
+    await mkdir(unrelatedDir);
+    const linkedDir = path.join(tmpRoot, `linked-${HEAD_A}`);
+    await symlink(unrelatedDir, linkedDir);
+    const fileDir = path.join(tmpRoot, `file-${HEAD_A}`);
+    await writeFile(fileDir, bytes);
+    const canonicalDir = path.join(tmpRoot, "gate-reviews", "owner-repo", "pr-7", `draft_gate-${HEAD_A}`);
+    await mkdir(canonicalDir, { recursive: true });
+    const base = { gate: "draft_gate", headSha: HEAD_A, reason: "refusal", noFindingsArtifacts: true, tmpRoot };
+    for (const [options, message] of [
+      [{ gate: "unknown" }, /Unknown gate/],
+      [{ headSha: HEAD_A.slice(0, 7) }, /FULL 40- or 64-char/],
+      [{ reason: " " }, /non-empty string/],
+      [{ findingsDir: path.join(tmpRoot, "missing") }, /not an existing directory/],
+      [{ findingsDir: fileDir }, /not an existing directory/],
+      [{ findingsDir: linkedDir }, /symlinks are rejected/],
+      [{ findingsDir: unrelatedDir }, /does not name head/],
+      [{ noFindingsArtifacts: false }, /requires --repo and --pr/],
+      [{ noFindingsArtifacts: false, repo: "owner/repo", pr: 7 }, /canonical findings-artifacts directory/],
+    ]) {
+      await assert.rejects(retireGateRound({ ...base, ...options }), message);
+      assert.deepEqual(await readFile(dispatchPath), bytes);
+      assert.deepEqual(await readFile(sentinelPath), bytes);
+      await assert.rejects(lstat(path.join(tmpRoot, "retired-gate-rounds")), { code: "ENOENT" });
+    }
+  });
+});
+
+for (const withSentinel of [false, true]) {
+  test(`failed findings move audits successful dispatch moves separately (${withSentinel ? "with sentinel" : "dispatch-only"})`, async () => {
+    await withTmpRoot(async (base) => {
+      // Moving a directory into its own descendant deterministically fails on
+      // real filesystems, AFTER its flat records move. No injection or race.
+      const tmpRoot = path.join(base, `round-${HEAD_A}`);
+      await mkdir(tmpRoot);
+      const dispatchPath = dispatchPromptLayoutRecordPath(tmpRoot, "draft-gate-correctness", HEAD_A);
+      const bytes = Buffer.from("{ partial evidence\r\n");
+      await writeFile(dispatchPath, bytes);
+      const sentinels = withSentinel ? [sentinelName("draft-gate-correctness", HEAD_A)] : [];
+      for (const name of sentinels) await writeFile(path.join(tmpRoot, name), bytes);
+      let failure;
+      await assert.rejects(
+        retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "deterministic findings failure", findingsDir: tmpRoot, tmpRoot }),
+        (error) => {
+          failure = error;
+          assert.match(error.message, /partial retirement/);
+          assert.deepEqual(error.partiallyRetired, sentinels);
+          assert.deepEqual(error.partiallyRetiredDispatchPromptRecords, [path.basename(dispatchPath)]);
+          return true;
+        },
+      );
+      const audit = JSON.parse(await readFile(path.join(failure.retirementDir, "retirement.json"), "utf8"));
+      assert.equal(audit.partial, true);
+      assert.equal(audit.findingsDirRetired, false);
+      assert.equal(audit.findingsDir, tmpRoot);
+      assert.deepEqual(audit.sentinels, sentinels);
+      assert.deepEqual(audit.dispatchPromptRecords, [path.basename(dispatchPath)]);
+      assert.deepEqual(await readFile(path.join(failure.retirementDir, path.basename(dispatchPath))), bytes);
+      await assert.rejects(readFile(dispatchPath), { code: "ENOENT" });
+      assert.ok((await lstat(tmpRoot)).isDirectory());
+    });
+  });
+}
+
+test("CLI partial failure serializes both successful-move arrays and the durable partial audit", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const scriptPath = path.resolve("scripts/github/retire-gate-round.mjs");
+  await withTmpRoot(async (base) => {
+    const tmpRoot = path.join(base, `round-${HEAD_A}`);
+    await mkdir(tmpRoot);
+    const dispatchPath = dispatchPromptLayoutRecordPath(tmpRoot, "draft-gate-correctness", HEAD_A);
+    await writeFile(dispatchPath, "{ malformed partial evidence\n");
+    const sentinel = sentinelName("draft-gate-correctness", HEAD_A);
+    await writeFile(path.join(tmpRoot, sentinel), "{}\n");
+    const result = spawnSync((Bun.which("node") ?? "node"), [
+      scriptPath, "--gate", "draft_gate", "--head-sha", HEAD_A, "--reason", "cli partial test",
+      "--tmp-root", tmpRoot, "--findings-dir", tmpRoot,
+    ], { cwd: base, encoding: "utf8", timeout: 30_000 });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    const failure = JSON.parse(result.stderr);
+    assert.equal(failure.ok, false);
+    assert.deepEqual(failure.partiallyRetired, [sentinel]);
+    assert.deepEqual(failure.partiallyRetiredDispatchPromptRecords, [path.basename(dispatchPath)]);
+    const audit = JSON.parse(await readFile(path.join(failure.retirementDir, "retirement.json"), "utf8"));
+    assert.equal(audit.partial, true);
+    assert.deepEqual(audit.sentinels, failure.partiallyRetired);
+    assert.deepEqual(audit.dispatchPromptRecords, failure.partiallyRetiredDispatchPromptRecords);
   });
 });
