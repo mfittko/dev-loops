@@ -101,6 +101,45 @@ test("integrate-only base-move: main-relative delta drops already-merged main fi
   }
 });
 
+test("incrementalFiles includes a config source reverted to base despite empty reduced delta", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "git-delta-config-revert-"));
+  try {
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.email", "test@example.com"]);
+    git(root, ["config", "user.name", "Test"]);
+    await write(root, ".devloops", "version: 1\n");
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    await write(root, ".devloops", "version: 1\nworkflow: {}\n");
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "reviewed config"]);
+    const prevHead = git(root, ["rev-parse", "HEAD"]).trim();
+    await write(root, ".devloops", "version: 1\n");
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "revert config"]);
+    const delta = await captureMainRelativeChangedFilesSince({ base: prevHead, repoRoot: root });
+    assert.deepEqual(delta.changedFiles, []);
+    assert.deepEqual(delta.incrementalFiles, [".devloops"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("incrementalFiles keeps both rename and copy endpoints before base reduction", async () => {
+  for (const status of ["R100", "C100"]) {
+    const runGit = async (args) => {
+      if (args.includes("--name-status")) {
+        return { code: 0, stdout: args.at(-1) === "old..HEAD" ? `${status}\t.devloops\tother.txt\n` : "", stderr: "" };
+      }
+      return { code: 0, stdout: "abc123\n", stderr: "" };
+    };
+    const delta = await captureMainRelativeChangedFilesSince({ base: "old", repoRoot: "/unused", runGit });
+    assert.deepEqual(delta.changedFiles, []);
+    assert.deepEqual(delta.incrementalFiles, [".devloops", "other.txt"]);
+  }
+});
+
 test("genuine PR-own commit after the base-move still appears in the main-relative delta (fail closed)", async () => {
   const { root, prevHead } = await makeBaseMoveRepo({
     prExtra: async (r) => {
