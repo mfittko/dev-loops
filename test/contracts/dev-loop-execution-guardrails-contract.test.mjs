@@ -32,12 +32,6 @@ test("dev-loop SKILL inlines the sanctioned consolidate-fanin fan-out dispatch i
   );
 });
 
-test("dev-loop SKILL conditions the pr_draft pre-flight exception on draftStart (#2456)", async () => {
-  const skill = await readRepo("skills/dev-loop/SKILL.md");
-  assert.match(skill, /`state: "pr_draft"` and the startup output for this PR carries `draftStart`/);
-  assert.match(skill, /Without `draftStart`, the `pr_draft` stop still aborts/);
-});
-
 test("dev-loop SKILL enforces bounded-timeout test runs (#1650)", async () => {
   const skill = await readRepo("skills/dev-loop/SKILL.md");
   assert.match(

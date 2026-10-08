@@ -72,22 +72,35 @@ Output (stdout, JSON):
 Actions:
   watch   Copilot review was requested; use watchArgs with probe-copilot-review.mjs
   fix     Unresolved feedback exists; address it before re-requesting review
-  stop    No automatic next step; report the current state (terminal, blocked, or operator-decision-required) and do not proceed
+  stop    No automatic Copilot-sub-loop step; not necessarily a blocked or completed PR lifecycle
+Stop interpretation (in order):
+  Honor user/envelope stops and harness/classifier, ADR/size, blocked or
+  reconciliation refusals first. terminal=true alone is not permission.
+  Closed/merged PRs or canonical state=done report completion; do not enter gates.
+  For an open PR, terminal=true with loopDisposition=done or clean_converged
+  ends only the Copilot sub-loop. Consult fresh loop gate-coordination for the
+  same PR/current head; follow nextAction, allowedNextActions and forbiddenActions.
+  Do not require roundCapCleanEligible, request another round merely because
+  Copilot stopped, infer pre-approval permission, or merge implicitly.
+  The pr_draft stop permits this consultation only with fresh canonical startup
+  draftStart for the same PR. All other stops remain stops; nonterminal watch/fix
+  outcomes stay under their owning strategy, not later gates.
 suppressedPostConvergenceDocsOnly:
   Present (true) only when strict mode found the post-convergence head bump, at or
   below the round cap, to be a provable pure doc/prose or integrate-only delta, so
   no fresh Copilot round was placed.
-  This is a converged/proceed outcome (action=stop, terminal): route to the
-  pre-approval gate exactly as a clean round-cap fallback — never enter a Copilot
-  wait. requestWatchContract.requestStatus is "none" for this case (the shared
-  enum carries no active request).
+  This is a clean terminal Copilot outcome (action=stop): consult fresh canonical
+  gate coordination, which may permit pre-approval or require draft-evidence
+  reconciliation. Never enter a Copilot wait merely because no round was placed.
+  requestWatchContract.requestStatus is "none" (no active request).
 suppressedPostConvergence:
   Present (true) only when the request tool returned suppressed_post_convergence:
   converged-once mode (the default; refinement.requireCopilotConvergenceAtLatestHead
   is false) found the latest Copilot review converged on an earlier head, so no
   fresh Copilot round was placed. In that mode a post-convergence change never
-  reopens a cycle at the round cap. Route to the pre-approval gate, never to a
-  Copilot wait. requestWatchContract.requestStatus is "none" for this case.
+  reopens a cycle at the round cap. Consult fresh canonical gate coordination;
+  do not infer pre-approval permission or enter a Copilot wait.
+  requestWatchContract.requestStatus is "none" for this case.
 carriedConvergence:
   Present only on a --watch-status readback that would otherwise read
   ready_to_rerequest_review and where the request tool would suppress the
@@ -101,8 +114,9 @@ carryUnverified:
   request tool.
 Watch refresh rule:
   watcher timeout/idle is observational only. Re-run this helper with
-  --watch-status and stop only when terminal=true. Pending or unresolved
-  states remain non-terminal even after a timeout.
+  --watch-status. Terminal outcomes end the Copilot watch and follow the stop
+  interpretation above, not unconditional lifecycle continuation or abortion.
+  Pending or unresolved states remain non-terminal even after a timeout.
 Watch defaults:
   pollIntervalMs  60000  (1 minute)
   timeoutMs       1800000   (30 minutes)

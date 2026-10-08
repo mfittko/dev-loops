@@ -23,7 +23,7 @@ The machine maps observable PR/GitHub/worktree facts (the **snapshot**) to exact
 | `review_request_unavailable` | Copilot review request returned `unavailable` and no observable in-progress review evidence exists; must stop/report |
 | <!-- term: state:waiting_for_ci --> `waiting_for_ci` | CI checks are in progress or no usable CI readiness signal exists yet; wait before proceeding |
 | `blocked_needs_user_decision` | Unexpected failure (CI failure, bad request result); requires user decision |
-| `done` | The loop's work at this boundary is complete: the PR was merged or closed, or a terminal hand-off occurred (e.g. re-request handed back to the watcher, internal-tooling PR proceeding to `pre_approval_gate`) |
+| `done` | Canonical snapshot state for a merged or closed PR; report completion without entering gates. This state is distinct from the handoff's `loopDisposition: "done"`, which can end only the Copilot sub-loop for an open PR |
 | <!-- term: state:internal_tooling_direct_gate --> `internal_tooling_direct_gate` | Internal-tooling-only PR; Copilot external review is skipped and the loop proceeds directly to `pre_approval_gate`. Externally assigned by the routing layer, never derived from a snapshot by `interpretLoopState` — no snapshot field drives it |
 
 The round-cap/low-signal heuristics in `copilot-loop-state.mjs` (`NEXT_ACTIONS`/`isCopilotRoundCapReached`) own three more terminal states and their entry conditions: `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback`.
@@ -213,6 +213,20 @@ Auto-detect must fail closed when review-thread state cannot be captured or pars
 - top-level `action`, `nextAction`, `reviewRequestStatus`, `watchArgs`, `loopDisposition`, `terminal`
 - `requestWatchContract.routingState` (`ready_state_needs_copilot_request`, `copilot_request_confirmed_waiting`, `draft_reset_requires_ready_state_reentry`, `non_ready_state`)
 - `requestWatchContract.stopState` for explicit stop/blocked routing (`unavailable`, `blocked`, `draft_requires_ready_state_reentry`, `no_automatic_next_step`)
+
+### Interpreting Copilot completion versus PR lifecycle completion
+
+`action: "stop"`, `terminal: true` and empty `allowedTransitions` describe the Copilot sub-loop, not permission to run a lifecycle gate or merge. `loopDisposition` is separate from canonical `state`: a clean terminal handoff can report `loopDisposition: "done"` or `"clean_converged"` while an open PR still needs lifecycle work.
+
+Consume fresh machine output in this order:
+
+1. Honor user/envelope stops and genuine blocked/refusal conditions first, including harness/classifier and ADR/size or reconciliation refusals. Blocked Copilot states are also terminal; `terminal: true` alone MUST NOT authorize continuation.
+2. For a closed/merged PR or canonical `state: "done"`, report completion without entering gates.
+3. For an open PR with `terminal: true` and `loopDisposition: "done"` or `"clean_converged"` (including `round_cap_clean_fallback` and suppressed post-convergence outcomes), end the Copilot sub-loop and consult fresh `dev-loops-run cli/index.mjs loop gate-coordination --repo <owner/name> --pr <number>` for the same PR/current head. `roundCapCleanEligible` is not a prerequisite: a suppressed fallback can report it as false. Do not request another round merely because the Copilot sub-loop stopped.
+4. The `action: "stop"` / `state: "pr_draft"` exception permits consultation only when fresh canonical startup carries `draftStart` for the same PR. Otherwise the draft stop remains a stop.
+5. All other stops remain stops. Nonterminal watch/fix outcomes remain under their owning strategy and do not grant entry to later gates.
+
+Gate coordination's fresh `nextAction`, `allowedNextActions` and `forbiddenActions` remain authoritative: missing draft evidence requires reconciliation; CI/thread work remains with its owning strategy; gates run only when permitted; blocked/refusal outcomes stop. Consultation does not infer pre-approval or merge readiness. Canonical draft/ready/request boundaries, current-head CI/pre-approval evidence, title markers, ADR/size, review requirements and human approval controls remain unchanged; no implicit merge is authorized. [PR Lifecycle Contract](./pr-lifecycle-contract.md) and [Stop Conditions](./stop-conditions.md) retain ownership of lifecycle gates and genuine stops.
 
 ## Related Scripts
 
