@@ -33,6 +33,9 @@ import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-
 import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
 import { resolvePendingRetrospectives as defaultResolvePendingRetrospectives } from "../loop/resolve-dev-loop-startup.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { evaluateAdrTripwire as defaultEvaluateAdrTripwire } from "../loop/check-adr-tripwire.mjs";
+import { defaultFetchOrigin } from "../loop/standing-authorization.mjs";
+import { waiveAdrTripwire as defaultWaiveAdrTripwire } from "./waive-adr-tripwire.mjs";
 
 const VALID_METHODS = new Set(["squash", "merge", "rebase"]);
 
@@ -79,8 +82,14 @@ Optional:
 
 Preconditions (each refuses with a machine-readable reason naming the failing one):
   human_approver, mergeable, ci_green, title_markers, gate_evidence,
-  copilot_convergence, size_budget_human_approval, merge_approval,
+  copilot_convergence, size_budget_human_approval, merge_approval, adr_tripwire,
   retrospective_checkpoint (only when workflow.requireRetrospective is true).
+  adr_tripwire fetches the PR head and evaluates the ADR tripwire at
+  origin/<base>...<head> against the current PR body, on every merge class. It
+  refuses when the tripwire blocks or cannot be evaluated. When the only cause
+  is a standing-authorization waiver line pinned to an older head, it re-issues
+  the line through waive-adr-tripwire and re-evaluates; a writer refusal is
+  quoted in the reason.
   copilot_convergence refuses a current-head Copilot "Changes recommended" (🟡)
   or unrecognized non-approval disposition (🔵 "Needs a closer look" is
   conductor-overridable; unresolved threads still gate it). A trusted
@@ -386,6 +395,31 @@ async function isInternalOnlyPr({ repo, pr, patterns }, { env, ghCommand, runChi
   }
 }
 
+const defaultFetchPrHead = ({ pr, baseRefName, repoRoot }) => {
+  defaultFetchOrigin(baseRefName, { repoRoot });
+  defaultFetchOrigin(`pull/${pr}/head`, { repoRoot });
+};
+
+// Returns an adr_tripwire refusal reason, or null when the tripwire passes.
+// Any evaluator or fetch error is a refusal (fail closed).
+async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, repoRoot, env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire }) {
+  try {
+    if (!baseRefName) throw new Error("the PR base branch is unreadable");
+    fetchPrHead({ pr: options.pr, baseRefName, repoRoot });
+    const evaluate = (prBody) => evaluateAdrTripwire({ base: `origin/${baseRefName}`, head: headSha, prBody, repoRoot, env });
+    let result = await evaluate(body);
+    if (result.outcome === "block" && result.waiver?.standing === true && result.waiver.stale === true) {
+      const written = await waiveAdrTripwire({ repo: options.repo, pr: options.pr }, { env, ghCommand, repoRoot, runChild });
+      if (!written.ok) return `the standing-authorization waiver is pinned to an older head and its re-issue was refused (${written.reason}: ${written.detail})`;
+      const fresh = await ghJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body"], { env, ghCommand, runChild });
+      result = await evaluate(typeof fresh?.body === "string" ? fresh.body : "");
+    }
+    return result.outcome === "pass" ? null : `the ADR tripwire blocks at head ${headSha}: ${(result.reasons ?? []).join(" ")}`;
+  } catch (error) {
+    return `the ADR tripwire could not be evaluated (unevaluable): ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 const POST_MERGE_ACTIONS_PATH = fileURLToPath(new URL("../loop/run-post-merge-actions.mjs", import.meta.url));
 const SELF_PATH = fileURLToPath(import.meta.url);
 
@@ -509,12 +543,15 @@ export async function mergePr(options, runtime = {}) {
     resolvePendingRetrospectives = defaultResolvePendingRetrospectives,
     postMergeSteps = {},
     stderr = process.stderr,
+    fetchPrHead = defaultFetchPrHead,
+    evaluateAdrTripwire = defaultEvaluateAdrTripwire,
+    waiveAdrTripwire = defaultWaiveAdrTripwire,
   } = runtime;
 
   assertGithubWriteStubbedInTestMode(runChild, "pr merge", { env });
 
   const prView = await ghJson(
-    ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "mergeable,mergeStateStatus,title,headRefOid,headRefName,url,statusCheckRollup"],
+    ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "mergeable,mergeStateStatus,title,headRefOid,headRefName,baseRefName,body,url,statusCheckRollup"],
     { env, ghCommand, runChild },
   );
   const currentHeadSha = typeof prView?.headRefOid === "string" && prView.headRefOid.trim().length > 0 ? prView.headRefOid.trim() : null;
@@ -653,6 +690,24 @@ export async function mergePr(options, runtime = {}) {
       copilotDisposition: verdict.copilotDisposition,
       copilotCarriedConvergence: copilotAbsentReviewDisposition?.carriedConvergence ?? null,
       copilotBodyDisposition: verdict.copilotBodyDisposition,
+    };
+    throw error;
+  }
+
+  // Runs after the other preconditions pass: a re-issue writes the PR body.
+  const adrReason = await resolveAdrTripwireRefusal({
+    options,
+    baseRefName: typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "",
+    body: typeof prView?.body === "string" ? prView.body : "",
+    headSha: currentHeadSha,
+    repoRoot: resolveRepoRoot(cwd),
+    env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire,
+  });
+  if (adrReason !== null) {
+    const error = new Error(`Merge preconditions not satisfied: adr_tripwire (${adrReason})`);
+    error.mergePrFailure = {
+      ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
+      mergeClass: verdict.mergeClass, failures: [{ precondition: "adr_tripwire", reason: adrReason }],
     };
     throw error;
   }

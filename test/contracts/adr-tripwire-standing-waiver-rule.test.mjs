@@ -49,3 +49,18 @@ test("ADR 0119 amends ADR 0052 and leaves it unedited", () => {
   const adr = read("docs/decisions/0119-standing-authorization-for-adr-tripwire-waivers.md");
   assert.match(adr, /Amends \[0052\]\(\.\/0052-adr-tripwire-fail-closed\.md\)/u);
 });
+
+test("the standing-waiver eligibility names the pre_approval_gate alternative", () => {
+  assert.match(read("skills/docs/decision-record-contract.md"), /clean `draft_gate` or `pre_approval_gate` verdict whose recorded `specDigest`/u);
+});
+
+test("adr_tripwire is listed in the merge preconditions, the sanctioned-wrapper section and the merge-pr usage text", () => {
+  const doc = read("skills/docs/merge-preconditions.md");
+  assert.match(doc, /^12\. ✅ ADR tripwire \(`adr_tripwire`\)/mu);
+  assert.match(doc, /^- The wrapper includes the `adr_tripwire` precondition/mu);
+  assert.match(read("scripts/github/merge-pr.mjs"), /merge_approval, adr_tripwire,/u);
+});
+
+test("ADR 0132 amends ADR 0119 and 0119 keeps its draft_gate-only text", () => {
+  assert.match(read("docs/decisions/0132-merge-pr-enforces-adr-tripwire-and-reissues-stale-waivers.md"), /Amends \[0119\]\(\.\/0119-standing-authorization-for-adr-tripwire-waivers\.md\)/u);
+});

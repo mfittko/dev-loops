@@ -67,6 +67,7 @@ function makeRuntime(repo, { prView = {}, mergeCode = 0, postMergeState = "MERGE
     mergeStateStatus: "CLEAN",
     title: "fix: post-merge steps",
     headRefOid: head,
+    baseRefName: "main",
     headRefName: BRANCH,
     url: "https://github.com/mfittko/dev-loops/pull/7",
     statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
@@ -84,6 +85,8 @@ function makeRuntime(repo, { prView = {}, mergeCode = 0, postMergeState = "MERGE
       ? { stdout: "", stderr: mergeCode ? "merge blocked" : "", code: mergeCode }
       : { stdout: "", stderr: "", code: 0 }),
     detectEvidence: async () => ({ ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], currentHeadSha: head }),
+    fetchPrHead: () => {},
+    evaluateAdrTripwire: async () => ({ outcome: "pass" }),
     loadConfig: async () => ({ config: { autonomy: { humanMergeOnly: false }, refinement: { maxCopilotRounds: 0 } }, errors: [] }),
   };
   if (postMergeSteps) runtime.postMergeSteps = postMergeSteps;

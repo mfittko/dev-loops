@@ -754,7 +754,7 @@ async function runMerge(fixture, { threads = [], delta = DOCS_DELTA, prOwn = del
   const runChild = async (_cmd, args) => {
     const joined = args.join(" ");
     if (args[0] === "pr" && args[1] === "view" && joined.includes("mergeable")) {
-      return ok({ mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", title: "feat: converged-once", headRefOid: HEAD, url: "https://example.test/pr", statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }] });
+      return ok({ mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", title: "feat: converged-once", headRefOid: HEAD, baseRefName: "main", url: "https://example.test/pr", statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }] });
     }
     if (args[0] === "pr" && args[1] === "view" && joined.includes("baseRefName")) return ok("main\n");
     if (args[0] === "pr" && args[1] === "view" && joined.includes("mergeCommit")) return ok({ mergeCommit: { oid: FIX }, state: "MERGED" });
@@ -775,6 +775,8 @@ async function runMerge(fixture, { threads = [], delta = DOCS_DELTA, prOwn = del
       ghCommand: "gh",
       runChild,
       detectEvidence: async () => ({ ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], currentHeadSha: HEAD, draftGate: null }),
+      fetchPrHead: () => {},
+      evaluateAdrTripwire: async () => ({ outcome: "pass" }),
       loadConfig: async () => ({ config: { refinement: { maxCopilotRounds: 5, requireCopilotConvergenceAtLatestHead: strict } }, errors: [] }),
       detectInternalOnlyPr: async () => ({ ok: true, internalOnly: false, files: [] }),
       cwd: process.cwd(),

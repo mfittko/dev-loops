@@ -55,6 +55,7 @@ function makeRuntime({
     mergeStateStatus: "CLEAN",
     title: "feat: sanctioned merge wrapper",
     headRefOid: HEAD,
+    baseRefName: "main",
     url: "https://github.com/mfittko/dev-loops/pull/5",
     statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
     ...prView,
@@ -104,6 +105,8 @@ function makeRuntime({
         return { stdout: "", stderr: "", code: 0 };
       },
       detectEvidence: async () => ({ ...evidence, currentHeadSha: evidenceHead }),
+      fetchPrHead: () => {},
+      evaluateAdrTripwire: async () => ({ outcome: "pass" }),
       detectInternalOnlyPr: async () => (prFilesCode ? { ok: false, error: "files read failed" } : { ok: true, internalOnly: detectorInternalOnly, files: prFiles }),
       loadConfig: async () => ({ config: { autonomy: { humanMergeOnly }, refinement: { maxCopilotRounds, requireCopilotConvergenceAtLatestHead: strict }, ...configExtra }, errors: [] }),
       cwd: process.cwd(),
@@ -130,6 +133,48 @@ test("parse: --human-approved-by is mandatory and login-validated", () => {
   // An explicit disable is honored, not read as enabled (no presence-means-true fail-open).
   assert.equal(parseMergePrCliArgs(["--repo", "o/r", "--pr", "5", "--human-approved-by", "mfittko", "--standing-authorization=false"]).standingAuthorization, false);
   assert.equal(parseMergePrCliArgs(["--repo", "o/r", "--pr", "5", "--human-approved-by", "mfittko", "--stable-release=0"]).stableRelease, false);
+});
+
+const STALE_BLOCK = { outcome: "block", waiver: { standing: true, stale: true }, reasons: ["stale"] };
+const mergeCalls = (calls) => calls.runChild.filter((c) => c.args[0] === "pr" && c.args[1] === "merge");
+
+test("adr_tripwire refuses a block that is not a stale waiver, never merging", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  runtime.evaluateAdrTripwire = async () => ({ outcome: "block", waiver: { requested: false }, reasons: ["no record"] });
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(the ADR tripwire blocks.*no record/);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("adr_tripwire fails closed when the evaluator throws or the head fetch fails", async () => {
+  for (const key of ["evaluateAdrTripwire", "fetchPrHead"]) {
+    const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
+    runtime[key] = () => { throw new Error("git exploded"); };
+    await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*git exploded/);
+    assert.equal(mergeCalls(calls).length, 0);
+  }
+});
+
+test("adr_tripwire re-issues a stale covered waiver through the writer, re-reads the body, and merges", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "old" } });
+  const bodies = [];
+  runtime.evaluateAdrTripwire = async ({ prBody }) => { bodies.push(prBody); return prBody === "old" ? STALE_BLOCK : { outcome: "pass" }; };
+  const written = [];
+  runtime.waiveAdrTripwire = async (opts) => { written.push(opts); return { ok: true, action: "waiver_written" }; };
+  const base = runtime.ghJson;
+  runtime.ghJson = async (args) => (args.join(" ").endsWith("--json body") ? { body: "new" } : base(args));
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.merged, true);
+  assert.deepEqual(written, [{ repo: "mfittko/dev-loops", pr: 5 }]);
+  assert.deepEqual(bodies, ["old", "new"]);
+  assert.equal(mergeCalls(calls).length, 1);
+});
+
+test("adr_tripwire quotes the writer's typed reason when the re-issue is refused", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
+  runtime.evaluateAdrTripwire = async () => STALE_BLOCK;
+  runtime.waiveAdrTripwire = async () => ({ ok: false, refused: true, reason: "contract_doc_not_in_matrix", detail: "skills/docs/x.md" });
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*re-issue was refused \(contract_doc_not_in_matrix: skills\/docs\/x\.md\)/);
+  assert.equal(mergeCalls(calls).length, 0);
 });
 
 test("a config load/validation error fails closed (cannot verify humanMergeOnly or standing auth)", async () => {

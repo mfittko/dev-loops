@@ -177,6 +177,24 @@ test("refuses when the recorded specDigest differs from the issue's current dige
   await assertRefusal({ fetchIssueBody: async () => "no spec here" }, "issue_matrix_invalid");
 });
 
+test("post-ready path: a clean pre_approval_gate at head with a matching digest writes the line", async () => {
+  const reads = [];
+  const { edits, run } = harness({
+    fetchDraftGateEvidence: async () => ({ currentHeadClean: false, preApprovalCurrentHeadClean: true }),
+    readRecordedSpecDigest: async ({ gate }) => { reads.push(gate); return DIGEST; },
+  });
+  const result = await run();
+  assert.equal(result.action, "waiver_written");
+  assert.deepEqual(reads, ["pre_approval_gate"]);
+  assert.equal(edits.length, 1);
+});
+
+test("post-ready path: a mismatched pre_approval_gate digest refuses, and neither gate clean refuses typed", async () => {
+  const pre = { fetchDraftGateEvidence: async () => ({ currentHeadClean: false, preApprovalCurrentHeadClean: true }) };
+  await assertRefusal({ ...pre, readRecordedSpecDigest: async () => "sha256:stale" }, "spec_digest_mismatch");
+  await assertRefusal({ fetchDraftGateEvidence: async () => ({ currentHeadClean: false, preApprovalCurrentHeadClean: false }) }, "no_clean_draft_gate");
+});
+
 test("parse and CLI: --repo and --pr are required; a refusal exits 1 with a typed stderr reason", async () => {
   assert.throws(() => parseWaiveAdrTripwireCliArgs(["--repo", "o/n"]), /requires --repo and --pr/);
   const stdout = captureStream();
