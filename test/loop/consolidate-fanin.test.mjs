@@ -23,6 +23,7 @@ import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetr
 import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, renderBriefingPointerLine, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
+import { retireGateRound } from "../../scripts/github/retire-gate-round.mjs";
 import { writeJson } from "@dev-loops/core/loop/phase-files";
 import { runNode, withTempDir } from "../_helpers.mjs";
 
@@ -4125,6 +4126,239 @@ test("#1841 AC4: a head with no dispatch-prompt records still consolidates (offl
       }
     },
   );
+});
+
+test("#2709: retirement cannot reopen the zero-dispatch-record fan-in path", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const findingsDir = path.join(tmpRoot, `draft_gate-${HEAD_A}`);
+    await mkdir(findingsDir);
+    await writeFile(path.join(findingsDir, "coverage.json"), JSON.stringify({ angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A }));
+    await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+    await writeFile(dispatchPromptLayoutRecordPath(tmpRoot, "draft-gate-coverage", HEAD_A), "{}");
+    const retired = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "rebuild prefix and unit layout", findingsDir, tmpRoot });
+    assert.equal(retired.noop, false);
+
+    // Fresh findings and a fresh sentinel satisfy the existing records-floor,
+    // but do not prove any freshly emitted/delivered dispatch.
+    await mkdir(findingsDir);
+    await writeFile(path.join(findingsDir, "coverage.json"), JSON.stringify({ angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A }));
+    await writePrefixSentinel(tmpRoot, "draft-gate-group-coverage", HEAD_A, "b".repeat(64));
+    const out = path.join(tmpRoot, "out.json");
+    const ledgerOut = path.join(tmpRoot, "ledger.json");
+    await writeFile(out, "prior output\n");
+    await writeFile(ledgerOut, "prior ledger\n");
+    await assert.rejects(
+      () => consolidateGateFanin({ findingsDir, headSha: HEAD_A, gate: "draft_gate", tmpRoot, out, ledgerOut }),
+      /GATE-EXEC-ROUND-RETIREMENT.*fresh.*--emit-plan/,
+    );
+    const cli = await runNode(path.join(import.meta.dirname, "../../scripts/loop/consolidate-fanin.mjs"), [
+      "--findings-dir", findingsDir, "--head-sha", HEAD_A, "--gate", "draft_gate", "--tmp-root", tmpRoot,
+      "--out", out, "--ledger-out", ledgerOut,
+    ]);
+    assert.equal(cli.code, 1, cli.stderr);
+    assert.match(JSON.parse(cli.stderr).error, /GATE-EXEC-ROUND-RETIREMENT.*fresh.*--emit-plan/);
+    assert.equal(await readFile(out, "utf8"), "prior output\n");
+    assert.equal(await readFile(ledgerOut, "utf8"), "prior ledger\n");
+  });
+});
+
+async function withRebuiltRetiredRound(fn) {
+  await withTempDir(async (tmpRoot) => {
+    const gate = "draft_gate";
+    const findingsDir = path.join(tmpRoot, `${gate}-${HEAD_A}`);
+    await mkdir(findingsDir);
+    await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "a".repeat(64));
+    await writeGateBriefingRecord(tmpRoot, gate, HEAD_A, "old prefix\n");
+    const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `${gate}-${HEAD_A}.briefing-prefix.txt`);
+    await writeDispatchPromptRecord(tmpRoot, "draft-gate-correctness", HEAD_A, { prefixPath, leading: "old prefix\nold unit\n" });
+    const retired = await retireGateRound({ gate, headSha: HEAD_A, reason: "new prefix and grouped layout", findingsDir, tmpRoot });
+    const audit = JSON.parse(await readFile(path.join(retired.retirementDir, "retirement.json"), "utf8"));
+    const afterRetirement = new Date(Date.parse(audit.retiredAt) + 1000);
+    const beforeRetirement = new Date(Date.parse(audit.retiredAt) - 1000);
+    const scope = "draft-gate-group-correctness-input";
+    const unit = { ...matchingEmitPlan().units[0], scope, angles: ["correctness", "input-validation"], workOrderRef: `review:o/r#1:${gate}:${HEAD_A}:${scope}`, executionIdentity: "r2-cd-u0" };
+    const plan = { ...matchingEmitPlan(), gate, headSha: HEAD_A, units: [unit] };
+    const emitPlan = await writeEmitPlan(tmpRoot, plan, `${gate}-${HEAD_A}.emit-plan.json`);
+    await utimes(emitPlan, afterRetirement, afterRetirement);
+    await writeGateBriefingRecord(tmpRoot, gate, HEAD_A, "fresh prefix\n");
+    await writePrefixSentinel(tmpRoot, scope, HEAD_A, sha256Hex("fresh prefix\n").replace(/^sha256:/, ""));
+    await writeDispatchPromptRecord(tmpRoot, scope, HEAD_A, { prefixPath, leading: "fresh prefix\ngrouped unit\n" });
+    const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, scope, HEAD_A);
+    const record = JSON.parse(await readFile(recordPath, "utf8"));
+    record.compactReference = { workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity };
+    await writeJson(recordPath, record);
+    await utimes(recordPath, afterRetirement, afterRetirement);
+    await writeEmitPlanReceipt(tmpRoot, unit);
+    await utimes(pullReceiptPath(tmpRoot, unit.workOrderRef), afterRetirement, afterRetirement);
+    await mkdir(findingsDir);
+    for (const angle of unit.angles) {
+      const file = path.join(findingsDir, `${angle}.json`);
+      await writeJson(file, { angle, verdict: "clean", findings: [], headSha: HEAD_A });
+      await utimes(file, afterRetirement, afterRetirement);
+    }
+    await fn({ options: { findingsDir, gate, headSha: HEAD_A, tmpRoot, receiptTmpRoot: tmpRoot, emitPlan }, plan, unit, emitPlan, recordPath, record, beforeRetirement, afterRetirement });
+  });
+}
+
+test("#2709: rebuilt grouped round needs its complete fresh record set, keyed plan and pull receipts", async () => {
+  await withRebuiltRetiredRound(async ({ options, recordPath, afterRetirement }) => {
+    const recordBytes = await readFile(recordPath);
+    await rm(recordPath);
+    await assert.rejects(() => consolidateGateFanin(options), /fresh current-gate dispatch-prompt records.*recorded: none/);
+    await writeFile(recordPath, recordBytes);
+    await utimes(recordPath, afterRetirement, afterRetirement);
+    const result = await consolidateGateFanin({ ...options, expectedDispatchUnits: 1 });
+    assert.equal(result.overallVerdict, "clean");
+    assert.deepEqual(result.angles.map(({ angle }) => angle).sort(), ["correctness", "input-validation"]);
+  });
+});
+
+test("#2709: retired-round dispatch reconciliation fails closed on stale, partial or foreign evidence", async () => {
+  const cases = [
+    ["stale plan", async (f) => utimes(f.emitPlan, f.beforeRetirement, f.beforeRetirement), /emit-plan predates retirement/],
+    ["stale record", async (f) => utimes(f.recordPath, f.beforeRetirement, f.beforeRetirement), /dispatch-prompt record.*predates retirement/],
+    ["empty units", async (f) => writeJson(f.emitPlan, { ...f.plan, count: 0, units: [] }), /non-empty fresh unit set/],
+    ["missing units", async (f) => writeJson(f.emitPlan, { ...f.plan, units: undefined }), /non-empty fresh unit set/],
+    ["wrong count", async (f) => writeJson(f.emitPlan, { ...f.plan, count: 2 }), /matching count/],
+    ["duplicate scope", async (f) => writeJson(f.emitPlan, { ...f.plan, count: 2, units: [f.unit, f.unit] }), /unique current-gate scopes/],
+    ["foreign scope", async (f) => writeJson(f.emitPlan, { ...f.plan, units: [{ ...f.unit, scope: "pre-approval-gate-correctness" }] }), /unique current-gate scopes/],
+    ["missing scope", async (f) => writeJson(f.emitPlan, { ...f.plan, units: [{ ...f.unit, scope: null }] }), /unique current-gate scopes/],
+    ["missing unit record", async (f) => writeJson(f.emitPlan, { ...f.plan, count: 2, units: [f.unit, { ...f.unit, scope: "draft-gate-scope" }] }), /records do not match emit-plan units/],
+    ["extra record", async (f) => writeFile(dispatchPromptLayoutRecordPath(f.options.tmpRoot, "draft-gate-extra", HEAD_A), "{}"), /records do not match emit-plan units/],
+    ["wrong execution", async (f) => writeJson(f.recordPath, { ...f.record, compactReference: { ...f.record.compactReference, executionIdentity: "r1-ab-u0" } }), /does not bind.*compact reference/],
+    ["wrong ref", async (f) => writeJson(f.recordPath, { ...f.record, compactReference: { ...f.record.compactReference, workOrderRef: "review:foreign" } }), /does not bind.*compact reference/],
+    ["wrong digest", async (f) => writeJson(f.recordPath, { ...f.record, compactReference: { ...f.record.compactReference, workOrderDigest: "sha256:other" } }), /does not bind.*compact reference/],
+    ["missing plan reference", async (f) => writeJson(f.emitPlan, { ...f.plan, units: [{ ...f.unit, workOrderRef: null }] }), /does not bind.*compact reference/],
+    ["malformed record", async (f) => writeFile(f.recordPath, "{invalid json"), /JSON|parse/i],
+    ["missing receipt", async (f) => rm(pullReceiptPath(f.options.tmpRoot, f.unit.workOrderRef)), /incomplete delivery evidence.*receipt_missing/],
+    ["stale receipt", async (f) => utimes(pullReceiptPath(f.options.tmpRoot, f.unit.workOrderRef), f.beforeRetirement, f.beforeRetirement), /pull receipt.*predates retirement/],
+  ];
+  for (const [name, mutate, error] of cases) {
+    await withRebuiltRetiredRound(async (fixture) => {
+      await mutate(fixture);
+      // Normalize the deliberately changed plan/record clock except in the
+      // stale-time cases, so each case exercises its named uncertainty.
+      if (name !== "stale plan") await utimes(fixture.emitPlan, fixture.afterRetirement, fixture.afterRetirement);
+      if (name !== "stale record") await utimes(fixture.recordPath, fixture.afterRetirement, fixture.afterRetirement);
+      await assert.rejects(() => consolidateGateFanin(fixture.options), error, name);
+    });
+  }
+});
+
+test("#2709: retirement requires gate identity and reconciles the caller's expected unit count", async () => {
+  await withRebuiltRetiredRound(async ({ options }) => {
+    await assert.rejects(() => consolidateGateFanin({ ...options, emitPlan: undefined, gate: undefined }), /--gate is required/);
+    await assert.rejects(() => consolidateGateFanin({ ...options, expectedDispatchUnits: 2 }), /differs from expected dispatch-unit count/);
+  });
+});
+
+test("#2709: no-op, sentinel-only retirement and another gate or head preserve the legacy zero-record path", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const noop = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "nothing live", noFindingsArtifacts: true, tmpRoot });
+    assert.equal(noop.noop, true);
+    const findingsDir = path.join(tmpRoot, "findings");
+    await mkdir(findingsDir);
+    await writeJson(path.join(findingsDir, "coverage.json"), { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A });
+    const options = { findingsDir, gate: "draft_gate", headSha: HEAD_A, tmpRoot };
+    assert.equal((await consolidateGateFanin(options)).ok, true);
+    await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+    const sentinelOnly = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "legacy sentinel-only round", noFindingsArtifacts: true, tmpRoot });
+    assert.deepEqual(sentinelOnly.dispatchPromptRecords, []);
+    assert.equal((await consolidateGateFanin(options)).ok, true);
+    await writePrefixSentinel(tmpRoot, "pre-approval-gate-coverage", HEAD_A, "a".repeat(64));
+    await writeFile(dispatchPromptLayoutRecordPath(tmpRoot, "pre-approval-gate-coverage", HEAD_A), "{}");
+    await retireGateRound({ gate: "pre_approval_gate", headSha: HEAD_A, reason: "other gate", noFindingsArtifacts: true, tmpRoot });
+    await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_B, "a".repeat(64));
+    await writeFile(dispatchPromptLayoutRecordPath(tmpRoot, "draft-gate-coverage", HEAD_B), "{}");
+    await retireGateRound({ gate: "draft_gate", headSha: HEAD_B, reason: "other head", noFindingsArtifacts: true, tmpRoot });
+    assert.equal((await consolidateGateFanin(options)).ok, true);
+  });
+});
+
+test("#2709: successful moved-record partial audits enforce the same fresh-dispatch boundary", async () => {
+  await withTempDir(async (base) => {
+    // Moving the tmp root into its own retirement child deterministically
+    // fails after the dispatch record has moved, matching the producer's
+    // existing partial-audit regression seam.
+    const tmpRoot = path.join(base, `tmp-${HEAD_A}`);
+    await mkdir(tmpRoot);
+    await writeFile(dispatchPromptLayoutRecordPath(tmpRoot, "draft-gate-correctness", HEAD_A), "{}");
+    let failure;
+    await assert.rejects(
+      () => retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "partial moved-record retirement", findingsDir: tmpRoot, tmpRoot }),
+      (error) => { failure = error; return /partial retirement/.test(error.message); },
+    );
+    const audit = JSON.parse(await readFile(path.join(failure.retirementDir, "retirement.json"), "utf8"));
+    assert.equal(audit.partial, true);
+    assert.equal(audit.dispatchPromptRecords.length, 1);
+    const findingsDir = path.join(base, "fresh-findings");
+    await mkdir(findingsDir);
+    await writeJson(path.join(findingsDir, "correctness.json"), { angle: "correctness", headSha: HEAD_A, verdict: "clean", findings: [] });
+    await assert.rejects(() => consolidateGateFanin({ findingsDir, headSha: HEAD_A, gate: "draft_gate", tmpRoot }), /fresh keyed --emit-plan/);
+  });
+});
+
+test("#2709: actual retire, re-emit, pull and fan-in CLIs enforce a fresh grouped round", async () => {
+  await withTempDir(async (workDir) => {
+    const tmpRoot = path.join(workDir, "tmp");
+    const contextDir = path.join(tmpRoot, "gate-context", "o-r", "pr-7");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(workDir, ".devloops"), "version: 1\n");
+    const gate = "draft_gate";
+    const prefixPath = path.join(contextDir, `${gate}-${HEAD_A}.briefing-prefix.txt`);
+    const contextPath = path.join(contextDir, `${gate}-${HEAD_A}.json`);
+    await writeFile(prefixPath, "old prefix\n");
+    await writeFile(path.join(contextDir, `${gate}-${HEAD_A}.briefing-volatile.txt`), "volatile\n");
+    await writeJson(contextPath, { fanout: { groups: [{ name: "correctness", angles: ["correctness"] }] } });
+    const emitArgs = ["--repo", "o/r", "--pr", "7", "--gate", gate, "--head-sha", HEAD_A];
+    const emitScript = path.join(import.meta.dirname, "../../scripts/github/emit-fanout-dispatch.mjs");
+    const oldEmit = await runNode(emitScript, emitArgs, { cwd: workDir });
+    assert.equal(oldEmit.code, 0, oldEmit.stderr);
+    const oldUnit = JSON.parse(oldEmit.stdout).units[0];
+    const retired = await runNode(path.join(import.meta.dirname, "../../scripts/github/retire-gate-round.mjs"), [
+      "--gate", gate, "--head-sha", HEAD_A, "--reason", "new grouped prefix",
+      "--no-findings-artifacts", "--tmp-root", tmpRoot,
+    ], { cwd: workDir });
+    assert.equal(retired.code, 0, retired.stderr);
+    assert.deepEqual(JSON.parse(retired.stdout).dispatchPromptRecords, [path.basename(dispatchPromptLayoutRecordPath(tmpRoot, oldUnit.scope, HEAD_A))]);
+
+    await writeFile(prefixPath, "fresh prefix\n");
+    await writeJson(contextPath, { fanout: { groups: [{ name: "correctness-input", angles: ["correctness", "input-validation"] }] } });
+    const findingsDir = path.join(workDir, `findings-${HEAD_A}`);
+    await mkdir(findingsDir);
+    const writeResults = async () => {
+      for (const angle of ["correctness", "input-validation"]) {
+        await writeJson(path.join(findingsDir, `${angle}.json`), { angle, verdict: "clean", headSha: HEAD_A, findings: [] });
+      }
+    };
+    await writeResults();
+    await writePrefixSentinel(tmpRoot, "draft-gate-group-correctness-input", HEAD_A, sha256Hex("fresh prefix\n").replace(/^sha256:/, ""));
+    const faninScript = path.join(import.meta.dirname, "../../scripts/loop/consolidate-fanin.mjs");
+    const faninArgs = ["--findings-dir", findingsDir, "--gate", gate, "--head-sha", HEAD_A, "--tmp-root", tmpRoot, "--repo-root", workDir];
+    const beforeEmission = await runNode(faninScript, faninArgs, { cwd: workDir });
+    assert.equal(beforeEmission.code, 1, beforeEmission.stderr);
+    assert.match(JSON.parse(beforeEmission.stderr).error, /fresh keyed --emit-plan/);
+
+    const freshEmit = await runNode(emitScript, emitArgs, { cwd: workDir });
+    assert.equal(freshEmit.code, 0, freshEmit.stderr);
+    const unit = JSON.parse(freshEmit.stdout).units[0];
+    assert.equal(unit.scope, "draft-gate-group-correctness-input");
+    const pull = await runNode(path.join(import.meta.dirname, "../../scripts/github/pull-work-order.mjs"), [
+      "--ref", unit.workOrderRef, "--digest", unit.workOrderDigest, "--execution", unit.executionIdentity,
+    ], { cwd: workDir });
+    assert.equal(pull.code, 0, pull.stdout + pull.stderr);
+    await writeResults();
+    const emitPlan = path.join(contextDir, `${gate}-${HEAD_A}.emit-plan.json`);
+    const afterEmission = await runNode(faninScript, [...faninArgs, "--emit-plan", emitPlan], { cwd: workDir });
+    assert.equal(afterEmission.code, 0, afterEmission.stderr);
+    assert.equal(JSON.parse(afterEmission.stdout).overallVerdict, "clean");
+
+    // The unchanged verifier must still reject invalid fresh emitted bytes.
+    await writeFile(unit.promptPath, "fresh prefix\nALTERED\n");
+    const invalidFresh = await runNode(faninScript, [...faninArgs, "--emit-plan", emitPlan], { cwd: workDir });
+    assert.equal(invalidFresh.code, 1, invalidFresh.stderr);
+    assert.match(JSON.parse(invalidFresh.stderr).error, /dispatch-prompt layout verification failed/);
+  });
 });
 
 test("#1841 AC1/AC2: a round whose dispatched reviewer prompt is prefix-first (inline) consolidates", async () => {

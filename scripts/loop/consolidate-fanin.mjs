@@ -45,14 +45,14 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { GATE_NAMES } from "../github/_gate-names.mjs";
+import { GATE_NAMES, gateScopePrefix } from "../github/_gate-names.mjs";
 import { lintFillerPhrases } from "../github/_gate-finding-text.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof } from "../github/_carried-angles.mjs";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
-import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-protocol.mjs";
+import { pullReceiptPath, verifyPullReceipt, verifyPulledResult } from "../github/_work-order-protocol.mjs";
 import { resolveGateArtifactTmpRoot, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
@@ -221,8 +221,8 @@ Optional:
                                  recorded reviewer prompt does not LEAD with the round's
                                  byte-identical invariant prefix or its byte-identical pointer line
                                  (GATE-EXEC-BRIEFING-PREFIX layout, #1841/completes #1468) — an
-                                 angle-first prompt fails this mechanically. A round with no such
-                                 records is never newly blocked (progressive/optional capture).
+                                 angle-first prompt fails this mechanically. Zero records remain allowed
+                                 when no matching audit records archived dispatch records (progressive/optional capture).
   --cache-telemetry <path>       The optional before/after cache-telemetry evidence artifact
                                  (<gate>-<headSha>.cache-telemetry.json) as JSON.
                                  When given, the fan-in validates it via enforceCacheTelemetryEvidence
@@ -234,8 +234,12 @@ Optional:
                                  proceeds unchanged (recording telemetry is progressive/optional).
   --emit-plan <path>            emit-fanout-dispatch.mjs's keyed emit-plan artifact
                                  (<gate>-<headSha>.emit-plan.json, GATE-EXEC-FANOUT-DISPATCH-EMIT) as a
-                                 path. Required once the head has dispatch-prompt records; the fan-in verifies its embedded
-                                 round key (gate, headSha) against the round being consolidated and
+                                 path. Required once the head has dispatch-prompt records OR this gate+head
+                                 has an audit of archived dispatch-prompt records. After that retirement,
+                                 the plan and every current-gate unit's record and pull receipt must postdate
+                                 retirement; records must match
+                                 the plan's non-empty unit set and compact references exactly.
+                                 The fan-in verifies its embedded round key (gate, headSha) and
                                  FAILS CLOSED (exit 1, "cannot verify emit-plan key" / "is stamped for ...")
                                  on a mismatch, a missing/malformed key field, or an unreadable/non-JSON
                                  plan — BEFORE any --out/--ledger-out write. A rejected invocation
@@ -504,7 +508,7 @@ async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAng
 // a pull receipt for its own execution/unit/digest, and a pulled unit without a
 // result for each of its angles is an interrupted reviewer, never complete.
 // Carried angles are not plan units, so their carry proof stays the authority.
-async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot) {
+async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot, dispatchRetiredAt) {
   for (const unit of Array.isArray(plan?.units) ? plan.units : []) {
     if (typeof unit?.workOrderRef !== "string") {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: emit-plan unit ${JSON.stringify(unit?.scope)} carries no compact work-order reference; re-emit the round with emit-fanout-dispatch.mjs (fail-closed)`);
@@ -513,11 +517,103 @@ async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot) {
     if (!check.ok) {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: incomplete delivery evidence for unit ${unit.scope}: ${check.reason} (expected a pull receipt for execution ${unit.executionIdentity}, digest ${unit.workOrderDigest}) under ${receiptTmpRoot}; re-dispatch the unit with its compact reference (fail-closed)`);
     }
+    if (dispatchRetiredAt !== undefined) {
+      const receiptStats = await stat(pullReceiptPath(receiptTmpRoot, unit.workOrderRef));
+      if (receiptStats.mtimeMs <= dispatchRetiredAt) {
+        throw new Error(`GATE-EXEC-ROUND-RETIREMENT: pull receipt for ${unit.scope} predates retirement; freshly redispatch this unit (fail-closed)`);
+      }
+    }
     // A result older than this execution's pull is a stale prior-round file (verifyPulledResult).
     const missing = (await Promise.all((unit.angles ?? []).map(async (angle) => (resultAngles.has(angle)
       && (await verifyPulledResult({ resultPath: resultAngles.get(angle)[0], receiptTmpRoot, role: "review", ...unit })).ok ? null : angle)))).filter(Boolean);
     if (missing.length > 0) throw new Error(`interrupted reviewer: unit ${unit.scope} (execution ${unit.executionIdentity}) pulled its work order but wrote no post-pull result for angle(s) ${missing.join(", ")}; the unit is not complete, retry it per the existing execution rules (fail-closed)`);
   }
+}
+
+// Read the producer's existing audit, not a new provenance store. Only an
+// actual archived dispatch record closes the newly reachable zero-record path;
+// sentinel-only/legacy retirements retain their pre-existing offline behavior.
+async function readDispatchRetirementTimes(tmpRoot, headSha) {
+  const retiredRoot = path.join(tmpRoot, "retired-gate-rounds", headSha);
+  let rounds;
+  try {
+    rounds = await readdir(retiredRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return new Map();
+    throw error;
+  }
+  const times = new Map();
+  for (const round of rounds.filter((entry) => entry.isDirectory() && /^round-\d+$/.test(entry.name))) {
+    const auditPath = path.join(retiredRoot, round.name, "retirement.json");
+    let text;
+    try {
+      text = await readFile(auditPath, "utf8");
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    const audit = JSON.parse(text);
+    if (audit?.headSha !== headSha || !GATE_NAMES.includes(audit.gate)
+        || !Array.isArray(audit.dispatchPromptRecords) || audit.dispatchPromptRecords.length === 0) continue;
+    const retiredAt = Date.parse(audit.retiredAt);
+    if (!Number.isFinite(retiredAt)) throw new Error(`GATE-EXEC-ROUND-RETIREMENT: cannot verify retirement time in ${auditPath}`);
+    times.set(audit.gate, Math.max(times.get(audit.gate) ?? -Infinity, retiredAt));
+  }
+  return times;
+}
+
+// Retirement's existing durable audit closes the legacy zero-record escape:
+// rebuilt rounds must have fresh, current-gate records for exactly their plan units.
+async function verifyRetiredRoundDispatch(options, plan) {
+  if (options.headSha === undefined) return;
+  const tmpRoot = options.tmpRoot ?? path.join(process.cwd(), "tmp");
+  const retirementTimes = await readDispatchRetirementTimes(tmpRoot, options.headSha);
+  if (retirementTimes.size === 0) return;
+  const fail = (reason) => { throw new Error(`GATE-EXEC-ROUND-RETIREMENT: ${reason} (fail-closed; rebuild and freshly redispatch this gate's units before consolidation)`); };
+  if (options.gate === undefined) fail(`head ${options.headSha} has retired rounds; --gate is required to identify the rebuilt round`);
+  const dispatchRetiredAt = retirementTimes.get(options.gate);
+  if (dispatchRetiredAt === undefined) return; // The other gate's live round is untouched.
+  if (plan === undefined) fail(`gate ${options.gate} at head ${options.headSha} requires a fresh keyed --emit-plan after retirement`);
+  const planStats = await stat(options.emitPlan);
+  if (planStats.mtimeMs <= dispatchRetiredAt) {
+    fail("--emit-plan predates retirement; re-emit the rebuilt round");
+  }
+  const units = plan.units;
+  if (!Array.isArray(units) || units.length === 0 || plan.count !== units.length) {
+    fail("--emit-plan must name a non-empty fresh unit set with a matching count");
+  }
+  if (options.expectedDispatchUnits !== undefined && options.expectedDispatchUnits !== units.length) {
+    fail(`emit-plan unit count (${units.length}) differs from expected dispatch-unit count (${options.expectedDispatchUnits})`);
+  }
+  const scopePrefix = gateScopePrefix(options.gate);
+  const unitScopes = new Set();
+  for (const unit of units) {
+    if (typeof unit?.scope !== "string" || !unit.scope.startsWith(scopePrefix) || unitScopes.has(unit.scope)) {
+      fail("emit-plan units must have unique current-gate scopes");
+    }
+    unitScopes.add(unit.scope);
+  }
+  const recordPrefix = "checkpoint-dispatch-prompt-";
+  const suffix = `-${options.headSha}.json`;
+  const records = (await readdir(tmpRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.startsWith(`${recordPrefix}${scopePrefix}`) && entry.name.endsWith(suffix));
+  const recordScopes = new Set(records.map((entry) => entry.name.slice(recordPrefix.length, -suffix.length)));
+  if (recordScopes.size !== unitScopes.size || [...unitScopes].some((scope) => !recordScopes.has(scope))) {
+    fail(`fresh current-gate dispatch-prompt records do not match emit-plan units (expected: ${[...unitScopes].join(", ")}; recorded: ${[...recordScopes].join(", ") || "none"})`);
+  }
+  for (const unit of units) {
+    const recordPath = path.join(tmpRoot, `${recordPrefix}${unit.scope}${suffix}`);
+    const recordStats = await stat(recordPath);
+    if (recordStats.mtimeMs <= dispatchRetiredAt) {
+      fail(`dispatch-prompt record for ${unit.scope} predates retirement`);
+    }
+    const record = JSON.parse(await readFile(recordPath, "utf8"));
+    if (["workOrderRef", "workOrderDigest", "executionIdentity"].some((key) =>
+      typeof unit[key] !== "string" || record?.compactReference?.[key] !== unit[key])) {
+      fail(`dispatch-prompt record for ${unit.scope} does not bind the fresh emit-plan unit's compact reference`);
+    }
+  }
+  return dispatchRetiredAt;
 }
 
 export function parseConsolidateFaninCliArgs(argv) {
@@ -953,6 +1049,7 @@ export async function consolidateGateFanin(options) {
     // programmatic path, whose legacy pass-through behavior is preserved.
     options = { ...options, gate: options.gate.trim().toLowerCase() };
   }
+  const dispatchRetiredAt = await verifyRetiredRoundDispatch(options, emitPlan);
   const dir = options.findingsDir;
   let entries;
   try {
@@ -1067,7 +1164,7 @@ export async function consolidateGateFanin(options) {
   if (emitPlan !== undefined) {
     // Receipts live under the MAIN checkout's tmp root (pull-work-order.mjs).
     const receiptTmpRoot = options.receiptTmpRoot ?? resolveGateArtifactTmpRoot(path.dirname(path.resolve(options.tmpRoot ?? path.join(process.cwd(), "tmp"))));
-    await verifyUnitDeliveryReceipts(emitPlan, angleSourceFiles, receiptTmpRoot);
+    await verifyUnitDeliveryReceipts(emitPlan, angleSourceFiles, receiptTmpRoot, dispatchRetiredAt);
   }
 
   // GATE-EXEC-BRIEFING-PREFIX: the fan-in runs verify-briefing-prefixes.mjs
@@ -1117,8 +1214,8 @@ export async function consolidateGateFanin(options) {
     // the sanctioned emitter's emitted unit (missing promptContentHash, no
     // canonical emitted file on disk, a hash mismatch from an altered suffix /
     // mismatched delivered prompt, or an emitted unit that is not inline-aligned).
-    // A round with no dispatch-prompt records at all is never newly blocked —
-    // progressive/optional capture.
+    // Zero records stay progressive/optional without a matching archived-dispatch audit;
+    // verifyRetiredRoundDispatch already enforced the rebuilt round's floor.
     const layoutVerdict = await verifyDispatchPromptLayoutForHead(tmpRoot, options.headSha);
     if (layoutVerdict.recordCount > 0 && !layoutVerdict.verified) {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt did not bind to the sanctioned emitter's emitted unit. Re-run the sanctioned emitter (emit-fanout-dispatch.mjs) for the whole round, re-dispatch every unit's compact dispatchPrompt, then re-consolidate.`);

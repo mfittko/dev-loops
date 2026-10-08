@@ -438,7 +438,7 @@ Missing/malformed `prefixPath` or leading bytes, missing `promptContentHash`, a 
 
 **Three identities, one honest boundary.** The layout check binds recorded-layout identity to generated-file identity. The pull receipt binds delivered-task identity: `pull-work-order.mjs` writes it only after the reviewer's supplied reference matched the canonical emitted unit, and fan-in requires a matching receipt (execution, unit, digest) for every freshly dispatched unit. A missing or mismatched receipt fails closed; a receipt without the unit's result artifacts is an interrupted reviewer, never complete. Carried-only units need no receipt; their carry proof stays the authority. The remaining boundary holds for evidence reads: the sentinel proves each hashed required read still matches its recorded bytes before the reviewer starts, not that the reviewer read it in full. The per-harness delivery limitations above and `GATE-EXEC-FANOUT-DISPATCH-EMIT` still apply.
 
-Zero dispatch-prompt records do not themselves fail this check: capture remains progressive/optional for non-composer callers, including legacy offline rounds. This does not waive the records-floor below. Recovery requires re-emitting and actually redispatching compliant prompts before reconsolidating; regenerating files cannot certify old delivery. For unchanged prefix bytes, use the same-head retry guard below. For changed bytes, follow `GATE-EXEC-ROUND-RETIREMENT`: retire before rebuilding, then redispatch. Preserve the original review history and audit records.
+Zero dispatch-prompt records do not themselves fail the layout check: capture remains progressive/optional for non-composer callers, including legacy offline rounds, when no exact gate+full-head retirement audit records archived dispatch-prompt records. This preserves sentinel-only legacy retirements. This does not waive the records-floor below. After dispatch-record retirement, fan-in consumes the existing durable audit and requires the rebuilt round's fresh keyed emit plan, complete current-gate dispatch-record set and post-retirement pull receipts as described in `GATE-EXEC-ROUND-RETIREMENT`. Recovery requires re-emitting and actually redispatching compliant prompts before reconsolidating; regenerating files cannot certify old delivery. For unchanged prefix bytes, use the same-head retry guard below. For changed bytes, follow `GATE-EXEC-ROUND-RETIREMENT`: retire before rebuilding, then redispatch. Preserve the original review history and audit records.
 
 **Records-floor.** A coordinator round that records ZERO dispatch/briefing evidence for a gate that DID dispatch units is closed mechanically: the Phase-1 request-plan artifact (`tmp/gate-context/**/<gate>-<headSha>.dispatch-plan.json`, written by `write-gate-context.mjs`) is the AUTHORITY for whether the round dispatched units. When `--head-sha` is given, fan-in derives the expected dispatch-unit floor from every persisted plan for the head (the total pending angles across `requestGroups`) and FAILS CLOSED when the plan expects units but the round recorded zero reviewer sentinels. `verify-briefing-prefixes` correspondingly no longer returns `verified: true` for `sentinels.length === 0` when the plan-derived unit count is positive. A genuinely zero-unit gate (a plan whose `requestGroups` carry no angles, e.g. an all-carried round) is not forced to fail, and a corrupt or unparseable plan artifact fails closed (the plan is the enforcement authority, never silently ignorable). The optional `--expected-dispatch-units` flag still reconciles the EXACT unit count when the caller knows it; the plan, not the flag, decides whether units were expected at all.
 
@@ -544,6 +544,25 @@ total artifact count. A dispatch-only retirement is non-noop even with
 Failures expose `partiallyRetiredDispatchPromptRecords` for dispatch records
 successfully moved before failure; partial audits list only successfully archived
 records, never failed moves.
+
+Fan-in consumes the existing `retirement.json` audit for the exact gate+full head
+only when its `dispatchPromptRecords` is non-empty, including partial audits
+listing successfully moved records. It never treats the newly empty live
+dispatch namespace as a legacy/offline round. It requires `--gate` and a keyed
+`--emit-plan` written after the latest matching dispatch-record retirement.
+That plan must name a non-empty fresh
+unit set with a matching `count`; when supplied, `--expected-dispatch-units`
+must agree. The current gate's live dispatch-record scopes must match those
+units exactly, and each post-retirement record must bind its unit's compact
+reference (work-order ref, digest and execution identity). Every unit also
+needs a matching post-retirement pull receipt and its existing post-pull
+result proof. Missing, stale, partial or foreign dispatch evidence fails
+before fan-in writes outputs; existing output files are preserved.
+Other gates and heads, no-op retirements, and sentinel-only/legacy audits
+without archived dispatch records do not acquire this floor. No new provenance
+store or retirement schema is introduced.
+The dispatch-prefix/scope verifier itself remains unchanged; fresh records
+still have to pass its full binding checks.
 
 The caller MUST pass `--findings-dir` whenever the retired round wrote artifacts:
 same-head stamps alone would otherwise let stale findings enter the new fan-in.
