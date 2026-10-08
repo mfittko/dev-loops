@@ -188,8 +188,9 @@ export async function waiveAdrTripwire(options, {
 
   const gate = await fetchDraftGateEvidence({ repo, pr, headSha }, gh);
   // A post-ready push gets only a pre_approval_gate round, so that verdict is the alternative.
-  const gateName = gate?.currentHeadClean ? "draft_gate" : gate?.preApprovalCurrentHeadClean ? "pre_approval_gate" : null;
-  if (!gateName) {
+  // Every clean current-head gate is tried in order; the first matching digest wins.
+  const cleanGates = [gate?.currentHeadClean && "draft_gate", gate?.preApprovalCurrentHeadClean && "pre_approval_gate"].filter(Boolean);
+  if (cleanGates.length === 0) {
     return refuse("no_clean_draft_gate", `no clean draft_gate or pre_approval_gate checkpoint verdict on the current head ${headSha.slice(0, 7)}`);
   }
   let currentSpecDigest;
@@ -198,11 +199,16 @@ export async function waiveAdrTripwire(options, {
   } catch (error) {
     return refuse("spec_unreadable", `cannot derive the spec digest of issue #${issue}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const recorded = await readRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate: gateName });
-  if (recorded === null) return refuse("spec_digest_unrecorded", `the ${gateName} for head ${headSha.slice(0, 7)} recorded no specDigest`);
-  if (recorded !== currentSpecDigest) {
-    return refuse("spec_digest_mismatch", `the ${gateName} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest}`);
+  let digestRefusal = null;
+  let matched = false;
+  for (const gateName of cleanGates) {
+    const recorded = await readRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate: gateName });
+    if (recorded === currentSpecDigest) { matched = true; break; }
+    // A recorded-but-stale digest outranks an unrecorded one in the refusal.
+    if (recorded !== null) digestRefusal = refuse("spec_digest_mismatch", `the ${gateName} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest}`);
+    else digestRefusal ??= refuse("spec_digest_unrecorded", `the ${gateName} for head ${headSha.slice(0, 7)} recorded no specDigest`);
   }
+  if (!matched) return digestRefusal;
 
   const { record } = authorization;
   const line = buildStandingWaiverLine({ head: headSha, issue, grantedBy: record.grantedBy, expires: record.expires, paths });

@@ -189,6 +189,17 @@ test("post-ready path: a clean pre_approval_gate at head with a matching digest 
   assert.equal(edits.length, 1);
 });
 
+test("both gates clean at head: a stale draft_gate digest falls through to a matching pre_approval_gate digest", async () => {
+  const both = { fetchDraftGateEvidence: async () => ({ currentHeadClean: true, preApprovalCurrentHeadClean: true }) };
+  const reads = [];
+  const { edits, run } = harness({ ...both, readRecordedSpecDigest: async ({ gate }) => { reads.push(gate); return gate === "draft_gate" ? "sha256:stale" : DIGEST; } });
+  assert.equal((await run()).action, "waiver_written");
+  assert.deepEqual(reads, ["draft_gate", "pre_approval_gate"]);
+  assert.equal(edits.length, 1);
+  await assertRefusal({ ...both, readRecordedSpecDigest: async () => "sha256:stale" }, "spec_digest_mismatch");
+  await assertRefusal({ ...both, readRecordedSpecDigest: async () => null }, "spec_digest_unrecorded");
+});
+
 test("post-ready path: a mismatched pre_approval_gate digest refuses, and neither gate clean refuses typed", async () => {
   const pre = { fetchDraftGateEvidence: async () => ({ currentHeadClean: false, preApprovalCurrentHeadClean: true }) };
   await assertRefusal({ ...pre, readRecordedSpecDigest: async () => "sha256:stale" }, "spec_digest_mismatch");

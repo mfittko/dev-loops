@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
+import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { ghJson as defaultGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfig, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly, resolveRequireCopilotConvergenceAtLatestHead, resolveWorkflowConfig } from "@dev-loops/core/config";
 import { countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
@@ -87,7 +87,8 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   adr_tripwire fetches the PR head and evaluates the ADR tripwire at
   origin/<base>...<head> against the current PR body, on every merge class. It
   refuses when the tripwire blocks or cannot be evaluated. When the only cause
-  is a standing-authorization waiver line pinned to an older head, it re-issues
+  is a stale standing-authorization waiver line (older head, expired, or a
+  current trigger missing from paths=), it re-issues
   the line through waive-adr-tripwire and re-evaluates; a writer refusal is
   quoted in the reason.
   copilot_convergence refuses a current-head Copilot "Changes recommended" (🟡)
@@ -402,15 +403,19 @@ const defaultFetchPrHead = ({ pr, baseRefName, repoRoot }) => {
 
 // Returns an adr_tripwire refusal reason, or null when the tripwire passes.
 // Any evaluator or fetch error is a refusal (fail closed).
-async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, repoRoot, env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire }) {
+async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, repoRoot, env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire, detectOriginSlug }) {
   try {
     if (!baseRefName) throw new Error("the PR base branch is unreadable");
+    const originSlug = detectOriginSlug(repoRoot);
+    if (!originSlug || !repoSlugEquals(originSlug, options.repo)) {
+      throw new Error(`the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}`);
+    }
     fetchPrHead({ pr: options.pr, baseRefName, repoRoot });
     const evaluate = (prBody) => evaluateAdrTripwire({ base: `origin/${baseRefName}`, head: headSha, prBody, repoRoot, env });
     let result = await evaluate(body);
     if (result.outcome === "block" && result.waiver?.standing === true && result.waiver.stale === true) {
       const written = await waiveAdrTripwire({ repo: options.repo, pr: options.pr }, { env, ghCommand, repoRoot, runChild });
-      if (!written.ok) return `the standing-authorization waiver is pinned to an older head and its re-issue was refused (${written.reason}: ${written.detail})`;
+      if (!written.ok) return `the standing-authorization waiver is stale and its re-issue was refused (${written.reason}: ${written.detail})`;
       const fresh = await ghJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body"], { env, ghCommand, runChild });
       result = await evaluate(typeof fresh?.body === "string" ? fresh.body : "");
     }
@@ -544,6 +549,7 @@ export async function mergePr(options, runtime = {}) {
     postMergeSteps = {},
     stderr = process.stderr,
     fetchPrHead = defaultFetchPrHead,
+    detectOriginSlug = detectRepoSlug,
     evaluateAdrTripwire = defaultEvaluateAdrTripwire,
     waiveAdrTripwire = defaultWaiveAdrTripwire,
   } = runtime;
@@ -701,7 +707,7 @@ export async function mergePr(options, runtime = {}) {
     body: typeof prView?.body === "string" ? prView.body : "",
     headSha: currentHeadSha,
     repoRoot: resolveRepoRoot(cwd),
-    env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire,
+    env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire, detectOriginSlug,
   });
   if (adrReason !== null) {
     const error = new Error(`Merge preconditions not satisfied: adr_tripwire (${adrReason})`);

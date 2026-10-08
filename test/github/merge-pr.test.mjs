@@ -106,6 +106,7 @@ function makeRuntime({
       },
       detectEvidence: async () => ({ ...evidence, currentHeadSha: evidenceHead }),
       fetchPrHead: () => {},
+      detectOriginSlug: () => "mfittko/dev-loops",
       evaluateAdrTripwire: async () => ({ outcome: "pass" }),
       detectInternalOnlyPr: async () => (prFilesCode ? { ok: false, error: "files read failed" } : { ok: true, internalOnly: detectorInternalOnly, files: prFiles }),
       loadConfig: async () => ({ config: { autonomy: { humanMergeOnly }, refinement: { maxCopilotRounds, requireCopilotConvergenceAtLatestHead: strict }, ...configExtra }, errors: [] }),
@@ -167,6 +168,35 @@ test("adr_tripwire re-issues a stale covered waiver through the writer, re-reads
   assert.deepEqual(written, [{ repo: "mfittko/dev-loops", pr: 5 }]);
   assert.deepEqual(bodies, ["old", "new"]);
   assert.equal(mergeCalls(calls).length, 1);
+});
+
+test("adr_tripwire evaluates origin/<base> at the PR head after fetching it", async () => {
+  const { runtime } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  const fetched = [];
+  const evaluated = [];
+  runtime.fetchPrHead = (opts) => { fetched.push({ pr: opts.pr, baseRefName: opts.baseRefName }); };
+  runtime.evaluateAdrTripwire = async (opts) => { evaluated.push({ base: opts.base, head: opts.head }); return { outcome: "pass" }; };
+  await mergePr(baseOptions(), runtime);
+  assert.deepEqual(fetched, [{ pr: 5, baseRefName: "main" }]);
+  assert.deepEqual(evaluated, [{ base: "origin/main", head: HEAD }]);
+});
+
+test("adr_tripwire refuses as unevaluable when the PR base branch is unreadable", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "" } });
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*base branch is unreadable/);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("adr_tripwire refuses as unevaluable when the checkout origin is not --repo or unreadable", async () => {
+  for (const slug of ["someone/fork", null]) {
+    const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
+    runtime.detectOriginSlug = () => slug;
+    let fetched = false;
+    runtime.fetchPrHead = () => { fetched = true; };
+    await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*checkout origin/);
+    assert.equal(fetched, false);
+    assert.equal(mergeCalls(calls).length, 0);
+  }
 });
 
 test("adr_tripwire still refuses when the writer succeeds but the re-read body still blocks", async () => {
