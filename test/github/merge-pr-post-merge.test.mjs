@@ -86,6 +86,7 @@ function makeRuntime(repo, { prView = {}, mergeCode = 0, postMergeState = "MERGE
       : { stdout: "", stderr: "", code: 0 }),
     detectEvidence: async () => ({ ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], currentHeadSha: head }),
     fetchPrHead: () => {},
+    detectOriginSlug: () => "mfittko/dev-loops",
     evaluateAdrTripwire: async () => ({ outcome: "pass" }),
     loadConfig: async () => ({ config: { autonomy: { humanMergeOnly: false }, refinement: { maxCopilotRounds: 0 } }, errors: [] }),
   };

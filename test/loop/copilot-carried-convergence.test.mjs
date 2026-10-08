@@ -776,6 +776,7 @@ async function runMerge(fixture, { threads = [], delta = DOCS_DELTA, prOwn = del
       runChild,
       detectEvidence: async () => ({ ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], currentHeadSha: HEAD, draftGate: null }),
       fetchPrHead: () => {},
+      detectOriginSlug: () => REPO,
       evaluateAdrTripwire: async () => ({ outcome: "pass" }),
       loadConfig: async () => ({ config: { refinement: { maxCopilotRounds: 5, requireCopilotConvergenceAtLatestHead: strict } }, errors: [] }),
       detectInternalOnlyPr: async () => ({ ok: true, internalOnly: false, files: [] }),
