@@ -169,6 +169,16 @@ test("adr_tripwire re-issues a stale covered waiver through the writer, re-reads
   assert.equal(mergeCalls(calls).length, 1);
 });
 
+test("adr_tripwire still refuses when the writer succeeds but the re-read body still blocks", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "old" } });
+  runtime.evaluateAdrTripwire = async () => STALE_BLOCK;
+  runtime.waiveAdrTripwire = async () => ({ ok: true, action: "waiver_written" });
+  const base = runtime.ghJson;
+  runtime.ghJson = async (args) => (args.join(" ").endsWith("--json body") ? { body: "new" } : base(args));
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(the ADR tripwire blocks/);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
 test("adr_tripwire quotes the writer's typed reason when the re-issue is refused", async () => {
   const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
   runtime.evaluateAdrTripwire = async () => STALE_BLOCK;

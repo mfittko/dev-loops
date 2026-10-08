@@ -14,6 +14,7 @@ import {
   collectSuppressedFingerprints,
   collectVerdictHeadShas,
   createGateReview,
+  fetchDraftGateEvidence,
   buildDeferredFindingsComment,
   commentDeferredFindings,
   fetchListedFingerprints,
@@ -1344,4 +1345,26 @@ test("commentDeferredFindings: a bare #<digits> in summary or angle is neutraliz
   assert.match(bodyArg, /regression-of-321/);
   assert.match(bodyArg, /duplicate of 987 and also 12/);
   assert.match(bodyArg, /run-of-55/);
+});
+
+// preApprovalCurrentHeadClean gates the waiver writer's pre_approval_gate eligibility path.
+test("fetchDraftGateEvidence: preApprovalCurrentHeadClean needs a clean, contract-complete pre_approval_gate marker at the current head", async () => {
+  const body = (o = {}) => renderGateReviewCommentBody({
+    gate: "pre_approval_gate", headSha: HEAD_SHA, repo: "o/r", verdict: "clean",
+    findingsSummary: "none", nextAction: "merge", ...o,
+  });
+  const run = async (comments) => {
+    // Only the issue-comments read succeeds; the reviews and thread reads fail non-fatally.
+    const runChild = async (_cmd, args) => (args.some((a) => String(a).includes("issues/7/comments"))
+      ? { code: 0, stdout: JSON.stringify([comments]), stderr: "" }
+      : { code: 1, stdout: "", stderr: "unavailable" });
+    const evidence = await fetchDraftGateEvidence({ repo: "o/r", pr: 7, headSha: HEAD_SHA }, { env: {}, ghCommand: "gh", runChild });
+    return evidence.preApprovalCurrentHeadClean;
+  };
+  const comment = (b) => ({ id: 1, body: b, created_at: "2026-01-01T00:00:00Z" });
+  assert.equal(await run([comment(body())]), true);
+  assert.equal(await run([comment(body({ headSha: "1111110000000000000000000000000000000000" }))]), false);
+  assert.equal(await run([comment(body({ verdict: "findings_present" }))]), false);
+  assert.equal(await run([comment(body({ findingsSummary: "", nextAction: "" }))]), false);
+  assert.equal(await run([]), false);
 });
