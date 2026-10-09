@@ -1374,16 +1374,6 @@ Under `GATE-EXEC-GATE-COORDINATOR`, the gate coordinator returns this signal to 
 coordinator as the round's result. The dev-loop coordinator then stops for an operator's
 per-PR decision and never runs the round inline.
 
-## Additive review-lineage composition (Section E)
-
-The offline `packages/core/src/loop/review-lineage.mjs` builder composes a stable `review-lineage-base` (lineage id, gate, stable contracts, the ORIGINAL review target and full diff) with deterministic per-fix-round `round-N-delta` artifacts (exact `baseHead`/`reviewedHead` SHAs, the fix diff, validation evidence and an independent findings-verification checklist); round 2+ appends only changes to that composition. It has no GitHub, harness or clock dependencies and does not replace the runtime gate chain: Phase 1 rebuilds current-head context on every head bump, and each rebuild discovers the gate's closed prior rounds to seed cumulative advisory disposition memory for reviewers that re-run (ADR 0070, amended by ADR 0109). The builder module and `packages/core/test/review-lineage.test.mjs` own the artifact shapes, `composeRoundRequest` (append-only, contiguity fail-closed, byte-deterministic hashes) and the compaction/rebase policy (`checkLineageCompaction`, `rebaseLineage`, default `maxRounds` 20). The composer only PRESERVES carry-forward provenance (`carriedAngles`); it never decides carry-forward, which stays in `gate-carry-forward.mjs`, and never fabricates a verdict.
-
-### Non-goals preserved
-
-- No provider cache-reuse claim from artifact hashes (telemetry capability rules live in `review-dispatch-plan.mjs`).
-- No continuity-reviewer convergence loop or calibration audit yet (later #1468 slices 6/7).
-- Round-1 fresh one-reviewer-per-angle provenance and fan-in semantics are untouched.
-
 ## See also
 
 - [Checkpoint Verdict Comment Contract](gate-review-comment-contract.md) — visible PR comment evidence format

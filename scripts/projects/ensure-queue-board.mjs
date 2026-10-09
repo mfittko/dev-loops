@@ -410,55 +410,7 @@ const STANDARD_COLUMNS = [
   { name: "Done", color: "GREEN", description: "" },
 ];
 
-const STANDARD_COLUMN_NAMES = STANDARD_COLUMNS.map((c) => c.name);
-
 const EMPTY_REPAIRS = Object.freeze({ additive: [], renameCandidates: [], renamesApplied: [], conflicts: [] });
-
-/**
- * Auto-repair a Status field that is missing standard columns.
- *
- * Calls updateProjectV2Field to add missing columns while preserving
- * any existing (non-standard) columns in their current order.
- *
- * Returns the updated field options (with IDs from the mutation response).
- */
-async function autoRepairColumns(
-  fieldId,
-  existingOptions,
-  env,
-  runChild,
-) {
-  const existingNames = new Set(existingOptions.map((o) => o.name));
-  const missingColumns = STANDARD_COLUMNS.filter(
-    (c) => !existingNames.has(c.name),
-  );
-
-  if (missingColumns.length === 0) {
-    // Nothing to repair — should not be called in this case
-    return existingOptions;
-  }
-
-  // Build full option list: existing options + missing standard columns appended
-  const fullOptions = [
-    ...existingOptions.map((o) => ({ name: o.name, color: o.color ?? "GRAY", description: o.description ?? "" })),
-    ...missingColumns,
-  ];
-
-  const payload = await ghGraphql(UPDATE_PROJECT_FIELD, {
-    fieldId,
-    options: JSON.stringify(fullOptions),
-  }, env, runChild);
-
-  const updatedField = payload?.data?.updateProjectV2Field?.projectV2Field;
-  if (!updatedField) {
-    throw Object.assign(
-      new Error("Failed to update Status field with missing columns"),
-      { code: "UPDATE_FIELD_FAILED" },
-    );
-  }
-
-  return updatedField.options ?? fullOptions;
-}
 
 // ── Exit code classification ────────────────────────────────────────────
 
@@ -656,4 +608,4 @@ if (isDirectCliRun(import.meta.url)) {
   });
 }
 
-export { main, autoRepairColumns, resolveSettings, STANDARD_COLUMNS, STANDARD_COLUMN_NAMES };
+export { main, resolveSettings, STANDARD_COLUMNS };
