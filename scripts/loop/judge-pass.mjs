@@ -492,7 +492,7 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
 function countByDisposition(enriched) {
   const counts = { act: 0, defer: 0, reject: 0 };
   for (const f of enriched) {
-    if (f.judgeDisposition === "act") { if (f.remedyKind !== "evidence_only") counts.act += 1; }
+    if (isOpenActItem(f)) counts.act += 1;
     else if (f.judgeDisposition === "defer") counts.defer += 1;
     else if (f.judgeDisposition === "reject") counts.reject += 1;
   }
