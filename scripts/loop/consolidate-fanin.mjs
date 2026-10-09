@@ -226,6 +226,8 @@ Optional:
                                  when no matching audit records archived dispatch records (progressive/optional capture).
                                  Abbreviated aliases of matching retired full heads are refused; use the
                                  full reviewed head. Known foreign-gate private retirement proof is not required.
+                                 Matching retirement-head directory symlinks are followed; broken or unreadable
+                                 matching targets fail closed before outputs, rather than granting offline success.
   --cache-telemetry <path>       The optional before/after cache-telemetry evidence artifact
                                  (<gate>-<headSha>.cache-telemetry.json) as JSON.
                                  When given, the fan-in validates it via enforceCacheTelemetryEvidence
@@ -542,10 +544,14 @@ async function readDispatchRetirements(tmpRoot, headSha) {
   }
   const retirements = new Map();
   // An accepted short offline head must not hide an applicable full-head audit.
-  const matchingHeads = heads.filter((entry) => entry.isDirectory()
-    && (entry.name === headSha || (/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(entry.name) && entry.name.startsWith(headSha))));
+  const matchingHeads = heads.filter((entry) => entry.name === headSha
+    || (/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(entry.name) && entry.name.startsWith(headSha)));
   for (const head of matchingHeads) {
     const retiredRoot = path.join(root, head.name);
+    // The producer accepts directory symlinks; a matched broken target is not offline evidence.
+    if (!head.isDirectory() && !(await stat(retiredRoot)).isDirectory()) {
+      throw new Error(`GATE-EXEC-ROUND-RETIREMENT: matching retirement-head target ${retiredRoot} is not a directory`);
+    }
     const rounds = await readdir(retiredRoot, { withFileTypes: true });
     for (const round of rounds.filter((entry) => entry.isDirectory() && /^round-\d+$/.test(entry.name))) {
       const auditPath = path.join(retiredRoot, round.name, "retirement.json");

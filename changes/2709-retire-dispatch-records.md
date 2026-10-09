@@ -6,3 +6,4 @@
 - Retirement guards normalize programmatic gates and accept valid fresh same-bucket or lower-filesystem-time evidence without weakening existing post-pull result checks (#2709)
 - Fan-in isolates known foreign-gate retirement proof and refuses abbreviated aliases of matching dispatch-retired full heads while retaining unrelated offline inputs (#2709)
 - Cross-checkout digest equality applies to the same execution-bound semantic work order, not separate reviewer emissions (#2709)
+- Fan-in follows producer-accepted retirement-head directory symlinks, retaining the fresh-dispatch floor and failing closed on broken or unreadable matching targets (#2709)

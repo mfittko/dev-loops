@@ -559,6 +559,11 @@ listing successfully moved records. It never treats the newly empty live
 dispatch namespace as a legacy/offline round. An abbreviated head that aliases
 an archived-dispatch retirement for the requested gate is refused; use the full
 reviewed head and fresh proof. Unrelated abbreviated offline heads remain valid.
+Discovery follows producer-accepted directory symlink targets for matching
+exact full-head names and full-head-prefix aliases. Broken, unreadable or
+non-directory matching targets fail closed before output writes; they never
+grant the offline exemption. Valid fresh proof through a directory symlink
+remains eligible under the same retirement checks.
 When archived-dispatch audit headers exist for the head (including full-head
 aliases), fan-in requires a supported string `--gate`, canonicalized by
 trim/lowercase independently of plan presence, before granting another-gate

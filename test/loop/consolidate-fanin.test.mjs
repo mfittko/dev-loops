@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -4134,10 +4134,21 @@ test("#1841 AC4: a head with no dispatch-prompt records still consolidates (offl
   );
 });
 
+async function linkRetirementHead(tmpRoot, headSha) {
+  const target = path.join(tmpRoot, "retirement-directory-targets", headSha);
+  const root = path.join(tmpRoot, "retired-gate-rounds");
+  await mkdir(target, { recursive: true });
+  await mkdir(root, { recursive: true });
+  await symlink(target, path.join(root, headSha), "dir");
+  return target;
+}
+
+for (const linkedHead of [false, true]) {
 for (const retiredGate of ["draft_gate", "pre_approval_gate"]) {
-test(`#2709: retirement cannot reopen the zero-dispatch-record fan-in path for ${retiredGate}`, async () => {
+test(`#2709: retirement cannot reopen the zero-dispatch-record fan-in path for ${retiredGate} (linked head: ${linkedHead})`, async () => {
   await withTempDir(async (tmpRoot) => {
     const gatePrefix = retiredGate.replaceAll("_", "-");
+    if (linkedHead) await linkRetirementHead(tmpRoot, HEAD_A);
     const findingsDir = path.join(tmpRoot, `${retiredGate}-${HEAD_A}`);
     await mkdir(findingsDir);
     await writeFile(path.join(findingsDir, "coverage.json"), JSON.stringify({ angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A }));
@@ -4145,6 +4156,10 @@ test(`#2709: retirement cannot reopen the zero-dispatch-record fan-in path for $
     await writeFile(dispatchPromptLayoutRecordPath(tmpRoot, `${gatePrefix}-coverage`, HEAD_A), "{}");
     const retired = await retireGateRound({ gate: retiredGate, headSha: HEAD_A, reason: "rebuild prefix and unit layout", findingsDir, tmpRoot });
     assert.equal(retired.noop, false);
+    const audit = JSON.parse(await readFile(path.join(retired.retirementDir, "retirement.json"), "utf8"));
+    const recordName = path.basename(dispatchPromptLayoutRecordPath(tmpRoot, `${gatePrefix}-coverage`, HEAD_A));
+    assert.deepEqual(audit.dispatchPromptRecords, [recordName]);
+    assert.equal(await readFile(path.join(retired.retirementDir, recordName), "utf8"), "{}");
 
     // Fresh findings and a fresh sentinel satisfy the existing records-floor,
     // but do not prove any freshly emitted/delivered dispatch.
@@ -4178,7 +4193,7 @@ test(`#2709: retirement cannot reopen the zero-dispatch-record fan-in path for $
       assert.equal((await consolidateGateFanin({ findingsDir, headSha, gate: otherGate, tmpRoot })).overallVerdict, "clean");
     }
     await writeJson(path.join(findingsDir, "coverage.json"), { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A });
-    if (retiredGate === "draft_gate") {
+    if (retiredGate === "draft_gate" && !linkedHead) {
       const cli = await runNode(path.join(import.meta.dirname, "../../scripts/loop/consolidate-fanin.mjs"), [
         "--findings-dir", findingsDir, "--head-sha", HEAD_A, "--gate", retiredGate, "--tmp-root", tmpRoot,
         "--out", out, "--ledger-out", ledgerOut,
@@ -4189,6 +4204,7 @@ test(`#2709: retirement cannot reopen the zero-dispatch-record fan-in path for $
       assert.equal(await readFile(ledgerOut, "utf8"), "prior ledger\n");
     }
     const fullHead = HEAD_A + "b".repeat(24);
+    if (linkedHead) await linkRetirementHead(tmpRoot, fullHead);
     await writeFile(dispatchPromptLayoutRecordPath(tmpRoot, `${gatePrefix}-coverage`, fullHead), "{}");
     await retireGateRound({ gate: retiredGate, headSha: fullHead, reason: "64-character head isolation", noFindingsArtifacts: true, tmpRoot });
     for (const headSha of [HEAD_A, fullHead.slice(0, -1)]) {
@@ -4201,10 +4217,58 @@ test(`#2709: retirement cannot reopen the zero-dispatch-record fan-in path for $
   });
 });
 }
+}
 
-async function withRebuiltRetiredRound(fn) {
+for (const [state, mutate, error] of [
+  ["dangling", (target) => rm(target, { recursive: true }), /ENOENT/],
+  ["non-directory", async (target) => {
+    await rm(target, { recursive: true });
+    await writeFile(target, "not a directory\n");
+  }, /matching retirement-head target.*not a directory/],
+  ["looping", async (target) => {
+    await rm(target, { recursive: true });
+    await symlink(target, target, "dir");
+  }, /ELOOP/],
+  ["unreadable", (target) => chmod(target, 0), /EACCES/],
+]) {
+  test(`#2709: ${state} matching retirement-head directory target cannot grant offline success`, async () => {
+    await withTempDir(async (tmpRoot) => {
+      const target = await linkRetirementHead(tmpRoot, HEAD_A);
+      const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, "draft-gate-coverage", HEAD_A);
+      await writeFile(recordPath, "{}");
+      const retired = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "directory target becomes unusable", noFindingsArtifacts: true, tmpRoot });
+      const audit = JSON.parse(await readFile(path.join(retired.retirementDir, "retirement.json"), "utf8"));
+      assert.deepEqual(audit.dispatchPromptRecords, [path.basename(recordPath)]);
+      assert.equal(await readFile(path.join(retired.retirementDir, path.basename(recordPath)), "utf8"), "{}");
+      const findingsDir = path.join(tmpRoot, "findings");
+      await mkdir(findingsDir);
+      await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+      const out = path.join(tmpRoot, "out.json");
+      const ledgerOut = path.join(tmpRoot, "ledger.json");
+      await writeFile(out, "prior output\n");
+      await writeFile(ledgerOut, "prior ledger\n");
+      await mutate(target);
+      try {
+        for (const headSha of [HEAD_A, HEAD_A.slice(0, 7)]) {
+          await writeJson(path.join(findingsDir, "coverage.json"), { angle: "coverage", verdict: "clean", findings: [], headSha });
+          await assert.rejects(() => consolidateGateFanin({ findingsDir, gate: "draft_gate", headSha, tmpRoot, out, ledgerOut }), error);
+          assert.equal(await readFile(out, "utf8"), "prior output\n");
+          assert.equal(await readFile(ledgerOut, "utf8"), "prior ledger\n");
+        }
+        const headSha = HEAD_A.slice(0, 6) + "b";
+        await writeJson(path.join(findingsDir, "coverage.json"), { angle: "coverage", verdict: "clean", findings: [], headSha });
+        assert.equal((await consolidateGateFanin({ findingsDir, gate: "draft_gate", headSha, tmpRoot })).overallVerdict, "clean");
+      } finally {
+        if (state === "unreadable") await chmod(target, 0o755);
+      }
+    });
+  });
+}
+
+async function withRebuiltRetiredRound(fn, { linkedHead = false } = {}) {
   await withTempDir(async (tmpRoot) => {
     const gate = "draft_gate";
+    if (linkedHead) await linkRetirementHead(tmpRoot, HEAD_A);
     const findingsDir = path.join(tmpRoot, `${gate}-${HEAD_A}`);
     await mkdir(findingsDir);
     await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "a".repeat(64));
@@ -4250,7 +4314,8 @@ async function withRebuiltRetiredRound(fn) {
   });
 }
 
-test("#2709: rebuilt grouped round needs its complete fresh record set, keyed plan and pull receipts", async () => {
+for (const linkedHead of [false, true]) {
+test(`#2709: rebuilt grouped round needs its complete fresh record set, keyed plan and pull receipts (linked head: ${linkedHead})`, async () => {
   await withRebuiltRetiredRound(async ({ options, recordPath, afterRetirement }) => {
     const recordBytes = await readFile(recordPath);
     await rm(recordPath);
@@ -4260,8 +4325,9 @@ test("#2709: rebuilt grouped round needs its complete fresh record set, keyed pl
     const result = await consolidateGateFanin({ ...options, expectedDispatchUnits: 1 });
     assert.equal(result.overallVerdict, "clean");
     assert.deepEqual(result.angles.map(({ angle }) => angle).sort(), ["correctness", "input-validation"]);
-  });
+  }, { linkedHead });
 });
+}
 
 for (const clockOffset of [0, 60_000]) {
   test(`#2709: fresh bound evidence passes in the retirement filesystem bucket with audit text offset ${clockOffset}`, async () => {
@@ -4413,6 +4479,7 @@ test("#2709: no-op, sentinel-only retirement and another gate or head preserve t
     assert.equal((await consolidateGateFanin({ ...options, headSha: shortHead })).ok, true);
     await writeJson(path.join(findingsDir, "coverage.json"), { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A });
     await writePrefixSentinel(tmpRoot, "draft-gate-coverage", HEAD_A, "a".repeat(64));
+    await linkRetirementHead(tmpRoot, HEAD_A);
     const sentinelOnly = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "legacy sentinel-only round", noFindingsArtifacts: true, tmpRoot });
     assert.deepEqual(sentinelOnly.dispatchPromptRecords, []);
     assert.equal((await consolidateGateFanin(options)).ok, true);
@@ -4433,8 +4500,9 @@ test("#2709: no-op, sentinel-only retirement and another gate or head preserve t
 });
 
 for (const retiredGate of ["draft_gate", "pre_approval_gate"]) {
-  test(`#2709: broken private retirement proof for ${retiredGate} does not block the other gate`, async () => {
+  test(`#2709: broken private retirement proof for ${retiredGate} through a directory symlink does not block the other gate`, async () => {
     await withTempDir(async (tmpRoot) => {
+      await linkRetirementHead(tmpRoot, HEAD_A);
       const gate = retiredGate === "draft_gate" ? "pre_approval_gate" : "draft_gate";
       const scope = `${retiredGate.replaceAll("_", "-")}-coverage`;
       const unit = bindReviewUnit({ ...matchingEmitPlan().units[0], scope,
