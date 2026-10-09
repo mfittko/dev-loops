@@ -1044,6 +1044,7 @@ test("judgePassCli keeps an evidence-only valid_compliant finding off the fixer 
   const payload = await judgePassCli(...specAuthorityArgs(tmpDir, contentDigest));
   assert.equal(payload.ok, true);
   assert.deepEqual(payload.act.map((f) => f.summary), ["legit defect"]);
+  assert.equal(payload.actCount, 1);
 });
 
 test("judgePassCli wires resolveCriterionInvalidation: a spec change stales all prior approvals and persists a durable record", async () => {
