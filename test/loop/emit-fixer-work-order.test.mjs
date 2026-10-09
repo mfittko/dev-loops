@@ -747,6 +747,8 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
     assert.deepEqual(query.sites, []);
     assert.match(query.noSitesReason, /^FILL:/);
     assert.match(await readFile(promptPath, "utf8"), /Start from the `siteCoverage` skeleton/);
+    assert.match(await readFile(promptPath, "utf8"), /run the work order's `handbackCheck` command/);
+    assert.equal(workOrder.handbackCheck, `dev-loops loop pre-push-delta --act-list ${JSON.stringify(files.actList)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
     const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(threads.workOrder.siteCoverage, undefined);
   });

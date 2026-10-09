@@ -31,7 +31,7 @@ import {
   startDeltaSequence,
   threadsToActList,
 } from "@dev-loops/core/loop/pre-push-delta-review";
-import { normalizeFixerDispositionHandoff } from "@dev-loops/core/loop/fixer-disposition";
+import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -188,6 +188,10 @@ export function runCli(
     const record = normalizeFixerDispositionHandoff(JSON.parse(readFileSync(options.siteCoverage, "utf8")), { ruleIds: loadKnownRuleIds() });
     if (record.headSha !== currentHead && !options.result) {
       throw new Error(`site coverage record names head ${record.headSha}, not the worktree HEAD ${currentHead}: the fixer must record coverage for its latest commit`);
+    }
+    if (!options.result) {
+      const gaps = siteCoverageGaps(sequence.actItems, record.siteCoverage);
+      if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
     }
     // Result mode discards coverage for an older head; decideDeltaNextStep routes the stale result.
     siteCoverage = record.headSha === currentHead ? record.siteCoverage ?? [] : [];

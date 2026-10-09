@@ -200,6 +200,21 @@ test("--site-coverage fails on a headSha mismatch or malformed JSON", () => {
   assert.throws(() => runCli(args, headAt(B)), SyntaxError);
 });
 
+test("--site-coverage input mode refuses a record that leaves a siteQuery uncovered", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-"));
+  const actList = path.join(dir, "act-list.json");
+  fs.writeFileSync(actList, JSON.stringify([{ ...ACT_LIST[0], fingerprint: "fp1", siteQuery: "git grep -n x" }]));
+  const coverage = path.join(dir, "coverage.json");
+  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--site-coverage", coverage];
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [{ fingerprint: "fp1", returnedSites: ["scripts/loop/consolidate-fanin.mjs:1161-1163"], sites: [] }] }));
+  assert.throws(() => runCli(args, headAt(B)), /GATE-EXEC-REMEDIATION-SITE-QUERY/);
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [] }));
+  assert.throws(() => runCli(args, headAt(B)), /GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: /);
+  const complete = { fingerprint: "fp1", returnedSites: ["s1"], sites: [{ site: "s1", status: "fixed" }] };
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [complete] }));
+  assert.equal(runCli(args, headAt(B)).input.siteCoverage[0].fingerprint, "fp1");
+});
+
 test("with --result a coverage record for an older head is discarded and the stale result is routed", () => {
   const { dir, actList, result } = fixture();
   const coverage = path.join(dir, "coverage.json");
