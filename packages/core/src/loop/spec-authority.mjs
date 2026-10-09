@@ -307,11 +307,17 @@ function nonEmptyStringList(value) {
  * or fragment lag lists every stated surface of the changed rule.
  */
 function validateRemediationScope(d) {
+  // A remedy that changes no file has no defect class or site; it never reaches the fixer.
+  if (d.remedyKind === "evidence_only") return { remedyKind: "evidence_only" };
+  const missing = (field, what) => Object.assign(
+    new Error(`spec-authority valid_compliant decision ${d.index} requires a non-empty ${field} (${what})`),
+    { code: "spec_authority_decision_invalid", decisionIndex: d.index, field },
+  );
   if (typeof d.defectClass !== "string" || d.defectClass.trim().length === 0) {
-    throw new Error("spec-authority valid_compliant decision requires a non-empty defectClass (the class of defect the remediation closes)");
+    throw missing("defectClass", "the class of defect the remediation closes; set remedyKind \"evidence_only\" when the remedy changes no file");
   }
   if (typeof d.siteQuery !== "string" || d.siteQuery.trim().length === 0) {
-    throw new Error("spec-authority valid_compliant decision requires a non-empty siteQuery (a git grep pattern or symbol list the fixer runs at the head)");
+    throw missing("siteQuery", "a git grep pattern or symbol list the fixer runs at the head");
   }
   const defectKind = d.defectKind === undefined ? "other" : d.defectKind;
   if (!DEFECT_KINDS.includes(defectKind)) {
@@ -345,6 +351,19 @@ function validateRemediationScope(d) {
 }
 
 /**
+ * Check the remediation scope of every valid_compliant decision in a raw verdict
+ * (no digests needed, so the judge can run it before handing back). Throws the
+ * typed error of the first bad decision; returns the number checked.
+ * @param {{ decisions?: unknown[] }} verdict
+ */
+export function checkRemediationScopes(verdict) {
+  const decisions = Array.isArray(verdict?.decisions) ? verdict.decisions : [];
+  const scoped = decisions.filter((d) => d?.outcome === SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT);
+  for (const d of scoped) validateRemediationScope(d);
+  return scoped.length;
+}
+
+/**
  * Validate ONE judge decision for a single finding against the complete spec.
  * Pure and fail-closed: throws (never returns a partial decision) unless every
  * authority invariant holds. Returns the normalized decision on success.
@@ -360,7 +379,8 @@ function validateRemediationScope(d) {
  *   conflictingCriteria: [<ids>],         // required + non-empty for the two conflict outcomes
  *   rationale: "<non-empty>",
  *   authorizedRemediation: "<...>",       // required for valid_compliant
- *   defectClass: "<...>", siteQuery: "<...>", // required for valid_compliant
+ *   defectClass: "<...>", siteQuery: "<...>", // required for valid_compliant unless remedyKind is "evidence_only"
+ *   remedyKind?: "evidence_only",         // the remedy changes no file: no defectClass/siteQuery, never on the fixer act list
  *   defectKind?: "matcher"|"doc_lag"|"other", // matcher: acceptedForms[] + rejectedForms[]; doc_lag: statedSurfaces[]
  *   rejectedRemediations: ["<...>"]       // optional audit of rejected options
  * }

@@ -700,8 +700,8 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
   // The defect class and site query ride the act item to the fixer and the delta review.
   const remediationScopes = validated.decisions
     .filter((d) => d.outcome === SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT)
-    .map(({ index, authorizedRemediation, defectClass, siteQuery, defectKind, acceptedForms, rejectedForms, statedSurfaces }) => ({
-      index, authorizedRemediation, defectClass, siteQuery, defectKind,
+    .map(({ index, authorizedRemediation, remedyKind, defectClass, siteQuery, defectKind, acceptedForms, rejectedForms, statedSurfaces }) => ({
+      index, authorizedRemediation, remedyKind, defectClass, siteQuery, defectKind,
       ...(acceptedForms ? { acceptedForms, rejectedForms } : {}),
       ...(statedSurfaces ? { statedSurfaces } : {}),
     }));
@@ -937,7 +937,7 @@ export async function judgePassCli(
       }
     }
     for (const { index, ...scope } of specAuthority.remediationScopes) Object.assign(result.enriched[index], scope);
-    result.act = result.enriched.filter((f) => f.judgeDisposition === "act");
+    result.act = result.enriched.filter((f) => f.judgeDisposition === "act" && f.remedyKind !== "evidence_only");
     result.counts = countByDisposition(result.enriched);
   }
 

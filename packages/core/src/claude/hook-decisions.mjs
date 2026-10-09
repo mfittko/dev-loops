@@ -105,6 +105,9 @@ const PULL_VALUE = "[A-Za-z0-9][\\w.:/#-]*";
 // emits (issue 2560 drops it).
 const PULL_LINE = `dev-loops-run scripts/github/pull-work-order\\.mjs (?:(${IDENTITY_PATTERN})|--ref (${PULL_VALUE}) --digest (${PULL_VALUE}) --execution (${PULL_VALUE}))`;
 const SANCTIONED_WORK_ORDER_PULL_RE = new RegExp(`^${PULL_LINE}$`);
+// The judge's read-only check of its own decision file, run before it hands back.
+const JUDGE_DECISION_CHECK_RE = /^dev-loops-run scripts\/loop\/check-judge-decision\.mjs --file [\w.\/#-]*tmp\/gate-judge\/[\w.\/#-]+\.json$/;
+export const isJudgeDecisionCheckLine = (command) => typeof command === "string" && JUDGE_DECISION_CHECK_RE.test(command.trim()) && !command.includes("..");
 const FIXER_IDENTITY_TOKEN_RE = /\bf\d+-[0-9a-f]{8}\b/;
 
 /**
@@ -172,12 +175,12 @@ export function decideBashGate({
   enforceCoordinator = false,
 }) {
   if (normalizeAgentType(agentType) === JUDGE_AGENT_TYPE) {
-    return parseSanctionedPullLine(command) ? ALLOW : {
+    return parseSanctionedPullLine(command) || isJudgeDecisionCheckLine(command) ? ALLOW : {
       decision: "deny",
       reason:
         "Judge read-only boundary (agents/judge.agent.md, ADR 0106): the judge may run only its " +
         "dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line (or its emitted 3-flag form), " +
-        "alone, with no chaining, redirection or substitution. Read " +
+        "alone, with no chaining, redirection or substitution, or `dev-loops-run scripts/loop/check-judge-decision.mjs --file tmp/gate-judge/<path>.json`. Read " +
         "files with Read/Grep/Glob; never run shell, test or build commands.",
     };
   }

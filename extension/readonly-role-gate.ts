@@ -14,6 +14,7 @@ const SANCTIONED_PULL_RE = new RegExp(
   `^dev-loops-run scripts/github/pull-work-order\\.mjs (?:${EXECUTION_IDENTITY_RE.source.slice(1, -1)}|--ref ${PULL_VALUE} --digest ${PULL_VALUE} --execution ${PULL_VALUE})$`,
 );
 const parseSanctionedPullLine = (command: string) => SANCTIONED_PULL_RE.test(command.trim());
+const JUDGE_DECISION_CHECK_RE = /^dev-loops-run scripts\/loop\/check-judge-decision\.mjs --file [\w.\/#-]*tmp\/gate-judge\/[\w.\/#-]+\.json$/;
 const stripPluginNamespace = (agentType: string) => agentType.slice(agentType.lastIndexOf(':') + 1);
 /**
  * The plugin namespace a tag value names: the text before its first `:`, trimmed; '' when the value
@@ -180,6 +181,7 @@ export function decidePiToolCall({ toolName, input, agentType }: {
   if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
   const command = typeof input?.command === 'string' ? input.command : '';
   if (parseSanctionedPullLine(command)) return { block: false };
+  if (agentType === 'judge' && JUDGE_DECISION_CHECK_RE.test(command.trim()) && !command.includes('..')) return { block: false };
   if (READ_SEARCH_ROLES.has(agentType) && isReadSearchCommand(command)) return { block: false };
   return {
     block: true,
