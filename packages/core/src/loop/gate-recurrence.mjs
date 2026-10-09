@@ -12,7 +12,7 @@
  */
 import path from "node:path";
 
-import { listOpenActItems, resolveFindingFile } from "./gate-fanin.mjs";
+import { isOpenActItem, resolveFindingFile } from "./gate-fanin.mjs";
 
 /** Act items on one surface in this many counted rounds escalate. */
 const ESCALATION_THRESHOLD = 3;
@@ -76,7 +76,7 @@ export function recurrenceFiles(actFindings, priorLogs) {
   for (const f of actFindings) if (recurrenceFile(f)) files.add(recurrenceFile(f));
   for (const log of priorLogs) {
     for (const f of Array.isArray(log?.findings) ? log.findings : []) {
-      if (listOpenActItems([f]).length > 0 && recurrenceFile(f)) files.add(recurrenceFile(f));
+      if (isOpenActItem(f) && recurrenceFile(f)) files.add(recurrenceFile(f));
     }
   }
   return [...files];
@@ -103,7 +103,7 @@ export function findEscalations({ actFindings, priorLogs, specDigest, headSha, s
     head: log.headSha,
     keys: new Set(
       (Array.isArray(log.findings) ? log.findings : [])
-        .filter((f) => listOpenActItems([f]).length > 0)
+        .filter(isOpenActItem)
         .flatMap((f) => surfaceKeysOf(f, sources))
         .map(keyString),
     ),

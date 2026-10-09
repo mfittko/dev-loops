@@ -1274,13 +1274,16 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
   return { findings: enriched, scopeDrift: validated.scopeDrift };
 }
 
+/** Whether one finding is an open act item (judge act, not evidence-only). */
+export const isOpenActItem = (f) => Boolean(f) && f.judgeDisposition === "act" && f.remedyKind !== "evidence_only";
+
 /**
  * The judge's act list: the findings this PR must still fix. Pure.
  * @param {unknown} findings
  * @returns {Array<object>}
  */
 export function listOpenActItems(findings) {
-  return (Array.isArray(findings) ? findings : []).filter((f) => f && f.judgeDisposition === "act" && f.remedyKind !== "evidence_only");
+  return (Array.isArray(findings) ? findings : []).filter(isOpenActItem);
 }
 
 /**

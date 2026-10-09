@@ -24,7 +24,7 @@ import {
 import { replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateConfig, resolveTrackerProvider } from "@dev-loops/core/config";
-import { GATE_CONFIG_KEY, listOpenActItems } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, isOpenActItem } from "@dev-loops/core/loop/gate-fanin";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 
 const USAGE = `Usage: close-gate-findings.mjs --ledger <findings-log path> [--tmp-root <dir>]
@@ -290,7 +290,7 @@ function currentLedgerActOrAmbiguous(findings, fp) {
   const currentMatches = findings.filter((f) => f && findingFingerprintMatches(f, fp));
   if (currentMatches.length === 0) return null;
   const dispositions = new Set(currentMatches.map((f) => (typeof f.judgeDisposition === "string" ? f.judgeDisposition.trim() : "")));
-  return listOpenActItems(currentMatches).length > 0 || dispositions.size > 1;
+  return currentMatches.some(isOpenActItem) || dispositions.size > 1;
 }
 
 async function isJudgeActThread({ fp, threadBody, findings, lookup }) {

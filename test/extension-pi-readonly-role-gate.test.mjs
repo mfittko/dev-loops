@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { READONLY_SUBAGENT_ROLES } from "@dev-loops/core/claude/hook-decisions";
+import { READONLY_SUBAGENT_ROLES, decideBashGate } from "@dev-loops/core/claude/hook-decisions";
 import { NATIVE_PI_PARENT_SESSION_MARKER } from "@dev-loops/core/loop/run-context";
 import extension from "../extension/index.ts";
 import { mapAgentToolsForPi, renderPiAgent } from "../extension/sync-packaged-agents.ts";
@@ -65,6 +65,16 @@ test("Pi judge may run the check line, but not chained or .. forms, and other re
   assert.equal((await callAs("judge", `${line}; id`)).block, true);
   assert.equal((await callAs("judge", line.replace("/w/tmp/gate-judge/o-r", "/w/tmp/gate-judge/../x"))).block, true);
   assert.equal((await callAs("review", line)).block, true);
+});
+
+test("Pi and Claude judge gates agree on the decision-check matcher", async () => {
+  const ok = "dev-loops-run scripts/loop/check-judge-decision.mjs --file /w/tmp/gate-judge/o-r/pr-1/r1/verdict.json";
+  const inputs = [ok, `  ${ok}  `, `${ok}; id`, `${ok} && ls`, ok.replace("/w/tmp/gate-judge/o-r", "/w/tmp/gate-judge/../x"),
+    ok.replace("tmp/gate-judge", "tmp/other"), ok.replace("verdict.json", "verdict.txt"), ok.replace("dev-loops-run ", ""), ok.replace("/verdict", "/a b")];
+  for (const command of inputs) {
+    const claudeAllows = decideBashGate({ command, agentType: "judge" }).decision === "allow";
+    assert.equal((await callAs("judge", command)).block, !claudeAllows, command);
+  }
 });
 
 test("Pi reviewer reads and searches but cannot run tests or builds", async () => {

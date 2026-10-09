@@ -6,7 +6,7 @@ Accepted — 2026-10-09 ([PR 2717](https://github.com/mfittko/dev-loops/pull/271
 
 ## Context
 
-Amends [0115](./0115-dispatch-pointer-carries-the-execution-identity-alone.md): the judge Bash boundary accepted only the sanctioned work-order pull line, so the judge could not validate its own decision before returning it. Amends [0060](./0060-immutable-spec-authority.md): an invalid spec-authority decision had no typed failure. Records 0115 and 0060 stay unedited.
+Amends [0127](./0127-act-item-remediation-names-defect-class-and-sweeps-sites.md): the launcher-cwd rule exempts the judge decision-check line. Amends [0115](./0115-dispatch-pointer-carries-the-execution-identity-alone.md): the judge Bash boundary accepted only the sanctioned work-order pull line, so the judge could not validate its own decision before returning it. Amends [0060](./0060-immutable-spec-authority.md): an invalid spec-authority decision had no typed failure. Records 0127, 0115 and 0060 stay unedited.
 
 ## Decision
 
