@@ -39,11 +39,9 @@ test("the judge check CLI accepts evidence-only and names the decision and field
   const dir = await mkdtemp(path.join(os.tmpdir(), "judge-check-"));
   const run = async (decisions) => {
     const file = path.join(dir, "v.json");
-    await writeFile(file, JSON.stringify({ decisions }));
+    await writeFile(file, JSON.stringify({ specDigest: ctx.specDigest, headSha: HEAD, contentDigest: ctx.contentDigest, decisions }));
     let out = "";
-    const write = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (chunk) => { out += chunk; return true; };
-    try { await checkMain(["--file", file]); } finally { process.stdout.write = write; }
+    await checkMain(["--file", file], { stdout: { write: (chunk) => { out += chunk; return true; } } });
     return JSON.parse(out);
   };
   try {
@@ -52,6 +50,9 @@ test("the judge check CLI accepts evidence-only and names the decision and field
     assert.equal(bad.ok, false);
     assert.equal(bad.decisionIndex, 1);
     assert.equal(bad.field, "defectClass");
+    const noRemedy = await run([{ ...decision({ remedyKind: "evidence_only" }), authorizedRemediation: undefined }]);
+    assert.equal(noRemedy.ok, false);
+    assert.match(noRemedy.error, /authorizedRemediation/);
     assert.equal(checkRemediationScopes({ decisions: [{ outcome: "finding_conflicts" }] }), 0);
   } finally {
     process.exitCode = 0;

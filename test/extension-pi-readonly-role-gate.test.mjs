@@ -59,6 +59,14 @@ test("Pi judge runs the sanctioned pull and nothing else (J7)", async () => {
   }
 });
 
+test("Pi judge may run the check line, but not chained or .. forms, and other restricted roles may not", async () => {
+  const line = "dev-loops-run scripts/loop/check-judge-decision.mjs --file /w/tmp/gate-judge/o-r/pr-1/r1/verdict.json";
+  assert.deepEqual(await callAs("judge", line), { block: false });
+  assert.equal((await callAs("judge", `${line}; id`)).block, true);
+  assert.equal((await callAs("judge", line.replace("/w/tmp/gate-judge/o-r", "/w/tmp/gate-judge/../x"))).block, true);
+  assert.equal((await callAs("review", line)).block, true);
+});
+
 test("Pi reviewer reads and searches but cannot run tests or builds", async () => {
   for (const cmd of ["git diff origin/main...HEAD", "grep -rn foo src", "rg foo", "cat README.md", PULL,
     "cd /w/tree && dev-loops-run scripts/github/verify-fresh-review-context.mjs --context-path a.json",

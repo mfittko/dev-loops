@@ -1280,7 +1280,7 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
  * @returns {Array<object>}
  */
 export function listOpenActItems(findings) {
-  return (Array.isArray(findings) ? findings : []).filter((f) => f && f.judgeDisposition === "act");
+  return (Array.isArray(findings) ? findings : []).filter((f) => f && f.judgeDisposition === "act" && f.remedyKind !== "evidence_only");
 }
 
 /**
