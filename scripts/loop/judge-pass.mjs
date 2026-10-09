@@ -83,7 +83,8 @@ Inputs:
   --pr <number>                Echoed onto the result.
   --gate <name>                Echoed onto the result (draft_gate|pre_approval_gate).
   --out <path>                 Write the fixer's ACT list (enriched findings with
-                               judgeDisposition === "act") to this path as JSON. It
+                               judgeDisposition === "act", never an evidence-only
+                               remedy; counts.act and actCount exclude those too) to this path as JSON. It
                                omits escalated act items and their cluster siblings
                                (recurrence escalation, below).
   --ledger-out <path>          Write the enriched { overallVerdict, findings, scopeDrift,
@@ -432,7 +433,7 @@ export function validateCliArgs(options) {
  * @param {object} judgeVerdict — the judge agent's verdict artifact (JSON object)
  * @param {string} headSha — the round's current head (the verdict must be current-head)
  * @returns {{ enriched: Array<object>, act: Array<object>, scopeDrift: object,
- *             counts: { act: number, defer: number, reject: number }, headSha: string }}
+ *             counts: { act: number, defer: number, reject: number } (act excludes evidence-only remedies), headSha: string }}
  */
 export function runJudgePass(findings, judgeVerdict, headSha) {
   const validated = validateJudgeVerdict(judgeVerdict);
@@ -485,12 +486,12 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
  * The ONE counting rule shared by runJudgePass and the spec-authority act-list
  * recount, so the two cannot drift.
  * @param {Array<{judgeDisposition?: string}>} enriched
- * @returns {{ act: number, defer: number, reject: number }}
+ * @returns {{ act: number, defer: number, reject: number }} act excludes evidence-only remedies
  */
 function countByDisposition(enriched) {
   const counts = { act: 0, defer: 0, reject: 0 };
   for (const f of enriched) {
-    if (f.judgeDisposition === "act") counts.act += 1;
+    if (f.judgeDisposition === "act") { if (f.remedyKind !== "evidence_only") counts.act += 1; }
     else if (f.judgeDisposition === "defer") counts.defer += 1;
     else if (f.judgeDisposition === "reject") counts.reject += 1;
   }

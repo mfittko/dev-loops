@@ -351,19 +351,6 @@ function validateRemediationScope(d) {
 }
 
 /**
- * Check the remediation scope of every valid_compliant decision in a raw verdict
- * (no digests needed, so the judge can run it before handing back). Throws the
- * typed error of the first bad decision; returns the number checked.
- * @param {{ decisions?: unknown[] }} verdict
- */
-export function checkRemediationScopes(verdict) {
-  const decisions = Array.isArray(verdict?.decisions) ? verdict.decisions : [];
-  const scoped = decisions.filter((d) => d?.outcome === SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT);
-  for (const d of scoped) validateRemediationScope(d);
-  return scoped.length;
-}
-
-/**
  * Validate ONE judge decision for a single finding against the complete spec.
  * Pure and fail-closed: throws (never returns a partial decision) unless every
  * authority invariant holds. Returns the normalized decision on success.

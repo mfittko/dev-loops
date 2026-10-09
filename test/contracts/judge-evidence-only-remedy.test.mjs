@@ -6,7 +6,6 @@ import { test } from "bun:test";
 
 import { decideBashGate } from "@dev-loops/core/claude/hook-decisions";
 import {
-  checkRemediationScopes,
   computeContentDigest,
   computeSpecDigest,
   specCriterionIds,
@@ -53,7 +52,7 @@ test("the judge check CLI accepts evidence-only and names the decision and field
     const noRemedy = await run([{ ...decision({ remedyKind: "evidence_only" }), authorizedRemediation: undefined }]);
     assert.equal(noRemedy.ok, false);
     assert.match(noRemedy.error, /authorizedRemediation/);
-    assert.equal(checkRemediationScopes({ decisions: [{ outcome: "finding_conflicts" }] }), 0);
+    assert.equal(noRemedy.decisionIndex, 0);
   } finally {
     process.exitCode = 0;
     await rm(dir, { recursive: true, force: true });

@@ -13,8 +13,8 @@ spec-authority verdict file. The identities come from the verdict (specDigest, h
 contentDigest); the criterion set is the union of the decisions' checkedCriteria. A code-change
 remedy needs defectClass and siteQuery; remedyKind "evidence_only" needs neither.
 Exit 0 and print { ok: true, checked } when every decision is valid. Otherwise print
-{ ok: false, error, code?, decisionIndex?, field? } and exit 1. The typed fields appear only when
-a valid_compliant decision fails its remediation-scope check.
+{ ok: false, error, decisionIndex?, code?, field? } and exit 1. decisionIndex names the failing
+decision; code and field appear only when a valid_compliant decision fails its remediation-scope check.
 
 ${JQ_OUTPUT_USAGE}`;
 
@@ -42,10 +42,17 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
     const verdict = JSON.parse(await readFile(path.resolve(args.file), "utf8"));
     const decisions = Array.isArray(verdict?.decisions) ? verdict.decisions : [];
     const criterionIds = [...new Set(decisions.flatMap((d) => (Array.isArray(d?.checkedCriteria) ? d.checkedCriteria : [])))];
-    for (const d of decisions) validateSpecAuthorityDecision(d, { specDigest: verdict.specDigest, headSha: verdict.headSha, contentDigest: verdict.contentDigest, criterionIds });
+    for (const [i, d] of decisions.entries()) {
+      try {
+        validateSpecAuthorityDecision(d, { specDigest: verdict.specDigest, headSha: verdict.headSha, contentDigest: verdict.contentDigest, criterionIds });
+      } catch (error) {
+        error.decisionIndex ??= d?.index ?? i;
+        throw error;
+      }
+    }
     result = { ok: true, checked: decisions.length };
   } catch (error) {
-    result = { ok: false, error: error.message, ...(error.code ? { code: error.code, decisionIndex: error.decisionIndex, field: error.field } : {}) };
+    result = { ok: false, error: error.message, ...(error.decisionIndex !== undefined ? { decisionIndex: error.decisionIndex } : {}), ...(error.code ? { code: error.code, field: error.field } : {}) };
   }
   process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
 }
