@@ -7,3 +7,4 @@
 - Fan-in isolates known foreign-gate retirement proof and refuses abbreviated aliases of matching dispatch-retired full heads while retaining unrelated offline inputs (#2709)
 - Cross-checkout digest equality applies to the same execution-bound semantic work order, not separate reviewer emissions (#2709)
 - Fan-in follows producer-accepted retirement-head directory symlinks, retaining the fresh-dispatch floor and failing closed on broken or unreadable matching targets (#2709)
+- Only the chmod-based unreadable test records a root-only skip; exact unprivileged EACCES/output assertions and all other retirement safeguards remain active (#2709)

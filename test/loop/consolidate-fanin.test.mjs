@@ -4231,7 +4231,10 @@ for (const [state, mutate, error] of [
   }, /ELOOP/],
   ["unreadable", (target) => chmod(target, 0), /EACCES/],
 ]) {
-  test(`#2709: ${state} matching retirement-head directory target cannot grant offline success`, async () => {
+  const skipReason = state === "unreadable" && typeof process.getuid === "function" && process.getuid() === 0
+    ? "skipped under root: chmod-based permission refusal is bypassed by root (#2709)"
+    : false;
+  (skipReason ? test.skip : test)(`#2709: ${state} matching retirement-head directory target cannot grant offline success${skipReason ? ` (${skipReason})` : ""}`, async () => {
     await withTempDir(async (tmpRoot) => {
       const target = await linkRetirementHead(tmpRoot, HEAD_A);
       const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, "draft-gate-coverage", HEAD_A);
