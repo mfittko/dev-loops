@@ -11,6 +11,7 @@ import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder, locateFixerUnit } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
@@ -715,5 +716,77 @@ test("regenerate: the rule is identical for the claude and pi harness CLI adapte
     }
     assert.ok(rules[0]);
     assert.equal(rules[0], rules[1]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// commit_only siteCoverage skeleton
+// ---------------------------------------------------------------------------
+
+const SKELETON_ACT = [
+  { severity: "high", angle: "correctness", summary: "doc lag", judgeDisposition: "act", fingerprint: "fp-doc", siteQuery: "git grep -n lag", statedSurfaces: ["docs/a.md", "docs/b.md"], acceptedForms: ["--x"] },
+  { severity: "low", angle: "correctness", summary: "unqueried", judgeDisposition: "act", fingerprint: "fp-none" },
+  { severity: "low", angle: "correctness", summary: "query only", judgeDisposition: "act", fingerprint: "fp-query", siteQuery: "git grep -n q" },
+  { severity: "low", angle: "correctness", summary: "matcher", judgeDisposition: "act", fingerprint: "fp-rej", siteQuery: "git grep -n m", acceptedForms: ["--a=b"], rejectedForms: ["keep spacing"] },
+];
+
+test("commit_only work order carries a siteCoverage skeleton built from the act list", async () => {
+  await withFixture(async ({ files, emit }) => {
+    await writeFile(files.actList, JSON.stringify(SKELETON_ACT));
+    const { workOrder, promptPath } = await emit({ phase: "commit_only", deltaResult: undefined });
+    // The item without a siteQuery gets no entry.
+    assert.deepEqual(workOrder.siteCoverage.map((r) => r.fingerprint), ["fp-doc", "fp-query", "fp-rej"]);
+    const [doc, query, rej] = workOrder.siteCoverage;
+    assert.deepEqual(doc.returnedSites, []);
+    assert.match(doc.noSitesReason, /^FILL:/);
+    assert.deepEqual(doc.sites.map((s) => [s.site, s.status, s.reason]), [["docs/a.md", "fixed|skipped", ""], ["docs/b.md", "fixed|skipped", ""], ["--x", "fixed|skipped", ""]]);
+    assert.equal(doc.sites[2].kind, "input_form");
+    // Accepted and rejected form texts pass through verbatim.
+    assert.deepEqual(rej.sites.map((s) => [s.site, s.kind]), [["--a=b", "input_form"], ["keep spacing", "input_form"]]);
+    assert.deepEqual(query.returnedSites, []);
+    assert.deepEqual(query.sites, []);
+    assert.match(query.noSitesReason, /^FILL:/);
+    assert.match(await readFile(promptPath, "utf8"), /Start from the `siteCoverage` skeleton/);
+    const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    assert.equal(threads.workOrder.siteCoverage, undefined);
+  });
+});
+
+test("the skeleton merges a shared fingerprint and dedupes repeated site texts", async () => {
+  await withFixture(async ({ files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([
+      { severity: "low", angle: "correctness", summary: "one", judgeDisposition: "act", fingerprint: "fp", siteQuery: "q1", statedSurfaces: ["a.md", "a.md", "--x"], acceptedForms: ["--x"] },
+      { severity: "low", angle: "holistic", summary: "two", judgeDisposition: "act", fingerprint: "fp", siteQuery: "q2", statedSurfaces: ["b.md", "a.md"] },
+    ]));
+    const { workOrder } = await emit({ phase: "commit_only", deltaResult: undefined });
+    assert.equal(workOrder.siteCoverage.length, 1);
+    assert.deepEqual(workOrder.siteCoverage[0].returnedSites, []);
+    assert.deepEqual(workOrder.siteCoverage[0].sites.map((x) => x.site), ["a.md", "--x", "b.md"]);
+    assert.equal(workOrder.siteCoverage[0].sites.find((s) => s.site === "--x").kind, "input_form");
+  });
+});
+
+test("a handback made by filling the skeleton passes check-pre-push-delta input mode", async () => {
+  await withFixture(async ({ files, emit, head }) => {
+    await writeFile(files.actList, JSON.stringify(SKELETON_ACT));
+    const { workOrder } = await emit({ phase: "commit_only", deltaResult: undefined });
+    const siteCoverage = structuredClone(workOrder.siteCoverage);
+    for (const site of siteCoverage.flatMap((r) => r.sites ?? [])) {
+      if (site.kind === "input_form") Object.assign(site, { status: "fixed", test: "test/a.test.mjs" });
+      else Object.assign(site, { status: "skipped", reason: "out of scope" });
+    }
+    for (const r of siteCoverage) {
+      if (r.sites.length) { r.returnedSites = r.sites.map((x) => x.site); delete r.noSitesReason; }
+    }
+    siteCoverage[1].noSitesReason = "the query returned nothing";
+    const candidate = "b".repeat(40);
+    const coverage = path.join(path.dirname(files.actList), "coverage.json");
+    await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage }));
+    const seam = { stdout: { write: () => {} }, tmpRoot: path.dirname(files.actList), revParse: (_w, rev) => (rev === "HEAD" ? candidate : rev), isAncestor: () => true };
+    const out = runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--site-coverage", coverage], seam);
+    assert.equal(out.input.siteCoverage.length, 3);
+    // The unfilled skeleton is refused.
+    await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage: workOrder.siteCoverage }));
+    assert.throws(() => runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--site-coverage", coverage], seam), /expected fixed or skipped/);
   });
 });

@@ -75,12 +75,3 @@ When the work is not a deck, the loop does not trigger; it returns a skip outcom
 3. Run the story review against the acceptance criteria and storytelling brief using the template at `skills/dev-loop/templates/slides-story-review.md`.
 4. If the outcome is `needs_iteration`, apply the corrective actions (words / order / structure, not the design system) and re-run.
 5. Re-run until the outcome is `story_review_satisfied`.
-
-## Current minimal validation seam
-
-The pure validation helpers at `scripts/loop/slides-story-review-contract.mjs` codify the boundary:
-- non-deck or not-requested work is skipped (`skip_non_slides`)
-- missing required inputs are blocked (`blocked_missing_required_inputs`)
-- incomplete optional slide screenshots are blocked (`blocked_incomplete_deck_bundle`)
-- a complete bundle is eligible for review (`ready_for_story_review`)
-- `validateSlidesStoryReviewResult` enforces the output shape and the `story_review_satisfied` | `needs_iteration` outcome set

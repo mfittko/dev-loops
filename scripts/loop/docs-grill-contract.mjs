@@ -1,5 +1,4 @@
-// Bounded docs-grill disposition classifier behind `dev-loop`. Sibling of
-// scripts/loop/slides-story-review-contract.mjs: this one codifies the keep/fix
+// Bounded docs-grill disposition classifier behind `dev-loop`. It codifies the keep/fix
 // rule for the autonomous docs-grill step (claims vs the actual contracts,
 // code-vs-doc drift, stale references, contract-surface accuracy). Pure module,
 // no I/O. See skills/docs/docs-grill-step.md.

@@ -287,18 +287,6 @@ function shouldCarryForwardWaitCycles(previousCheckpoint, { repo, pr, headSha, o
     && headSha.length > 0
     && previousCheckpoint.headSha === headSha;
 }
-export function decideOuterAction({ copilotState, reviewerState, gitStatus }) {
-  const routing = evaluateConductorRouting({
-    target: { repo: "routing/sentinel", pr: 1 },
-    copilotState,
-    reviewerState,
-    requiresLocalIsolation: gitStatus.isDirty || gitStatus.isDetached,
-  });
-  return {
-    outerAction: routing.outerAction,
-    ...(routing.stopReason !== null ? { reason: routing.stopReason } : {}),
-  };
-}
 export async function runOuterLoop(options, { env = process.env, ghCommand = "gh", gitCommand = "git" } = {}) {
   const { repo, pr, copilotInputPath, reviewerInputPath } = options;
   const normalizedRepo = repo.trim().toLowerCase();
