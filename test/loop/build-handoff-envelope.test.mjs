@@ -333,13 +333,14 @@ test("build-handoff-envelope emits actionable error when auto-detected repo slug
   try {
     const inputPath = await writeTempJson(tempDir, "resolver.json", makeResolverOutput());
 
-    // Run in a temp dir that is inside a git repo but the envelope builder
-    // resolves repoRoot; the key is no --repo and no usable origin.
-    // We use cwd override via runNodeHelper option but since the script
-    // runs as a child process we can set an env to guide.
-    const result = await runNode(["--input", inputPath], {
-      env: { ...process.env, GIT_DIR: "/nonexistent", GIT_WORK_TREE: "/nonexistent" },
-    });
+    // No --repo and a git repo without an origin remote.
+    const repoDir = path.join(tempDir, "repo");
+    const { execFileSync } = await import("node:child_process");
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(repoDir, { recursive: true });
+    execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
+
+    const result = await runNode(["--input", inputPath], { cwd: repoDir });
     assert.equal(result.code, 1, `expected exit 1, got ${result.code} stdout:${result.stdout} stderr:${result.stderr}`);
     const parsed = JSON.parse(result.stderr.trim());
     assert.equal(parsed.ok, false);

@@ -144,7 +144,7 @@ function buildRemediationItem(finding) {
  * Build a debt_epic artifact from a finding.
  *
  * @param {object} finding — enriched debt_finding
- * @returns {object} DebtEpicSchema-compatible shape
+ * @returns {object} debt_epic shape
  */
 function buildDebtEpic(finding) {
   const { createdAt, updatedAt } = deriveTimestamps(finding);

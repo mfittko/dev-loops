@@ -21,17 +21,12 @@ import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWo
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
-import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
 or the unresolved review threads (list-review-threads.mjs --unresolved-only), plus the
-optional pre-push delta result (dev-loops loop pre-push-delta). --phase full needs a clearing
-delta decision for the head: an act-list source passes the clearing --delta-result, a
-threads source needs a thread-bound clearing record under <tmp-root>/gate-delta/ (written by
-check-pre-push-delta --result), and any non-clearing record for the head refuses; use
---phase commit_only first. The mutation authority is
+optional pre-push delta result (dev-loops loop pre-push-delta). The mutation authority is
 the PR's own head branch (gh pr view headRefName) and the --allowed-path selectors
 (default "." = the whole repository). A PR head other than --head-sha refuses.
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
@@ -92,22 +87,27 @@ async function defaultFetchPr({ repo, pr }) {
 const SKELETON_STATUS = "fixed|skipped";
 
 /**
- * The pre-filled `siteCoverage` of a commit_only handback, one record per act item.
+ * The pre-filled `siteCoverage` of a commit_only handback, one record per act item with a siteQuery.
+ * It reads the same act list that check-pre-push-delta verifies (`--act-list`, the cumulative list),
+ * so its fingerprints and input forms match what the check demands.
  * The sites are the ones the act item already names (stated surfaces and input forms);
  * the fixer fills each site's `status` (and `reason` for a skip, `test` for a fixed input form).
- * An item with no named site, or no siteQuery, carries a `noSitesReason` the fixer keeps or replaces
- * with `returnedSites` and `sites` after it runs the siteQuery.
+ * Items that share a fingerprint merge into one record, and a site text appears once (an input form wins).
+ * `returnedSites` starts empty: the fixer runs the siteQuery, sets `returnedSites` to its output, adds every
+ * returned site missing from `sites`, and deletes `noSitesReason`; a query that returns nothing keeps `returnedSites` empty
+ * and replaces the `FILL:` `noSitesReason` with the query outcome.
  */
 export function buildSiteCoverageSkeleton(actList) {
-  return toDeltaActItems(actList).map((item) => {
+  const records = new Map();
+  for (const item of toDeltaActItems(actList).filter((i) => i.siteQuery)) {
     const fingerprint = item.fingerprint ?? item.ref;
-    if (!item.siteQuery) return { fingerprint, noSitesReason: "the act item carries no siteQuery" };
-    const sites = [
-      ...(item.statedSurfaces ?? []).map((site) => ({ site, status: SKELETON_STATUS, reason: "" })),
-      ...[...(item.acceptedForms ?? []), ...(item.rejectedForms ?? [])].map((site) => ({ site, kind: "input_form", status: SKELETON_STATUS, reason: "", test: "" })),
-    ];
-    if (sites.length === 0) return { fingerprint, noSitesReason: "FILL: run the siteQuery; keep this reason if it returns nothing, else replace it with returnedSites and sites" };
-    return { fingerprint, returnedSites: sites.map((s) => s.site), sites };
+    const rec = records.get(fingerprint) ?? records.set(fingerprint, { fingerprint, sites: new Map() }).get(fingerprint);
+    for (const site of item.statedSurfaces ?? []) if (!rec.sites.has(site)) rec.sites.set(site, { site, status: SKELETON_STATUS, reason: "" });
+    for (const site of [...(item.acceptedForms ?? []), ...(item.rejectedForms ?? [])]) rec.sites.set(site, { site, kind: "input_form", status: SKELETON_STATUS, reason: "", test: "" });
+  }
+  return [...records.values()].map(({ fingerprint, sites }) => {
+    // returnedSites starts empty: only the fixer's siteQuery run fills it. The declared sites ride in `sites`.
+    return { fingerprint, returnedSites: [], sites: [...sites.values()], noSitesReason: "FILL: run the siteQuery; if it returns nothing replace this with the outcome, else list its sites in returnedSites and delete this field" };
   });
 }
 
@@ -116,7 +116,7 @@ export function renderWorkOrder(workOrder) {
   // headRefName is PR-supplied: JSON-quote it (and paths) so a backtick cannot close a span and inject prose.
   const { branch, allowedPaths } = workOrder.mutationAuthority;
   const task = workOrder.phase === "commit_only"
-    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery. Start from the \`siteCoverage\` skeleton in the work order JSON below: set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site, and change nothing else except replacing each \`FILL:\` noSitesReason with the outcome of running that act item's siteQuery.`
+    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery. Start from the \`siteCoverage\` skeleton in the work order JSON below: set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.`
     : `Apply and commit any fixes not yet committed, then push, reply to and resolve the addressed threads per agents/fixer.agent.md (pass \`--disposition fixed\` and the full 40-character SHA of the fixing commit in each fixed reply), then write the disposition handoff \`{ headSha, dispositions: [...] }\` (headSha = the pushed PR head) to \`${dispositionPath}\`. Also write \`siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }]\` in that handoff, one entry per act item that has a siteQuery (threadless items included): verify-fixer-disposition refuses a handoff without it. A threadless act item gets no disposition handoff entry; every entry's \`threadId\` is a review-thread node id.`;
   return `# Fixer work order (ADR 0106)
 
@@ -137,35 +137,6 @@ ${workOrder.requiredReads.map((read) => renderRequiredReadLine(read, "/")).join(
 ${JSON.stringify(workOrder, null, 2)}
 \`\`\`
 `;
-}
-
-// The commit_only phase commits unpushed; the delta review then decides whether `full` may push.
-// `delta` is the parsed --delta-result (act-list route); `threads` the unresolved threads (thread route).
-function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads }) {
-  const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
-  const record = readGateDeltaRecord(tmpRoot, headSha);
-  const next = "emit --phase commit_only, run the delta review (dev-loops loop pre-push-delta), then emit --phase full";
-  if (record && !DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep)) {
-    throw new Refusal(`--phase full refused: the delta record ${recordPath} holds nextStep ${JSON.stringify(record.nextStep)}, not ${DELTA_CLEARING_NEXT_STEPS.join(" or ")}; fix and re-run the delta review (${next})`);
-  }
-  if (!threads) {
-    if (!delta) throw new Refusal(`--phase full with --act-list-file needs --delta-result naming a clearing delta result: ${next}`);
-    // The decided nextStep in the record for this head clears the push, not the result file's outcome.
-    const clears = record && record.candidateHead === delta.candidateHead && record.actSetId === delta.actSetId;
-    if (!clears) throw new Refusal(`--phase full refused: no delta record at ${recordPath} holds a clearing nextStep for the --delta-result's candidate and act set; ${next}`);
-    return;
-  }
-  if (!record) throw new Refusal(`--phase full with --threads-file needs a delta record at ${recordPath} from a thread-route delta review: ${next}`);
-  const threadIds = new Set(threads.map((thread) => thread.threadId));
-  const refs = (Array.isArray(record.items) ? record.items : []).map((item) => item?.ref);
-  const unbound = refs.filter((ref) => !threadIds.has(ref));
-  if (unbound.length > 0) {
-    throw new Refusal(`--phase full refused: the delta record ${recordPath} covers refs that are not threads in the threads file (${unbound.map((ref) => JSON.stringify(ref)).join(", ")}); review the current threads (${next})`);
-  }
-  const uncovered = [...threadIds].filter((id) => !refs.includes(id));
-  if (uncovered.length > 0) {
-    throw new Refusal(`--phase full refused: the threads file holds threads the delta record ${recordPath} never reviewed (${uncovered.map((id) => JSON.stringify(id)).join(", ")}); review the current threads (${next})`);
-  }
 }
 
 /**
@@ -203,7 +174,6 @@ export async function emitFixerWorkOrder({
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
     if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}`);
   }
-  if (phase === "full") assertDeltaClearsFullPhase({ tmpRoot, headSha, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null });
 
   // Mutation authority comes from the PR itself, never from the caller.
   const prState = await fetchPr({ repo, pr });

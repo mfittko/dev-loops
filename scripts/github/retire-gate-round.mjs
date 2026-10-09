@@ -9,11 +9,11 @@ import { GATE_NAMES, gateScopePrefix } from "./_gate-names.mjs";
 import { buildGateReviewsDir } from "./write-gate-context.mjs";
 
 const USAGE = `Usage: retire-gate-round.mjs --gate <draft_gate|pre_approval_gate> --head-sha <sha> --reason <text> [--findings-dir <dir>] [--tmp-root <dir>]
-Retire ONE GATE's review round at one head: move every reviewer sentinel of
-that gate keyed by that head out of the live sentinel namespace into an
-audited retirement directory, so a FRESH fan-out can run at the same head
-after the gate-context bundle was legitimately rebuilt (new briefing-prefix
-bytes -> new hash that no existing sentinel can ever match).
+Retire ONE GATE's review round at one head: move every regular reviewer
+sentinel and dispatch-prompt record of that gate keyed by that full head
+out of the live namespaces into an audited retirement directory, preserving
+the original bytes without parsing JSON, so a FRESH fan-out can run at the
+same head after the gate-context bundle was legitimately rebuilt.
 
 This is the sanctioned rebuild-and-retire path (GATE-EXEC-ROUND-RETIREMENT in
 skills/docs/gate-review-sub-loop-contract.md), the complement of the
@@ -21,17 +21,17 @@ same-head retry: the retry covers an UNCHANGED prefix (hash equality proves
 byte identity), retirement covers a REBUILT prefix (the whole round restarts
 so every reviewer of the new round agrees on the one new hash).
 verify-briefing-prefixes.mjs keeps failing closed on mixed hashes within a
-live round — retired sentinels live under a subdirectory its flat scan never
-reads, so retirement can never mix two prefixes into one consolidation.
+live round — retired sentinels and dispatch records live under a subdirectory
+the flat verifier scans never read, so retired bindings cannot poison fresh fan-in.
 
 Required:
   --gate <name>          Which gate's round to retire: draft_gate or
-                         pre_approval_gate. Sentinel scopes are gate-prefixed
-                         (draft-gate-<angle> / pre-approval-gate-<angle>), so
-                         this bounds the sweep to ONE gate — the other gate's
-                         live round at the same head is never touched.
+                         pre_approval_gate. Sentinel and dispatch-record scopes
+                         are gate-prefixed (draft-gate- / pre-approval-gate-).
+                         Each sweep matches gate prefix + full-head suffix
+                         independently, leaving the other gate's round untouched.
   --head-sha <sha>       FULL 40- or 64-char head SHA the round was keyed by (the
-                         sentinel filename suffix). A short prefix would match
+                         record filename suffix). A short prefix would match
                          nothing and read as a vacuous success — rejected.
   --reason <text>        Why the round is being retired (recorded verbatim in
                          the audit record; retirement is explicit and audited,
@@ -64,21 +64,25 @@ Optional:
                          per-angle findings artifacts (if any) are left LIVE at
                          this head. Use only when no canonical artifacts dir
                          exists or the operator accepts the live-artifact risk.
-  --tmp-root <dir>       Root tmp directory holding the sentinels (default:
-                         tmp). MUST exist as a directory — a missing root
-                         fails closed rather than reading as an empty round.
+  --tmp-root <dir>       Root tmp directory holding sentinels and dispatch records
+                         (default: tmp). MUST exist as a directory — a missing
+                         root fails closed rather than reading as an empty round.
 
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "retired": <n>,
-    "sentinels": [...], "findingsDirRetired": <bool>,
-    "retirementDir": "...", "noop": <bool> }
-  A gate+head with no sentinels (and no --findings-dir to move) is a NO-OP
-  (retired: 0, noop: true), not an error.
+    "sentinels": [...], "dispatchPromptRecords": [...],
+    "findingsDirRetired": <bool>, "retirementDir": "...", "noop": <bool> }
+  retired remains the SENTINEL count. dispatchPromptRecords lists sorted
+  successfully moved basenames, also recorded in retirement.json.
+  A gate+head with no sentinels, no matching dispatch records, and no
+  --findings-dir to move is a NO-OP (retired: 0, dispatchPromptRecords: [],
+  noop: true), not an error.
 On error (stderr, JSON): { "ok": false, "error": "...",
-  "partiallyRetired"?: [...], "retirementDir"?: "..." } — a move failure
-  mid-retirement reports every sentinel already moved and the retirement
-  directory holding them, and the audit record is still written with the
-  partial state.
+  "partiallyRetired"?: [...], "partiallyRetiredDispatchPromptRecords"?: [...],
+  "retirementDir"?: "..." } — a move failure reports separate successful
+  sentinel and dispatch-record basenames and their retirement directory.
+  A partial audit is still attempted; failure to persist an audit remains an
+  error, never clean success.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success (including the no-op)
@@ -166,14 +170,15 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
   if (typeof headSha !== "string" || !HEAD_SHA_RE.test(headSha)) {
     throw new Error(`headSha must be the FULL 40- or 64-char hex head SHA, got ${JSON.stringify(headSha)}`);
   }
-  // Normalize for the sentinel filename match: sentinel names embed the
-  // lowercase rev-parse output, so an uppercase programmatic value would
-  // silently retire nothing.
+  // Normalize for artifact filename matches: names embed the lowercase
+  // rev-parse output, so uppercase input must not silently retire nothing.
   headSha = headSha.trim().toLowerCase();
   if (typeof reason !== "string" || reason.trim().length === 0) {
     throw new Error("reason must be a non-empty string — retirement is explicit and audited");
   }
-  const namePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(gate)}`;
+  const scopePrefix = gateScopePrefix(gate);
+  const namePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${scopePrefix}`;
+  const dispatchNamePrefix = `checkpoint-dispatch-prompt-${scopePrefix}`;
   const suffix = `-${headSha}.json`;
   let entries = [];
   try {
@@ -187,6 +192,12 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
   }
   const sentinels = entries
     .filter((e) => e.isFile() && e.name.startsWith(namePrefix) && e.name.endsWith(suffix))
+    .map((e) => e.name)
+    .sort();
+  // Dispatch-only records must retire even when no sentinel survives. Match
+  // names independently; malformed JSON is still evidence to preserve unchanged.
+  const dispatchPromptRecords = entries
+    .filter((e) => e.isFile() && e.name.startsWith(dispatchNamePrefix) && e.name.endsWith(suffix))
     .map((e) => e.name)
     .sort();
 
@@ -245,8 +256,8 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
     }
   }
 
-  if (sentinels.length === 0 && !findingsDirPresent) {
-    return { ok: true, gate, headSha, retired: 0, sentinels: [], findingsDirRetired: false, retirementDir: null, noop: true };
+  if (sentinels.length === 0 && dispatchPromptRecords.length === 0 && !findingsDirPresent) {
+    return { ok: true, gate, headSha, retired: 0, sentinels: [], dispatchPromptRecords: [], findingsDirRetired: false, retirementDir: null, noop: true };
   }
 
   // One retirement directory per invocation. The sequence number is MAX-based
@@ -271,10 +282,11 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
   }
 
   const moved = [];
+  const movedDispatchPromptRecords = [];
   let findingsDirRetired = false;
   // `partial` is an explicit flag, never derived from counts alone: a failed
-  // findings-dir move after every sentinel moved is still a PARTIAL
-  // retirement and must be recorded as one.
+  // findings-dir move after every record moved is still a PARTIAL retirement
+  // and must be recorded as one.
   const writeRecord = async (partial) => {
     const record = {
       gate,
@@ -282,6 +294,7 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
       reason,
       retiredAt: new Date().toISOString(),
       sentinels: moved,
+      dispatchPromptRecords: movedDispatchPromptRecords,
       findingsDir: findingsDirPresent ? findingsDir : null,
       findingsDirRetired,
       partial,
@@ -293,19 +306,24 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
       await rename(path.join(tmpRoot, name), path.join(retirementDir, name));
       moved.push(name);
     }
+    for (const name of dispatchPromptRecords) {
+      await rename(path.join(tmpRoot, name), path.join(retirementDir, name));
+      movedDispatchPromptRecords.push(name);
+    }
     if (findingsDirPresent) {
       await rename(findingsDir, path.join(retirementDir, "findings-artifacts"));
       findingsDirRetired = true;
     }
     await writeRecord(false);
-    return { ok: true, gate, headSha, retired: moved.length, sentinels: moved, findingsDirRetired, retirementDir, noop: false };
+    return { ok: true, gate, headSha, retired: moved.length, sentinels: moved, dispatchPromptRecords: movedDispatchPromptRecords, findingsDirRetired, retirementDir, noop: false };
   } catch (err) {
     // Partial retirement: report what already moved and where it lives, and
     // still write the audit record with the partial state — an unaudited
     // half-retired round would be worse than the failure itself.
     await writeRecord(true).catch(() => {});
-    const error = new Error(`${err instanceof Error ? err.message : String(err)} — partial retirement: ${moved.length}/${sentinels.length} sentinel(s) already moved to ${retirementDir}`);
+    const error = new Error(`${err instanceof Error ? err.message : String(err)} — partial retirement: ${moved.length}/${sentinels.length} sentinel(s) and ${movedDispatchPromptRecords.length}/${dispatchPromptRecords.length} dispatch-prompt record(s) already moved to ${retirementDir}`);
     error.partiallyRetired = moved;
+    error.partiallyRetiredDispatchPromptRecords = movedDispatchPromptRecords;
     error.retirementDir = retirementDir;
     throw error;
   }
@@ -341,6 +359,7 @@ async function main() {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
       ...(Array.isArray(error?.partiallyRetired) ? { partiallyRetired: error.partiallyRetired } : {}),
+      ...(Array.isArray(error?.partiallyRetiredDispatchPromptRecords) ? { partiallyRetiredDispatchPromptRecords: error.partiallyRetiredDispatchPromptRecords } : {}),
       ...(typeof error?.retirementDir === "string" ? { retirementDir: error.retirementDir } : {}),
     })}\n`);
     process.exitCode = 1;
