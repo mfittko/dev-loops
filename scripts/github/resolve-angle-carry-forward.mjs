@@ -28,6 +28,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
+import { isDevLoopConfigSourcePath } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfigStrict, resolveBaseBranch, resolveClassifyRules, resolveGateAngleContract } from "@dev-loops/core/config";
 import {
   angleReviewSurface,
@@ -197,6 +198,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  * @param {string[]} input.changedFiles — the MAIN-RELATIVE incremental delta
  *   (files changed since head A whose head-B content is genuinely PR-own), NOT
  *   the raw two-dot A..B delta.
+ * @param {string[]} [input.incrementalFiles] — unreduced A..B paths, including rename/copy sources.
  * @param {Iterable<string>} [input.alwaysRerun] — angles that must NEVER carry
  *   forward regardless of the delta (the gate's configured mandatory angles, plus
  *   the RENAME_ONLY-mapped angles when the delta contains any rename). Each
@@ -207,7 +209,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  * @param {import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null} [input.rules] — repository `classify` rules from resolveClassifyRules
  * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, dispatchId?: string, model?: string, prevVerdict: "clean"|"findings_present", findings: Array<object>, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
  */
-export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [], deltaComplete = false, rules = null }) {
+export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = [], alwaysRerun = [], deltaComplete = false, rules = null }) {
   if (!log || typeof log !== "object") {
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
@@ -323,6 +325,14 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [], del
     const [angle] = matches;
     if (!priorFindingsByAngle.has(angle)) priorFindingsByAngle.set(angle, []);
     priorFindingsByAngle.get(angle).push(finding);
+  }
+
+  if (incrementalFiles.some(isDevLoopConfigSourcePath)) {
+    return {
+      prevHead: headSha,
+      carried: [],
+      mustRerun: prevAngles.map((angle) => ({ angle, reason: "incremental delta changed a dev-loop config source; every angle must re-run" })),
+    };
   }
 
   const carried = [];
@@ -480,7 +490,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // becomes `deltaComplete` below so an EMPTY reduced delta carries (proven
     // "nothing PR-own changed") while an unreduced/unavailable delta still fails
     // closed.
-    const { changedFiles, hasRename, reduced } = await captureMainRelativeChangedFilesSince({ base: options.prevHead, mainRef, repoRoot, runGit });
+    const { changedFiles, incrementalFiles, hasRename, reduced } = await captureMainRelativeChangedFilesSince({ base: options.prevHead, mainRef, repoRoot, runGit });
     // A rename anywhere in the delta forces the RENAME_ONLY-mapped angles to
     // re-run: parseChangedFiles keeps only a rename's destination path, so
     // classifying that path alone misses what the rename itself implicates.
@@ -492,7 +502,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // findings, duplicate angle) throws UNTAGGED and is treated like an
     // operational failure below: no marker, emitter refuses. So the catch never
     // blanket-tags — it trusts the tag the pure seam set.
-    const rawPlan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun, deltaComplete: reduced, rules });
+    const rawPlan = buildCarryForwardPlan({ log, changedFiles, incrementalFiles, alwaysRerun, deltaComplete: reduced, rules });
     // AC1 (ADR 0061): optional --spec-authority stamps the pinned revision
     // identity onto the plan via the ONE shared helper. Pure no-op when absent.
     // Resolved against `repoRoot` (default process.cwd()) — matching every

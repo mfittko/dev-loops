@@ -101,6 +101,29 @@ test("integrate-only base-move: main-relative delta drops already-merged main fi
   }
 });
 
+test("incrementalFiles keeps both rename and copy endpoints before base reduction", async () => {
+  for (const status of ["R100", "C100"]) {
+    const runGit = async (args) => {
+      if (args.includes("--name-status")) {
+        return { code: 0, stdout: args.at(-1) === "old..HEAD" ? `${status}\t.devloops\tother.txt\n` : "", stderr: "" };
+      }
+      return { code: 0, stdout: "abc123\n", stderr: "" };
+    };
+    const delta = await captureMainRelativeChangedFilesSince({ base: "old", repoRoot: "/unused", runGit });
+    assert.deepEqual(delta.changedFiles, []);
+    assert.deepEqual(delta.incrementalFiles, [".devloops", "other.txt"]);
+
+    // mainRef does not resolve (rev-parse exits 1): the unreduced fallback must still carry incrementalFiles.
+    const runGitNoMain = async (args) => {
+      if (args.includes("--name-status")) return runGit(args);
+      return { code: 1, stdout: "", stderr: "" };
+    };
+    const fallback = await captureMainRelativeChangedFilesSince({ base: "old", repoRoot: "/unused", runGit: runGitNoMain });
+    assert.equal(fallback.reduced, false);
+    assert.deepEqual(fallback.incrementalFiles, [".devloops", "other.txt"]);
+  }
+});
+
 test("genuine PR-own commit after the base-move still appears in the main-relative delta (fail closed)", async () => {
   const { root, prevHead } = await makeBaseMoveRepo({
     prExtra: async (r) => {
