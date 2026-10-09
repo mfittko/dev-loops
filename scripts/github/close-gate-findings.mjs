@@ -298,7 +298,7 @@ async function isJudgeActThread({ fp, threadBody, findings, lookup }) {
   if (current !== null) return current;
   const prior = await findJudgeDispositionForFingerprint({ ...lookup, fp });
   if (prior?.ambiguous) return true;
-  if (prior) return prior.disposition === "act";
+  if (prior) return prior.disposition === "act" && prior.remedyKind !== "evidence_only";
   return parseRenderedJudgeDisposition(threadBody) === "act";
 }
 

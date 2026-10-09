@@ -40,7 +40,8 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
   let result;
   try {
     const verdict = JSON.parse(await readFile(path.resolve(args.file), "utf8"));
-    const decisions = Array.isArray(verdict?.decisions) ? verdict.decisions : [];
+    const decisions = verdict?.decisions;
+    if (!Array.isArray(decisions) || decisions.length === 0) throw new Error("verdict.decisions must be a non-empty array");
     const criterionIds = [...new Set(decisions.flatMap((d) => (Array.isArray(d?.checkedCriteria) ? d.checkedCriteria : [])))];
     for (const [i, d] of decisions.entries()) {
       try {
@@ -52,7 +53,7 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
     }
     result = { ok: true, checked: decisions.length };
   } catch (error) {
-    result = { ok: false, error: error.message, ...(error.decisionIndex !== undefined ? { decisionIndex: error.decisionIndex } : {}), ...(error.code ? { code: error.code, field: error.field } : {}) };
+    result = { ok: false, error: error.message, ...(error.decisionIndex !== undefined ? { decisionIndex: error.decisionIndex } : {}), ...(error.code === "spec_authority_decision_invalid" ? { code: error.code, field: error.field } : {}) };
   }
   process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
 }

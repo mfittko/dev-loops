@@ -1456,6 +1456,7 @@ async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, g
       matches.push({
         disposition: finding.judgeDisposition.trim(),
         rationale,
+        remedyKind: finding.remedyKind === "evidence_only" ? "evidence_only" : undefined,
         loggedAtMs: Number.isFinite(loggedAtMs) ? loggedAtMs : null,
       });
     }
@@ -1520,14 +1521,14 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
     // At least one candidate ledger carries no usable loggedAt: "greatest" is
     // undecidable across the full set. Safe to proceed only when every
     // candidate already agrees on the disposition regardless of order.
-    return allAgree ? { disposition: matches[0].disposition, rationale: matches[0].rationale } : { ambiguous: true };
+    return allAgree ? { disposition: matches[0].disposition, rationale: matches[0].rationale, remedyKind: matches[0].remedyKind } : { ambiguous: true };
   }
   const maxLoggedAtMs = Math.max(...timestamped.map((m) => m.loggedAtMs));
   const winners = timestamped.filter((m) => m.loggedAtMs === maxLoggedAtMs);
   if (winners.length > 1 && !winners.every((m) => m.disposition === winners[0].disposition)) {
     return { ambiguous: true }; // Tied on the greatest loggedAt, and those tied candidates disagree.
   }
-  return { disposition: winners[0].disposition, rationale: winners[0].rationale };
+  return { disposition: winners[0].disposition, rationale: winners[0].rationale, remedyKind: winners[0].remedyKind };
 }
 
 // Tier 3 (last-resort) of the reject-close judge-disposition lookup: parses

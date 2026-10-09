@@ -53,6 +53,11 @@ test("the judge check CLI accepts evidence-only and names the decision and field
     assert.equal(noRemedy.ok, false);
     assert.match(noRemedy.error, /authorizedRemediation/);
     assert.equal(noRemedy.decisionIndex, 0);
+    for (const missing of [undefined, [], "x"]) {
+      const empty = await run(missing);
+      assert.equal(empty.ok, false);
+      assert.match(empty.error, /decisions/);
+    }
   } finally {
     process.exitCode = 0;
     await rm(dir, { recursive: true, force: true });

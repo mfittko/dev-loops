@@ -2350,3 +2350,32 @@ test("#2263: folded and thread deferrals of one round go in ONE batched comment"
   ));
 });
 
+
+// A prior-ledger `act` with remedyKind evidence_only is non-act (no fixer cycle):
+// the round-4 thread is selected for disposition like any deferred finding.
+test("a prior-ledger act with remedyKind evidence_only does not keep a round-4 thread open", async () => {
+  const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
+  const fp = fingerprintFinding(finding);
+  const thread = openWfnThread({ commentId: 6002, fp });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      ...deferralCommentEntries(9500),
+      getReviewCommentEntry(6002, wfnBody(fp)),
+      patchReviewCommentEntry(6002),
+      postReplyEntry(6002, { id: 7001 }),
+      resolveThreadEntry("THREAD_D"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+      await mkdir(findingsDir, { recursive: true });
+      await writeFile(
+        path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ ...finding, judgeDisposition: "act", remedyKind: "evidence_only", judgeRationale: "no file change" }] }),
+        "utf8",
+      );
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
