@@ -667,3 +667,38 @@ test("a resolved delta item for the thread still lets the Fixed reply post", asy
     assert.equal(hasPost(calls), true);
   });
 });
+
+test("a not_resolved delta record also blocks resolving a thread whose Fixed reply already exists", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }]);
+    await writeDeltaRecord(repoRoot, { items: [{ ref: "PRRT_T1", status: "not_resolved" }] });
+    const { deps, calls } = runtimeWithGit([
+      threadsCallEntry([
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: null }] } },
+      ]),
+      compareEntry(FIX_SHA, "ahead"),
+    ], repoRoot, () => ({ code: 0, stdout: `${FIX_SHA}\n` }));
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.deepEqual(result.incomplete.map((entry) => [entry.failedStep, entry.deltaStatus]), [["delta_blocked", "not_resolved"]]);
+    assert.deepEqual(result.actions, []);
+    assert.equal(calls.some((call) => call.args.includes("graphql") && call.args.some((arg) => String(arg).includes("resolveReviewThread"))), false, "thread was not resolved");
+  });
+});
+
+test("the finding marker is found on any comment of the thread, not only the id-first one", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }]);
+    await writeDeltaRecord(repoRoot, { items: [{ ref: "0123456789abcdef", status: "not_resolved" }] });
+    const { deps } = runtimeWithGit([
+      threadsCallEntry([
+        { id: "PRRT_T1", isResolved: false, comments: { nodes: [
+          { id: "c2", databaseId: 200, body: "<!-- dev-loops:finding 0123456789abcdef -->\nroot", author: { login: "reviewer", __typename: "User" } },
+          { id: "c1", databaseId: 100, body: "earlier id, no marker", author: { login: "reviewer", __typename: "User" } },
+        ] } },
+      ]),
+      compareEntry(FIX_SHA, "ahead"),
+    ], repoRoot, () => ({ code: 0, stdout: `${FIX_SHA}\n` }));
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.deepEqual(result.incomplete.map((entry) => [entry.failedStep, entry.deltaStatus]), [["delta_blocked", "not_resolved"]]);
+  });
+});

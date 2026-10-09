@@ -947,3 +947,12 @@ test("a handback made by filling the skeleton passes check-pre-push-delta input 
     assert.throws(() => runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--site-coverage", coverage], seam), /expected fixed or skipped/);
   });
 });
+
+test("a threads --phase full prompt names no siteCoverage skeleton, an act-list one does", async () => {
+  await withFixture(async ({ files, emit }) => {
+    const threads = await emit({ ...threadsOnly, threadsFile: files.threads });
+    assert.doesNotMatch(await readFile(threads.promptPath, "utf8"), /skeleton in the work order JSON/);
+    const act = await emit({ deltaResult: files.delta });
+    assert.match(await readFile(act.promptPath, "utf8"), /skeleton in the work order JSON/);
+  });
+});

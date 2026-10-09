@@ -284,7 +284,7 @@ export async function verifyFixerDisposition(
   // a claim with no ledger entry, is never evidence).
   // A thread the delta review of the fix left not_resolved or cannot_verify gets no "Fixed" reply.
   const deltaBlocked = new Map();
-  for (const entry of evaluation.incomplete.filter((e) => e.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING)) {
+  for (const entry of evaluation.incomplete.filter((e) => e.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING || e.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED)) {
     const blocked = await findDeltaBlockedFixedReply(
       [{ threadId: entry.threadId, body: `Fixed in commit ${entry.expectedCommit}.`, commit: entry.expectedCommit }],
       { repo: options.repo, pr: options.pr, parsed: initialSnapshot, tmpRoot: path.resolve(repoRoot, tmpRoot) },

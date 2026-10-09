@@ -124,8 +124,9 @@ export async function findDeltaBlockedFixedReply(
       const covers = unresolved ? [true] : await Promise.all(shas.map((sha) => deltaRecordCoversCommit(record, sha, { gitEnv, runChild })));
       if (!covers.includes(true)) continue;
       snapshot ??= await captureParsedReviewThreads({ repo, pr }, { env, ghCommand, runChild });
-      const rootBody = snapshot.comments.find((comment) => comment.threadId === threadId)?.body;
-      const fingerprint = FINDING_MARKER_FP_RE.exec(typeof rootBody === "string" ? rootBody : "")?.[1];
+      // Comments are id-sorted, so the root is not necessarily first: search every comment of the thread.
+      const fingerprint = snapshot.comments.filter((comment) => comment.threadId === threadId)
+        .map((comment) => FINDING_MARKER_FP_RE.exec(typeof comment.body === "string" ? comment.body : "")?.[1]).find(Boolean);
       const item = record.items.find((entry) => BLOCKING_DELTA_STATUSES.includes(entry?.status)
         && [threadId, fingerprint].includes(String(entry.ref).replace(/#\d+$/, "")));
       if (item) return { threadId, status: item.status, recordPath: gateDeltaRecordPath(root, record.reviewBaselineHead) };
