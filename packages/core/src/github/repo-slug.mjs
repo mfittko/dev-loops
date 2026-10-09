@@ -116,6 +116,8 @@ export function detectRepoSlug(cwd) {
   try {
     const url = execFileSync("git", ["remote", "get-url", "origin"], {
       cwd,
+      // An ambient GIT_DIR/GIT_WORK_TREE would override cwd and inspect another checkout.
+      env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined },
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
