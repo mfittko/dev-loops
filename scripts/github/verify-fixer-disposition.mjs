@@ -352,6 +352,9 @@ export async function verifyFixerDisposition(
     });
   }
 
+  const incomplete = evaluation.incomplete.map((entry) => (deltaBlocked.has(entry.threadId)
+    ? { ...entry, failedStep: FIXER_DISPOSITION_FAILED_STEP.DELTA_BLOCKED, deltaStatus: deltaBlocked.get(entry.threadId).status, deltaRecord: deltaBlocked.get(entry.threadId).recordPath }
+    : entry));
   return {
     ok: true,
     repo: options.repo,
@@ -359,14 +362,19 @@ export async function verifyFixerDisposition(
     headSha: options.headSha,
     checkpointPath: logPath,
     complete: evaluation.ok,
-    incomplete: evaluation.incomplete.map((entry) => (deltaBlocked.has(entry.threadId)
-      ? { ...entry, failedStep: FIXER_DISPOSITION_FAILED_STEP.DELTA_BLOCKED, deltaStatus: deltaBlocked.get(entry.threadId).status, deltaRecord: deltaBlocked.get(entry.threadId).recordPath }
-      : entry)),
+    incomplete,
     forbiddenActions: evaluation.forbiddenActions,
     nextAction: evaluation.nextAction,
-    reason: evaluation.reason,
+    reason: deltaBlocked.size > 0 ? deltaBlockedReason(incomplete) : evaluation.reason,
     actions,
   };
+}
+
+// Re-derived from the remapped incomplete list so one output never carries two failedStep values.
+function deltaBlockedReason(incomplete) {
+  const parts = incomplete.map((entry) => `thread ${entry.threadId} (failed step: ${entry.failedStep}${entry.deltaStatus ? `, delta status: ${entry.deltaStatus}` : ""})`);
+  return `Fixer disposition is incomplete for ${incomplete.length} tackled thread(s): ${parts.join("; ")}. `
+    + "A delta_blocked thread is not fixed yet: fix it, re-run the delta review (dev-loops loop pre-push-delta), then re-run this verifier.";
 }
 
 async function main() {

@@ -14,7 +14,7 @@ ADR 0094 added delta mode for fixes of the judge act list and rejected other del
 
 The thread route is a second delta source. The captured set of unresolved review threads (`list-review-threads --unresolved-only` output for the PR) is its caller-independent definition. `check-pre-push-delta.mjs --threads-file` turns each unresolved thread into one act item whose `ref` is the `threadId`. The baseline, `actSetId`, result shape and invocation bound match the act-list route. `resolveDeltaTrigger` takes a thread item count next to the act item count.
 
-`check-pre-push-delta.mjs --result` records its decision at `<tmp-root>/gate-delta/<reviewBaselineHead>.json`. The record is local evidence and never a gate verdict, ledger entry, comment or merge signal.
+`check-pre-push-delta.mjs --result` records its decision at `<tmp-root>/gate-delta/<reviewBaselineHead>.json`. The record is local evidence. No gate verdict, findings ledger, comment or merge signal reads it (PRE-PUSH-DELTA-NOT-GATE-EVIDENCE).
 
 Three consumers read the record.
 

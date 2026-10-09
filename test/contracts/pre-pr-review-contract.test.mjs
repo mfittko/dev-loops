@@ -228,7 +228,7 @@ test("every PR-creating route loads Copilot Loop Operations or the local SKILL",
 // Delta mode: one fresh reviewer between the gate act-list fix commit and its
 // push. The contract owns the rules; the SKILL and fixer only cross-reference.
 const DELTA_RULES = [
-  ["PRE-PUSH-DELTA-TRIGGER", /MUST NOT/, ["act list", "before that fix is pushed", "no act-list fix", "thread route", "unresolved review threads"]],
+  ["PRE-PUSH-DELTA-TRIGGER", /MUST NOT/, ["act list", "before that fix is pushed", "no act-list fix", "thread route", "unresolved review threads", "passed to the `commit_only` emission"]],
   ["PRE-PUSH-DELTA-PINNED-BASELINE", /MUST/, ["reviewBaselineHead..candidateHead", "A..C", "B..C", "new gate round"]],
   ["PRE-PUSH-DELTA-INPUT", /MUST NOT/, ["judge dispositions", "spec identity", "surface hints", "checklist", "diff bytes", "sibling reviewer verdicts", "widenedReads[]"]],
   ["PRE-PUSH-DELTA-RESULT", /MUST/, ["resolved", "not_resolved", "cannot_verify", "widenedReads[]", "{ path, reason }", "missing or unknown status"]],
@@ -278,7 +278,7 @@ test("delta mode states the decision record, the full-phase refusal and the fixe
 test("the Copilot follow-up skill emits commit_only, runs the thread-route delta review, then emits full", () => {
   const skill = readRepo("skills/copilot-pr-followup/SKILL.md");
   const line = skill.split("\n").find((l) => l.includes("--phase commit_only --threads-file")) ?? "";
-  for (const text of ["check-pre-push-delta.mjs --threads-file", "`--result` run", "`PRE-PUSH-DELTA-TRIGGER`", "`--phase full`"]) {
+  for (const text of ["check-pre-push-delta.mjs --threads-file", "--baseline <headRefOid> --spec-identity <id>", "--baseline <headRefOid> --result <path> --invocation <1-3>", "`--result` run", "`PRE-PUSH-DELTA-TRIGGER`", "`--phase full`"]) {
     assert.ok(line.includes(text), `follow-up skill must state: ${text}`);
   }
   assert.doesNotMatch(skill, /--phase full --threads-file/);

@@ -587,6 +587,8 @@ test("an abbreviated fixingCommitSha resolving to a commit a not_resolved record
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
     assert.equal(result.complete, false);
     assert.deepEqual(result.incomplete.map((entry) => [entry.threadId, entry.failedStep, entry.deltaStatus]), [["PRRT_T1", "delta_blocked", "not_resolved"]]);
+    assert.doesNotMatch(result.reason, /reply_missing/);
+    assert.match(result.reason, /delta_blocked[^]*fix it, re-run the delta review/);
     assert.equal(hasPost(calls), false);
   });
 });

@@ -172,8 +172,11 @@ test("delta gate: the decided nextStep in the record clears, whatever outcome th
     await writeFile(files.delta, JSON.stringify(deltaResultFor(head, { outcome: "needs_fix" })));
     await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", invocation: 3 });
     assert.equal((await emit({ deltaResult: files.delta })).workOrder.phase, "full");
-    // A record for another candidate does not clear this result.
+    // A stale invocation-3 result (record candidateHead = worktree HEAD, differing from the result's) still clears.
     await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", invocation: 3, candidateHead: "d".repeat(40) });
+    assert.equal((await emit({ deltaResult: files.delta })).workOrder.phase, "full");
+    // A record for another act set does not clear this result.
+    await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", invocation: 3, actSetId: "other" });
     await assert.rejects(emit({ deltaResult: files.delta }), (err) => err.message.includes(recordPath) && /commit_only/.test(err.message));
     await rm(recordPath);
     await assert.rejects(emit({ deltaResult: files.delta }), (err) => err.message.includes(recordPath) && /commit_only/.test(err.message));
@@ -880,6 +883,27 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
     assert.equal(workOrder.handbackCheck, `dev-loops loop pre-push-delta --act-list ${JSON.stringify(files.actList)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
     const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(threads.workOrder.siteCoverage, undefined);
+  });
+});
+
+test("a --phase full act-list order carries the same siteCoverage skeleton as commit_only", async () => {
+  await withFixture(async ({ emit }) => {
+    const full = await emit({ phase: "full" });
+    const commitOnly = await emit({ phase: "commit_only", deltaResult: undefined });
+    assert.equal(full.workOrder.siteCoverage.length, 1);
+    assert.deepEqual(full.workOrder.siteCoverage, commitOnly.workOrder.siteCoverage);
+    assert.equal(full.workOrder.handbackCheck, undefined);
+    assert.match(await readFile(full.promptPath, "utf8"), /starting from the `siteCoverage` skeleton/);
+  });
+});
+
+test("handbackCheck is machine-local: two commit_only emissions with different executions share a digest", async () => {
+  await withFixture(async ({ files, emit }) => {
+    await writeFile(files.actList, JSON.stringify(SKELETON_ACT));
+    const a = await emit({ phase: "commit_only", deltaResult: undefined });
+    const b = await emit({ phase: "commit_only", deltaResult: undefined });
+    assert.notEqual(a.workOrder.handbackCheck, b.workOrder.handbackCheck);
+    assert.equal(a.workOrderDigest, b.workOrderDigest);
   });
 });
 
