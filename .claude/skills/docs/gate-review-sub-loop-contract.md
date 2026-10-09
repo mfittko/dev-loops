@@ -559,7 +559,7 @@ sit outside the verifiers' flat live scans; divergent prefix hashes and invalid
 live dispatch bindings still fail closed. Retirement does not weaken verification
 or authorize reuse of retired reviewer evidence.
 
-After a retirement that archived dispatch records for a gate and full head, `consolidate-fanin.mjs` for that gate and head requires `--emit-plan` and at least one fresh dispatch record. It refuses plan units whose execution identity appears in the archived records. It looks up the archive by the full head and filters by gate from the file names before parsing any record. A short head fails closed when any retirement audit exists.
+After a retirement that archived dispatch records for a gate and full head, `consolidate-fanin.mjs` for that gate and head requires `--emit-plan` and at least one fresh dispatch record. It refuses plan units whose execution identity appears in the archived records. It looks up the archive by the full head and filters by gate from the file names before parsing any record. A short head fails closed when a retirement audit exists for a head it prefixes. The requirement keys on the presence of an archived dispatch record file for the gate, parseable or not, and counts fresh records for that gate only. A fan-in without `--gate` at a head with archived dispatch records is refused.
 
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 

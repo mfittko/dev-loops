@@ -15,6 +15,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { buildGateEmitPlanPath, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { retireGateRound } from "../../scripts/github/retire-gate-round.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
@@ -4555,5 +4556,23 @@ test("#2709 AC5: another gate's archive or another head's archive does not affec
 
 test("#2709 AC5: a short head is refused when retirement audits exist", async () => {
   const { error } = await retiredHeadFanin(archiveDraft("r1-ab-u0"), { head: HEAD_A.slice(0, 12) });
-  assert.match(error?.message ?? "", /not a full 40\/64-character SHA|headSha/);
+  assert.match(error?.message ?? "", /not a full 40\/64-character SHA and retired gate rounds exist/);
+});
+
+test("#2709 AC5: a real retireGateRound archive refuses fan-in without a fresh --emit-plan", async () => {
+  const { error } = await retiredHeadFanin(async (tmpRoot) => {
+    const bytes = "## Invariant prefix\nrepo: o/r\n";
+    await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, { prefixPath: path.join(tmpRoot, "p.txt"), leading: bytes });
+    await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "test retirement", noFindingsArtifacts: true, tmpRoot });
+  });
+  assert.match(error?.message ?? "", /retired with archived dispatch records.*fresh --emit-plan/);
+});
+
+test("#2709 AC5: an archived malformed record still triggers the retired-head requirement", async () => {
+  const { error } = await retiredHeadFanin(async (tmpRoot) => {
+    const dir = path.join(tmpRoot, "retired-gate-rounds", HEAD_A, "round-1");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD_A}.json`), "{ malformed");
+  });
+  assert.match(error?.message ?? "", /retired with archived dispatch records.*fresh --emit-plan/);
 });

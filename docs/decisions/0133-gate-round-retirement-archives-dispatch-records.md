@@ -12,7 +12,7 @@ Accepted — 2026-10-09 ([issue 2709](https://github.com/mfittko/dev-loops/issue
 
 - Gate-round retirement archives the round's dispatch-prompt records together with its sentinels and findings. The archive keeps the original bytes. `retirement.json` lists the archived records as `dispatchPromptRecords`.
 - After such a retirement, fan-in for that exact gate and full head requires `--emit-plan` and at least one fresh dispatch record. Fan-in refuses a plan unit whose execution appears in the archive.
-- Fan-in refuses a short head when retired rounds exist.
+- Fan-in refuses a short head when a retirement audit exists for a head it prefixes.
 
 Rejected: an inventory, digest, symlink or alias layer over the archive (machinery with no consumer).
 
