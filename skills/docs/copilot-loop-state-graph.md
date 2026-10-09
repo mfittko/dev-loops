@@ -55,7 +55,7 @@ Terminal states with no outgoing transitions: `no_pr`, `review_request_unavailab
 - `ready_to_rerequest_review` -> `review_request_unavailable`
   - re-request failed with unavailable
 - `ready_to_rerequest_review` -> `done`
-  - agent decides the Copilot sub-loop is complete; an open PR then consults fresh gate coordination
+  - agent decides the Copilot sub-loop is complete; an open PR reports this as `loopDisposition`, not canonical `done`
 - `waiting_for_ci` -> `pr_ready_no_feedback`
   - CI passed; no review yet
 - `waiting_for_ci` -> `ready_to_rerequest_review`

@@ -73,19 +73,7 @@ Actions:
   watch   Copilot review was requested; use watchArgs with probe-copilot-review.mjs
   fix     Unresolved feedback exists; address it before re-requesting review
   stop    No automatic Copilot-sub-loop step; not necessarily a blocked or completed PR lifecycle
-Stop interpretation (in order):
-  Honor user/envelope stops and harness/classifier, ADR/size, blocked or
-  reconciliation refusals first. terminal=true alone is not permission.
-  Closed/merged PRs or canonical state=done report completion; do not enter gates.
-  For an open PR, loopDisposition=direct_gate (emitted with action=fix, terminal=false), or terminal=true
-  with loopDisposition=done or clean_converged,
-  ends only the Copilot sub-loop. Consult fresh loop gate-coordination for the
-  same PR/current head; its nextAction, allowedNextActions and forbiddenActions supersede any pre_approval_gate hint in this output.
-  Do not require roundCapCleanEligible, request another round merely because
-  Copilot stopped, infer pre-approval permission, or merge implicitly.
-  The pr_draft stop permits this consultation only with fresh canonical startup
-  draftStart for the same PR. All other stops remain stops; other nonterminal watch/fix
-  outcomes stay under their owning strategy, not later gates.
+Stop interpretation: see "Interpreting Copilot completion versus PR lifecycle completion" in skills/docs/copilot-loop-state-graph.md. A clean terminal or direct_gate open PR consults fresh loop gate-coordination, whose nextAction supersedes any pre_approval_gate hint here.
 suppressedPostConvergenceDocsOnly:
   Present (true) only when strict mode found the post-convergence head bump, at or
   below the round cap, to be a provable pure doc/prose or integrate-only delta, so
