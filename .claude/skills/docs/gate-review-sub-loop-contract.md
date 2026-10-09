@@ -559,6 +559,8 @@ sit outside the verifiers' flat live scans; divergent prefix hashes and invalid
 live dispatch bindings still fail closed. Retirement does not weaken verification
 or authorize reuse of retired reviewer evidence.
 
+After a retirement that archived dispatch records for a gate and full head, `consolidate-fanin.mjs` for that gate and head requires `--emit-plan` and at least one fresh dispatch record. It refuses plan units whose execution identity appears in the archived records. It looks up the archive by the full head and filters by gate from the file names before parsing any record. A short head fails closed when any retirement audit exists.
+
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 
 `consolidate-fanin.mjs --head-sha <sha>` runs the prefix and emitted-prompt layout checks before consolidation. Missing/divergent hashes, insufficient reviewer sentinels, or a recorded prompt that does not match its inline-aligned emitted unit fail closed; stop the pass on failure. The checks and their limits are owned by `GATE-EXEC-BRIEFING-PREFIX` above.

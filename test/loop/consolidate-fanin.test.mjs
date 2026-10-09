@@ -4492,3 +4492,68 @@ test("issue 2511: a mixed-unit carry round-trips through consolidateGateFanin an
     );
   });
 });
+
+// Retired dispatch records (#2709 AC 5): fan-in at a retired gate+head needs a fresh emission.
+async function archiveDispatchRecord(tmpRoot, head, file, executionIdentity) {
+  const dir = path.join(tmpRoot, "retired-gate-rounds", head, "round-1");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, file), JSON.stringify({ compactReference: { executionIdentity } }));
+}
+
+async function retiredHeadFanin(archive, { fresh = false, planIdentity = "r1-ab-u0", head = HEAD_A, gate = "draft_gate" } = {}) {
+  let outcome;
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: head } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-retired-"));
+      try {
+        await archive(tmpRoot);
+        const options = { findingsDir: dir, headSha: head, tmpRoot, gate };
+        if (fresh) {
+          const bytes = "## Invariant prefix\nrepo: o/r\n";
+          await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, bytes);
+          const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `draft_gate-${HEAD_A}.briefing-prefix.txt`);
+          await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, { prefixPath, leading: `${bytes}## Angle: coverage\nGo.` });
+          const unit = { ...matchingEmitPlan().units[0], scope: "draft-gate-coverage", executionIdentity: planIdentity, workOrderRef: `review:o/r#1:draft_gate:${HEAD_A}:draft-gate-coverage` };
+          await writeEmitPlanReceipt(tmpRoot, unit);
+          options.emitPlan = await writeEmitPlan(tmpRoot, { ...matchingEmitPlan(), gate: "draft_gate", headSha: HEAD_A, units: [unit] });
+          options.receiptTmpRoot = tmpRoot;
+        }
+        outcome = await consolidateGateFanin(options).then((value) => ({ value }), (error) => ({ error }));
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+  return outcome;
+}
+
+const archiveDraft = (identity) => (tmpRoot) => archiveDispatchRecord(tmpRoot, HEAD_A, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD_A}.json`, identity);
+
+test("#2709 AC5: a retired head with archived dispatch records and no fresh records or plan is refused", async () => {
+  const { error } = await retiredHeadFanin(archiveDraft("r1-ab-u0"));
+  assert.match(error?.message ?? "", /retired with archived dispatch records.*fresh --emit-plan/);
+});
+
+test("#2709 AC5: a fresh emission with fresh records passes at a retired head", async () => {
+  const { value, error } = await retiredHeadFanin(archiveDraft("r0-old-u0"), { fresh: true });
+  assert.equal(error, undefined);
+  assert.equal(value.overallVerdict, "clean");
+});
+
+test("#2709 AC5: a plan unit whose execution is in the archive is refused", async () => {
+  const { error } = await retiredHeadFanin(archiveDraft("r1-ab-u0"), { fresh: true });
+  assert.match(error?.message ?? "", /reuses execution r1-ab-u0 from a retired round/);
+});
+
+test("#2709 AC5: another gate's archive or another head's archive does not affect fan-in", async () => {
+  const otherGate = await retiredHeadFanin((t) => archiveDispatchRecord(t, HEAD_A, `checkpoint-dispatch-prompt-review-coverage-${HEAD_A}.json`, "r1-ab-u0"));
+  assert.equal(otherGate.value?.overallVerdict, "clean");
+  const otherHead = await retiredHeadFanin((t) => archiveDispatchRecord(t, "c3".repeat(20), `checkpoint-dispatch-prompt-draft-gate-coverage-${"c3".repeat(20)}.json`, "r1-ab-u0"));
+  assert.equal(otherHead.value?.overallVerdict, "clean");
+});
+
+test("#2709 AC5: a short head is refused when retirement audits exist", async () => {
+  const { error } = await retiredHeadFanin(archiveDraft("r1-ab-u0"), { head: HEAD_A.slice(0, 12) });
+  assert.match(error?.message ?? "", /not a full 40\/64-character SHA|headSha/);
+});

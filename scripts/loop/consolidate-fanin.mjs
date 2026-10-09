@@ -45,7 +45,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { GATE_NAMES } from "../github/_gate-names.mjs";
+import { GATE_NAMES, gateScopePrefix } from "../github/_gate-names.mjs";
 import { lintFillerPhrases } from "../github/_gate-finding-text.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof } from "../github/_carried-angles.mjs";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -928,6 +928,28 @@ export async function detectMisplacedFindingsDiagnostic(findingsDir, repoRoot) {
   return ` — MISPLACED FINDINGS: ${stray.length} findings artifact(s) were found in the PRIMARY checkout at ${primaryFindingsDir} (${stray.sort().join(", ")}), not in this worktree's --findings-dir. A reviewer wrote findings to the primary checkout's tmp/ instead of this worktree's (${path.resolve(resolvedRepoRoot, findingsDir)}). Reviewer briefings pin the worktree-absolute findings dir; re-dispatch the reviewer(s) or move these artifacts into the worktree --findings-dir.`;
 }
 
+// Execution identities in the dispatch records `retire-gate-round.mjs` archived for this gate and
+// full head. Filters by gate from the file names before parsing; a short head fails closed when
+// any retirement audit exists, since the exact-path lookup cannot match it.
+async function readRetiredDispatchExecutions(tmpRoot, gate, headSha) {
+  const root = path.join(tmpRoot, "retired-gate-rounds");
+  const ls = (dir) => readdir(dir, { withFileTypes: true }).catch(() => []);
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha) && (await ls(root)).some((e) => e.name.startsWith(headSha))) {
+    throw new Error(`head ${headSha} is not a full 40/64-character SHA and retired gate rounds exist under ${root}; pass the full head so the retired dispatch records can be checked (fail-closed)`);
+  }
+  const prefix = `checkpoint-dispatch-prompt-${gateScopePrefix(gate)}`;
+  const identities = new Set();
+  for (const round of (await ls(path.join(root, headSha))).filter((e) => e.isDirectory() && e.name.startsWith("round-"))) {
+    for (const file of (await ls(path.join(root, headSha, round.name))).filter((e) => e.isFile() && e.name.startsWith(prefix))) {
+      try {
+        const id = JSON.parse(await readFile(path.join(root, headSha, round.name, file.name), "utf8"))?.compactReference?.executionIdentity;
+        if (typeof id === "string") identities.add(id);
+      } catch { /* ponytail: an unparseable archived record carries no identity to refuse */ }
+    }
+  }
+  return identities;
+}
+
 export async function consolidateGateFanin(options) {
   // Re-normalize/validate headSha here, not only in the CLI parser: a direct
   // programmatic caller bypasses parseConsolidateFaninCliArgs, and an
@@ -1127,6 +1149,13 @@ export async function consolidateGateFanin(options) {
     // a fan-out round; it must pass --emit-plan so every unit's pull receipt is checked
     // (ADR 0106). Disk evidence, never a conductor-typed flag, decides this.
     if (emitPlan === undefined && layoutVerdict.recordCount > 0) throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: head ${options.headSha} has ${layoutVerdict.recordCount} dispatch-prompt record(s) but no --emit-plan, so fan-in cannot require a pull receipt for every freshly dispatched unit; pass emit-fanout-dispatch.mjs's emit plan (fail-closed)`);
+    // A retired head must be re-fanned-out: fresh records and plan, never a retired execution.
+    const retired = typeof options.gate === "string" ? await readRetiredDispatchExecutions(tmpRoot, options.gate.trim().toLowerCase(), options.headSha) : new Set();
+    if (retired.size > 0) {
+      if (emitPlan === undefined || layoutVerdict.recordCount === 0) throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: head ${options.headSha} was retired with archived dispatch records, so fan-in needs a fresh --emit-plan and fresh dispatch records (fail-closed)`);
+      const stale = (emitPlan.units ?? []).find((u) => retired.has(u.executionIdentity));
+      if (stale) throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: unit ${stale.scope} reuses execution ${stale.executionIdentity} from a retired round's archived dispatch records; re-dispatch it (fail-closed)`);
+    }
   }
 
   // GATE-EXEC-CACHE-TELEMETRY: enforces the before/after cache-telemetry
