@@ -749,6 +749,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — the work order for unit ${JSON.stringify(unit.name)} (scope ${scope}) carries inline diff text (a "diff --git" line); reference the diff through requiredReads instead` }, false);
     }
     const workOrder = {
+      executionIdentity: `${roundId}-u${emitted.length}`,
       role: "review",
       target: { repo, pr },
       operation: "gate",
@@ -766,7 +767,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const identity = {
       workOrderRef: `review:${repo}#${pr}:${gate}:${headSha}:${scope}`,
       workOrderDigest: workOrderDigest(workOrder),
-      executionIdentity: `${roundId}-u${emitted.length}`,
+      executionIdentity: workOrder.executionIdentity,
     };
     // An over-cap envelope or unreadable record throws to the CLI wrapper (exit 2).
     const dispatchPrompt = buildDispatchPointer(identity);

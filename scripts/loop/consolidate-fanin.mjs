@@ -52,7 +52,8 @@ import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guar
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
-import { pullReceiptPath, verifyPullReceipt, verifyPulledResult } from "../github/_work-order-protocol.mjs";
+import { EXECUTION_IDENTITY_RE, REVIEW_REF_RE, materializationHash, resolveExecutionIndex, verifyPullReceipt, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { buildGateEmitPlanPath } from "../github/write-gate-context.mjs";
 import { resolveGateArtifactTmpRoot, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
@@ -508,7 +509,7 @@ async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAng
 // a pull receipt for its own execution/unit/digest, and a pulled unit without a
 // result for each of its angles is an interrupted reviewer, never complete.
 // Carried angles are not plan units, so their carry proof stays the authority.
-async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot, dispatchRetiredAt) {
+async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot) {
   for (const unit of Array.isArray(plan?.units) ? plan.units : []) {
     if (typeof unit?.workOrderRef !== "string") {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: emit-plan unit ${JSON.stringify(unit?.scope)} carries no compact work-order reference; re-emit the round with emit-fanout-dispatch.mjs (fail-closed)`);
@@ -516,14 +517,6 @@ async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot, di
     const check = await verifyPullReceipt({ receiptTmpRoot, role: "review", ...unit });
     if (!check.ok) {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: incomplete delivery evidence for unit ${unit.scope}: ${check.reason} (expected a pull receipt for execution ${unit.executionIdentity}, digest ${unit.workOrderDigest}) under ${receiptTmpRoot}; re-dispatch the unit with its compact reference (fail-closed)`);
-    }
-    if (dispatchRetiredAt !== undefined) {
-      const receiptStats = await stat(pullReceiptPath(receiptTmpRoot, unit.workOrderRef));
-      // Both sides use filesystem time; equality is valid on coarse filesystems.
-      // Retired executions are independently excluded by verifyRetiredRoundDispatch.
-      if (receiptStats.mtimeMs < dispatchRetiredAt) {
-        throw new Error(`GATE-EXEC-ROUND-RETIREMENT: pull receipt for ${unit.scope} predates retirement; freshly redispatch this unit (fail-closed)`);
-      }
     }
     // A result older than this execution's pull is a stale prior-round file (verifyPulledResult).
     const missing = (await Promise.all((unit.angles ?? []).map(async (angle) => (resultAngles.has(angle)
@@ -557,9 +550,28 @@ async function readDispatchRetirements(tmpRoot, headSha) {
     const audit = JSON.parse(text);
     if (audit?.headSha !== headSha || !GATE_NAMES.includes(audit.gate)
         || !Array.isArray(audit.dispatchPromptRecords) || audit.dispatchPromptRecords.length === 0) continue;
-    const auditTime = (await stat(auditPath)).mtimeMs;
-    const retirement = retirements.get(audit.gate) ?? { filesystemTime: -Infinity, executions: new Set() };
-    retirement.filesystemTime = Math.max(retirement.filesystemTime, auditTime);
+    const inventory = audit.emittedExecutionInventory;
+    // Under serial ownership, a complete pre-move inventory plus the immutable
+    // canonical index proves new registration without comparing filesystem clocks.
+    // Delivery must separately bind that execution inside the semantic digest.
+    if (!Array.isArray(inventory?.executions) || inventory.count !== inventory.executions.length) {
+      throw new Error(`GATE-EXEC-ROUND-RETIREMENT: missing or incomplete canonical execution inventory in ${auditPath}`);
+    }
+    const retirement = retirements.get(audit.gate) ?? { executions: new Set() };
+    const seen = new Set();
+    for (const entry of inventory.executions) {
+      const key = REVIEW_REF_RE.exec(entry?.workOrderRef);
+      if (key === null || key[3] !== audit.gate || key[4] !== headSha
+          || !EXECUTION_IDENTITY_RE.test(entry?.executionIdentity) || !entry.executionIdentity.startsWith("r") || seen.has(entry.executionIdentity)) {
+        throw new Error(`GATE-EXEC-ROUND-RETIREMENT: invalid canonical execution inventory in ${auditPath}`);
+      }
+      const index = await resolveExecutionIndex(entry.executionIdentity, [tmpRoot]);
+      if (index.workOrderRef !== entry.workOrderRef || index.workOrderDigest !== entry.workOrderDigest) {
+        throw new Error(`GATE-EXEC-ROUND-RETIREMENT: captured execution binding changed in ${auditPath}`);
+      }
+      seen.add(entry.executionIdentity);
+      retirement.executions.add(entry.executionIdentity);
+    }
     for (const name of audit.dispatchPromptRecords) {
       if (typeof name !== "string" || path.basename(name) !== name) {
         throw new Error(`GATE-EXEC-ROUND-RETIREMENT: invalid archived dispatch-record name in ${auditPath}`);
@@ -596,21 +608,16 @@ async function verifyRetiredRoundDispatch(options, plan) {
   const gate = options.gate.trim().toLowerCase();
   const retirement = retirements.get(gate);
   if (retirement === undefined) return; // The other gate's live round is untouched.
-  const dispatchRetiredAt = retirement.filesystemTime;
   if (plan === undefined) fail(`gate ${gate} at head ${options.headSha} requires a fresh keyed --emit-plan after retirement`);
-  const planStats = await stat(options.emitPlan);
-  // Same-filesystem ordering tolerates timestamp buckets and wall-clock skew.
-  // It is not sufficient alone: every execution must also be absent from the
-  // archived records, so rewriting/retouching retired evidence cannot renew it.
-  if (planStats.mtimeMs < dispatchRetiredAt) {
-    fail("--emit-plan predates retirement; re-emit the rebuilt round");
-  }
   const units = plan.units;
   if (!Array.isArray(units) || units.length === 0 || plan.count !== units.length) {
     fail("--emit-plan must name a non-empty fresh unit set with a matching count");
   }
   if (options.expectedDispatchUnits !== undefined && options.expectedDispatchUnits !== units.length) {
     fail(`emit-plan unit count (${units.length}) differs from expected dispatch-unit count (${options.expectedDispatchUnits})`);
+  }
+  if (path.resolve(options.emitPlan) !== path.resolve(buildGateEmitPlanPath({ repo: plan.repo, pr: plan.pr, gate, headSha: options.headSha, tmpRoot }))) {
+    fail("--emit-plan must be the current canonical keyed emission");
   }
   const scopePrefix = gateScopePrefix(gate);
   const unitScopes = new Set();
@@ -622,6 +629,15 @@ async function verifyRetiredRoundDispatch(options, plan) {
     if (retirement.executions.has(unit.executionIdentity)) {
       fail(`execution ${unit.executionIdentity} for ${unit.scope} was retired; re-emit the rebuilt round`);
     }
+    if (!EXECUTION_IDENTITY_RE.test(unit.executionIdentity) || !unit.executionIdentity.startsWith("r")
+        || unit.workOrder?.role !== "review" || unit.workOrder.executionIdentity !== unit.executionIdentity
+        || unit.workOrder.target?.repo !== plan.repo || Number(unit.workOrder.target?.pr) !== Number(plan.pr)
+        || unit.workOrder.roundIdentity?.gate !== gate || unit.workOrder.roundIdentity?.headSha !== options.headSha
+        || workOrderDigest(unit.workOrder) !== unit.workOrderDigest) fail(`unit ${unit.scope} does not bind its semantic execution identity`);
+    const index = await resolveExecutionIndex(unit.executionIdentity, [tmpRoot]);
+    if (index.workOrderRef !== `review:${plan.repo}#${plan.pr}:${gate}:${options.headSha}:${unit.scope}`
+        || index.workOrderRef !== unit.workOrderRef || index.workOrderDigest !== unit.workOrderDigest) fail(`unit ${unit.scope} does not bind its canonical execution index`);
+    if (materializationHash(await readFile(unit.promptPath, "utf8")) !== unit.materializationHash) fail(`unit ${unit.scope} original materialization changed`);
   }
   const recordPrefix = "checkpoint-dispatch-prompt-";
   const suffix = `-${options.headSha}.json`;
@@ -633,17 +649,12 @@ async function verifyRetiredRoundDispatch(options, plan) {
   }
   for (const unit of units) {
     const recordPath = path.join(tmpRoot, `${recordPrefix}${unit.scope}${suffix}`);
-    const recordStats = await stat(recordPath);
-    if (recordStats.mtimeMs < dispatchRetiredAt) {
-      fail(`dispatch-prompt record for ${unit.scope} predates retirement`);
-    }
     const record = JSON.parse(await readFile(recordPath, "utf8"));
     if (["workOrderRef", "workOrderDigest", "executionIdentity"].some((key) =>
       typeof unit[key] !== "string" || record?.compactReference?.[key] !== unit[key])) {
       fail(`dispatch-prompt record for ${unit.scope} does not bind the fresh emit-plan unit's compact reference`);
     }
   }
-  return dispatchRetiredAt;
 }
 
 export function parseConsolidateFaninCliArgs(argv) {
@@ -1079,7 +1090,7 @@ export async function consolidateGateFanin(options) {
     // programmatic path, whose legacy pass-through behavior is preserved.
     options = { ...options, gate: options.gate.trim().toLowerCase() };
   }
-  const dispatchRetiredAt = await verifyRetiredRoundDispatch(options, emitPlan);
+  await verifyRetiredRoundDispatch(options, emitPlan);
   const dir = options.findingsDir;
   let entries;
   try {
@@ -1194,7 +1205,7 @@ export async function consolidateGateFanin(options) {
   if (emitPlan !== undefined) {
     // Receipts live under the MAIN checkout's tmp root (pull-work-order.mjs).
     const receiptTmpRoot = options.receiptTmpRoot ?? resolveGateArtifactTmpRoot(path.dirname(path.resolve(options.tmpRoot ?? path.join(process.cwd(), "tmp"))));
-    await verifyUnitDeliveryReceipts(emitPlan, angleSourceFiles, receiptTmpRoot, dispatchRetiredAt);
+    await verifyUnitDeliveryReceipts(emitPlan, angleSourceFiles, receiptTmpRoot);
   }
 
   // GATE-EXEC-BRIEFING-PREFIX: the fan-in runs verify-briefing-prefixes.mjs

@@ -5,7 +5,7 @@ import { mkdir, open, readFile, readdir, realpath, rm, stat, utimes, writeFile }
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
-import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
+import { pullReceiptPath, workOrderDigest } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
 import { parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
 import { withTempDir } from "./_helpers.mjs";
@@ -23,9 +23,11 @@ function fakeClock() {
 }
 
 function unitFixture(root, scope, angles, index) {
-  const identity = { workOrderRef: `review:o/r#7:${GATE}:${HEAD}:${scope}`, workOrderDigest: `sha256:${scope}`, executionIdentity: `r1-u${index}` };
+  const executionIdentity = `r1-abcdef12-u${index}`;
   const outputRefs = angles.map((angle) => path.join(root, "tmp", "findings", `${angle}.json`));
-  return { unit: { scope, angles, ...identity, workOrder: { outputRefs } }, identity, outputRefs };
+  const workOrder = { role: "review", executionIdentity, outputRefs };
+  const identity = { workOrderRef: `review:o/r#7:${GATE}:${HEAD}:${scope}`, workOrderDigest: workOrderDigest(workOrder), executionIdentity, materializationHash: "sha256:fixture" };
+  return { unit: { scope, angles, ...identity, workOrder }, identity, outputRefs };
 }
 
 async function seedReceipt(root, identity, role = "review", seconds = 100) {
@@ -113,7 +115,7 @@ test("grouped unit: partial until every covered angle has a post-pull result", a
     const partial = await run(root, planPath);
     assert.equal(partial.outcome, "timeout");
     assert.equal(partial.unitCount, 1);
-    assert.deepEqual(partial.missing, [{ scope: "group-1", executionIdentity: "r1-u0", state: "partial", missingAngles: ["c"] }]);
+    assert.deepEqual(partial.missing, [{ scope: "group-1", executionIdentity: identity.executionIdentity, state: "partial", missingAngles: ["c"] }]);
     await seedResult(outputRefs[2]);
     const done = await run(root, planPath);
     assert.equal(done.outcome, "all_done");

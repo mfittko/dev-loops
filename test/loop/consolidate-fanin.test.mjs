@@ -22,7 +22,7 @@ import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-
 import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, renderBriefingPointerLine, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
-import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
+import { executionIndexPath, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { retireGateRound } from "../../scripts/github/retire-gate-round.mjs";
 import { writeJson } from "@dev-loops/core/loop/phase-files";
 import { runNode, withTempDir } from "../_helpers.mjs";
@@ -1039,6 +1039,11 @@ async function writeEmitPlan(dir, plan, filename = "emit-plan.json") {
   return planPath;
 }
 
+function bindReviewUnit(unit, { gate = "review", headSha = EMIT_HEAD } = {}) {
+  const workOrder = { role: "review", executionIdentity: unit.executionIdentity, target: { repo: "o/r", pr: 7 }, roundIdentity: { gate, headSha }, assignedAngles: unit.angles };
+  return { ...unit, workOrder, workOrderDigest: workOrderDigest(workOrder), materializationHash: unit.materializationHash ?? "sha256:fixture" };
+}
+
 function matchingEmitPlan() {
   return {
     ok: true,
@@ -1048,10 +1053,11 @@ function matchingEmitPlan() {
     pr: "7",
     count: 1,
     maxConcurrent: 4,
-    units: [{
+    roundId: "r1-000000ab",
+    units: [bindReviewUnit({
       scope: "review-coverage", angles: ["coverage"], group: null, promptPath: "tmp/x",
-      workOrderRef: `review:o/r#7:review:${EMIT_HEAD}:review-coverage`, workOrderDigest: "sha256:d", executionIdentity: "r1-ab-u0",
-    }],
+      workOrderRef: `review:o/r#7:review:${EMIT_HEAD}:review-coverage`, executionIdentity: "r1-000000ab-u0",
+    })],
   };
 }
 
@@ -1062,7 +1068,7 @@ async function writeEmitPlanReceipt(receiptTmpRoot, unit = matchingEmitPlan().un
   const { workOrderRef, workOrderDigest, executionIdentity } = receipt;
   const pulledAt = new Date(Date.now() - 60_000);
   const receiptPath = pullReceiptPath(receiptTmpRoot, unit.workOrderRef);
-  await writeJson(receiptPath, { role: "review", workOrderRef, workOrderDigest, executionIdentity, pulledAt: pulledAt.toISOString() });
+  await writeJson(receiptPath, { role: "review", workOrderRef, workOrderDigest, executionIdentity, materializationHash: receipt.materializationHash, pulledAt: pulledAt.toISOString() });
   await utimes(receiptPath, pulledAt, pulledAt);
 }
 
@@ -1152,7 +1158,7 @@ test("consolidateGateFanin classifies a matching receipt without a post-pull res
   await withFindingsDir({ "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD }, "docs.json": { angle: "docs", verdict: "clean", findings: [], headSha: EMIT_HEAD } }, (dir) => withTempDir(async (planDir) => {
     await utimes(path.join(dir, "docs.json"), new Date(0), new Date(0));
     const plan = matchingEmitPlan();
-    const docsUnit = { ...plan.units[0], scope: "review-docs", angles: ["docs"], workOrderRef: `review:o/r#7:review:${EMIT_HEAD}:review-docs`, executionIdentity: "r1-ab-u1" };
+    const docsUnit = bindReviewUnit({ ...plan.units[0], scope: "review-docs", angles: ["docs"], workOrderRef: `review:o/r#7:review:${EMIT_HEAD}:review-docs`, executionIdentity: "r1-000000ab-u1" });
     plan.units.push(docsUnit);
     const planPath = await writeEmitPlan(planDir, plan);
     await writeEmitPlanReceipt(planDir);
@@ -4181,18 +4187,29 @@ async function withRebuiltRetiredRound(fn) {
     await mkdir(findingsDir);
     await writePrefixSentinel(tmpRoot, "draft-gate-correctness", HEAD_A, "a".repeat(64));
     await writeGateBriefingRecord(tmpRoot, gate, HEAD_A, "old prefix\n");
-    const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `${gate}-${HEAD_A}.briefing-prefix.txt`);
+    const contextDir = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646");
+    const prefixPath = path.join(contextDir, `${gate}-${HEAD_A}.briefing-prefix.txt`);
     await writeDispatchPromptRecord(tmpRoot, "draft-gate-correctness", HEAD_A, { prefixPath, leading: "old prefix\nold unit\n" });
+    const oldUnit = bindReviewUnit({ ...matchingEmitPlan().units[0], scope: "draft-gate-correctness", angles: ["correctness"], workOrderRef: `review:o/r#7:${gate}:${HEAD_A}:draft-gate-correctness`, promptPath: path.join(contextDir, `${gate}-${HEAD_A}.dispatch-prompt-draft-gate-correctness.txt`), materializationHash: sha256Hex("old prefix\nold unit\n") }, { gate, headSha: HEAD_A });
+    const oldPlan = { ...matchingEmitPlan(), gate, headSha: HEAD_A, units: [oldUnit] };
+    const emitPlan = buildGateEmitPlanPath({ repo: "o/r", pr: 7, gate, headSha: HEAD_A, tmpRoot });
+    await mkdir(path.dirname(emitPlan), { recursive: true });
+    await writeJson(emitPlan, oldPlan);
+    await writeExecutionIndex(tmpRoot, oldUnit);
+    const oldRecordPath = dispatchPromptLayoutRecordPath(tmpRoot, oldUnit.scope, HEAD_A);
+    const oldRecord = JSON.parse(await readFile(oldRecordPath, "utf8"));
+    oldRecord.compactReference = { workOrderRef: oldUnit.workOrderRef, workOrderDigest: oldUnit.workOrderDigest, executionIdentity: oldUnit.executionIdentity };
+    await writeJson(oldRecordPath, oldRecord);
     const retired = await retireGateRound({ gate, headSha: HEAD_A, reason: "new prefix and grouped layout", findingsDir, tmpRoot });
     const auditPath = path.join(retired.retirementDir, "retirement.json");
     const audit = JSON.parse(await readFile(auditPath, "utf8"));
     const afterRetirement = new Date(Date.parse(audit.retiredAt) + 1000);
     const beforeRetirement = new Date(Date.parse(audit.retiredAt) - 1000);
     const scope = "draft-gate-group-correctness-input";
-    const unit = { ...matchingEmitPlan().units[0], scope, angles: ["correctness", "input-validation"], workOrderRef: `review:o/r#1:${gate}:${HEAD_A}:${scope}`, executionIdentity: "r2-cd-u0" };
-    const plan = { ...matchingEmitPlan(), gate, headSha: HEAD_A, units: [unit] };
-    const emitPlan = await writeEmitPlan(tmpRoot, plan, `${gate}-${HEAD_A}.emit-plan.json`);
-    await utimes(emitPlan, afterRetirement, afterRetirement);
+    const unit = bindReviewUnit({ ...matchingEmitPlan().units[0], scope, angles: ["correctness", "input-validation"], workOrderRef: `review:o/r#7:${gate}:${HEAD_A}:${scope}`, executionIdentity: "r2-000000cd-u0", promptPath: path.join(contextDir, `${gate}-${HEAD_A}.dispatch-prompt-${scope}.txt`), materializationHash: sha256Hex("fresh prefix\ngrouped unit\n") }, { gate, headSha: HEAD_A });
+    const plan = { ...matchingEmitPlan(), gate, headSha: HEAD_A, roundId: "r2-000000cd", units: [unit] };
+    await writeJson(emitPlan, plan);
+    await writeExecutionIndex(tmpRoot, unit);
     await writeGateBriefingRecord(tmpRoot, gate, HEAD_A, "fresh prefix\n");
     await writePrefixSentinel(tmpRoot, scope, HEAD_A, sha256Hex("fresh prefix\n").replace(/^sha256:/, ""));
     await writeDispatchPromptRecord(tmpRoot, scope, HEAD_A, { prefixPath, leading: "fresh prefix\ngrouped unit\n" });
@@ -4200,16 +4217,14 @@ async function withRebuiltRetiredRound(fn) {
     const record = JSON.parse(await readFile(recordPath, "utf8"));
     record.compactReference = { workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity };
     await writeJson(recordPath, record);
-    await utimes(recordPath, afterRetirement, afterRetirement);
     await writeEmitPlanReceipt(tmpRoot, unit);
-    await utimes(pullReceiptPath(tmpRoot, unit.workOrderRef), afterRetirement, afterRetirement);
     await mkdir(findingsDir);
     for (const angle of unit.angles) {
       const file = path.join(findingsDir, `${angle}.json`);
       await writeJson(file, { angle, verdict: "clean", findings: [], headSha: HEAD_A });
       await utimes(file, afterRetirement, afterRetirement);
     }
-    await fn({ options: { findingsDir, gate, headSha: HEAD_A, tmpRoot, receiptTmpRoot: tmpRoot, emitPlan }, plan, unit, emitPlan, recordPath, record, auditPath, audit, beforeRetirement, afterRetirement });
+    await fn({ options: { findingsDir, gate, headSha: HEAD_A, tmpRoot, receiptTmpRoot: tmpRoot, emitPlan }, plan, unit, emitPlan, recordPath, record, oldUnit, oldPlan, auditPath, audit, beforeRetirement, afterRetirement });
   });
 }
 
@@ -4227,10 +4242,10 @@ test("#2709: rebuilt grouped round needs its complete fresh record set, keyed pl
 });
 
 for (const clockOffset of [0, 60_000]) {
-  test(`#2709: fresh bound evidence passes in the retirement filesystem bucket with wall-clock offset ${clockOffset}`, async () => {
+  test(`#2709: fresh bound evidence passes in the retirement filesystem bucket with audit text offset ${clockOffset}`, async () => {
     await withRebuiltRetiredRound(async ({ options, unit, emitPlan, recordPath, auditPath, audit }) => {
       const bucket = new Date(Math.floor(Date.parse(audit.retiredAt) / 1000) * 1000);
-      // The audit's human wall clock may be ahead of the filesystem clock.
+      // Only audit text differs; filesystem time does not move backwards.
       await writeJson(auditPath, { ...audit, retiredAt: new Date(bucket.getTime() + clockOffset).toISOString() });
       for (const file of [auditPath, emitPlan, recordPath, pullReceiptPath(options.tmpRoot, unit.workOrderRef),
         ...unit.angles.map((angle) => path.join(options.findingsDir, `${angle}.json`))]) {
@@ -4243,11 +4258,11 @@ for (const clockOffset of [0, 60_000]) {
 
 for (const retiredRound of [1, 2]) {
   test(`#2709: retouching an execution from retirement ${retiredRound} cannot make its plan, record and receipt fresh`, async () => {
-    await withRebuiltRetiredRound(async ({ options, plan, unit, emitPlan, recordPath, record, afterRetirement, auditPath }) => {
+    await withRebuiltRetiredRound(async ({ options, plan, unit, oldUnit, emitPlan, recordPath, record, afterRetirement, auditPath }) => {
       if (retiredRound === 2) {
         await retireGateRound({ gate: options.gate, headSha: HEAD_A, reason: "another rebuilt round", noFindingsArtifacts: true, tmpRoot: options.tmpRoot });
       }
-      const retiredUnit = { ...unit, executionIdentity: "r1-ab-u0" };
+      const retiredUnit = { ...unit, executionIdentity: oldUnit.executionIdentity };
       await writeJson(emitPlan, { ...plan, units: [retiredUnit] });
       await writeJson(recordPath, { ...record, compactReference: { ...record.compactReference, executionIdentity: retiredUnit.executionIdentity } });
       await writeEmitPlanReceipt(options.tmpRoot, retiredUnit);
@@ -4279,34 +4294,71 @@ test("#2709: malformed archived dispatch bytes retain the floor without poisonin
 
 test("#2709: retired-round dispatch reconciliation fails closed on stale, partial or foreign evidence", async () => {
   const cases = [
-    ["stale plan", async (f) => utimes(f.emitPlan, f.beforeRetirement, f.beforeRetirement), /emit-plan predates retirement/],
-    ["stale record", async (f) => utimes(f.recordPath, f.beforeRetirement, f.beforeRetirement), /dispatch-prompt record.*predates retirement/],
+    ["stale plan", async (f) => writeJson(f.emitPlan, f.oldPlan), /execution.*was retired/],
+    ["stale record", async (f) => writeJson(f.recordPath, { ...f.record, compactReference: { workOrderRef: f.oldUnit.workOrderRef, workOrderDigest: f.oldUnit.workOrderDigest, executionIdentity: f.oldUnit.executionIdentity } }), /does not bind.*compact reference/],
     ["empty units", async (f) => writeJson(f.emitPlan, { ...f.plan, count: 0, units: [] }), /non-empty fresh unit set/],
     ["missing units", async (f) => writeJson(f.emitPlan, { ...f.plan, units: undefined }), /non-empty fresh unit set/],
     ["wrong count", async (f) => writeJson(f.emitPlan, { ...f.plan, count: 2 }), /matching count/],
     ["duplicate scope", async (f) => writeJson(f.emitPlan, { ...f.plan, count: 2, units: [f.unit, f.unit] }), /unique current-gate scopes/],
     ["foreign scope", async (f) => writeJson(f.emitPlan, { ...f.plan, units: [{ ...f.unit, scope: "pre-approval-gate-correctness" }] }), /unique current-gate scopes/],
     ["missing scope", async (f) => writeJson(f.emitPlan, { ...f.plan, units: [{ ...f.unit, scope: null }] }), /unique current-gate scopes/],
-    ["missing unit record", async (f) => writeJson(f.emitPlan, { ...f.plan, count: 2, units: [f.unit, { ...f.unit, scope: "draft-gate-scope" }] }), /records do not match emit-plan units/],
+    ["missing unit record", async (f) => {
+      const unit = bindReviewUnit({ ...f.unit, scope: "draft-gate-scope", executionIdentity: "r3-000000ef-u0", workOrderRef: `review:o/r#7:draft_gate:${HEAD_A}:draft-gate-scope` }, { gate: "draft_gate", headSha: HEAD_A });
+      await writeExecutionIndex(f.options.tmpRoot, unit);
+      await writeJson(f.emitPlan, { ...f.plan, count: 2, units: [f.unit, unit] });
+    }, /records do not match emit-plan units/],
     ["extra record", async (f) => writeFile(dispatchPromptLayoutRecordPath(f.options.tmpRoot, "draft-gate-extra", HEAD_A), "{}"), /records do not match emit-plan units/],
     ["wrong execution", async (f) => writeJson(f.recordPath, { ...f.record, compactReference: { ...f.record.compactReference, executionIdentity: "r1-ab-u0" } }), /does not bind.*compact reference/],
     ["wrong ref", async (f) => writeJson(f.recordPath, { ...f.record, compactReference: { ...f.record.compactReference, workOrderRef: "review:foreign" } }), /does not bind.*compact reference/],
     ["wrong digest", async (f) => writeJson(f.recordPath, { ...f.record, compactReference: { ...f.record.compactReference, workOrderDigest: "sha256:other" } }), /does not bind.*compact reference/],
-    ["missing plan reference", async (f) => writeJson(f.emitPlan, { ...f.plan, units: [{ ...f.unit, workOrderRef: null }] }), /does not bind.*compact reference/],
+    ["missing plan reference", async (f) => writeJson(f.emitPlan, { ...f.plan, units: [{ ...f.unit, workOrderRef: null }] }), /does not bind.*canonical execution index/],
     ["malformed record", async (f) => writeFile(f.recordPath, "{invalid json"), /JSON|parse/i],
     ["missing receipt", async (f) => rm(pullReceiptPath(f.options.tmpRoot, f.unit.workOrderRef)), /incomplete delivery evidence.*receipt_missing/],
-    ["stale receipt", async (f) => utimes(pullReceiptPath(f.options.tmpRoot, f.unit.workOrderRef), f.beforeRetirement, f.beforeRetirement), /pull receipt.*predates retirement/],
+    ["stale receipt", async (f) => writeEmitPlanReceipt(f.options.tmpRoot, f.unit, { ...f.unit, workOrderDigest: f.oldUnit.workOrderDigest }), /incomplete delivery evidence.*digest_mismatch/],
     ["missing archived record", async (f) => rm(path.join(path.dirname(f.auditPath), f.audit.dispatchPromptRecords[0])), /ENOENT/],
     ["invalid archived record name", async (f) => writeJson(f.auditPath, { ...f.audit, dispatchPromptRecords: ["../foreign.json"] }), /invalid archived dispatch-record name/],
     ["stale receipt identity", async (f) => writeEmitPlanReceipt(f.options.tmpRoot, f.unit, { ...f.unit, executionIdentity: "r1-ab-u0" }), /incomplete delivery evidence.*execution_mismatch/],
+    ["missing inventory", async (f) => writeJson(f.auditPath, { ...f.audit, emittedExecutionInventory: undefined }), /missing or incomplete.*inventory/],
+    ["incomplete inventory", async (f) => writeJson(f.auditPath, { ...f.audit, emittedExecutionInventory: { ...f.audit.emittedExecutionInventory, executions: [] } }), /missing or incomplete.*inventory/],
+    ["duplicate inventory execution", async (f) => writeJson(f.auditPath, { ...f.audit, emittedExecutionInventory: { count: 2, executions: [f.audit.emittedExecutionInventory.executions[0], f.audit.emittedExecutionInventory.executions[0]] } }), /invalid canonical execution inventory/],
+    ["foreign inventory", async (f) => writeJson(f.auditPath, { ...f.audit, emittedExecutionInventory: { count: 1, executions: [{ ...f.audit.emittedExecutionInventory.executions[0], workOrderRef: `review:o/r#7:pre_approval_gate:${HEAD_A}:pre-approval-gate-coverage` }] } }), /invalid canonical execution inventory/],
+    ["changed captured binding", async (f) => writeJson(f.auditPath, { ...f.audit, emittedExecutionInventory: { count: 1, executions: [{ ...f.audit.emittedExecutionInventory.executions[0], workOrderDigest: "sha256:other" }] } }), /captured execution binding changed/],
+    ["missing captured index", async (f) => rm(executionIndexPath(f.options.tmpRoot, f.oldUnit.executionIdentity)), /matches no emitted execution index entry/],
+    ["non-review inventory identity", async (f) => {
+      const entry = { ...f.audit.emittedExecutionInventory.executions[0], executionIdentity: "j1-000000ab-u0" };
+      await writeExecutionIndex(f.options.tmpRoot, entry);
+      await writeJson(f.auditPath, { ...f.audit, emittedExecutionInventory: { count: 1, executions: [entry] } });
+    }, /invalid canonical execution inventory/],
+    ["missing semantic execution", async (f) => writeJson(f.emitPlan, { ...f.plan, units: [{ ...f.unit, workOrder: { ...f.unit.workOrder, executionIdentity: undefined } }] }), /does not bind.*semantic execution identity/],
+    ["wrong semantic digest", async (f) => writeJson(f.emitPlan, { ...f.plan, units: [{ ...f.unit, workOrderDigest: "sha256:other" }] }), /does not bind.*semantic execution identity/],
+    ["missing current index", async (f) => rm(executionIndexPath(f.options.tmpRoot, f.unit.executionIdentity)), /matches no emitted execution index entry/],
+    ["unregistered aliased current identity", async (f) => {
+      const unit = bindReviewUnit({ ...f.unit, executionIdentity: "r4-000000ef-u0" }, { gate: "draft_gate", headSha: HEAD_A });
+      await writeJson(f.emitPlan, { ...f.plan, units: [unit] });
+      await writeJson(f.recordPath, { ...f.record, compactReference: { ...f.record.compactReference, executionIdentity: unit.executionIdentity, workOrderDigest: unit.workOrderDigest } });
+      await writeEmitPlanReceipt(f.options.tmpRoot, unit);
+    }, /matches no emitted execution index entry/],
+    ["foreign canonical plan path", async (f) => {
+      const copied = path.join(f.options.tmpRoot, "copied-plan.json");
+      await writeJson(copied, f.plan);
+      f.options.emitPlan = copied;
+    }, /must be the current canonical keyed emission/],
+    ["changed original materialization", async (f) => writeFile(f.unit.promptPath, "changed original\n"), /original materialization changed/],
+    ["non-review current identity", async (f) => {
+      const unit = bindReviewUnit({ ...f.unit, executionIdentity: "j2-000000cd-u0" }, { gate: "draft_gate", headSha: HEAD_A });
+      await writeExecutionIndex(f.options.tmpRoot, unit);
+      await writeJson(f.emitPlan, { ...f.plan, units: [unit] });
+      await writeJson(f.recordPath, { ...f.record, compactReference: { ...f.record.compactReference, executionIdentity: unit.executionIdentity, workOrderDigest: unit.workOrderDigest } });
+      await writeEmitPlanReceipt(f.options.tmpRoot, unit);
+    }, /does not bind.*semantic execution identity/],
+    ["foreign receipt materialization", async (f) => writeEmitPlanReceipt(f.options.tmpRoot, f.unit, { ...f.unit, materializationHash: f.oldUnit.materializationHash }), /incomplete delivery evidence.*materialization_mismatch/],
   ];
   for (const [name, mutate, error] of cases) {
     await withRebuiltRetiredRound(async (fixture) => {
       await mutate(fixture);
-      // Normalize the deliberately changed plan/record clock except in the
-      // stale-time cases, so each case exercises its named uncertainty.
-      if (name !== "stale plan") await utimes(fixture.emitPlan, fixture.afterRetirement, fixture.afterRetirement);
-      if (name !== "stale record") await utimes(fixture.recordPath, fixture.afterRetirement, fixture.afterRetirement);
+      // Timestamps do not substitute for the captured/indexed execution proof.
+      await utimes(fixture.emitPlan, fixture.afterRetirement, fixture.afterRetirement);
+      await utimes(fixture.recordPath, fixture.afterRetirement, fixture.afterRetirement);
       const out = path.join(fixture.options.tmpRoot, "out.json");
       const ledgerOut = path.join(fixture.options.tmpRoot, "ledger.json");
       await writeFile(out, "prior output\n");
@@ -4433,7 +4485,7 @@ test("#2709: actual retire, re-emit, pull and fan-in CLIs enforce a fresh groupe
     await writeFile(unit.promptPath, "fresh prefix\nALTERED\n");
     const invalidFresh = await runNode(faninScript, [...faninArgs, "--emit-plan", emitPlan], { cwd: workDir });
     assert.equal(invalidFresh.code, 1, invalidFresh.stderr);
-    assert.match(JSON.parse(invalidFresh.stderr).error, /dispatch-prompt layout verification failed/);
+    assert.match(JSON.parse(invalidFresh.stderr).error, /original materialization changed/);
   });
 });
 

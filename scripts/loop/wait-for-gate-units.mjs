@@ -81,7 +81,7 @@ function requireRound(gate, headSha) {
 
 /** Normalize a plan into { gate, headSha, role, units: [{ scope, angles, outputRefs, receipt query }] }. */
 function selectUnits({ plan, judge, wanted }) {
-  const compact = (unit) => ({ workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity });
+  const compact = (unit) => ({ workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity, workOrder: unit.workOrder, materializationHash: unit.materializationHash });
   if (judge) {
     const { gate, headSha } = plan.workOrder?.roundIdentity ?? {};
     const refs = plan.workOrder?.outputRefs;
@@ -114,7 +114,7 @@ function retiredNow(...args) {
 const exists = (file) => stat(file).then(() => true, (error) => { if (error?.code === "ENOENT") return false; throw error; });
 
 async function checkUnit(unit, { role, receiptTmpRoot, tmpRoot, headSha }) {
-  const query = { receiptTmpRoot, role, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity };
+  const query = { receiptTmpRoot, role, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity, workOrder: unit.workOrder, materializationHash: unit.materializationHash };
   const receipt = await verifyPullReceipt(query);
   const results = await Promise.all(unit.outputRefs.map((resultPath) => verifyPulledResult({ resultPath, ...query })));
   const missingAngles = unit.angles.filter((_, index) => !results[index].ok);

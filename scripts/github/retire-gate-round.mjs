@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-import { lstat, mkdir, readdir, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
 import { parsePrNumber } from "../_cli-primitives.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 import { GATE_NAMES, gateScopePrefix } from "./_gate-names.mjs";
-import { buildGateReviewsDir } from "./write-gate-context.mjs";
+import { buildGateEmitPlanPath, buildGateReviewsDir } from "./write-gate-context.mjs";
+import { EXECUTION_IDENTITY_RE, REVIEW_REF_RE, workOrderDigest } from "./_work-order-protocol.mjs";
 
 const USAGE = `Usage: retire-gate-round.mjs --gate <draft_gate|pre_approval_gate> --head-sha <sha> --reason <text> [--findings-dir <dir>] [--tmp-root <dir>]
 Retire ONE GATE's review round at one head: move every regular reviewer
@@ -160,6 +161,45 @@ export function parseRetireGateRoundArgs(argv) {
   };
 }
 
+async function captureEmittedExecutions(tmpRoot, gate, headSha) {
+  const fail = (reason) => { throw new Error(`GATE-EXEC-ROUND-RETIREMENT: incomplete canonical execution inventory: ${reason}`); };
+  const list = async (dir, options) => readdir(dir, options).catch((error) => { if (error.code === "ENOENT") return []; throw error; });
+  const indexRoot = path.join(tmpRoot, "work-order-executions");
+  const executions = new Map();
+  for (const entry of await list(indexRoot, { withFileTypes: true })) {
+    if (!entry.name.startsWith("r") || !entry.name.endsWith(".json")) continue;
+    if (!entry.isFile()) fail(`non-regular review execution index ${entry.name}`);
+    const index = JSON.parse(await readFile(path.join(indexRoot, entry.name), "utf8"));
+    const key = REVIEW_REF_RE.exec(index?.workOrderRef);
+    if (key === null) fail(`invalid review reference in ${entry.name}`);
+    if (key[3] !== gate || key[4] !== headSha) continue;
+    if (!EXECUTION_IDENTITY_RE.test(index.executionIdentity) || entry.name !== `${index.executionIdentity}.json`
+        || typeof index.workOrderDigest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(index.workOrderDigest)
+        || !key[5].startsWith(gateScopePrefix(gate))) fail(`invalid binding in ${entry.name}`);
+    executions.set(index.executionIdentity, { executionIdentity: index.executionIdentity, workOrderRef: index.workOrderRef, workOrderDigest: index.workOrderDigest });
+  }
+  const contextRoot = path.join(tmpRoot, "gate-context");
+  for (const entry of await list(contextRoot, { recursive: true, withFileTypes: true })) {
+    if (entry.name !== `${gate}-${headSha}.emit-plan.json`) continue;
+    if (!entry.isFile()) fail(`non-regular keyed emit plan ${entry.name}`);
+    const planPath = path.resolve(entry.parentPath, entry.name);
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    if (plan.gate !== gate || plan.headSha !== headSha || !Array.isArray(plan.units) || plan.count !== plan.units.length
+        || planPath !== path.resolve(buildGateEmitPlanPath({ repo: plan.repo, pr: plan.pr, gate, headSha, tmpRoot }))) fail(`invalid keyed emit plan ${planPath}`);
+    const seen = new Set();
+    for (const unit of plan.units) {
+      const index = executions.get(unit?.executionIdentity);
+      if (index === undefined || seen.has(unit.executionIdentity)
+          || unit.workOrderRef !== `review:${plan.repo}#${plan.pr}:${gate}:${headSha}:${unit.scope}`
+          || index.workOrderRef !== unit.workOrderRef || index.workOrderDigest !== unit.workOrderDigest
+          || unit.workOrder?.role !== "review" || workOrderDigest(unit.workOrder) !== unit.workOrderDigest) fail(`unindexed or invalid plan unit in ${planPath}`);
+      seen.add(unit.executionIdentity);
+    }
+  }
+  const captured = [...executions.values()].sort((a, b) => a.executionIdentity.localeCompare(b.executionIdentity));
+  return { count: captured.length, executions: captured };
+}
+
 export async function retireGateRound({ gate, headSha, reason, findingsDir = null, repo = null, pr = null, noFindingsArtifacts = false, tmpRoot = "tmp" }) {
   // Function-boundary re-validation, same rule as the CLI parser: a direct
   // programmatic caller must not bypass the full-SHA and audited-reason
@@ -259,6 +299,8 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
   if (sentinels.length === 0 && dispatchPromptRecords.length === 0 && !findingsDirPresent) {
     return { ok: true, gate, headSha, retired: 0, sentinels: [], dispatchPromptRecords: [], findingsDirRetired: false, retirementDir: null, noop: true };
   }
+  const emittedExecutionInventory = dispatchPromptRecords.length > 0 ? await captureEmittedExecutions(tmpRoot, gate, headSha) : undefined;
+
 
   // One retirement directory per invocation. The sequence number is MAX-based
   // (never count-based: a deleted round must not make the next retirement
@@ -295,6 +337,7 @@ export async function retireGateRound({ gate, headSha, reason, findingsDir = nul
       retiredAt: new Date().toISOString(),
       sentinels: moved,
       dispatchPromptRecords: movedDispatchPromptRecords,
+      emittedExecutionInventory,
       findingsDir: findingsDirPresent ? findingsDir : null,
       findingsDirRetired,
       partial,

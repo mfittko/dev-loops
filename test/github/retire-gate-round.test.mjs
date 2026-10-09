@@ -8,6 +8,8 @@ import { retireGateRound, parseRetireGateRoundArgs } from "../../scripts/github/
 import { verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
 import { dispatchPromptLayoutRecordPath, recordDispatchPromptLayout } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 import { bindCompactReference } from "../_helpers.mjs";
+import { executionIndexPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 
 const HEAD_A = "a1".repeat(20);
 const HEAD_B = "b2".repeat(20);
@@ -25,6 +27,62 @@ function sentinelName(scope, head) {
   return `checkpoint-context-sentinel-${scope}-${head}.json`;
 }
 
+
+test("#2709: audit captures canonical indexed executions even when their plan was never dispatched", async () => {
+  await withTmpRoot(async (tmpRoot) => {
+    const workOrder = { role: "review", executionIdentity: "r1-abcdef12-u0", roundIdentity: { gate: "draft_gate", headSha: HEAD_A } };
+    const unit = { scope: "draft-gate-coverage", executionIdentity: workOrder.executionIdentity, workOrderRef: `review:o/r#7:draft_gate:${HEAD_A}:draft-gate-coverage`, workOrderDigest: workOrderDigest(workOrder), workOrder };
+    await writeExecutionIndex(tmpRoot, unit);
+    const priorWorkOrder = { ...workOrder, executionIdentity: "r0-abcdef12-u0" };
+    const prior = { ...unit, executionIdentity: priorWorkOrder.executionIdentity, workOrderDigest: workOrderDigest(priorWorkOrder) };
+    await writeExecutionIndex(tmpRoot, prior);
+    await writeExecutionIndex(tmpRoot, { ...unit, executionIdentity: "r8-abcdef12-u0", workOrderRef: unit.workOrderRef.replace(HEAD_A, HEAD_B) });
+    await writeExecutionIndex(tmpRoot, { ...unit, executionIdentity: "r9-abcdef12-u0", workOrderRef: `review:o/r#7:pre_approval_gate:${HEAD_A}:pre-approval-gate-coverage` });
+    await writeExecutionIndex(tmpRoot, { executionIdentity: "j1-abcdef12-u0", workOrderRef: "judge:unrelated", workOrderDigest: unit.workOrderDigest });
+    const planPath = buildGateEmitPlanPath({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: HEAD_A, tmpRoot });
+    await mkdir(path.dirname(planPath), { recursive: true });
+    await writeFile(planPath, JSON.stringify({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: HEAD_A, count: 1, units: [unit] }));
+    await writeFile(dispatchPromptLayoutRecordPath(tmpRoot, "draft-gate-old", HEAD_A), "{}");
+    const result = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "complete pre-retirement inventory", noFindingsArtifacts: true, tmpRoot });
+    const audit = JSON.parse(await readFile(path.join(result.retirementDir, "retirement.json"), "utf8"));
+    assert.deepEqual(audit.emittedExecutionInventory, { count: 2, executions: [prior, unit].map(({ executionIdentity, workOrderRef, workOrderDigest }) => ({ executionIdentity, workOrderRef, workOrderDigest })) });
+  });
+});
+
+test("#2709: incomplete or malformed canonical inventory refuses before any retirement move", async () => {
+  const cases = [
+    ["missing index", async (f) => rm(f.indexPath)],
+    ["malformed index", async (f) => writeFile(f.indexPath, "{")],
+    ["invalid index reference", async (f) => writeFile(f.indexPath, JSON.stringify({ ...f.unit, workOrderRef: "review:foreign" }))],
+    ["invalid index identity", async (f) => writeFile(f.indexPath, JSON.stringify({ ...f.unit, executionIdentity: "r2-abcdef12-u0" }))],
+    ["invalid index digest", async (f) => writeFile(f.indexPath, JSON.stringify({ ...f.unit, workOrderDigest: "sha256:other" }))],
+    ["invalid index scope", async (f) => writeFile(f.indexPath, JSON.stringify({ ...f.unit, workOrderRef: `review:o/r#7:draft_gate:${HEAD_A}:review-coverage` }))],
+    ["nonregular index", async (f) => { await rm(f.indexPath); await mkdir(f.indexPath); }],
+    ["malformed plan", async (f) => writeFile(f.planPath, "{")],
+    ["wrong plan count", async (f) => writeFile(f.planPath, JSON.stringify({ ...f.plan, count: 2 }))],
+    ["nonregular plan", async (f) => { await rm(f.planPath); await mkdir(f.planPath); }],
+    ["duplicate plan unit", async (f) => writeFile(f.planPath, JSON.stringify({ ...f.plan, count: 2, units: [f.unit, f.unit] }))],
+    ["changed semantic digest", async (f) => writeFile(f.planPath, JSON.stringify({ ...f.plan, units: [{ ...f.unit, workOrder: { ...f.unit.workOrder, assignedAngles: ["changed"] } }] }))],
+    ["foreign plan path", async (f) => { const dir = path.join(f.tmpRoot, "gate-context", "misplaced"); await mkdir(dir); await writeFile(path.join(dir, path.basename(f.planPath)), JSON.stringify(f.plan)); }],
+  ];
+  for (const [name, mutate] of cases) {
+    await withTmpRoot(async (tmpRoot) => {
+      const workOrder = { role: "review", executionIdentity: "r1-abcdef12-u0", roundIdentity: { gate: "draft_gate", headSha: HEAD_A } };
+      const unit = { scope: "draft-gate-coverage", executionIdentity: workOrder.executionIdentity, workOrderRef: `review:o/r#7:draft_gate:${HEAD_A}:draft-gate-coverage`, workOrderDigest: workOrderDigest(workOrder), workOrder };
+      await writeExecutionIndex(tmpRoot, unit);
+      const plan = { repo: "o/r", pr: 7, gate: "draft_gate", headSha: HEAD_A, count: 1, units: [unit] };
+      const planPath = buildGateEmitPlanPath({ repo: plan.repo, pr: plan.pr, gate: plan.gate, headSha: HEAD_A, tmpRoot });
+      await mkdir(path.dirname(planPath), { recursive: true });
+      await writeFile(planPath, JSON.stringify(plan));
+      const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, "draft-gate-old", HEAD_A);
+      await writeFile(recordPath, "prior record\n");
+      await mutate({ tmpRoot, unit, plan, planPath, indexPath: executionIndexPath(tmpRoot, unit.executionIdentity) });
+      await assert.rejects(() => retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "fail closed before moves", noFindingsArtifacts: true, tmpRoot }), /canonical execution inventory|JSON|parse/i, name);
+      assert.equal(await readFile(recordPath, "utf8"), "prior record\n");
+      await assert.rejects(() => lstat(path.join(tmpRoot, "retired-gate-rounds")), /ENOENT/);
+    });
+  }
+});
 test("parseRetireGateRoundArgs requires a full head SHA and a reason", () => {
   assert.throws(() => parseRetireGateRoundArgs(["--gate", "draft_gate", "--reason", "x"]), /--head-sha/);
   assert.throws(() => parseRetireGateRoundArgs(["--gate", "draft_gate", "--head-sha", "abc1234", "--reason", "x"]), /FULL 40- or 64-char/);

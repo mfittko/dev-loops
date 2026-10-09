@@ -12,7 +12,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
-import { EXECUTION_IDENTITY_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole, workOrderDigest } from "./_work-order-protocol.mjs";
+import { EXECUTION_IDENTITY_RE, REVIEW_REF_RE, WorkOrderRefusal, executionIndexPath, pullWorkOrder, registerWorkOrderRole, workOrderDigest } from "./_work-order-protocol.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { fixerPlanPath } from "../loop/emit-fixer-work-order.mjs"; // also registers the fixer role adapter
 import { TOOLCHAIN_ROOT, isOtherDevLoopsCheckout, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveMainWorktreeRoot } from "../loop/_repo-root-resolver.mjs";
@@ -35,7 +35,6 @@ Exit codes: 0 pulled, 1 refused, 2 usage/IO error.`;
 
 // Gate reviewer adapter. ref = review:<owner/repo>#<pr>:<gate>:<headSha>:<scope>;
 // executionIdentity = r<emit ms>-<hex>-u<n> (see emit-fanout-dispatch.mjs).
-const REVIEW_REF_RE = /^review:([^/\s#]+\/[^/\s#]+)#(\d+):([a-z_]+):([0-9a-f]{40}|[0-9a-f]{64}):([A-Za-z0-9-]+)$/;
 const EXECUTION_ROUND_RE = /^(r(\d+)-[0-9a-f]+)-u/;
 
 // The retirement predicate, shared with the fixer hooks (their vendored copy).

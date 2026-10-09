@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -13,12 +13,13 @@ import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { consolidateGateFanin, parseConsolidateFaninCliArgs } from "../../scripts/loop/consolidate-fanin.mjs";
 import { verifyEmitPlanProvenance, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
-import { VALID_SCOPE_RE } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
+import { VALID_SCOPE_RE, dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 import { verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
 import { CHECKPOINT_SENTINEL_PREFIX } from "../../scripts/github/verify-fresh-review-context.mjs";
 import { verifyBriefingPrefixesForHead } from "../../scripts/github/verify-briefing-prefixes.mjs";
 import { createHash } from "node:crypto";
-import { executionIndexPath, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { executionIndexPath, pullReceiptPath, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { retireGateRound } from "../../scripts/github/retire-gate-round.mjs";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
@@ -508,6 +509,148 @@ test("fan-in join: consolidateGateFanin consumes per-angle findings artifacts fo
       assert.ok(section, `consolidation must cover auto-chunk angle "${angle}"`);
       assert.equal(section.verdict, "clean");
     }
+  });
+});
+
+test("#2709: review execution identity is part of the semantic work order, not just delivery metadata", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "correctness", angles: ["correctness"] }], pendingGroups: [{ name: "correctness", angles: ["correctness"] }] } });
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\n");
+    const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    const first = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+    const oldUnit = JSON.parse(first.stdout).units[0];
+    const second = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(second.status, 0, second.stderr);
+    const newUnit = JSON.parse(second.stdout).units[0];
+    assert.notEqual(newUnit.executionIdentity, oldUnit.executionIdentity);
+    assert.equal(newUnit.materializationHash, oldUnit.materializationHash);
+    assert.notEqual(newUnit.workOrderDigest, oldUnit.workOrderDigest);
+    assert.equal(newUnit.workOrder.executionIdentity, newUnit.executionIdentity);
+  });
+});
+
+for (const clockOffset of [0, -60_000]) {
+test(`#2709: real canonical rebuilt dispatch and original pull pass with filesystem offset ${clockOffset}`, async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "correctness", angles: ["correctness"] }], pendingGroups: [{ name: "correctness", angles: ["correctness"] }] } });
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\n");
+    const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const first = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+    const retired = await retireGateRound({ gate: GATE, headSha: HEAD_SHA, reason: "canonical fresh delivery proof", noFindingsArtifacts: true, tmpRoot });
+    const auditPath = path.join(retired.retirementDir, "retirement.json");
+    const audit = JSON.parse(await readFile(auditPath, "utf8"));
+    const emitted = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(emitted.status, 0, emitted.stderr);
+    const plan = JSON.parse(emitted.stdout);
+    const unit = plan.units[0];
+    const delivered = runPullCli(unit, { cwd: tmpDir });
+    assert.equal(delivered.status, 0, delivered.stdout + delivered.stderr);
+    const prefixHash = createHash("sha256").update(PREFIX_BYTES).digest("hex");
+    await writeFile(path.join(tmpRoot, `${CHECKPOINT_SENTINEL_PREFIX}${unit.scope}-${HEAD_SHA}.json`), JSON.stringify({ scope: unit.scope, prefixHash }));
+    const findingsDir = buildGateReviewsDir({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    await mkdir(findingsDir, { recursive: true });
+    const resultPath = path.join(findingsDir, "correctness.json");
+    await writeFile(resultPath, JSON.stringify({ angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_SHA }));
+    const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const bucket = Math.floor(Date.parse(audit.retiredAt) / 1000) * 1000;
+    const freshFilesystemTime = new Date(bucket + clockOffset);
+    await utimes(auditPath, new Date(bucket), new Date(bucket));
+    for (const file of [emitPlan, dispatchPromptLayoutRecordPath(tmpRoot, unit.scope, HEAD_SHA), pullReceiptPath(tmpRoot, unit.workOrderRef), resultPath]) {
+      await utimes(file, freshFilesystemTime, freshFilesystemTime);
+    }
+    const fanin = await consolidateGateFanin({ findingsDir, headSha: HEAD_SHA, gate: GATE, tmpRoot, receiptTmpRoot: tmpRoot, emitPlan });
+    assert.equal(fanin.overallVerdict, "clean");
+  });
+});
+}
+
+test("#2709: fan-in refuses an original old receipt with only execution and date metadata aliased to a genuine new emission", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "correctness", angles: ["correctness"] }], pendingGroups: [{ name: "correctness", angles: ["correctness"] }] } });
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\n");
+    const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const first = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(first.status, 0, first.stderr);
+    const oldUnit = JSON.parse(first.stdout).units[0];
+    assert.equal(runPullCli(oldUnit, { cwd: tmpDir }).status, 0);
+    const receiptPath = pullReceiptPath(tmpRoot, oldUnit.workOrderRef);
+    const originalReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
+    await retireGateRound({ gate: GATE, headSha: HEAD_SHA, reason: "original delivery must not alias", noFindingsArtifacts: true, tmpRoot });
+    const emitted = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(emitted.status, 0, emitted.stderr);
+    const plan = JSON.parse(emitted.stdout);
+    const unit = plan.units[0];
+    assert.equal(unit.materializationHash, oldUnit.materializationHash);
+    assert.notEqual(unit.workOrderDigest, originalReceipt.workOrderDigest);
+    await writeFile(receiptPath, JSON.stringify({ ...originalReceipt, executionIdentity: unit.executionIdentity, subject: { ...originalReceipt.subject, roundId: plan.roundId }, pulledAt: new Date().toISOString() }));
+    const prefixHash = createHash("sha256").update(PREFIX_BYTES).digest("hex");
+    await writeFile(path.join(tmpRoot, `${CHECKPOINT_SENTINEL_PREFIX}${unit.scope}-${HEAD_SHA}.json`), JSON.stringify({ scope: unit.scope, prefixHash }));
+    const findingsDir = buildGateReviewsDir({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    await mkdir(findingsDir, { recursive: true });
+    const resultPath = path.join(findingsDir, "correctness.json");
+    const result = JSON.stringify({ angle: "correctness", verdict: "clean", findings: [], headSha: HEAD_SHA });
+    await writeFile(resultPath, result);
+    const out = path.join(tmpRoot, "out.json");
+    const ledgerOut = path.join(tmpRoot, "ledger.json");
+    await writeFile(out, "prior output\n");
+    await writeFile(ledgerOut, "prior ledger\n");
+    const options = { findingsDir, gate: GATE, headSha: HEAD_SHA, tmpRoot, receiptTmpRoot: tmpRoot, emitPlan: buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot }), out, ledgerOut };
+    await assert.rejects(() => consolidateGateFanin(options), /incomplete delivery evidence.*digest_mismatch/);
+    assert.equal(await readFile(out, "utf8"), "prior output\n");
+    assert.equal(await readFile(ledgerOut, "utf8"), "prior ledger\n");
+    assert.equal(runPullCli(unit, { cwd: tmpDir }).status, 0);
+    await writeFile(resultPath, result);
+    assert.equal((await consolidateGateFanin(options)).overallVerdict, "clean");
+  });
+});
+
+test("#2709: retirement inventories a real never-dispatched canonical plan and refuses its unarchived execution", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "correctness", angles: ["correctness"] }] } });
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\n");
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(emitted.status, 0, emitted.stderr);
+    const [unit] = JSON.parse(emitted.stdout).units;
+    const tmpRoot = path.join(tmpDir, "tmp");
+    await rm(dispatchPromptLayoutRecordPath(tmpRoot, unit.scope, HEAD_SHA));
+    await writeFile(dispatchPromptLayoutRecordPath(tmpRoot, "pre-approval-gate-old", HEAD_SHA), "{}");
+    const retirement = await retireGateRound({ gate: GATE, headSha: HEAD_SHA, reason: "undispatched canonical plans are pre-existing", noFindingsArtifacts: true, tmpRoot });
+    const audit = JSON.parse(await readFile(path.join(retirement.retirementDir, "retirement.json"), "utf8"));
+    assert.deepEqual(audit.emittedExecutionInventory.executions.map((entry) => entry.executionIdentity), [unit.executionIdentity]);
+    assert.deepEqual(audit.dispatchPromptRecords, [path.basename(dispatchPromptLayoutRecordPath(tmpRoot, "pre-approval-gate-old", HEAD_SHA))]);
+    const out = path.join(tmpRoot, "out.json");
+    const ledgerOut = path.join(tmpRoot, "ledger.json");
+    await writeFile(out, "prior output\n");
+    await writeFile(ledgerOut, "prior ledger\n");
+    await assert.rejects(() => consolidateGateFanin({ findingsDir: buildGateReviewsDir({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot }), gate: GATE, headSha: HEAD_SHA, tmpRoot, emitPlan: buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot }), out, ledgerOut }), /execution.*was retired/);
+    assert.equal(await readFile(out, "utf8"), "prior output\n");
+    assert.equal(await readFile(ledgerOut, "utf8"), "prior ledger\n");
+  });
+});
+
+test("#2709: genuine global Date rollback is still an upstream stale_dispatch refusal, not a filesystem freshness claim", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "correctness", angles: ["correctness"] }] } });
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\n");
+    const clockShim = path.join(tmpDir, "clock-forward.mjs");
+    await writeFile(clockShim, "const NativeDate = Date; globalThis.Date = class extends NativeDate { constructor(...args) { super(...(args.length ? args : [NativeDate.now() + 60000])); } static now() { return NativeDate.now() + 60000; } };\n");
+    const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    const initial = spawnSync("node", ["--import", clockShim, emitCliPath, ...args], { cwd: tmpDir, encoding: "utf8" });
+    assert.equal(initial.status, 0, initial.stderr);
+    const retired = spawnSync("node", ["--import", clockShim, path.resolve("scripts/github/retire-gate-round.mjs"), "--gate", GATE, "--head-sha", HEAD_SHA, "--reason", "actual producer clock boundary", "--no-findings-artifacts"], { cwd: tmpDir, encoding: "utf8" });
+    assert.equal(retired.status, 0, retired.stderr);
+    const audit = JSON.parse(await readFile(path.resolve(tmpDir, JSON.parse(retired.stdout).retirementDir, "retirement.json"), "utf8"));
+    assert.ok(Date.parse(audit.retiredAt) > Date.now());
+    const emitted = runEmitCli(args, { cwd: tmpDir });
+    assert.equal(emitted.status, 0, emitted.stderr);
+    const [unit] = JSON.parse(emitted.stdout).units;
+    const pulled = runPullCli(unit, { cwd: tmpDir });
+    assert.equal(pulled.status, 1);
+    assert.equal(JSON.parse(pulled.stdout).refusal, "stale_dispatch");
   });
 });
 

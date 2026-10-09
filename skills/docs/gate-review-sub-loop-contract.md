@@ -545,31 +545,53 @@ Failures expose `partiallyRetiredDispatchPromptRecords` for dispatch records
 successfully moved before failure; partial audits list only successfully archived
 records, never failed moves.
 
+Before moving dispatch records, retirement captures every canonical review
+execution index for the exact gate+head into the existing audit's
+`emittedExecutionInventory: { count, executions }`. Each entry is the original
+`{ executionIdentity, workOrderRef, workOrderDigest }` tuple. It reconciles all
+matching keyed plans against those indexes, including plans never dispatched,
+and refuses malformed or incomplete inventories before any move. Partial audits
+retain the same pre-move inventory while listing only records actually moved.
+
 Fan-in consumes the existing `retirement.json` audit for the exact gate+full head
 only when its `dispatchPromptRecords` is non-empty, including partial audits
 listing successfully moved records. It never treats the newly empty live
 dispatch namespace as a legacy/offline round. When archived-dispatch audits
 exist for the head, it requires a supported string `--gate`, canonicalized by
 trim/lowercase independently of plan presence, before granting another-gate
-exemption. The matching gate requires a keyed `--emit-plan` from the rebuilt
-round. That plan must name a non-empty fresh
-unit set with a matching `count`; when supplied, `--expected-dispatch-units`
-must agree. The current gate's live dispatch-record scopes must match those
-units exactly, and each post-retirement record must bind its unit's compact
-reference (work-order ref, digest and execution identity). Every unit also
-needs a matching post-retirement pull receipt and its existing post-pull
-result proof. Freshness combines same-filesystem ordering and execution binding:
-plan, record and receipt mtimes must be at or after the matching audits' latest
-filesystem mtime, not their human-readable `retiredAt` wall-clock timestamp.
-Equality is valid on coarse filesystems only with a new bound execution;
-executions from every matching archived dispatch record are refused even if
-their plan, records or receipts are rewritten or retouched. Receipt identity
-and the existing post-pull result check remain mandatory.
-Missing, stale, partial or foreign dispatch evidence fails
-before fan-in writes outputs; existing output files are preserved.
-Other gates and heads, no-op retirements, and sentinel-only/legacy audits
-without archived dispatch records do not acquire this floor. No new provenance
-store or retirement schema is introduced.
+exemption. The matching gate requires the canonical keyed `--emit-plan` from
+the rebuilt round, with a non-empty unit set and matching `count`; when supplied,
+`--expected-dispatch-units` must agree. Every unit must bind its exact canonical
+execution-index tuple, target and round. Its execution must be absent from every
+matching audit's complete pre-retirement inventory and archived records. Under
+the existing single-runner ownership and immutable index-write contract, this
+proves new registration rather than trusting ID novelty or file retouches alone.
+Missing or inconsistent inventory bindings fail closed.
+
+Each newly emitted reviewer work order contains its `executionIdentity` inside
+the semantic work order before `workOrderDigest` is computed. Pull and result
+consumers require that binding, the reproduced digest and the original
+materialization hash; there is no unbound reviewer compatibility path. Identical
+prompt bytes may retain their materialization hash across genuine new emissions,
+but distinct executions have distinct semantic digests. An old original receipt
+with only its execution/date metadata aliased to a new canonical execution cannot
+prove delivery of the new semantic work order.
+
+The current gate's live dispatch-record scopes must match the units exactly,
+and each record must bind its compact ref, digest and execution. Every unit needs
+its matching original pull receipt and the existing post-pull result proof.
+Plan, record and receipt mtimes are not compared with audit time: valid newly
+registered, freshly delivered evidence passes with equal or lower filesystem
+timestamps, including coarse resolution or filesystem-clock alignment/rollback.
+The existing result-at-or-after-receipt check remains mandatory. A genuine global
+`Date` rollback that makes a newly emitted round predate the retirement audit
+still receives the upstream `stale_dispatch` pull refusal; this fan-in proof does
+not change that producer/pull eligibility policy or claim such a receipt exists.
+Missing, stale, partial or foreign evidence fails before output writes and
+preserves caller-owned output files. Other gates and heads, no-op retirements,
+and sentinel-only/legacy audits without archived dispatch records retain their
+existing behavior. This extends the existing audit only, with no new provenance
+store, epoch or receipt format.
 The dispatch-prefix/scope verifier itself remains unchanged; fresh records
 still have to pass its full binding checks.
 

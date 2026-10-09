@@ -66,6 +66,35 @@ test("pull returns exactly the emitted work order, carrying the widening rule, a
   });
 });
 
+test("#2709: receipt verification requires the review execution inside its semantic work order", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    assert.equal(pull(unit, root).status, 0);
+    for (const executionIdentity of [undefined, "r2-abcdef12-u0"]) {
+      const query = { receiptTmpRoot: path.join(root, "tmp"), role: "review", ...unit, workOrder: { ...unit.workOrder, executionIdentity } };
+      assert.equal((await verifyPullReceipt(query)).reason, "execution_binding_mismatch");
+    }
+    assert.equal((await verifyPullReceipt({ receiptTmpRoot: path.join(root, "tmp"), role: "review", ...unit, workOrder: { ...unit.workOrder, assignedAngles: ["changed"] } })).reason, "semantic_identity_mismatch");
+    for (const materializationHash of [undefined, "sha256:other"]) {
+      assert.equal((await verifyPullReceipt({ receiptTmpRoot: path.join(root, "tmp"), role: "review", ...unit, materializationHash })).reason, "materialization_mismatch");
+    }
+  });
+});
+
+test("#2709: canonical pull rejects a review work order with an absent or different bound execution", async () => {
+  await withDir(async (root) => {
+    const unit = await emitRound(root);
+    const planPath = buildGateEmitPlanPath({ repo: "o/r", pr: 7, gate: GATE, headSha: HEAD, tmpRoot: path.join(root, "tmp") });
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    for (const executionIdentity of [undefined, "r2-abcdef12-u0"]) {
+      const changed = { ...unit, workOrder: { ...unit.workOrder, executionIdentity } };
+      changed.workOrderDigest = workOrderDigest(changed.workOrder);
+      await writeFile(planPath, JSON.stringify({ ...plan, units: [changed] }));
+      assert.equal(refusal(pull(changed, root)).refusal, "dispatch_identity_mismatch");
+    }
+  });
+});
+
 test("the dispatchPrompt carries a shell-runnable pull command; shell metacharacters refuse", async () => {
   await withDir(async (root) => {
     const unit = await emitRound(root);
@@ -84,11 +113,11 @@ test("the dispatch envelope fits the cap for a worst-case sanctioned identity an
   assert.throws(() => buildDispatchPointer({ ...worst, workOrderRef: "a".repeat(2 + pad) }), /over DISPATCH_POINTER_MAX_BYTES/);
 });
 
-test("workOrderDigest is equal across two checkout roots whose required reads hash differently; a semantic input change changes it", async () => {
+test("workOrderDigest for one execution is equal across checkout roots whose required reads hash differently; a semantic input change changes it", async () => {
   await withDir(async (a) => withDir(async (b) => withDir(async (c) => {
     const [ua, ub] = [await emitRound(a), await emitRound(b)];
     assert.notEqual(ua.workOrder.requiredReads[0].sha256, ub.workOrder.requiredReads[0].sha256);
-    assert.equal(ua.workOrderDigest, ub.workOrderDigest);
+    assert.equal(ua.workOrderDigest, workOrderDigest({ ...ub.workOrder, executionIdentity: ua.executionIdentity }));
     assert.notEqual(ua.materializationHash, ub.materializationHash);
     const uc = await emitRound(c, { prompt: "Review the coverage angle, including error paths." });
     assert.notEqual(uc.workOrderDigest, ua.workOrderDigest);
@@ -138,9 +167,9 @@ test("semantic mutation refuses as semantic_identity_mismatch; a materialization
     delete invalid.workOrder.executionRules.widening;
     invalid.workOrderDigest = workOrderDigest(invalid.workOrder);
     await writeFile(planPath, JSON.stringify(plan), "utf8");
-    assert.equal(refusal(pull(unit, root, { digest: invalid.workOrderDigest })).refusal, "invalid_work_order");
     const entry = JSON.parse(await readFile(indexPath(root, unit), "utf8"));
     await writeFile(indexPath(root, unit), JSON.stringify({ ...entry, workOrderDigest: invalid.workOrderDigest }), "utf8");
+    assert.equal(refusal(pull(unit, root, { digest: invalid.workOrderDigest })).refusal, "invalid_work_order");
     assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "invalid_work_order");
   });
 });

@@ -19,6 +19,7 @@ import { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE, executionIndexPath, 
 export { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE, canonicalizeWorkOrder, executionIndexPath, workOrderDigest } from "@dev-loops/core/loop/work-order-digest";
 
 export const materializationHash = sha256Hex;
+export const REVIEW_REF_RE = /^review:([^/\s#]+\/[^/\s#]+)#(\d+):([a-z_]+):([0-9a-f]{40}|[0-9a-f]{64}):([A-Za-z0-9-]+)$/;
 
 // The compact dispatch envelope, the ONLY text relayed to a worker: a self-describing pull instruction
 // (a lagging agent definition still pulls), never task prose. Values go unquoted, so each is one shell-inert word.
@@ -49,7 +50,7 @@ export async function writeExecutionIndex(tmpRoot, { executionIdentity, workOrde
 const IDENTITY_ROLES = { r: "review", j: "judge", f: "fixer" };
 
 /** The one `{ workOrderRef, workOrderDigest }` the execution index holds for `execution` across `tmpRoots`. */
-async function resolveExecutionIndex(execution, tmpRoots) {
+export async function resolveExecutionIndex(execution, tmpRoots) {
   let found = null;
   if (EXECUTION_IDENTITY_RE.test(String(execution))) {
     for (const tmpRoot of tmpRoots) {
@@ -113,7 +114,12 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
     const refusal = WORK_ORDER_ROLES.has(unit.workOrder?.role) ? "dispatch_identity_mismatch" : "unknown_role";
     throw new WorkOrderRefusal(refusal, `work order header role ${JSON.stringify(unit.workOrder?.role)} does not match ref role ${JSON.stringify(role)}`);
   }
+  if (role === "review" && unit.workOrder.executionIdentity !== execution) throw new WorkOrderRefusal("dispatch_identity_mismatch", `review work order does not bind execution ${execution}; re-emit before pulling`);
   if (workOrderDigest(unit.workOrder) !== unit.workOrderDigest) throw new WorkOrderRefusal("semantic_identity_mismatch", `the canonical work order for ${ref} no longer reproduces workOrderDigest ${unit.workOrderDigest}; fail closed and re-emit against current authority`);
+  if (role === "review" && !fromIndex) {
+    const indexed = await resolveExecutionIndex(execution, tmpRoots);
+    if (indexed.workOrderRef !== ref || indexed.workOrderDigest !== digest) throw new WorkOrderRefusal("dispatch_reference_mismatch", `review execution ${execution} does not bind its canonical index; re-emit before pulling`);
+  }
   const invalid = adapter.validate(unit.workOrder);
   if (invalid) throw new WorkOrderRefusal("invalid_work_order", invalid);
   const workOrderText = await readFile(unit.materializationPath, "utf8").catch(() => null);
@@ -126,16 +132,21 @@ export async function pullWorkOrder({ ref, digest, execution, cwd, tmpRoots, rec
 
 /**
  * Receipt-verification seam for every result consumer (gate fan-in first).
- * Returns { ok: true, receipt } or { ok: false, reason } where reason is one of
- * receipt_missing, unit_mismatch, role_mismatch, execution_mismatch, digest_mismatch.
+ * Returns { ok: true, receipt } or { ok: false, reason }. Review receipts also
+ * require the unit's execution-bound semantic work order and original materialization.
  */
-export async function verifyPullReceipt({ receiptTmpRoot, workOrderRef, workOrderDigest: digest, executionIdentity, role }) {
+export async function verifyPullReceipt({ receiptTmpRoot, workOrderRef, workOrderDigest: digest, executionIdentity, role, workOrder, materializationHash: expectedMaterializationHash }) {
   const receipt = await readFile(pullReceiptPath(receiptTmpRoot, workOrderRef), "utf8").then(JSON.parse).catch(() => undefined);
   if (receipt === undefined) return { ok: false, reason: "receipt_missing" };
   if (receipt?.workOrderRef !== workOrderRef) return { ok: false, reason: "unit_mismatch" };
   if (receipt.role !== role) return { ok: false, reason: "role_mismatch" };
   if (receipt.executionIdentity !== executionIdentity) return { ok: false, reason: "execution_mismatch" };
   if (receipt.workOrderDigest !== digest) return { ok: false, reason: "digest_mismatch" };
+  if (role === "review") {
+    if (typeof executionIdentity !== "string" || workOrder?.role !== "review" || workOrder.executionIdentity !== executionIdentity) return { ok: false, reason: "execution_binding_mismatch" };
+    if (workOrderDigest(workOrder) !== digest) return { ok: false, reason: "semantic_identity_mismatch" };
+    if (typeof expectedMaterializationHash !== "string" || receipt.materializationHash !== expectedMaterializationHash) return { ok: false, reason: "materialization_mismatch" };
+  }
   return { ok: true, receipt };
 }
 
