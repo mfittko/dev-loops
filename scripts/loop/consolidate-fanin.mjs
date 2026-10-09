@@ -224,6 +224,8 @@ Optional:
                                  (GATE-EXEC-BRIEFING-PREFIX layout, #1841/completes #1468) — an
                                  angle-first prompt fails this mechanically. Zero records remain allowed
                                  when no matching audit records archived dispatch records (progressive/optional capture).
+                                 Abbreviated aliases of matching retired full heads are refused; use the
+                                 full reviewed head. Known foreign-gate private retirement proof is not required.
   --cache-telemetry <path>       The optional before/after cache-telemetry evidence artifact
                                  (<gate>-<headSha>.cache-telemetry.json) as JSON.
                                  When given, the fan-in validates it via enforceCacheTelemetryEvidence
@@ -237,9 +239,10 @@ Optional:
                                  (<gate>-<headSha>.emit-plan.json, GATE-EXEC-FANOUT-DISPATCH-EMIT) as a
                                  path. Required once the head has dispatch-prompt records OR this gate+head
                                  has an audit of archived dispatch-prompt records. After that retirement,
-                                 the plan and every current-gate unit's record and pull receipt must postdate
-                                 retirement; records must match
-                                 the plan's non-empty unit set and compact references exactly.
+                                 the plan must bind newly registered execution identities absent from the
+                                 matching audit's complete inventory, with original pull receipts and
+                                 a complete current-gate record set matching its non-empty units and references.
+                                 Filesystem mtimes are not compared with retirement time.
                                  The fan-in verifies its embedded round key (gate, headSha) and
                                  FAILS CLOSED (exit 1, "cannot verify emit-plan key" / "is stamped for ...")
                                  on a mismatch, a missing/malformed key field, or an unreadable/non-JSON
@@ -529,27 +532,45 @@ async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot) {
 // actual archived dispatch record closes the newly reachable zero-record path;
 // sentinel-only/legacy retirements retain their pre-existing offline behavior.
 async function readDispatchRetirements(tmpRoot, headSha) {
-  const retiredRoot = path.join(tmpRoot, "retired-gate-rounds", headSha);
-  let rounds;
+  const root = path.join(tmpRoot, "retired-gate-rounds");
+  let heads;
   try {
-    rounds = await readdir(retiredRoot, { withFileTypes: true });
+    heads = await readdir(root, { withFileTypes: true });
   } catch (error) {
     if (error.code === "ENOENT") return new Map();
     throw error;
   }
   const retirements = new Map();
-  for (const round of rounds.filter((entry) => entry.isDirectory() && /^round-\d+$/.test(entry.name))) {
-    const auditPath = path.join(retiredRoot, round.name, "retirement.json");
-    let text;
-    try {
-      text = await readFile(auditPath, "utf8");
-    } catch (error) {
-      if (error.code === "ENOENT") continue;
-      throw error;
+  // An accepted short offline head must not hide an applicable full-head audit.
+  const matchingHeads = heads.filter((entry) => entry.isDirectory()
+    && (entry.name === headSha || (/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(entry.name) && entry.name.startsWith(headSha))));
+  for (const head of matchingHeads) {
+    const retiredRoot = path.join(root, head.name);
+    const rounds = await readdir(retiredRoot, { withFileTypes: true });
+    for (const round of rounds.filter((entry) => entry.isDirectory() && /^round-\d+$/.test(entry.name))) {
+      const auditPath = path.join(retiredRoot, round.name, "retirement.json");
+      let text;
+      try {
+        text = await readFile(auditPath, "utf8");
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
+        throw error;
+      }
+      const audit = JSON.parse(text);
+      if (audit?.headSha !== head.name || !GATE_NAMES.includes(audit.gate)
+          || !Array.isArray(audit.dispatchPromptRecords) || audit.dispatchPromptRecords.length === 0) continue;
+      const audits = retirements.get(audit.gate) ?? [];
+      audits.push({ auditPath, audit });
+      retirements.set(audit.gate, audits);
     }
-    const audit = JSON.parse(text);
-    if (audit?.headSha !== headSha || !GATE_NAMES.includes(audit.gate)
-        || !Array.isArray(audit.dispatchPromptRecords) || audit.dispatchPromptRecords.length === 0) continue;
+  }
+  return retirements;
+}
+
+// Only the selected gate owns its inventory/index/archive dependencies.
+async function readRetiredExecutions(tmpRoot, audits) {
+  const retirement = { executions: new Set() };
+  for (const { auditPath, audit } of audits) {
     const inventory = audit.emittedExecutionInventory;
     // Under serial ownership, a complete pre-move inventory plus the immutable
     // canonical index proves new registration without comparing filesystem clocks.
@@ -557,7 +578,7 @@ async function readDispatchRetirements(tmpRoot, headSha) {
     if (!Array.isArray(inventory?.executions) || inventory.count !== inventory.executions.length) {
       throw new Error(`GATE-EXEC-ROUND-RETIREMENT: missing or incomplete canonical execution inventory in ${auditPath}`);
     }
-    const retirement = retirements.get(audit.gate) ?? { executions: new Set() };
+    const headSha = audit.headSha;
     const seen = new Set();
     for (const entry of inventory.executions) {
       const key = REVIEW_REF_RE.exec(entry?.workOrderRef);
@@ -576,7 +597,7 @@ async function readDispatchRetirements(tmpRoot, headSha) {
       if (typeof name !== "string" || path.basename(name) !== name) {
         throw new Error(`GATE-EXEC-ROUND-RETIREMENT: invalid archived dispatch-record name in ${auditPath}`);
       }
-      const recordText = await readFile(path.join(retiredRoot, round.name, name), "utf8");
+      const recordText = await readFile(path.join(path.dirname(auditPath), name), "utf8");
       let record;
       try {
         record = JSON.parse(recordText);
@@ -588,9 +609,8 @@ async function readDispatchRetirements(tmpRoot, headSha) {
       const execution = record?.compactReference?.executionIdentity;
       if (typeof execution === "string") retirement.executions.add(execution);
     }
-    retirements.set(audit.gate, retirement);
   }
-  return retirements;
+  return retirement;
 }
 
 // Retirement's existing durable audit closes the legacy zero-record escape:
@@ -606,8 +626,12 @@ async function verifyRetiredRoundDispatch(options, plan) {
     fail("--gate must identify a supported string gate");
   }
   const gate = options.gate.trim().toLowerCase();
-  const retirement = retirements.get(gate);
-  if (retirement === undefined) return; // The other gate's live round is untouched.
+  const audits = retirements.get(gate);
+  if (audits === undefined) return; // The other gate's private proof and live round are untouched.
+  if (audits.some(({ audit }) => audit.headSha !== options.headSha)) {
+    fail(`abbreviated head ${options.headSha} aliases a dispatch-retired round for gate ${gate}; use the full head and fresh dispatch proof`);
+  }
+  const retirement = await readRetiredExecutions(tmpRoot, audits);
   if (plan === undefined) fail(`gate ${gate} at head ${options.headSha} requires a fresh keyed --emit-plan after retirement`);
   const units = plan.units;
   if (!Array.isArray(units) || units.length === 0 || plan.count !== units.length) {

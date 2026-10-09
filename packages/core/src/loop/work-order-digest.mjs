@@ -4,8 +4,10 @@
  * `workOrderDigest` is the sha256 of the canonical SEMANTIC work order: object
  * keys sorted, machine-local material excluded (LOCAL_MATERIAL_KEYS and every
  * absolute-path string). Repository-relative paths stay semantic. Two checkouts
- * that emit the same unit get the same digest. Dependency-free (node: builtins
- * only) so the Claude hook bundle can vendor it.
+ * reproduce the same digest for the same execution-bound semantic work order;
+ * separate reviewer emissions intentionally have different execution identities
+ * and digests. Dependency-free (node: builtins only) so the Claude hook bundle
+ * can vendor it.
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
