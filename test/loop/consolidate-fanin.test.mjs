@@ -4353,7 +4353,7 @@ for (const retiredRound of [1, 2]) {
       if (retiredRound === 2) {
         await retireGateRound({ gate: options.gate, headSha: HEAD_A, reason: "another rebuilt round", noFindingsArtifacts: true, tmpRoot: options.tmpRoot });
       }
-      const retiredUnit = { ...unit, executionIdentity: oldUnit.executionIdentity };
+      const retiredUnit = retiredRound === 2 ? unit : { ...unit, executionIdentity: oldUnit.executionIdentity };
       await writeJson(emitPlan, { ...plan, units: [retiredUnit] });
       await writeJson(recordPath, { ...record, compactReference: { ...record.compactReference, executionIdentity: retiredUnit.executionIdentity } });
       await writeEmitPlanReceipt(options.tmpRoot, retiredUnit);
