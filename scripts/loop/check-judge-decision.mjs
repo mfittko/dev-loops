@@ -14,7 +14,7 @@ contentDigest); the criterion set is the union of the decisions' checkedCriteria
 remedy needs defectClass and siteQuery; remedyKind "evidence_only" needs neither.
 Exit 0 and print { ok: true, checked } when every decision is valid. Otherwise print
 { ok: false, error, decisionIndex?, code?, field? } and exit 1. decisionIndex names the failing
-decision; code and field appear only when a valid_compliant decision fails its remediation-scope check.
+decision; code and field appear only when a valid_compliant decision lacks defectClass or siteQuery.
 
 ${JQ_OUTPUT_USAGE}`;
 

@@ -168,7 +168,7 @@ export function resolvePiRole({ systemPrompt, env = process.env, sessionId }: {
 }
 /**
  * Decide a Pi `tool_call`. A restricted role runs only the sanctioned pull line (plus
- * read and search commands for the reviewer). An unresolved role ('' from a blank tag, an
+ * read and search commands for the reviewer; the judge also runs its decision check). An unresolved role ('' from a blank tag, an
  * unknown dev-loops: name, conflicting tags or an untagged native async child session) fails
  * closed: it is treated as a restricted role that may pull only.
  */

@@ -94,7 +94,7 @@ export function normalizeAgentType(agentType) {
 }
 
 /**
- * The read-only judge holds Bash only to pull its work order (ADR 0106). The one allowed command
+ * The read-only judge holds Bash only to pull its work order (ADR 0106) and run its decision check. The pull command
  * is the dispatch envelope's pull line with shell-inert values, so chaining, redirection and
  * substitution cannot match.
  */
@@ -126,7 +126,7 @@ export const isFixerPullAttempt = (command) => typeof command === "string" && co
 /**
  * Decide whether a PreToolUse Bash command must be blocked by a dev-loop gate boundary.
  *
- * The `judge` agent (plugin-namespaced or bare) may run ONLY the sanctioned work-order pull;
+ * The `judge` agent (plugin-namespaced or bare) may run ONLY the sanctioned work-order pull and the decision check;
  * every other command, including test/build entrypoints, is denied fail-closed.
  *
  * Gated commands on the target repo (each rationale sits inline at its check):

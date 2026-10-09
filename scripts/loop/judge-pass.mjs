@@ -7,6 +7,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   GATE_CONFIG_KEY,
   applyJudgeDispositions,
+  listOpenActItems,
   validateJudgeVerdict,
 } from "@dev-loops/core/loop/gate-fanin";
 import {
@@ -987,7 +988,7 @@ export async function judgePassCli(
     const escalated = members.filter((f) => escalatedActs.has(f));
     if (escalated.length === 0) continue;
     for (const f of members) escalatedActs.add(f);
-    const siblings = members.filter((f) => f.judgeDisposition === "act" && !escalated.includes(f)).map((f) => f.fingerprint);
+    const siblings = members.filter((f) => listOpenActItems([f]).length > 0 && !escalated.includes(f)).map((f) => f.fingerprint);
     if (siblings.length > 0) for (const f of escalated) siblingFingerprints.set(f, siblings);
   }
   const fixerAct = result.act.filter((f) => !escalatedActs.has(f));
