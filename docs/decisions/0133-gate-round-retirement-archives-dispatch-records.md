@@ -6,7 +6,7 @@ Accepted — 2026-10-09 ([issue 2709](https://github.com/mfittko/dev-loops/issue
 
 ## Context
 
-`GATE-EXEC-ROUND-RETIREMENT` in [gate-review-sub-loop-contract.md](../../skills/docs/gate-review-sub-loop-contract.md) archives a retired round's sentinels and findings. The round's dispatch-prompt records stayed in place. A later fan-in for the same gate and head could read those stale records as evidence of a fresh dispatch.
+`GATE-EXEC-ROUND-RETIREMENT` in [gate-review-sub-loop-contract.md](../../skills/docs/gate-review-sub-loop-contract.md) archives a retired round's sentinels and findings. The round's dispatch-prompt records stayed in place. The live retired records made a rebuilt same-head round with a changed prefix or unit layout fail dispatch-binding verification (`DISPATCH_BINDING_INVALID`, PR 2708). Archiving them makes a zero-record fan-in reachable at the retired head. The fan-in guard closes that case.
 
 ## Decision
 
