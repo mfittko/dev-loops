@@ -77,14 +77,14 @@ Stop interpretation (in order):
   Honor user/envelope stops and harness/classifier, ADR/size, blocked or
   reconciliation refusals first. terminal=true alone is not permission.
   Closed/merged PRs or canonical state=done report completion; do not enter gates.
-  For an open PR, loopDisposition=direct_gate (terminal=false), or terminal=true
+  For an open PR, loopDisposition=direct_gate (emitted with action=fix, terminal=false), or terminal=true
   with loopDisposition=done or clean_converged,
   ends only the Copilot sub-loop. Consult fresh loop gate-coordination for the
-  same PR/current head; follow nextAction, allowedNextActions and forbiddenActions.
+  same PR/current head; its nextAction, allowedNextActions and forbiddenActions supersede any pre_approval_gate hint in this output.
   Do not require roundCapCleanEligible, request another round merely because
   Copilot stopped, infer pre-approval permission, or merge implicitly.
   The pr_draft stop permits this consultation only with fresh canonical startup
-  draftStart for the same PR. All other stops remain stops; nonterminal watch/fix
+  draftStart for the same PR. All other stops remain stops; other nonterminal watch/fix
   outcomes stay under their owning strategy, not later gates.
 suppressedPostConvergenceDocsOnly:
   Present (true) only when strict mode found the post-convergence head bump, at or
