@@ -86,6 +86,8 @@ export async function captureChangedFilesBetween({ base, head = "HEAD", repoRoot
  * - An integrate-only base-move (every incremental file already on main)
  *   contributes an EMPTY `changedFiles` with `reduced: true` — the caller reads
  *   that (with `deltaComplete`) as "nothing PR-own changed, carry forward".
+ * - `incrementalFiles` retains the unreduced base..head paths, including both
+ *   rename/copy endpoints, for config-source invalidation.
  * - `hasRename` reflects only renames that SURVIVE the exclusion (a PR-own
  *   rename), so a rename replayed from an already-merged main commit does not
  *   force RENAME_ONLY angles to re-run.
@@ -99,7 +101,7 @@ export async function captureChangedFilesBetween({ base, head = "HEAD", repoRoot
  * @param {string} [input.mainRef] — the already-reviewed baseline ref, default "origin/main"
  * @param {string} [input.head] — default "HEAD"
  * @param {string} input.repoRoot
- * @returns {Promise<{ changedFiles: string[], hasRename: boolean, reduced: boolean }>}
+ * @returns {Promise<{ changedFiles: string[], incrementalFiles: string[], hasRename: boolean, reduced: boolean }>}
  */
 export async function captureMainRelativeChangedFilesSince({ base, mainRef = "origin/main", head = "HEAD", repoRoot, runGit = runGitCommand }) {
   const normalizedBase = normalizeBaseRef(base);
@@ -112,13 +114,19 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
   const incRange = `${normalizedBase}..${normalizedHead}`;
   const incResult = await runGit([...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", incRange], { repoRoot });
   if (incResult.code !== 0) throw new Error(`git diff ${incRange} failed: ${incResult.stderr.trim() || `exit ${incResult.code}`}`);
+  const incrementalFiles = [];
+  for (const line of incResult.stdout.split("\n")) {
+    const cols = line.replace(/\r$/, "").split("\t");
+    if (/^[RC]\d*$/i.test(cols[0]?.trim()) && cols[1]?.trim()) incrementalFiles.push(cols[1].trim());
+    if (cols.length >= 2 && cols.at(-1)?.trim()) incrementalFiles.push(cols.at(-1).trim());
+  }
 
   // The main-relative exclusion needs mainRef to resolve. If it does not, fall
   // back to the plain two-dot delta (reduced: false) — never fail the whole
   // decision just because origin/main is absent.
   const mainResolves = await runGit(["rev-parse", "--verify", "--quiet", `${normalizedMain}^{commit}`], { repoRoot });
   if (mainResolves.code !== 0) {
-    return { changedFiles: parseChangedFiles(incResult.stdout), hasRename: hasRenameEntry(incResult.stdout), reduced: false };
+    return { changedFiles: parseChangedFiles(incResult.stdout), incrementalFiles, hasRename: hasRenameEntry(incResult.stdout), reduced: false };
   }
 
   // Files whose head blob differs from mainRef (two-dot mainRef..head): the
@@ -169,5 +177,5 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
     changedFiles.push(file);
     if (isRenameOrCopy) hasRename = true;
   }
-  return { changedFiles, hasRename, reduced: true };
+  return { changedFiles, incrementalFiles, hasRename, reduced: true };
 }

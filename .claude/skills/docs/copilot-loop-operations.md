@@ -41,7 +41,7 @@ These routing guarantees are owned by [Copilot Loop State Graph](./copilot-loop-
    `node <resolved-skill-scripts>/github/stage-reviewer-draft.mjs --repo <owner/name> --pr <number> --review-file <merged-review.json> --local-state-output <state.json>`,
    then re-run the detector with `--local-state <state.json>`.
 
-6. Follow the `nextAction` from the machine output. For stop states (`review_request_unavailable`,
+6. Interpret the machine output per [Interpreting Copilot completion versus PR lifecycle completion](./copilot-loop-state-graph.md#interpreting-copilot-completion-versus-pr-lifecycle-completion); a fresh gate-coordination `nextAction` takes precedence over a `pre_approval_gate` hint. For stop states (`review_request_unavailable`,
    `blocked_needs_user_decision`), report to the user and do not proceed.
 
 7. Before you request another Copilot round on a later head, apply `COPILOT-STATE-CARRIED-CONVERGENCE`
