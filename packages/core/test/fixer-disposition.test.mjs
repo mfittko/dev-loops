@@ -337,3 +337,17 @@ test("normalizeFixerDispositionHandoff refuses a threadId that is not a review-t
     /not a review-thread node id/,
   );
 });
+
+test("normalizeFixerDispositionHandoff refuses an unedited FILL: noSitesReason", () => {
+  assert.throws(
+    () => normalizeFixerDispositionHandoff({ headSha: SHA, siteCoverage: [{ fingerprint: "fp", noSitesReason: "FILL: run the siteQuery" }] }),
+    /unedited skeleton placeholder/,
+  );
+});
+
+test("normalizeFixerDispositionHandoff refuses a count-valued returnedSites and quotes the expected shape", () => {
+  assert.throws(
+    () => normalizeFixerDispositionHandoff({ headSha: SHA, siteCoverage: [{ fingerprint: "fp", returnedSites: 3, sites: 3 }] }),
+    /not counts; expected returnedSites: \["<site>", \.\.\.\] and sites: \[\{ "site": "<site>", "status": "fixed"\|"skipped"/,
+  );
+});

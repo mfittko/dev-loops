@@ -14,7 +14,7 @@ import { parseArgs } from "node:util";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
-import { startDeltaSequence, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
@@ -84,12 +84,35 @@ async function defaultFetchPr({ repo, pr }) {
   return JSON.parse(out);
 }
 
+const SKELETON_STATUS = "fixed|skipped";
+
+/**
+ * The pre-filled `siteCoverage` of a commit_only handback, one record per act item with a siteQuery.
+ * It reads the same act list that check-pre-push-delta verifies (`--act-list`, the cumulative list),
+ * so its fingerprints and input forms match what the check demands.
+ * The sites are the ones the act item already names (stated surfaces and input forms);
+ * the fixer fills each site's `status` (and `reason` for a skip, `test` for a fixed input form).
+ * An item with no named site carries a `FILL:` `noSitesReason`; after running the siteQuery the fixer
+ * replaces it with the outcome, or with `returnedSites` and `sites`.
+ */
+export function buildSiteCoverageSkeleton(actList) {
+  return toDeltaActItems(actList).filter((item) => item.siteQuery).map((item) => {
+    const fingerprint = item.fingerprint ?? item.ref;
+    const sites = [
+      ...(item.statedSurfaces ?? []).map((site) => ({ site, status: SKELETON_STATUS, reason: "" })),
+      ...[...(item.acceptedForms ?? []), ...(item.rejectedForms ?? [])].map((site) => ({ site, kind: "input_form", status: SKELETON_STATUS, reason: "", test: "" })),
+    ];
+    if (sites.length === 0) return { fingerprint, noSitesReason: "FILL: run the siteQuery; keep this reason if it returns nothing, else replace it with returnedSites and sites" };
+    return { fingerprint, returnedSites: sites.map((s) => s.site), sites };
+  });
+}
+
 export function renderWorkOrder(workOrder) {
   const [dispositionPath] = workOrder.outputRefs;
   // headRefName is PR-supplied: JSON-quote it (and paths) so a backtick cannot close a span and inject prose.
   const { branch, allowedPaths } = workOrder.mutationAuthority;
   const task = workOrder.phase === "commit_only"
-    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.`
+    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery. Start from the \`siteCoverage\` skeleton in the work order JSON below: set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site, and change nothing else.`
     : `Apply and commit any fixes not yet committed, then push, reply to and resolve the addressed threads per agents/fixer.agent.md (pass \`--disposition fixed\` and the full 40-character SHA of the fixing commit in each fixed reply), then write the disposition handoff \`{ headSha, dispositions: [...] }\` (headSha = the pushed PR head) to \`${dispositionPath}\`. Also write \`siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }]\` in that handoff, one entry per act item that has a siteQuery (threadless items included): verify-fixer-disposition refuses a handoff without it. A threadless act item gets no disposition handoff entry; every entry's \`threadId\` is a review-thread node id.`;
   return `# Fixer work order (ADR 0106)
 
@@ -170,6 +193,7 @@ export async function emitFixerWorkOrder({
     contracts,
     requiredReads: [source.read, ...(delta ? [delta.read] : [])],
     outputRefs: [path.join(dir, executionIdentity, "fixer-disposition.json")],
+    siteCoverage: phase === "commit_only" && actListFile ? buildSiteCoverageSkeleton(source.parsed) : undefined,
     executionRules: {
       contract: "agents/fixer.agent.md",
       phase,
