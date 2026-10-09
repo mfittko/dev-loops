@@ -10,8 +10,11 @@ import {
   buildAngleRequestGroups,
   buildReviewDispatchPlan,
   cacheReuseVeracity,
+  composeCacheAwareRequest,
   fingerprintRequestPrefix,
+  fingerprintStablePrefix,
   normalizeHarnessCapabilities,
+  opaqueMarker,
   sha256Hex,
   DISPATCH_PROMPT_LEADING_CAP_BYTES,
   composeReviewerPromptText,
@@ -230,6 +233,90 @@ describe("fingerprintRequestPrefix — complete observable prefix (Section A/AC-
       () => fingerprintRequestPrefix({ model: "m", tools: [{ name: "Read", at: new Date() }] }),
       /fingerprint input at \$\.tools\[0\]\.at is not a plain object/,
     );
+  });
+});
+
+describe("fingerprintStablePrefix — AC-1: changing only gateState does not change the shared prefix", () => {
+  const stablePrefix = "You are a review agent with sys tools.";
+  const briefing = "materialized shared briefing block bytes";
+
+  test("returned fingerprint is the stable prefix + briefing only", () => {
+    const r = fingerprintStablePrefix({ stablePrefix, briefingBlock: briefing });
+    assert.match(r.stableFingerprint, /^sha256:[0-9a-f]{64}$/);
+  });
+
+  test("stable fingerprint is identity across gateState-only changes (AC-1)", () => {
+    const a = fingerprintStablePrefix({ stablePrefix, briefingBlock: briefing }).stableFingerprint;
+    const b = fingerprintStablePrefix({ stablePrefix, briefingBlock: briefing }).stableFingerprint;
+    assert.equal(a, b);
+  });
+
+  test("changing the briefing changes the stable fingerprint (head-specific bytes matter)", () => {
+    const a = fingerprintStablePrefix({ stablePrefix, briefingBlock: briefing }).stableFingerprint;
+    const c = fingerprintStablePrefix({ stablePrefix, briefingBlock: briefing + "!" }).stableFingerprint;
+    assert.notEqual(a, c);
+  });
+});
+
+describe("composeCacheAwareRequest — stable/volatile separation (Section B)", () => {
+  const stablePrefix = "stable agent/system/tool prefix";
+  const briefing = "SHARED_BRIEFING_BLOCK";
+
+  test("cache boundary sits after stable prefix + briefing block, before volatile/angle", () => {
+    const r = composeCacheAwareRequest({
+      stablePrefix,
+      briefingBlock: briefing,
+      volatileState: { headSha: "deadbeef", ciStatus: "green", round: 3 },
+      angleSuffix: "correctness",
+    });
+    const slots = r.segments.map((s) => s.slot);
+    assert.deepEqual(slots, [
+      "stablePrefix",
+      "briefingBlock",
+      "<cache boundary>",
+      "volatileState",
+      "angleSuffix",
+    ]);
+    assert.equal(r.segments[r.boundaryIndex].slot, "<cache boundary>");
+  });
+
+  test("no volatile or angle cases keep a minimal 3-segment request", () => {
+    const r = composeCacheAwareRequest({ stablePrefix, briefingBlock: briefing });
+    assert.deepEqual(r.segments.map((s) => s.slot), ["stablePrefix", "briefingBlock", "<cache boundary>"]);
+  });
+
+  test("cache-boundary marker segment is byte-empty (no label leaked into request bytes)", () => {
+    const r = composeCacheAwareRequest({ stablePrefix, briefingBlock: briefing });
+    const marker = r.segments[r.boundaryIndex];
+    assert.equal(marker.slot, "<cache boundary>");
+    assert.equal(marker.bytes, "", "boundary label must not be injected into provider-visible prompt bytes");
+    // The label still lives in the separate cacheBoundary field.
+    assert.equal(r.cacheBoundary, CACHE_BOUNDARY_AFTER_SHARED_PREFIX);
+  });
+
+  test("invalid cacheBoundary / ttlIntent fail closed in composeCacheAwareRequest", () => {
+    assert.throws(() => composeCacheAwareRequest({ stablePrefix, briefingBlock: briefing, cacheBoundary: "5min" }));
+    assert.throws(() => composeCacheAwareRequest({ stablePrefix, briefingBlock: briefing, ttlIntent: "forever" }));
+  });
+
+  test("briefedBytes canonicalizes a Buffer stablePrefix (no Buffer.toJSON data array)", () => {
+    const r = composeCacheAwareRequest({ stablePrefix: Buffer.from("stable bytes"), briefingBlock: briefing });
+    assert.ok(!r.briefedBytes.includes('"type":"Buffer"'), "nested Buffer must not expand into a decimal data array");
+    assert.ok(r.briefedBytes.includes("__buffer:"), "nested Buffer canonicalized to a hex marker");
+    // Byte-deterministic across identical Buffer bytes.
+    assert.equal(
+      r.briefedBytes,
+      composeCacheAwareRequest({ stablePrefix: Buffer.from("stable bytes"), briefingBlock: briefing }).briefedBytes,
+    );
+  });
+
+  test("stable fingerprint is unchanged by volatile/angle changes (AC-1 + AC-3)", () => {
+    const base = { stablePrefix, briefingBlock: briefing };
+    const withVolatile = composeCacheAwareRequest({ ...base, volatileState: { tag: "x" } }).stableFingerprint;
+    const withAngle = composeCacheAwareRequest({ ...base, angleSuffix: "security" }).stableFingerprint;
+    const plain = composeCacheAwareRequest(base).stableFingerprint;
+    assert.equal(withVolatile, plain);
+    assert.equal(withAngle, plain);
   });
 });
 
@@ -546,6 +633,10 @@ describe("sha256Hex — deterministic hashing + opaque markers", () => {
     const a = sha256Hex({ b: 1, a: 2 });
     const b = sha256Hex({ a: 2, b: 1 });
     assert.equal(a, b);
+  });
+
+  test("opaqueMarker marks harness-owned values as unverifiable", () => {
+    assert.match(opaqueMarker("model"), /^__opaque:/);
   });
 
   test("nested Buffers are canonicalized to hex (not Buffer.toJSON data array)", () => {

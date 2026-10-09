@@ -6,6 +6,8 @@ import {
   composeReviewVerdict,
   listOpenActItems,
   toFindingsLogShape,
+  planFanoutBatches,
+  DEFAULT_MAX_FANOUT_REVIEWERS,
   FANOUT_UNAVAILABLE_MESSAGE,
   fanoutUnavailableError,
   countDistinctReviewers,
@@ -438,6 +440,51 @@ describe("toFindingsLogShape", () => {
     for (const entry of shaped) {
       assert.equal("line" in entry, false);
     }
+  });
+});
+
+describe("planFanoutBatches", () => {
+  test("no degradation when angles <= cap (single parallel batch)", () => {
+    const angles = ["a", "b", "c"];
+    const result = planFanoutBatches(angles, 8);
+    assert.equal(result.degraded, false);
+    assert.deepEqual(result.batches, [["a", "b", "c"]]);
+  });
+
+  test("exactly at the cap is a single batch (no degrade)", () => {
+    const angles = Array.from({ length: 8 }, (_, i) => `a${i}`);
+    const result = planFanoutBatches(angles, 8);
+    assert.equal(result.degraded, false);
+    assert.equal(result.batches.length, 1);
+    assert.equal(result.batches[0].length, 8);
+  });
+
+  test("degrades into sequential batches when angles > cap", () => {
+    const angles = Array.from({ length: 10 }, (_, i) => `a${i}`);
+    const result = planFanoutBatches(angles, 8);
+    assert.equal(result.degraded, true);
+    assert.equal(result.batches.length, 2);
+    assert.equal(result.batches[0].length, 8);
+    assert.equal(result.batches[1].length, 2);
+    assert.deepEqual(result.batches.flat(), angles);
+  });
+
+  test("default cap is 8", () => {
+    assert.equal(DEFAULT_MAX_FANOUT_REVIEWERS, 8);
+    const angles = Array.from({ length: 9 }, (_, i) => `a${i}`);
+    const result = planFanoutBatches(angles);
+    assert.equal(result.degraded, true);
+    assert.equal(result.batches.length, 2);
+  });
+
+  test("empty angle set yields no batches and no degradation", () => {
+    assert.deepEqual(planFanoutBatches([]), { batches: [], degraded: false });
+  });
+
+  test("invalid cap falls back to default", () => {
+    const angles = Array.from({ length: 9 }, (_, i) => `a${i}`);
+    assert.equal(planFanoutBatches(angles, 0).batches.length, 2);
+    assert.equal(planFanoutBatches(angles, -1).degraded, true);
   });
 });
 

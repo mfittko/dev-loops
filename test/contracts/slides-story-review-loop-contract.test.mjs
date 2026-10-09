@@ -5,7 +5,7 @@ import { extractRelativeMarkdownLinks } from '../../scripts/docs/validate-links.
 
 const readRepo = (relativePath) => readFile(new URL(`../../${relativePath}`, import.meta.url), 'utf8');
 
-test('slides review has reachable sibling and template boundaries with executable output vocabulary', async () => {
+test('slides review has reachable sibling and template boundaries and names both outcomes', async () => {
   const [doc, indexDoc, uiDoc, template] = await Promise.all([
     readRepo('skills/docs/slides-story-review-loop.md'),
     readRepo('docs/index.md'),
