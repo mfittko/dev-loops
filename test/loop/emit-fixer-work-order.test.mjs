@@ -153,7 +153,7 @@ test("delta gate: an act-list --phase full with a push-clearing delta result at 
   });
 });
 
-test("delta gate: an act-list --phase full refuses a non-clearing or other-head delta result", async () => {
+test("delta gate: an act-list --phase full refuses without a delta record for the result's act set, whatever the result file states", async () => {
   await withFixture(async ({ head, files, emit, recordPath }) => {
     await rm(recordPath);
     for (const bad of [
@@ -883,6 +883,8 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
     assert.equal(workOrder.handbackCheck, `dev-loops loop pre-push-delta --act-list ${JSON.stringify(files.actList)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
     const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(threads.workOrder.siteCoverage, undefined);
+    const threadsPrompt = await readFile(threads.promptPath, "utf8");
+    assert.doesNotMatch(threadsPrompt, /handbackCheck|`siteCoverage` skeleton/);
   });
 });
 

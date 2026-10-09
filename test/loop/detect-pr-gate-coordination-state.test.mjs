@@ -3899,7 +3899,7 @@ test("detect-pr-gate-coordination-state behaves exactly as before when no fixer-
 
 // A full-phase fixer handoff delivered for the live head that lists a tackled thread, with no
 // verification checkpoint, means verify-fixer-disposition never completed: the boundary fails closed.
-async function runNotVerifiedFixture({ phase = "full", handoffHead }, assertResult) {
+async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw }, assertResult) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-not-verified-"));
   const REPO = "owner/repo";
   const PR = 3004;
@@ -3910,7 +3910,7 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead }, assertResu
     const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
     await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
     await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ executionIdentity: "f1-0000abcd", workOrder: { phase } }));
-    await writeFile(path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json"), JSON.stringify({
+    await writeFile(path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json"), handoffRaw ?? JSON.stringify({
       headSha: handoffHead ?? HEAD_SHA,
       dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543", disposition: "tackled" }],
     }));
@@ -3956,7 +3956,23 @@ test("detect-pr-gate-coordination-state reports not_verified for a delivered tac
   });
 });
 
-for (const [name, opts] of [["a tackled handoff for an older head", { handoffHead: "0ld1234567" }], ["a commit_only plan", { phase: "commit_only" }]]) {
+test("detect-pr-gate-coordination-state keeps not_verified after a later commit_only emission overwrote the plan", async () => {
+  await runNotVerifiedFixture({ phase: "commit_only" }, (result) => {
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.reason, /not_verified/);
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  });
+});
+
+test("detect-pr-gate-coordination-state fails closed on a malformed delivered handoff", async () => {
+  await runNotVerifiedFixture({ handoffRaw: '{"headSha": "abc99887' }, (result) => {
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.reason, /unreadable_handoff/);
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  });
+});
+
+for (const [name, opts] of [["a tackled handoff for an older head", { handoffHead: "0ld1234567" }]]) {
   test(`detect-pr-gate-coordination-state does not block on ${name}`, async () => {
     await runNotVerifiedFixture(opts, (result) => {
       assert.equal(result.ok, true);

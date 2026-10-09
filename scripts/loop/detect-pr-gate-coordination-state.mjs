@@ -41,7 +41,7 @@ import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 // Gate-coordination terminal stop actions where the dev-loop run is completing
 // or stopping (success OR stop). The runner-coordination lock is auto-released
@@ -770,23 +770,38 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // No checkpoint recorded for this head means nothing to enforce here (a PR
 // with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
-// A full-phase fixer handoff for the live head that lists a tackled thread, with no checkpoint, means
+// A fixer handoff delivered for the live head that lists a tackled thread, with no checkpoint, means
 // verify-fixer-disposition never completed (a failed run writes none): fail closed as not_verified.
+// Scans every execution's handoff, not the latest plan: a later emission overwrites the plan but not the handoff.
+// Only absence (ENOENT) means "no handoff"; any other read or parse failure fails closed like unreadable_checkpoint.
 async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot }) {
-  const planPath = path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`, "fixer-emit-plan.json");
-  let handoff;
+  const prDir = path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`);
+  const unreadable = (error) => ({
+    complete: false,
+    incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_handoff: ${error instanceof Error ? error.message : String(error)}` }],
+  });
+  let executions;
   try {
-    const plan = JSON.parse(await readFile(planPath, "utf8"));
-    if (plan?.workOrder?.phase !== "full" || !/^f\d+-[0-9a-f]{8}$/.test(plan.executionIdentity)) return null;
-    // The handoff path is derived from the plan location, as verify-fixer-disposition derives it.
-    handoff = JSON.parse(await readFile(path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json"), "utf8"));
-  } catch {
-    return null;
+    executions = (await readdir(prDir)).filter((name) => /^f\d+-[0-9a-f]{8}$/.test(name));
+  } catch (error) {
+    return error?.code === "ENOENT" ? null : unreadable(error);
   }
-  if (handoff?.headSha !== currentHeadSha) return null;
-  const incomplete = (Array.isArray(handoff.dispositions) ? handoff.dispositions : [])
-    .filter((entry) => entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.threadId === "string")
-    .map((entry) => ({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED }));
+  const incomplete = [];
+  for (const execution of executions) {
+    let handoff;
+    try {
+      handoff = JSON.parse(await readFile(path.join(prDir, execution, "fixer-disposition.json"), "utf8"));
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      return unreadable(error);
+    }
+    if (handoff?.headSha !== currentHeadSha) continue;
+    for (const entry of Array.isArray(handoff.dispositions) ? handoff.dispositions : []) {
+      if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.threadId === "string") {
+        incomplete.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
+      }
+    }
+  }
   return incomplete.length > 0 ? { complete: false, incomplete } : null;
 }
 
