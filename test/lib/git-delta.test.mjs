@@ -112,6 +112,15 @@ test("incrementalFiles keeps both rename and copy endpoints before base reductio
     const delta = await captureMainRelativeChangedFilesSince({ base: "old", repoRoot: "/unused", runGit });
     assert.deepEqual(delta.changedFiles, []);
     assert.deepEqual(delta.incrementalFiles, [".devloops", "other.txt"]);
+
+    // mainRef does not resolve (rev-parse exits 1): the unreduced fallback must still carry incrementalFiles.
+    const runGitNoMain = async (args) => {
+      if (args.includes("--name-status")) return runGit(args);
+      return { code: 1, stdout: "", stderr: "" };
+    };
+    const fallback = await captureMainRelativeChangedFilesSince({ base: "old", repoRoot: "/unused", runGit: runGitNoMain });
+    assert.equal(fallback.reduced, false);
+    assert.deepEqual(fallback.incrementalFiles, [".devloops", "other.txt"]);
   }
 });
 
