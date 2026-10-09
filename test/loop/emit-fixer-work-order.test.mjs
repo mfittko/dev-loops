@@ -750,6 +750,19 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
   });
 });
 
+test("the skeleton merges a shared fingerprint and dedupes repeated site texts", async () => {
+  await withFixture(async ({ files, emit }) => {
+    await writeFile(files.actList, JSON.stringify([
+      { severity: "low", angle: "correctness", summary: "one", judgeDisposition: "act", fingerprint: "fp", siteQuery: "q1", statedSurfaces: ["a.md", "a.md", "--x"], acceptedForms: ["--x"] },
+      { severity: "low", angle: "holistic", summary: "two", judgeDisposition: "act", fingerprint: "fp", siteQuery: "q2", statedSurfaces: ["b.md", "a.md"] },
+    ]));
+    const { workOrder } = await emit({ phase: "commit_only", deltaResult: undefined });
+    assert.equal(workOrder.siteCoverage.length, 1);
+    assert.deepEqual(workOrder.siteCoverage[0].returnedSites, ["a.md", "--x", "b.md"]);
+    assert.equal(workOrder.siteCoverage[0].sites.find((s) => s.site === "--x").kind, "input_form");
+  });
+});
+
 test("a handback made by filling the skeleton passes check-pre-push-delta input mode", async () => {
   await withFixture(async ({ files, emit, head }) => {
     await writeFile(files.actList, JSON.stringify(SKELETON_ACT));
