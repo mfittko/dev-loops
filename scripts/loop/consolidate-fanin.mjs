@@ -519,7 +519,9 @@ async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot, di
     }
     if (dispatchRetiredAt !== undefined) {
       const receiptStats = await stat(pullReceiptPath(receiptTmpRoot, unit.workOrderRef));
-      if (receiptStats.mtimeMs <= dispatchRetiredAt) {
+      // Both sides use filesystem time; equality is valid on coarse filesystems.
+      // Retired executions are independently excluded by verifyRetiredRoundDispatch.
+      if (receiptStats.mtimeMs < dispatchRetiredAt) {
         throw new Error(`GATE-EXEC-ROUND-RETIREMENT: pull receipt for ${unit.scope} predates retirement; freshly redispatch this unit (fail-closed)`);
       }
     }
@@ -533,7 +535,7 @@ async function verifyUnitDeliveryReceipts(plan, resultAngles, receiptTmpRoot, di
 // Read the producer's existing audit, not a new provenance store. Only an
 // actual archived dispatch record closes the newly reachable zero-record path;
 // sentinel-only/legacy retirements retain their pre-existing offline behavior.
-async function readDispatchRetirementTimes(tmpRoot, headSha) {
+async function readDispatchRetirements(tmpRoot, headSha) {
   const retiredRoot = path.join(tmpRoot, "retired-gate-rounds", headSha);
   let rounds;
   try {
@@ -542,7 +544,7 @@ async function readDispatchRetirementTimes(tmpRoot, headSha) {
     if (error.code === "ENOENT") return new Map();
     throw error;
   }
-  const times = new Map();
+  const retirements = new Map();
   for (const round of rounds.filter((entry) => entry.isDirectory() && /^round-\d+$/.test(entry.name))) {
     const auditPath = path.join(retiredRoot, round.name, "retirement.json");
     let text;
@@ -555,11 +557,28 @@ async function readDispatchRetirementTimes(tmpRoot, headSha) {
     const audit = JSON.parse(text);
     if (audit?.headSha !== headSha || !GATE_NAMES.includes(audit.gate)
         || !Array.isArray(audit.dispatchPromptRecords) || audit.dispatchPromptRecords.length === 0) continue;
-    const retiredAt = Date.parse(audit.retiredAt);
-    if (!Number.isFinite(retiredAt)) throw new Error(`GATE-EXEC-ROUND-RETIREMENT: cannot verify retirement time in ${auditPath}`);
-    times.set(audit.gate, Math.max(times.get(audit.gate) ?? -Infinity, retiredAt));
+    const auditTime = (await stat(auditPath)).mtimeMs;
+    const retirement = retirements.get(audit.gate) ?? { filesystemTime: -Infinity, executions: new Set() };
+    retirement.filesystemTime = Math.max(retirement.filesystemTime, auditTime);
+    for (const name of audit.dispatchPromptRecords) {
+      if (typeof name !== "string" || path.basename(name) !== name) {
+        throw new Error(`GATE-EXEC-ROUND-RETIREMENT: invalid archived dispatch-record name in ${auditPath}`);
+      }
+      const recordText = await readFile(path.join(retiredRoot, round.name, name), "utf8");
+      let record;
+      try {
+        record = JSON.parse(recordText);
+      } catch {
+        // Retirement preserves malformed records too. They cannot replay as
+        // valid dispatch bindings, but their audit still activates the floor.
+        continue;
+      }
+      const execution = record?.compactReference?.executionIdentity;
+      if (typeof execution === "string") retirement.executions.add(execution);
+    }
+    retirements.set(audit.gate, retirement);
   }
-  return times;
+  return retirements;
 }
 
 // Retirement's existing durable audit closes the legacy zero-record escape:
@@ -567,15 +586,23 @@ async function readDispatchRetirementTimes(tmpRoot, headSha) {
 async function verifyRetiredRoundDispatch(options, plan) {
   if (options.headSha === undefined) return;
   const tmpRoot = options.tmpRoot ?? path.join(process.cwd(), "tmp");
-  const retirementTimes = await readDispatchRetirementTimes(tmpRoot, options.headSha);
-  if (retirementTimes.size === 0) return;
+  const retirements = await readDispatchRetirements(tmpRoot, options.headSha);
+  if (retirements.size === 0) return;
   const fail = (reason) => { throw new Error(`GATE-EXEC-ROUND-RETIREMENT: ${reason} (fail-closed; rebuild and freshly redispatch this gate's units before consolidation)`); };
   if (options.gate === undefined) fail(`head ${options.headSha} has retired rounds; --gate is required to identify the rebuilt round`);
-  const dispatchRetiredAt = retirementTimes.get(options.gate);
-  if (dispatchRetiredAt === undefined) return; // The other gate's live round is untouched.
-  if (plan === undefined) fail(`gate ${options.gate} at head ${options.headSha} requires a fresh keyed --emit-plan after retirement`);
+  if (typeof options.gate !== "string" || !VALID_GATES.has(options.gate.trim().toLowerCase())) {
+    fail("--gate must identify a supported string gate");
+  }
+  const gate = options.gate.trim().toLowerCase();
+  const retirement = retirements.get(gate);
+  if (retirement === undefined) return; // The other gate's live round is untouched.
+  const dispatchRetiredAt = retirement.filesystemTime;
+  if (plan === undefined) fail(`gate ${gate} at head ${options.headSha} requires a fresh keyed --emit-plan after retirement`);
   const planStats = await stat(options.emitPlan);
-  if (planStats.mtimeMs <= dispatchRetiredAt) {
+  // Same-filesystem ordering tolerates timestamp buckets and wall-clock skew.
+  // It is not sufficient alone: every execution must also be absent from the
+  // archived records, so rewriting/retouching retired evidence cannot renew it.
+  if (planStats.mtimeMs < dispatchRetiredAt) {
     fail("--emit-plan predates retirement; re-emit the rebuilt round");
   }
   const units = plan.units;
@@ -585,13 +612,16 @@ async function verifyRetiredRoundDispatch(options, plan) {
   if (options.expectedDispatchUnits !== undefined && options.expectedDispatchUnits !== units.length) {
     fail(`emit-plan unit count (${units.length}) differs from expected dispatch-unit count (${options.expectedDispatchUnits})`);
   }
-  const scopePrefix = gateScopePrefix(options.gate);
+  const scopePrefix = gateScopePrefix(gate);
   const unitScopes = new Set();
   for (const unit of units) {
     if (typeof unit?.scope !== "string" || !unit.scope.startsWith(scopePrefix) || unitScopes.has(unit.scope)) {
       fail("emit-plan units must have unique current-gate scopes");
     }
     unitScopes.add(unit.scope);
+    if (retirement.executions.has(unit.executionIdentity)) {
+      fail(`execution ${unit.executionIdentity} for ${unit.scope} was retired; re-emit the rebuilt round`);
+    }
   }
   const recordPrefix = "checkpoint-dispatch-prompt-";
   const suffix = `-${options.headSha}.json`;
@@ -604,7 +634,7 @@ async function verifyRetiredRoundDispatch(options, plan) {
   for (const unit of units) {
     const recordPath = path.join(tmpRoot, `${recordPrefix}${unit.scope}${suffix}`);
     const recordStats = await stat(recordPath);
-    if (recordStats.mtimeMs <= dispatchRetiredAt) {
+    if (recordStats.mtimeMs < dispatchRetiredAt) {
       fail(`dispatch-prompt record for ${unit.scope} predates retirement`);
     }
     const record = JSON.parse(await readFile(recordPath, "utf8"));

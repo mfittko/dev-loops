@@ -548,15 +548,24 @@ records, never failed moves.
 Fan-in consumes the existing `retirement.json` audit for the exact gate+full head
 only when its `dispatchPromptRecords` is non-empty, including partial audits
 listing successfully moved records. It never treats the newly empty live
-dispatch namespace as a legacy/offline round. It requires `--gate` and a keyed
-`--emit-plan` written after the latest matching dispatch-record retirement.
-That plan must name a non-empty fresh
+dispatch namespace as a legacy/offline round. When archived-dispatch audits
+exist for the head, it requires a supported string `--gate`, canonicalized by
+trim/lowercase independently of plan presence, before granting another-gate
+exemption. The matching gate requires a keyed `--emit-plan` from the rebuilt
+round. That plan must name a non-empty fresh
 unit set with a matching `count`; when supplied, `--expected-dispatch-units`
 must agree. The current gate's live dispatch-record scopes must match those
 units exactly, and each post-retirement record must bind its unit's compact
 reference (work-order ref, digest and execution identity). Every unit also
 needs a matching post-retirement pull receipt and its existing post-pull
-result proof. Missing, stale, partial or foreign dispatch evidence fails
+result proof. Freshness combines same-filesystem ordering and execution binding:
+plan, record and receipt mtimes must be at or after the matching audits' latest
+filesystem mtime, not their human-readable `retiredAt` wall-clock timestamp.
+Equality is valid on coarse filesystems only with a new bound execution;
+executions from every matching archived dispatch record are refused even if
+their plan, records or receipts are rewritten or retouched. Receipt identity
+and the existing post-pull result check remain mandatory.
+Missing, stale, partial or foreign dispatch evidence fails
 before fan-in writes outputs; existing output files are preserved.
 Other gates and heads, no-op retirements, and sentinel-only/legacy audits
 without archived dispatch records do not acquire this floor. No new provenance
