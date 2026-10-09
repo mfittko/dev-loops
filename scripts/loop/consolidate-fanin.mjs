@@ -1162,8 +1162,7 @@ export async function consolidateGateFanin(options) {
     const retired = await readRetiredDispatchExecutions(tmpRoot, gate, options.headSha);
     if (retired.count > 0) {
       // Fresh records are counted for the retired gate only: the other gate's same-head records stay live.
-      const freshPrefix = gate === undefined ? "" : `checkpoint-dispatch-prompt-${gateScopePrefix(gate)}`;
-      const fresh = gate === undefined ? 0 : (await readdir(tmpRoot).catch(() => [])).filter((n) => n.startsWith(freshPrefix) && n.endsWith(`-${options.headSha}.json`)).length;
+      const fresh = gate === undefined ? 0 : (await readdir(tmpRoot).catch(() => [])).filter((n) => n.startsWith(`checkpoint-dispatch-prompt-${gateScopePrefix(gate)}`) && n.endsWith(`-${options.headSha}.json`)).length;
       if (emitPlan === undefined || fresh === 0) throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: head ${options.headSha} was retired with archived dispatch records, so fan-in needs --gate, a fresh --emit-plan and fresh dispatch records for that gate (fail-closed)`);
       const stale = (emitPlan.units ?? []).find((u) => retired.identities.has(u.executionIdentity));
       if (stale) throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: unit ${stale.scope} reuses execution ${stale.executionIdentity} from a retired round's archived dispatch records; re-dispatch it (fail-closed)`);

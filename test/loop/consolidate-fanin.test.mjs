@@ -4517,7 +4517,7 @@ async function retiredHeadFanin(archive, { fresh = false, planIdentity = "r1-ab-
           await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, { prefixPath, leading: `${bytes}## Angle: coverage\nGo.` });
           const unit = { ...matchingEmitPlan().units[0], scope: "draft-gate-coverage", executionIdentity: planIdentity, workOrderRef: `review:o/r#1:draft_gate:${HEAD_A}:draft-gate-coverage` };
           await writeEmitPlanReceipt(tmpRoot, unit);
-          options.emitPlan = await writeEmitPlan(tmpRoot, { ...matchingEmitPlan(), gate: "draft_gate", headSha: HEAD_A, units: [unit] });
+          options.emitPlan = await writeEmitPlan(tmpRoot, { ...matchingEmitPlan(), gate, headSha: HEAD_A, units: [unit] });
           options.receiptTmpRoot = tmpRoot;
         }
         outcome = await consolidateGateFanin(options).then((value) => ({ value }), (error) => ({ error }));
@@ -4540,6 +4540,19 @@ test("#2709 AC5: a fresh emission with fresh records passes at a retired head", 
   const { value, error } = await retiredHeadFanin(archiveDraft("r0-old-u0"), { fresh: true });
   assert.equal(error, undefined);
   assert.equal(value.overallVerdict, "clean");
+});
+
+test("#2709 AC5: no --gate with an archived dispatch record at the head is refused", async () => {
+  const { error } = await retiredHeadFanin(archiveDraft("r1-ab-u0"), { gate: null });
+  assert.match(error?.message ?? "", /retired with archived dispatch records.*fresh --emit-plan/);
+});
+
+test("#2709 AC5: another gate's live records do not satisfy the retired gate's fresh-record requirement", async () => {
+  const { error } = await retiredHeadFanin(
+    (t) => archiveDispatchRecord(t, HEAD_A, `checkpoint-dispatch-prompt-pre-approval-gate-coverage-${HEAD_A}.json`, "r1-ab-u0"),
+    { fresh: true, planIdentity: "r2-new-u0", gate: "pre_approval_gate" },
+  );
+  assert.match(error?.message ?? "", /retired with archived dispatch records.*fresh --emit-plan/);
 });
 
 test("#2709 AC5: a plan unit whose execution is in the archive is refused", async () => {
