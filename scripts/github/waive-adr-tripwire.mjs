@@ -39,8 +39,8 @@ create-pr.mjs refuse a hand-written one. It applies the waiver only when:
     lightweight pr_body path;
   - the ADR tripwire blocks, and every trigger is a skills/docs/*-contract.md path;
   - every triggering path appears, backticked, in a row of the linked issue's AC / DoD matrix;
-  - the current head has a clean draft_gate verdict whose recorded specDigest
-    equals the specDigest of the linked issue's current body.
+  - the current head has a clean draft_gate or pre_approval_gate verdict whose
+    recorded specDigest equals the specDigest of the linked issue's current body.
 Otherwise it refuses with a typed reason and leaves the body unchanged. It never
 waives an extension-defaults.yaml trigger, a rule-modality reversal or removal,
 an unresolvable scan, a standingAuthorizations change, or any other approval.
@@ -89,8 +89,8 @@ async function defaultFetchDefaultBranch({ repo }, { env, ghCommand, runChild })
   return typeof data?.defaultBranchRef?.name === "string" ? data.defaultBranchRef.name : null;
 }
 
-async function defaultReadRecordedSpecDigest({ repo, pr, headSha, repoRoot }) {
-  const ledgerPath = buildLogPath({ repo, pr, gate: "draft_gate", headSha, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) });
+async function defaultReadRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate = "draft_gate" }) {
+  const ledgerPath = buildLogPath({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) });
   try {
     const ledger = JSON.parse(await readFile(ledgerPath, "utf8"));
     return typeof ledger?.specAuthority?.specDigest === "string" ? ledger.specAuthority.specDigest : null;
@@ -187,8 +187,11 @@ export async function waiveAdrTripwire(options, {
   }
 
   const gate = await fetchDraftGateEvidence({ repo, pr, headSha }, gh);
-  if (!gate?.currentHeadClean) {
-    return refuse("no_clean_draft_gate", `no clean draft_gate checkpoint verdict on the current head ${headSha.slice(0, 7)}`);
+  // A post-ready push gets only a pre_approval_gate round, so that verdict is the alternative.
+  // Every clean current-head gate is tried in order; the first matching digest wins.
+  const cleanGates = [gate?.currentHeadClean && "draft_gate", gate?.preApprovalCurrentHeadClean && "pre_approval_gate"].filter(Boolean);
+  if (cleanGates.length === 0) {
+    return refuse("no_clean_draft_gate", `no clean draft_gate or pre_approval_gate checkpoint verdict on the current head ${headSha.slice(0, 7)}`);
   }
   let currentSpecDigest;
   try {
@@ -196,11 +199,16 @@ export async function waiveAdrTripwire(options, {
   } catch (error) {
     return refuse("spec_unreadable", `cannot derive the spec digest of issue #${issue}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const recorded = await readRecordedSpecDigest({ repo, pr, headSha, repoRoot });
-  if (recorded === null) return refuse("spec_digest_unrecorded", `the draft_gate for head ${headSha.slice(0, 7)} recorded no specDigest`);
-  if (recorded !== currentSpecDigest) {
-    return refuse("spec_digest_mismatch", `the draft_gate recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest}`);
+  let digestRefusal = null;
+  let matched = false;
+  for (const gateName of cleanGates) {
+    const recorded = await readRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate: gateName });
+    if (recorded === currentSpecDigest) { matched = true; break; }
+    // A recorded-but-stale digest outranks an unrecorded one in the refusal.
+    if (recorded !== null) digestRefusal = refuse("spec_digest_mismatch", `the ${gateName} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest}`);
+    else digestRefusal ??= refuse("spec_digest_unrecorded", `the ${gateName} for head ${headSha.slice(0, 7)} recorded no specDigest`);
   }
+  if (!matched) return digestRefusal;
 
   const { record } = authorization;
   const line = buildStandingWaiverLine({ head: headSha, issue, grantedBy: record.grantedBy, expires: record.expires, paths });

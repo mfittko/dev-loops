@@ -21,8 +21,7 @@ const FIXTURE = JSON.parse(
  * for the fixture's "before" run, once for "after" — builds one compact
  * execution-unit record per unit FROM the primitive's own validated output
  * (never a hand-built record), and aggregates a phase-level before/after
- * delta report. Mirrors review-lineage-e2e-fixture.test.mjs's drive-the-real-
- * pipeline shape.
+ * delta report.
  */
 function buildRoleBudgetRecord({ role, run, headSha, consumed, snapshot, harness }) {
   const verdict = enforceRoleBudget({ unit: { role, run, gateContext: { headSha } }, consumed });

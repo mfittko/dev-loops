@@ -154,7 +154,7 @@ function buildFinding(signals, clusterReason) {
       : undefined,
     createdAt,
     updatedAt,
-    // Internal fields for shaping (not in the DebtFindingSchema output)
+    // Internal fields for shaping (not part of the emitted finding)
     _clusterReason: clusterReason,
     _signalCount: signals.length,
     _categories: categories,
