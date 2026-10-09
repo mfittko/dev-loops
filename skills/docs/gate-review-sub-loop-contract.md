@@ -438,7 +438,7 @@ Missing/malformed `prefixPath` or leading bytes, missing `promptContentHash`, a 
 
 **Three identities, one honest boundary.** The layout check binds recorded-layout identity to generated-file identity. The pull receipt binds delivered-task identity: `pull-work-order.mjs` writes it only after the reviewer's supplied reference matched the canonical emitted unit, and fan-in requires a matching receipt (execution, unit, digest) for every freshly dispatched unit. A missing or mismatched receipt fails closed; a receipt without the unit's result artifacts is an interrupted reviewer, never complete. Carried-only units need no receipt; their carry proof stays the authority. The remaining boundary holds for evidence reads: the sentinel proves each hashed required read still matches its recorded bytes before the reviewer starts, not that the reviewer read it in full. The per-harness delivery limitations above and `GATE-EXEC-FANOUT-DISPATCH-EMIT` still apply.
 
-Zero dispatch-prompt records do not themselves fail this check: capture remains progressive/optional for non-composer callers, including legacy offline rounds. This does not waive the records-floor below. Recovery requires re-emitting and actually redispatching compliant prompts before reconsolidating; regenerating files cannot certify old delivery. For unchanged prefix bytes, use the same-head retry guard below. For changed bytes, follow `GATE-EXEC-ROUND-RETIREMENT`: retire before rebuilding, then redispatch. Preserve the original review history and audit records.
+Zero dispatch-prompt records do not themselves fail this check: capture remains progressive/optional for non-composer callers, including legacy offline rounds, except at a head whose gate round was retired with archived dispatch records (`GATE-EXEC-ROUND-RETIREMENT`). This does not waive the records-floor below. Recovery requires re-emitting and actually redispatching compliant prompts before reconsolidating; regenerating files cannot certify old delivery. For unchanged prefix bytes, use the same-head retry guard below. For changed bytes, follow `GATE-EXEC-ROUND-RETIREMENT`: retire before rebuilding, then redispatch. Preserve the original review history and audit records.
 
 **Records-floor.** A coordinator round that records ZERO dispatch/briefing evidence for a gate that DID dispatch units is closed mechanically: the Phase-1 request-plan artifact (`tmp/gate-context/**/<gate>-<headSha>.dispatch-plan.json`, written by `write-gate-context.mjs`) is the AUTHORITY for whether the round dispatched units. When `--head-sha` is given, fan-in derives the expected dispatch-unit floor from every persisted plan for the head (the total pending angles across `requestGroups`) and FAILS CLOSED when the plan expects units but the round recorded zero reviewer sentinels. `verify-briefing-prefixes` correspondingly no longer returns `verified: true` for `sentinels.length === 0` when the plan-derived unit count is positive. A genuinely zero-unit gate (a plan whose `requestGroups` carry no angles, e.g. an all-carried round) is not forced to fail, and a corrupt or unparseable plan artifact fails closed (the plan is the enforcement authority, never silently ignorable). The optional `--expected-dispatch-units` flag still reconciles the EXACT unit count when the caller knows it; the plan, not the flag, decides whether units were expected at all.
 
@@ -526,23 +526,40 @@ node scripts/github/retire-gate-round.mjs --gate <gate> --head-sha <sha> --reaso
   [--findings-dir <round artifacts dir>] [--repo <owner/name> --pr <N> | --no-findings-artifacts]
 ```
 
-Use the FULL 40-character sentinel-key SHA. Retirement moves only that gate+head's
-sentinels and supplied findings directory into
-`tmp/retired-gate-rounds/<sha>/round-<n>/`, with `retirement.json` for audit.
-The other gate's live same-head round is untouched. Then rebuild and dispatch a FRESH
+Use the FULL 40- or 64-character head SHA. Retirement moves only that gate+head's
+regular sentinel files, matching
+`checkpoint-dispatch-prompt-<gate-prefixed-scope>-<headSha>.json` records, and supplied
+findings directory into `tmp/retired-gate-rounds/<sha>/round-<n>/`, with
+`retirement.json` for audit. Dispatch records match by gate prefix and full-head
+filename suffix, independently of surviving sentinels or JSON contents; their
+original bytes are preserved, including malformed JSON. Records for other gates
+or heads and unrelated files remain untouched. Then rebuild and dispatch a FRESH
 fan-out whose reviewers all use the new hash.
+
+The success result and retirement audit add `dispatchPromptRecords`, a sorted
+array of successfully archived dispatch-record basenames; a no-op result returns
+an empty array. The legacy `retired` result remains the sentinel count, not a
+total artifact count. A dispatch-only retirement is non-noop even with
+`retired: 0`; repeating retirement with no matching live evidence is a no-op.
+Failures expose `partiallyRetiredDispatchPromptRecords` for dispatch records
+successfully moved before failure; partial audits list only successfully archived
+records, never failed moves.
 
 The caller MUST pass `--findings-dir` whenever the retired round wrote artifacts:
 same-head stamps alone would otherwise let stale findings enter the new fan-in.
 Without that flag or `--no-findings-artifacts`, retirement REFUSES when the canonical
 `tmp/gate-reviews/<slug>/pr-<N>/<gate>-<headSha>/` exists. Supply `--repo` and `--pr`
 to check that path; `--no-findings-artifacts` is the explicit operator opt-out accepting
-live-artifact risk. Even a no-sentinel/no-artifact no-op performs that check first.
+live-artifact risk. Even a no-sentinel/no-dispatch/no-artifact no-op performs that check first.
 
 Retired evidence stays recoverable for audit, never as input to the new fan-in.
 The carry resolver also refuses equal prior/current heads, so retirement cannot
-re-seed its own verdict through carry-forward. Retired sentinels sit outside the
-verifier's flat live scan; divergent hashes within a live round still fail closed.
+re-seed its own verdict through carry-forward. Retired sentinels and dispatch records
+sit outside the verifiers' flat live scans; divergent prefix hashes and invalid
+live dispatch bindings still fail closed. Retirement does not weaken verification
+or authorize reuse of retired reviewer evidence.
+
+After a retirement that archived dispatch records for a gate and full head, `consolidate-fanin.mjs` for that gate and head requires `--emit-plan` and at least one fresh dispatch record. It refuses plan units whose execution identity appears in the archived records. It looks up the archive by the full head and filters by gate from the file names before parsing any record. A short head fails closed when a retirement audit exists for a head it prefixes. The requirement keys on the presence of an archived dispatch record file for the gate, parseable or not, and counts fresh records for that gate only. A fan-in without `--gate` at a head with archived dispatch records is refused.
 
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 
