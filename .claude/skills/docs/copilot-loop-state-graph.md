@@ -23,8 +23,8 @@ The machine maps observable PR/GitHub/worktree facts (the **snapshot**) to exact
 | `review_request_unavailable` | Copilot review request returned `unavailable` and no observable in-progress review evidence exists; must stop/report |
 | <!-- term: state:waiting_for_ci --> `waiting_for_ci` | CI checks are in progress or no usable CI readiness signal exists yet; wait before proceeding |
 | `blocked_needs_user_decision` | Unexpected failure (CI failure, bad request result); requires user decision |
-| `done` | Canonical snapshot state for a merged or closed PR; report completion without entering gates. This state is distinct from the handoff's `loopDisposition: "done"`, which can end only the Copilot sub-loop for an open PR |
-| <!-- term: state:internal_tooling_direct_gate --> `internal_tooling_direct_gate` | Internal-tooling-only PR; Copilot external review is skipped and the loop proceeds directly to `pre_approval_gate`. Externally assigned by the routing layer, never derived from a snapshot by `interpretLoopState` — no snapshot field drives it |
+| `done` | Canonical snapshot state; for a merged or closed PR, report completion without entering gates. This state is distinct from the handoff's `loopDisposition: "done"`, which can end only the Copilot sub-loop for an open PR |
+| <!-- term: state:internal_tooling_direct_gate --> `internal_tooling_direct_gate` | Internal-tooling-only PR; Copilot external review is skipped and the loop proceeds to fresh gate coordination. Externally assigned by the routing layer, never derived from a snapshot by `interpretLoopState` — no snapshot field drives it |
 
 The round-cap/low-signal heuristics in `copilot-loop-state.mjs` (`NEXT_ACTIONS`/`isCopilotRoundCapReached`) own three more terminal states and their entry conditions: `low_signal_converged`, `round_cap_reached`, `round_cap_clean_fallback`.
 
@@ -55,7 +55,7 @@ Terminal states with no outgoing transitions: `no_pr`, `review_request_unavailab
 - `ready_to_rerequest_review` -> `review_request_unavailable`
   - re-request failed with unavailable
 - `ready_to_rerequest_review` -> `done`
-  - agent decides PR is complete
+  - agent decides the Copilot sub-loop is complete; an open PR then consults fresh gate coordination
 - `waiting_for_ci` -> `pr_ready_no_feedback`
   - CI passed; no review yet
 - `waiting_for_ci` -> `ready_to_rerequest_review`
@@ -63,7 +63,7 @@ Terminal states with no outgoing transitions: `no_pr`, `review_request_unavailab
 - `waiting_for_ci` -> `blocked_needs_user_decision`
   - CI failed
 - `internal_tooling_direct_gate` -> `done`
-  - internal-tooling PR skips Copilot review and proceeds directly to `pre_approval_gate`
+  - internal-tooling PR skips Copilot review and proceeds to fresh gate coordination
 
 ## Snapshot Schema
 
