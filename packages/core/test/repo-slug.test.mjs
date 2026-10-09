@@ -195,6 +195,24 @@ test("detectRepoSlug returns owner/repo from git remote", () => {
   }
 });
 
+test("detectRepoSlug ignores an ambient GIT_DIR", () => {
+  const a = fs.mkdtempSync(path.join(os.tmpdir(), "repo-slug-test-"));
+  const b = fs.mkdtempSync(path.join(os.tmpdir(), "repo-slug-test-"));
+  const saved = process.env.GIT_DIR;
+  try {
+    for (const [dir, slug] of [[a, "owner/a"], [b, "owner/b"]]) {
+      execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["-C", dir, "remote", "add", "origin", `https://github.com/${slug}.git`]);
+    }
+    process.env.GIT_DIR = path.join(b, ".git");
+    assert.equal(detectRepoSlug(a), "owner/a");
+  } finally {
+    if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved;
+    fs.rmSync(a, { recursive: true, force: true });
+    fs.rmSync(b, { recursive: true, force: true });
+  }
+});
+
 test("detectRepoSlug returns null for non-git directory", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-slug-test-"));
   try {

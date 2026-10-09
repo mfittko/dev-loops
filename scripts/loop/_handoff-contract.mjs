@@ -22,15 +22,6 @@ const HANDOFF_RESUME_POLICY = Object.freeze({
   NONE: "none",
 });
 const GATE_BOUNDARY_STOP_VALUES = new Set(Object.values(PR_CHECKPOINT));
-const SUBAGENT_ACTIONS = new Set([
-  "fix_threads",
-  "draft_gate",
-  "request_review",
-  "rerequest_review",
-  "run_pre_approval",
-  "run_ui_e2e",
-  "record_designer_review",
-]);
 function normalizeContractValue(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : null;
 }
@@ -40,65 +31,6 @@ function buildContract({ ownership, stopBoundary, resumePolicy }) {
     stopBoundary,
     resumePolicy,
   };
-}
-export function buildHandoffContractForConductorAction({ action, gateBoundary, requiresApproval = false } = {}) {
-  const normalizedAction = normalizeContractValue(action);
-  if (SUBAGENT_ACTIONS.has(normalizedAction)) {
-    if (requiresApproval) {
-      return buildContract({
-        ownership: HANDOFF_OWNERSHIP.HUMAN,
-        stopBoundary: HANDOFF_STOP_BOUNDARY.APPROVAL_BOUNDARY,
-        resumePolicy: HANDOFF_RESUME_POLICY.RESUME_AFTER_HUMAN_APPROVAL,
-      });
-    }
-    return buildContract({
-      ownership: HANDOFF_OWNERSHIP.SUBAGENT,
-      stopBoundary: HANDOFF_STOP_BOUNDARY.SUBAGENT_EXIT,
-      resumePolicy: HANDOFF_RESUME_POLICY.RESUME_AFTER_SUBAGENT_EXIT,
-    });
-  }
-  switch (normalizedAction) {
-    case "watch":
-      return buildContract({
-        ownership: HANDOFF_OWNERSHIP.PARENT,
-        stopBoundary: HANDOFF_STOP_BOUNDARY.WATCH_BOUNDARY,
-        resumePolicy: HANDOFF_RESUME_POLICY.RESUME_AFTER_STATE_REFRESH,
-      });
-    case "merge":
-      return buildContract({
-        ownership: requiresApproval ? HANDOFF_OWNERSHIP.HUMAN : HANDOFF_OWNERSHIP.PARENT,
-        stopBoundary: HANDOFF_STOP_BOUNDARY.MERGE_BOUNDARY,
-        resumePolicy: requiresApproval
-          ? HANDOFF_RESUME_POLICY.RESUME_AFTER_MERGE_AUTHORIZATION
-          : HANDOFF_RESUME_POLICY.NONE,
-      });
-    case "await_approval":
-      return buildContract({
-        ownership: HANDOFF_OWNERSHIP.HUMAN,
-        stopBoundary: HANDOFF_STOP_BOUNDARY.APPROVAL_BOUNDARY,
-        resumePolicy: HANDOFF_RESUME_POLICY.RESUME_AFTER_HUMAN_APPROVAL,
-      });
-    case "resolve_conflicts":
-    case "blocked":
-    case "error":
-      return buildContract({
-        ownership: HANDOFF_OWNERSHIP.HUMAN,
-        stopBoundary: HANDOFF_STOP_BOUNDARY.CONFLICT_BOUNDARY,
-        resumePolicy: HANDOFF_RESUME_POLICY.MANUAL_ATTENTION,
-      });
-    case "done":
-      return buildContract({
-        ownership: HANDOFF_OWNERSHIP.TERMINAL,
-        stopBoundary: HANDOFF_STOP_BOUNDARY.TERMINAL,
-        resumePolicy: HANDOFF_RESUME_POLICY.NONE,
-      });
-    default:
-      return buildContract({
-        ownership: HANDOFF_OWNERSHIP.HUMAN,
-        stopBoundary: HANDOFF_STOP_BOUNDARY.CONFLICT_BOUNDARY,
-        resumePolicy: HANDOFF_RESUME_POLICY.MANUAL_ATTENTION,
-      });
-  }
 }
 export function buildHandoffContractForResumeAction(resumeAction) {
   const normalizedAction = normalizeContractValue(resumeAction);
@@ -227,6 +159,5 @@ export function compareHandoffContracts(recorded, expected) {
 export {
   HANDOFF_OWNERSHIP,
   HANDOFF_STOP_BOUNDARY,
-  HANDOFF_RESUME_POLICY,
-  SUBAGENT_ACTIONS
+  HANDOFF_RESUME_POLICY
 };

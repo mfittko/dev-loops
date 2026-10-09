@@ -1073,7 +1073,13 @@ export async function fetchUnresolvedGateThreadCount({ repo, pr }, gh) {
 export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
   const comments = await fetchGateEvidenceComments({ repo, pr }, gh);
   const summary = summarizeGateReviewComments(comments).draft_gate;
-  const marker = summarizeGateReviewCommentMarkers(comments, { headSha }).draft_gate;
+  const markers = summarizeGateReviewCommentMarkers(comments, { headSha });
+  const marker = markers.draft_gate;
+  const preMarker = markers.pre_approval_gate;
+  const preApprovalCurrentHeadClean = Boolean(
+    preMarker?.headSha && headSha && headSha.startsWith(preMarker.headSha)
+    && preMarker.verdict === "clean" && preMarker.contractComplete === true,
+  );
   const draftGate = summary ? { ...summary, visible: true } : { visible: false };
   const draftGateMarker = marker
     ? { ...marker, visible: true, contractComplete: marker.contractComplete === true }
@@ -1112,6 +1118,7 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
     unresolvedGateThreadCount,
     unresolvedGateThreadBreakdown,
     currentHeadClean,
+    preApprovalCurrentHeadClean,
     cleanEvidenceExists,
     effectiveHeadClean: currentHeadClean || legacyHeadMatch,
   };

@@ -32,6 +32,7 @@ function makeRuntime(detectEvidence) {
     mergeStateStatus: "CLEAN",
     title: "fix: act list drives the review verdict",
     headRefOid: HEAD,
+    baseRefName: "main",
     url: "https://github.com/mfittko/dev-loops/pull/5",
     statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
   };
@@ -48,6 +49,9 @@ function makeRuntime(detectEvidence) {
       detectEvidence,
       // Copilot gate disabled (maxCopilotRounds 0): a head without a current-head
       // Copilot review converges via copilot_gate_disabled, isolating gate_evidence.
+      fetchPrHead: () => {},
+      detectOriginSlug: () => "mfittko/dev-loops",
+      evaluateAdrTripwire: async () => ({ outcome: "pass" }),
       loadConfig: async () => ({ config: { autonomy: { humanMergeOnly: false }, refinement: { maxCopilotRounds: 0 } }, errors: [] }),
       cwd: process.cwd(),
       // No-op post-merge steps: the real ones would fast-forward and prune the test checkout.
