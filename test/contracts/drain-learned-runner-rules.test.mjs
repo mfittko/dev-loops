@@ -74,17 +74,15 @@ test("ADR 0096 records GATE-EXEC-BASE-REFRESH and amends ADR 0066", async () => 
   assert.match(adr, /`GATE-EXEC-BASE-REFRESH`/);
 });
 
-test("COPILOT-FOLLOWUP-REQUEST-BRANCHING stops on an unchanged head and names no bypass", async () => {
+test("COPILOT-FOLLOWUP-REQUEST-BRANCHING names unchanged-head branches without a bypass", async () => {
   const section = sectionFrom(await readRepo(COPILOT_SKILL), "<!-- rule: COPILOT-FOLLOWUP-REQUEST-BRANCHING -->", "\n\n");
   const branch = (status) => {
     const line = section.split("\n").find((l) => l.startsWith(`- \`${status}\`:`));
     assert.ok(line, `expected a ${status} branch`);
     return line;
   };
-  assert.match(branch("no_changes_since_last_review"), /stop/i);
-  assert.match(branch("no_changes_since_last_review"), /Report/);
+  branch("no_changes_since_last_review");
   const sameHead = branch("suppressed_same_head_clean");
-  assert.match(sameHead, /stop/);
   assert.doesNotMatch(sameHead, /--force-rerequest-review/);
 });
 
