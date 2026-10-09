@@ -64,7 +64,7 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
   const rawSites = entry.sites === undefined ? [] : entry.sites;
   const returned = entry.returnedSites === undefined ? [] : entry.returnedSites;
   if (!Array.isArray(rawSites) || !Array.isArray(returned)) {
-    throw new Error(`${label} sites and returnedSites must be arrays`);
+    throw new Error(`${label} sites and returnedSites must be arrays, not counts; expected returnedSites: ["<site>", ...] and sites: [{ "site": "<site>", "status": "fixed"|"skipped", "reason": "<required for skipped>" }, ...]`);
   }
   const sites = rawSites.map((site, i) => {
     if (!site || typeof site !== "object" || !isNonEmptyString(site.site)) throw new Error(`${label} sites[${i}] needs a site`);
@@ -97,6 +97,7 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
   if (entry.noSitesReason !== undefined) {
     if (!isNonEmptyString(entry.noSitesReason)) throw new Error(`${label} noSitesReason must be a non-empty string`);
     out.noSitesReason = entry.noSitesReason.trim();
+    if (out.noSitesReason.startsWith("FILL:")) throw new Error(`${label} noSitesReason is the unedited skeleton placeholder; replace it with the outcome of running the siteQuery`);
   }
   if (entry.ruleCitations !== undefined) {
     if (!Array.isArray(entry.ruleCitations) || !entry.ruleCitations.every((id) => typeof id === "string" && RULE_ID_PATTERN.test(id.trim()))) {
