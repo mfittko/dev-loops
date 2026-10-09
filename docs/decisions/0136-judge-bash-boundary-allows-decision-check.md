@@ -12,8 +12,8 @@ Amends [0115](./0115-dispatch-pointer-carries-the-execution-identity-alone.md): 
 
 - The judge may also run `check-judge-decision.mjs --file <path>`. The path must lie under `tmp/gate-judge/`, contain no `..` and carry no command chaining. The Claude hook and the Pi read-only gate enforce the same rule.
 - A `valid_compliant` decision with `remedyKind: "evidence_only"` needs no `defectClass` and never enters the fixer act list.
-- An invalid spec-authority decision fails with the typed error `spec_authority_decision_invalid`.
+- A `valid_compliant` decision missing `defectClass` or `siteQuery` fails with the typed error `spec_authority_decision_invalid`.
 
 ## Consequences
 
-The judge self-checks its decision file with one extra sanctioned line. Evidence-only items cost the fixer nothing. Invalid decisions fail with a name a caller can match.
+The judge self-checks its decision file with one extra sanctioned line. Evidence-only items cost the fixer nothing. A `valid_compliant` decision missing `defectClass` or `siteQuery` fails with a name a caller can match.

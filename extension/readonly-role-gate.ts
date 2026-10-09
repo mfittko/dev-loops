@@ -188,7 +188,8 @@ export function decidePiToolCall({ toolName, input, agentType }: {
     reason:
       `Read-only role boundary (#2509): role "${agentType || '(unresolved role: fail closed)'}" may run only its dispatched ` +
       '`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line' +
-      (READ_SEARCH_ROLES.has(agentType) ? ' and shell-inert read or search commands' : '') +
+      (agentType === 'judge' ? ' or `dev-loops-run scripts/loop/check-judge-decision.mjs --file tmp/gate-judge/<path>.json`' : '') +
+      (READ_SEARCH_ROLES.has(agentType) ?' and shell-inert read or search commands' : '') +
       '. Never run shell, test or build commands.',
   };
 }
