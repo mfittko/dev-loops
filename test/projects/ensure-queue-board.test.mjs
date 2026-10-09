@@ -2,7 +2,7 @@ import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
-import { main, autoRepairColumns, resolveSettings, STANDARD_COLUMNS, STANDARD_COLUMN_NAMES } from "../../scripts/projects/ensure-queue-board.mjs";
+import { main, resolveSettings, STANDARD_COLUMNS } from "../../scripts/projects/ensure-queue-board.mjs";
 import { userPayload, orgPayload, noUserPayload, statusField, existingProject } from "./_fixtures.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -386,62 +386,6 @@ describe("ensure-queue-board", () => {
     });
   });
 
-  describe("autoRepairColumns unit", () => {
-    it("appends missing standard columns to existing options", async () => {
-      const existing = [
-        { id: "a", name: "Backlog", color: "GRAY" },
-      ];
-      const updatedOpts = [
-        { id: "a", name: "Backlog", color: "GRAY" },
-        { id: "n1", name: "Next Up", color: "BLUE" },
-        { id: "n2", name: "In Progress", color: "YELLOW" },
-        { id: "n3", name: "Done", color: "GREEN" },
-      ];
-      const responses = [
-        { payload: updateFieldResponse(updatedOpts) },
-      ];
-      const result = await autoRepairColumns(
-        "fieldId", existing, {}, mockRunChild(responses),
-      );
-      assert.equal(result.length, 4);
-      assert.deepEqual(result.map((o) => o.name), STANDARD_COLUMN_NAMES);
-    });
-
-    it("preserves non-standard columns when adding missing ones", async () => {
-      const existing = [
-        { id: "a", name: "Custom Column", color: "RED" },
-      ];
-      const updatedOpts = [
-        { id: "a", name: "Custom Column", color: "RED" },
-        { id: "n1", name: "Backlog", color: "GRAY" },
-        { id: "n2", name: "Next Up", color: "BLUE" },
-        { id: "n3", name: "In Progress", color: "YELLOW" },
-        { id: "n4", name: "Done", color: "GREEN" },
-      ];
-      const responses = [
-        { payload: updateFieldResponse(updatedOpts) },
-      ];
-      const result = await autoRepairColumns(
-        "fieldId", existing, {}, mockRunChild(responses),
-      );
-      assert.equal(result.length, 5);
-      assert.equal(result[0].name, "Custom Column");
-    });
-
-    it("no-ops when all standard columns are present", async () => {
-      const existing = STANDARD_COLUMNS.map((c, i) => ({
-        id: `opt${i}`, name: c.name, color: c.color,
-      }));
-      // Should not call gh at all — returns existing options directly
-      const result = await autoRepairColumns(
-        "fieldId", existing, {}, () => {
-          throw new Error("should not be called");
-        },
-      );
-      assert.equal(result, existing);
-    });
-  });
-
   describe("already-exists path", () => {
     it("returns existing project when board and Status field exist", async () => {
       const responses = [
@@ -702,7 +646,7 @@ describe("ensure-queue-board", () => {
   describe("STANDARD_COLUMNS", () => {
     it("has exactly 4 standard columns in correct order", () => {
       assert.equal(STANDARD_COLUMNS.length, 4);
-      assert.deepEqual(STANDARD_COLUMN_NAMES, ["Backlog", "Next Up", "In Progress", "Done"]);
+      assert.deepEqual(STANDARD_COLUMNS.map((c) => c.name), ["Backlog", "Next Up", "In Progress", "Done"]);
     });
   });
 });

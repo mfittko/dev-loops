@@ -221,8 +221,7 @@ function stableStringify(value, keyPath = "$") {
  * Fingerprint the complete observable request prefix (Section A): concrete
  * model, tool definitions/order, system/project/agent instructions,
  * thinking/tool-choice settings, content-block boundaries, shared artifact
- * bytes, and breakpoint/TTL intent. Values owned opaquely by a harness should
- * be passed as `null`-free opaque markers (see `opaqueMarker`).
+ * bytes, and breakpoint/TTL intent.
  *
  * @param {object} input
  * @param {string} input.model - non-empty concrete model id.
@@ -274,122 +273,6 @@ export function fingerprintRequestPrefix(input) {
     ...(input.angleSuffix != null ? { angleSuffix: input.angleSuffix } : {}),
   };
   return { fingerprint: sha256Hex(canonical), canonical };
-}
-
-/**
- * Opaque placeholder for a value owned opaquely by the harness. Using this in a
- * fingerprint input records that the value existed but was not byte-observable,
- * so two runs that differ only in an unobservable harness value STILL collapse
- * to the same fingerprint (they cannot be proven different) — and, symmetrically,
- * a claimed difference under an opaque value is not assertable.
- *
- * @param {string} label
- * @returns {string}
- */
-export function opaqueMarker(label) {
-  return `__opaque:${String(label)}`;
-}
-
-/* ------------------------------------------------------------------ *
- * 3. Stable/volatile request separation
- * ------------------------------------------------------------------ */
-
-/**
- * The stable-prefix fingerprint is computed ONLY over the stable prefix +
- * materialized briefing block — never the volatile tail or angle suffix. This
- * is the mechanical proof for AC-1: changing only `gateState` (or the angle
- * suffix) MUST NOT change the shared request prefix block.
- *
- * @param {object} input
- * @param {string|Buffer} input.stablePrefix - stable review-agent/system/tool prefix.
- * @param {string|Buffer} input.briefingBlock - materialized shared briefing block bytes.
- * @param {string} [input.cacheBoundary]
- * @param {string} [input.ttlIntent]
- * @returns {{ stableFingerprint: string, briefedBytes: string }}
- */
-export function fingerprintStablePrefix({ stablePrefix, briefingBlock, cacheBoundary, ttlIntent } = {}) {
-  const parts = [stablePrefix ?? "", briefingBlock ?? ""];
-  const stableFingerprint = sha256Hex({ stablePrefix: parts[0], briefingBlock: parts[1] });
-  return {
-    stableFingerprint,
-    // Canonicalize through stableStringify so a Buffer stablePrefix/briefingBlock
-    // becomes `__buffer:<hex>` here too — raw JSON.stringify would expand Buffers
-    // into large {type:"Buffer",data:[…]} decimal arrays (byte-unstable + costly),
-    // reintroducing exactly what sha256Hex avoids.
-    briefedBytes: JSON.stringify(stableStringify({
-      cacheBoundary: cacheBoundary ?? CACHE_BOUNDARY_AFTER_SHARED_PREFIX,
-      ttlIntent: ttlIntent ?? "harness_managed",
-      stableBytes: parts,
-    })),
-  };
-}
-
-/**
- * Compose a cache-aware request as ordered segments with a declared cache
- * boundary after the stable briefing block (Section B):
- *
- *   [stable review-agent/system/tool prefix]
- *   [materialized shared briefing block]
- *   <cache boundary>
- *   [late volatile gate state, when needed]
- *   [angle-specific suffix]
- *
- * Returns the ordered segment list plus the boundary index and the stable
- * fingerprints, so a consumer can render the request and a verifier can assert
- * stable-prefix equality byte-for-byte regardless of volatile/angle changes.
- *
- * @param {object} input
- * @param {string|Buffer} input.stablePrefix
- * @param {string|Buffer} input.briefingBlock
- * @param {object} [input.volatileState] - late volatile gate state (serialized AFTER the boundary).
- * @param {string|Buffer} [input.angleSuffix]
- * @param {string} [input.cacheBoundary]
- * @param {string} [input.ttlIntent]
- * @returns {object} ordered segments + boundary + fingerprints.
- */
-export function composeCacheAwareRequest({ stablePrefix, briefingBlock, volatileState, angleSuffix, cacheBoundary, ttlIntent } = {}) {
-  const boundary = cacheBoundary ?? CACHE_BOUNDARY_AFTER_SHARED_PREFIX;
-  const ttl = ttlIntent ?? "harness_managed";
-  // Fail closed on out-of-enum cacheBoundary/ttlIntent (parity with
-  // fingerprintRequestPrefix / validateRequestGroups) so a caller typo cannot
-  // silently flow into the returned structure and break later parity checks.
-  if (!CACHE_BOUNDARY_VALUES.includes(boundary)) {
-    throw new Error(`composeCacheAwareRequest invalid cacheBoundary ${JSON.stringify(boundary)}`);
-  }
-  if (!TTL_INTENT_VALUES.includes(ttl)) {
-    throw new Error(`composeCacheAwareRequest invalid ttlIntent ${JSON.stringify(ttl)}`);
-  }
-  const { stableFingerprint, briefedBytes } = fingerprintStablePrefix({
-    stablePrefix,
-    briefingBlock,
-    cacheBoundary: boundary,
-    ttlIntent: ttl,
-  });
-  const late = (typeof volatileState === "object" && volatileState !== null && !Buffer.isBuffer(volatileState))
-    ? JSON.stringify(volatileState)
-    : (volatileState ?? "");
-  const segments = [
-    { slot: "stablePrefix", bytes: stablePrefix ?? "" },
-    { slot: "briefingBlock", bytes: briefingBlock ?? "" },
-  ];
-  // The cache boundary sits AFTER the stable prefix + briefing block. The marker
-  // segment is a structural pointer, NOT request bytes: it is byte-empty so a
-  // consumer concatenating segment bytes never injects the boundary label into
-  // the provider-visible prompt (the label lives in the separate cacheBoundary
-  // field).
-  const boundaryIndex = segments.length;
-  segments.push({ slot: "<cache boundary>", bytes: "" });
-  if (late.length > 0) segments.push({ slot: "volatileState", bytes: late });
-  if (angleSuffix != null && String(angleSuffix).length > 0) {
-    segments.push({ slot: "angleSuffix", bytes: String(angleSuffix) });
-  }
-  return {
-    cacheBoundary: boundary,
-    boundaryIndex,
-    stableFingerprint,
-    briefedBytes,
-    segments,
-  };
 }
 
 /* ------------------------------------------------------------------ *

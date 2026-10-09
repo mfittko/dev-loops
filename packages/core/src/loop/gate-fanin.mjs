@@ -914,12 +914,6 @@ export function checkResolvedAngleEvidence(resolvedAngles, { recordedAngles, car
   return { missingAngles };
 }
 
-/**
- * Default cap on parallel fan-out reviewers when a caller supplies none. Mirrors
- * gates.maxFanoutReviewers.
- */
-export const DEFAULT_MAX_FANOUT_REVIEWERS = 8;
-
 // Every sanctioned angle name is a short hand-authored slug; nothing legitimate
 // approaches this length. Bounding it at this trust boundary fails a
 // pathological artifact closed as malformed — where every other angle-result
@@ -1348,36 +1342,3 @@ export function toFindingsLogShape(findings) {
   });
 }
 
-/**
- * Plan how a resolved angle set fans out across the reviewer cap. Pure.
- *
- * SUPERSEDED by `scheduleFanoutWaves` (ADR 0048): the conductor now dispatches
- * wave-by-wave. Kept for back-compat only (zero non-test callers); no longer in
- * the dispatch path.
- *
- * When `angles.length <= maxReviewers`, all reviewers run in one parallel batch;
- * otherwise the overflow splits into sequential batches of at most `maxReviewers`
- * and `degraded` is true.
- *
- * @param {string[]} angles
- * @param {number} [maxReviewers] — default DEFAULT_MAX_FANOUT_REVIEWERS (8)
- * @returns {{ batches: string[][], degraded: boolean }}
- */
-export function planFanoutBatches(angles, maxReviewers = DEFAULT_MAX_FANOUT_REVIEWERS) {
-  const list = Array.isArray(angles)
-    ? angles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim())
-    : [];
-  const cap = Number.isInteger(maxReviewers) && maxReviewers > 0
-    ? maxReviewers
-    : DEFAULT_MAX_FANOUT_REVIEWERS;
-
-  if (list.length === 0) {
-    return { batches: [], degraded: false };
-  }
-
-  const batches = [];
-  for (let i = 0; i < list.length; i += cap) {
-    batches.push(list.slice(i, i + cap));
-  }
-  return { batches, degraded: batches.length > 1 };
-}
