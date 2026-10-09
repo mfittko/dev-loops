@@ -21,12 +21,17 @@ import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWo
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
 or the unresolved review threads (list-review-threads.mjs --unresolved-only), plus the
-optional pre-push delta result (dev-loops loop pre-push-delta). The mutation authority is
+optional pre-push delta result (dev-loops loop pre-push-delta). --phase full needs a clearing
+delta decision for the head: an act-list source passes the clearing --delta-result, a
+threads source needs a thread-bound clearing record under <tmp-root>/gate-delta/ (written by
+check-pre-push-delta --result), and any non-clearing record for the head refuses; use
+--phase commit_only first. The mutation authority is
 the PR's own head branch (gh pr view headRefName) and the --allowed-path selectors
 (default "." = the whole repository). A PR head other than --head-sha refuses.
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
@@ -139,6 +144,35 @@ ${JSON.stringify(workOrder, null, 2)}
 `;
 }
 
+// The commit_only phase commits unpushed; the delta review then decides whether `full` may push.
+// `delta` is the parsed --delta-result (act-list route); `threads` the unresolved threads (thread route).
+function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads }) {
+  const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
+  const record = readGateDeltaRecord(tmpRoot, headSha);
+  const next = "emit --phase commit_only, run the delta review (dev-loops loop pre-push-delta), then emit --phase full";
+  if (record && !DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep)) {
+    throw new Refusal(`--phase full refused: the delta record ${recordPath} holds nextStep ${JSON.stringify(record.nextStep)}, not ${DELTA_CLEARING_NEXT_STEPS.join(" or ")}; fix and re-run the delta review (${next})`);
+  }
+  if (!threads) {
+    if (!delta) throw new Refusal(`--phase full with --act-list-file needs --delta-result naming a clearing delta result: ${next}`);
+    // The decided nextStep in the record for this head clears the push, not the result file's outcome.
+    const clears = record && record.candidateHead === delta.candidateHead && record.actSetId === delta.actSetId;
+    if (!clears) throw new Refusal(`--phase full refused: no delta record at ${recordPath} holds a clearing nextStep for the --delta-result's candidate and act set; ${next}`);
+    return;
+  }
+  if (!record) throw new Refusal(`--phase full with --threads-file needs a delta record at ${recordPath} from a thread-route delta review: ${next}`);
+  const threadIds = new Set(threads.map((thread) => thread.threadId));
+  const refs = (Array.isArray(record.items) ? record.items : []).map((item) => item?.ref);
+  const unbound = refs.filter((ref) => !threadIds.has(ref));
+  if (unbound.length > 0) {
+    throw new Refusal(`--phase full refused: the delta record ${recordPath} covers refs that are not threads in the threads file (${unbound.map((ref) => JSON.stringify(ref)).join(", ")}); review the current threads (${next})`);
+  }
+  const uncovered = [...threadIds].filter((id) => !refs.includes(id));
+  if (uncovered.length > 0) {
+    throw new Refusal(`--phase full refused: the threads file holds threads the delta record ${recordPath} never reviewed (${uncovered.map((id) => JSON.stringify(id)).join(", ")}); review the current threads (${next})`);
+  }
+}
+
 /**
  * Emit one fixer work order. Returns the plan record written beside it. Throws
  * Refusal on a missing or conflicting source or authority. `executionIdentity`
@@ -174,6 +208,7 @@ export async function emitFixerWorkOrder({
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
     if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}`);
   }
+  if (phase === "full") assertDeltaClearsFullPhase({ tmpRoot, headSha, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null });
 
   // Mutation authority comes from the PR itself, never from the caller.
   const prState = await fetchPr({ repo, pr });
