@@ -2754,6 +2754,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       severity: f?.severity,
       summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
       judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
+      ...(f?.remedyKind ? { remedyKind: f.remedyKind } : {}),
     }));
     const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
     if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
