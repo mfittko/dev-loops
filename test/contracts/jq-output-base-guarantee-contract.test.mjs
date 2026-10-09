@@ -87,10 +87,6 @@ const EXCLUDED = new Map([
     "Build tool for the Claude asset pipeline (npm run build:claude), not a dev-loop operator-facing command surfaced via the SKILL/agent verb set.",
   ],
   [
-    "loop/check-judge-decision.mjs",
-    "Judge-side validator whose output is a pass/fail verdict ({ ok, error, decisionIndex, field }) read via exit code, not a result payload a --jq filter would project.",
-  ],
-  [
     "loop/inspect-run-viewer.mjs",
     "Long-running read-only dashboard server; its one startup JSON line is informational for a human opening a browser URL, not a \"read tool output\" result consumed by the loop/skill.",
   ],
