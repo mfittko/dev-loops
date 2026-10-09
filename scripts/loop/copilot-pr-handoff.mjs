@@ -77,7 +77,8 @@ Stop interpretation (in order):
   Honor user/envelope stops and harness/classifier, ADR/size, blocked or
   reconciliation refusals first. terminal=true alone is not permission.
   Closed/merged PRs or canonical state=done report completion; do not enter gates.
-  For an open PR, terminal=true with loopDisposition=done or clean_converged
+  For an open PR, loopDisposition=direct_gate (terminal=false), or terminal=true
+  with loopDisposition=done or clean_converged,
   ends only the Copilot sub-loop. Consult fresh loop gate-coordination for the
   same PR/current head; follow nextAction, allowedNextActions and forbiddenActions.
   Do not require roundCapCleanEligible, request another round merely because
