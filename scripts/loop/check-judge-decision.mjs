@@ -55,7 +55,7 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
   } catch (error) {
     result = { ok: false, error: error.message, ...(error.decisionIndex !== undefined ? { decisionIndex: error.decisionIndex } : {}), ...(error.code === "spec_authority_decision_invalid" ? { code: error.code, field: error.field } : {}) };
   }
-  process.exitCode = emitResult(result, { jq: args.jq, silent: args.silent, stdout, stderr });
+  process.exitCode = emitResult(result, { jq: args.jq, fields: args.fields, silent: args.silent, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) await main();

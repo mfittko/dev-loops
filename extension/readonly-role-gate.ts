@@ -27,7 +27,7 @@ const pluginNamespace = (agentType: string) => {
   return colon === -1 ? '' : trimmed.slice(0, colon).trim();
 };
 
-/** Roles whose Pi `bash` is restricted. The judge pulls only; the reviewer also reads and searches. */
+/** Roles whose Pi `bash` is restricted. The judge pulls and runs the check-judge-decision line; the reviewer also reads and searches. */
 const READ_SEARCH_ROLES = new Set(['review']);
 export const BASH_RESTRICTED_ROLES = Object.freeze(['judge', 'review']);
 

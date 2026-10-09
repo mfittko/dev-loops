@@ -51,6 +51,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Judge bash gates allow the check-judge-decision line; its --fields is honored; judge lookup treats a remedyKind disagreement as ambiguous (#2716)
 - omp commits no longer require false Claude attribution when omp also sets `CLAUDECODE=1`; genuine Claude and general message checks remain enforced (#2624)
 - The inspect viewer Reload snapshot button uses `window.URL`, so `refresh=1` navigation forces a fresh selected-PR snapshot (#2627)
 - Playwright config test and `test:playwright:*` scripts resolve the Playwright CLI without a cwd-relative `node_modules/` path, so they pass in a worktree without `node_modules` (#2632)

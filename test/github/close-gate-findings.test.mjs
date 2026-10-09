@@ -2379,3 +2379,49 @@ test("a prior-ledger act with remedyKind evidence_only does not keep a round-4 t
     },
   ));
 });
+
+// An act with remedyKind evidence_only in the CURRENT ledger is non-act too.
+test("a current-ledger act with remedyKind evidence_only does not keep a round-4 thread open", async () => {
+  const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
+  const fp = fingerprintFinding(finding);
+  const thread = openWfnThread({ commentId: 6003, fp });
+  const ledger = makeLedger({ gate: "draft_gate", findings: [{ ...finding, judgeDisposition: "act", remedyKind: "evidence_only", judgeRationale: "no file change" }] });
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      ...deferralCommentEntries(9501),
+      getReviewCommentEntry(6003, wfnBody(fp)),
+      patchReviewCommentEntry(6003),
+      postReplyEntry(6003, { id: 7002 }),
+      resolveThreadEntry("THREAD_D"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
+// Tier 2: same disposition but a remedyKind disagreement is ambiguous, not a cache hit.
+test("a tied prior-ledger remedyKind disagreement (same disposition) is ambiguous — the thread stays open", async () => {
+  const fp = fingerprintFinding({ summary: "why this approach?" });
+  const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 2 })}\n**question** (\`scope\`): why this approach? — judge: reject`;
+  const thread = threadNode({ id: "THREAD_Q_REMEDY_AMBIGUOUS", commentId: 6278, body: questionBody, replies: [{ body: "Answering now.", author: "operator" }] });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    roundEntries({ issueComments: roundHistory("draft_gate", 2), threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+      await mkdir(findingsDir, { recursive: true });
+      for (const [n, extra] of [[1, { remedyKind: "evidence_only" }], [2, {}]]) {
+        await writeFile(
+          path.join(findingsDir, `draft_gate-${nthHeadSha(n)}.json`),
+          JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: `tied ${n}`, ...extra }] }),
+          "utf8",
+        );
+      }
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
