@@ -224,6 +224,15 @@ const GateTierMatchKind = z.enum(FILE_KIND_NAMES);
 // valid angle/tier kind (see FILE_KIND_NAMES).
 const CLASSIFY_KIND_NAMES = Object.freeze(["code", "docs", "config", "test", "ci", "asset"]);
 
+// Repo-relative glob shared by `classify.paths` and `validation.paths`.
+const RepoRelativeGlob = z.string().min(1)
+  .refine((v) => {
+    const n = v.replaceAll("\\", "/");
+    return n === n.trim() && !n.startsWith("./") && !n.startsWith("/") && !n.endsWith("/")
+      && n.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
+  }, "pattern must be repo-relative: no surrounding whitespace, no leading './' or '/', no trailing '/', and no empty, '.' or '..' segments")
+  .describe("Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive. Must be repo-relative: no surrounding whitespace, no leading `./` or `/`, no trailing `/`, and no empty, `.` or `..` segments.");
+
 const ClassifyExtension = z.string().regex(/^\.[^./\\\s]+$/, "extension must start with '.' and contain no whitespace, '/', '\\' or further '.'").transform((v) => v.toLowerCase());
 
 const ClassifyConfig = z
@@ -246,19 +255,31 @@ const ClassifyConfig = z
       .optional(),
     paths: z
       .array(z.strictObject({
-        pattern: z.string().min(1)
-          .refine((v) => {
-            const n = v.replaceAll("\\", "/");
-            return n === n.trim() && !n.startsWith("./") && !n.startsWith("/") && !n.endsWith("/")
-              && n.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
-          }, "pattern must be repo-relative: no surrounding whitespace, no leading './' or '/', no trailing '/', and no empty, '.' or '..' segments")
-          .describe("Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive. Must be repo-relative: no surrounding whitespace, no leading `./` or `/`, no trailing `/`, and no empty, `.` or `..` segments."),
+        pattern: RepoRelativeGlob,
         kind: z.enum(CLASSIFY_KIND_NAMES).describe("Kind assigned to files matching the pattern."),
       }))
       .describe("Path rules; the first matching entry wins and beats `extensions` and the built-in tables.")
       .optional(),
   })
   .describe("Repository file-classification rules. Precedence: first matching `paths` entry, then `extensions`, then built-in tables. `.github/` paths stay ci and dev-loop config sources stay config. A later config layer replaces `extensions` and `paths` as whole values. Requires a dev-loops CLI that knows the `classify` key.");
+
+// Validation resolution (ADR 0137, amends 0105). Commands come only from the
+// repo's own config, never from PR content, and run through `sh -c`.
+const ValidationCommand = z.string().trim().min(1).max(500)
+  .regex(/^[^\p{Cc}]+$/u, "command must be one line with no control characters");
+
+export const ValidationConfig = z
+  .strictObject({
+    mode: z.enum(["ci-only", "local"]).describe("`ci-only` (default): current-head CI is the only full-validation authority; the gate records a complete `ci-authoritative` artifact and runs no local suite. `local`: the gate runs the full suite locally (`fullCommand`, else the package.json `verify` script).").optional(),
+    fullCommand: ValidationCommand.describe("Optional full-validation command for `local` mode, run through `sh -c` at the repo root (for example `cargo test`). Without it, `local` mode runs the package.json `verify` script through Bun.").optional(),
+    paths: z.array(z.strictObject({
+      match: z.union([RepoRelativeGlob, z.array(RepoRelativeGlob).min(1)]).describe("Glob or globs this rule covers."),
+      surface: z.string().min(1).describe("Surface name. A change set that spans surfaces, or an unmapped path, needs full validation."),
+      commands: z.array(ValidationCommand).describe("Targeted worker commands. `{path}` expands to each matching changed path, which must use only [A-Za-z0-9._/-]. An empty list pins matching paths to full validation."),
+      gateSuites: z.array(z.string().min(1)).describe("Explicit gate `--suite` names; `bun run <name>` commands add theirs.").optional(),
+    })).describe("Ordered, first-match-wins path-to-command map for targeted worker checks (`resolveTargetedValidation`).").optional(),
+  })
+  .describe("Validation resolution: gate mode, optional full command, and a path-to-command map. Requires a dev-loops CLI that knows the `validation` key.");
 
 // A tier's match conditions: EVERY changed file's kind must be in `kinds`
 // (when set) AND the change must stay within `maxFiles`/`maxLines` (when
@@ -970,6 +991,7 @@ export const DevLoopConfigSchema = z.strictObject({
   postMerge: PostMergeConfig.optional(),
   standingAuthorizations: StandingAuthorizationsConfig.optional(),
   classify: ClassifyConfig.optional(),
+  validation: ValidationConfig.optional(),
 }).superRefine(refineExtraToolsGuidanceKeys);
 
 // ============================================================================
@@ -1048,6 +1070,7 @@ export const FileConfigSchema = z.strictObject({
   postMerge: PostMergeConfig.partial().describe("Post-merge local hook actions (postMerge.actions): consumer-declared commands run sequentially, in order, after a merge succeeds — optionally scoped to changed-file substrings (onlyIfChanged) and polled for readiness (verify).").optional(),
   standingAuthorizations: StandingAuthorizationsConfig.describe("Operator-recorded standing human authorizations (adrTripwireWaiver), read only from the default branch's .devloops.").optional(),
   classify: ClassifyConfig.optional(),
+  validation: ValidationConfig.optional(),
   // Unknown keys fail closed like any typo (strictObject).
 });
 
@@ -1892,6 +1915,16 @@ export async function loadDevLoopConfig(options = {}) {
  */
 export function resolveClassifyRules(config) {
   return compileClassifyRules(config?.classify);
+}
+
+/**
+ * Resolve the merged config's `validation` key. Mode defaults to `ci-only`.
+ * @param {DevLoopConfig|null|undefined} config
+ * @returns {{ mode: "ci-only"|"local", fullCommand: string|null, paths: Array<object> }}
+ */
+export function resolveValidationConfig(config) {
+  const v = config?.validation ?? {};
+  return { mode: v.mode ?? "ci-only", fullCommand: v.fullCommand ?? null, paths: v.paths ?? [] };
 }
 
 /**

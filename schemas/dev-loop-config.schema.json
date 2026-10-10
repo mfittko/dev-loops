@@ -1830,6 +1830,85 @@
       },
       "additionalProperties": false,
       "description": "Repository file-classification rules. Precedence: first matching `paths` entry, then `extensions`, then built-in tables. `.github/` paths stay ci and dev-loop config sources stay config. A later config layer replaces `extensions` and `paths` as whole values. Requires a dev-loops CLI that knows the `classify` key."
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "ci-only",
+            "local"
+          ],
+          "description": "`ci-only` (default): current-head CI is the only full-validation authority; the gate records a complete `ci-authoritative` artifact and runs no local suite. `local`: the gate runs the full suite locally (`fullCommand`, else the package.json `verify` script)."
+        },
+        "fullCommand": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^[^\\p{Cc}]+$",
+          "description": "Optional full-validation command for `local` mode, run through `sh -c` at the repo root (for example `cargo test`). Without it, `local` mode runs the package.json `verify` script through Bun."
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "match": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive. Must be repo-relative: no surrounding whitespace, no leading `./` or `/`, no trailing `/`, and no empty, `.` or `..` segments."
+                  },
+                  {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Glob (`**/`, `**`, `*` within one segment, everything else literal) anchored to the whole repo-relative path; case-sensitive. Must be repo-relative: no surrounding whitespace, no leading `./` or `/`, no trailing `/`, and no empty, `.` or `..` segments."
+                    }
+                  }
+                ],
+                "description": "Glob or globs this rule covers."
+              },
+              "surface": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Surface name. A change set that spans surfaces, or an unmapped path, needs full validation."
+              },
+              "commands": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "pattern": "^[^\\p{Cc}]+$"
+                },
+                "description": "Targeted worker commands. `{path}` expands to each matching changed path, which must use only [A-Za-z0-9._/-]. An empty list pins matching paths to full validation."
+              },
+              "gateSuites": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "description": "Explicit gate `--suite` names; `bun run <name>` commands add theirs."
+              }
+            },
+            "required": [
+              "match",
+              "surface",
+              "commands"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Ordered, first-match-wins path-to-command map for targeted worker checks (`resolveTargetedValidation`)."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Validation resolution: gate mode, optional full command, and a path-to-command map. Requires a dev-loops CLI that knows the `validation` key."
     }
   },
   "required": [

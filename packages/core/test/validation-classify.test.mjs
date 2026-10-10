@@ -80,3 +80,19 @@ test("changed surfaces select existing checks and unknown or mixed changes fail 
   assert.deepEqual(resolveTargetedValidation(paths), expected);
   assert.deepEqual(resolveTargetedValidation(paths.toReversed()), expected);
 });
+
+test("readValidationPaths probes the .devloops family and parses .json as JSON", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { readValidationPaths } = await import("../src/loop/validation-classify.mjs");
+  const rule = { match: "spec/**", surface: "models", commands: ["bundle exec rspec {path}"] };
+  for (const [name, body] of [[".devloops.yaml", "validation:\n  paths:\n    - match: spec/**\n      surface: models\n      commands: [\"bundle exec rspec {path}\"]\n"], [".devloops.json", JSON.stringify({ validation: { paths: [rule] } })]]) {
+    const dir = mkdtempSync(join(tmpdir(), "vc-family-"));
+    try {
+      writeFileSync(join(dir, name), body);
+      assert.deepEqual(readValidationPaths(dir), [rule], name);
+      assert.deepEqual(resolveTargetedValidation(["spec/models/user_spec.rb"], readValidationPaths(dir)).commands, ["bundle exec rspec spec/models/user_spec.rb"], name);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});

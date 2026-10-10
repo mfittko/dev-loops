@@ -233,6 +233,26 @@ classify:
 - `gates.<gate>.angles[].kinds` and `gates.<gate>.tiers[].match.kinds` accept `asset`.
 - Requires dev-loops 1.0.6 or later. An older CLI rejects the `classify` key as unknown.
 
+### Validation (`validation`)
+
+The top-level `validation` key controls gate validation ([ADR 0137](../docs/decisions/0137-validation-modes-and-consumer-configured-commands.md)). All sub-keys are optional.
+
+```yaml
+validation:
+  mode: ci-only            # default; "local" runs the full suite in the gate
+  fullCommand: cargo test  # local mode only; non-Node full-validation command
+  paths:                   # targeted worker checks, first match wins
+    - match: "spec/models/**/*_spec.rb"
+      surface: models
+      commands: ["bundle exec rspec {path}"]
+```
+
+- `ci-only` (the default for consumers): current-head CI is the only full-validation authority. `dev-loops gate resolve-validation` runs no local suite and records an artifact with `status: "complete"` and `authority: "ci-authoritative"` when current-head CI is green. Red CI records `failed`. Pending, missing or wrong-head CI records `incomplete`. This works for repos without `package.json`, such as a Rails or Rust app.
+- `local`: the gate runs the full suite. With `fullCommand` it runs that command through `sh -c` at the repo root (a Rust repo sets `cargo test`). Without it, `local` mode runs the `package.json` `verify` script through Bun.
+- `paths` rules map changed paths to targeted worker commands for `resolveTargetedValidation(changedPaths)`. `{path}` expands to each matching path, which may use only `A-Za-z0-9._/-`. An unmapped path, or a change set that spans two surfaces, needs full validation. A rule with `commands: []` pins its paths to full validation. `gateSuites` names explicit gate `--suite` scripts.
+- The gate reads the `validation` block from the default branch (`origin/HEAD`), not from the PR checkout. A PR that adds or changes the block records `incomplete` and runs nothing until that change merges. A malformed command (empty, multi-line) or map fails config validation. No command is read from a PR title, PR body or CLI argument.
+- Requires a dev-loops CLI that knows the `validation` key. An older CLI rejects it as unknown.
+
 ### Available review angles
 
 The shipped defaults activate these angles. Additional angles are available as opt-in — add them to your `gates.draft.angles` or `gates.preApproval.angles` and they'll use the prompts defined in the personas registry. Opt-in prompts are generic and can be overridden in consumer repos through `personas.<angle>.prompt` without depending on this repository's audit examples.
