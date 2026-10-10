@@ -3981,3 +3981,12 @@ for (const [name, opts] of [["a tackled handoff for an older head", { handoffHea
     });
   });
 }
+
+for (const [name, handoffHead] of [["an abbreviated", "abc9988"], ["an upper-case", "ABC9988776"], ["a whitespace-padded", "  abc9988776\n"]]) {
+  test(`detect-pr-gate-coordination-state reports not_verified for ${name} handoff headSha`, async () => {
+    await runNotVerifiedFixture({ handoffHead }, (result) => {
+      assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+      assert.match(result.reason, /not_verified/);
+    });
+  });
+}

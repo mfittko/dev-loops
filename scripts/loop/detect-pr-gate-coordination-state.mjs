@@ -787,6 +787,13 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
     return error?.code === "ENOENT" ? null : unreadable(error);
   }
   const incomplete = [];
+  // One match rule for both branches: trimmed, case-insensitive, full head or a hex prefix of at least 7 chars.
+  const matchesLiveHead = (stated) => {
+    if (typeof stated !== "string") return false;
+    const head = stated.trim().toLowerCase();
+    const live = currentHeadSha.toLowerCase();
+    return head === live || (/^[0-9a-f]{7,}$/.test(head) && live.startsWith(head));
+  };
   for (const execution of executions) {
     let handoff;
     let raw;
@@ -797,10 +804,10 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
       if (error?.code === "ENOENT") continue;
       // A malformed handoff for another head must not block this one: read the head first.
       const stated = typeof raw === "string" ? /"headSha"\s*:\s*"([^"]*)/.exec(raw)?.[1] : undefined;
-      if (stated !== undefined && !currentHeadSha.startsWith(stated)) continue;
+      if (stated !== undefined && !matchesLiveHead(stated)) continue;
       return unreadable(error);
     }
-    if (handoff?.headSha !== currentHeadSha) continue;
+    if (!matchesLiveHead(handoff?.headSha)) continue;
     for (const entry of Array.isArray(handoff.dispositions) ? handoff.dispositions : []) {
       if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.threadId === "string") {
         incomplete.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
