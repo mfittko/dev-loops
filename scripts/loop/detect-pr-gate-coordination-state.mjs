@@ -767,8 +767,8 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY surface: read the durable checkpoint
 // (if any) verify-fixer-disposition.mjs wrote for this exact head and
 // re-verify it against LIVE thread state, never the checkpoint's own claims.
-// No checkpoint recorded for this head means nothing to enforce here (a PR
-// with no fixer-disposition ledger entry behaves exactly as before this
+// No checkpoint recorded for this head and no delivered tackled handoff for the live head means nothing
+// to enforce here (a PR with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
 // A fixer handoff delivered for the live head that lists a tackled thread, with no checkpoint, means
 // verify-fixer-disposition never completed (a failed run writes none): fail closed as not_verified.
