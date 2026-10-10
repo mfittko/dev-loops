@@ -203,8 +203,10 @@ export async function emitFixerWorkOrder({
     throw new Refusal(`threads file ${threadsFile} is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
   }
   if (deltaResult && !actListFile) throw new Refusal("--delta-result applies only to an --act-list-file source");
-  const delta = deltaResult ? await readSource("delta-result", abs(deltaResult)) : null;
-  if (delta) {
+  // A thread source reads the record the thread-route delta review wrote for this head (step 7 bounded_out rule), never a flag.
+  const threadRecordPath = threadsFile ? gateDeltaRecordPath(tmpRoot, headSha) : null;
+  const delta = deltaResult ? await readSource("delta-result", abs(deltaResult)) : threadRecordPath && existsSync(threadRecordPath) ? await readSource("delta-result", threadRecordPath) : null;
+  if (delta && deltaResult) {
     // The delta result must belong to this act list and this head (its pinned review baseline).
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
     if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}`);

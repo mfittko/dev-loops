@@ -110,7 +110,7 @@ test("F1: real act-list, threads and delta inputs resolve into the work order un
     assert.deepEqual(act.workOrder.mutationAuthority, { repo: REPO, pr: PR, branch: "issue-1", allowedPaths: ["."] });
     assert.equal(act.workOrder.headSha, head);
     const threads = await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, allowedPaths: ["src/", "test/a.test.mjs"] });
-    assert.deepEqual(threads.workOrder.requiredReads.map((read) => read.kind), ["threads"]);
+    assert.deepEqual(threads.workOrder.requiredReads.map((read) => read.kind), ["threads", "delta-result"]);
     assert.equal(threads.workOrder.gate, undefined);
     assert.deepEqual(threads.workOrder.mutationAuthority.allowedPaths, ["src", "test/a.test.mjs"]);
   });
@@ -954,5 +954,18 @@ test("a threads --phase full prompt names no siteCoverage skeleton, an act-list 
     assert.doesNotMatch(await readFile(threads.promptPath, "utf8"), /skeleton in the work order JSON/);
     const act = await emit({ deltaResult: files.delta });
     assert.match(await readFile(act.promptPath, "utf8"), /skeleton in the work order JSON/);
+  });
+});
+
+test("delta gate: a threads order lists the delta record as a delta-result read in both phases, carrying a not_resolved item on push_to_gate", async () => {
+  await withFixture(async ({ files, emit, writeRecord, recordPath }) => {
+    await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", items: [{ ref: "T1", status: "not_resolved" }] });
+    for (const phase of ["commit_only", "full"]) {
+      const plan = await emit({ ...threadsOnly, phase, threadsFile: files.threads });
+      const read = plan.workOrder.requiredReads.find((entry) => entry.kind === "delta-result");
+      assert.equal(read?.path, recordPath);
+      assert.ok(plan.workOrder.authority.deltaResultDigest);
+    }
+    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
   });
 });

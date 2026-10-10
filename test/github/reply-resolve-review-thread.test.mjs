@@ -852,3 +852,13 @@ test("reply-resolve-review-thread posts a fixed reply for a resolved item and wh
   const uncovered = await runDeltaGuardedReply({ items: [{ ref: "THREAD_123", status: "not_resolved" }], candidateOffset: true });
   assert.equal(uncovered.result.code, 0, uncovered.result.stderr);
 });
+
+test("reply-resolve-review-thread refuses a fixed reply when the blocking item is the second marker of a merged comment", async () => {
+  const merged = `${markerBody}\n<!-- dev-loops:finding fedcba9876543210 severity=medium angle=holistic round=1 -->\nsecond`;
+  const { result, ghLog } = await runDeltaGuardedReply({
+    items: [{ ref: FINGERPRINT, status: "resolved" }, { ref: "fedcba9876543210", status: "not_resolved" }], rootBody: merged,
+  });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /fixed_reply_delta_not_resolved/);
+  assert.equal(ghLog.length, 2, "no post or resolve");
+});

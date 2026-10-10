@@ -165,7 +165,10 @@ fixer and owns the push. The sequence is:
    `not_resolved` and `cannot_verify` items, it replies with the residual delta
    status and leaves the thread unresolved. The fixer MUST NOT mark these
    residual threads `tackled`; its handoff disposition records them as
-   `deferred`.
+   `deferred`. On the thread route the emitter attaches the head's delta record
+   as a `delta-result` required read to the work order in both phases (the
+   `--delta-result` flag stays refused for thread sources), so this residual-thread
+   rule applies to thread sources through that read.
 
 Each delta review, including a re-review of the current head, consumes one
 invocation. The dev-loop coordinator owns the invocation count and passes it to

@@ -83,7 +83,8 @@ export async function assertFixedReplyShas(
   }
 }
 const BLOCKING_DELTA_STATUSES = ["not_resolved", "cannot_verify"];
-const FINDING_MARKER_FP_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/m;
+// Global: a merged gate-finding comment carries one marker line per finding. Not imported from _gate-finding-surface.mjs (import cycle).
+const FINDING_MARKER_FP_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/gm;
 
 // A record applies to a fixing commit that is its candidateHead or lies in reviewBaselineHead..candidateHead.
 async function deltaRecordCoversCommit(record, sha, { gitEnv, runChild }) {
@@ -125,10 +126,10 @@ export async function findDeltaBlockedFixedReply(
       if (!covers.includes(true)) continue;
       snapshot ??= await captureParsedReviewThreads({ repo, pr }, { env, ghCommand, runChild });
       // Comments are id-sorted, so the root is not necessarily first: search every comment of the thread.
-      const fingerprint = snapshot.comments.filter((comment) => comment.threadId === threadId)
-        .map((comment) => FINDING_MARKER_FP_RE.exec(typeof comment.body === "string" ? comment.body : "")?.[1]).find(Boolean);
+      const fingerprints = snapshot.comments.filter((comment) => comment.threadId === threadId)
+        .flatMap((comment) => [...(typeof comment.body === "string" ? comment.body : "").matchAll(FINDING_MARKER_FP_RE)].map((match) => match[1]));
       const item = record.items.find((entry) => BLOCKING_DELTA_STATUSES.includes(entry?.status)
-        && [threadId, fingerprint].includes(String(entry.ref).replace(/#\d+$/, "")));
+        && [threadId, ...fingerprints].includes(String(entry.ref).replace(/#\d+$/, "")));
       if (item) return { threadId, status: item.status, recordPath: gateDeltaRecordPath(root, record.reviewBaselineHead) };
     }
   }
