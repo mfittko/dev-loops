@@ -250,7 +250,7 @@ validation:
 - `ci-only` (the default for consumers): current-head CI is the only full-validation authority. `dev-loops gate resolve-validation` runs no local suite and records an artifact with `status: "complete"` and `authority: "ci-authoritative"` when current-head CI is green. Red CI records `failed`. Pending, missing or wrong-head CI records `incomplete`. This works for repos without `package.json`, such as a Rails or Rust app.
 - `local`: the gate runs the full suite. With `fullCommand` it runs that command through `sh -c` at the repo root (a Rust repo sets `cargo test`). Without it, `local` mode runs the `package.json` `verify` script through Bun.
 - `paths` rules map changed paths to targeted worker commands for `resolveTargetedValidation(changedPaths)`. `{path}` expands to each matching path, which may use only `A-Za-z0-9._/-`. An unmapped path, or a change set that spans two surfaces, needs full validation. A rule with `commands: []` pins its paths to full validation. `gateSuites` names explicit gate `--suite` scripts.
-- Commands come only from your repo's `.devloops`. A malformed command (empty, multi-line) or map fails config validation. No command is read from a PR title, PR body or CLI argument.
+- The gate reads the `validation` block from the default branch (`origin/HEAD`), not from the PR checkout. A PR that adds or changes the block records `incomplete` and runs nothing until that change merges. A malformed command (empty, multi-line) or map fails config validation. No command is read from a PR title, PR body or CLI argument.
 - Requires a dev-loops CLI that knows the `validation` key. An older CLI rejects it as unknown.
 
 ### Available review angles
