@@ -789,10 +789,15 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
   const incomplete = [];
   for (const execution of executions) {
     let handoff;
+    let raw;
     try {
-      handoff = JSON.parse(await readFile(path.join(prDir, execution, "fixer-disposition.json"), "utf8"));
+      raw = await readFile(path.join(prDir, execution, "fixer-disposition.json"), "utf8");
+      handoff = JSON.parse(raw);
     } catch (error) {
       if (error?.code === "ENOENT") continue;
+      // A malformed handoff for another head must not block this one: read the head first.
+      const stated = typeof raw === "string" ? /"headSha"\s*:\s*"([^"]*)/.exec(raw)?.[1] : undefined;
+      if (stated !== undefined && !currentHeadSha.startsWith(stated)) continue;
       return unreadable(error);
     }
     if (handoff?.headSha !== currentHeadSha) continue;

@@ -236,7 +236,7 @@ export async function emitFixerWorkOrder({
     outputRefs: [outputRef],
     siteCoverage: actListFile ? buildSiteCoverageSkeleton(source.parsed) : undefined,
     handbackCheck: phase === "commit_only" && actListFile
-      ? `dev-loops loop pre-push-delta --act-list ${JSON.stringify(abs(actListFile))} --baseline ${headSha} --spec-identity fixer-handback --site-coverage ${JSON.stringify(outputRef)}`
+      ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(abs(actListFile))} --baseline ${headSha} --spec-identity fixer-handback --site-coverage ${JSON.stringify(outputRef)}`
       : undefined,
     executionRules: {
       contract: "agents/fixer.agent.md",

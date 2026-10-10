@@ -3972,7 +3972,7 @@ test("detect-pr-gate-coordination-state fails closed on a malformed delivered ha
   });
 });
 
-for (const [name, opts] of [["a tackled handoff for an older head", { handoffHead: "0ld1234567" }]]) {
+for (const [name, opts] of [["a tackled handoff for an older head", { handoffHead: "0ld1234567" }], ["a malformed handoff for an older head", { handoffRaw: '{"headSha": "0ld1234567", "dispositions": [' }]]) {
   test(`detect-pr-gate-coordination-state does not block on ${name}`, async () => {
     await runNotVerifiedFixture(opts, (result) => {
       assert.equal(result.ok, true);
