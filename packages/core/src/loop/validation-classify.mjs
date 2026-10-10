@@ -50,7 +50,7 @@ export function classifyValidationCommand(command) {
 
 // The `.devloops` family in loader order (the list DEVLOOPS_CONFIG_PATHS holds in scripts/loop/check-adr-tripwire.mjs; core cannot import scripts).
 const DEVLOOPS_FAMILY = [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json"];
-const SAFE_PATH =/^[A-Za-z0-9._/-]+$/;
+const SAFE_PATH = /^[A-Za-z0-9._/-]+$/;
 
 /**
  * Read `validation.paths` from the first existing `.devloops` family file in
