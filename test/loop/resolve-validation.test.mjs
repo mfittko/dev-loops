@@ -38,8 +38,19 @@ async function fixture(extraScripts = {}, pinnedBunVersion = bunVersion) {
   execFileSync("git", ["init", "-q"], { cwd: repoRoot });
   execFileSync("git", ["add", "package.json", ".gitignore", ".devloops", "scripts"], { cwd: repoRoot });
   execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], { cwd: repoRoot });
+  addOrigin(repoRoot);
   const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
   return { repoRoot, headSha };
+}
+
+// Publish HEAD as origin/main (the trusted base the validation block is read from).
+function addOrigin(repoRoot) {
+  const remote = `${repoRoot}-origin.git`;
+  execFileSync("git", ["init", "-q", "--bare", remote]);
+  execFileSync("git", ["remote", "add", "origin", remote], { cwd: repoRoot });
+  execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/main"], { cwd: repoRoot });
+  execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoRoot });
+  execFileSync("git", ["remote", "set-head", "origin", "main"], { cwd: repoRoot });
 }
 
 const args = (headSha, profile = "full-repository") => ["--profile", profile, "--repo", "owner/repo", "--pr", "1", "--gate", "draft_gate", "--head-sha", headSha];
@@ -400,6 +411,7 @@ async function bareFixture(devloops) {
   execFileSync("git", ["init", "-q"], { cwd: repoRoot });
   execFileSync("git", ["add", ".gitignore", ".devloops"], { cwd: repoRoot });
   execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], { cwd: repoRoot });
+  addOrigin(repoRoot);
   const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
   return { repoRoot, headSha };
 }
@@ -485,4 +497,41 @@ test("a malformed validation config fails closed and the CLI accepts no command 
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
   assert.throws(() => parseResolveValidationArgs([...args("a".repeat(40)), "--command", "rm -rf /"]), /Unknown argument/);
   assert.throws(() => parseResolveValidationArgs([...args("a".repeat(40)), "--full-command", "rm -rf /"]), /Unknown argument/);
+});
+
+// ADR 0137: the validation block is trusted only from the base branch. A PR head that
+// edits it yields a typed incomplete artifact and runs no command.
+test("a PR head that changes the validation block runs nothing and resolves incomplete", async () => {
+  const base = "version: 1\nvalidation:\n  mode: local\n  fullCommand: echo base-ran\n  paths:\n    - match: src/**\n      surface: src\n      commands: [echo one]\n";
+  const edits = {
+    fullCommand: base.replace("echo base-ran", "touch MARKER"),
+    mode: base.replace("mode: local", "mode: ci-only"),
+    paths: base.replace("echo one", "echo two"),
+  };
+  for (const [name, devloops] of Object.entries(edits)) {
+    const { repoRoot, headSha: baseSha } = await bareFixture(base);
+    const marker = path.join(repoRoot, "MARKER");
+    try {
+      await writeFile(path.join(repoRoot, ".devloops"), devloops.replace("touch MARKER", `touch ${marker}`));
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
+      const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+      assert.notEqual(headSha, baseSha);
+      const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+      assert.equal(result.status, "incomplete", name);
+      assert.match(result.reason, /differs from the base branch.*config-source change/, name);
+      const artifact = JSON.parse(await readFile(path.join(repoRoot, result.artifactPath), "utf8"));
+      assert.equal(artifact.allPassed, false, name);
+      await assert.rejects(readFile(marker), /ENOENT/, name);
+    } finally { await rm(repoRoot, { recursive: true, force: true }); }
+  }
+});
+
+test("the declared command runs without GitHub tokens in its environment", async () => {
+  const { repoRoot, headSha } = await bareFixture("version: 1\nvalidation:\n  mode: local\n  fullCommand: env\n");
+  try {
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, env: { ...process.env, GH_TOKEN: "leak-marker-1", GITHUB_TOKEN: "leak-marker-2" } });
+    assert.equal(result.status, "complete");
+    assert.match(result.artifact.suites[0].outputTail, /^PATH=/m);
+    assert.doesNotMatch(result.artifact.suites[0].outputTail, /leak-marker/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });

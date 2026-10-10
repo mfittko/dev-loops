@@ -3,7 +3,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { loadDevLoopConfigStrict, resolveValidationConfig } from "@dev-loops/core/config";
+import { ValidationConfig, loadDevLoopConfigStrict, resolveBaseBranch, resolveValidationConfig } from "@dev-loops/core/config";
 import { deriveLoopCiStatusFromRollup } from "@dev-loops/core/loop/copilot-ci-status";
 
 import { parsePrNumber } from "../_cli-primitives.mjs";
@@ -14,6 +14,7 @@ import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts, stripAnsi } from "./run-gate-validation.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { readDefaultBranchConfig } from "./standing-authorization.mjs";
 
 const USAGE = `Usage: dev-loops gate resolve-validation --profile <targeted|full-repository> --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA> [--suite <script>]... [--tmp-root <dir>]\nTargeted profile requires at least one explicit --suite.\n${JQ_OUTPUT_USAGE}`;
 
@@ -66,11 +67,26 @@ async function defaultReadCi({ repo, pr }) {
   return { headSha: view.headRefOid, rollup: view.statusCheckRollup };
 }
 
-// Run the repo-declared full command (`.devloops` validation.fullCommand, never
-// PR content) through `sh -c` and shape its result like a package suite.
+// The validation block as the base branch declares it (ADR 0137): the only
+// trusted source of the command, mode and paths. Returns the resolved block or
+// a refusal reason.
+function readBaseValidation(config, repoRoot) {
+  const base = readDefaultBranchConfig({ repoRoot, defaultBranch: resolveBaseBranch(config, { cwd: repoRoot }) });
+  if (!base.ok) return { reason: `cannot read the base branch validation config: ${base.detail}` };
+  const parsed = ValidationConfig.optional().safeParse(base.parsed?.validation);
+  if (!parsed.success) return { reason: "base branch validation config is malformed" };
+  return { validation: resolveValidationConfig({ validation: parsed.data }) };
+}
+
+// Secrets stay out of the declared command's environment.
+const SECRET_ENV = /token|secret|password|passwd|credential|api_?key|^gh_|^github_|^npm_/i;
+const commandEnv = (env) => Object.fromEntries(Object.entries(env).filter(([key]) => !SECRET_ENV.test(key)));
+
+// Run the declared full command (the base branch's `validation.fullCommand`,
+// never PR content) through `sh -c` and shape its result like a package suite.
 function runDeclaredFullCommand(command, { repo, pr, gate, headSha, tmpRoot }, { repoRoot, env }) {
   return new Promise((resolve, reject) => {
-    execFile("sh", ["-c", command], { cwd: repoRoot, env, maxBuffer: 64 * 1024 * 1024 }, async (error, stdout, stderr) => {
+    execFile("sh", ["-c", command], { cwd: repoRoot, env: commandEnv(env), maxBuffer: 64 * 1024 * 1024 }, async (error, stdout, stderr) => {
       try {
         const output = stripAnsi(`${stdout ?? ""}${stderr ?? ""}` || (error?.message ?? ""));
         const exitCode = error ? (typeof error.code === "number" ? error.code : 1) : 0;
@@ -113,7 +129,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
   // the requested head and a re-check at the throw still confirms it: a suite
   // may have moved HEAD before a later step threw.
   const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
-  const readHead = () => execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim().toLowerCase();
+  const readHead = () => execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", env: gitEnv, stdio: ["ignore", "pipe", "ignore"] }).trim().toLowerCase();
   let headConfirmed = false;
   try {
     const currentTreeProblem = () => {
@@ -126,7 +142,15 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     };
     const beforeProblem = currentTreeProblem();
     if (beforeProblem) return incomplete(beforeProblem.reason, beforeProblem);
-    const { mode, fullCommand } = resolveValidationConfig((await loadDevLoopConfigStrict({ repoRoot })).config);
+    const checkoutConfig = (await loadDevLoopConfigStrict({ repoRoot })).config;
+    const checkout = resolveValidationConfig(checkoutConfig);
+    const base = readBaseValidation(checkoutConfig, repoRoot);
+    if (base.reason) return incomplete(base.reason);
+    // A PR that edits its own validation block never runs what it declared.
+    if (JSON.stringify(checkout) !== JSON.stringify(base.validation)) {
+      return incomplete("validation config differs from the base branch: a config-source change needs review before validation runs");
+    }
+    const { mode, fullCommand } = base.validation;
     const declared = options.profile === "full-repository" && mode === "local" && fullCommand;
     let pinned = null;
     let artifact;

@@ -50,10 +50,12 @@ export function classifyValidationCommand(command) {
 const SAFE_PATH = /^[A-Za-z0-9._/-]+$/;
 
 /**
- * Read the cwd repo's `.devloops` `validation.paths` (sync, schema-checked). Any
- * absent or malformed file yields no rules, so every path needs full validation.
+ * Read `validation.paths` from `<repoRoot>/.devloops` (sync, schema-checked).
+ * An absent or malformed file yields no rules, so every path needs full
+ * validation. `repoRoot` is required: no cwd-dependent lookup.
  */
-export function readValidationPaths(repoRoot = process.cwd()) {
+export function readValidationPaths(repoRoot) {
+  if (typeof repoRoot !== "string" || repoRoot === "") throw new TypeError("readValidationPaths requires an explicit repoRoot");
   try {
     const parsed = ValidationConfig.safeParse(parseYaml(readFileSync(join(repoRoot, ".devloops"), "utf8"))?.validation);
     return parsed.success ? parsed.data.paths ?? [] : [];
@@ -67,7 +69,7 @@ export function readValidationPaths(repoRoot = process.cwd()) {
  * paths need full ownership. Rules come from `.devloops` `validation.paths`
  * (first match wins), never from the changed content.
  */
-export function resolveTargetedValidation(paths, rules = readValidationPaths()) {
+export function resolveTargetedValidation(paths, rules = readValidationPaths(process.cwd())) {
   const full = { profile: "full-repository", commands: [], gateSuites: [] };
   if (!Array.isArray(paths) || paths.length === 0) return full;
   const checks = paths.map((path) => {
