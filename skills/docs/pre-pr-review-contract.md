@@ -166,9 +166,15 @@ fixer and owns the push. The sequence is:
    status and leaves the thread unresolved. The fixer MUST NOT mark these
    residual threads `tackled`; its handoff disposition records them as
    `deferred`. On the thread route the emitter attaches the head's delta record
-   as a `delta-result` required read to the work order in both phases (the
+   as a `delta-result` required read to the work order when a delta record exists for the head (always in the `full` phase; the
    `--delta-result` flag stays refused for thread sources), so this residual-thread
    rule applies to thread sources through that read.
+
+   A round in which the `commit_only` fixer makes no commit has no unpushed fix, so no delta review runs and no record is
+   written (`PRE-PUSH-DELTA-TRIGGER`), and `--phase full` stays refused. The coordinator then posts each declined or deferred
+   thread reply directly with `reply-resolve-review-thread.mjs --disposition rejected|deferred` at the unchanged head. That
+   helper refuses only a `fixed` reply, so no full-phase refusal is bypassed. The fixer's `handbackCheck` does not apply to a
+   no-commit handback.
 
 Each delta review, including a re-review of the current head, consumes one
 invocation. The dev-loop coordinator owns the invocation count and passes it to
