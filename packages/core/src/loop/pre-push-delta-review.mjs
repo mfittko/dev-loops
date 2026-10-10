@@ -152,7 +152,8 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
   const actSetId = createHash("sha256")
     .update(JSON.stringify(actItems.map((item) => {
       const { ref, angle, severity, file, line, summary } = item;
-      const base = [ref, angle, severity, file ?? null, line ?? null, summary];
+      // A thread-route summary is a body excerpt that varies with --body-max, so it stays out of the hash.
+      const base = angle === "review-thread" ? [ref, angle, severity, file ?? null, line ?? null] : [ref, angle, severity, file ?? null, line ?? null, summary];
       // Scope fields join the hash only when present, so a legacy act list keeps its id.
       const scope = [...REMEDIATION_TEXT_FIELDS, ...REMEDIATION_LIST_FIELDS, "siblingRemediations"].filter((key) => item[key] !== undefined).map((key) => [key, item[key]]);
       return scope.length > 0 ? [...base, scope] : base;

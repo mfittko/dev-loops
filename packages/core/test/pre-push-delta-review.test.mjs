@@ -115,6 +115,13 @@ describe("delta trigger", () => {
     assert.throws(() => threadsToActList({ ...payload, threads: [{ ...payload.threads[0], isResolved: true }] }, { repo: "o/r", pr: 7 }), /not successful list-review-threads/);
   });
 
+  test("thread-route actSetId ignores body excerpts and order; a different thread set changes it", () => {
+    const mk = (threads) => startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList({ ok: true, repo: "o/r", pr: 7, threads }, { repo: "o/r", pr: 7 }) }).actSetId;
+    const t = (threadId, body) => ({ threadId, body, isResolved: false, path: "a.mjs", line: 3 });
+    assert.equal(mk([t("T1", "long body one"), t("T2", "long body two")]), mk([t("T2", "x"), t("T1", "y")]));
+    assert.notEqual(mk([t("T1", "a"), t("T2", "b")]), mk([t("T1", "a"), t("T3", "b")]));
+  });
+
   test("an entry the judge did not mark act cannot open a sequence", () => {
     assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [{ judgeDisposition: "defer", summary: "x" }] }), /expected "act"/);
     assert.throws(() => startDeltaSequence({ reviewBaselineHead: A, actList: [] }), /non-empty judge act list/);
