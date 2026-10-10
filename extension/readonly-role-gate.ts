@@ -14,6 +14,7 @@ const SANCTIONED_PULL_RE = new RegExp(
   `^dev-loops-run scripts/github/pull-work-order\\.mjs (?:${EXECUTION_IDENTITY_RE.source.slice(1, -1)}|--ref ${PULL_VALUE} --digest ${PULL_VALUE} --execution ${PULL_VALUE})$`,
 );
 const parseSanctionedPullLine = (command: string) => SANCTIONED_PULL_RE.test(command.trim());
+const JUDGE_DECISION_CHECK_RE = /^dev-loops-run scripts\/loop\/check-judge-decision\.mjs --file [\w.\/#-]*tmp\/gate-judge\/[\w.\/#-]+\.json$/;
 const stripPluginNamespace = (agentType: string) => agentType.slice(agentType.lastIndexOf(':') + 1);
 /**
  * The plugin namespace a tag value names: the text before its first `:`, trimmed; '' when the value
@@ -26,7 +27,7 @@ const pluginNamespace = (agentType: string) => {
   return colon === -1 ? '' : trimmed.slice(0, colon).trim();
 };
 
-/** Roles whose Pi `bash` is restricted. The judge pulls only; the reviewer also reads and searches. */
+/** Roles whose Pi `bash` is restricted. The judge pulls and runs the check-judge-decision line; the reviewer also reads and searches. */
 const READ_SEARCH_ROLES = new Set(['review']);
 export const BASH_RESTRICTED_ROLES = Object.freeze(['judge', 'review']);
 
@@ -167,7 +168,7 @@ export function resolvePiRole({ systemPrompt, env = process.env, sessionId }: {
 }
 /**
  * Decide a Pi `tool_call`. A restricted role runs only the sanctioned pull line (plus
- * read and search commands for the reviewer). An unresolved role ('' from a blank tag, an
+ * read and search commands for the reviewer; the judge also runs its decision check). An unresolved role ('' from a blank tag, an
  * unknown dev-loops: name, conflicting tags or an untagged native async child session) fails
  * closed: it is treated as a restricted role that may pull only.
  */
@@ -180,13 +181,15 @@ export function decidePiToolCall({ toolName, input, agentType }: {
   if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
   const command = typeof input?.command === 'string' ? input.command : '';
   if (parseSanctionedPullLine(command)) return { block: false };
+  if (agentType === 'judge' && JUDGE_DECISION_CHECK_RE.test(command.trim()) && !command.includes('..')) return { block: false };
   if (READ_SEARCH_ROLES.has(agentType) && isReadSearchCommand(command)) return { block: false };
   return {
     block: true,
     reason:
       `Read-only role boundary (#2509): role "${agentType || '(unresolved role: fail closed)'}" may run only its dispatched ` +
       '`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line' +
-      (READ_SEARCH_ROLES.has(agentType) ? ' and shell-inert read or search commands' : '') +
+      (agentType === 'judge' ? ' or `dev-loops-run scripts/loop/check-judge-decision.mjs --file tmp/gate-judge/<path>.json`' : '') +
+      (READ_SEARCH_ROLES.has(agentType) ?' and shell-inert read or search commands' : '') +
       '. Never run shell, test or build commands.',
   };
 }

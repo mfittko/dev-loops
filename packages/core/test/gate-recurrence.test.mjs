@@ -98,6 +98,11 @@ describe("findEscalations", () => {
     assert.deepEqual(findEscalations(args([round("h1", [rejected]), round("h2", [rejected])])), []);
   });
 
+  test("evidence-only act items never count", () => {
+    const evidence = { ...actItem("`isSameDefect` x"), remedyKind: "evidence_only" };
+    assert.deepEqual(findEscalations(args([round("h1", [evidence]), round("h2", [evidence])])), []);
+  });
+
   test("a different symbol on the same file does not count", () => {
     const other = round("h1", [actItem("`mergeSameDefectFindings` x")]);
     assert.deepEqual(findEscalations(args([other, round("h2", [actItem("`THRESHOLD` y")])])), []);

@@ -933,7 +933,10 @@ widening rule.
 `GATE-EXEC-REMEDIATION-SITE-QUERY`: Each `valid_compliant` act item's `authorizedRemediation`
 MUST come with a `defectClass` and a `siteQuery`: a `git grep` pattern or a symbol list that the
 fixer runs at the head. `validateSpecAuthorityDecision` rejects a `valid_compliant` decision
-that lacks either. For a matcher or guard defect (`defectKind: "matcher"`), the decision also lists
+that lacks either, with a typed error (`code: "spec_authority_decision_invalid"`, `decisionIndex`, `field`).
+A `valid_compliant` decision with `remedyKind: "evidence_only"` (the remedy changes no file) needs neither field and never
+enters the fixer act list. The judge runs `dev-loops-run scripts/loop/check-judge-decision.mjs --file <spec-authority-verdict path>`
+before it hands back. For a matcher or guard defect (`defectKind: "matcher"`), the decision also lists
 the accepted and rejected input forms (`acceptedForms[]`, `rejectedForms[]`) alongside its
 `siteQuery`, and the fix adds one test per form. For doc, comment or fragment lag (`defectKind: "doc_lag"`), `statedSurfaces[]`
 lists every stated surface of the changed rule: PR body scope, changes fragment, JSDoc, hook

@@ -1027,6 +1027,26 @@ test("judgePassCli drops a finding_conflicts finding from the act list even if r
   assert.deepEqual(payload.specAuthority.findingConflictIndices, [0]);
 });
 
+test("judgePassCli keeps an evidence-only valid_compliant finding off the fixer act list", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-evidence-only-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "confirm CI" }), finding({ summary: "legit defect" })] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [
+    { index: 0, disposition: "act", rationale: "relevance act" },
+    { index: 1, disposition: "act", rationale: "relevance act" },
+  ] })));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  const base = { specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" };
+  await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
+    { index: 0, outcome: "valid_compliant", remedyKind: "evidence_only", ...base },
+    { index: 1, outcome: "valid_compliant", defectClass: "c", siteQuery: "q", ...base },
+  ] }));
+  const payload = await judgePassCli(...specAuthorityArgs(tmpDir, contentDigest));
+  assert.equal(payload.ok, true);
+  assert.deepEqual(payload.act.map((f) => f.summary), ["legit defect"]);
+  assert.equal(payload.actCount, 1);
+});
+
 test("judgePassCli wires resolveCriterionInvalidation: a spec change stales all prior approvals and persists a durable record", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-invalidate-"));
   const { computeSpecDigest } = await import("@dev-loops/core/loop/spec-authority");

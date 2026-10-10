@@ -1456,6 +1456,7 @@ async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, g
       matches.push({
         disposition: finding.judgeDisposition.trim(),
         rationale,
+        ...(finding.remedyKind === "evidence_only" ? { remedyKind: "evidence_only" } : {}),
         loggedAtMs: Number.isFinite(loggedAtMs) ? loggedAtMs : null,
       });
     }
@@ -1514,20 +1515,21 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
   }
   const matches = await collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, gate, fp });
   if (matches.length === 0) return null;
-  const allAgree = matches.every((m) => m.disposition === matches[0].disposition);
+  const same = (a, b) => a.disposition === b.disposition && (a.remedyKind ?? null) === (b.remedyKind ?? null);
+  const allAgree = matches.every((m) => same(m, matches[0]));
   const timestamped = matches.filter((m) => m.loggedAtMs !== null);
   if (timestamped.length !== matches.length) {
     // At least one candidate ledger carries no usable loggedAt: "greatest" is
     // undecidable across the full set. Safe to proceed only when every
     // candidate already agrees on the disposition regardless of order.
-    return allAgree ? { disposition: matches[0].disposition, rationale: matches[0].rationale } : { ambiguous: true };
+    return allAgree ? { disposition: matches[0].disposition, rationale: matches[0].rationale, ...(matches[0].remedyKind ? { remedyKind: matches[0].remedyKind } : {}) } : { ambiguous: true };
   }
   const maxLoggedAtMs = Math.max(...timestamped.map((m) => m.loggedAtMs));
   const winners = timestamped.filter((m) => m.loggedAtMs === maxLoggedAtMs);
-  if (winners.length > 1 && !winners.every((m) => m.disposition === winners[0].disposition)) {
+  if (winners.length > 1 && !winners.every((m) => same(m, winners[0]))) {
     return { ambiguous: true }; // Tied on the greatest loggedAt, and those tied candidates disagree.
   }
-  return { disposition: winners[0].disposition, rationale: winners[0].rationale };
+  return { disposition: winners[0].disposition, rationale: winners[0].rationale, ...(winners[0].remedyKind ? { remedyKind: winners[0].remedyKind } : {}) };
 }
 
 // Tier 3 (last-resort) of the reject-close judge-disposition lookup: parses

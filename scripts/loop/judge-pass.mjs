@@ -7,6 +7,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
   GATE_CONFIG_KEY,
   applyJudgeDispositions,
+  isOpenActItem,
   validateJudgeVerdict,
 } from "@dev-loops/core/loop/gate-fanin";
 import {
@@ -83,7 +84,8 @@ Inputs:
   --pr <number>                Echoed onto the result.
   --gate <name>                Echoed onto the result (draft_gate|pre_approval_gate).
   --out <path>                 Write the fixer's ACT list (enriched findings with
-                               judgeDisposition === "act") to this path as JSON. It
+                               judgeDisposition === "act", never an evidence-only
+                               remedy; counts.act and actCount exclude those too) to this path as JSON. It
                                omits escalated act items and their cluster siblings
                                (recurrence escalation, below).
   --ledger-out <path>          Write the enriched { overallVerdict, findings, scopeDrift,
@@ -432,7 +434,7 @@ export function validateCliArgs(options) {
  * @param {object} judgeVerdict — the judge agent's verdict artifact (JSON object)
  * @param {string} headSha — the round's current head (the verdict must be current-head)
  * @returns {{ enriched: Array<object>, act: Array<object>, scopeDrift: object,
- *             counts: { act: number, defer: number, reject: number }, headSha: string }}
+ *             counts: { act: number, defer: number, reject: number } (act excludes evidence-only remedies), headSha: string }}
  */
 export function runJudgePass(findings, judgeVerdict, headSha) {
   const validated = validateJudgeVerdict(judgeVerdict);
@@ -485,12 +487,12 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
  * The ONE counting rule shared by runJudgePass and the spec-authority act-list
  * recount, so the two cannot drift.
  * @param {Array<{judgeDisposition?: string}>} enriched
- * @returns {{ act: number, defer: number, reject: number }}
+ * @returns {{ act: number, defer: number, reject: number }} act excludes evidence-only remedies
  */
 function countByDisposition(enriched) {
   const counts = { act: 0, defer: 0, reject: 0 };
   for (const f of enriched) {
-    if (f.judgeDisposition === "act") counts.act += 1;
+    if (isOpenActItem(f)) counts.act += 1;
     else if (f.judgeDisposition === "defer") counts.defer += 1;
     else if (f.judgeDisposition === "reject") counts.reject += 1;
   }
@@ -700,8 +702,8 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
   // The defect class and site query ride the act item to the fixer and the delta review.
   const remediationScopes = validated.decisions
     .filter((d) => d.outcome === SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT)
-    .map(({ index, authorizedRemediation, defectClass, siteQuery, defectKind, acceptedForms, rejectedForms, statedSurfaces }) => ({
-      index, authorizedRemediation, defectClass, siteQuery, defectKind,
+    .map(({ index, authorizedRemediation, remedyKind, defectClass, siteQuery, defectKind, acceptedForms, rejectedForms, statedSurfaces }) => ({
+      index, authorizedRemediation, remedyKind, defectClass, siteQuery, defectKind,
       ...(acceptedForms ? { acceptedForms, rejectedForms } : {}),
       ...(statedSurfaces ? { statedSurfaces } : {}),
     }));
@@ -937,7 +939,7 @@ export async function judgePassCli(
       }
     }
     for (const { index, ...scope } of specAuthority.remediationScopes) Object.assign(result.enriched[index], scope);
-    result.act = result.enriched.filter((f) => f.judgeDisposition === "act");
+    result.act = result.enriched.filter(isOpenActItem);
     result.counts = countByDisposition(result.enriched);
   }
 
@@ -986,7 +988,7 @@ export async function judgePassCli(
     const escalated = members.filter((f) => escalatedActs.has(f));
     if (escalated.length === 0) continue;
     for (const f of members) escalatedActs.add(f);
-    const siblings = members.filter((f) => f.judgeDisposition === "act" && !escalated.includes(f)).map((f) => f.fingerprint);
+    const siblings = members.filter((f) => isOpenActItem(f) && !escalated.includes(f)).map((f) => f.fingerprint);
     if (siblings.length > 0) for (const f of escalated) siblingFingerprints.set(f, siblings);
   }
   const fixerAct = result.act.filter((f) => !escalatedActs.has(f));

@@ -226,6 +226,7 @@ function validateFindingsArray(parsed, flagLabel) {
       }
       entry.judgeDisposition = jd;
     }
+    if (f.remedyKind === "evidence_only") entry.remedyKind = "evidence_only";
     if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
       entry.judgeRationale = f.judgeRationale.trim();
     }
@@ -695,6 +696,9 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
   const conflicts = validated.decisions
     .filter((d) => d.outcome === SPEC_AUTHORITY_OUTCOMES.FINDING_CONFLICTS)
     .map((d) => d.index);
+  for (const d of validated.decisions) {
+    if (d.outcome === SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT && d.remedyKind === "evidence_only") findings[d.index].remedyKind = "evidence_only";
+  }
   return rejectFindingConflicts(findings, conflicts);
 }
 /**

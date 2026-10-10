@@ -422,7 +422,7 @@
     {
       "id": "GATE-EXEC-REMEDIATION-SITE-QUERY",
       "enforcement": "runtime",
-      "enforcementNote": "validateSpecAuthorityDecision rejects a valid_compliant decision without defectClass and siteQuery (and the matcher or doc_lag lists), and normalizeFixerDispositionHandoff rejects a returned site that is neither fixed nor skipped with a reason"
+      "enforcementNote": "validateSpecAuthorityDecision rejects a valid_compliant decision without defectClass and siteQuery unless remedyKind is evidence_only (and the matcher or doc_lag lists), and normalizeFixerDispositionHandoff rejects a returned site that is neither fixed nor skipped with a reason"
     },
     {
       "id": "GATE-EXEC-RESOLVED-ANGLE-EVIDENCE",
