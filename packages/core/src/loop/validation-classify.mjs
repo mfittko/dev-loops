@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { matchesGlob } from "../analysis/diff-analyzer.mjs";
@@ -48,17 +48,23 @@ export function classifyValidationCommand(command) {
   return targeted ? "targeted" : "non-validation";
 }
 
-const SAFE_PATH = /^[A-Za-z0-9._/-]+$/;
+// The `.devloops` family in loader order (the list DEVLOOPS_CONFIG_PATHS holds in scripts/loop/check-adr-tripwire.mjs; core cannot import scripts).
+const DEVLOOPS_FAMILY = [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json"];
+const SAFE_PATH =/^[A-Za-z0-9._/-]+$/;
 
 /**
- * Read `validation.paths` from `<repoRoot>/.devloops` (sync, schema-checked).
+ * Read `validation.paths` from the first existing `.devloops` family file in
+ * `<repoRoot>` (sync, schema-checked; `.json` parses as JSON, the rest as YAML).
  * An absent or malformed file yields no rules, so every path needs full
  * validation. `repoRoot` is required: no cwd-dependent lookup.
  */
 export function readValidationPaths(repoRoot) {
   if (typeof repoRoot !== "string" || repoRoot === "") throw new TypeError("readValidationPaths requires an explicit repoRoot");
   try {
-    const parsed = ValidationConfig.safeParse(parseYaml(readFileSync(join(repoRoot, ".devloops"), "utf8"))?.validation);
+    const name = DEVLOOPS_FAMILY.find((candidate) => existsSync(join(repoRoot, candidate)));
+    if (!name) return [];
+    const parse = name.endsWith(".json") ? JSON.parse : parseYaml;
+    const parsed = ValidationConfig.safeParse(parse(readFileSync(join(repoRoot, name), "utf8"))?.validation);
     return parsed.success ? parsed.data.paths ?? [] : [];
   } catch {
     return [];

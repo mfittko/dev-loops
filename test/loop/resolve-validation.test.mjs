@@ -581,3 +581,58 @@ test("a checkout-only validation.paths edit never reaches a gate-consumed suite"
 test("a hung CI read times out so the gate resolves incomplete", async () => {
   await assert.rejects(defaultReadCi({ repo: "o/r", pr: 1 }, { read: () => new Promise(() => {}), timeoutMs: 20 }), /timed out/);
 });
+
+const commit = (repoRoot, message) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", message, "--allow-empty"], { cwd: repoRoot });
+const headOf = (repoRoot) => execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+
+test("a default branch with no .devloops file resolves the ci-only default and completes on green CI", async () => {
+  const { repoRoot } = await bareFixture("version: 1\n");
+  try {
+    execFileSync("git", ["rm", "-q", ".devloops"], { cwd: repoRoot });
+    commit(repoRoot, "drop config");
+    execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/main"], { cwd: repoRoot });
+    execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoRoot });
+    const headSha = headOf(repoRoot);
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+    assert.equal(result.status, "complete");
+    assert.equal(result.artifact.authority, "ci-authoritative");
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a checkout workflow.baseBranch pointing at its own branch never selects the trusted base", async () => {
+  const { repoRoot } = await bareFixture("version: 1\n");
+  try {
+    const marker = path.join(repoRoot, "MARKER");
+    await writeFile(path.join(repoRoot, ".devloops"), `version: 1\nworkflow:\n  baseBranch: pr-branch\nvalidation:\n  mode: local\n  fullCommand: touch ${marker}\n`);
+    commit(repoRoot, "pr edit");
+    execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/pr-branch"], { cwd: repoRoot });
+    execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoRoot });
+    const headSha = headOf(repoRoot);
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /differs from the base branch/);
+    await assert.rejects(readFile(marker), /ENOENT/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a validation block in the .pi/dev-loop/defaults layer does not trip the base comparison", async () => {
+  const { repoRoot } = await bareFixture("version: 1\n");
+  try {
+    await mkdir(path.join(repoRoot, ".pi", "dev-loop"), { recursive: true });
+    await writeFile(path.join(repoRoot, ".pi", "dev-loop", "defaults.yaml"), "validation:\n  mode: local\n");
+    execFileSync("git", ["add", ".pi"], { cwd: repoRoot });
+    commit(repoRoot, "defaults layer");
+    const headSha = headOf(repoRoot);
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+    assert.equal(result.status, "complete");
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("defaultReadCi maps the gh view fields to headSha and rollup", async () => {
+  const calls = [];
+  const read = async (request) => { calls.push(request); return { ok: true, pr: { headRefOid: "abc", statusCheckRollup: [{ name: "ci" }] } }; };
+  assert.deepEqual(await defaultReadCi({ repo: "o/r", pr: 7 }, { read }), { headSha: "abc", rollup: [{ name: "ci" }] });
+  assert.equal(calls[0].fields, "headRefOid,statusCheckRollup");
+  assert.equal(calls[0].repo, "o/r");
+  assert.equal(calls[0].pr, 7);
+});

@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { execFile, execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { ValidationConfig, loadDevLoopConfigStrict, resolveBaseBranch, resolveValidationConfig } from "@dev-loops/core/config";
+import { parse as parseYaml } from "yaml";
+
+import { ValidationConfig, resolveValidationConfig } from "@dev-loops/core/config";
 import { deriveLoopCiStatusFromRollup } from "@dev-loops/core/loop/copilot-ci-status";
 
 import { parsePrNumber } from "../_cli-primitives.mjs";
@@ -14,6 +17,7 @@ import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts, runKillable, stripAnsi } from "./run-gate-validation.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { DEVLOOPS_CONFIG_PATHS } from "./check-adr-tripwire.mjs";
 import { readDefaultBranchConfig } from "./standing-authorization.mjs";
 
 const USAGE = `Usage: dev-loops gate resolve-validation --profile <targeted|full-repository> --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA> [--suite <script>]... [--tmp-root <dir>]\nTargeted profile requires at least one explicit --suite.\n${JQ_OUTPUT_USAGE}`;
@@ -74,14 +78,31 @@ export async function defaultReadCi({ repo, pr }, { read = viewPr, timeoutMs = 1
   }
 }
 
-// The validation block as the base branch declares it (ADR 0137): the only
-// trusted source of the command, mode and paths. Returns the resolved block or
-// a refusal reason.
-function readBaseValidation(config, repoRoot) {
-  const base = readDefaultBranchConfig({ repoRoot, defaultBranch: resolveBaseBranch(config, { cwd: repoRoot }) });
-  if (!base.ok) return { reason: `cannot read the base branch validation config: ${base.detail}` };
-  const parsed = ValidationConfig.optional().safeParse(base.parsed?.validation);
+// The validation block as the default branch declares it (ADR 0137): the only
+// trusted source of the command, mode and paths. The base is `origin/HEAD`, as
+// `readStandingAuthorization` reads it, never the checkout's `workflow.baseBranch`
+// (a PR could point that at its own branch). A default branch with no `.devloops`
+// family file is an absent block, so the `ci-only` default applies. Returns the
+// resolved block or a refusal reason.
+function readBaseValidation(repoRoot) {
+  const base = readDefaultBranchConfig({ repoRoot });
+  if (!base.ok && !base.noConfigFile) return { reason: `cannot read the base branch validation config: ${base.detail}` };
+  const parsed = ValidationConfig.optional().safeParse(base.ok ? base.parsed?.validation : undefined);
   if (!parsed.success) return { reason: "base branch validation config is malformed" };
+  return { validation: resolveValidationConfig({ validation: parsed.data }) };
+}
+
+// The checkout's own `.devloops` family file (loader order, first existing file
+// wins), so both sides of the comparison read the same layer: the merged loader
+// config also carries `.pi/dev-loop/defaults.*`, which the base side never sees.
+function readCheckoutValidation(repoRoot) {
+  const name = DEVLOOPS_CONFIG_PATHS.find((candidate) => existsSync(path.join(repoRoot, candidate)));
+  let raw;
+  try {
+    raw = name ? (name.endsWith(".json") ? JSON.parse : parseYaml)(readFileSync(path.join(repoRoot, name), "utf8"))?.validation : undefined;
+  } catch { return { reason: `checkout ${name} does not parse` }; }
+  const parsed = ValidationConfig.optional().safeParse(raw);
+  if (!parsed.success) return { reason: "checkout validation config is malformed" };
   return { validation: resolveValidationConfig({ validation: parsed.data }) };
 }
 
@@ -149,12 +170,12 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     };
     const beforeProblem = currentTreeProblem();
     if (beforeProblem) return incomplete(beforeProblem.reason, beforeProblem);
-    const checkoutConfig = (await loadDevLoopConfigStrict({ repoRoot })).config;
-    const checkout = resolveValidationConfig(checkoutConfig);
-    const base = readBaseValidation(checkoutConfig, repoRoot);
+    const checkout = readCheckoutValidation(repoRoot);
+    if (checkout.reason) return incomplete(checkout.reason);
+    const base = readBaseValidation(repoRoot);
     if (base.reason) return incomplete(base.reason);
     // A PR that edits its own validation block never runs what it declared.
-    if (JSON.stringify(checkout) !== JSON.stringify(base.validation)) {
+    if (JSON.stringify(checkout.validation) !== JSON.stringify(base.validation)) {
       return incomplete("validation config differs from the base branch: a config-source change needs review before validation runs");
     }
     const { mode, fullCommand } = base.validation;

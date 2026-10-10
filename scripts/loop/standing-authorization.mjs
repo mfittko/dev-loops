@@ -89,11 +89,11 @@ export function defaultFetchOrigin(branch, { repoRoot }, exec = execFileSync) {
  * Probes the family in loader order and stops at the first file that exists on
  * the branch; an existing file that cannot be read or parsed is `malformed`,
  * never "try the next name".
- * @returns {{ ok: true, parsed: object, defaultBranch: string } | { ok: false, state: string, detail: string, defaultBranch: string|null }}
+ * @returns {{ ok: true, parsed: object, defaultBranch: string } | { ok: false, state: string, detail: string, defaultBranch: string|null, noConfigFile?: true }}
  */
 export function readDefaultBranchConfig({ repoRoot = process.cwd(), defaultBranch, git = defaultGit, fetchOrigin = defaultFetchOrigin } = {}) {
   const branch = defaultBranch ?? resolveDefaultBranch({ repoRoot, git });
-  const refuse = (state, detail) => ({ ok: false, state, detail, defaultBranch: branch });
+  const refuse = (state, detail, extra) => ({ ok: false, state, detail, defaultBranch: branch, ...extra });
   if (!branch) return refuse("default_branch_unresolved", "refs/remotes/origin/HEAD is unset; refusing to guess the default branch");
   try {
     fetchOrigin(branch, { repoRoot });
@@ -123,7 +123,8 @@ export function readDefaultBranchConfig({ repoRoot = process.cwd(), defaultBranc
     sourceName = name;
     break;
   }
-  if (source === null) return refuse("missing", `no .devloops on origin/${branch}`);
+  // `noConfigFile`: the ref exists but carries no family file (an absent block, not an unreadable one).
+  if (source === null) return refuse("missing", `no .devloops on origin/${branch}`, { noConfigFile: true });
   let parsed;
   try {
     parsed = (sourceName.endsWith(".json") ? JSON.parse(source) : parseYaml(source)) ?? {};
