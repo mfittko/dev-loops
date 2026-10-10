@@ -1,6 +1,9 @@
-import { posix } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, posix } from "node:path";
+import { parse as parseYaml } from "yaml";
+import { matchesGlob } from "../analysis/diff-analyzer.mjs";
+import { ValidationConfig } from "../config/config.mjs";
 import { verificationCommandSegments } from "./bash-command-classify.mjs";
-import { REGISTERED_ARTIFACT_SUITES } from "./ui-e2e-scoping.mjs";
 
 const COMPONENT_SUITES = new Set(["test:core", "test:scripts", "test:assets", "test:extension", "test:dev-loop", "test:pack", "test:docs", "test:workflows"]);
 const FULL_SUITES = ["test:all", "test:docs", "test:workflows"];
@@ -44,37 +47,40 @@ export function classifyValidationCommand(command) {
   return targeted ? "targeted" : "non-validation";
 }
 
-/** Pick an existing domain check for a single changed surface; mixed/unknown needs full ownership. */
-export function resolveTargetedValidation(paths) {
+const SAFE_PATH = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * Read the cwd repo's `.devloops` `validation.paths` (sync, schema-checked). Any
+ * absent or malformed file yields no rules, so every path needs full validation.
+ */
+export function readValidationPaths(repoRoot = process.cwd()) {
+  try {
+    const parsed = ValidationConfig.safeParse(parseYaml(readFileSync(join(repoRoot, ".devloops"), "utf8"))?.validation);
+    return parsed.success ? parsed.data.paths ?? [] : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Pick the configured check for a single changed surface; mixed or unmapped
+ * paths need full ownership. Rules come from `.devloops` `validation.paths`
+ * (first match wins), never from the changed content.
+ */
+export function resolveTargetedValidation(paths, rules = readValidationPaths()) {
   const full = { profile: "full-repository", commands: [], gateSuites: [] };
   if (!Array.isArray(paths) || paths.length === 0) return full;
   const checks = paths.map((path) => {
     if (typeof path !== "string" || !path || path.startsWith("/") || path.includes("..") || path.includes("\\")) return null;
-    if (/^packages\/core\/test\/[^/]+\.test\.mjs$/.test(path)) return /^packages\/core\/test\/[A-Za-z0-9._-]+\.test\.mjs$/.test(path) ? ["core", `bun scripts/run-bun-test.mjs ${path}`] : null;
-    if (path === "packages/core/package.json") return ["core", "bun run test:core", "bun run test:pack"];
-    if (path.startsWith("packages/core/")) return ["core", "bun run assets:check", "bun run test:core"];
-    if (/^test\/(?:loop|github|docs|projects|pages|security)\/[^/]+\.test\.mjs$/.test(path)) return /^test\/(?:loop|github|docs|projects|pages|security)\/[A-Za-z0-9._-]+\.test\.mjs$/.test(path) ? ["scripts", `bun scripts/run-bun-test.mjs ${path}`] : null;
-    if (path === "scripts/claude/generate-claude-assets.mjs") return ["generated", "bun run assets:check", "bun run test:doc-guard"];
-    if (REGISTERED_ARTIFACT_SUITES[path]) return ["ui", `bun run test:playwright:${REGISTERED_ARTIFACT_SUITES[path]}`];
-    if (/^docs\/(?:presentations|articles)\/[^/]+\.html$/.test(path)) return null;
-    if (path.startsWith("test/playwright/") && path.endsWith(".spec.mjs")) {
-      const suite = path.slice("test/playwright/".length, -".spec.mjs".length);
-      if (suite === "inspect-run-viewer") return ["ui", "bun run test:playwright:viewer"];
-      if (suite === "deep-dive-deck") return ["ui", "bun run test:playwright:deep-dive"];
-      if (Object.values(REGISTERED_ARTIFACT_SUITES).includes(suite)) return ["ui", `bun run test:playwright:${suite}`];
-      return null;
-    }
-    if (path === "scripts/loop/inspect-run-viewer.mjs" || path.startsWith("scripts/loop/inspect-run-viewer/")) return ["ui", "bun run test:playwright:viewer"];
-    if (path.startsWith("scripts/") || path.startsWith("cli/") || path.startsWith("lib/")) return ["scripts", "bun run test:scripts"];
-    if (path.startsWith("skills/docs/") || /^skills\/[^/]+\/SKILL\.md$/.test(path) || path.startsWith("docs/") || path === "AGENTS.md" || path === "README.md") return ["docs", "bun run test:docs", "bun run test:doc-guard"];
-    if (path.startsWith(".github/workflows/")) return ["workflow", "bun run test:workflows"];
-    if (path.startsWith("extension/")) return ["extension", "bun run test:extension"];
-    if (path.startsWith(".claude/") || path.startsWith("agents/") || path.startsWith("commands/") || path.startsWith("skills/dev-loop/templates/")) return ["generated", "bun run assets:check", "bun run test:assets"];
-    return null;
+    const rule = rules.find(({ match }) => [match].flat().some((glob) => matchesGlob(path, glob)));
+    if (!rule || rule.commands.length === 0) return null;
+    const templated = rule.commands.some((command) => command.includes("{path}"));
+    if (templated && !SAFE_PATH.test(path)) return null;
+    const commands = rule.commands.map((command) => command.replaceAll("{path}", path));
+    const gateSuites = [...(rule.gateSuites ?? []), ...commands.filter((c) => c.startsWith("bun run ")).map((c) => c.slice(8))];
+    return { surface: rule.surface, commands, gateSuites };
   });
-  const surfaces = new Set(checks.map((check) => check?.[0]));
-  if (surfaces.size !== 1 || surfaces.has(undefined)) return full;
-  const commands = [...new Set(checks.flatMap((check) => check.slice(1)))].sort();
-  const gateSuites = [...new Set(checks.flatMap((check) => check.slice(1).map((command) => command.startsWith("bun run ") ? command.slice(8) : check[0] === "core" ? "test:core" : "test:scripts")))].sort();
-  return { profile: "targeted", commands, gateSuites };
+  if (checks.includes(null) || new Set(checks.map((check) => check.surface)).size !== 1) return full;
+  const unique = (list) => [...new Set(list)].sort();
+  return { profile: "targeted", commands: unique(checks.flatMap((c) => c.commands)), gateSuites: unique(checks.flatMap((c) => c.gateSuites)) };
 }

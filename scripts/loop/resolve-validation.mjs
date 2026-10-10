@@ -1,14 +1,18 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+import { loadDevLoopConfigStrict, resolveValidationConfig } from "@dev-loops/core/config";
+import { deriveLoopCiStatusFromRollup } from "@dev-loops/core/loop/copilot-ci-status";
 
 import { parsePrNumber } from "../_cli-primitives.mjs";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { normalizeGate, normalizeHeadSha } from "../github/_gate-names.mjs";
+import { viewPr } from "../github/view-pr.mjs";
 import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
-import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts } from "./run-gate-validation.mjs";
+import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts, stripAnsi } from "./run-gate-validation.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: dev-loops gate resolve-validation --profile <targeted|full-repository> --repo <owner/name> --pr <number> --gate <gate> --head-sha <full SHA> [--suite <script>]... [--tmp-root <dir>]\nTargeted profile requires at least one explicit --suite.\n${JQ_OUTPUT_USAGE}`;
@@ -56,7 +60,34 @@ export function parseResolveValidationArgs(argv) {
   return { ...options, profile };
 }
 
-export async function resolveValidation(options, { repoRoot = resolveRepoRoot(process.cwd()), env = process.env } = {}) {
+// The PR's head and status rollup, for ci-only mode (ADR 0137).
+async function defaultReadCi({ repo, pr }) {
+  const { pr: view } = await viewPr({ repo, pr, fields: "headRefOid,statusCheckRollup" });
+  return { headSha: view.headRefOid, rollup: view.statusCheckRollup };
+}
+
+// Run the repo-declared full command (`.devloops` validation.fullCommand, never
+// PR content) through `sh -c` and shape its result like a package suite.
+function runDeclaredFullCommand(command, { repo, pr, gate, headSha, tmpRoot }, { repoRoot, env }) {
+  return new Promise((resolve, reject) => {
+    execFile("sh", ["-c", command], { cwd: repoRoot, env, maxBuffer: 64 * 1024 * 1024 }, async (error, stdout, stderr) => {
+      try {
+        const output = stripAnsi(`${stdout ?? ""}${stderr ?? ""}` || (error?.message ?? ""));
+        const exitCode = error ? (typeof error.code === "number" ? error.code : 1) : 0;
+        const artifactDir = path.dirname(buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot }));
+        const outputPath = path.join(artifactDir, `${gate}-${headSha}.validation-full.log`);
+        await mkdir(path.resolve(repoRoot, artifactDir), { recursive: true });
+        await writeFile(path.resolve(repoRoot, outputPath), output.endsWith("\n") ? output : `${output}\n`, "utf8");
+        resolve({
+          ok: true, repo, pr, gate, headSha, generatedAt: new Date().toISOString(), allPassed: exitCode === 0,
+          suites: [{ name: "full", command, exitCode, outputTail: output.slice(-4000), outputPath }],
+        });
+      } catch (writeError) { reject(writeError); }
+    });
+  });
+}
+
+export async function resolveValidation(options, { repoRoot = resolveRepoRoot(process.cwd()), env = process.env, readCi = defaultReadCi } = {}) {
   const artifactPath = path.resolve(repoRoot, buildValidationResultsPath(options));
   // An incomplete outcome replaces any earlier same-head evidence with a typed
   // incomplete record, so the verdict writer sees that the round resolved its
@@ -95,19 +126,34 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     };
     const beforeProblem = currentTreeProblem();
     if (beforeProblem) return incomplete(beforeProblem.reason, beforeProblem);
-    const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
-    const pinned = packageJson.packageManager;
-    if (!/^bun@\d+\.\d+\.\d+$/.test(pinned ?? "")) return incomplete("packageManager does not pin an exact Bun version");
-    const installed = execFileSync("bun", ["--version"], { cwd: repoRoot, encoding: "utf8", env }).trim();
-    if (`bun@${installed}` !== pinned) return incomplete(`installed bun@${installed} differs from ${pinned}`);
-    const scripts = await readPackageScripts(repoRoot);
-    const classification = classifyPackageSuites(options.suites, scripts);
-    if (options.profile === "targeted" && classification === "full-repository") return incomplete("targeted profile cannot run full-repository validation");
-    if (options.profile === "targeted" && classification !== "targeted") return incomplete("targeted profile requires a validation suite");
-    if (options.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
-    const artifact = { ...await buildValidationArtifact(options, { repoRoot }), profile: options.profile, toolchain: pinned };
+    const { mode, fullCommand } = resolveValidationConfig((await loadDevLoopConfigStrict({ repoRoot })).config);
+    const declared = options.profile === "full-repository" && mode === "local" && fullCommand;
+    let pinned = null;
+    let artifact;
+    if (options.profile === "full-repository" && mode === "ci-only") {
+      // ADR 0137: current-head CI is the only full-validation authority; no local suite runs.
+      const ci = await readCi({ repo: options.repo, pr: options.pr });
+      const ciStatus = ci.headSha?.toLowerCase() === options.headSha ? deriveLoopCiStatusFromRollup(ci.rollup).status : "wrong-head";
+      if (ciStatus !== "success" && ciStatus !== "failure") return incomplete(ciStatus === "wrong-head" ? `PR head ${ci.headSha} differs from requested head` : `current-head CI is ${ciStatus}`);
+      artifact = { ok: ciStatus === "success", status: ciStatus === "success" ? "complete" : "failed", allPassed: ciStatus === "success", ...(ciStatus === "success" ? { authority: "ci-authoritative" } : { reason: "current-head CI is failure" }), repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, profile: options.profile, generatedAt: new Date().toISOString(), suites: [] };
+    } else if (declared) {
+      artifact = { ...await runDeclaredFullCommand(declared, options, { repoRoot, env }), profile: options.profile };
+    } else {
+      const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
+      pinned = packageJson.packageManager;
+      if (!/^bun@\d+\.\d+\.\d+$/.test(pinned ?? "")) return incomplete("packageManager does not pin an exact Bun version");
+      const installed = execFileSync("bun", ["--version"], { cwd: repoRoot, encoding: "utf8", env }).trim();
+      if (`bun@${installed}` !== pinned) return incomplete(`installed bun@${installed} differs from ${pinned}`);
+      const scripts = await readPackageScripts(repoRoot);
+      const classification = classifyPackageSuites(options.suites, scripts);
+      if (options.profile === "targeted" && classification === "full-repository") return incomplete("targeted profile cannot run full-repository validation");
+      if (options.profile === "targeted" && classification !== "targeted") return incomplete("targeted profile requires a validation suite");
+      if (options.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
+      artifact = { ...await buildValidationArtifact(options, { repoRoot }), profile: options.profile, toolchain: pinned };
+    }
     const afterProblem = currentTreeProblem();
     if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem.reason}`, afterProblem);
+    await mkdir(path.dirname(artifactPath), { recursive: true });
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
     // HEAD can move between the check above and the write: re-check after it.
     const writtenProblem = currentTreeProblem();

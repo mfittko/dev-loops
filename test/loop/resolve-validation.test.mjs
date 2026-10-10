@@ -27,6 +27,7 @@ async function fixture(extraScripts = {}, pinnedBunVersion = bunVersion) {
   await mkdir(path.join(repoRoot, "scripts", "docs"));
   await mkdir(path.join(repoRoot, "scripts", "github"));
   await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
+  await writeFile(path.join(repoRoot, ".devloops"), "version: 1\nvalidation:\n  mode: local\n");
   for (const name of ["verify", "passing", "suite", "all", "docs", "workflows"]) {
     await writeFile(path.join(repoRoot, "scripts", `${name}.mjs`), `console.log('${name}-ran')`);
   }
@@ -35,7 +36,7 @@ async function fixture(extraScripts = {}, pinnedBunVersion = bunVersion) {
     await writeFile(path.join(repoRoot, "scripts", `${name}.mjs`), `console.log('${name}-ran')`);
   }
   execFileSync("git", ["init", "-q"], { cwd: repoRoot });
-  execFileSync("git", ["add", "package.json", ".gitignore", "scripts"], { cwd: repoRoot });
+  execFileSync("git", ["add", "package.json", ".gitignore", ".devloops", "scripts"], { cwd: repoRoot });
   execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], { cwd: repoRoot });
   const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
   return { repoRoot, headSha };
@@ -389,4 +390,99 @@ test("a suite that moves HEAD leaves no artifact", async () => {
     const artifactPath = path.join(repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
     await assert.rejects(readFile(artifactPath), /ENOENT/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+// A repo with no package.json (Rust, Rails, config-only) and a given .devloops.
+async function bareFixture(devloops) {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "resolve-validation-bare-"));
+  await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
+  await writeFile(path.join(repoRoot, ".devloops"), devloops);
+  execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+  execFileSync("git", ["add", ".gitignore", ".devloops"], { cwd: repoRoot });
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], { cwd: repoRoot });
+  const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+  return { repoRoot, headSha };
+}
+
+const rollup = (conclusion) => [{ name: "ci", status: "COMPLETED", conclusion }];
+const ciReader = (headSha, conclusion) => async () => ({ headSha, rollup: conclusion === null ? [] : rollup(conclusion) });
+
+test("ci-only without package.json records a complete ci-authoritative artifact and runs no suite", async () => {
+  for (const devloops of ["version: 1\n", "version: 1\nvalidation:\n  mode: ci-only\n"]) {
+    const { repoRoot, headSha } = await bareFixture(devloops);
+    try {
+      const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+      assert.equal(result.status, "complete");
+      assert.equal(result.ok, true);
+      assert.equal(result.artifact.authority, "ci-authoritative");
+      assert.equal(result.artifact.allPassed, true);
+      assert.deepEqual(result.artifact.suites, []);
+      assert.equal(result.artifact.headSha, headSha);
+      assert.doesNotMatch(JSON.stringify(result), /package\.json|ENOENT/);
+      assert.deepEqual(JSON.parse(await readFile(path.join(repoRoot, result.artifactPath), "utf8")), result.artifact);
+    } finally { await rm(repoRoot, { recursive: true, force: true }); }
+  }
+});
+
+test("ci-only fails closed on red, pending, missing and wrong-head CI", async () => {
+  const { repoRoot, headSha } = await bareFixture("version: 1\n");
+  try {
+    const other = "b".repeat(40);
+    const cases = [
+      [ciReader(headSha, "FAILURE"), "failed", /failure/],
+      [ciReader(headSha, null), "incomplete", /none/],
+      [async () => ({ headSha, rollup: [{ name: "ci", status: "IN_PROGRESS", conclusion: "" }] }), "incomplete", /pending/],
+      [ciReader(other, "SUCCESS"), "incomplete", /differs/],
+      [async () => { throw new Error("gh unavailable"); }, "incomplete", /gh unavailable/],
+    ];
+    for (const [readCi, status, reason] of cases) {
+      const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi });
+      assert.equal(result.status, status);
+      assert.equal(result.ok, false);
+      const artifact = JSON.parse(await readFile(path.join(repoRoot, result.artifactPath), "utf8"));
+      assert.equal(artifact.allPassed, false);
+      assert.equal(artifact.authority, undefined);
+      assert.match(artifact.reason ?? artifact.ci?.reason ?? JSON.stringify(artifact), reason);
+    }
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("local mode runs the declared non-Node full command without package.json", async () => {
+  const { repoRoot, headSha } = await bareFixture("version: 1\nvalidation:\n  mode: local\n  fullCommand: echo cargo-test-ran\n");
+  try {
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: () => { throw new Error("local mode must not read CI"); } });
+    assert.equal(result.status, "complete");
+    assert.equal(result.artifact.allPassed, true);
+    assert.equal(result.artifact.authority, undefined);
+    assert.equal(result.artifact.suites[0].command, "echo cargo-test-ran");
+    assert.equal(result.artifact.suites[0].exitCode, 0);
+    assert.match(result.artifact.suites[0].outputTail, /cargo-test-ran/);
+    assert.doesNotMatch(JSON.stringify(result), /package\.json|ENOENT/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a failing declared command is failed evidence, and local mode without a command keeps the package.json path", async () => {
+  const failing = await bareFixture("version: 1\nvalidation:\n  mode: local\n  fullCommand: exit 3\n");
+  try {
+    const result = await resolveValidation(parseResolveValidationArgs(args(failing.headSha)), { repoRoot: failing.repoRoot });
+    assert.equal(result.status, "failed");
+    assert.equal(result.artifact.suites[0].exitCode, 3);
+  } finally { await rm(failing.repoRoot, { recursive: true, force: true }); }
+  const bare = await bareFixture("version: 1\nvalidation:\n  mode: local\n");
+  try {
+    const result = await resolveValidation(parseResolveValidationArgs(args(bare.headSha)), { repoRoot: bare.repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /package\.json/);
+  } finally { await rm(bare.repoRoot, { recursive: true, force: true }); }
+});
+
+test("a malformed validation config fails closed and the CLI accepts no command argument", async () => {
+  const { repoRoot, headSha } = await bareFixture("version: 1\nvalidation:\n  mode: local\n  fullCommand: \"\"\n");
+  try {
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /fullCommand|validation/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+  assert.throws(() => parseResolveValidationArgs([...args("a".repeat(40)), "--command", "rm -rf /"]), /Unknown argument/);
+  assert.throws(() => parseResolveValidationArgs([...args("a".repeat(40)), "--full-command", "rm -rf /"]), /Unknown argument/);
 });

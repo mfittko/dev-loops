@@ -4146,7 +4146,9 @@ test("renderBriefingEvidence: validationResultsPath present appends the section 
     "",
     "Read that record for suite status, exit codes, and output tails. Executing a suite it",
     "already records is outside a read-only angle review's scope. A record with",
-    "`status: \"incomplete\"` ran no suite; it is incomplete evidence, never a pass. If the record",
+    "`status: \"incomplete\"` ran no suite; it is incomplete evidence, never a pass. A record with",
+    "`status: \"complete\"` and `authority: \"ci-authoritative\"` ran no local suite by design: current-head CI",
+    "is its evidence, so it satisfies gate evidence. If the record",
     "is absent, unreadable, incomplete, or stamped with a head SHA other than abc1234, say so",
     "as a gate-evidence finding instead of substituting your own run.",
   ].join("\n");
