@@ -106,6 +106,11 @@ describe("delta trigger", () => {
     const payload = { ok: true, repo: "o/r", pr: 7, threads: [{ threadId: "T1", body: " fix it ", isResolved: false, path: "a.mjs", line: 3 }, { threadId: "T2", isResolved: false }] };
     const items = startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList(payload, { repo: "o/r", pr: 7 }) }).actItems;
     assert.deepEqual(items.map((item) => [item.ref, item.summary, item.file ?? null]), [["T1", "fix it", "a.mjs"], ["T2", "", null]]);
+    const reversed = { ...payload, threads: [...payload.threads].reverse() };
+    assert.equal(
+      startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList(reversed, { repo: "o/r", pr: 7 }) }).actSetId,
+      startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList(payload, { repo: "o/r", pr: 7 }) }).actSetId,
+    );
     assert.throws(() => threadsToActList(payload, { repo: "o/r", pr: 8 }), /not successful list-review-threads/);
     assert.throws(() => threadsToActList({ ...payload, threads: [{ ...payload.threads[0], isResolved: true }] }, { repo: "o/r", pr: 7 }), /not successful list-review-threads/);
   });

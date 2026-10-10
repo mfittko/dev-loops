@@ -74,7 +74,8 @@ export function threadsToActList(payload, { repo, pr } = {}) {
     || !threads.every((thread) => thread?.isResolved === false && nonEmpty(thread?.threadId))) {
     throw new Error(`threads file is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
   }
-  return threads.map((thread) => ({
+  // Sorted by threadId so actSetId is stable for the same thread set, whatever the capture order.
+  return [...threads].sort((a, b) => (a.threadId < b.threadId ? -1 : a.threadId > b.threadId ? 1 : 0)).map((thread) => ({
     ref: thread.threadId,
     angle: "review-thread",
     summary: nonEmpty(thread.body) ? thread.body.trim() : "",
