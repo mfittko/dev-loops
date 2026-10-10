@@ -307,11 +307,17 @@ function nonEmptyStringList(value) {
  * or fragment lag lists every stated surface of the changed rule.
  */
 function validateRemediationScope(d) {
+  // A remedy that changes no file has no defect class or site; it never reaches the fixer.
+  if (d.remedyKind === "evidence_only") return { remedyKind: "evidence_only" };
+  const missing = (field, what) => Object.assign(
+    new Error(`spec-authority valid_compliant decision ${d.index} requires a non-empty ${field} (${what})`),
+    { code: "spec_authority_decision_invalid", decisionIndex: d.index, field },
+  );
   if (typeof d.defectClass !== "string" || d.defectClass.trim().length === 0) {
-    throw new Error("spec-authority valid_compliant decision requires a non-empty defectClass (the class of defect the remediation closes)");
+    throw missing("defectClass", "the class of defect the remediation closes; set remedyKind \"evidence_only\" when the remedy changes no file");
   }
   if (typeof d.siteQuery !== "string" || d.siteQuery.trim().length === 0) {
-    throw new Error("spec-authority valid_compliant decision requires a non-empty siteQuery (a git grep pattern or symbol list the fixer runs at the head)");
+    throw missing("siteQuery", "a git grep pattern or symbol list the fixer runs at the head");
   }
   const defectKind = d.defectKind === undefined ? "other" : d.defectKind;
   if (!DEFECT_KINDS.includes(defectKind)) {
@@ -360,7 +366,8 @@ function validateRemediationScope(d) {
  *   conflictingCriteria: [<ids>],         // required + non-empty for the two conflict outcomes
  *   rationale: "<non-empty>",
  *   authorizedRemediation: "<...>",       // required for valid_compliant
- *   defectClass: "<...>", siteQuery: "<...>", // required for valid_compliant
+ *   defectClass: "<...>", siteQuery: "<...>", // required for valid_compliant unless remedyKind is "evidence_only"
+ *   remedyKind?: "evidence_only",         // the remedy changes no file: no defectClass/siteQuery, never on the fixer act list
  *   defectKind?: "matcher"|"doc_lag"|"other", // matcher: acceptedForms[] + rejectedForms[]; doc_lag: statedSurfaces[]
  *   rejectedRemediations: ["<...>"]       // optional audit of rejected options
  * }

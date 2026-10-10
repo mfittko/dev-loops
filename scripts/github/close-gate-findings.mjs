@@ -24,7 +24,7 @@ import {
 import { replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateConfig, resolveTrackerProvider } from "@dev-loops/core/config";
-import { GATE_CONFIG_KEY } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, isOpenActItem } from "@dev-loops/core/loop/gate-fanin";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 
 const USAGE = `Usage: close-gate-findings.mjs --ledger <findings-log path> [--tmp-root <dir>]
@@ -290,7 +290,7 @@ function currentLedgerActOrAmbiguous(findings, fp) {
   const currentMatches = findings.filter((f) => f && findingFingerprintMatches(f, fp));
   if (currentMatches.length === 0) return null;
   const dispositions = new Set(currentMatches.map((f) => (typeof f.judgeDisposition === "string" ? f.judgeDisposition.trim() : "")));
-  return dispositions.has("act") || dispositions.size > 1;
+  return currentMatches.some(isOpenActItem) || dispositions.size > 1;
 }
 
 async function isJudgeActThread({ fp, threadBody, findings, lookup }) {
@@ -298,7 +298,7 @@ async function isJudgeActThread({ fp, threadBody, findings, lookup }) {
   if (current !== null) return current;
   const prior = await findJudgeDispositionForFingerprint({ ...lookup, fp });
   if (prior?.ambiguous) return true;
-  if (prior) return prior.disposition === "act";
+  if (prior) return prior.disposition === "act" && prior.remedyKind !== "evidence_only";
   return parseRenderedJudgeDisposition(threadBody) === "act";
 }
 

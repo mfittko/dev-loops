@@ -3259,6 +3259,42 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json is 
   }, { prefix: "dev-loops-upsert-clean-findings-json-match-" });
 });
 
+test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json carries only an evidence-only act finding", async () => {
+  await withTempDir(async (tempDir) => {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(
+      findingsPath,
+      JSON.stringify([
+        { angle: "correctness", verdict: "clean", findings: [] },
+        { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [{ severity: "nice-to-have", summary: "evidence only note", judgeDisposition: "act", remedyKind: "evidence_only" }] },
+      ]),
+      "utf8",
+    );
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["**Verdict:** clean"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean", "--findings-json", findingsPath,
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":1}',
+      "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    ], { env });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).ok, true);
+  }, { prefix: "dev-loops-upsert-clean-findings-json-evidence-only-" });
+});
+
 // The clean-verdict cross-check's actual boundary is the blockCleanOnFindingSeverities
 // filter, not "any findings at all" — a clean verdict whose --findings-json carries
 // only NON-blocking (defer) findings is a sanctioned combination and must still be

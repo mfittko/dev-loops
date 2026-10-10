@@ -196,6 +196,48 @@ test("buildCarryForwardPlan re-runs code angles but carries the docs angle on a 
   assert.deepEqual(plan.carried.map((c) => c.angle), ["docs"]);
 });
 
+test("buildCarryForwardPlan re-runs every angle when an incremental config change was reduced away", () => {
+  for (const incrementalFiles of [[".devloops"], [".devloops", "other.txt"]]) {
+    const plan = buildCarryForwardPlan({ log: cleanLog, changedFiles: [], incrementalFiles, deltaComplete: true });
+    assert.deepEqual(plan.carried, []);
+    assert.deepEqual(plan.mustRerun.map((entry) => entry.angle), ["correctness", "coverage", "docs"]);
+    assert.ok(plan.mustRerun.every((entry) => /config.source/i.test(entry.reason)));
+  }
+});
+
+test("CLI re-runs all angles when reviewed config is reverted to base", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-config-revert-"));
+  try {
+    git(repoRoot, ["init", "-q", "-b", "main"]);
+    git(repoRoot, ["config", "user.email", "test@example.com"]);
+    git(repoRoot, ["config", "user.name", "Test"]);
+    const configPath = path.join(repoRoot, ".devloops.yaml");
+    const baseConfig = "version: 1\ngates:\n  draft: {}\n";
+    await writeFile(configPath, baseConfig);
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "base"]);
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    await writeFile(configPath, "version: 1\ngates:\n  draft: {}\n  preApproval: {}\n");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "reviewed config"]);
+    const prevHead = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+    await writeFile(configPath, baseConfig);
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "revert config"]);
+    const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+    const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(logPath), { recursive: true });
+    await writeFile(logPath, JSON.stringify({ ...cleanLog, headSha: prevHead }));
+    const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha, "--tmp-root", "tmp"], { repoRoot });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.deltaChangedFiles, []);
+    assert.deepEqual(result.carried, []);
+    assert.deepEqual(result.mustRerun.map((entry) => entry.angle), ["correctness", "coverage", "docs"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("buildCarryForwardPlan fails closed on a non-carry-forward-eligible or missing prior log", () => {
   assert.throws(() => buildCarryForwardPlan({ log: null, changedFiles: ["docs/x.md"] }), /not found or unreadable/);
   assert.throws(

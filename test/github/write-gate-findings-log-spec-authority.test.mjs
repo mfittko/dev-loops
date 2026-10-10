@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { composeReviewVerdict } from "@dev-loops/core/loop/gate-fanin";
+import { composeReviewVerdict, listOpenActItems } from "@dev-loops/core/loop/gate-fanin";
 import { computeContentDigest, computeSpecDigest, specCriterionIds } from "@dev-loops/core/loop/spec-authority";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 
@@ -97,5 +97,22 @@ test("a spec_cannot_decide sibling verdict fails closed at the human-spec-decisi
   await withCase({ siblingVerdict }, async ({ run, ledgerPath }) => {
     await assert.rejects(run(), /SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT: .* finding index\(es\) 1;/);
     await assert.rejects(access(ledgerPath));
+  });
+});
+
+test("an evidence-only valid_compliant sibling decision leaves zero open act items in the ledger", async () => {
+  const siblingVerdict = {
+    ...VERDICT,
+    decisions: [
+      decision(0, "valid_compliant", { authorizedRemediation: "confirm from CI", remedyKind: "evidence_only" }),
+      decision(1, "valid_compliant", { authorizedRemediation: "confirm from CI", remedyKind: "evidence_only" }),
+    ],
+  };
+  await withCase({ siblingVerdict }, async ({ run, ledgerPath }) => {
+    await run();
+    const { findings } = JSON.parse(await readFile(ledgerPath, "utf8"));
+    assert.deepEqual(findings.map((f) => f.remedyKind), ["evidence_only", "evidence_only"]);
+    assert.equal(listOpenActItems(findings).length, 0);
+    assert.equal(composeReviewVerdict("clean", findings), "clean");
   });
 });
