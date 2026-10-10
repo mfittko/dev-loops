@@ -153,6 +153,10 @@ fixer and owns the push. The sequence is:
    refs with their evidence, plus the result's medium-or-higher `newFindings` and every
    `residueOf` finding at any severity (`PRE-PUSH-DELTA-RESIDUE`; residue is exempt from the
    medium-or-higher and regression-range limits).
+   On the thread route the coordinator emits the commit-only re-dispatch with
+   `--threads-file` and without `--delta-result`. The emitter attaches the head's
+   delta record as the `delta-result` read, and that record carries item
+   ref/status pairs only, without evidence, `newFindings` or residue.
    On `nextStep: rereview_current_head`, the result is stale for the current
    head; the coordinator returns to step 2 without a fixer.
 4. On `nextStep: push` (`locally_clear`) or `nextStep: push_to_gate`

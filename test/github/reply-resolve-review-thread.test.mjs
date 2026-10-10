@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
-import { test } from "bun:test";
+import { afterAll, test } from "bun:test";
 import { initGitFixture, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import { hasCommitShaReference } from "../../scripts/github/reply-resolve-review-thread.mjs";
 
@@ -700,7 +700,11 @@ test("#1731: reply-resolve-review-thread rejects a non-numeric --allowed-refs en
   }
 });
 
-const headSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+// Hermetic default cwd: the delta guard reads tmp/gate-delta under the cwd, never the operator's checkout.
+const defaultFixtureDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-default-"));
+initGitFixture(defaultFixtureDir, { commit: "head" });
+afterAll(() => rm(defaultFixtureDir, { recursive: true, force: true }));
+const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: defaultFixtureDir, encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
 const headViewEntry = { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `${JSON.stringify({ headRefOid: headSha })}\n` };
 const threadEntry = {
   assertArgs: ["api", "graphql", "--field", "owner=owner", "--field", "name=repo", "--field", "pr=17"],
@@ -708,7 +712,7 @@ const threadEntry = {
 };
 const threadArgs = (bodyFile, disposition = "fixed") => ["--repo", "owner/repo", "--pr", "17", "--comment-id", "123", "--thread-id", "THREAD_123", "--body-file", bodyFile, ...(disposition ? ["--disposition", disposition] : [])];
 
-async function runFixedReply(body, entries, disposition, cwd) {
+async function runFixedReply(body, entries, disposition, cwd = defaultFixtureDir) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-fixed-sha-"));
   try {
     const bodyFile = path.join(tempDir, "reply.md");
