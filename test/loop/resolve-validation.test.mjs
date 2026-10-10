@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
-import { parseResolveValidationArgs, resolveValidation } from "../../scripts/loop/resolve-validation.mjs";
+import { defaultReadCi, parseResolveValidationArgs, resolveValidation } from "../../scripts/loop/resolve-validation.mjs";
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import { runNode } from "../_helpers.mjs";
 
@@ -404,14 +404,14 @@ test("a suite that moves HEAD leaves no artifact", async () => {
 });
 
 // A repo with no package.json (Rust, Rails, config-only) and a given .devloops.
-async function bareFixture(devloops) {
+async function bareFixture(devloops, { origin = true } = {}) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "resolve-validation-bare-"));
   await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
   await writeFile(path.join(repoRoot, ".devloops"), devloops);
   execFileSync("git", ["init", "-q"], { cwd: repoRoot });
   execFileSync("git", ["add", ".gitignore", ".devloops"], { cwd: repoRoot });
   execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], { cwd: repoRoot });
-  addOrigin(repoRoot);
+  if (origin) addOrigin(repoRoot);
   const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
   return { repoRoot, headSha };
 }
@@ -454,7 +454,7 @@ test("ci-only fails closed on red, pending, missing and wrong-head CI", async ()
       const artifact = JSON.parse(await readFile(path.join(repoRoot, result.artifactPath), "utf8"));
       assert.equal(artifact.allPassed, false);
       assert.equal(artifact.authority, undefined);
-      assert.match(artifact.reason ?? artifact.ci?.reason ?? JSON.stringify(artifact), reason);
+      assert.match(artifact.reason, reason);
     }
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
@@ -531,7 +531,53 @@ test("the declared command runs without GitHub tokens in its environment", async
   try {
     const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, env: { ...process.env, GH_TOKEN: "leak-marker-1", GITHUB_TOKEN: "leak-marker-2" } });
     assert.equal(result.status, "complete");
-    assert.match(result.artifact.suites[0].outputTail, /^PATH=/m);
-    assert.doesNotMatch(result.artifact.suites[0].outputTail, /leak-marker/);
+    // The full log, not the 4000-char tail, so the check does not depend on the host env size.
+    const log = await readFile(path.join(repoRoot, result.artifact.suites[0].outputPath), "utf8");
+    assert.match(log, /^PATH=/m);
+    assert.doesNotMatch(log, /leak-marker/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+// The base block is the only trusted source: an unreadable or malformed one refuses and runs nothing.
+test("an unreadable or malformed base validation block resolves incomplete and runs nothing", async () => {
+  const good = (marker) => `version: 1\nvalidation:\n  mode: local\n  fullCommand: touch ${marker}\n`;
+  const cases = [
+    ["no origin base", /cannot read the base branch validation config/, async (repoRoot) => {
+      await writeFile(path.join(repoRoot, ".devloops"), good(path.join(repoRoot, "MARKER")));
+    }, { origin: false }],
+    ["malformed base block", /base branch validation config is malformed/, async (repoRoot) => {
+      await writeFile(path.join(repoRoot, ".devloops"), good(path.join(repoRoot, "MARKER")));
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "valid block"], { cwd: repoRoot });
+    }, { origin: true, base: "version: 1\nvalidation:\n  mode: sometimes\n" }],
+  ];
+  for (const [name, reason, prepare, { origin, base = "version: 1\n" }] of cases) {
+    const { repoRoot } = await bareFixture(base, { origin });
+    try {
+      await prepare(repoRoot);
+      if (origin) execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "x", "--allow-empty"], { cwd: repoRoot });
+      else execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "x"], { cwd: repoRoot });
+      const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+      const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+      assert.equal(result.status, "incomplete", name);
+      assert.match(result.reason, reason, name);
+      await assert.rejects(readFile(path.join(repoRoot, "MARKER")), /ENOENT/, name);
+    } finally { await rm(repoRoot, { recursive: true, force: true }); }
+  }
+});
+
+test("a checkout-only validation.paths edit never reaches a gate-consumed suite", async () => {
+  const { repoRoot } = await fixture();
+  try {
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\nvalidation:\n  mode: local\n  paths:\n    - match: src/**\n      surface: src\n      commands: [bun run passing]\n      gateSuites: [passing]\n");
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "passing"]), { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /differs from the base branch/);
+    assert.equal(result.artifact, undefined);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a hung CI read times out so the gate resolves incomplete", async () => {
+  await assert.rejects(defaultReadCi({ repo: "o/r", pr: 1 }, { read: () => new Promise(() => {}), timeoutMs: 20 }), /timed out/);
 });

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -64,12 +65,24 @@ export function readValidationPaths(repoRoot) {
   }
 }
 
+// The checkout's repo root, so the default lookup does not depend on the cwd.
+function checkoutRoot() {
+  try {
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined }, stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return process.cwd();
+  }
+}
+
 /**
  * Pick the configured check for a single changed surface; mixed or unmapped
- * paths need full ownership. Rules come from `.devloops` `validation.paths`
- * (first match wins), never from the changed content.
+ * paths need full ownership. Without explicit `rules`, they come from the
+ * checkout's `.devloops` `validation.paths` (first match wins) at the git repo
+ * root, an author-local worker self-check. The gate refuses a checkout
+ * `validation` block that differs from the base branch (ADR 0137), so a
+ * gate-consumed command or `--suite` never comes from a checkout-only edit.
  */
-export function resolveTargetedValidation(paths, rules = readValidationPaths(process.cwd())) {
+export function resolveTargetedValidation(paths, rules = readValidationPaths(checkoutRoot())) {
   const full = { profile: "full-repository", commands: [], gateSuites: [] };
   if (!Array.isArray(paths) || paths.length === 0) return full;
   const checks = paths.map((path) => {
@@ -77,7 +90,8 @@ export function resolveTargetedValidation(paths, rules = readValidationPaths(pro
     const rule = rules.find(({ match }) => [match].flat().some((glob) => matchesGlob(path, glob)));
     if (!rule || rule.commands.length === 0) return null;
     const templated = rule.commands.some((command) => command.includes("{path}"));
-    if (templated && !SAFE_PATH.test(path)) return null;
+    // A leading "-" on the path or any segment would read as an option to the command.
+    if (templated && (!SAFE_PATH.test(path) || path.split("/").some((segment) => segment.startsWith("-")))) return null;
     const commands = rule.commands.map((command) => command.replaceAll("{path}", path));
     const gateSuites = [...(rule.gateSuites ?? []), ...commands.filter((c) => c.startsWith("bun run ")).map((c) => c.slice(8))];
     return { surface: rule.surface, commands, gateSuites };

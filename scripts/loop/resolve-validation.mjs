@@ -12,7 +12,7 @@ import { normalizeGate, normalizeHeadSha } from "../github/_gate-names.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
-import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts, stripAnsi } from "./run-gate-validation.mjs";
+import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts, runKillable, stripAnsi } from "./run-gate-validation.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { readDefaultBranchConfig } from "./standing-authorization.mjs";
 
@@ -62,9 +62,16 @@ export function parseResolveValidationArgs(argv) {
 }
 
 // The PR's head and status rollup, for ci-only mode (ADR 0137).
-async function defaultReadCi({ repo, pr }) {
-  const { pr: view } = await viewPr({ repo, pr, fields: "headRefOid,statusCheckRollup" });
-  return { headSha: view.headRefOid, rollup: view.statusCheckRollup };
+// A hung gh call rejects after the timeout, so the gate resolves typed incomplete.
+export async function defaultReadCi({ repo, pr }, { read = viewPr, timeoutMs = 10_000 } = {}) {
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`reading the PR CI status timed out after ${timeoutMs}ms`)), timeoutMs); });
+  try {
+    const { pr: view } = await Promise.race([read({ repo, pr, fields: "headRefOid,statusCheckRollup" }, { run: runKillable(timeoutMs) }), timeout]);
+    return { headSha: view.headRefOid, rollup: view.statusCheckRollup };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // The validation block as the base branch declares it (ADR 0137): the only
