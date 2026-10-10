@@ -11,7 +11,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
-import { captureParsedReviewThreads, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
+import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containment.mjs";
 import { verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
@@ -57,7 +57,7 @@ replied with its commit's evidence is never replied to twice, and a thread
 already resolved live is left alone.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": 17, "headSha": "...", "checkpointPath": "...",
-    "complete": true|false, "incomplete": [{ threadId, expectedCommit, failedStep }],
+    "complete": true|false, "incomplete": [{ threadId, expectedCommit, failedStep, deltaStatus?, deltaRecord? }],
     "forbiddenActions": [...], "nextAction": "..."|null, "reason": "..."|null,
     "actions": [{ threadId, ok, step? , error? }] }
 Error output (stderr, JSON):
@@ -282,7 +282,17 @@ export async function verifyFixerDisposition(
   // actually actionable via reply/resolve; commit_not_contained and
   // missing_from_handoff never trigger a mutation (Non-goals: a SHA alone, or
   // a claim with no ledger entry, is never evidence).
-  const actionable = evaluation.incomplete.filter((entry) => (
+  // A thread the delta review of the fix left not_resolved or cannot_verify gets no "Fixed" reply.
+  const deltaBlocked = new Map();
+  for (const entry of evaluation.incomplete.filter((e) => e.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING || e.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED)) {
+    const blocked = await findDeltaBlockedFixedReply(
+      [{ threadId: entry.threadId, body: `Fixed in commit ${entry.expectedCommit}.`, commit: entry.expectedCommit }],
+      { repo: options.repo, pr: options.pr, parsed: initialSnapshot, tmpRoot: path.resolve(repoRoot, tmpRoot) },
+      runtime,
+    );
+    if (blocked) deltaBlocked.set(entry.threadId, blocked);
+  }
+  const actionable = evaluation.incomplete.filter((entry) => !deltaBlocked.has(entry.threadId) && (
     entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING
     || entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED
   ));
@@ -342,6 +352,9 @@ export async function verifyFixerDisposition(
     });
   }
 
+  const incomplete = evaluation.incomplete.map((entry) => (deltaBlocked.has(entry.threadId)
+    ? { ...entry, failedStep: FIXER_DISPOSITION_FAILED_STEP.DELTA_BLOCKED, deltaStatus: deltaBlocked.get(entry.threadId).status, deltaRecord: deltaBlocked.get(entry.threadId).recordPath }
+    : entry));
   return {
     ok: true,
     repo: options.repo,
@@ -349,12 +362,19 @@ export async function verifyFixerDisposition(
     headSha: options.headSha,
     checkpointPath: logPath,
     complete: evaluation.ok,
-    incomplete: evaluation.incomplete,
+    incomplete,
     forbiddenActions: evaluation.forbiddenActions,
     nextAction: evaluation.nextAction,
-    reason: evaluation.reason,
+    reason: deltaBlocked.size > 0 ? deltaBlockedReason(incomplete) : evaluation.reason,
     actions,
   };
+}
+
+// Re-derived from the remapped incomplete list so one output never carries two failedStep values.
+function deltaBlockedReason(incomplete) {
+  const parts = incomplete.map((entry) => `thread ${entry.threadId} (failed step: ${entry.failedStep}${entry.deltaStatus ? `, delta status: ${entry.deltaStatus}` : ""})`);
+  return `Fixer disposition is incomplete for ${incomplete.length} tackled thread(s): ${parts.join("; ")}. `
+    + "A delta_blocked thread is not fixed yet: fix it, re-run the delta review (dev-loops loop pre-push-delta), then re-run this verifier.";
 }
 
 async function main() {

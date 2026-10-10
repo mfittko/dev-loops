@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { isCopilotLogin, parseReviewThreads, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
+import { gateDeltaRecordPath, listGateDeltaRecords } from "../loop/_gate-delta-record.mjs";
+import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 export const MIN_DISMISSAL_REASON_LENGTH = 30;
 export function hasCommitShaReference(text) {
@@ -80,6 +82,69 @@ export async function assertFixedReplyShas(
     }
   }
 }
+const BLOCKING_DELTA_STATUSES = ["not_resolved", "cannot_verify"];
+// Global: a merged gate-finding comment carries one marker line per finding. Not imported from _gate-finding-surface.mjs (import cycle).
+const FINDING_MARKER_FP_RE = /^<!--\s*dev-loops:finding\s+([0-9a-f]{16})\b/gm;
+
+// A record applies to a fixing commit that is its candidateHead or lies in reviewBaselineHead..candidateHead.
+async function deltaRecordCoversCommit(record, sha, { gitEnv, runChild }) {
+  if (sha === record.candidateHead) return true;
+  const inCandidate = await runChild("git", ["merge-base", "--is-ancestor", sha, record.candidateHead], gitEnv);
+  const inBaseline = await runChild("git", ["merge-base", "--is-ancestor", sha, record.reviewBaselineHead], gitEnv);
+  // Only exit 0/1 are determinate; any other code (e.g. 128, object missing) fails closed as covering.
+  if (![0, 1].includes(inCandidate.code) || ![0, 1].includes(inBaseline.code)) return true;
+  return inCandidate.code === 0 && inBaseline.code === 1;
+}
+
+// A fixed reply never closes a thread that the delta review of the fix left not_resolved or cannot_verify.
+// `replies` are { threadId, body } for fixed replies only. An absent record, or none covering the cited
+// commit, is "no delta decision". Returns the first blocked { threadId, status, recordPath } or null.
+export async function findDeltaBlockedFixedReply(
+  replies,
+  { repo, pr, parsed = null, tmpRoot },
+  { env = process.env, ghCommand = "gh", runChild = runChildWithInput } = {},
+) {
+  let root = tmpRoot;
+  try { root ??= resolveGateArtifactTmpRoot(process.cwd()); } catch { return null; /* not in a checkout: no record to read */ }
+  const records = listGateDeltaRecords(root).filter((record) => Array.isArray(record.items) && record.items.some((item) => BLOCKING_DELTA_STATUSES.includes(item?.status)));
+  if (records.length === 0 || replies.length === 0) return null;
+  const gitEnv = { ...env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete gitEnv[key];
+  let snapshot = parsed;
+  for (const { threadId, body, commit } of replies) {
+    let shas = (body.match(FULL_SHA_PATTERN) ?? []).map((sha) => sha.toLowerCase());
+    let unresolved = false;
+    // An explicit `commit` (any git rev) replaces body extraction; one git cannot resolve covers every record (fail closed).
+    if (commit) {
+      const resolved = await runChild("git", ["rev-parse", "--verify", "--quiet", `${commit}^{commit}`], gitEnv);
+      const full = resolved.stdout.trim().toLowerCase();
+      unresolved = resolved.code !== 0 || !/^[0-9a-f]{40}$/.test(full);
+      shas = unresolved ? [] : [full];
+    }
+    for (const record of records) {
+      const covers = unresolved ? [true] : await Promise.all(shas.map((sha) => deltaRecordCoversCommit(record, sha, { gitEnv, runChild })));
+      if (!covers.includes(true)) continue;
+      snapshot ??= await captureParsedReviewThreads({ repo, pr }, { env, ghCommand, runChild });
+      // Comments are id-sorted, so the root is not necessarily first: search every comment of the thread.
+      const fingerprints = snapshot.comments.filter((comment) => comment.threadId === threadId)
+        .flatMap((comment) => [...(typeof comment.body === "string" ? comment.body : "").matchAll(FINDING_MARKER_FP_RE)].map((match) => match[1]));
+      const item = record.items.find((entry) => BLOCKING_DELTA_STATUSES.includes(entry?.status)
+        && [threadId, ...fingerprints].includes(String(entry.ref).replace(/#\d+$/, "")));
+      if (item) return { threadId, status: item.status, recordPath: gateDeltaRecordPath(root, record.reviewBaselineHead) };
+    }
+  }
+  return null;
+}
+
+export async function assertFixedRepliesNotDeltaBlocked(replies, target, deps) {
+  const blocked = await findDeltaBlockedFixedReply(replies, target, deps);
+  if (blocked) {
+    throw new Error(
+      `fixed_reply_delta_${blocked.status}: the delta review of the fix marks thread ${blocked.threadId} ${blocked.status} (${blocked.recordPath}). Fix the thread and re-run the delta review before replying fixed.`,
+    );
+  }
+}
+
 export function runChildWithInput(command, args, env, stdinText) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {

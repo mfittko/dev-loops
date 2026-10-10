@@ -19,8 +19,10 @@ import { buildAdrTripwireField, buildSizeBudgetField, evaluatePrGateCoordination
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
+import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import {
   evaluateFixerDisposition,
+  FIXER_DISPOSITION_FAILED_STEP,
   FIXER_DISPOSITION_KIND,
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
@@ -39,7 +41,7 @@ import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 // Gate-coordination terminal stop actions where the dev-loop run is completing
 // or stopping (success OR stop). The runner-coordination lock is auto-released
@@ -765,10 +767,58 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY surface: read the durable checkpoint
 // (if any) verify-fixer-disposition.mjs wrote for this exact head and
 // re-verify it against LIVE thread state, never the checkpoint's own claims.
-// No checkpoint recorded for this head means nothing to enforce here (a PR
-// with no fixer-disposition ledger entry behaves exactly as before this
+// No checkpoint recorded for this head and no delivered tackled handoff for the live head means nothing
+// to enforce here (a PR with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
-async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
+// A fixer handoff delivered for the live head that lists a tackled thread, with no checkpoint, means
+// verify-fixer-disposition never completed (a failed run writes none): fail closed as not_verified.
+// Scans every execution's handoff, not the latest plan: a later emission overwrites the plan but not the handoff.
+// Only absence (ENOENT) means "no handoff"; any other read or parse failure fails closed like unreadable_checkpoint.
+async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot }) {
+  const prDir = path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`);
+  const unreadable = (error) => ({
+    complete: false,
+    incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_handoff: ${error instanceof Error ? error.message : String(error)}` }],
+  });
+  let executions;
+  try {
+    executions = (await readdir(prDir)).filter((name) => /^f\d+-[0-9a-f]{8}$/.test(name));
+  } catch (error) {
+    return error?.code === "ENOENT" ? null : unreadable(error);
+  }
+  const incomplete = [];
+  // One match rule for both branches: trimmed, case-insensitive, full head or a hex prefix of at least 7 chars.
+  const matchesLiveHead = (stated) => {
+    if (typeof stated !== "string") return false;
+    const head = stated.trim().toLowerCase();
+    const live = currentHeadSha.toLowerCase();
+    return head === live || (/^[0-9a-f]{7,}$/.test(head) && live.startsWith(head));
+  };
+  for (const execution of executions) {
+    let handoff;
+    let raw;
+    try {
+      raw = await readFile(path.join(prDir, execution, "fixer-disposition.json"), "utf8");
+      handoff = JSON.parse(raw);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      // A malformed handoff for another head must not block this one: read the head first.
+      const stated = typeof raw === "string" ? /"headSha"\s*:\s*"([^"]*)/.exec(raw)?.[1] : undefined;
+      if (stated !== undefined && !matchesLiveHead(stated)) continue;
+      return unreadable(error);
+    }
+    if (!matchesLiveHead(handoff?.headSha)) continue;
+    for (const entry of Array.isArray(handoff.dispositions) ? handoff.dispositions : []) {
+      if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.threadId === "string") {
+        incomplete.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
+      }
+    }
+  }
+  return incomplete.length > 0 ? { complete: false, incomplete } : null;
+}
+
+// The one fixer-disposition input: detect-pr-gate-coordination-state and request-copilot-review both read it here.
+export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // Same main-anchored default verify-fixer-disposition.mjs writes under.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
@@ -800,7 +850,7 @@ async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedTh
       };
     }
   }
-  if (raw === null) return null;
+  if (raw === null) return resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot });
   let handoff;
   try {
     handoff = normalizeFixerDispositionHandoff(JSON.parse(raw));
@@ -823,10 +873,12 @@ async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedTh
       .map((entry) => entry.fixingCommitSha),
   )];
   const containment = await buildContainmentMap(tackledShas, { repo, headSha: currentHeadSha }, runtime);
-  const liveThreads = parsedThreads.threads.map((thread) => ({
+  // A caller that has not read the threads yet passes a loader, so a PR with no checkpoint costs no read.
+  const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
+  const liveThreads = threads.threads.map((thread) => ({
     threadId: thread.id,
     isResolved: thread.isResolved,
-    replyBodies: parsedThreads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body),
+    replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body),
   }));
   const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment });
   return { complete: evaluation.ok, incomplete: evaluation.incomplete };

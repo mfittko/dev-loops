@@ -47,6 +47,9 @@ const deltaResultFor = (head, over = {}) => ({
   outcome: "bounded_out",
   ...over,
 });
+const clearingDeltaFor = (head, over = {}) => deltaResultFor(head, {
+  actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["guarded"] }], outcome: "locally_clear", ...over,
+});
 let clock = 1_790_000_000_000;
 const nextExecution = () => `f${clock++}-0000abcd`;
 
@@ -72,12 +75,37 @@ async function withFixture(fn) {
     const files = { actList: path.join(src, "act.json"), threads: path.join(src, "threads.json"), delta: path.join(src, "delta.json") };
     await writeFile(files.actList, JSON.stringify(ACT));
     await writeFile(files.threads, JSON.stringify(THREADS));
-    await writeFile(files.delta, JSON.stringify(deltaResultFor(head)));
-    const emit = (over = {}) => emitFixerWorkOrder({
+    await writeFile(files.delta, JSON.stringify(clearingDeltaFor(head)));
+    // The thread-route delta record for `head` that --phase full needs (written by check-pre-push-delta --result).
+    const recordPath = path.join(root, "tmp", "gate-delta", `${head}.json`);
+    const writeRecord = async (over = {}) => {
+      await mkdir(path.dirname(recordPath), { recursive: true });
+      await writeFile(recordPath, JSON.stringify({
+        reviewBaselineHead: head, candidateHead: "c".repeat(40), actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: ACT }).actSetId, invocation: 1,
+        outcome: "locally_clear", nextStep: "push", items: [{ ref: "T1", status: "resolved" }], ...over,
+      }));
+    };
+    await writeRecord();
+    // An act-list source gets the clearing --delta-result unless the test names one.
+    // On the act-list route the record's items default to the --delta-result's own pairs (the result the decision used);
+    // `keepRecord` leaves the record untouched so a test can pin a mismatch.
+    const syncRecordItems = async (over) => {
+      if (over.threadsFile || over.phase === "commit_only" || over.keepRecord || ("actListFile" in over && over.actListFile === undefined) || !existsSync(recordPath)) return async () => {};
+      const delta = JSON.parse(await readFile(over.deltaResult ?? files.delta, "utf8"));
+      const original = await readFile(recordPath, "utf8");
+      await writeFile(recordPath, JSON.stringify({ ...JSON.parse(original), items: (delta.actionableItems ?? []).map(({ ref, status }) => ({ ref, status })) }));
+      return () => writeFile(recordPath, original);
+    };
+    const emitRaw = (over = {}) => emitFixerWorkOrder({
       repo: REPO, pr: PR, headSha: head, phase: "full", actListFile: files.actList, gate: "draft_gate", cwd: wt,
+      ...(over.actListFile === undefined && "actListFile" in over ? {} : { deltaResult: files.delta }),
       fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), executionIdentity: nextExecution(), ...over,
     });
-    await fn({ root, wt, head, files, emit });
+    const emit = async (over = {}) => {
+      const restore = await syncRecordItems(over);
+      try { return await emitRaw(over); } finally { await restore(); }
+    };
+    await fn({ root, wt, head, files, emit, recordPath, writeRecord });
   }, { prefix: "dev-loops-fixer-" });
 }
 
@@ -95,7 +123,7 @@ test("F1: real act-list, threads and delta inputs resolve into the work order un
     assert.deepEqual(act.workOrder.mutationAuthority, { repo: REPO, pr: PR, branch: "issue-1", allowedPaths: ["."] });
     assert.equal(act.workOrder.headSha, head);
     const threads = await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, allowedPaths: ["src/", "test/a.test.mjs"] });
-    assert.deepEqual(threads.workOrder.requiredReads.map((read) => read.kind), ["threads"]);
+    assert.deepEqual(threads.workOrder.requiredReads.map((read) => read.kind), ["threads", "delta-result"]);
     assert.equal(threads.workOrder.gate, undefined);
     assert.deepEqual(threads.workOrder.mutationAuthority.allowedPaths, ["src", "test/a.test.mjs"]);
   });
@@ -117,6 +145,135 @@ test("F1: a delta result that does not belong to this act list and head refuses 
       await writeFile(files.delta, JSON.stringify(bad));
       await assert.rejects(emit({ deltaResult: files.delta }), /does not belong to this act list/, JSON.stringify(bad));
     }
+  });
+});
+
+const threadsOnly = { actListFile: undefined, gate: undefined };
+const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ ...THREADS.threads[0], threadId, commentId: i + 1 })) };
+
+test("delta gate: an act-list --phase full without --delta-result refuses and names commit_only; commit_only emits", async () => {
+  await withFixture(async ({ emit }) => {
+    await assert.rejects(emit({ deltaResult: undefined }), /needs --delta-result[^]*--phase commit_only/);
+    assert.equal((await emit({ deltaResult: undefined, phase: "commit_only" })).workOrder.phase, "commit_only");
+  });
+});
+
+test("delta gate: an act-list --phase full with a push-clearing delta result at the PR head emits the delta-result read", async () => {
+  await withFixture(async ({ files, emit }) => {
+    const unit = await emit({ deltaResult: files.delta });
+    assert.equal(unit.workOrder.phase, "full");
+    assert.deepEqual(unit.workOrder.requiredReads.map((read) => read.kind), ["act-list", "delta-result"]);
+  });
+});
+
+test("delta gate: an act-list --phase full refuses without a delta record for the result's act set, whatever the result file states", async () => {
+  await withFixture(async ({ head, files, emit, recordPath }) => {
+    await rm(recordPath);
+    for (const bad of [
+      deltaResultFor(head, { outcome: "needs_fix" }),
+      deltaResultFor(head, { actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["e"] }] }),
+      clearingDeltaFor("b".repeat(40)),
+    ]) {
+      await writeFile(files.delta, JSON.stringify(bad));
+      await assert.rejects(emit({ deltaResult: files.delta }), /does not belong to this act list|no delta record[^]*commit_only/, JSON.stringify(bad.outcome));
+    }
+  });
+});
+
+test("delta gate: the decided nextStep in the record clears, whatever outcome the result file states", async () => {
+  await withFixture(async ({ head, files, emit, writeRecord, recordPath }) => {
+    await writeFile(files.delta, JSON.stringify(deltaResultFor(head, { outcome: "needs_fix" })));
+    await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", invocation: 3 });
+    assert.equal((await emit({ deltaResult: files.delta })).workOrder.phase, "full");
+    // A stale invocation-3 result (record candidateHead = worktree HEAD, differing from the result's) still clears.
+    await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", invocation: 3, candidateHead: "d".repeat(40) });
+    assert.equal((await emit({ deltaResult: files.delta })).workOrder.phase, "full");
+    // A record for another act set does not clear this result.
+    await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", invocation: 3, actSetId: "other" });
+    await assert.rejects(emit({ deltaResult: files.delta }), (err) => err.message.includes(recordPath) && /commit_only/.test(err.message));
+    await rm(recordPath);
+    await assert.rejects(emit({ deltaResult: files.delta }), (err) => err.message.includes(recordPath) && /commit_only/.test(err.message));
+  });
+});
+
+test("delta gate: an act-list --phase full binds the --delta-result to the record's item statuses", async () => {
+  await withFixture(async ({ head, files, emit, writeRecord }) => {
+    const items = [{ ref: "act-1", status: "resolved" }];
+    // Accepted: the clearing result whose pairs equal the record's items.
+    await writeRecord({ items });
+    assert.equal((await emit({ keepRecord: true })).workOrder.phase, "full");
+    // Accepted: a stale invocation-3 bounded_out result whose items are the record's.
+    await writeFile(files.delta, JSON.stringify(deltaResultFor(head)));
+    await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", invocation: 3, items: [{ ref: "act-1", status: "not_resolved" }] });
+    assert.equal((await emit({ keepRecord: true })).workOrder.phase, "full");
+    // Rejected: the invocation-1 needs_fix result (act-1 not_resolved) while a later record for the act set holds a push decision with act-1 resolved.
+    await writeRecord({ items });
+    await assert.rejects(emit({ keepRecord: true }), /item statuses differ from the delta record/);
+    // Rejected: a clearing result whose statuses differ from the record's items.
+    await writeFile(files.delta, JSON.stringify(clearingDeltaFor(head)));
+    await writeRecord({ items: [{ ref: "act-1", status: "cannot_verify" }] });
+    await assert.rejects(emit({ keepRecord: true }), /item statuses differ from the delta record/);
+  });
+});
+
+test("delta gate: a clearing --delta-result does not override a later non-clearing record for the head", async () => {
+  await withFixture(async ({ files, emit, writeRecord, recordPath }) => {
+    await writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix" });
+    await assert.rejects(emit({ deltaResult: files.delta }), (err) => err.message.includes(recordPath) && /fix_and_rereview/.test(err.message));
+  });
+});
+
+test("delta gate: a threads --phase full refuses a non-clearing record and names the record path", async () => {
+  await withFixture(async ({ files, emit, writeRecord, recordPath }) => {
+    for (const nextStep of ["fix_and_rereview", "rereview_current_head"]) {
+      await writeRecord({ nextStep, outcome: "needs_fix", items: [{ ref: "T1", status: "not_resolved" }] });
+      await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), (err) => err.message.includes(recordPath) && err.message.includes(nextStep));
+    }
+  });
+});
+
+test("delta gate: a threads --phase full refuses a record whose refs are not all threads in the threads file", async () => {
+  await withFixture(async ({ files, emit, writeRecord }) => {
+    await writeRecord({ items: [{ ref: "T1", status: "resolved" }, { ref: "act-1", status: "resolved" }] });
+    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), /not threads in the threads file[^]*"act-1"/);
+  });
+});
+
+test("delta gate: a threads --phase full refuses a threads file holding a thread the record never reviewed", async () => {
+  await withFixture(async ({ files, emit, writeRecord }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [...THREADS.threads, { ...THREADS.threads[0], threadId: "T2", commentId: 2 }] }));
+    await writeRecord({ items: [{ ref: "T1", status: "resolved" }] });
+    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), /never reviewed[^]*"T2"/);
+  });
+});
+
+test("delta gate: a threads --phase full with a thread-bound clearing record emits", async () => {
+  await withFixture(async ({ files, emit, writeRecord }) => {
+    for (const nextStep of ["push", "push_to_gate"]) {
+      await writeRecord({ nextStep });
+      assert.equal((await emit({ ...threadsOnly, threadsFile: files.threads })).workOrder.source, "threads");
+    }
+  });
+});
+
+test("delta gate: a threads --phase full with no record refuses and names commit_only; commit_only emits", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    await rm(path.join(root, "tmp", "gate-delta"), { recursive: true });
+    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), /needs a delta record[^]*--phase commit_only/);
+    assert.equal((await emit({ ...threadsOnly, threadsFile: files.threads, phase: "commit_only" })).workOrder.phase, "commit_only");
+  });
+});
+
+test("delta gate: a three-thread Copilot fix cannot reach --phase full without a clearing thread-route review", async () => {
+  await withFixture(async ({ root, files, emit, writeRecord }) => {
+    await writeFile(files.threads, JSON.stringify(THREE));
+    const items = (status) => ["T1", "T2", "T3"].map((ref) => ({ ref, status }));
+    await writeRecord({ nextStep: "fix_and_rereview", outcome: "needs_fix", items: items("not_resolved") });
+    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), /fix_and_rereview/);
+    await rm(path.join(root, "tmp", "gate-delta"), { recursive: true });
+    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), /--phase commit_only/);
+    await writeRecord({ items: items("resolved") });
+    assert.equal((await emit({ ...threadsOnly, threadsFile: files.threads })).workOrder.source, "threads");
   });
 });
 
@@ -161,7 +318,7 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
 });
 
 test("F1/F4: changing act list, threads, allowed paths, branch, phase or head changes the digest; equal inputs keep it", async () => {
-  await withFixture(async ({ files, emit }) => {
+  await withFixture(async ({ head, files, emit, writeRecord }) => {
     const base = await emit();
     assert.equal((await emit()).workOrderDigest, base.workOrderDigest);
     const variants = [
@@ -169,12 +326,19 @@ test("F1/F4: changing act list, threads, allowed paths, branch, phase or head ch
       await emit({ phase: "commit_only" }),
       await emit({ gate: "pre_approval_gate" }),
       await emit({ fetchPr: async () => ({ headRefName: "other", headRefOid: base.workOrder.headSha }) }),
-      await emit({ headSha: "b".repeat(40), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) }),
+      await emit({ headSha: "b".repeat(40), phase: "commit_only", deltaResult: undefined, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) }),
       await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }),
     ];
-    await writeFile(files.actList, JSON.stringify([...ACT, { ...ACT[0], line: 9 }]));
+    const widened = [...ACT, { ...ACT[0], line: 9 }];
+    await writeFile(files.actList, JSON.stringify(widened));
+    await writeFile(files.delta, JSON.stringify(clearingDeltaFor(head, {
+      actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: widened }).actSetId,
+      actionableItems: ["act-1", "act-2"].map((ref) => ({ ref, status: "resolved", evidence: ["guarded"] })),
+    })));
+    await writeRecord({ actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: widened }).actSetId });
     variants.push(await emit());
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [] }));
+    await writeRecord({ items: [] });
     variants.push(await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }));
     const digests = new Set([base, ...variants].map((unit) => unit.workOrderDigest));
     assert.equal(digests.size, variants.length + 1);
@@ -217,14 +381,15 @@ test("F2: Claude and Pi initial, resumed and replacement adapter payloads are th
   const hostOverrides = process.env.DEVLOOPS_AGENT_OVERRIDES;
   delete process.env.DEVLOOPS_AGENT_OVERRIDES;
   try {
-  await withFixture(async ({ root, wt, head, files }) => {
+  await withFixture(async ({ root, wt, head, files, writeRecord }) => {
+    await writeRecord({ items: [{ ref: "act-1", status: "resolved" }] });
     const bin = path.join(root, "tmp", "bin");
     await mkdir(bin, { recursive: true });
     await writeFile(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ headRefName: "issue-1", headRefOid: head })}'\n`);
     chmodSync(path.join(bin, "gh"), 0o755);
     // Hermetic: a launched session's DEVLOOPS_AGENT_OVERRIDES must not flip the consumer-checkout agent type.
     const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
-    const cli = (harness) => spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate"], { cwd: wt, encoding: "utf8", env });
+    const cli = (harness) => spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate", "--delta-result", files.delta], { cwd: wt, encoding: "utf8", env });
     for (const [harness, textKey] of [["claude", "prompt"], ["pi", "task"]]) {
       const initial = JSON.parse(cli(harness).stdout);
       const plan = JSON.parse(await readFile(initial.planPath, "utf8"));
@@ -375,13 +540,16 @@ test("F3: delta mode emits at the PR head; after a local fix commit a second com
 // ---------------------------------------------------------------------------
 
 test("F4: two checkout roots emit equal digests with independently valid materializations", async () => {
-  await withFixture(async ({ root, wt, head, files, emit }) => {
+  await withFixture(async ({ root, wt, head, files, emit, recordPath, writeRecord }) => {
+    await writeRecord({ items: [{ ref: "act-1", status: "resolved" }] });
     const clone = path.join(path.dirname(root), "clone");
     git(path.dirname(root), "clone", "-q", root, clone);
     git(clone, "branch", "-q", "issue-1", `origin/issue-1`);
     const cloneAct = path.join(clone, "tmp", "act.json");
     await mkdir(path.dirname(cloneAct), { recursive: true });
     await writeFile(cloneAct, await readFile(files.actList));
+    await mkdir(path.join(clone, "tmp", "gate-delta"), { recursive: true });
+    await writeFile(path.join(clone, "tmp", "gate-delta", `${head}.json`), await readFile(recordPath));
     const a = await emit();
     const b = await emit({ cwd: clone, actListFile: cloneAct });
     assert.equal(a.workOrderDigest, b.workOrderDigest);
@@ -394,11 +562,10 @@ test("F4: two checkout roots emit equal digests with independently valid materia
 });
 
 test("F4: a conflicting rewrite under the same reference is refused", async () => {
-  await withFixture(async ({ files, emit }) => {
+  await withFixture(async ({ emit }) => {
     const unit = await emit();
     await emit({ executionIdentity: unit.executionIdentity });
-    await writeFile(files.actList, JSON.stringify([{ ...ACT[0], line: 9 }]));
-    await assert.rejects(emit({ executionIdentity: unit.executionIdentity }), /already exists with different content/);
+    await assert.rejects(emit({ executionIdentity: unit.executionIdentity, allowedPaths: ["src"] }), /already exists with different content/);
   });
 });
 
@@ -700,7 +867,8 @@ test("regenerate: the rendered line is present and the materialization hash stil
 });
 
 test("regenerate: the rule is identical for the claude and pi harness CLI adapters", async () => {
-  await withFixture(async ({ root, wt, head, files }) => {
+  await withFixture(async ({ root, wt, head, files, writeRecord }) => {
+    await writeRecord({ items: [{ ref: "act-1", status: "resolved" }] });
     await addGenerator(wt);
     const bin = path.join(root, "tmp", "bin");
     await mkdir(bin, { recursive: true });
@@ -709,7 +877,7 @@ test("regenerate: the rule is identical for the claude and pi harness CLI adapte
     const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
     const rules = [];
     for (const harness of ["claude", "pi"]) {
-      const cli = spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate"], { cwd: wt, encoding: "utf8", env });
+      const cli = spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate", "--delta-result", files.delta], { cwd: wt, encoding: "utf8", env });
       assert.equal(cli.status, 0, cli.stderr);
       rules.push(JSON.parse(await readFile(JSON.parse(cli.stdout).planPath, "utf8")).workOrder.executionRules.regenerate);
       await new Promise((resolve) => setTimeout(resolve, 2));
@@ -747,8 +915,33 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
     assert.deepEqual(query.sites, []);
     assert.match(query.noSitesReason, /^FILL:/);
     assert.match(await readFile(promptPath, "utf8"), /Start from the `siteCoverage` skeleton/);
+    assert.match(await readFile(promptPath, "utf8"), /run the work order's `handbackCheck` command/);
+    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(files.actList)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
     const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(threads.workOrder.siteCoverage, undefined);
+    const threadsPrompt = await readFile(threads.promptPath, "utf8");
+    assert.doesNotMatch(threadsPrompt, /handbackCheck|`siteCoverage` skeleton/);
+  });
+});
+
+test("a --phase full act-list order carries the same siteCoverage skeleton as commit_only", async () => {
+  await withFixture(async ({ emit }) => {
+    const full = await emit({ phase: "full" });
+    const commitOnly = await emit({ phase: "commit_only", deltaResult: undefined });
+    assert.equal(full.workOrder.siteCoverage.length, 1);
+    assert.deepEqual(full.workOrder.siteCoverage, commitOnly.workOrder.siteCoverage);
+    assert.equal(full.workOrder.handbackCheck, undefined);
+    assert.match(await readFile(full.promptPath, "utf8"), /starting from the `siteCoverage` skeleton/);
+  });
+});
+
+test("handbackCheck is machine-local: two commit_only emissions with different executions share a digest", async () => {
+  await withFixture(async ({ files, emit }) => {
+    await writeFile(files.actList, JSON.stringify(SKELETON_ACT));
+    const a = await emit({ phase: "commit_only", deltaResult: undefined });
+    const b = await emit({ phase: "commit_only", deltaResult: undefined });
+    assert.notEqual(a.workOrder.handbackCheck, b.workOrder.handbackCheck);
+    assert.equal(a.workOrderDigest, b.workOrderDigest);
   });
 });
 
@@ -788,5 +981,27 @@ test("a handback made by filling the skeleton passes check-pre-push-delta input 
     // The unfilled skeleton is refused.
     await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage: workOrder.siteCoverage }));
     assert.throws(() => runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--site-coverage", coverage], seam), /expected fixed or skipped/);
+  });
+});
+
+test("a threads --phase full prompt names no siteCoverage skeleton, an act-list one does", async () => {
+  await withFixture(async ({ files, emit }) => {
+    const threads = await emit({ ...threadsOnly, threadsFile: files.threads });
+    assert.doesNotMatch(await readFile(threads.promptPath, "utf8"), /skeleton in the work order JSON/);
+    const act = await emit({ deltaResult: files.delta });
+    assert.match(await readFile(act.promptPath, "utf8"), /skeleton in the work order JSON/);
+  });
+});
+
+test("delta gate: a threads order lists the delta record as a delta-result read in both phases, carrying a not_resolved item on push_to_gate", async () => {
+  await withFixture(async ({ files, emit, writeRecord, recordPath }) => {
+    await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", items: [{ ref: "T1", status: "not_resolved" }] });
+    for (const phase of ["commit_only", "full"]) {
+      const plan = await emit({ ...threadsOnly, phase, threadsFile: files.threads });
+      const read = plan.workOrder.requiredReads.find((entry) => entry.kind === "delta-result");
+      assert.equal(read?.path, recordPath);
+      assert.ok(plan.workOrder.authority.deltaResultDigest);
+    }
+    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
   });
 });

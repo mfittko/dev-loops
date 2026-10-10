@@ -228,7 +228,7 @@ test("every PR-creating route loads Copilot Loop Operations or the local SKILL",
 // Delta mode: one fresh reviewer between the gate act-list fix commit and its
 // push. The contract owns the rules; the SKILL and fixer only cross-reference.
 const DELTA_RULES = [
-  ["PRE-PUSH-DELTA-TRIGGER", /MUST NOT/, ["act list", "before that fix is pushed", "no act-list fix"]],
+  ["PRE-PUSH-DELTA-TRIGGER", /MUST NOT/, ["act list", "before that fix is pushed", "no act-list fix", "thread route", "unresolved review threads", "passed to the `commit_only` emission"]],
   ["PRE-PUSH-DELTA-PINNED-BASELINE", /MUST/, ["reviewBaselineHead..candidateHead", "A..C", "B..C", "new gate round"]],
   ["PRE-PUSH-DELTA-INPUT", /MUST NOT/, ["judge dispositions", "spec identity", "surface hints", "checklist", "diff bytes", "sibling reviewer verdicts", "widenedReads[]"]],
   ["PRE-PUSH-DELTA-RESULT", /MUST/, ["resolved", "not_resolved", "cannot_verify", "widenedReads[]", "{ path, reason }", "missing or unknown status"]],
@@ -265,6 +265,37 @@ test("the gate fix pass and the fixer cross-reference delta mode between the fix
   const pushIdx = fixer.indexOf("8. Push the commit");
   assert.ok(commitIdx < fixerDeltaIdx && fixerDeltaIdx < pushIdx, "fixer must run delta mode after the commit and before the push");
   assert.match(fixer.slice(commitIdx, pushIdx), /hand back the commit SHA unpushed/);
+});
+
+test("delta mode states the decision record, the full-phase refusal and the fixed-reply refusal", () => {
+  const doc = readRepo(CONTRACT).replace(/\s+/g, " ");
+  for (const text of ["<tmp-root>/gate-delta/<reviewBaselineHead>.json", "The run without `--result` writes nothing", "refuses `--phase full`", "`--phase commit_only` first", "A fixed reply", "`not_resolved` or `cannot_verify`", "`threadId` or by the fingerprint"]) {
+    assert.ok(doc.includes(text), `contract must state: ${text}`);
+  }
+  assert.doesNotMatch(readRepo("scripts/loop/check-pre-push-delta.mjs"), /Read-only:/, "the --result run is no longer read-only");
+});
+
+test("the Copilot follow-up skill emits commit_only, runs the thread-route delta review, then emits full", () => {
+  const skill = readRepo("skills/copilot-pr-followup/SKILL.md");
+  const line = skill.split("\n").find((l) => l.includes("--phase commit_only --threads-file")) ?? "";
+  for (const text of ["check-pre-push-delta.mjs --threads-file", "--baseline <headRefOid> --spec-identity <id>", "--baseline <headRefOid> --result <path> --invocation <1-3>", "`--result` run", "`PRE-PUSH-DELTA-TRIGGER`", "`--phase full`"]) {
+    assert.ok(line.includes(text), `follow-up skill must state: ${text}`);
+  }
+  assert.doesNotMatch(skill, /--phase full --threads-file/);
+  assert.match(skill, /`blocked_by_fixer_disposition`: no request was placed/);
+});
+
+test("every verify-fixer-disposition.mjs invocation under skills/ shows the full required synopsis", () => {
+  const out = spawnSync("git", ["grep", "-n", "verify-fixer-disposition\\.mjs\\s\\+-", "--", "skills"], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(out.status, 0, `git grep failed: ${out.stderr}`);
+  const invocations = out.stdout.trim().split("\n");
+  assert.ok(invocations.length >= 3, "the gate contract, the copilot-pr-followup skill and the pre-PR contract each show an invocation");
+  for (const line of invocations) {
+    const call = line.slice(line.indexOf("verify-fixer-disposition.mjs"));
+    for (const flag of ["--repo", "--pr", "--head-sha", "--fixer-plan"]) {
+      assert.ok(call.includes(flag), `${line.split(":").slice(0, 2).join(":")}: invocation lacks ${flag}`);
+    }
+  }
 });
 
 test("bounded_out residual threads are handed off as deferred, never tackled", () => {

@@ -31,15 +31,82 @@ function fixture() {
 }
 
 const quiet = { stdout: { write: () => {} } };
-const headAt = (head) => ({ ...quiet, revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev), isAncestor: () => true });
+const headAt = (head, tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"))) => ({ ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev), isAncestor: () => true });
 
 test("without --result the CLI prints the cumulative delta input for the worktree head", () => {
   const { dir, actList } = fixture();
   const out = runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"], headAt(B));
   assert.equal(out.input.diffRange, `${A}..${B}`);
   assert.equal(out.input.specIdentity, "spec@1");
-  // Read-only: nothing is written next to the inputs.
+  // Write-free: nothing is written next to the inputs.
   assert.deepEqual(fs.readdirSync(dir).sort(), ["act-list.json", "result.json"]);
+});
+
+test("without --result no decision record is written under the tmp root", () => {
+  const { actList } = fixture();
+  const seam = headAt(B);
+  runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"], seam);
+  assert.deepEqual(fs.readdirSync(seam.tmpRoot), []);
+});
+
+test("with --result the CLI records the decision for the baseline, and the last write wins", () => {
+  const { actList, result } = fixture();
+  const seam = headAt(B);
+  const args = ["--act-list", actList, "--baseline", A, "--result", result, "--invocation", "1"];
+  runCli(args, seam);
+  const recordPath = path.join(seam.tmpRoot, "gate-delta", `${A}.json`);
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: ACT_LIST });
+  assert.deepEqual(JSON.parse(fs.readFileSync(recordPath, "utf8")), {
+    reviewBaselineHead: A, candidateHead: B, actSetId: sequence.actSetId, invocation: 1,
+    outcome: "locally_clear", nextStep: "push", items: [{ ref: "act-1", status: "resolved" }],
+  });
+  runCli(args, { ...seam, revParse: (_worktree, rev) => (rev === "HEAD" ? "ccccccc3333333" : rev) });
+  const later = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+  assert.equal(later.nextStep, "rereview_current_head");
+  assert.equal(later.candidateHead, "ccccccc3333333");
+});
+
+const THREADS = { ok: true, repo: "o/r", pr: 7, threads: [{ threadId: "T1", commentId: 1, body: "fix a", isResolved: false, path: "a.mjs", line: 1 }, { threadId: "T2", commentId: 2, body: "fix b", isResolved: false }] };
+function threadsFixture(payload = THREADS) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-threads-"));
+  const threadsFile = path.join(dir, "threads.json");
+  fs.writeFileSync(threadsFile, JSON.stringify(payload));
+  return { dir, threadsFile };
+}
+const threadArgs = (threadsFile, ...rest) => ["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, ...rest];
+
+test("--threads-file builds one act item per unresolved thread, keyed by threadId, with a stable actSetId", () => {
+  const { threadsFile } = threadsFixture();
+  const first = runCli(threadArgs(threadsFile, "--spec-identity", "spec@1"), headAt(B)).input;
+  assert.deepEqual(first.actItems.map((item) => item.ref), ["T1", "T2"]);
+  assert.equal(runCli(threadArgs(threadsFile, "--spec-identity", "spec@1"), headAt(B)).input.actSetId, first.actSetId);
+});
+
+test("--threads-file refuses another PR's file, a resolved thread and a missing --repo/--pr", () => {
+  const { threadsFile } = threadsFixture({ ...THREADS, pr: 8 });
+  assert.throws(() => runCli(threadArgs(threadsFile, "--spec-identity", "s"), headAt(B)), /not successful list-review-threads/);
+  const resolved = threadsFixture({ ...THREADS, threads: [{ ...THREADS.threads[0], isResolved: true }] });
+  assert.throws(() => runCli(threadArgs(resolved.threadsFile, "--spec-identity", "s"), headAt(B)), /not successful list-review-threads/);
+  assert.throws(() => parseCheckPrePushDeltaArgs(["--threads-file", "x", "--baseline", A, "--spec-identity", "s"]), /--repo/);
+  assert.throws(() => parseCheckPrePushDeltaArgs(["--threads-file", "x", "--act-list", "y", "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s"]), /exactly one/);
+});
+
+test("--threads-file with --result records the decision with thread-id item refs", () => {
+  const { dir, threadsFile } = threadsFixture();
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [
+    { ref: "T1", angle: "review-thread", summary: "fix a", judgeDisposition: "act", file: "a.mjs", line: 1 },
+    { ref: "T2", angle: "review-thread", summary: "fix b", judgeDisposition: "act" },
+  ] });
+  const result = path.join(dir, "result.json");
+  fs.writeFileSync(result, JSON.stringify({
+    reviewBaselineHead: A, candidateHead: B, actSetId: sequence.actSetId,
+    actionableItems: [{ ref: "T1", status: "resolved", evidence: ["e"] }, { ref: "T2", status: "not_resolved", evidence: ["e"] }],
+    newFindings: [], widenedReads: [], outcome: "needs_fix",
+  }));
+  const seam = headAt(B);
+  assert.equal(runCli(threadArgs(threadsFile, "--result", result, "--invocation", "1"), seam).nextStep, "fix_and_rereview");
+  const record = JSON.parse(fs.readFileSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`), "utf8"));
+  assert.deepEqual(record.items, [{ ref: "T1", status: "resolved" }, { ref: "T2", status: "not_resolved" }]);
 });
 
 test("with --result the CLI authorizes the push only for the reviewed head", () => {
@@ -131,6 +198,21 @@ test("--site-coverage fails on a headSha mismatch or malformed JSON", () => {
   assert.throws(() => runCli(args, headAt(B)), /site coverage record names head/);
   fs.writeFileSync(coverage, "{not json");
   assert.throws(() => runCli(args, headAt(B)), SyntaxError);
+});
+
+test("--site-coverage input mode refuses a record that leaves a siteQuery uncovered", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-"));
+  const actList = path.join(dir, "act-list.json");
+  fs.writeFileSync(actList, JSON.stringify([{ ...ACT_LIST[0], fingerprint: "fp1", siteQuery: "git grep -n x" }]));
+  const coverage = path.join(dir, "coverage.json");
+  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--site-coverage", coverage];
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [{ fingerprint: "fp1", returnedSites: ["scripts/loop/consolidate-fanin.mjs:1161-1163"], sites: [] }] }));
+  assert.throws(() => runCli(args, headAt(B)), /GATE-EXEC-REMEDIATION-SITE-QUERY/);
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [] }));
+  assert.throws(() => runCli(args, headAt(B)), /GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: /);
+  const complete = { fingerprint: "fp1", returnedSites: ["s1"], sites: [{ site: "s1", status: "fixed" }] };
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [complete] }));
+  assert.equal(runCli(args, headAt(B)).input.siteCoverage[0].fingerprint, "fp1");
 });
 
 test("with --result a coverage record for an older head is discarded and the stale result is routed", () => {

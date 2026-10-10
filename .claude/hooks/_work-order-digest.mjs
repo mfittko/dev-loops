@@ -15,7 +15,7 @@ import path from "node:path";
 // and hashes/sizes of files that embed absolute paths (the briefing prefix, and
 // the required reads: the evidence file's validation pointer and validation.json).
 // Readers still verify each required read's sha256 from the materialized work order.
-const LOCAL_MATERIAL_KEYS = new Set(["promptPath", "outputRefs", "tmpRoot", "prefixSha256", "sha256", "bytes"]);
+const LOCAL_MATERIAL_KEYS = new Set(["promptPath", "outputRefs", "tmpRoot", "prefixSha256", "sha256", "bytes", "handbackCheck"]);
 
 const isLocal = (value) => typeof value === "string" && path.isAbsolute(value);
 

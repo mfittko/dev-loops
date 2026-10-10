@@ -119,11 +119,15 @@ ledger, no gate verdict comment.
 
 ## Delta mode
 
-Delta mode is one fresh holistic review of a gate act-list fix before that fix
-is pushed. It checks the cumulative fix delta against the act items the fix
-claims to resolve. It resolves the same `pre-push-reviewer`
+Delta mode is one fresh holistic review of a gate act-list fix or of a
+Copilot-thread fix before that fix is pushed. It checks the cumulative fix delta
+against the act items the fix claims to resolve. It resolves the same `pre-push-reviewer`
 role and tier as full mode (`PRE-PR-MODEL-CONFIG-RESOLVED`) and uses the same
-harness dispatch. The only delta source is the gate judge's act list. The
+harness dispatch. There are two delta sources: the gate judge's act list, and
+the thread route, which takes the captured set of unresolved review threads
+(`list-review-threads --unresolved-only` output, passed with `--threads-file` in
+place of `--act-list`, with `--repo` and `--pr`). On the thread route each
+unresolved thread is one act item and its `ref` is the `threadId`. The
 deterministic checks live in `@dev-loops/core/loop/pre-push-delta-review`; the
 dev-loop coordinator runs them through `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta`.
 
@@ -149,19 +153,32 @@ fixer and owns the push. The sequence is:
    refs with their evidence, plus the result's medium-or-higher `newFindings` and every
    `residueOf` finding at any severity (`PRE-PUSH-DELTA-RESIDUE`; residue is exempt from the
    medium-or-higher and regression-range limits).
+   On the thread route the coordinator emits the commit-only re-dispatch with
+   `--threads-file` and without `--delta-result`. The emitter attaches the head's
+   delta record as the `delta-result` read, and that record carries item
+   ref/status pairs only, without evidence, `newFindings` or residue.
    On `nextStep: rereview_current_head`, the result is stale for the current
    head; the coordinator returns to step 2 without a fixer.
 4. On `nextStep: push` (`locally_clear`) or `nextStep: push_to_gate`
    (`bounded_out`), it emits a `full` work order with `--delta-result <result>`
    and dispatches the fixer to push and reply to each gate thread with the
-   fixing commit. `verify-fixer-disposition.mjs --fixer-plan <plan>` then checks
+   fixing commit. `verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <plan>` then checks
    the handoff that fixer wrote to the work order's outputRef. On
    `locally_clear`, the fixer resolves each thread. On `bounded_out`, the fixer
    resolves only the threads of act items with status `resolved`. For
    `not_resolved` and `cannot_verify` items, it replies with the residual delta
    status and leaves the thread unresolved. The fixer MUST NOT mark these
    residual threads `tackled`; its handoff disposition records them as
-   `deferred`.
+   `deferred`. On the thread route the emitter attaches the head's delta record
+   as a `delta-result` required read to the work order when a delta record exists for the head (always in the `full` phase; the
+   `--delta-result` flag stays refused for thread sources), so this residual-thread
+   rule applies to thread sources through that read.
+
+   A round in which the `commit_only` fixer makes no commit has no unpushed fix, so no delta review runs and no record is
+   written (`PRE-PUSH-DELTA-TRIGGER`), and `--phase full` stays refused. The coordinator then posts each declined or deferred
+   thread reply directly with `reply-resolve-review-thread.mjs --disposition rejected|deferred` at the unchanged head. That
+   helper refuses only a `fixed` reply, so no full-phase refusal is bypassed. The fixer's `handbackCheck` does not apply to a
+   no-commit handback.
 
 Each delta review, including a re-review of the current head, consumes one
 invocation. The dev-loop coordinator owns the invocation count and passes it to
@@ -169,7 +186,9 @@ invocation. The dev-loop coordinator owns the invocation count and passes it to
 each sequence.
 
 <!-- rule: PRE-PUSH-DELTA-TRIGGER -->
-`PRE-PUSH-DELTA-TRIGGER`: delta mode MUST run after the gate Phase 4 fixer commits a fix for a judge act list and before that fix is pushed. A push with no act-list fix MUST NOT get a delta review, even when a PR exists. Standalone implementation pushes and the full-mode first push are unaffected.
+`PRE-PUSH-DELTA-TRIGGER`: delta mode MUST run after the gate Phase 4 fixer commits a fix for a judge act list, or after a fixer commits a fix for the captured set of unresolved review threads (the thread route), and before that fix is pushed. On the thread route the baseline is the PR head (`headRefOid`) passed to the `commit_only` emission, because the emitter reads the record at `gate-delta/<that head>.json`. A push with no act-list fix and no thread-route fix MUST NOT get a delta review, even when a PR exists. Standalone implementation pushes and the full-mode first push are unaffected. A CI-only fix is out of scope.
+
+`check-pre-push-delta.mjs --result` records its decision as local evidence at `<tmp-root>/gate-delta/<reviewBaselineHead>.json` (`reviewBaselineHead`, `candidateHead`, `actSetId`, `invocation`, `outcome`, `nextStep`, `items: [{ ref, status }]`; the last write for a baseline wins). The run without `--result` writes nothing. The emitter and the reply wrappers enforce two refusals from the record. `emit-fixer-work-order.mjs` refuses `--phase full` unless a clearing delta decision exists for the PR head: an act-list source needs `--delta-result`, a record for the PR head with `nextStep: push` or `nextStep: push_to_gate` and the result's `actSetId`, and result item ref/status pairs equal to the record's items, a threads source needs a record for the PR head whose decision is `nextStep: push` or `nextStep: push_to_gate` and whose item refs equal the thread ids in the threads file (a record ref that is no thread, or a thread with no record item, refuses), and a record with any other `nextStep` refuses either source. The coordinator emits `--phase commit_only` first, then runs the delta review. A fixed reply (`reply-resolve-review-thread.mjs`, `reply-resolve-review-threads.mjs`, and the `Fixed in commit` reply of `verify-fixer-disposition.mjs`) is refused for a thread that a record marks `not_resolved` or `cannot_verify`, when the fixing commit is the record's `candidateHead` or lies in `reviewBaselineHead..candidateHead`. A thread matches an item by `threadId` or by the fingerprint of its `dev-loops:finding` marker.
 
 <!-- rule: PRE-PUSH-DELTA-PINNED-BASELINE -->
 `PRE-PUSH-DELTA-PINNED-BASELINE`: every delta sequence MUST bind `reviewBaselineHead..candidateHead`, where `reviewBaselineHead` is the head the gate round reviewed and stays pinned for the whole sequence. A second local fix `C` after candidate `B` MUST be reviewed as `A..C`, never only `B..C`, with the same act-set identity. `reviewBaselineHead` MUST be an ancestor of `candidateHead`; otherwise the delta check fails closed. A new gate round starts a new sequence.
@@ -178,7 +197,7 @@ each sequence.
 `PRE-PUSH-DELTA-INPUT`: the reviewer input MUST carry `reviewBaselineHead` and `candidateHead`, the act-item refs with their judge dispositions from the gate findings ledger, the current spec identity, the act items' angle names as surface hints, each act item's `authorizedRemediation` text and site query (`defectClass`, `siteQuery`, and the input-form or stated-surface lists when present, plus `siblingRemediations[]`: each sibling's fingerprint, differing remediation text and `siteQuery`), the fixer's site coverage record (`siteCoverage[]`, below), and the adversarial-enumeration checklist. The reviewer checks the edit against the authorized remedy text and runs the site query at the candidate head, and also runs each sibling `siteQuery` there and reports its unfixed sites as residue of the kept act item. The reviewer reads the cumulative diff from the worktree; the coordinator MUST NOT inline diff bytes. The input MUST NOT carry sibling reviewer verdicts or "clean" claims. The reviewer MAY widen to surrounding code, spec or prior finding evidence when a concrete dependency requires it, and it MUST record each widened read in `widenedReads[]`.
 
 <!-- rule: PRE-PUSH-DELTA-RESULT -->
-`PRE-PUSH-DELTA-RESULT`: the reviewer MUST return a `DeltaPrePushReviewResult` bound to the baseline, candidate and act set, with a status and evidence for every claimed act item. The `actSetId` MUST equal the sequence's id, which hashes each act item's ref, angle, severity, file, line and summary, plus its remediation scope fields (`authorizedRemediation`, `defectClass`, `siteQuery`, `defectKind`, `acceptedForms`, `rejectedForms`, `statedSurfaces`, `siblingRemediations`) when present. Each act item ref appears once, in the act list and in the result. The status MUST be `resolved`, `not_resolved` or `cannot_verify`; `cannot_verify` stays distinct from `not_resolved`. Every `evidence[]` entry, for act items and new findings, MUST be a non-empty string, and each list MUST be non-empty. `widenedReads[]` is required, and empty when nothing was widened; each entry MUST be an object `{ path, reason }` with non-empty strings, never a bare path string. A result with a missing or unknown status is rejected.
+`PRE-PUSH-DELTA-RESULT`: the reviewer MUST return a `DeltaPrePushReviewResult` bound to the baseline, candidate and act set, with a status and evidence for every claimed act item. The `actSetId` MUST equal the sequence's id, which hashes each act item's ref, angle, severity, file, line and summary (a thread-route item omits the summary, a body excerpt that varies with `--body-max`), plus its remediation scope fields (`authorizedRemediation`, `defectClass`, `siteQuery`, `defectKind`, `acceptedForms`, `rejectedForms`, `statedSurfaces`, `siblingRemediations`) when present. Each act item ref appears once, in the act list and in the result. The status MUST be `resolved`, `not_resolved` or `cannot_verify`; `cannot_verify` stays distinct from `not_resolved`. Every `evidence[]` entry, for act items and new findings, MUST be a non-empty string, and each list MUST be non-empty. `widenedReads[]` is required, and empty when nothing was widened; each entry MUST be an object `{ path, reason }` with non-empty strings, never a bare path string. A result with a missing or unknown status is rejected.
 
 ```text
 DeltaPrePushReviewResult {

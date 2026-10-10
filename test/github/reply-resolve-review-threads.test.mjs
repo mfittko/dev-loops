@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { test } from "bun:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { initGitFixture, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import { parseReplyResolveThreadsCliArgs } from "../../scripts/github/reply-resolve-review-threads.mjs";
 
@@ -1218,4 +1218,59 @@ test("reply-resolve-review-threads checks a shared fixed --message for a full SH
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// A fixture checkout whose second commit is the fixing commit, with a delta record under its tmp/gate-delta.
+async function runDeltaGuardedBatch({ items, rootBody = "note" }) {
+  const repoDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-delta-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reply-resolve-threads-delta-gh-"));
+  try {
+    initGitFixture(repoDir, { commit: "base" });
+    const git = (...args) => execFileSync("git", args, { cwd: repoDir, encoding: "utf8", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+    const baseline = git("rev-parse", "HEAD");
+    git("commit", "-q", "--allow-empty", "-m", "fix");
+    const fix = git("rev-parse", "HEAD");
+    await mkdir(path.join(repoDir, "tmp", "gate-delta"), { recursive: true });
+    await writeFile(path.join(repoDir, "tmp", "gate-delta", `${baseline}.json`), JSON.stringify({
+      reviewBaselineHead: baseline, candidateHead: fix, actSetId: "0".repeat(16), invocation: 1, outcome: "needs_fix", nextStep: "fix_and_rereview", items,
+    }));
+    const gh = await writeGhStub(tempDir, [
+      { stdout: createReviewThreadsPayload([{ id: "THREAD_1", isResolved: false, comments: { nodes: [{ id: "PRRC_node_101", databaseId: 101, body: rootBody, author: { login: "reviewer", __typename: "User" } }] } }]) },
+      { stdout: `${JSON.stringify({ headRefOid: fix })}\n` },
+      { stdout: '{"id":2301,"html_url":"https://github.com/owner/repo/pull/17#discussion_r2301"}\n' },
+    ]);
+    const env = { ...gh.env };
+    delete env.GIT_DIR;
+    delete env.GIT_WORK_TREE;
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--disposition", "fixed", "--message", `Fixed the null check in ${fix}.`], { env, cwd: repoDir });
+    const ghLog = (await readFile(gh.ghLogPath, "utf8")).trim().split("\n").filter(Boolean);
+    return { result, ghLog };
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+const BATCH_FINGERPRINT = "0123456789abcdef";
+
+test("reply-resolve-review-threads refuses a fixed reply for a not_resolved thread matched by threadId and posts nothing", async () => {
+  const { result, ghLog } = await runDeltaGuardedBatch({ items: [{ ref: "THREAD_1", status: "not_resolved" }] });
+  assert.equal(result.code, 1);
+  assert.match(JSON.parse(result.stderr).error, /fixed_reply_delta_not_resolved/);
+  assert.equal(ghLog.length, 2, "only the capture and head lookup ran; no post");
+});
+
+test("reply-resolve-review-threads refuses a fixed reply for a cannot_verify thread matched by finding-marker fingerprint", async () => {
+  const { result, ghLog } = await runDeltaGuardedBatch({
+    items: [{ ref: BATCH_FINGERPRINT, status: "cannot_verify" }],
+    rootBody: `<!-- dev-loops:finding ${BATCH_FINGERPRINT} severity=high angle=correctness round=1 -->\nbody`,
+  });
+  assert.equal(result.code, 1);
+  assert.match(JSON.parse(result.stderr).error, /fixed_reply_delta_cannot_verify/);
+  assert.equal(ghLog.length, 2);
+});
+
+test("reply-resolve-review-threads posts a fixed reply for a resolved item", async () => {
+  const { result } = await runDeltaGuardedBatch({ items: [{ ref: "THREAD_1", status: "resolved" }] });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).repliedThreadCount, 1);
 });

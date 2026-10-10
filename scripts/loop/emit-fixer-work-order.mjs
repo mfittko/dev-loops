@@ -21,12 +21,17 @@ import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWo
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
 or the unresolved review threads (list-review-threads.mjs --unresolved-only), plus the
-optional pre-push delta result (dev-loops loop pre-push-delta). The mutation authority is
+optional pre-push delta result (dev-loops loop pre-push-delta). --phase full needs a clearing
+delta decision for the head: an act-list source passes the clearing --delta-result, a
+threads source needs a thread-bound clearing record under <tmp-root>/gate-delta/ (written by
+check-pre-push-delta --result), and any non-clearing record for the head refuses; use
+--phase commit_only first. The mutation authority is
 the PR's own head branch (gh pr view headRefName) and the --allowed-path selectors
 (default "." = the whole repository). A PR head other than --head-sha refuses.
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
@@ -116,8 +121,8 @@ export function renderWorkOrder(workOrder) {
   // headRefName is PR-supplied: JSON-quote it (and paths) so a backtick cannot close a span and inject prose.
   const { branch, allowedPaths } = workOrder.mutationAuthority;
   const task = workOrder.phase === "commit_only"
-    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery. Start from the \`siteCoverage\` skeleton in the work order JSON below: set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.`
-    : `Apply and commit any fixes not yet committed, then push, reply to and resolve the addressed threads per agents/fixer.agent.md (pass \`--disposition fixed\` and the full 40-character SHA of the fixing commit in each fixed reply), then write the disposition handoff \`{ headSha, dispositions: [...] }\` (headSha = the pushed PR head) to \`${dispositionPath}\`. Also write \`siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }]\` in that handoff, one entry per act item that has a siteQuery (threadless items included): verify-fixer-disposition refuses a handoff without it. A threadless act item gets no disposition handoff entry; every entry's \`threadId\` is a review-thread node id.`;
+    ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.handbackCheck ? " Before you hand back, run the work order's \`handbackCheck\` command from your worktree and correct the record until it exits 0 (skip it when you made no commit)." : ""}`
+    :`Apply and commit any fixes not yet committed, then push, reply to and resolve the addressed threads per agents/fixer.agent.md (pass \`--disposition fixed\` and the full 40-character SHA of the fixing commit in each fixed reply), then write the disposition handoff \`{ headSha, dispositions: [...] }\` (headSha = the pushed PR head) to \`${dispositionPath}\`. Also write \`siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }]\` in that handoff, ${workOrder.siteCoverage ? "starting from the \`siteCoverage\` skeleton in the work order JSON below (fill it as the commit_only phase describes), " : ""}one entry per act item that has a siteQuery (threadless items included): verify-fixer-disposition refuses a handoff without it. A threadless act item gets no disposition handoff entry; every entry's \`threadId\` is a review-thread node id.`;
   return `# Fixer work order (ADR 0106)
 
 Source: the \`${workOrder.source}\` read${workOrder.gate ? ` (${workOrder.gate} act list)` : ""}. Phase: \`${workOrder.phase}\`. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.
@@ -137,6 +142,42 @@ ${workOrder.requiredReads.map((read) => renderRequiredReadLine(read, "/")).join(
 ${JSON.stringify(workOrder, null, 2)}
 \`\`\`
 `;
+}
+
+// The commit_only phase commits unpushed; the delta review then decides whether `full` may push.
+// `delta` is the parsed --delta-result (act-list route); `threads` the unresolved threads (thread route).
+function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads }) {
+  const recordPath = gateDeltaRecordPath(tmpRoot, headSha);
+  const record = readGateDeltaRecord(tmpRoot, headSha);
+  const next = "emit --phase commit_only, run the delta review (dev-loops loop pre-push-delta), then emit --phase full";
+  if (record && !DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep)) {
+    throw new Refusal(`--phase full refused: the delta record ${recordPath} holds nextStep ${JSON.stringify(record.nextStep)}, not ${DELTA_CLEARING_NEXT_STEPS.join(" or ")}; fix and re-run the delta review (${next})`);
+  }
+  if (!threads) {
+    if (!delta) throw new Refusal(`--phase full with --act-list-file needs --delta-result naming a clearing delta result: ${next}`);
+    // The decided nextStep in the record for this head clears the push. The record's candidateHead is the worktree
+    // HEAD at decision time and may differ from a stale invocation-3 result's, so only the act set binds them.
+    const clears = record && record.actSetId === delta.actSetId;
+    if (!clears) throw new Refusal(`--phase full refused: no delta record at ${recordPath} holds a clearing nextStep for the --delta-result's act set; ${next}`);
+    // The result must be the one the decision used: an earlier non-clearing result of the same sequence shares the act set
+    // but not the record's item statuses, and the fixer reads those statuses (step 7 bounded_out rule).
+    const pairs = (items) => [...new Set((Array.isArray(items) ? items : []).map((item) => `${JSON.stringify(item?.ref)}:${JSON.stringify(item?.status)}`))].sort().join("\n");
+    if (pairs(delta.actionableItems) !== pairs(record.items)) {
+      throw new Refusal(`--phase full refused: the --delta-result's item statuses differ from the delta record ${recordPath}, so it is not the result that decision used; pass the clearing result (${next})`);
+    }
+    return;
+  }
+  if (!record) throw new Refusal(`--phase full with --threads-file needs a delta record at ${recordPath} from a thread-route delta review: ${next}`);
+  const threadIds = new Set(threads.map((thread) => thread.threadId));
+  const refs = (Array.isArray(record.items) ? record.items : []).map((item) => item?.ref);
+  const unbound = refs.filter((ref) => !threadIds.has(ref));
+  if (unbound.length > 0) {
+    throw new Refusal(`--phase full refused: the delta record ${recordPath} covers refs that are not threads in the threads file (${unbound.map((ref) => JSON.stringify(ref)).join(", ")}); review the current threads (${next})`);
+  }
+  const uncovered = [...threadIds].filter((id) => !refs.includes(id));
+  if (uncovered.length > 0) {
+    throw new Refusal(`--phase full refused: the threads file holds threads the delta record ${recordPath} never reviewed (${uncovered.map((id) => JSON.stringify(id)).join(", ")}); review the current threads (${next})`);
+  }
 }
 
 /**
@@ -168,12 +209,15 @@ export async function emitFixerWorkOrder({
     throw new Refusal(`threads file ${threadsFile} is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
   }
   if (deltaResult && !actListFile) throw new Refusal("--delta-result applies only to an --act-list-file source");
-  const delta = deltaResult ? await readSource("delta-result", abs(deltaResult)) : null;
-  if (delta) {
+  // A thread source reads the record the thread-route delta review wrote for this head (step 7 bounded_out rule), never a flag.
+  const threadRecordPath = threadsFile ? gateDeltaRecordPath(tmpRoot, headSha) : null;
+  const delta = deltaResult ? await readSource("delta-result", abs(deltaResult)) : threadRecordPath && existsSync(threadRecordPath) ? await readSource("delta-result", threadRecordPath) : null;
+  if (delta && deltaResult) {
     // The delta result must belong to this act list and this head (its pinned review baseline).
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
     if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}`);
   }
+  if (phase === "full") assertDeltaClearsFullPhase({ tmpRoot, headSha, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null });
 
   // Mutation authority comes from the PR itself, never from the caller.
   const prState = await fetchPr({ repo, pr });
@@ -183,6 +227,7 @@ export async function emitFixerWorkOrder({
   const contracts = await Promise.all(FIXER_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
   if (errors?.length > 0) throw new Refusal(`dev-loops config is invalid; fix it before emitting: ${errors.map((e) => e?.message ?? String(e)).join("; ")}`);
+  const outputRef = path.join(dir, executionIdentity, "fixer-disposition.json");
   const workOrder = {
     role: "fixer",
     target: { repo, pr: Number(pr) },
@@ -196,8 +241,11 @@ export async function emitFixerWorkOrder({
     mutationAuthority: { repo, pr: Number(pr), branch: prState.headRefName, allowedPaths: paths },
     contracts,
     requiredReads: [source.read, ...(delta ? [delta.read] : [])],
-    outputRefs: [path.join(dir, executionIdentity, "fixer-disposition.json")],
-    siteCoverage: phase === "commit_only" && actListFile ? buildSiteCoverageSkeleton(source.parsed) : undefined,
+    outputRefs: [outputRef],
+    siteCoverage: actListFile ? buildSiteCoverageSkeleton(source.parsed) : undefined,
+    handbackCheck: phase === "commit_only" && actListFile
+      ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(abs(actListFile))} --baseline ${headSha} --spec-identity fixer-handback --site-coverage ${JSON.stringify(outputRef)}`
+      : undefined,
     executionRules: {
       contract: "agents/fixer.agent.md",
       phase,

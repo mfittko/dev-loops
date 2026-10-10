@@ -11,6 +11,7 @@ import {
   authorMatchesFilter,
   captureParsedReviewThreads,
   assertFixedReplyShas,
+  assertFixedRepliesNotDeltaBlocked,
   assertReplyDisposition,
   REPLY_DISPOSITIONS,
   replyAndMaybeResolve,
@@ -437,6 +438,14 @@ export async function runCli(
       .filter((entry) => entry.disposition === "fixed")
       .map((entry) => entry.body),
     { repo: options.repo, pr: options.pr },
+    { env, ghCommand },
+  );
+  await assertFixedRepliesNotDeltaBlocked(
+    matchedTargets
+      .map((target) => ({ threadId: target.threadId, entry: resolveEntryForThread(target.threadId) }))
+      .filter(({ entry }) => entry.disposition === "fixed")
+      .map(({ threadId, entry }) => ({ threadId, body: entry.body })),
+    { repo: options.repo, pr: options.pr, parsed },
     { env, ghCommand },
   );
   if (matchedTargets.length === 0) {

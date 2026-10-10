@@ -11,6 +11,7 @@ import {
   isDeltaResultFresh,
   resolveDeltaTrigger,
   startDeltaSequence,
+  threadsToActList,
   validateDeltaResult,
 } from "../src/loop/pre-push-delta-review.mjs";
 import { consolidateFanin } from "../src/loop/gate-fanin.mjs";
@@ -92,6 +93,33 @@ describe("delta trigger", () => {
     // Not committed yet, or already pushed: no delta review either.
     assert.equal(resolveDeltaTrigger({ actItemCount: 2, fixCommitted: false }), "none");
     assert.equal(resolveDeltaTrigger({ actItemCount: 2, fixCommitted: true, fixPushed: true }), "none");
+  });
+
+  test("a committed, unpushed thread-route fix with zero act items triggers delta mode", () => {
+    // PR 2647 shape: act list [], one unresolved Copilot thread, fix committed and unpushed.
+    assert.equal(resolveDeltaTrigger({ actItemCount: 0, threadItemCount: 1, fixCommitted: true, fixPushed: false }), "delta");
+    assert.equal(resolveDeltaTrigger({ actItemCount: 0, threadItemCount: 0, fixCommitted: true, fixPushed: false }), "none");
+    assert.equal(resolveDeltaTrigger({ threadItemCount: 1, fixCommitted: true, fixPushed: true }), "none");
+  });
+
+  test("threadsToActList maps each unresolved thread to one act item keyed by its threadId", () => {
+    const payload = { ok: true, repo: "o/r", pr: 7, threads: [{ threadId: "T1", body: " fix it ", isResolved: false, path: "a.mjs", line: 3 }, { threadId: "T2", isResolved: false }] };
+    const items = startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList(payload, { repo: "o/r", pr: 7 }) }).actItems;
+    assert.deepEqual(items.map((item) => [item.ref, item.summary, item.file ?? null]), [["T1", "fix it", "a.mjs"], ["T2", "", null]]);
+    const reversed = { ...payload, threads: [...payload.threads].reverse() };
+    assert.equal(
+      startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList(reversed, { repo: "o/r", pr: 7 }) }).actSetId,
+      startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList(payload, { repo: "o/r", pr: 7 }) }).actSetId,
+    );
+    assert.throws(() => threadsToActList(payload, { repo: "o/r", pr: 8 }), /not successful list-review-threads/);
+    assert.throws(() => threadsToActList({ ...payload, threads: [{ ...payload.threads[0], isResolved: true }] }, { repo: "o/r", pr: 7 }), /not successful list-review-threads/);
+  });
+
+  test("thread-route actSetId ignores body excerpts and order; a different thread set changes it", () => {
+    const mk = (threads) => startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList({ ok: true, repo: "o/r", pr: 7, threads }, { repo: "o/r", pr: 7 }) }).actSetId;
+    const t = (threadId, body) => ({ threadId, body, isResolved: false, path: "a.mjs", line: 3 });
+    assert.equal(mk([t("T1", "long body one"), t("T2", "long body two")]), mk([t("T2", "x"), t("T1", "y")]));
+    assert.notEqual(mk([t("T1", "a"), t("T2", "b")]), mk([t("T1", "a"), t("T3", "b")]));
   });
 
   test("an entry the judge did not mark act cannot open a sequence", () => {

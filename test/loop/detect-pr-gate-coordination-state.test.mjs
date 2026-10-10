@@ -3896,3 +3896,97 @@ test("detect-pr-gate-coordination-state behaves exactly as before when no fixer-
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+// A full-phase fixer handoff delivered for the live head that lists a tackled thread, with no
+// verification checkpoint, means verify-fixer-disposition never completed: the boundary fails closed.
+async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw }, assertResult) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-not-verified-"));
+  const REPO = "owner/repo";
+  const PR = 3004;
+  const HEAD_SHA = "abc9988776";
+
+  try {
+    initGitFixture(tempDir);
+    const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
+    await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
+    await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ executionIdentity: "f1-0000abcd", workOrder: { phase } }));
+    await writeFile(path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json"), handoffRaw ?? JSON.stringify({
+      headSha: handoffHead ?? HEAD_SHA,
+      dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543", disposition: "tackled" }],
+    }));
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: jsonLine({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD_SHA, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews: [] }),
+      },
+      { assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: jsonLine({ users: [], teams: [] }) },
+      {
+        assertArgs: ["api", "graphql", `pr=${PR}`],
+        stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } }] } } } } }),
+      },
+      { assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid"], stdout: jsonLine({ headRefOid: HEAD_SHA }) },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${PR}/comments?per_page=100`],
+        stdout: jsonLine([[{
+          id: 11,
+          body: ["Gate review: draft_gate", `Reviewed head SHA: ${HEAD_SHA}`, "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
+          html_url: "https://example.test/comment/11",
+          updated_at: "2026-05-31T20:00:00Z",
+        }]]),
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`], stdout: jsonLine([[]]) },
+      { assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: "\n" },
+    ]);
+
+    const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR }, buildMockRuntime(env, { repoRoot: tempDir }));
+
+    assertResult(result);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("detect-pr-gate-coordination-state reports not_verified for a delivered tackled handoff with no checkpoint for the live head", async () => {
+  await runNotVerifiedFixture({}, (result) => {
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.reason, /PRRT_T1/);
+    assert.match(result.reason, /not_verified/);
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  });
+});
+
+test("detect-pr-gate-coordination-state keeps not_verified after a later commit_only emission overwrote the plan", async () => {
+  await runNotVerifiedFixture({ phase: "commit_only" }, (result) => {
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.reason, /not_verified/);
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  });
+});
+
+test("detect-pr-gate-coordination-state fails closed on a malformed delivered handoff", async () => {
+  await runNotVerifiedFixture({ handoffRaw: '{"headSha": "abc99887' }, (result) => {
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.reason, /unreadable_handoff/);
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  });
+});
+
+for (const [name, opts] of [["a tackled handoff for an older head", { handoffHead: "0ld1234567" }], ["a malformed handoff for an older head", { handoffRaw: '{"headSha": "0ld1234567", "dispositions": [' }]]) {
+  test(`detect-pr-gate-coordination-state does not block on ${name}`, async () => {
+    await runNotVerifiedFixture(opts, (result) => {
+      assert.equal(result.ok, true);
+      assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+      assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+    });
+  });
+}
+
+for (const [name, handoffHead] of [["an abbreviated", "abc9988"], ["an upper-case", "ABC9988776"], ["a whitespace-padded", "  abc9988776\n"]]) {
+  test(`detect-pr-gate-coordination-state reports not_verified for ${name} handoff headSha`, async () => {
+    await runNotVerifiedFixture({ handoffHead }, (result) => {
+      assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+      assert.match(result.reason, /not_verified/);
+    });
+  });
+}
