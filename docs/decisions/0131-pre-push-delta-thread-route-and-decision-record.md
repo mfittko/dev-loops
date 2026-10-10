@@ -16,11 +16,12 @@ The thread route is a second delta source. The captured set of unresolved review
 
 `check-pre-push-delta.mjs --result` records its decision at `<tmp-root>/gate-delta/<reviewBaselineHead>.json`. The record is local evidence. No gate verdict, findings ledger, comment or merge signal reads it (PRE-PUSH-DELTA-NOT-GATE-EVIDENCE).
 
-Three consumers read the record.
+Two consumers read the record.
 
 - `emit-fixer-work-order.mjs` refuses `--phase full` without a clearing decision for the PR head. An act-list source needs a clearing `--delta-result`. A threads source needs a thread-bound record with `nextStep` `push` or `push_to_gate`. A record with another `nextStep` refuses either source. The refusal names `commit_only`.
 - The fixed-reply guard in `_review-thread-mutations.mjs` refuses a fixed reply for a thread that a covering record marks `not_resolved` or `cannot_verify`. `reply-resolve-review-thread.mjs`, `reply-resolve-review-threads.mjs` and `verify-fixer-disposition.mjs` call it.
-- `request-copilot-review.mjs` refuses while the fixer disposition is incomplete. The shared resolver reports `not_verified` when a delivered tackled handoff for the live head has no verification checkpoint.
+
+Related boundary: `request-copilot-review.mjs` does not read the record. It refuses while the fixer disposition is incomplete, and the shared resolver reports `not_verified` when a delivered tackled handoff for the live head has no verification checkpoint.
 
 Rejected alternative: an operator bypass flag for the full-phase refusal. The `bounded_out` exit already yields `push_to_gate`.
 
