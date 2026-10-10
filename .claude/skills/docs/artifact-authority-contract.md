@@ -120,6 +120,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/github/write-gate-findings-log.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/resolve-angle-carry-forward.mjs` | Fail closed: `config_load_failed` |
 | `scripts/loop/resolve-gate-dispatch.mjs` | Fail closed: `config_load_failed` |
+| `scripts/loop/resolve-validation.mjs` | Fail closed: typed `incomplete` artifact with the config error as `reason` |
 | `scripts/github/detect-checkpoint-evidence.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/emit-fanout-dispatch.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/reconcile-draft-gate.mjs` | Fail closed: `config_load_failed` |
