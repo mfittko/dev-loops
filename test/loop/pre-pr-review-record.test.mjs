@@ -37,7 +37,7 @@ test("no record for the branch head is refused with pre_pr_review_missing naming
     const result = await validatePrePrReview({ cwd: dir });
     assert.equal(result.ok, false);
     assert.equal(result.code, "pre_pr_review_missing");
-    assert.match(result.detail, /cli\/index.mjs loop pre-pr-review --verdict/);
+    assert.match(result.detail, /dev-loops loop pre-pr-review --verdict/);
     assert.match(result.detail, /PRE-PR-BEFORE-FIRST-PUSH/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
