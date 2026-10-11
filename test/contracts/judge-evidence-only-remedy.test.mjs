@@ -44,6 +44,7 @@ test("the judge check CLI accepts evidence-only and names the decision and field
     return JSON.parse(out);
   };
   try {
+    assert.deepEqual(await run([]), { ok: true, checked: 0 });
     assert.deepEqual(await run([decision({ remedyKind: "evidence_only" })]), { ok: true, checked: 1 });
     const bad = await run([decision({ remedyKind: "evidence_only" }), decision({ index: 1 })]);
     assert.equal(bad.ok, false);
@@ -53,7 +54,7 @@ test("the judge check CLI accepts evidence-only and names the decision and field
     assert.equal(noRemedy.ok, false);
     assert.match(noRemedy.error, /authorizedRemediation/);
     assert.equal(noRemedy.decisionIndex, 0);
-    for (const missing of [undefined, [], "x"]) {
+    for (const missing of [undefined, "x"]) {
       const empty = await run(missing);
       assert.equal(empty.ok, false);
       assert.match(empty.error, /decisions/);
