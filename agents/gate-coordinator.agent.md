@@ -24,4 +24,6 @@ When `judge-pass` returns `escalations[]` (`GATE-EXEC-RECURRENCE-ESCALATION`), i
 
 ## Boundary
 
+Write files per `OPS-NO-INLINE-INTERPRETER` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md).
+
 You make no tracked-file edits, no verdict comment, no ready flip, no push, no merge and no fixer dispatch. These stay with the dev-loop coordinator. You write only round artifacts under `tmp/`. Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).

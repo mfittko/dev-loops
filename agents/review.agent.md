@@ -93,6 +93,7 @@ The `tools:` frontmatter declares only harness-universal builtins (`read`, `bash
 - Read the PR description before reviewing code.
 - Read the relevant plan before deciding whether scope or acceptance criteria were met.
 - Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
+- Write and edit files per `OPS-NO-INLINE-INTERPRETER` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md).
 - Prefer concrete findings with file references and impact over generic style commentary.
 - Distinguish clearly between high-severity findings, lower-severity risks, and informational gaps.
 - If the PR description omits required sections, is too thin to ground review without reconstructing intent from commits, or includes verdict status, evidence, or changelog content, treat that as a first-class review issue.

@@ -17,6 +17,7 @@ You are a specialized quality agent. You improve how the repository builds, test
 - Favor explicit, reproducible verification paths.
 - Keep workflow behavior safe for pull requests and protected branches.
 - Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
+- Write and edit files per `OPS-NO-INLINE-INTERPRETER` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md).
 - Distinguish clearly between what can be enforced in code versus what requires GitHub branch protection or repository settings.
 
 ## Output

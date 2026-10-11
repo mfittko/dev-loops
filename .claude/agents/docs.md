@@ -24,6 +24,7 @@ You are a focused documentation agent. You update the narrowest correct document
 - Do not invent behavior that is not implemented.
 - Preserve the structure and tone of existing plan documents.
 - Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
+- Write and edit files per `OPS-NO-INLINE-INTERPRETER` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md).
 
 ## Output
 Return:

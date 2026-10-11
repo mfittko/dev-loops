@@ -54,6 +54,7 @@ For the active phase, require and produce:
 - When more hardening is needed, run another fresh-context fan-out pass with a different persona or angle and its own `variant-a` / `variant-b` pair, then merge across those persona-specific passes instead of mixing personas inside one pair.
 - Preserve KISS, SRP, and YAGNI.
 - Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
+- Write and edit files per `OPS-NO-INLINE-INTERPRETER` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md).
 - When the phase introduces a new CLI surface, make the success output and malformed-argument/error-contract expectations explicit.
 - When the phase introduces watcher or predicate-driven behavior, make the timeout semantics and false-positive prevention rules explicit.
 - When the phase depends on package-first shared helpers in a source-loaded workspace, make the local integration boundary explicit so scripts/tests do not guess at import style.
