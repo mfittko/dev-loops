@@ -409,6 +409,9 @@ export function evaluateMergePreconditions({
   // verdict review sits on an earlier commit and is not converged (the latest
   // review decides); null otherwise.
   copilotLaterReviewRefusal = null,
+  // Refusal reason when a decision record the PR adds shares its number with
+  // the base branch tip (ADR-PATH-NUMBERING); null otherwise.
+  adrNumberCollisionRefusal = null,
   // Result of the shared retrospective-checkpoint evaluator, `{ checkpointState,
   // pendingRetrospectives }`. null means enforcement is off
   // (workflow.requireRetrospective unset/false): no precondition is evaluated.
@@ -490,6 +493,10 @@ export function evaluateMergePreconditions({
     failures.push({ precondition: "copilot_convergence", reason: copilotConvergence.reason });
   } else if (typeof copilotLaterReviewRefusal === "string") {
     failures.push({ precondition: "copilot_convergence", reason: copilotLaterReviewRefusal });
+  }
+
+  if (typeof adrNumberCollisionRefusal === "string") {
+    failures.push({ precondition: "adr_number_collision", reason: adrNumberCollisionRefusal });
   }
 
   const mergeClass = resolveMergeClass({ sizeOutcome, touchesT1, stableRelease });

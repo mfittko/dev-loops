@@ -236,6 +236,7 @@ test("evaluateMergePreconditions: each missing precondition is named individuall
     [{ sizeOutcome: "escalate", standingAuthorized: true }, "size_budget_human_approval"],
     [{ standingAuthorized: false }, "merge_approval"],
     [{ copilotLaterReviewRefusal: "a later Copilot review is not converged" }, "copilot_convergence"],
+    [{ adrNumberCollisionRefusal: "PR adds docs/decisions/0095-b.md but main already holds docs/decisions/0095-a.md" }, "adr_number_collision"],
   ];
   for (const [override, expected] of cases) {
     const res = evaluateMergePreconditions(greenFacts(override));
@@ -631,4 +632,10 @@ test("evaluateMergePreconditions: retrospective_checkpoint is skipped when enfor
 
   // A malformed evaluator result fails closed.
   assert.equal(evaluateMergePreconditions(greenFacts({ retrospective: {} })).ok, false);
+});
+
+test("evaluateMergePreconditions: a null adrNumberCollisionRefusal adds no failure", () => {
+  const res = evaluateMergePreconditions(greenFacts({ adrNumberCollisionRefusal: null }));
+  assert.equal(res.ok, true);
+  assert.ok(!res.failures.some((f) => f.precondition === "adr_number_collision"));
 });
