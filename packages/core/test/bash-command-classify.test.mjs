@@ -5,6 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  ALLOWED_INLINE_INTERPRETER_FORMS,
+  DENIED_INLINE_INTERPRETER_FORMS,
+} from "../../../test/fixtures/inline-interpreter-forms.mjs";
+import {
   TARGET_REPO_SLUG,
   deriveInManagedRepo,
   explicitRepoProvenForeign,
@@ -848,6 +852,41 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter('node --require ./setup.js -e "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node -r ./x.js --eval "1+1"'), true);
   assert.equal(commandContainsInlineInterpreter('node --import ./m.mjs -p "1+1"'), true);
+});
+
+test("commandContainsInlineInterpreter runs the shared denied and allowed fixture table (#2442)", () => {
+  for (const form of DENIED_INLINE_INTERPRETER_FORMS) {
+    assert.equal(commandContainsInlineInterpreter(form), true, `expected deny: ${form}`);
+  }
+  for (const form of ALLOWED_INLINE_INTERPRETER_FORMS) {
+    assert.equal(commandContainsInlineInterpreter(form), false, `expected allow: ${form}`);
+  }
+});
+
+test("commandContainsInlineInterpreter handles multi-line heredocs by head (#2442)", () => {
+  // cat/tee heredoc bodies are inert data
+  assert.equal(commandContainsInlineInterpreter("cat > tmp/f <<'EOF'\nnode -e 'x'\npython3 -c 'y'\nEOF"), false);
+  assert.equal(commandContainsInlineInterpreter("cat > tmp/f <<-EOF\n\tsed -i x f\n\tEOF"), false);
+  assert.equal(commandContainsInlineInterpreter('cat > tmp/f <<"EOF"\nperl -pi -e x f\nEOF'), false);
+  // a heredoc fed to a shell or an interpreter keeps its executing body
+  assert.equal(commandContainsInlineInterpreter("bash <<'EOF'\nnode -e 'x'\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("python3 - <<'EOF'\nprint(1)\nEOF"), true);
+  // write then run in separate lines
+  assert.equal(commandContainsInlineInterpreter("cat > /tmp/r.mjs <<'EOF'\nconsole.log(1)\nEOF\nnode /tmp/r.mjs"), true);
+  assert.equal(commandContainsInlineInterpreter("cat > /tmp/r.mjs <<'EOF'\nconsole.log(1)\nEOF"), false);
+});
+
+test("commandContainsDetachedWaitTool ignores inert heredoc and quoted text but denies real waits (#2442)", () => {
+  const body = "cat > tmp/f <<'EOF'\nnode scripts/loop/detect-copilot-loop-state.mjs --pr 5 &\nEOF";
+  assert.equal(commandContainsDetachedWaitTool(body), false);
+  assert.equal(commandContainsDetachedWaitTool('echo "detect-copilot-loop-state.mjs & more"'), false);
+  assert.equal(commandContainsDetachedWaitTool("sed -n 's/`x`/while sleep gh/p' f"), false);
+  assert.equal(commandContainsDetachedWaitTool("cat > tmp/f <<'EOF'\nsleep 5; python3 -c x\nEOF"), false);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/loop/probe-copilot-review.mjs --pr 5 --timeout-ms 1000 &"), true);
+  assert.equal(commandContainsDetachedWaitTool('node "scripts/loop/probe-copilot-review.mjs" &'), true);
+  assert.equal(commandContainsDetachedWaitTool("bash <<'EOF'\nnode scripts/loop/probe-copilot-review.mjs --pr 5 &\nEOF"), true);
+  assert.equal(commandContainsDetachedWaitTool("while true; do gh pr view 5; sleep 5; done"), true);
+  assert.equal(commandContainsDetachedWaitTool('while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done'), true);
 });
 
 test("commandContainsCodeVerificationEntrypoint detects known verify/test/build entrypoints and does not over-match compact orchestration commands (#2082)", () => {

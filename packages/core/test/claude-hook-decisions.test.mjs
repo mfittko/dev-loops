@@ -950,6 +950,29 @@ test("decideBashGate denies inline interpreters actor-independently on the targe
   assert.match(dMain.reason, /OPS-NO-INLINE-INTERPRETER/);
 });
 
+test("decideBashGate allows inert heredoc and quoted text, denies a backgrounded probe (#2442)", () => {
+  const gate = (command, extra = {}) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, ...extra });
+  const write = "cat > tmp/retro.md <<'EOF'\nran detect-copilot-loop-state.mjs & then node -e\nEOF";
+  assert.equal(gate(write).decision, "allow");
+  assert.equal(gate('node scripts/loop/x.mjs --notes "11 were python3 or node -e; python3 -c denied"').decision, "allow");
+  assert.equal(gate("node scripts/loop/probe-copilot-review.mjs --pr 5 --timeout-ms 1000 &").decision, "deny");
+});
+
+test("decideBashGate denies perl in-place edits for any actor in a managed repo and names the four classes (#2442)", () => {
+  const command = "perl -0pi -e 's/a/b/' src/a.mjs";
+  for (const agentType of ["developer", null]) {
+    const d = decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
+    assert.equal(d.decision, "deny");
+    assert.match(d.reason, /OPS-NO-INLINE-INTERPRETER/);
+    assert.match(d.reason, /inline code or a stdin heredoc/);
+    assert.match(d.reason, /in-place sed\/perl\/ruby\/awk/);
+    assert.match(d.reason, /cat\/tee heredoc write outside a temp path/);
+    assert.match(d.reason, /running a file written by a heredoc/);
+    assert.match(d.reason, /editor tools/);
+  }
+  assert.equal(decideBashGate({ command, repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
+});
+
 test("decideBashGate allows sanctioned node/python script invocations and off-target inline interpreters", () => {
   assert.equal(decideBashGate({ command: "node scripts/github/comment-issue.mjs 5", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
   assert.equal(decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");

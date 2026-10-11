@@ -1,0 +1,71 @@
+/**
+ * Shared single-line fixture table for the OPS-NO-INLINE-INTERPRETER matcher. Both the Bash gate
+ * suite (`packages/core/test/bash-command-classify.test.mjs`) and the retro checker suite
+ * (`test/loop/check-retro-tooling.test.mjs`) run it, so the two matchers cannot drift.
+ */
+
+/** Forms the matcher denies. */
+export const DENIED_INLINE_INTERPRETER_FORMS = [
+  "node -e 'x'",
+  "node --eval 'x'",
+  "node -p 'x'",
+  "bun -e 'x'",
+  "bun --eval 'x'",
+  "python3 -c 'x'",
+  "python3 -I -c 'x'",
+  "python3 -I - <<'E'",
+  "python3 - <<'EOF'",
+  "node - <<'EOF'",
+  "perl - <<'EOF'",
+  "perl -0pi -e 's/a/b/' src/a.mjs",
+  "perl -pi -e 's/a/b/' src/a.mjs",
+  "perl -ne 'print' f",
+  "perl -i.bak tool.pl src/a.mjs",
+  "ruby -e 'puts 1'",
+  "ruby -i -pe 'x' f",
+  "sed -i 's/a/b/' src/a.mjs",
+  "sed -i '' 's/a/b/' src/a.mjs",
+  "sed -i.bak 's/a/b/' f",
+  "sed -Ei 's/a/b/' f",
+  "sed --in-place 's/a/b/' f",
+  "sed -i 's/a/b/' tmp/x.md",
+  "awk -i inplace '{print}' src/a.mjs",
+  "gawk --include=inplace '{print}' f",
+  "env FOO=1 perl -pi -e 'x' f",
+  "bash -c 'x; node -e y'",
+  "eval \"x; perl -pi -e y f\"",
+  "cat > packages/a.mjs <<'EOF'",
+  "cat >> packages/core/src/a.mjs <<'EOF'",
+  "cat <<'EOF' > src/a.mjs",
+  "tee src/a.mjs <<'EOF'",
+  "tee -a src/a.mjs <<'EOF'",
+  "cat > /r/tmp/worktrees/s/packages/a.mjs <<'EOF'",
+  "cat > tmp/../src/a.mjs <<'EOF'",
+  "cat > \"$F\" <<'EOF'",
+  "cat > /tmp/r.mjs <<'EOF' && node /tmp/r.mjs",
+  "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs",
+  "cat > ./r.mjs <<'EOF' && node r.mjs",
+  "cat > tmp/r.sh <<'EOF' && bash tmp/r.sh",
+];
+
+/** Forms the matcher allows, including quoted literals that only name an interpreter. */
+export const ALLOWED_INLINE_INTERPRETER_FORMS = [
+  "node scripts/loop/x.mjs",
+  "python3 tool.py",
+  "perl tool.pl",
+  "perl -Mstrict tool.pl",
+  "ruby -rjson tool.rb",
+  "awk '{print $1}' f",
+  "sed -n 1,5p f",
+  "sed 's/a/b/' f > tmp/out",
+  "cat > tmp/x.md <<'EOF'",
+  "cat > /tmp/x.md <<'EOF'",
+  "cat > /r/tmp/worktrees/s/tmp/x.md <<'EOF'",
+  "tee tmp/x.md <<'EOF'",
+  "cat > /tmp/r.mjs <<'EOF'",
+  "git commit -F - <<'MSG'",
+  'node scripts/loop/x.mjs --notes "11 were python3 or node -e; python3 -c denied"',
+  'node scripts/loop/x.mjs --notes "a \\| node -e b"',
+  "node scripts/loop/x.mjs --notes 'perl -0pi -e & ruby -e'",
+  'grep -n "sed -i" README.md',
+];

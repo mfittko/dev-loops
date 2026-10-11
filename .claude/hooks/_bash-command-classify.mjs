@@ -961,13 +961,14 @@ export function commandContainsCopilotSummonComment(command) {
  * a natural shape a genuine poll loop takes.
  * @param {string} command @returns {string}
  */
-function stripQuotedLiterals(command) {
-  return command.replace(/(['"])((?:(?!\1).)*)\1/gs, (match, _quote, inner, offset, full) => {
-    // A quoted string containing a command substitution ($()) or backtick is executable code, not
-    // inert data — its command runs regardless of the surrounding quotes. Blanking it would hide a
+export function stripQuotedLiterals(command) {
+  return command.replace(/(['"])((?:(?!\1).)*)\1/gs, (match, quote, inner, offset, full) => {
+    // A DOUBLE-quoted string containing a command substitution ($()) or backtick is executable code,
+    // not inert data — its command runs regardless of the surrounding quotes. Blanking it would hide a
     // real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done` that the
-    // gh/loop-state ban already denied. Preserve it (fail-closed direction).
-    if (/\$\(|`/.test(inner)) {
+    // gh/loop-state ban already denied. Preserve it (fail-closed direction). A SINGLE-quoted `$(`/
+    // backtick is inert, so it is blanked unless the -c/--command/eval rule below preserves it.
+    if (quote === '"' && /\$\(|`/.test(inner)) {
       return match;
     }
     const before = full.slice(0, offset);
@@ -1092,7 +1093,8 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
  * backgrounded wait), so the gate catches its backgrounding too.
  * @param {string} command @returns {boolean}
  */
-export function commandContainsDetachedWaitTool(command) {
+export function commandContainsDetachedWaitTool(rawCommand) {
+  const command = scanCatTeeHeredocs(rawCommand).text;
   const whole = command.trim();
 
   // (1) Unconditional detach-wrapper ban — no wait/probe-family requirement.
@@ -1113,60 +1115,136 @@ export function commandContainsDetachedWaitTool(command) {
     return true;
   }
 
-  // (3) OPTION-C: bare-`&` background AND a wait/probe family reference.
-  if (!commandHasBareBackgroundOperator(whole)) {
+  // (3) OPTION-C: bare-`&` background AND a wait/probe family reference. The `&` is checked outside
+  // quoted data; the family match stays on the unstripped text so a quoted script path still counts.
+  if (!commandHasBareBackgroundOperator(stripQuotedLiterals(whole))) {
     return false;
   }
   return WAIT_PROBE_FAMILY_RE.test(whole);
 }
 
-/** Build a `node`/`python`/`python3` command-head matcher (env/wrapper/path prefix tolerated). */
-function interpreterRegex(bin) {
-  return new RegExp(`^${SHELL_EXEC_PREFIX}${bin}(?:\\s|$)`, "i");
+/** Heredoc operator: `<<`, `<<-`, optionally quoted delimiter; never the `<<<` here-string. */
+const HEREDOC_OPERATOR_RE = /(?<!<)<<(?!<)-?\s*(['"]?)([A-Za-z_][\w-]*)\1/;
+
+/** A `cat`/`tee` command head (env/wrapper/path prefix tolerated) plus the rest of its segment. */
+const CAT_TEE_HEAD_RE = new RegExp(`^${SHELL_EXEC_PREFIX}(cat|tee)(?:\\s+(.*))?$`);
+
+/**
+ * Whether `target` is a temp path: it holds a `tmp/` segment, the segment after the last `tmp/` is not
+ * `worktrees`, and it has no `..` segment, `$`, backtick or `~`. Allows `/tmp/x`, `tmp/issues/x`,
+ * `<worktree>/tmp/x`; denies `src/a.mjs`, `<repo>/tmp/worktrees/<slug>/src/a.mjs`, `tmp/../src/a.mjs`.
+ * @param {string} target @returns {boolean}
+ */
+function isTempPath(target) {
+  const path = target.replace(/^(['"])(.*)\1$/, "$2");
+  if (/[$`~]/.test(path)) return false;
+  const parts = path.split("/");
+  if (parts.includes("..")) return false;
+  const last = parts.lastIndexOf("tmp");
+  return last !== -1 && last < parts.length - 1 && parts[last + 1] !== "worktrees";
 }
 
 /**
- * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
- * heredoc fed to node/python (`node - <<EOF`, `python3 - <<EOF`). Sanctioned output parsing uses
- * `--jq`/`--silent`, never an inline interpreter. Actor-independent (bars both coordinator and
- * agent flows). Script-path invocations (running a `.mjs` file, `python3 script.py`) never match.
+ * Scan the heredocs of a command. The body (and delimiter line) of a heredoc fed to `cat` or `tee` is
+ * inert data and is removed from `text`; a heredoc fed to any other head keeps its body, because that
+ * body executes. `writes` lists the write target of each cat/tee heredoc (`> T`, `>> T`, or the `tee`
+ * operand). Line based, not a shell parser.
+ * @param {string} command @returns {{ text: string, writes: string[] }}
+ */
+function scanCatTeeHeredocs(command) {
+  const out = [];
+  const writes = [];
+  const lines = String(command).split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    out.push(line);
+    const op = HEREDOC_OPERATOR_RE.exec(line);
+    if (!op) continue;
+    const before = line.slice(0, op.index).split(SHELL_SEGMENT_SEPARATOR).pop();
+    const after = line.slice(op.index + op[0].length).split(SHELL_SEGMENT_SEPARATOR)[0];
+    const head = CAT_TEE_HEAD_RE.exec(`${before} ${after}`.trim());
+    if (!head) continue;
+    const rest = head[2] ?? "";
+    if (head[1] === "cat") {
+      for (const m of rest.matchAll(/(?<![\d&])>>?(?!&)\s*([^\s;&|<>]+)/g)) writes.push(m[1]);
+    } else {
+      const operands = rest.replace(/[\d&]*>>?\s*\S+/g, " ").split(/\s+/).filter((t) => t && !t.startsWith("-"));
+      writes.push(...operands);
+    }
+    while (++i < lines.length && lines[i].trim() !== op[2]) { /* skip the inert body */ }
+  }
+  return { text: out.join("\n"), writes };
+}
+
+/** Command heads whose arguments can carry inline code, a stdin script, or an in-place edit. */
+const INTERPRETER_SEGMENT_RE = new RegExp(`^${SHELL_EXEC_PREFIX}(node|bun|python3?|perl|ruby|g?sed|g?awk)(?:\\s+(.*))?$`, "i");
+
+/** Heads that run a script file given as their first non-flag argument. */
+const SCRIPT_RUNNER_RE = new RegExp(`^${SHELL_EXEC_PREFIX}(node|bun|python3?|perl|ruby|sh|bash|zsh)(?:\\s+(.*))?$`, "i");
+
+/** Value-taking flags (each consumes the next token) before the script of a node/bun or python head. */
+const INTERPRETER_VALUE_FLAGS = new Set([
+  "-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "-W", "-X",
+]);
+
+/** Whether one command segment is a form `OPS-NO-INLINE-INTERPRETER` denies. */
+function segmentIsInlineInterpreter(segment) {
+  const m = INTERPRETER_SEGMENT_RE.exec(segment.trim());
+  if (!m) return false;
+  const bin = m[1].toLowerCase().replace(/^g(?=sed|awk)/, "");
+  const tokens = (m[2] ?? "").split(/\s+/).filter(Boolean);
+  if (bin === "sed") return tokens.some((t) => /^-[A-Za-z]*i/.test(t) || t.startsWith("--in-place"));
+  if (bin === "awk") {
+    return tokens.some((t, i) => t === "-iinplace" || t === "--include=inplace"
+      || ((t === "-i" || t === "--include") && tokens[i + 1] === "inplace"));
+  }
+  // Flags are the tokens before the first non-flag token; a later `-e`/`-c` is a script argument.
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.startsWith("<<")) return true; // stdin heredoc (`- <<EOF`, `<<EOF`)
+    if (t === "-") continue;
+    if (!t.startsWith("-")) break;
+    if (bin === "node" || bin === "bun") {
+      if (/^-[ep]/.test(t) || t === "--eval" || t.startsWith("--eval=")) return true;
+    } else if (bin === "python" || bin === "python3") {
+      if (/^-[A-Za-z]*c/.test(t)) return true;
+    } else if (!t.startsWith("--") && !/^-[MmrI]/.test(t)) { // perl, ruby: -M/-m/-r name a module, -I an include dir
+      if (/^-[A-Za-z0-9]*[eEi]/.test(t)) return true;
+    }
+    if (INTERPRETER_VALUE_FLAGS.has(t)) i += 1;
+  }
+  return false;
+}
+
+/** The script path a runner segment executes (first non-flag token), with a leading `./` dropped. */
+function runnerScriptPath(segment) {
+  const m = SCRIPT_RUNNER_RE.exec(segment.trim());
+  if (!m) return null;
+  const tokens = (m[2] ?? "").split(/\s+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    if (!tokens[i].startsWith("-")) return tokens[i].replace(/^\.\//, "");
+    if (INTERPRETER_VALUE_FLAGS.has(tokens[i])) i += 1;
+  }
+  return null;
+}
+
+/**
+ * OPS-NO-INLINE-INTERPRETER: a closed list of forms, actor-independent (bars both coordinator and
+ * agent flows). (1) Inline code (`node`/`bun` `-e`/`--eval`/`-p`, `python` `-c`, `perl`/`ruby` `-e`) or a
+ * stdin heredoc to node, bun, python, perl or ruby. (2) In-place editors: `sed -i`, `perl`/`ruby` `-i`,
+ * `awk -i inplace`. (3) A cat/tee heredoc write whose target is not a temp path. (4) A cat/tee heredoc
+ * write followed by running the written file. Script-path invocations (`node x.mjs`, `python3 tool.py`)
+ * never match. Heredoc bodies fed to cat/tee are ignored, and so is quoted data, except a quoted
+ * `-c`/`eval` payload or command substitution, which executes (see `stripQuotedLiterals`).
  * @param {string} command @returns {boolean}
  */
 export function commandContainsInlineInterpreter(command) {
-  return shellSegments(command).some((segment) => {
-    const s = segment.trim();
-    if (interpreterRegex("node").test(s)) {
-      const code = s.replace(interpreterRegex("node"), "").trim();
-      // Heredoc fed straight to node where node is the command head (`node - <<EOF`, `node <<EOF`),
-      // so `grep node <<EOF` (interpreter is grep) does not false-positive as an inline interpreter.
-      if (/^(?:-\s*)?<</i.test(code)) return true;
-      const tokens = code.split(/\s+/).filter(Boolean);
-      // Node value-taking flags (short + long) each consume the following token. Consuming them lets
-      // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
-      // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
-      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd"]);
-      for (let i = 0; i < tokens.length; i++) {
-        const t = tokens[i];
-        // `-e`/`-p` may be directly attached to the code (`node -e"console.log(1)"`), which a
-        // prefix match catches; break at the first non-flag token so a later `-e` on a script path
-        // is a script argument.
-        if (t === "-e" || t.startsWith("-e") || t === "--eval" || t.startsWith("--eval=") || t === "-p" || t.startsWith("-p")) return true;
-        if (!t.startsWith("-")) break; // script path reached — a later `-e` is a script argument
-        if (NODE_VALUE_FLAGS.has(t)) { i += 1; continue; } // skip the flag's value token
-      }
-    }
-    if (interpreterRegex("python3?").test(s)) {
-      const code = s.replace(interpreterRegex("python3?"), "").trim();
-      // Heredoc fed straight to python where python is the command head (`python3 - <<EOF`).
-      if (/^(?:-\s*)?<</i.test(code)) return true;
-      const tokens = code.split(/\s+/).filter(Boolean);
-      for (const t of tokens) {
-        if (t === "-c" || t.startsWith("-c")) return true;
-        if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
-      }
-    }
-    return false;
-  });
+  const { text, writes } = scanCatTeeHeredocs(command);
+  if (writes.some((target) => !isTempPath(target))) return true;
+  const segments = shellSegments(stripQuotedLiterals(text));
+  if (segments.some(segmentIsInlineInterpreter)) return true;
+  const written = new Set(writes.map((t) => t.replace(/^(['"])(.*)\1$/, "$2").replace(/^\.\//, "")));
+  return written.size > 0 && segments.some((s) => written.has(runnerScriptPath(s)));
 }
 
 /**

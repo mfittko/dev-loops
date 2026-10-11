@@ -240,9 +240,11 @@ export function decideBashGate({
     return {
       decision: "deny",
       reason:
-        "OPS-NO-INLINE-INTERPRETER: inline interpreters (node -e/--eval/-p, python3 -c, heredoc to " +
-        "node/python) are barred in the dev-loop flow. Parse tool output via --jq/--silent and mutate " +
-        "files via the editor/patch tools or a --jq-composed --body-file, never an inline interpreter.",
+        "OPS-NO-INLINE-INTERPRETER: barred in the dev-loop flow: (1) inline code or a stdin heredoc to " +
+        "node, bun, python, perl or ruby; (2) in-place sed/perl/ruby/awk edits; (3) a cat/tee heredoc " +
+        "write outside a temp path; (4) running a file written by a heredoc in the same command. " +
+        "Parse tool output via --jq/--silent and write or edit files with the editor tools (Write/Edit), " +
+        "or a --jq-composed --body-file.",
     };
   }
 

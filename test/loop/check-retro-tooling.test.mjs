@@ -9,6 +9,10 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { analyzeTranscript, run } from "../../scripts/loop/check-retro-tooling.mjs";
+import {
+  ALLOWED_INLINE_INTERPRETER_FORMS,
+  DENIED_INLINE_INTERPRETER_FORMS,
+} from "../fixtures/inline-interpreter-forms.mjs";
 
 test("clean transcript: dev-loops tooling + node scripts only — no violations", () => {
   const transcript = [
@@ -46,7 +50,19 @@ test("node -e and node --eval are violations; node scripts/x.mjs is not", () => 
   ].join("\n");
   const { violations } = analyzeTranscript(transcript);
   assert.equal(violations.length, 2);
-  assert.ok(violations.every((v) => v.startsWith("node -e:")));
+  assert.ok(violations.every((v) => v.startsWith("inline-interpreter:")));
+});
+
+test("the shared fixture table matches the Bash gate: denied forms are inline-interpreter violations, allowed forms are not (#2442)", () => {
+  // A python head keeps its existing `python`/`python3` violation tool; every other denied form is `inline-interpreter`.
+  for (const form of DENIED_INLINE_INTERPRETER_FORMS) {
+    assert.ok(analyzeTranscript(form).violations.some((v) => v.startsWith("inline-interpreter:") || /^python3?:/.test(v)), `expected violation: ${form}`);
+  }
+  for (const form of ALLOWED_INLINE_INTERPRETER_FORMS) {
+    assert.ok(!analyzeTranscript(form).violations.some((v) => v.startsWith("inline-interpreter:")), `expected no inline-interpreter violation: ${form}`);
+  }
+  // a separator inside quoted data does not split a segment into a fake violation
+  assert.deepEqual(analyzeTranscript('node scripts/x.mjs --notes "a; gh api b"').violations, []);
 });
 
 test("--eval after the script path is a script arg, not inline eval — clean", () => {
@@ -115,7 +131,7 @@ test("env-prefixed, wrapper-prefixed, and path-prefixed raw calls are violations
     ["GH_TOKEN=x gh api repos/o/r", "gh"],
     ["sudo gh api foo", "gh"],
     ["xargs gh api foo", "gh"],
-    ["NODE_OPTIONS=x node -e 'x'", "node -e"],
+    ["NODE_OPTIONS=x node -e 'x'", "inline-interpreter"],
     ["./node_modules/.bin/gh pr view 1", "gh"],
     ["/usr/bin/python3 -c 'x'", "python3"],
   ];

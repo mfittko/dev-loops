@@ -8,7 +8,9 @@
  * gone through internal dev-loops tooling:
  *   - `gh ...` (incl. `gh api`, `gh ... --jq`)
  *   - `python` / `python3`
- *   - `node -e` / `node --eval`
+ *   - every inline-interpreter form that `OPS-NO-INLINE-INTERPRETER` denies
+ *     (`node -e`, `perl -pi -e`, `sed -i`, a cat/tee heredoc source write, ...),
+ *     matched by the same predicate as the Bash gate and reported as `inline-interpreter`
  *
  * These three are the same breach: reaching past the dev-loops tooling to read
  * or parse tool output with a raw call. The verifier returns the list of
@@ -37,7 +39,9 @@
  *   - `gh ...` at the start of a command segment (start of line, or after
  *     `&&`, `||`, `|`, `;`) that is not in the write-op allowlist.
  *   - `python` / `python3` at the start of a command segment.
- *   - `node -e` / `node --eval` (inline eval) at the start of a command segment.
+ *   - an inline-interpreter form (see above), judged on the whole line.
+ *
+ * Segments are split after `stripQuotedLiterals`, so a separator inside quoted data does not split.
  *
  * Head normalization (before classifying a segment, fail-closed):
  *   - strips leading `NAME=value ` env-assignment prefixes (`GH_TOKEN=x gh api`)
@@ -58,6 +62,7 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
+import { commandContainsInlineInterpreter, stripQuotedLiterals } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
@@ -141,21 +146,6 @@ function normalizeSegmentHead(segment) {
  */
 function classifySegment(rawSegment) {
   const segment = normalizeSegmentHead(rawSegment);
-  // `node scripts/....mjs` (or any script path) is allowed tooling; only inline
-  // eval forms are violations. Check node first so script invocations pass.
-  if (/^node\b/.test(segment)) {
-    // Inline eval (`-e`/`--eval`) is a violation only before the script path:
-    // once a non-flag token (the script) appears, a later `--eval` is just a
-    // script argument, not Node's inline-eval mode (avoids false positives).
-    const tokens = segment.split(/\s+/).slice(1);
-    for (const tok of tokens) {
-      if (tok === "-e" || tok === "--eval" || /^--eval=/.test(tok)) {
-        return { kind: "violation", tool: "node -e" };
-      }
-      if (!tok.startsWith("-")) break; // script path reached
-    }
-    return { kind: "clean" };
-  }
   if (/^gh\b/.test(segment)) {
     if (ALLOWED_WRITE_OPS.some((re) => re.test(segment))) {
       return { kind: "allowedWriteOp", tool: "gh" };
@@ -181,13 +171,19 @@ export function analyzeTranscript(transcript) {
   for (const raw of lines) {
     const line = raw.trim();
     if (line.length === 0 || line.startsWith("#")) continue;
-    for (const segment of splitSegments(line)) {
+    let pythonFlagged = false;
+    for (const segment of splitSegments(stripQuotedLiterals(line))) {
       const result = classifySegment(segment);
       if (result.kind === "violation") {
         violations.push(`${result.tool}: ${segment}`);
+        pythonFlagged ||= result.tool.startsWith("python");
       } else if (result.kind === "allowedWriteOp") {
         allowedWriteOps.push(segment);
       }
+    }
+    // The gate's predicate (OPS-NO-INLINE-INTERPRETER) on the whole line; a bare python violation already covers its line.
+    if (!pythonFlagged && commandContainsInlineInterpreter(line)) {
+      violations.push(`inline-interpreter: ${line}`);
     }
   }
   return { violations, allowedWriteOps, internalToolingOnly: violations.length === 0 };
