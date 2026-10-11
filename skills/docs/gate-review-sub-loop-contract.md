@@ -800,7 +800,7 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
   is `act` regardless of its severity label. Round 1 is the cheapest fix point, so a real
   AC-relevant `low` is acted up front, never auto-deferred on its label.
 - `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract):
-  the draft is the durable ledger record, and `judge-pass`'s batched deferral comment on a linked spec issue target (a PR target posts no comment; the verdict body's Details markers record it)
+  the draft is the durable ledger record, and `judge-pass`'s batched deferral comment on a linked spec issue target (a PR target posts no comment; the thread marker and reply record a threaded finding, and the verdict body's Details marker records a folded one)
   records the deferral (`GATE-EXEC-DEFERRAL-RECORD`). The defer bar is high (net-reduction policy): a `nit` MUST NOT get
   a verdict `disposition` of `defer` (merged into the ledger as `judgeDisposition`; `act` —
   only when it rides an already-planned fix pass — or `reject`, and the resolved thread note
@@ -897,8 +897,8 @@ severity-only disposition or silently skipping spec authority for a wired gate. 
 comment on the deferral comment target via `commentDeferredFindings`
 (`scripts/github/_gate-finding-surface.mjs`). The target is the PR's linked spec issue when
 `tracker.provider` resolves to `github` and the PR has exactly one closing issue reference;
-otherwise it is the PR itself, and a PR target posts no comment (the verdict body's Details
-markers carry `issue=<pr>`). `judge-pass` never creates an issue and never writes a tracker
+otherwise it is the PR itself, and a PR target posts no comment (a threaded finding is recorded by its thread marker and reply, a folded one by its Details
+marker, which carries `issue=<pr>`). `judge-pass` never creates an issue and never writes a tracker
 other than GitHub. The comment goes through the sanctioned `commentIssue` from
 `@dev-loops/core/github/issue-ops`, never a raw `gh` call. `close-gate-findings.mjs`'s own
 severity/round-based defer routes through the SAME `commentDeferredFindings`, so both paths
@@ -1188,7 +1188,7 @@ A finding anchored to unchanged code has no in-diff `file:line` and is therefore
 (#2263, #2722) `GATE-COMMENT-INLINE-SEVERITY-FLOOR` (owned by
 [Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md)) applies BEFORE the
 locatability split above: a finding is visible (`isVisibleFinding`) when the judge disposed it `act`, it is at a
-`blockCleanOnFindingSeverities` severity, it is a `question`, it has an unrecognized severity, or it has no judge disposition and ranks at or above the inline floor; a locatable finding at or above the inline floor also takes the inline or body-filed track. Every other finding, locatable or not,
+`blockCleanOnFindingSeverities` severity, it is a `question`, it has an unrecognized severity, or it has no judge disposition and ranks at or above the inline floor; on a create, a locatable finding at or above the inline floor also takes the inline or body-filed track. Every other finding, locatable or not, and on an update every non-visible finding,
 folds into the verdict body's one `Details` section instead, grouped by disposition (`Deferred`,
 `Rejected`, `Not judged`), carrying the same
 fingerprint+`disposition=deferred` marker shape a body-filed finding carries (a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, carries no `disposition` field, like a body-filed `high` marker). A round without a
