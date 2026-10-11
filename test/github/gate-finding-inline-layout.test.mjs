@@ -21,7 +21,6 @@ import {
   MAX_MERGED_MEMBERS,
   mergeSameDefectFindings,
   normalizeFindingSummary,
-  splitSentences,
 } from "../../scripts/github/_gate-finding-text.mjs";
 import { escapeProse, renderBoundedFindingsCommentBody } from "../../scripts/github/post-gate-findings.mjs";
 import { fetchAllReviewThreads } from "../../scripts/github/list-review-threads.mjs";
@@ -384,16 +383,6 @@ test("merge: a findings-only `file` location merges, and the primary carries ope
 test("cutAtSentence never splits a code span when no whitespace precedes the cap", () => {
   const { text } = cutAtSentence(`x\`${"a".repeat(60)}\``, 20);
   assert.doesNotMatch(text, /`/);
-});
-
-test("splitSentences keeps list numbers and abbreviations inside one step", () => {
-  assert.deepEqual(splitSentences("1. Extract `scaleWidget()`. 2. Call it from `mount()`."), ["1. Extract `scaleWidget()`.", "2. Call it from `mount()`."]);
-  assert.deepEqual(splitSentences("Raise the cap to 200. Add a test."), ["Raise the cap to 200.", "Add a test."]);
-  assert.deepEqual(splitSentences("Guard the call, e.g. with a null check. Add a test."), ["Guard the call, e.g. with a null check.", "Add a test."]);
-});
-
-test("splitSentences splits an unpunctuated newline list at each marker", () => {
-  assert.deepEqual(splitSentences("1. Extract the block\n2. Call it from mount\n3. Add a test"), ["1. Extract the block", "2. Call it from mount", "3. Add a test"]);
 });
 
 test("cutAtSentence does not pair a stray backtick with the next real span", () => {

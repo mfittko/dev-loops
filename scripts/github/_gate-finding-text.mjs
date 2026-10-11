@@ -56,19 +56,6 @@ function sentenceEnds(text) {
   return ends;
 }
 
-export function splitSentences(text) {
-  const trimmed = String(text).trim();
-  const sentences = [];
-  let start = 0;
-  for (const end of sentenceEnds(trimmed)) {
-    sentences.push(trimmed.slice(start, end).trim());
-    start = end;
-  }
-  const rest = trimmed.slice(start).trim();
-  if (rest.length > 0) sentences.push(rest);
-  return sentences;
-}
-
 // Cuts `text` to at most `cap` characters at the last sentence boundary that
 // fits. Never splits a code span or fence. With no sentence boundary inside the
 // cap, cuts at the last whitespace outside code and appends an ellipsis.

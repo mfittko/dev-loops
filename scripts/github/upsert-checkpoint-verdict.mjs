@@ -2250,7 +2250,7 @@ export function composeCheckpointVerdict({ reviewVerdict, blockers = [] }) {
 }
 
 // The `**Gate blockers:**` line and the verdict-contradiction error state only
-// the count per kind; the item text lives in the collapsed block below.
+// the count per kind; the item text lives in the visible list below.
 function formatGateBlockerCounts(blockers) {
   const counts = new Map();
   for (const { kind } of blockers) counts.set(kind, (counts.get(kind) ?? 0) + 1);
