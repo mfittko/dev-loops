@@ -7817,6 +7817,38 @@ test("upsert-checkpoint-verdict --findings-ledger: a round whose only finding is
   }, { prefix: "dev-loops-upsert-disposition-locatable-nextaction-" });
 });
 
+test("upsert-checkpoint-verdict --findings-ledger: an act item from --findings-json over an unjudged ledger keeps Next action 'stay draft and fix'", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [{ severity: "low", angle: "naming", summary: "unjudged low finding" }]);
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([{ severity: "low", angle: "naming", summary: "unjudged low finding", judgeDisposition: "act" }]), "utf8");
+    const { runChild, calls } = makeGhMock([
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":722,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-722"}\n',
+      },
+    ]);
+    await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "1 finding",
+      findingsLedger: ledgerPath,
+      findingsJson: findingsPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const { body } = JSON.parse(postCall.stdinText);
+    assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
+    assert.doesNotMatch(body, /\*\*Next action:\*\* rerun gate/);
+  }, { prefix: "dev-loops-upsert-findings-json-act-nextaction-" });
+});
+
 test("upsert-checkpoint-verdict --findings-ledger: with only deferred and rejected findings the next action never says stay draft and fix, and Execution mode renders inside an HTML comment", async () => {
   await withTempDir(async (tempDir) => {
     const { body } = await postDispositionRound(tempDir, [

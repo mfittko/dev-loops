@@ -473,7 +473,7 @@ test("renderNonLocatableBlock: the line ref renders inside files[0]'s own code s
 
 // ---------------------------------------------------------------------------
 // renderVerdictDetailsBlock — the collapsed <details> surface for
-// findings folded below the inline severity floor.
+// findings that isVisibleFinding does not show.
 // ---------------------------------------------------------------------------
 
 test("renderVerdictDetailsBlock: empty input renders nothing", () => {

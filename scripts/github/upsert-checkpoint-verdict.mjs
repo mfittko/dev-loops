@@ -3240,6 +3240,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (findingSurface && options.nextAction === "stay draft and fix"
     && findingSurface.locatable.filter((f) => isVisibleFinding(f, { floor: activeGateConfig.inlineSeverityFloor, blockingSeverities: activeGateConfig.blockCleanOnFindingSeverities ?? [] })).length + findingSurface.nonLocatable.length === 0
     && !findingSurface.suppressedActionable
+    // A judge act item (ledger, or --findings-json over an unjudged ledger) keeps the verdict non-clean.
+    && listOpenActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems]).length === 0
     && !(checkpointComposition?.blockers?.length > 0)) {
     options.nextAction = "rerun gate";
   }

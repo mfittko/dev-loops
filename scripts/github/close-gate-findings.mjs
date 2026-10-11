@@ -117,7 +117,7 @@ Output (stdout, JSON):
     "deferredResolved": <disposition reply+resolve count>,
     "rejectClosed": <answered, judge-rejected question threads reply+resolved this pass (ADR 0088); 0 when none qualify>,
     "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer + reject-close passes; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
-    "foldedFiled": <#2263: operator-visible folded findings (not visible per the judge-disposition rule) newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); on a PR target no comment is posted and it counts the folded entries recorded by their folded marker and Details bullet (only a Deferred-group marker carries issue=<pr>); a nit or a non-operator-visible low is never filed>,
+    "foldedFiled": <#2263: operator-visible folded findings (not visible per the judge-disposition rule) newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); on a PR target no comment is posted and it counts the folded entries recorded in the verdict body's Deferred entry (only a Deferred-group marker carries issue=<pr>); a nit or a non-operator-visible low is never filed>,
     "followUpIssueNumber"?: <the deferral comment target number (the linked spec issue, or the PR itself); present when the round had a fileable thread target OR a fileable folded finding>,
     "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted; that thread stays unresolved rather than deadlocking the batch (#1882)> }
 
@@ -216,9 +216,9 @@ function isGateAutomationReply(body) {
 // reply is distinct by construction (fingerprint/severity/angle plus the
 // window reason) and always names the deferral comment target rather than only
 // the thread marker + ephemeral tmp ledger (GATE-EXEC-DEFERRAL-RECORD).
-function dispositionMessage({ fp, severity, angle, round, mediumFixWindow, repo, issueNumber, body, operatorVisible }) {
+function dispositionMessage({ fp, severity, angle, round, mediumFixWindow, repo, pr, issueNumber, body, operatorVisible }) {
   const meritRationale = buildMeritRationale({ body, severity, operatorVisible, round, mediumFixWindow });
-  return `${GATE_DEFERRED_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${windowReason(severity, mediumFixWindow)}; recorded in the deferral comment on https://github.com/${repo}/issues/${issueNumber}.`;
+  return `${GATE_DEFERRED_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${windowReason(severity, mediumFixWindow)}; ${issueNumber === pr ? `recorded in the verdict body's Deferred entry and this thread's marker (issue=${pr}).` : `recorded in the deferral comment on https://github.com/${repo}/issues/${issueNumber}.`}`;
 }
 
 // Reply for a thread RESOLVED this round but that does NOT clear the
@@ -461,7 +461,7 @@ async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, 
   // without its reply.
   for (const target of buildableFileable) {
     try {
-      const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow, repo, issueNumber, body: target.body, operatorVisible: target.operatorVisible });
+      const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow, repo, pr, issueNumber, body: target.body, operatorVisible: target.operatorVisible });
       await stampDeferredDisposition({ repo, commentId: target.commentId, round, mediumFixWindow, issueNumber }, { env, ghCommand, runChild });
       await replyAndMaybeResolve(
         { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },

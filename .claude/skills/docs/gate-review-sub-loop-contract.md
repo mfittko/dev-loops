@@ -1190,7 +1190,7 @@ locatability split above for NON-locatable findings only: a finding the judge di
 `blockCleanOnFindingSeverities` severity, takes the inline or body-filed track. Every other finding
 folds into the verdict body's one `Details` section instead, grouped by disposition (`Deferred`,
 `Rejected`, `Not judged`), carrying the same
-fingerprint+`disposition=deferred` marker shape a body-filed finding carries. A round without a
+fingerprint+`disposition=deferred` marker shape a body-filed finding carries (a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, carries no `disposition` field, like a body-filed `high` marker). A round without a
 judge disposition keeps the severity rule (`inlineSeverityFloor`, default `medium`). A locatable finding at or above the floor keeps its inline thread on a create whatever its judge disposition. An `act`
 finding never folds and never carries `disposition=deferred`, and the fixer work order includes
 every `act` finding whatever track it rendered on. A folded finding creates NO review thread, so it
