@@ -87,7 +87,9 @@ export async function defaultReadCi({ repo, pr }, { read = viewPr, timeoutMs = 1
 function readBaseValidation(repoRoot) {
   const base = readDefaultBranchConfig({ repoRoot });
   if (!base.ok && !base.noConfigFile) return { reason: `cannot read the base branch validation config: ${base.detail}` };
-  const parsed = ValidationConfig.optional().safeParse(base.ok ? base.parsed?.validation : undefined);
+  const doc = base.ok ? base.parsed : undefined;
+  if (doc != null && (typeof doc !== "object" || Array.isArray(doc))) return { reason: "base branch validation config is malformed" };
+  const parsed = ValidationConfig.optional().safeParse(doc?.validation);
   if (!parsed.success) return { reason: "base branch validation config is malformed" };
   return { validation: resolveValidationConfig({ validation: parsed.data }) };
 }
@@ -108,7 +110,9 @@ function readCheckoutValidation(repoRoot) {
 
 // Secrets stay out of the declared command's environment.
 const SECRET_ENV = /token|secret|password|passwd|credential|api_?key|^gh_|^github_|^npm_/i;
-const commandEnv = (env) => Object.fromEntries(Object.entries(env).filter(([key]) => !SECRET_ENV.test(key)));
+// Inherited Git repository pointers would aim a Git command at another repository.
+const GIT_POINTER_ENV = /^git_(dir|work_tree|index_file)$/i;
+const commandEnv = (env) => Object.fromEntries(Object.entries(env).filter(([key]) => !SECRET_ENV.test(key) && !GIT_POINTER_ENV.test(key)));
 
 // Run the declared full command (the base branch's `validation.fullCommand`,
 // never PR content) through `sh -c` and shape its result like a package suite.

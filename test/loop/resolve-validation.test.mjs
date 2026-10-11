@@ -572,7 +572,7 @@ test("a PR head that changes the validation block runs nothing and resolves inco
 test("the declared command runs without GitHub tokens in its environment", async () => {
   const { repoRoot, headSha } = await bareFixture("version: 1\nvalidation:\n  mode: local\n  fullCommand: env\n");
   try {
-    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, env: { ...process.env, GH_TOKEN: "leak-marker-1", GITHUB_TOKEN: "leak-marker-2" } });
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, env: { ...process.env, GH_TOKEN: "leak-marker-1", GITHUB_TOKEN: "leak-marker-2", GIT_DIR: "/leak-marker-3", GIT_WORK_TREE: "/leak-marker-4" } });
     assert.equal(result.status, "complete");
     // The full log, not the 4000-char tail, so the check does not depend on the host env size.
     const log = await readFile(path.join(repoRoot, result.artifact.suites[0].outputPath), "utf8");
@@ -592,6 +592,10 @@ test("an unreadable or malformed base validation block resolves incomplete and r
       await writeFile(path.join(repoRoot, ".devloops"), good(path.join(repoRoot, "MARKER")));
       execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "valid block"], { cwd: repoRoot });
     }, { origin: true, base: "version: 1\nvalidation:\n  mode: sometimes\n" }],
+    ["non-object base file", /base branch validation config is malformed/, async (repoRoot) => {
+      await writeFile(path.join(repoRoot, ".devloops"), good(path.join(repoRoot, "MARKER")));
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "valid block"], { cwd: repoRoot });
+    }, { origin: true, base: "- a\n- b\n" }],
   ];
   for (const [name, reason, prepare, { origin, base = "version: 1\n" }] of cases) {
     const { repoRoot } = await bareFixture(base, { origin });
