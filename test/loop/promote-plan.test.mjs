@@ -72,6 +72,8 @@ async function gitInit(repoDir, env) {
   // developer's global commit.gpgsign setting.
   await sh(["config", "commit.gpgsign", "false"]);
   await sh(["commit", "-q", "--allow-empty", "-m", "root"]);
+  // Base branches the tests name; pr create reads the docs-only diff against its base.
+  for (const base of ["integration/develop", "explicit-override"]) await sh(["branch", base]);
 }
 
 async function setup(plan = READY_PLAN, ghEntries = [PR_CREATE_ENTRY], { withRemote = true } = {}) {

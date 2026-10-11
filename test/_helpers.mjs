@@ -1,8 +1,10 @@
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ASYNC_CONTEXT_ENV_MARKERS } from "@dev-loops/core/loop/run-context";
+import { writePrePrReviewRecord } from "../scripts/loop/_pre-pr-review-record.mjs";
 import { dispatchPromptLayoutRecordPath } from "../scripts/github/record-dispatch-prompt-layout.mjs";
 
 // Bind a compact work-order reference into a dispatch-prompt record, as
@@ -556,4 +558,42 @@ export async function writeGhStub(tempDir, entries = [], {
     counterPath,
     claimsDir,
   };
+}
+
+// pr create needs a pre-PR review record for the --head branch head. This helper writes a real one in
+// the run's cwd. A run without a cwd gets a throwaway git fixture (the repo's own branches would
+// shadow the test's --head names); a non-git tmp cwd is initialized first.
+export async function runNodeWithPrePrRecord(scriptPath, args = [], options = {}) {
+  const headIdx = args.findIndex((a) => a === "--head" || a === "-H");
+  const head = headIdx >= 0 ? args[headIdx + 1] : null;
+  let cwd = options.cwd;
+  let fixture = null;
+  if (head && !cwd) {
+    fixture = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-fixture-"));
+    cwd = fixture;
+  }
+  const git = (...a) => execFileSync("git", a, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  let created = false;
+  if (!options.noRecord && cwd && existsSync(cwd)) {
+    try {
+      let hasRepo = true;
+      try { git("rev-parse", "--show-toplevel"); } catch { hasRepo = false; }
+      if (!hasRepo && cwd.startsWith(os.tmpdir())) git("init", "-q", "-b", "main");
+      try { git("rev-parse", "--verify", "HEAD^{commit}"); } catch {
+        git("-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init");
+      }
+      if (head) {
+        try { git("rev-parse", "--verify", `${head}^{commit}`); } catch { git("branch", head); created = true; }
+      }
+      if (!head || git("rev-parse", `${head}^{commit}`) === git("rev-parse", "HEAD")) {
+        writePrePrReviewRecord({ cwd, verdict: "clean", disposition: "none" });
+      }
+    } catch { /* not a usable git repo: the run reports its own failure */ }
+  }
+  try {
+    return await runNode(scriptPath, args, { ...options, cwd });
+  } finally {
+    if (created && !fixture) git("branch", "-D", head);
+    if (fixture) await rm(fixture, { recursive: true, force: true });
+  }
 }

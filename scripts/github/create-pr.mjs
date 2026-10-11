@@ -18,6 +18,7 @@ import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
 import { evaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
 import { evaluateEarlySurface } from "../loop/early-surface-checks.mjs";
+import { validatePrePrReview } from "../loop/_pre-pr-review-record.mjs";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
@@ -67,6 +68,7 @@ Behavior:
     \`--repo\`, no explicit body source, or an enqueue error is a non-fatal no-op (noted in
     that line; exit code unaffected). Omitting \`--lightweight\`, or a body that already
     carries a closing keyword (tracker-backed), never calls the board.
+  - refuses with \`pre_pr_review_missing\` unless a pre-PR review record covers the branch head (PRE-PR-BEFORE-FIRST-PUSH); the writer command is in that rule. \`--lightweight\` skips this check
   - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\` without \`--body\`/\`--body-file\`, and \`--recover\`/\`--editor\`/\`--web\` always (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
@@ -585,6 +587,21 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     });
     if (refusal) {
       throw parseError(refusal);
+    }
+  }
+  // PRE-PR-BEFORE-FIRST-PUSH guard: a non-lightweight create needs a pre-PR review record for the
+  // branch head named by --head (an `owner:` prefix is stripped), else the current HEAD.
+  if (!lightweight) {
+    const headFlag = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN);
+    const headRef = headFlag ? headFlag.trim().replace(/^[^:]*:/u, "") : undefined;
+    const baseRef = hasBase ? getFlagValue(forwardedArgv, BASE_FLAG_PATTERN) : baseDefault;
+    const review = (runtime.validatePrePrReview ?? validatePrePrReview)({
+      cwd: runtime.cwd ?? process.cwd(),
+      head: headRef || undefined,
+      base: typeof baseRef === "string" && baseRef.trim() ? baseRef.trim().replace(/^origin\//u, "") : undefined,
+    });
+    if (!review.ok) {
+      throw parseError(`${review.code}: ${review.detail}`);
     }
   }
   // LOCAL-COMMENT-DISCIPLINE preflight: refuse before gh is invoked when the
