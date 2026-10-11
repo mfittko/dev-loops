@@ -76,7 +76,7 @@ export async function validatePrePrReview({ cwd = process.cwd(), head: wanted, b
       const set = new Set(git(cwd, ["rev-list", `${ref}..${head}`]).split("\n").filter(Boolean));
       reachable = set;
       // A plan-doc promotion changes only docs-tree markdown; skills/** prose never qualifies.
-      const files = git(cwd, ["diff", "--name-only", "--no-renames", `${ref}...${head}`]).split("\n").filter(Boolean);
+      const files = git(cwd, ["diff", "--name-only", "--no-relative", "--no-renames", `${ref}...${head}`]).split("\n").filter(Boolean);
       if (files.length > 0 && files.every((f) => f.startsWith("docs/phases/") && f.endsWith(".md") && classifyFile(f, rules) === "docs")) return { ok: true, head, planDocOnly: true };
       break;
     } catch { /* base ref unresolvable: try the next */ }
@@ -88,7 +88,7 @@ export async function validatePrePrReview({ cwd = process.cwd(), head: wanted, b
     if (!record || record.head !== name.slice(0, -5) || (reachable && !reachable.has(record.head))) continue;
     try {
       git(cwd, ["merge-base", "--is-ancestor", record.head, head]);
-      const changed = git(cwd, ["diff", "--name-only", "--no-renames", `${record.head}..${head}`]).split("\n").filter(Boolean);
+      const changed = git(cwd, ["diff", "--name-only", "--no-relative", "--no-renames", `${record.head}..${head}`]).split("\n").filter(Boolean);
       if (changed.every(docsTest)) return { ok: true, head, reviewedHead: record.head };
     } catch { /* not an ancestor, or git failed: not usable */ }
   }

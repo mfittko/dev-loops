@@ -257,3 +257,28 @@ test("classify rules are loaded from .devloops at the repo root, also when run f
   const sub = path.join(dir, "src");
   assert.equal((await validatePrePrReview({ cwd: sub, ...feature })).ok, false);
 }));
+
+test("diff.relative=true does not hide changes outside a subdirectory cwd", withRepo(async (dir) => {
+  git(dir, "config", "diff.relative", "true");
+  record(dir);
+  commit(dir, "docs/note.md", "# note\n");
+  commit(dir, "test/a.test.mjs", "export {};\n");
+  assert.equal((await validatePrePrReview({ cwd: dir })).ok, true);
+  assert.equal((await validatePrePrReview({ cwd: path.join(dir, "docs") })).ok, true);
+  commit(dir, "src/a.mjs", "export const a = 2;\n");
+  for (const sub of ["docs", "test"]) {
+    const result = await validatePrePrReview({ cwd: path.join(dir, sub) });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "pre_pr_review_missing");
+  }
+}));
+
+test("a docs/phases-only branch validates from a subdirectory with diff.relative=true", withRepo(async (dir) => {
+  git(dir, "config", "diff.relative", "true");
+  onFeature(dir);
+  commit(dir, "docs/phases/p.md", "# plan\n");
+  commit(dir, "docs/phases/q.md", "# plan\n");
+  assert.equal((await validatePrePrReview({ cwd: path.join(dir, "docs/phases"), ...feature })).planDocOnly, true);
+  commit(dir, "src/a.mjs", "export const a = 2;\n");
+  assert.equal((await validatePrePrReview({ cwd: path.join(dir, "docs"), ...feature })).ok, false);
+}));
