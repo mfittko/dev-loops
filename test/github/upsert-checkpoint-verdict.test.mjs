@@ -11970,3 +11970,15 @@ test("upsert-checkpoint-verdict posts pre_approval_gate for a docs-only head bum
   assert.equal(parsed.gate, "pre_approval_gate");
   assert.equal(parsed.headSha, head);
 });
+
+test("upsert-checkpoint-verdict --findings-ledger: a judged --findings-json defer carrying followUpIssueNumber stamps the folded Deferred marker with that issue, not the PR (#2722)", async () => {
+  await withTempDir(async (tempDir) => {
+    const body = await postWithFindingsJson(
+      tempDir,
+      [{ severity: "medium", angle: "coverage", summary: "json defer medium" }],
+      [{ severity: "medium", angle: "coverage", summary: "json defer medium", judgeDisposition: "defer", followUpIssueNumber: 500 }],
+    );
+    assert.match(body, /disposition=deferred issue=500 -->/);
+    assert.doesNotMatch(body, /disposition=deferred issue=17 -->/);
+  }, { prefix: "dev-loops-upsert-findings-json-followup-" });
+});

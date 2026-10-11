@@ -91,7 +91,7 @@ renders in the verdict body (remaining gate blocker items render as a visible li
 part holds the gate name, `Reviewed head SHA`, the verdict, the findings summary line, the visible
 findings and `Next action`. `Next action` derives from the visible set: with no `act` finding, no
 blocking-severity finding, no other visible finding (a `question`, an unrecognized severity, or an unjudged finding at or above the floor) and no gate blocker, it never reads `stay draft and fix`; it reads
-`rerun gate`. `stay draft and fix` stays when any visible finding, posted this round or suppressed from an earlier round (any visible suppressed finding), remains, or a gate blocker exists. The visible-versus-renderer-only split applies to the main verdict renderer; the fallback poster and the `--findings-json` path keep their own layout, except that the fallback poster also hides the `Blocking severities` line. The `Execution mode` and `Blocking severities` lines are renderer-only. They render
+`rerun gate`. `stay draft and fix` stays when any visible finding, posted this round or suppressed from an earlier round (any visible suppressed finding), remains, or a gate blocker exists. The visible-versus-renderer-only split applies to the main verdict renderer and the `--findings-json` path, which hides the renderer-only lines and places its Clean roster in the one Details block; the fallback poster keeps its own layout, except that it also hides the `Blocking severities` line. The `Execution mode` and `Blocking severities` lines are renderer-only. They render
 inside one HTML comment (`<!--` and `-->` on their own lines, one field per line) so the posted body
 carries both values and the reader does not see them.
 

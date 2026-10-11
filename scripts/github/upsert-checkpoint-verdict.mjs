@@ -2767,6 +2767,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
       judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
       ...(f?.remedyKind ? { remedyKind: f.remedyKind } : {}),
+      ...(Number.isInteger(f?.followUpIssueNumber) && f.followUpIssueNumber > 0 ? { followUpIssueNumber: f.followUpIssueNumber } : {}),
     }));
     const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
     if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
@@ -2780,7 +2781,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // Prefer an act match so an ambiguous summary fails open to visible.
       const same = (f) => f.judgeDisposition && f.summary === (typeof lf.summary === "string" ? lf.summary.trim() : lf.summary);
       const judged = flatFindings.find((f) => f.judgeDisposition === "act" && same(f)) ?? flatFindings.find(same);
-      if (judged) lf.judgeDisposition = judged.judgeDisposition;
+      if (judged) {
+        lf.judgeDisposition = judged.judgeDisposition;
+        if (lf.followUpIssueNumber == null && judged.followUpIssueNumber) lf.followUpIssueNumber = judged.followUpIssueNumber;
+      }
     }
     const actItems = listOpenActItems(flatFindings);
     enrichedActItems = actItems;
