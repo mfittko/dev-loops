@@ -36,27 +36,35 @@ test("a code-change valid_compliant decision without defectClass is refused with
 
 test("the judge check CLI accepts evidence-only and names the decision and field of a malformed one", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "judge-check-"));
+  let code;
   const run = async (decisions) => {
     const file = path.join(dir, "v.json");
     await writeFile(file, JSON.stringify({ specDigest: ctx.specDigest, headSha: HEAD, contentDigest: ctx.contentDigest, decisions }));
     let out = "";
+    process.exitCode = 0;
     await checkMain(["--file", file], { stdout: { write: (chunk) => { out += chunk; return true; } } });
+    code = process.exitCode;
     return JSON.parse(out);
   };
   try {
     assert.deepEqual(await run([]), { ok: true, checked: 0 });
+    assert.equal(code, 0);
     assert.deepEqual(await run([decision({ remedyKind: "evidence_only" })]), { ok: true, checked: 1 });
+    assert.equal(code, 0);
     const bad = await run([decision({ remedyKind: "evidence_only" }), decision({ index: 1 })]);
     assert.equal(bad.ok, false);
+    assert.notEqual(code, 0);
     assert.equal(bad.decisionIndex, 1);
     assert.equal(bad.field, "defectClass");
     const noRemedy = await run([{ ...decision({ remedyKind: "evidence_only" }), authorizedRemediation: undefined }]);
     assert.equal(noRemedy.ok, false);
+    assert.notEqual(code, 0);
     assert.match(noRemedy.error, /authorizedRemediation/);
     assert.equal(noRemedy.decisionIndex, 0);
     for (const missing of [undefined, "x"]) {
       const empty = await run(missing);
       assert.equal(empty.ok, false);
+      assert.notEqual(code, 0);
       assert.match(empty.error, /decisions/);
     }
   } finally {
