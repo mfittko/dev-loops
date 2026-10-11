@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { runNodeWithPrePrRecord, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo, repeatedLinesContent } from "../_helpers.mjs";
+import { runNodeWithPrePrRecord, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo, repeatedLinesContent, runGitFixture } from "../_helpers.mjs";
 
 import { buildCreatePrArgs, main as createPrMain, detectClosingKeyword, extractClosingIssueNumber, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
 import { resolveBaseBranch } from "@dev-loops/core/config";
@@ -1400,9 +1400,9 @@ test("create-pr preflight diffs the --head branch, not the cwd HEAD (LOCAL-COMME
         { path: "scripts/sample.mjs", content: "// see #2171 for context\nexport const x = 1;\n" },
       ],
     });
-    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
-    execFileSync("git", ["checkout", "-q", "main"], { cwd: tempDir });
-    execFileSync("git", ["reset", "-q", "--hard", "origin/main"], { cwd: tempDir });
+    runGitFixture(tempDir, ["branch", "feature"]);
+    runGitFixture(tempDir, ["checkout", "-q", "main"]);
+    runGitFixture(tempDir, ["reset", "-q", "--hard", "origin/main"]);
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
     const result = await runNode([
       "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
@@ -1424,9 +1424,9 @@ test("create-pr preflight diffs origin/<branch> for --head owner:feature when no
         { path: "scripts/sample.mjs", content: "// see #2171 for context\nexport const x = 1;\n" },
       ],
     });
-    execFileSync("git", ["update-ref", "refs/remotes/origin/feature", "HEAD"], { cwd: tempDir });
-    execFileSync("git", ["checkout", "-q", "main"], { cwd: tempDir });
-    execFileSync("git", ["reset", "-q", "--hard", "origin/main"], { cwd: tempDir });
+    runGitFixture(tempDir, ["update-ref", "refs/remotes/origin/feature", "HEAD"]);
+    runGitFixture(tempDir, ["checkout", "-q", "main"]);
+    runGitFixture(tempDir, ["reset", "-q", "--hard", "origin/main"]);
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
     const result = await runNode([
       "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "owner:feature",
@@ -1444,9 +1444,9 @@ test("create-pr early-surface receives the --head ref", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-early-surface-head-"));
   try {
     await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
-    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
-    execFileSync("git", ["checkout", "-q", "main"], { cwd: tempDir });
-    execFileSync("git", ["reset", "-q", "--hard", "origin/main"], { cwd: tempDir });
+    runGitFixture(tempDir, ["branch", "feature"]);
+    runGitFixture(tempDir, ["checkout", "-q", "main"]);
+    runGitFixture(tempDir, ["reset", "-q", "--hard", "origin/main"]);
     const { env } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
     const calls = [];
     const stdoutWrite = process.stdout.write;
