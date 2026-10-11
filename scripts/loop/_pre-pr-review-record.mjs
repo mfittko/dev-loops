@@ -11,7 +11,7 @@ import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 
 import path from "node:path";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
-import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
+import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 export const PRE_PR_REVIEW_VERDICTS = Object.freeze(["clean", "findings_fixed"]);
 export const PRE_PR_REVIEW_DISPOSITIONS = Object.freeze(["none", "all_applied", "rationale_recorded"]);
@@ -53,20 +53,22 @@ export function writePrePrReviewRecord({ cwd = process.cwd(), verdict, dispositi
  * only one exists, that one is used. A record for that head covers it, as does a record for an ancestor
  * head when every file changed since classifies as docs or tests under the repository classify rules.
  * With a bare `base` name, only records reachable in `base..head` count as ancestors, and a branch whose
- * whole `base...head` diff is `.md` files under `docs/` (a plan-doc promotion) needs no record; contract
+ * whole `base...head` diff is `.md` files under `docs/phases/` (a plan-doc promotion) needs no record; contract
  * and skill prose under `skills/` always needs one. Returns `{ ok: true }` or
  * `{ ok: false, code: "pre_pr_review_missing", detail }`.
  */
 export async function validatePrePrReview({ cwd = process.cwd(), head: wanted, base, rules } = {}) {
   const missing = (detail) => ({ ok: false, code: PRE_PR_REVIEW_MISSING, detail: `${detail}. Record the review with: ${RECORD_COMMAND}` });
   const resolve = (ref) => { try { return git(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]); } catch { return null; } };
-  const heads = wanted ? [resolve(wanted), resolve(`origin/${wanted}`)].filter(Boolean) : [resolve("HEAD")].filter(Boolean);
-  if (!heads.length) return missing(`cannot resolve the branch head ${wanted ?? "HEAD"} from git`);
-  if (new Set(heads).size > 1) return missing(`local ${wanted} and origin/${wanted} name different commits, so the PR content is not the reviewed local head`);
+  let branch = wanted;
+  if (!branch) { try { branch = git(cwd, ["symbolic-ref", "--short", "HEAD"]); } catch { /* detached HEAD: compare HEAD only */ } }
+  const heads = (branch ? [resolve(branch), resolve(`origin/${branch}`)] : [resolve("HEAD")]).filter(Boolean);
+  if (!heads.length) return missing(`cannot resolve the branch head ${branch ?? "HEAD"} from git`);
+  if (new Set(heads).size > 1) return missing(`local ${branch} and origin/${branch} name different commits, so the PR content is not the reviewed local head`);
   const [head] = heads;
   const direct = parseValid(path.join(recordDir(cwd), `${head}.json`));
   if (direct && direct.head === head) return { ok: true, head };
-  if (rules === undefined) rules = resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot: cwd })).config);
+  if (rules === undefined) rules = resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(cwd) })).config);
   const docsTest = (f) => ["docs", "test"].includes(classifyFile(f, rules));
   let reachable = null;
   for (const ref of base ? [`origin/${base}`, base] : []) {
@@ -75,7 +77,7 @@ export async function validatePrePrReview({ cwd = process.cwd(), head: wanted, b
       reachable = set;
       // A plan-doc promotion changes only docs-tree markdown; skills/** prose never qualifies.
       const files = git(cwd, ["diff", "--name-only", "--no-renames", `${ref}...${head}`]).split("\n").filter(Boolean);
-      if (files.length > 0 && files.every((f) => f.startsWith("docs/") && f.endsWith(".md") && classifyFile(f, rules) === "docs")) return { ok: true, head, planDocOnly: true };
+      if (files.length > 0 && files.every((f) => f.startsWith("docs/phases/") && f.endsWith(".md") && classifyFile(f, rules) === "docs")) return { ok: true, head, planDocOnly: true };
       break;
     } catch { /* base ref unresolvable: try the next */ }
   }

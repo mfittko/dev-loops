@@ -230,3 +230,30 @@ test("the pr create refusal envelope on stderr carries the typed code", withRepo
   const result = await runNode(path.resolve("scripts/github/create-pr.mjs"), ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--body", "b"], { cwd: dir });
   assert.equal(JSON.parse(result.stderr.trim().split("\n").pop()).code, "pre_pr_review_missing");
 }));
+
+test("without --head the checked-out branch is compared with origin/<branch>: a divergence is refused", withRepo(async (dir) => {
+  onFeature(dir);
+  commit(dir, "src/b.mjs", "export const b = 1;\n");
+  record(dir);
+  const reviewed = git(dir, "rev-parse", "HEAD");
+  commit(dir, "src/c.mjs", "export const c = 1;\n");
+  git(dir, "update-ref", "refs/remotes/origin/feature", git(dir, "rev-parse", "HEAD"));
+  git(dir, "reset", "-q", "--hard", reviewed);
+  const diverged = await validatePrePrReview({ cwd: dir });
+  assert.equal(diverged.ok, false);
+  assert.match(diverged.detail, /different commits/);
+}));
+
+test("only docs/phases markdown is exempt: an ADR under docs/decisions needs a record", withRepo(async (dir) => {
+  onFeature(dir);
+  commit(dir, "docs/decisions/0001-x.md", "# adr\n");
+  assert.equal((await validatePrePrReview({ cwd: dir, ...feature })).ok, false);
+}));
+
+test("classify rules are loaded from .devloops at the repo root, also when run from a subdirectory", withRepo(async (dir) => {
+  writeFileSync(path.join(dir, ".devloops"), JSON.stringify({ version: 1, classify: { extensions: { code: [".md"] } } }));
+  onFeature(dir);
+  commit(dir, "docs/phases/p.md", "# plan\n");
+  const sub = path.join(dir, "src");
+  assert.equal((await validatePrePrReview({ cwd: sub, ...feature })).ok, false);
+}));
