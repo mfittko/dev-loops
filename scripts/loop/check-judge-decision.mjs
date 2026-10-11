@@ -41,7 +41,7 @@ export async function main(argv = process.argv.slice(2), { stdout = process.stdo
   try {
     const verdict = JSON.parse(await readFile(path.resolve(args.file), "utf8"));
     const decisions = verdict?.decisions;
-    if (!Array.isArray(decisions) || decisions.length === 0) throw new Error("verdict.decisions must be a non-empty array");
+    if (!Array.isArray(decisions)) throw new Error("verdict.decisions must be an array");
     const criterionIds = [...new Set(decisions.flatMap((d) => (Array.isArray(d?.checkedCriteria) ? d.checkedCriteria : [])))];
     for (const [i, d] of decisions.entries()) {
       try {
