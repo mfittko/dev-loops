@@ -854,6 +854,10 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter('python3 -c"print(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node -e"console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node -p"1+1"'), true);
+  assert.equal(commandContainsInlineInterpreter("echo 'a\\' 'b\\nc' ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("echo 'a\\'\\' ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("echo \\\\'a\nb' ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("printf '%s\\n' 'a\\' 'b\nc' ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("node <<EOF\nconsole.log(1)\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter('git commit -m "line1\nline2" && cat > packages/core/src/a.mjs <<\'EOF\'\nx\nEOF'), true);
   assert.equal(commandContainsInlineInterpreter('echo "use cat <<EOF here"'), false);

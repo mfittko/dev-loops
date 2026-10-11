@@ -1190,11 +1190,13 @@ function scanCatTeeHeredocs(command) {
         // Judge the quote state from the start of the command, so a quote opened on an earlier line counts.
         // Earlier lines are those still visible (a skipped cat/tee heredoc body is inert) minus `#` comments.
         const earlier = out.slice(0, -1).filter((l) => !/^\s*#/.test(l));
-        const upTo = [...earlier, prefix].join("\n").replace(/\\['"]/g, "  ");
+        const rawUpTo = [...earlier, prefix].join("\n");
+        const upTo = rawUpTo.replace(/\\['"]/g, "  ");
         let spansLines = false; // a closed quote pair crossing a newline: a stray earlier quote may have shifted pair parity
         const blanked = upTo.replace(/(['"])(?:(?!\1).)*\1/gs, (m) => { spansLines ||= m.includes("\n"); return " ".repeat(m.length); });
         const opener = blanked.search(/['"]/);
-        inertQuoted = opener >= 0 && !spansLines && !EXEC_PAYLOAD_FLAG_RE.test(upTo.slice(0, opener));
+        // Stripping a backslash before a quote is not shell-correct (literal in single quotes, `\\` pairs): fail closed.
+        inertQuoted = opener >= 0 && !spansLines && !/\\['"]/.test(rawUpTo) && !EXEC_PAYLOAD_FLAG_RE.test(upTo.slice(0, opener));
         // A stray apostrophe on an earlier visible line can fake the opener. Trust it only when the operator
         // line's own unbalanced quote (escapes stripped) exists and is the same character; otherwise fail closed.
         const localQuote = prefix.replace(/\\['"]/g, "  ").replace(/(['"])(?:(?!\1).)*\1/gs, (m) => " ".repeat(m.length)).match(/['"](?=[^'"]*$)/);
