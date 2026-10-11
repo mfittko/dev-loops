@@ -90,8 +90,8 @@ visible findings and before the gate-evidence note. It holds the folded groups a
 renders in the verdict body (remaining gate blocker items render as a visible list). The visible
 part holds the gate name, `Reviewed head SHA`, the verdict, the findings summary line, the visible
 findings and `Next action`. `Next action` derives from the visible set: with no `act` finding, no
-blocking-severity finding (visible or suppressed from an earlier round), no other visible finding (a `question`, an unrecognized severity, or an unjudged finding at or above the floor) and no gate blocker it never reads `stay draft and fix`; it reads
-`rerun gate`. The visible-versus-renderer-only split applies to the main verdict renderer; the fallback poster and the `--findings-json` path keep their own layout. The `Execution mode` and `Blocking severities` lines are renderer-only. They render
+blocking-severity finding, no other visible finding (a `question`, an unrecognized severity, or an unjudged finding at or above the floor) and no gate blocker, it never reads `stay draft and fix`; it reads
+`rerun gate`. `stay draft and fix` stays when any visible finding, posted this round or suppressed from an earlier round (any visible suppressed finding), remains, or a gate blocker exists. The visible-versus-renderer-only split applies to the main verdict renderer; the fallback poster and the `--findings-json` path keep their own layout. The `Execution mode` and `Blocking severities` lines are renderer-only. They render
 inside one HTML comment (`<!--` and `-->` on their own lines, one field per line) so the posted body
 carries both values and the reader does not see them.
 
@@ -409,7 +409,10 @@ follow-up relies on normal review/fix loops and the recurring per-head `pre_appr
 - When the `draft_gate` runs (while the PR is still draft and no clean evidence exists
   for the current head), the PR MUST receive a visible checkpoint verdict comment.
 - If the `draft_gate` verdict is `findings_present` or `blocked`, the comment MUST
-  state that the PR stays draft and fixes are required before retrying.
+  state that the PR stays draft and fixes are required before retrying. Exception: when the
+  visible set has no `act` finding, no visible finding (including any visible suppressed finding
+  from an earlier round) and no gate blocker, `Next action` reads `rerun gate` per
+  `GATE-COMMENT-INLINE-SEVERITY-FLOOR`.
 - After the PR leaves draft, existing clean `draft_gate` evidence remains valid as a
   one-time transition record. Later head changes do not invalidate this record.
 - If a PR is already non-draft and no clean `draft_gate` evidence exists at all (no
