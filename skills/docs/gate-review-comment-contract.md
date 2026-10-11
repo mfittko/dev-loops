@@ -73,7 +73,7 @@ verdict body's one `Details` block, grouped by disposition: `Deferred (N)`, `Rej
 severity/angle/summary bullet plus its own INVISIBLE fingerprint+`disposition=deferred` marker at
 line start, the same shape a body-filed marker carries, so cross-round fingerprint suppression
 still applies and a folded finding renders exactly once. A deferred finding keeps its deferral
-comment or `issue=<n>` link, so folding hides no record. An `act` finding never folds and its
+comment or `issue=<n>` link, so folding hides no record (a folded Deferred marker carries `issue=<pr>` on a PR target). An `act` finding never folds and its
 marker never carries `disposition=deferred`, on any track: below the floor it takes the normal
 track (an inline thread when locatable, a visible body entry otherwise). A folded finding creates
 NO gate-authored review thread and never enters `unresolvedGateThreadCount`
@@ -90,8 +90,8 @@ visible findings and before the gate-evidence note. It holds the folded groups a
 renders in the verdict body (remaining gate blocker items render as a visible list). The visible
 part holds the gate name, `Reviewed head SHA`, the verdict, the findings summary line, the visible
 findings and `Next action`. `Next action` derives from the visible set: with no `act` finding, no
-blocking-severity finding and no gate blocker it never reads `stay draft and fix`; it reads
-`rerun gate`. The `Execution mode` and `Blocking severities` lines are renderer-only. They render
+blocking-severity finding (visible or suppressed from an earlier round) and no gate blocker it never reads `stay draft and fix`; it reads
+`rerun gate`. The visible-versus-renderer-only split applies to the main verdict renderer; the fallback poster and the `--findings-json` path keep their own layout. The `Execution mode` and `Blocking severities` lines are renderer-only. They render
 inside one HTML comment (`<!--` and `-->` on their own lines, one field per line) so the posted body
 carries both values and the reader does not see them.
 

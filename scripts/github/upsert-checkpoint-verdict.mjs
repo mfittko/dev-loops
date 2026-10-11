@@ -1535,7 +1535,7 @@ function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, 
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, pr }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1622,6 +1622,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
       foldedFindings: foldedFindings ?? [],
       cleanRosterLine: angles ? renderCleanRosterLine(angles) : null,
       round,
+      pr,
     });
     if (detailsBlock) lines.push("", detailsBlock);
   } else if (angles) {
@@ -2099,6 +2100,8 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   const surface = {
     round,
     suppressedCount: ledger.findings.length - candidates.length,
+    // Suppressed (earlier-round) findings that are still actionable by the same classification.
+    suppressedActionable: ledger.findings.some((f) => suppressed.has(fingerprintFinding(f)) && isVisibleFinding(f, visibility)),
     locatable: [],
     // An update cannot add inline comments (GitHub exposes no endpoint to add
     // one to an already-submitted review), so every still-at-or-above-floor
@@ -3224,10 +3227,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   );
   // Next action follows the visible set: a non-clean round with no visible finding and no gate
   // blocker has nothing to fix, so the fix-oriented action would point at nothing. A round whose
-  // findings were all suppressed by an earlier round keeps its action (the earlier body shows them).
+  // findings were all suppressed by an earlier round keeps its action only when a suppressed finding is still actionable.
   if (findingSurface && options.nextAction === "stay draft and fix"
-    && findingSurface.suppressedCount === 0
     && findingSurface.locatable.length + findingSurface.nonLocatable.length === 0
+    && !findingSurface.suppressedActionable
     && !(checkpointComposition?.blockers?.length > 0)) {
     options.nextAction = "rerun gate";
   }
@@ -3381,7 +3384,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // posted review/threads and reaches zero here.
   // Folded findings (GATE-COMMENT-INLINE-SEVERITY-FLOOR) count toward "unposted" too: a rerun that adds a
   // brand-new below-floor finding never before fingerprinted must still force
-  // a re-post (the new folded <details> entry), not fall through to noop.
+  // a re-post (the new Details entry), not fall through to noop.
   const unpostedFindings = findingSurface
     ? findingSurface.locatable.length + findingSurface.nonLocatable.length + findingSurface.folded.length
     : 0;

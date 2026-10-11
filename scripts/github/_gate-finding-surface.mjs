@@ -605,7 +605,7 @@ export function renderInlineCommentBody(finding, { round }) {
 // isFileableDeferral/isDeferredAtRound's follow-up-issue tracking, all read
 // it back off the posted review body) — removing the now-redundant
 // human-readable duplicate must never also drop this marker.
-export function buildNonLocatableFindingMarker(finding, { round }) {
+export function buildNonLocatableFindingMarker(finding, { round, issue }) {
   const fp = fingerprintFinding(finding);
   // Normalized ONCE and reused for both the disposition decision and the
   // marker: deciding disposition off a raw, un-normalized legacy spelling
@@ -617,7 +617,7 @@ export function buildNonLocatableFindingMarker(finding, { round }) {
   // true) so a later reader (the folded-filing pass, close-gate-findings.mjs)
   // can decide fileability without re-reading the ephemeral ledger. Backward
   // compatible: omitted when false/absent, exactly like renderInlineCommentBody.
-  return buildFindingMarker({ fp, severity, angle: finding.angle, round, operatorVisible: finding.operatorVisible === true, disposition });
+  return buildFindingMarker({ fp, severity, angle: finding.angle, round, operatorVisible: finding.operatorVisible === true, disposition, issue });
 }
 
 // Human-readable rendering of a body-filed finding, kept for callers that
@@ -676,7 +676,7 @@ function foldGroupOf(finding) {
 // renders a folded finding exactly once across rounds. Markers stay at
 // column 0 (FINDING_MARKER_RE/collectFingerprints are line-start anchored).
 // Returns "" when there is nothing to fold and no roster.
-export function renderVerdictDetailsBlock({ foldedFindings = [], cleanRosterLine = null, round }) {
+export function renderVerdictDetailsBlock({ foldedFindings = [], cleanRosterLine = null, round, pr }) {
   const lines = [];
   for (const group of FOLD_GROUPS) {
     const members = foldedFindings.filter((f) => foldGroupOf(f) === group);
@@ -684,7 +684,9 @@ export function renderVerdictDetailsBlock({ foldedFindings = [], cleanRosterLine
     lines.push(`**${group} (${members.length})**`);
     for (const finding of members) {
       const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
-      lines.push(buildNonLocatableFindingMarker(finding, { round }));
+      // A deferred entry links the PR it is deferred on (issue=<pr>).
+      const issue = group === "Deferred" && Number.isInteger(pr) && pr > 0 ? pr : undefined;
+      lines.push(buildNonLocatableFindingMarker(finding, { round, issue }));
       // Location prefix mirrors renderNonLocatableBlock's Location logic:
       // files[0] gets the :line ref, absent files renders no prefix.
       const hasFile = Array.isArray(finding.files) && finding.files.length > 0;

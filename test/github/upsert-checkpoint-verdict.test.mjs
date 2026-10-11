@@ -7718,7 +7718,7 @@ test("upsert-checkpoint-verdict --findings-ledger: the body shows act and blocki
     }
     // The act finding never carries a deferral stamp; a folded deferred one keeps it.
     assert.match(body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 -->$/m);
-    assert.match(body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=medium angle=coverage round=1 disposition=deferred -->$/m);
+    assert.match(body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=medium angle=coverage round=1 disposition=deferred issue=17 -->$/m);
     assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
   }, { prefix: "dev-loops-upsert-disposition-split-" });
 });

@@ -1404,3 +1404,17 @@ test("fetchDraftGateEvidence: preApprovalCurrentHeadClean needs a clean, contrac
   assert.equal(await run([comment(body({ findingsSummary: "", nextAction: "" }))]), false);
   assert.equal(await run([]), false);
 });
+
+test("renderVerdictDetailsBlock: a Deferred entry carries issue=<pr> in its marker; other groups do not", () => {
+  const block = renderVerdictDetailsBlock({
+    foldedFindings: [
+      { severity: "medium", angle: "coverage", summary: "defer me", judgeDisposition: "defer" },
+      { severity: "low", angle: "style", summary: "unjudged" },
+    ],
+    round: 1,
+    pr: 17,
+  });
+  const markers = block.split("\n").filter((line) => line.startsWith("<!-- dev-loops:finding "));
+  assert.equal(parseFindingMarker(markers[0]).issue, 17);
+  assert.equal(parseFindingMarker(markers[1]).issue, null);
+});
