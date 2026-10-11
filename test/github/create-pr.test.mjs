@@ -1416,6 +1416,30 @@ test("create-pr preflight diffs the --head branch, not the cwd HEAD (LOCAL-COMME
   }
 });
 
+test("create-pr preflight diffs origin/<branch> for --head owner:feature when no local branch exists (LOCAL-COMMENT-DISCIPLINE)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-originhead-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, {
+      headFiles: [
+        { path: "scripts/sample.mjs", content: "// see #2171 for context\nexport const x = 1;\n" },
+      ],
+    });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/feature", "HEAD"], { cwd: tempDir });
+    execFileSync("git", ["checkout", "-q", "main"], { cwd: tempDir });
+    execFileSync("git", ["reset", "-q", "--hard", "origin/main"], { cwd: tempDir });
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "owner:feature",
+      "--title", "T", "--body", "no closing keyword", "--lightweight",
+    ], { env, cwd: tempDir, noRecord: true });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /LOCAL-COMMENT-DISCIPLINE/);
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("create-pr early-surface receives the --head ref", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-early-surface-head-"));
   try {
