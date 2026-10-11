@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo, repeatedLinesContent } from "../_helpers.mjs";
+import { runNodeWithPrePrRecord, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo, repeatedLinesContent } from "../_helpers.mjs";
 
 import { buildCreatePrArgs, detectClosingKeyword, extractClosingIssueNumber, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
 import { resolveBaseBranch } from "@dev-loops/core/config";
@@ -12,7 +12,7 @@ import { resolveBaseBranch } from "@dev-loops/core/config";
 // ADR-TRIPWIRE-EARLY-SURFACE appends one `{adrTripwire,sizeBudget}` JSON line after gh stdout.
 const withoutEarlySurface = (stdout) => stdout.split("\n").filter((line) => !line.startsWith("{\"adrTripwire\"")).join("\n");
 const scriptPath = path.resolve("scripts/github/create-pr.mjs");
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+const runNode = (args = [], options = {}) => runNodeWithPrePrRecord(scriptPath, args, options);
 
 // #2062: create-pr now injects `--base <resolveBaseBranch(config)>` whenever the
 // caller gives no explicit --base/-B. For CLI runs that omit --base and do not
@@ -1920,7 +1920,7 @@ test("create-pr reports a waivable sizeBudget block for a 1961-LOC diff and stil
   assert.equal(sizeBudget.wholeLogicLoc, 1961);
 });
 
-test("create-pr reports adrTripwire unknown and still creates the PR when --head does not resolve", async () => {
+test("create-pr refuses with pre_pr_review_missing when --head does not resolve to a commit", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-early-surface-nohead-"));
   try {
     await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
@@ -1928,11 +1928,10 @@ test("create-pr reports adrTripwire unknown and still creates the PR when --head
     const result = await runNode([
       "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "no-such-branch",
       "--title", "T", "--body", "no closing keyword",
-    ], { env, cwd: tempDir });
-    assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /https:\/\/github\.com\/owner\/repo\/pull\/1/u);
-    const line = result.stdout.split("\n").find((l) => l.startsWith("{\"adrTripwire\""));
-    assert.equal(JSON.parse(line).adrTripwire.outcome, "unknown");
+    ], { env, cwd: tempDir, noRecord: true });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /pre_pr_review_missing: cannot resolve the branch head no-such-branch/u);
+    assert.match(JSON.parse(result.stderr).error, /PRE-PR-BEFORE-FIRST-PUSH/u);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -153,7 +153,7 @@ PR; otherwise reuse/update that PR. The wrapper preserves `gh pr create`'s stdou
 A session that creates the branch and PR itself MUST run the pre-PR review per
 `PRE-PR-BEFORE-FIRST-PUSH` in [Pre-push review contract](./pre-pr-review-contract.md)
 before the branch's first push and before `create-pr.mjs`; until then, the session
-and its sub-delegates commit locally and do not push.
+and its sub-delegates commit locally and do not push. `pr create` also refuses without the review record (the guard and its writer are in `PRE-PR-BEFORE-FIRST-PUSH`).
 
 MUST use `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base <base> --head <head> --title "..." --body-file <body-file>` (always draft, self-assigned by default; `--assignee @me` is the default).
 

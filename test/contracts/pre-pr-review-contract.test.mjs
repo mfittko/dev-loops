@@ -322,3 +322,17 @@ test("main-agent contract cites the route-neutral PRE-PR-BEFORE-FIRST-PUSH scope
   const doc = readRepo("skills/docs/main-agent-contract.md").replace(/\s+/g, " ");
   assert.ok(/that pushes and opens a PR \(the scope `PRE-PR-BEFORE-FIRST-PUSH`/.test(doc), "sub-delegate sentence must cite PRE-PR-BEFORE-FIRST-PUSH");
 });
+
+test("PRE-PR-BEFORE-FIRST-PUSH names the pr create guard, its error code and the sanctioned writer", () => {
+  const flat = ruleParagraph(readRepo(CONTRACT), "PRE-PR-BEFORE-FIRST-PUSH").replace(/\s+/g, " ");
+  assert.ok(flat.includes("pre_pr_review_missing"), "rule must name the typed error code");
+  assert.ok(flat.includes("loop pre-pr-review"), "rule must name the sanctioned writer command");
+  assert.ok(flat.includes("cli/index.mjs pr create"), "rule must name the guarded command");
+  assert.ok(flat.includes("--lightweight"), "rule must name the exempt path");
+  assert.ok(flat.includes("skips this record check only"), "the exemption must be scoped to the record check");
+  assert.ok(flat.includes("`--head`"), "rule must name the head the record binds to");
+  const skill = readRepo(SKILL).replace(/\s+/g, " ");
+  assert.ok(skill.includes("a `--lightweight` create skips only that guard, the review pass still applies"), "SKILL step 11b must scope the --lightweight exemption");
+  assert.ok(!skill.includes("loop pre-pr-review --verdict"), "SKILL must not repeat the full writer command line");
+  assert.ok(!readRepo("skills/docs/copilot-loop-operations.md").includes("loop pre-pr-review"), "operations doc must point to the rule, not the writer");
+});
