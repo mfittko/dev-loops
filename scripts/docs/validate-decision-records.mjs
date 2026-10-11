@@ -98,6 +98,25 @@ export function detectIndexErrors(names) {
 }
 
 /**
+ * Merge-time number collision check (ADR-PATH-NUMBERING): the base tip listing
+ * minus removed names, plus each added name not already on the tip, must keep
+ * every added record's number unique. Returns one entry per added name that
+ * shares its number with another record. Filename shape and the template stay
+ * with detectIndexErrors.
+ */
+export function findAdrNumberCollisions({ tipNames = [], addedNames = [], removedNames = [] }) {
+  const removed = new Set(removedNames);
+  const added = new Set(addedNames);
+  const names = tipNames.filter((n) => !removed.has(n));
+  for (const n of addedNames) if (!names.includes(n)) names.push(n);
+  const highest = Math.max(0, ...names.filter((n) => FILENAME_RE.test(n)).map((n) => Number(n.slice(0, 4))));
+  const nextFree = String(highest + 1).padStart(4, "0");
+  return detectIndexErrors(names)
+    .filter((e) => e.kind === "adr_duplicate_prefix" && added.has(e.file))
+    .map((e) => ({ file: e.file, prefix: e.prefix, holder: names.find((n) => n !== e.file && n.startsWith(`${e.prefix}-`)), nextFree }));
+}
+
+/**
  * ADR-PATH-NUMBERING repair path: a number collision that already merged is fixed
  * by renaming one record to a free number. The deleted base record counts as that
  * rename only when another record that already held its number at the base still

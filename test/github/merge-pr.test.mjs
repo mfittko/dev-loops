@@ -48,6 +48,9 @@ function makeRuntime({
   // reduction the carried-convergence predicate applies. Unset skips it.
   baseRefName = "",
   prOwnFiles = [],
+  // PR files API entries and the base tip docs/decisions listing (names, or an Error).
+  adrPrFiles = [],
+  adrTip = [],
 } = {}) {
   const calls = { ghJson: [], runChild: [], postMerge: [] };
   const view = {
@@ -66,6 +69,11 @@ function makeRuntime({
       env: { GH_TOKEN: "t" },
       ghJson: async (args) => {
         calls.ghJson.push(args);
+        if (args.join(" ").includes("/files?")) return adrPrFiles;
+        if (args.join(" ").includes("/contents/docs/decisions")) {
+          if (adrTip instanceof Error) throw adrTip;
+          return adrTip.map((name) => ({ name }));
+        }
         if (args.join(" ").includes("/requested_reviewers")) {
           if (requestedReviewers instanceof Error) throw requestedReviewers;
           return requestedReviewers;
@@ -1091,4 +1099,52 @@ test("retrospective_checkpoint: a real complete record runs through the shared e
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
+});
+
+const adrFile = (filename, status = "added", previous_filename) => ({ filename, status, ...(previous_filename ? { previous_filename } : {}) });
+const contentsCalls = (calls) => calls.ghJson.filter((a) => a.join(" ").includes("/contents/docs/decisions"));
+
+test("adr_number_collision: refuses an added record whose number the base tip holds", async () => {
+  const { runtime, calls } = makeRuntime({
+    prView: { baseRefName: "develop" },
+    adrPrFiles: [adrFile("docs/decisions/0095-b.md")],
+    adrTip: ["0000-template.md", "0095-a.md"],
+  });
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.equal(threw.mergePrFailure.failures.find((f) => f.precondition === "adr_number_collision").reason,
+    "PR adds docs/decisions/0095-b.md but develop already holds docs/decisions/0095-a.md (ADR-PATH-NUMBERING); rebase onto develop and renumber the record to 0096");
+  assert.equal(mergeCalls(calls).length, 0);
+  assert.deepEqual(contentsCalls(calls), [["api", "repos/mfittko/dev-loops/contents/docs/decisions?ref=develop"]]);
+});
+
+test("adr_number_collision: a non-colliding added record merges", async () => {
+  const { runtime } = makeRuntime({ adrPrFiles: [adrFile("docs/decisions/0096-b.md")], adrTip: ["0095-a.md"] });
+  assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
+});
+
+test("adr_number_collision: a PR adding no decision record makes no contents call", async () => {
+  const { runtime, calls } = makeRuntime({ adrPrFiles: [adrFile("docs/decisions/0095-a.md", "modified"), adrFile("src/x.mjs")] });
+  assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
+  assert.equal(contentsCalls(calls).length, 0);
+});
+
+test("adr_number_collision: a 404 on the tip directory is an empty tip", async () => {
+  const { runtime } = makeRuntime({ adrPrFiles: [adrFile("docs/decisions/0001-a.md")], adrTip: new Error("gh command failed: gh: Not Found (HTTP 404)") });
+  assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
+});
+
+test("adr_number_collision: any other tip read error refuses fail-closed", async () => {
+  const { runtime, calls } = makeRuntime({ adrPrFiles: [adrFile("docs/decisions/0001-a.md")], adrTip: new Error("gh command failed: HTTP 500") });
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.equal(threw.mergePrFailure.failures.find((f) => f.precondition === "adr_number_collision").reason,
+    "could not read docs/decisions on main to check ADR numbers: gh command failed: HTTP 500");
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("adr_number_collision: a collision-repair rename merges", async () => {
+  const { runtime } = makeRuntime({
+    adrPrFiles: [adrFile("docs/decisions/0105-b.md", "renamed", "docs/decisions/0095-b.md")],
+    adrTip: ["0095-a.md", "0095-b.md"],
+  });
+  assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
 });
