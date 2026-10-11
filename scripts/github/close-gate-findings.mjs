@@ -432,8 +432,8 @@ async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, 
     }
   }
 
-  // ONE batched comment per round on the deferral comment target (the linked
-  // spec issue or the PR), posted BEFORE any stamp/resolve so a crash never
+  // ONE batched comment per round on a linked spec issue target (a PR target
+  // posts no comment), posted BEFORE any stamp/resolve so a crash never
   // resolves a thread whose deferral was not recorded. A fingerprint the
   // target already lists is not appended again, so a retry is idempotent.
   // No issue is ever created (GATE-EXEC-DEFERRAL-RECORD).
