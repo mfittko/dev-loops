@@ -34,7 +34,8 @@ No separate verdict issue comment and no separate findings review is posted. Two
 the opt-in findings comment (`gates.postFindingsComments`, `GATE-COMMENT-IDENTITY-DISJOINT`) and
 the batched deferral comment (`<!-- dev-loops:deferred-summary -->`) that `judge-pass.mjs` and
 `close-gate-findings.mjs` post for a round's deferred findings, at most one per tool run, on the
-linked spec issue or the PR (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`).
+linked spec issue (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`). When the target is the PR itself no
+deferral comment is posted: the verdict body's `Deferred (N)` entries are the record.
 
 `GATE-COMMENT-SUPERSEDE-OUTDATED`: When a new `draft_gate` (resp. `pre_approval_gate`) verdict
 is created, `upsert-checkpoint-verdict.mjs` folds the SAME gate's prior verdict reviews recorded
@@ -46,7 +47,7 @@ fail-open: a minimize failure logs a `minimizeWarning` on the result and never f
 post. Minimizing collapses and never deletes.
 
 The body's per-angle breakdown has up to THREE TRACKS, rendered at TOP LEVEL, NEVER as a markdown
-table. The third, folded, track is severity-gated (`GATE-COMMENT-INLINE-SEVERITY-FLOOR` below):
+table. The third, folded, track is disposition-gated (`GATE-COMMENT-INLINE-SEVERITY-FLOOR` below):
 1. **Locatable findings** (each carried by its own inline PR review comment, or by one merged comment per `GATE-COMMENT-INLINE-LAYOUT`) are never
    enumerated per-finding in the body. The body states only one aggregate `**Inline findings:**`
    line: the count, a severity breakdown (leading emoji per the legend below, with the severity
@@ -58,30 +59,45 @@ table. The third, folded, track is severity-gated (`GATE-COMMENT-INLINE-SEVERITY
    its contributing angle(s) in trailing brackets.
 
 <!-- rule: GATE-COMMENT-INLINE-SEVERITY-FLOOR -->
-`GATE-COMMENT-INLINE-SEVERITY-FLOOR` (#2263): a finding whose severity ranks below
-`gates.<gate>.inlineSeverityFloor` skips both tracks and folds into a THIRD track instead,
-regardless of locatability. The floor's valid values are `medium` (default), `low`, `nit`. The
-severity rank order is high, question, medium, low, nit, so `medium`/`high`/`question` always
-post inline and only `low`/`nit` can ever fold. Folding produces one collapsed
-`<details><summary>Suppressed low/nit findings (N) — below the inline severity
-floor</summary>...</details>` block, its own top-level section after the body-only list and
-clean-angle roster, before the gate-evidence note. Each folded finding renders as a
-`file:line`-prefixed (when locatable) severity/angle/summary bullet plus its own INVISIBLE
-fingerprint+`disposition=deferred` marker, the same shape a body-filed marker carries, so
-cross-round fingerprint suppression still applies and a folded finding renders exactly once. A
-folded finding creates NO gate-authored review thread and never enters
-`unresolvedGateThreadCount` (`GATE-EXEC-FINDING-THREADS`,
+`GATE-COMMENT-INLINE-SEVERITY-FLOOR` (#2263, #2722): the judge's verdict decides what the verdict
+body shows. A finding is VISIBLE (it takes the inline or body-only track) when the judge disposed
+it `act`, whatever its severity, or when its severity is in `gates.<gate>.blockCleanOnFindingSeverities`,
+whatever its disposition, because it blocks `clean`. A finding with no judge disposition (a round
+without a judge) keeps the severity rule: it is visible when it ranks at or above
+`gates.<gate>.inlineSeverityFloor`. The floor's valid values are `medium` (default), `low`, `nit`.
+The severity rank order is high, question, medium, low, nit. A `question` NEVER folds at any
+floor, because its resolvable thread blocks gate-close until answered
+(`GATE-EXEC-THREAD-DISPOSITION`). Every other finding FOLDS, regardless of locatability, into the
+verdict body's one `Details` block, grouped by disposition: `Deferred (N)`, `Rejected (N)` and
+`Not judged (N)`. Each folded entry renders as a `file:line`-prefixed (when known)
+severity/angle/summary bullet plus its own INVISIBLE fingerprint+`disposition=deferred` marker at
+line start, the same shape a body-filed marker carries, so cross-round fingerprint suppression
+still applies and a folded finding renders exactly once. A deferred finding keeps its deferral
+comment or `issue=<n>` link, so folding hides no record. An `act` finding never folds and its
+marker never carries `disposition=deferred`, on any track: below the floor it takes the normal
+track (an inline thread when locatable, a visible body entry otherwise). A folded finding creates
+NO gate-authored review thread and never enters `unresolvedGateThreadCount`
+(`GATE-EXEC-FINDING-THREADS`,
 [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
-Lowering `inlineSeverityFloor` (e.g. to `"low"` or `"nit"`) restores full inline/body-filed
-posting. The config schema rejects an out-of-vocabulary value, including `"high"`. An
-unrecognized severity fails OPEN (posts inline, never silently folded). A `question` NEVER folds
-at any floor, because its resolvable thread blocks gate-close until answered
-(`GATE-EXEC-THREAD-DISPOSITION`). `blockCleanOnFindingSeverities` semantics are unaffected: the
-verdict is computed upstream from the ledger, never from which track a finding renders on.
+Lowering `inlineSeverityFloor` changes only the no-disposition rule. The config schema rejects an
+out-of-vocabulary value, including `"high"`. An unrecognized severity fails OPEN (visible).
+`blockCleanOnFindingSeverities` semantics are unaffected: the verdict is computed upstream from the
+ledger, never from which track a finding renders on.
 
-Every clean (zero-finding) angle is collapsed into one trailing comma-joined `**Clean (N):**`
-line, never a list/table row. A finding's full text always lives in EXACTLY ONE reader-reachable
-carrier — its own inline review comment (locatable) or its own body-list bullet (non-locatable) —
+The verdict body has exactly ONE collapsed `<details><summary>Details</summary>` block, after the
+visible findings and before the gate-evidence note. It holds the folded groups and the
+`**Clean (N):**` angle roster, and renders only when it has content. No other collapsed block
+renders in the verdict body (remaining gate blocker items render as a visible list). The visible
+part holds the gate name, `Reviewed head SHA`, the verdict, the findings summary line, the visible
+findings and `Next action`. `Next action` derives from the visible set: with no `act` finding, no
+blocking-severity finding and no gate blocker it never reads `stay draft and fix`; it reads
+`rerun gate`. The `Execution mode` and `Blocking severities` lines are renderer-only. They render
+inside one HTML comment (`<!--` and `-->` on their own lines, one field per line) so the posted body
+carries both values and the reader does not see them.
+
+Every clean (zero-finding) angle is collapsed into one comma-joined `**Clean (N):**`
+line inside the `Details` block, never a list/table row. A finding's full text always lives in EXACTLY ONE reader-reachable
+carrier — its own inline review comment (locatable) or its own body-list bullet (non-locatable, or folded under `Details`) —
 never both, never neither, and never only the on-disk disposition ledger. The two exceptions are in `GATE-COMMENT-INLINE-LAYOUT`: a capped field keeps its text in a collapsed details block up to the per-field bound (a further cut is marked, and text past the bound lives in the ledger), and a same-defect merged comment or bullet carries its members together and renders each distinct summary once, so a non-primary member's Failing case and any repeated text live in the ledger. Budget pressure on an
 over-long round SHORTENS a body-only finding's rendered text rather than degrading it to an
 omitted-count/ledger pointer. Both tracks render at TOP LEVEL, never through the
@@ -91,12 +107,14 @@ corrected on its own surface (back-compat read).
 
 <!-- rule: GATE-COMMENT-INLINE-LAYOUT -->
 `GATE-COMMENT-INLINE-LAYOUT`: an inline finding renders in a fixed layout. The header line reads
-`**<severity>** · <angle>[, <angle>][ · judge: <disposition>]`. A line of `file:line` references in inline code follows the header when the finding has a file. The body lines are `**Problem:**`,
-`**Failing case:**` (when the finding carries `failingCase`) and `**Fix:**` (numbered steps when
-the recommendation holds more than one action). The renderer bounds each field at a sentence
-boundary, never inside a code span or fence, and puts the full text of every cut field into one
-collapsed `<details><summary>Details</summary>` block in the same comment. The block bounds each
-full field so the comment stays under GitHub's size limit, and marks a cut. A comment never names a
+`**<severity>** · <angle>[, <angle>][ · judge: <disposition>]`. A line of `file:line` references in inline code follows the header when the finding has a file. The body lines are `**Problem:**`
+and `**Fix:**`, each one short statement. The renderer bounds each at a sentence boundary, never
+inside a code span or fence. Supporting reasoning, evidence and the `**Failing case:**` (when the
+finding carries `failingCase`) live in one collapsed `<details><summary>Details</summary>` block
+in the same comment, together with the remainder of every cut field. A cut field's remainder
+renders under a label that names it a continuation (`**Problem (continued):**`), so `Details`
+never repeats visible text, and no `Details` block renders when nothing is hidden. The block bounds
+each field so the comment stays under GitHub's size limit, and marks a cut. A comment never names a
 local artifact. A code-like `**Failing case:**` (multi-line text, a shell prompt or braces) renders in a
 fenced block longer than any backtick run in the content, with comment delimiters entity-encoded.
 The ledger keeps the full text. Reviewer inline code spans survive into the thread, and every other
@@ -110,7 +128,7 @@ the one `fingerprintFinding` uses: lowercase, every non-alphanumeric run collaps
 trimmed. The `defectKey` never renders and never enters the fingerprint or the marker. One merged
 comment holds at most eight findings. That comment lists every angle in the header and keeps one
 marker per merged finding, so each fingerprint stays suppressible. It renders the primary member's
-Problem, Failing case and Fix. Each further member whose normalized summary differs from every
+Problem and Fix, and its Failing case under `Details`. Each further member whose normalized summary differs from every
 earlier rendered member adds one `**Problem (<angle>):**` line and, when it has a recommendation, one
 `**Fix (<angle>):**` line, under the same field caps. Non-locatable findings merge by the same rule
 into one body-only bullet that lists every angle in its angle suffix and joins each distinct summary
@@ -268,7 +286,7 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 | **Gate name** | `draft_gate` or `pre_approval_gate` |
 | **Head SHA reviewed** | The exact commit SHA that was reviewed |
 | **Verdict** | `clean`, `findings_present`, or `blocked` |
-| **Blocking severities** | (clean verdicts only) Which severity levels must be clean per gate config |
+| **Blocking severities** | (non-clean verdicts only) Which severity levels must be clean per gate config. Renders inside an HTML comment (`GATE-COMMENT-INLINE-SEVERITY-FLOOR`). |
 | **Findings summary** | Short truthful audit summary. Use `no issues found` only when the reviewed head needed no corrective change for that gate pass. |
 | **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval` |
 
