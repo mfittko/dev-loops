@@ -19,4 +19,4 @@ Amends [0075](./0075-fold-sub-floor-findings-out-of-inline-threads.md): the verd
 
 ## Consequences
 
-The visible verdict body holds the visible set (`act`, blocking-severity, `question`, unrecognized-severity and unjudged at-or-above-floor findings), so `Next action` derives from the visible set (act, blocking-severity, question, unrecognized-severity and unjudged findings at or above the floor). Rejected and deferred findings stay one click away and fingerprint-tracked.
+The visible verdict body holds the visible set (`act`, blocking-severity, `question`, unrecognized-severity and unjudged at-or-above-floor findings), so `Next action` derives from the visible set. Rejected and deferred findings stay one click away and fingerprint-tracked.
