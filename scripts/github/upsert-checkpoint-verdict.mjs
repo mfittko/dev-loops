@@ -39,11 +39,11 @@ import {
   findOwnPendingReview,
   findOwnSubmittedReview,
   fingerprintFinding,
-  isBelowInlineFloor,
+  isVisibleFinding,
   isLocatableFinding,
   listPrReviews,
   readGateFindingsLedger,
-  renderFoldedFindingsBlock,
+  renderVerdictDetailsBlock,
   renderInlineCommentBody,
   resolveGateRound,
   submitPendingReview,
@@ -1390,10 +1390,10 @@ function renderBodyOnlyFindingsList(findings, ctx = {}) {
 // approximating its size.
 function renderStructuredFindingsBlock(angles) {
   const lines = renderBodyOnlyFindingsList(flattenAnglesForBodyList(angles));
-  const cleanLine = renderCleanRosterLine(angles);
-  if (cleanLine) {
+  const detailsBlock = renderVerdictDetailsBlock({ cleanRosterLine: renderCleanRosterLine(angles) });
+  if (detailsBlock) {
     if (lines.length > 0) lines.push("");
-    lines.push(cleanLine);
+    lines.push(detailsBlock);
   }
   return enforcePostedCommentLimit(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-json structured findings render");
 }
@@ -1556,15 +1556,18 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     // Neither label matches a parsed field, so the parse contract is unchanged.
     ...(reviewVerdict ? [`**Review verdict:** ${reviewVerdict}`] : []),
     ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
-    renderExecutionModeLine(executionMode, inlineReason),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
   );
+  // Renderer-only lines: only the renderer reads them, so they sit in an HTML comment, one
+  // field per line at column 0 so the line-based field parser still reads them.
+  const hiddenLines = [renderExecutionModeLine(executionMode, inlineReason)];
   if ((verdict === "findings_present" || verdict === "blocked") && blockCleanOnFindingSeverities && blockCleanOnFindingSeverities.length > 0) {
     const sevs = blockCleanOnFindingSeverities.join(", ");
-    lines.push(`**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`);
+    hiddenLines.push(`**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`);
   }
+  lines.push("<!--", ...hiddenLines.map((l) => l.replaceAll("-->", "--&gt;").replaceAll("<!--", "&lt;!--")), "-->");
   if (Array.isArray(gateBlockers) && gateBlockers.length > 0) {
-    lines.push("", renderGateBlockerItemsBlock(gateBlockers));
+    lines.push("", renderGateBlockerItemsList(gateBlockers));
   }
   // When structured per-angle fan-in data is supplied (--findings-json), the
   // `**Findings summary:**` digest is computed from it; otherwise the digest
@@ -1610,19 +1613,17 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     if (bodyOnlyRows.length > 0) {
       lines.push("", renderBodyOnlyFindingsList(bodyOnlyRows, { repo, headSha }).join("\n"));
     }
-    if (angles) {
-      const cleanLine = renderCleanRosterLine(angles);
-      if (cleanLine) lines.push("", cleanLine);
-    }
-    // Findings below the inline severity floor (GATE-COMMENT-INLINE-SEVERITY-FLOOR) render as their own
-    // top-level collapsed section, after the body-only list and clean roster
-    // and before the gate-evidence note. renderFoldedFindingsBlock already
-    // stamps its own invisible marker per finding, so the trailing
-    // nonLocatableFindings marker loop below (scoped to that array only, which
+    // The folded findings (GATE-COMMENT-INLINE-SEVERITY-FLOOR) and the clean roster share the
+    // body's one Details block, after the body-only list and before the gate-evidence note.
+    // renderVerdictDetailsBlock stamps its own invisible marker per folded finding, so the
+    // trailing nonLocatableFindings marker loop below (scoped to that array only, which
     // never includes a folded finding) never double-stamps one.
-    if (Array.isArray(foldedFindings) && foldedFindings.length > 0) {
-      lines.push("", renderFoldedFindingsBlock(foldedFindings, { round }));
-    }
+    const detailsBlock = renderVerdictDetailsBlock({
+      foldedFindings: foldedFindings ?? [],
+      cleanRosterLine: angles ? renderCleanRosterLine(angles) : null,
+      round,
+    });
+    if (detailsBlock) lines.push("", detailsBlock);
   } else if (angles) {
     lines.push("", renderStructuredFindings(angles));
   }
@@ -2062,7 +2063,7 @@ async function loadMatchingFindingsLedger(options, headSha) {
   return ledger;
 }
 export const MERGED_THREAD_BODY_MAX = 4000;
-async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger, inlineSeverityFloor }, gh) {
+async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger, inlineSeverityFloor, blockingSeverities = [] }, gh) {
   // The withheld-tier coverage check above already loaded and validated this
   // same --findings-ledger file for this same round; reuse it instead of
   // reading it a second time (undefined means it was never preloaded, e.g. a
@@ -2088,11 +2089,13 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
     repoRoot,
   });
   const candidates = ledger.findings.filter((f) => !suppressed.has(fingerprintFinding(f)));
-  // Findings below the inline severity floor (GATE-COMMENT-INLINE-SEVERITY-FLOOR) never post inline or
-  // body-file — they fold into the verdict body's collapsed <details> block
-  // instead (see renderFoldedFindingsBlock), regardless of locatability.
-  const folded = candidates.filter((f) => isBelowInlineFloor(f.severity, inlineSeverityFloor));
-  const nonFolded = candidates.filter((f) => !isBelowInlineFloor(f.severity, inlineSeverityFloor));
+  // The judge's verdict, not severity alone, decides visibility
+  // (GATE-COMMENT-INLINE-SEVERITY-FLOOR): act and blocking-severity findings take the
+  // normal inline or body-filed track; every other finding folds into the verdict
+  // body's Details block (see renderVerdictDetailsBlock), regardless of locatability.
+  const visibility = { floor: inlineSeverityFloor, blockingSeverities };
+  const folded = candidates.filter((f) => !isVisibleFinding(f, visibility));
+  const nonFolded = candidates.filter((f) => isVisibleFinding(f, visibility));
   const surface = {
     round,
     suppressedCount: ledger.findings.length - candidates.length,
@@ -2242,15 +2245,12 @@ function formatGateBlockerCounts(blockers) {
   return [...counts].map(([kind, count]) => `${count} ${kind}`).join("; ");
 }
 
-// Every remaining blocker item, one per line, uncapped, in a collapsed block.
-function renderGateBlockerItemsBlock(blockers) {
+// Every remaining blocker item, one per line, uncapped. Blockers block clean, so they stay visible.
+function renderGateBlockerItemsList(blockers) {
   return [
-    "<details>",
-    `<summary>Remaining gate blocker items (${blockers.length})</summary>`,
+    `**Remaining gate blocker items (${blockers.length})**`,
     "",
     ...blockers.map(({ kind, item }) => `- ${kind}: \`${sanitizeCodeSpan(neutralizeBareIssuePrIds(item))}\``),
-    "",
-    "</details>",
   ].join("\n");
 }
 
@@ -3218,9 +3218,19 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       isUpdate: existing !== null,
       preloadedLedger: preloadedFindingsLedger,
       inlineSeverityFloor: activeGateConfig.inlineSeverityFloor,
+      blockingSeverities: activeGateConfig.blockCleanOnFindingSeverities ?? [],
     },
     gh,
   );
+  // Next action follows the visible set: a non-clean round with no visible finding and no gate
+  // blocker has nothing to fix, so the fix-oriented action would point at nothing. A round whose
+  // findings were all suppressed by an earlier round keeps its action (the earlier body shows them).
+  if (findingSurface && options.nextAction === "stay draft and fix"
+    && findingSurface.suppressedCount === 0
+    && findingSurface.locatable.length + findingSurface.nonLocatable.length === 0
+    && !(checkpointComposition?.blockers?.length > 0)) {
+    options.nextAction = "rerun gate";
+  }
   const desiredBody = renderGateReviewCommentBody({
     ...options,
     headSha: canonicalHeadSha,

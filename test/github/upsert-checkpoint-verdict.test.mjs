@@ -7658,13 +7658,82 @@ test("upsert-checkpoint-verdict --findings-ledger: at the default floor, a locat
 
     // The collapsed <details> block carries both folded findings' visible text.
     assert.match(posted.body, /<details>/);
-    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /<summary>Details<\/summary>/);
+    assert.match(posted.body, /^\*\*Not judged \(2\)\*\*$/m);
     assert.match(posted.body, /`src\/db\.mjs:2` \*\*low\*\* \(`naming`\): inconsistent casing of a local constant/);
     assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
     // Each folded finding still stamps its own invisible marker, deferred.
     assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 disposition=deferred -->$/m);
     assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 disposition=deferred -->$/m);
   }, { prefix: "dev-loops-upsert-fold-default-floor-" });
+});
+
+async function postDispositionRound(tempDir, findings) {
+  const ledgerPath = await writeSingleSurfaceLedger(tempDir, findings);
+  const { runChild, calls } = makeGhMock([
+    ...singleSurfaceLeadingEntries(),
+    {
+      assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+      stdout: '{"id":721,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-721"}\n',
+    },
+  ]);
+  const result = await upsertCheckpointVerdict({
+    repo: "owner/repo",
+    pr: 17,
+    gate: "draft_gate",
+    headSha: SINGLE_SURFACE_HEAD,
+    verdict: "findings_present",
+    findingsSummary: `${findings.length} findings`,
+    findingsLedger: ledgerPath,
+    nextAction: "stay draft and fix",
+    executionMode: "inline_single_agent",
+    inlineReason: "single-agent inline review (test)",
+  }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+  const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+  return { result, body: JSON.parse(postCall.stdinText).body };
+}
+
+test("upsert-checkpoint-verdict --findings-ledger: the body shows act and blocking findings and folds the rest by judge disposition in one Details block", async () => {
+  await withTempDir(async (tempDir) => {
+    const { result, body } = await postDispositionRound(tempDir, [
+      { severity: "low", angle: "naming", summary: "act low finding", judgeDisposition: "act" },
+      { severity: "medium", angle: "coverage", summary: "defer medium finding", judgeDisposition: "defer" },
+      { severity: "medium", angle: "dry", summary: "reject medium finding", judgeDisposition: "reject" },
+      { severity: "must-fix", angle: "security", summary: "reject high finding", judgeDisposition: "reject" },
+      { severity: "low", angle: "style", summary: "unjudged low finding" },
+    ]);
+    assert.equal(result.bodyFiled, 2);
+    assert.equal(result.folded, 3);
+    const details = body.slice(body.indexOf("<details>"));
+    const visible = body.slice(0, body.indexOf("<details>"));
+    assert.equal(body.match(/<details>/g).length, 1);
+    for (const text of ["act low finding", "reject high finding"]) {
+      assert.ok(visible.includes(text) && !details.includes(text), text);
+    }
+    for (const text of ["defer medium finding", "reject medium finding", "unjudged low finding"]) {
+      assert.ok(details.includes(text) && !visible.includes(text), text);
+    }
+    for (const header of ["**Deferred (1)**", "**Rejected (1)**", "**Not judged (1)**"]) {
+      assert.ok(details.split("\n").includes(header), header);
+    }
+    // The act finding never carries a deferral stamp; a folded deferred one keeps it.
+    assert.match(body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 -->$/m);
+    assert.match(body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=medium angle=coverage round=1 disposition=deferred -->$/m);
+    assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
+  }, { prefix: "dev-loops-upsert-disposition-split-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: with only deferred and rejected findings the next action never says stay draft and fix, and Execution mode renders inside an HTML comment", async () => {
+  await withTempDir(async (tempDir) => {
+    const { body } = await postDispositionRound(tempDir, [
+      { severity: "medium", angle: "coverage", summary: "defer medium finding", judgeDisposition: "defer" },
+      { severity: "medium", angle: "dry", summary: "reject medium finding", judgeDisposition: "reject" },
+    ]);
+    assert.match(body, /\*\*Next action:\*\* rerun gate/);
+    assert.doesNotMatch(body, /stay draft and fix/);
+    assert.match(body, /^<!--\n\*\*Execution mode:\*\* inline_single_agent — single-agent inline review \(test\)\n\*\*Blocking severities:\*\* [^\n]+\n-->$/m);
+    assert.match(body, /^\*\*Reviewed head SHA:\*\* `/m);
+  }, { prefix: "dev-loops-upsert-disposition-nextaction-" });
 });
 
 // #2263: an ALL-folded round (every candidate ranks below the inline severity
@@ -7710,7 +7779,8 @@ test("upsert-checkpoint-verdict --findings-ledger: an all-folded round (every ca
     const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
     const posted = JSON.parse(postCall.stdinText);
     assert.equal(posted.comments.length, 0);
-    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /<summary>Details<\/summary>/);
+    assert.match(posted.body, /^\*\*Not judged \(2\)\*\*$/m);
   }, { prefix: "dev-loops-upsert-fold-all-folded-no-files-fetch-" });
 });
 
@@ -7783,7 +7853,8 @@ test("upsert-checkpoint-verdict --findings-ledger: lowering inlineSeverityFloor 
     const posted = JSON.parse(postCall.stdinText);
     assert.equal(posted.comments.length, 2);
     assert.match(JSON.stringify(posted.comments), /inconsistent casing of a local constant/);
-    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(1\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /<summary>Details<\/summary>/);
+    assert.match(posted.body, /^\*\*Not judged \(1\)\*\*$/m);
     assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
   }, { prefix: "dev-loops-upsert-fold-lowered-floor-" });
 });
@@ -7833,7 +7904,8 @@ test("upsert-checkpoint-verdict --findings-ledger: at the default \"medium\" flo
     assert.match(JSON.stringify(posted.comments), /why parameterize here instead of an ORM\?/);
     // The low finding folds into the collapsed <details> block instead.
     assert.doesNotMatch(JSON.stringify(posted.comments), /inconsistent casing of a local constant/);
-    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(1\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /<summary>Details<\/summary>/);
+    assert.match(posted.body, /^\*\*Not judged \(1\)\*\*$/m);
     assert.match(posted.body, /inconsistent casing of a local constant/);
   }, { prefix: "dev-loops-upsert-fold-question-default-medium-floor-" });
 });
@@ -7849,7 +7921,7 @@ test("upsert-checkpoint-verdict --findings-ledger: a folded low finding does not
       "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    blockCleanOnFindingSeverities: [high, medium, low]\n",
       "utf8",
     );
-    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_LOW_FINDING]);
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_NIT_FINDING]);
     const entries = [
       ...singleSurfaceLeadingEntries(),
       {
@@ -7883,7 +7955,7 @@ test("upsert-checkpoint-verdict --findings-ledger: a folded low finding does not
     // as the caller supplied them, unaffected by the finding's own folding.
     assert.match(posted.body, /^\*\*Verdict:\*\* findings_present$/m);
     assert.match(posted.body, /^\*\*Blocking severities:\*\* high, medium, low \(clean requires no findings matching these severities\)$/m);
-    assert.match(posted.body, /inconsistent casing of a local constant/);
+    assert.match(posted.body, /trailing whitespace/);
   }, { prefix: "dev-loops-upsert-fold-blocking-severities-" });
 });
 
@@ -8000,7 +8072,7 @@ test("upsert-checkpoint-verdict --findings-ledger: an identical same-head rerun 
         headSha: SINGLE_SURFACE_HEAD,
         verdict: "findings_present",
         findingsSummary: "1 finding",
-        nextAction: "stay draft and fix",
+        nextAction: "rerun gate",
         executionMode: "inline_single_agent",
         inlineReason: "single-agent inline review (test)",
         round: 1,
@@ -8146,7 +8218,7 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --fin
       "        enabled: false",
       "",
     ].join("\n"), "utf8");
-    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [{ ...BODY_FILED_FINDING, judgeDisposition: "defer" }], {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [{ ...BODY_FILED_FINDING, judgeDisposition: "act" }], {
       provenance: {
         distinctReviewers: 2,
         perAngle: [
@@ -8355,7 +8427,8 @@ test("#2263: --gate review --findings-ledger folds locatable low/nit findings at
 
     // Both fold into the verdict body's collapsed <details> block instead.
     assert.match(posted.body, /<details>/);
-    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /<summary>Details<\/summary>/);
+    assert.match(posted.body, /^\*\*Not judged \(2\)\*\*$/m);
     assert.match(posted.body, /`src\/db\.mjs:2` \*\*low\*\* \(`naming`\): inconsistent casing of a local constant/);
     assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
     assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 disposition=deferred -->$/m);
@@ -10413,7 +10486,8 @@ test("#2389 regression: a clean ledger plus an unchecked PR-body DoD item posts 
     assert.match(body, /\*\*Verdict:\*\* blocked/);
     assert.match(body, /\*\*Review verdict:\*\* clean/);
     assert.match(body, /\*\*Gate blockers:\*\* 1 unchecked PR-body Definition of done\n/);
-    assert.match(body, /<details>\n<summary>Remaining gate blocker items \(1\)<\/summary>\n\n- unchecked PR-body Definition of done: `post-merge smoke run recorded`\n\n<\/details>/);
+    assert.match(body, /\*\*Remaining gate blocker items \(1\)\*\*\n\n- unchecked PR-body Definition of done: `post-merge smoke run recorded`/);
+    assert.doesNotMatch(body, /<details>/);
     assert.match(body, /\*\*Next action:\*\* rerun gate/);
     assert.equal(result.reviewVerdict, "clean");
     assert.deepEqual(result.gateBlockers, [{ kind: "unchecked PR-body Definition of done", item: "post-merge smoke run recorded" }]);
@@ -10606,7 +10680,7 @@ test("gate blockers: the counts line carries no criterion text and the collapsed
     const body = postedBody();
     const countsLine = body.split("\n").find((line) => line.startsWith("**Gate blockers:**"));
     assert.equal(countsLine, "**Gate blockers:** 1 unchecked PR-body Acceptance criteria; 12 unchecked PR-body Definition of done");
-    assert.match(body, /<summary>Remaining gate blocker items \(13\)<\/summary>/);
+    assert.match(body, /\*\*Remaining gate blocker items \(13\)\*\*/);
     for (const item of ["ac item open", ...Array.from({ length: 12 }, (_, i) => `dod item ${i + 1}`)]) {
       assert.equal(body.split("\n").filter((line) => line.endsWith(`: \`${item}\``)).length, 1, item);
     }

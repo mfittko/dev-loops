@@ -151,6 +151,17 @@ test("F1: a delta result that does not belong to this act list and head refuses 
 const threadsOnly = { actListFile: undefined, gate: undefined };
 const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ ...THREADS.threads[0], threadId, commentId: i + 1 })) };
 
+test("F1: a judge-act finding below the inline floor still reaches the work order through the act list", async () => {
+  await withFixture(async ({ files, emit }) => {
+    const lowAct = [{ severity: "nit", angle: "naming", summary: "rename the local", judgeDisposition: "act" }];
+    await writeFile(files.actList, JSON.stringify(lowAct));
+    const { workOrder } = await emit({ deltaResult: undefined, phase: "commit_only" });
+    assert.equal(workOrder.source, "act-list");
+    const read = workOrder.requiredReads.find((r) => r.kind === "act-list");
+    assert.deepEqual(JSON.parse(await readFile(read.path, "utf8")), lowAct);
+  });
+});
+
 test("delta gate: an act-list --phase full without --delta-result refuses and names commit_only; commit_only emits", async () => {
   await withFixture(async ({ emit }) => {
     await assert.rejects(emit({ deltaResult: undefined }), /needs --delta-result[^]*--phase commit_only/);

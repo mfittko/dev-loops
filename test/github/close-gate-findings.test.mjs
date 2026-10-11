@@ -1473,7 +1473,6 @@ test("stampDeferredDisposition fails closed when an already-stamped issue= diffe
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
       // No closing reference: the target resolves to the PR, not 9500.
       prViewEntry([]),
-      targetCommentsEntry(PR, [{ body: "<!-- dev-loops:deferred-summary -->\n- `1111000011110000` **medium** (`perf`): stale cache" }]),
       getReviewCommentEntry(6502, legacyStamped),
       // No PATCH, reply or resolve entries: any of them overflows the stub.
     ],
@@ -1551,17 +1550,15 @@ test("a mixed disposition pass comments once, for only the not-yet-listed finger
   ));
 });
 
-// Comment target fallback: with no closing reference, or more than one, the
-// deferral comment goes to the PR itself and the stamp records the PR number.
+// Comment target fallback: with no closing reference, or more than one, the PR itself is the
+// target: no deferral comment is posted and the stamp records the PR number.
 for (const [label, closing] of [["no closing reference", []], ["more than one closing reference", [9500, 9501]]]) {
-  test(`deferral comment target: ${label} — comments on the PR, followUpIssueNumber is the PR number`, async () => {
+  test(`deferral comment target: ${label} — posts no comment, followUpIssueNumber is the PR number`, async () => {
     const thread = openWfnThread({ commentId: 6700, fp: "2222222222222222", id: "THREAD_PR_TARGET" });
     await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
       [
         ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
         prViewEntry(closing),
-        targetCommentsEntry(PR),
-        appendFollowUpIssueEntry(PR, { contains: ["2222222222222222"] }),
         getReviewCommentEntry(6700, wfnBody("2222222222222222")),
         { ...patchReviewCommentEntry(6700), assertArgContains: [`disposition=deferred issue=${PR}`] },
         postReplyEntry(6700, { id: 7700 }),
@@ -1579,13 +1576,11 @@ for (const [label, closing] of [["no closing reference", []], ["more than one cl
 // A tracker other than GitHub: the comment goes to the PR, with no closing
 // reference lookup at all (a prViewEntry here would be the next stub entry and
 // its args would not match the comments read, failing the run).
-test("deferral comment target: tracker.provider other than github — comments on the PR, no closing-reference lookup", async () => {
+test("deferral comment target: tracker.provider other than github — no comment, no closing-reference lookup", async () => {
   const thread = openWfnThread({ commentId: 6710, fp: "3333333333333333", id: "THREAD_NON_GITHUB" });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
-      targetCommentsEntry(PR),
-      appendFollowUpIssueEntry(PR, { contains: ["3333333333333333"] }),
       getReviewCommentEntry(6710, wfnBody("3333333333333333")),
       patchReviewCommentEntry(6710),
       postReplyEntry(6710, { id: 7710 }),

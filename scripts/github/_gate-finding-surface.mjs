@@ -24,7 +24,7 @@ import {
 } from "../_core-helpers.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { escapeProse, flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
-import { FAILING_CASE_CAP, MAX_FIX_STEPS, PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, normalizeFindingSummary, splitSentences } from "./_gate-finding-text.mjs";
+import { PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, normalizeFindingSummary } from "./_gate-finding-text.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
@@ -351,8 +351,8 @@ export async function fetchListedFingerprints(
 }
 
 /**
- * Post a round's deferred findings as ONE batched comment on the comment
- * target (resolveDeferralCommentTarget). Entries whose fingerprint the target
+ * Post a round's deferred findings as ONE batched comment on the linked spec
+ * issue (resolveDeferralCommentTarget); a PR target posts nothing. Entries whose fingerprint the target
  * already lists are skipped; nothing is posted when none remain. Returns
  * `{ issueNumber, appendedFingerprints }` where `issueNumber` is the target's
  * number (an issue or the PR). Dependencies are injectable for tests;
@@ -366,6 +366,11 @@ export async function commentDeferredFindings(
     throw new Error("commentDeferredFindings: entries must be a non-empty array");
   }
   const target = await resolveDeferralCommentTarget({ repo, pr, trackerProvider }, { env, ghCommand, run });
+  // A PR target needs no comment: the verdict body's Deferred group carries each entry's
+  // marker (issue=<pr>) and is the record, so every entry counts as recorded.
+  if (target === pr) {
+    return { issueNumber: target, appendedFingerprints: new Set(entries.map((entry) => entry.fingerprint)) };
+  }
   const listed = await fetchListedFingerprints({ repo, target }, { env, ghCommand, run });
   const fresh = entries.filter((entry) => !listed.has(entry.fingerprint));
   if (fresh.length > 0) {
@@ -527,38 +532,26 @@ export function renderInlineCommentBody(finding, { round }) {
     const lineRef = Number.isInteger(finding.line) ? `:${finding.line}` : "";
     lines.push(refFiles.map((f, i) => `\`${sanitizeCodeSpan(f)}${i === 0 ? lineRef : ""}\``).join(", "));
   }
-  // A cut field keeps its capped text visible; its full text goes into one
-  // collapsed details block at the end of the comment.
-  const cutFields = [];
+  // The visible part is condensed: one short Problem and one short Fix. A cut
+  // field keeps its capped text visible and only the remainder goes under
+  // Details; the failing case lives wholly under Details. Nothing visible repeats.
+  const hiddenFields = [];
+  const remainderOf = (full, visible) => {
+    const shown = visible.endsWith("…") ? visible.slice(0, -1) : visible;
+    return String(full).trim().slice(shown.length).trim();
+  };
   const capped = (text, cap, label) => {
     const result = cutAtSentence(text, cap);
-    if (result.cut) cutFields.push({ label, text });
+    if (result.cut) hiddenFields.push({ label: `${label} (continued)`, text: remainderOf(text, result.text) });
     return escapeProse(result.text);
   };
+  const fixText = (text, label) => capped(String(text).replace(/\s+/g, " "), RECOMMENDATION_CAP, label);
   lines.push(`**Problem:** ${capped(finding.summary, PROBLEM_CAP, "Problem")}`);
-  if (typeof finding.failingCase === "string" && finding.failingCase.trim().length > 0) {
-    if (isCodeLike(finding.failingCase)) {
-      const result = cutAtSentence(finding.failingCase, FAILING_CASE_CAP);
-      if (result.cut) cutFields.push({ label: "Failing case", text: finding.failingCase, code: true });
-      lines.push("**Failing case:**", ...fenceCode(result.text));
-    } else {
-      lines.push(`**Failing case:** ${capped(finding.failingCase, FAILING_CASE_CAP, "Failing case")}`);
-    }
-  }
-  const fixSteps = (text, label) => {
-    const recommendation = cutAtSentence(text, RECOMMENDATION_CAP);
-    const allSteps = splitSentences(recommendation.text).map((step) => step.replace(/^\d+[.)]\s+/, ""));
-    const steps = allSteps.slice(0, MAX_FIX_STEPS);
-    if (recommendation.cut || steps.length < allSteps.length) cutFields.push({ label, text });
-    return steps;
-  };
   if (hasRecommendation(finding)) {
-    const steps = fixSteps(finding.recommendation, "Fix");
-    if (steps.length === 1) {
-      lines.push(`**Fix:** ${escapeProse(steps[0])}`);
-    } else {
-      lines.push("**Fix:**", ...steps.map((step, i) => `${i + 1}. ${escapeProse(step)}`));
-    }
+    lines.push(`**Fix:** ${fixText(finding.recommendation, "Fix")}`);
+  }
+  if (typeof finding.failingCase === "string" && finding.failingCase.trim().length > 0) {
+    hiddenFields.push({ label: "Failing case", text: finding.failingCase, code: isCodeLike(finding.failingCase) });
   }
   // A defectKey merge can join different summaries: each further distinct
   // member adds its own Problem and Fix line, labelled with its angle. An
@@ -571,14 +564,14 @@ export function renderInlineCommentBody(finding, { round }) {
     const angle = neutralizeHeaderSeparator(escapeProse(member.angle));
     lines.push(`**Problem (${angle}):** ${capped(member.summary, PROBLEM_CAP, `Problem (${angle})`)}`);
     if (hasRecommendation(member)) {
-      lines.push(`**Fix (${angle}):** ${fixSteps(member.recommendation, `Fix (${angle})`).map((step) => escapeProse(step)).join(" ")}`);
+      lines.push(`**Fix (${angle}):** ${fixText(member.recommendation, `Fix (${angle})`)}`);
     }
   }
-  if (cutFields.length > 0) {
+  if (hiddenFields.length > 0) {
     lines.push("<details><summary>Details</summary>", "");
-    for (const field of cutFields) {
+    for (const field of hiddenFields) {
       const rendered = field.code ? encodeCommentDelimiters(field.text) : escapeProse(field.text);
-      const text = boundDetailsText(rendered, cutFields.length, { prose: !field.code });
+      const text = boundDetailsText(rendered, hiddenFields.length, { prose: !field.code });
       // Prose stays on the label line so untrusted text never starts at column 0
       // (it could otherwise forge the header parseRenderedJudgeDisposition reads).
       lines.push(...(field.code ? [`**${field.label}:**`, ...fenceCode(text)] : [`**${field.label}:** ${text}`]), "");
@@ -618,7 +611,8 @@ export function buildNonLocatableFindingMarker(finding, { round }) {
   // marker: deciding disposition off a raw, un-normalized legacy spelling
   // would misclassify it (e.g. "must-fix" !== "high").
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
-  const disposition = severity === "high" ? undefined : "deferred";
+  // An act finding goes to the fixer, so it never carries a deferral stamp.
+  const disposition = severity === "high" || finding.judgeDisposition === "act" ? undefined : "deferred";
   // Carry the operator-visibility signal onto the marker (ov=1 only when
   // true) so a later reader (the folded-filing pass, close-gate-findings.mjs)
   // can decide fileability without re-reading the ephemeral ledger. Backward
@@ -655,33 +649,54 @@ export function renderNonLocatableBlock(finding, { round }) {
   return lines.join("\n");
 }
 
-// Fold every finding below the inline severity floor into ONE collapsed
-// <details> block instead of posting each as its own inline resolvable
-// thread. Each entry pairs an invisible marker (fp+severity+angle+round+ov+
-// disposition=deferred — buildNonLocatableFindingMarker, the same shape a
-// body-filed finding renders) with a visible `file:line + summary` bullet, so
+// Verdict-body visibility (GATE-COMMENT-INLINE-SEVERITY-FLOOR): a finding the
+// judge disposed `act`, or one at a blocking severity, is always visible. A
+// finding with no judge disposition keeps the severity rule: at or above the
+// inline floor is visible. Every other finding folds into the Details block.
+export function isVisibleFinding(finding, { floor, blockingSeverities = [] }) {
+  if (finding.judgeDisposition === "act") return true;
+  const severity = normalizeSeverity(finding.severity);
+  if (blockingSeverities.some((s) => normalizeSeverity(s) === severity)) return true;
+  return !finding.judgeDisposition && !isBelowInlineFloor(finding.severity, floor);
+}
+
+const FOLD_GROUPS = ["Deferred", "Rejected", "Not judged"];
+function foldGroupOf(finding) {
+  if (finding.judgeDisposition === "defer") return "Deferred";
+  if (finding.judgeDisposition === "reject") return "Rejected";
+  return "Not judged";
+}
+
+// The verdict body's ONE collapsed Details block: the folded findings grouped
+// by judge disposition, then the clean-angle roster line. Each folded entry
+// pairs an invisible marker (buildNonLocatableFindingMarker, the same shape a
+// body-filed finding renders) with a `file:line + summary` bullet, so
 // GATE-EXEC-FINDING-THREADS' cross-round fingerprint suppression
 // (collectSuppressedFingerprints, which reads own review bodies) still
 // renders a folded finding exactly once across rounds. Markers stay at
 // column 0 (FINDING_MARKER_RE/collectFingerprints are line-start anchored).
-// Returns "" when `foldedFindings` is empty — no block for a clean round.
-export function renderFoldedFindingsBlock(foldedFindings, { round }) {
-  if (!Array.isArray(foldedFindings) || foldedFindings.length === 0) return "";
-  const lines = [
-    "<details>",
-    `<summary>Suppressed low/nit findings (${foldedFindings.length}) — below the inline severity floor</summary>`,
-    "",
-  ];
-  for (const finding of foldedFindings) {
-    const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
-    lines.push(buildNonLocatableFindingMarker(finding, { round }));
-    // Location prefix mirrors renderNonLocatableBlock's Location logic:
-    // files[0] gets the :line ref, absent files renders no prefix.
-    const hasFile = Array.isArray(finding.files) && finding.files.length > 0;
-    const lineRef = hasFile && Number.isInteger(finding.line) ? `:${finding.line}` : "";
-    const locationPrefix = hasFile ? `\`${sanitizeCodeSpan(finding.files[0])}${lineRef}\` ` : "";
-    lines.push(`- ${locationPrefix}${renderFindingLine({ ...finding, severity })}`);
+// Returns "" when there is nothing to fold and no roster.
+export function renderVerdictDetailsBlock({ foldedFindings = [], cleanRosterLine = null, round }) {
+  const lines = [];
+  for (const group of FOLD_GROUPS) {
+    const members = foldedFindings.filter((f) => foldGroupOf(f) === group);
+    if (members.length === 0) continue;
+    lines.push(`**${group} (${members.length})**`);
+    for (const finding of members) {
+      const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
+      lines.push(buildNonLocatableFindingMarker(finding, { round }));
+      // Location prefix mirrors renderNonLocatableBlock's Location logic:
+      // files[0] gets the :line ref, absent files renders no prefix.
+      const hasFile = Array.isArray(finding.files) && finding.files.length > 0;
+      const lineRef = hasFile && Number.isInteger(finding.line) ? `:${finding.line}` : "";
+      const locationPrefix = hasFile ? `\`${sanitizeCodeSpan(finding.files[0])}${lineRef}\` ` : "";
+      lines.push(`- ${locationPrefix}${renderFindingLine({ ...finding, severity })}`);
+    }
+    lines.push("");
   }
+  if (cleanRosterLine) lines.push(cleanRosterLine);
+  if (lines.length === 0) return "";
+  lines.unshift("<details>", "<summary>Details</summary>", "");
   lines.push("</details>");
   return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
