@@ -650,12 +650,14 @@ export function renderNonLocatableBlock(finding, { round }) {
 }
 
 // Verdict-body visibility (GATE-COMMENT-INLINE-SEVERITY-FLOOR): a finding the
-// judge disposed `act`, or one at a blocking severity, is always visible. A
+// judge disposed `act`, a `question`, an unrecognized severity, or one at a blocking severity, is always visible. A
 // finding with no judge disposition keeps the severity rule: at or above the
 // inline floor is visible. Every other finding folds into the Details block.
 export function isVisibleFinding(finding, { floor, blockingSeverities = [] }) {
   if (finding.judgeDisposition === "act") return true;
   const severity = normalizeSeverity(finding.severity);
+  // A question never folds (its thread blocks gate-close) and an unrecognized severity fails open.
+  if (severity === "question" || !SEVERITY_ORDER.includes(severity)) return true;
   if (blockingSeverities.some((s) => normalizeSeverity(s) === severity)) return true;
   return !finding.judgeDisposition && !isBelowInlineFloor(finding.severity, floor);
 }
@@ -684,8 +686,9 @@ export function renderVerdictDetailsBlock({ foldedFindings = [], cleanRosterLine
     lines.push(`**${group} (${members.length})**`);
     for (const finding of members) {
       const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
-      // A deferred entry links the PR it is deferred on (issue=<pr>).
-      const issue = group === "Deferred" && Number.isInteger(pr) && pr > 0 ? pr : undefined;
+      // A deferred entry links its deferral target: the recorded followUpIssueNumber, else the PR.
+      const target = Number.isInteger(finding.followUpIssueNumber) && finding.followUpIssueNumber > 0 ? finding.followUpIssueNumber : pr;
+      const issue = group === "Deferred" && Number.isInteger(target) && target > 0 ? target : undefined;
       lines.push(buildNonLocatableFindingMarker(finding, { round, issue }));
       // Location prefix mirrors renderNonLocatableBlock's Location logic:
       // files[0] gets the :line ref, absent files renders no prefix.

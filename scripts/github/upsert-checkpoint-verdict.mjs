@@ -1478,6 +1478,10 @@ function buildStructuredFindingsDigest(angles, severityCounts) {
   const findingWord = totalFindings === 1 ? "finding" : "findings";
   return `${angles.length} ${angleWord} reviewed; ${totalFindings} ${findingWord} (see per-angle breakdown below).`;
 }
+// Neutralize every HTML comment delimiter (HTML5 also closes a comment on `--!>`).
+function hideCommentDelimiters(text) {
+  return text.replaceAll("-->", "--&gt;").replaceAll("--!>", "--!&gt;").replaceAll("<!--", "&lt;!--");
+}
 function renderExecutionModeLine(executionMode, inlineReason) {
   const mode = executionMode ?? DEFAULT_EXECUTION_MODE;
   if (mode === "inline_single_agent") {
@@ -1565,7 +1569,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     const sevs = blockCleanOnFindingSeverities.join(", ");
     hiddenLines.push(`**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`);
   }
-  lines.push("<!--", ...hiddenLines.map((l) => l.replaceAll("-->", "--&gt;").replaceAll("<!--", "&lt;!--")), "-->");
+  lines.push("<!--", ...hiddenLines.map(hideCommentDelimiters), "-->");
   if (Array.isArray(gateBlockers) && gateBlockers.length > 0) {
     lines.push("", renderGateBlockerItemsList(gateBlockers));
   }
@@ -3370,7 +3374,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // when verdict/summary/nextAction/executionMode AND the inline reason all
   // match, so a changed/added --inline-reason forces a comment update.
   const desiredInlineReason = desiredExecutionMode === "inline_single_agent"
-    ? (options.inlineReason ?? null)
+    ? (options.inlineReason == null ? null : hideCommentDelimiters(options.inlineReason))
     : null;
   const existingInlineReason = (existing?.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent"
     ? (existing?.inlineReason ?? null)

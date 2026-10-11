@@ -73,14 +73,14 @@ verdict body's one `Details` block, grouped by disposition: `Deferred (N)`, `Rej
 severity/angle/summary bullet plus its own INVISIBLE fingerprint+`disposition=deferred` marker at
 line start, the same shape a body-filed marker carries, so cross-round fingerprint suppression
 still applies and a folded finding renders exactly once. A deferred finding keeps its deferral
-comment or `issue=<n>` link, so folding hides no record (a folded Deferred marker carries `issue=<pr>` on a PR target). An `act` finding never folds and its
+comment or `issue=<n>` link, so folding hides no record (a folded Deferred marker carries `issue=<n>` for its deferral target: the linked spec issue, else the PR). An `act` finding never folds and its
 marker never carries `disposition=deferred`, on any track: below the floor it takes the normal
 track (an inline thread when locatable, a visible body entry otherwise). A folded finding creates
 NO gate-authored review thread and never enters `unresolvedGateThreadCount`
 (`GATE-EXEC-FINDING-THREADS`,
 [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
 Lowering `inlineSeverityFloor` changes only the no-disposition rule. The config schema rejects an
-out-of-vocabulary value, including `"high"`. An unrecognized severity fails OPEN (visible).
+out-of-vocabulary value, including `"high"`. An unrecognized severity fails OPEN (visible), whatever the judge disposition.
 `blockCleanOnFindingSeverities` semantics are unaffected: the verdict is computed upstream from the
 ledger, never from which track a finding renders on.
 

@@ -527,6 +527,18 @@ test("isVisibleFinding: act and blocking severities are visible whatever the flo
   assert.equal(isVisibleFinding({ severity: "medium", judgeDisposition: "reject" }, v), false);
   assert.equal(isVisibleFinding({ severity: "low" }, v), false);
   assert.equal(isVisibleFinding({ severity: "medium" }, v), true);
+  assert.equal(isVisibleFinding({ severity: "low", judgeDisposition: "reject" }, v), false);
+  for (const judgeDisposition of ["reject", "defer"]) {
+    assert.equal(isVisibleFinding({ severity: "question", judgeDisposition }, v), true);
+    assert.equal(isVisibleFinding({ severity: "bogus", judgeDisposition }, v), true);
+  }
+});
+
+test("renderVerdictDetailsBlock: a Deferred marker stamps followUpIssueNumber, else the PR", () => {
+  const issueOf = (f) => parseFindingMarker(renderVerdictDetailsBlock({ foldedFindings: [f], round: 1, pr: 7 }).split("\n").find((l) => l.startsWith("<!-- dev-loops:finding "))).issue;
+  const base = { severity: "low", angle: "a", summary: "s", judgeDisposition: "defer" };
+  assert.equal(issueOf({ ...base, followUpIssueNumber: 500 }), 500);
+  assert.equal(issueOf(base), 7);
 });
 
 test("buildNonLocatableFindingMarker: an act finding never carries disposition=deferred", () => {
