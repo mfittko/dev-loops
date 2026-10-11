@@ -36,6 +36,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { evaluateAdrTripwire as defaultEvaluateAdrTripwire } from "../loop/check-adr-tripwire.mjs";
 import { defaultFetchOrigin } from "../loop/standing-authorization.mjs";
 import { waiveAdrTripwire as defaultWaiveAdrTripwire } from "./waive-adr-tripwire.mjs";
+import { findAdrNumberCollisions } from "../docs/validate-decision-records.mjs";
 
 const VALID_METHODS = new Set(["squash", "merge", "rebase"]);
 
@@ -83,7 +84,9 @@ Optional:
 Preconditions (each refuses with a machine-readable reason naming the failing one):
   human_approver, mergeable, ci_green, title_markers, gate_evidence,
   copilot_convergence, size_budget_human_approval, merge_approval, adr_tripwire,
-  retrospective_checkpoint (only when workflow.requireRetrospective is true).
+  retrospective_checkpoint (only when workflow.requireRetrospective is true),
+  adr_number_collision (a PR-added docs/decisions record shares its number with
+  the base branch tip).
   adr_tripwire fetches the PR head and evaluates the ADR tripwire at
   origin/<base>...<head> against the current PR body, on every merge class. It
   refuses when the tripwire blocks or cannot be evaluated. When the only cause
@@ -301,6 +304,40 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
     if (docsOnly) return docsOnly;
   }
   return (await isInternalOnlyPr({ repo, pr, patterns: config?.internalPathPatterns }, runtime)) ? pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED) : null;
+}
+
+// Returns an adr_number_collision refusal reason when the PR adds a decision
+// record whose number the base branch tip already holds; null otherwise. Reads
+// the tip at merge time, so a record merged after the PR branched still counts.
+async function resolveAdrNumberCollisionRefusal({ repo, pr, baseRefName }, { env, ghCommand, runChild, ghJson }) {
+  const files = flattenPaginatedSlurp(await ghJson(
+    ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/files?per_page=100`],
+    { env, ghCommand, runChild },
+  ));
+  const isRecord = (n) => typeof n === "string" && /^docs\/decisions\/[^/]+\.md$/.test(n);
+  const base = (n) => n.slice("docs/decisions/".length);
+  const addedNames = files.filter((f) => ["added", "copied", "renamed"].includes(f?.status) && isRecord(f.filename)).map((f) => base(f.filename));
+  if (addedNames.length === 0) return null;
+  if (!baseRefName) return "could not check ADR numbers: the PR base branch name is unknown";
+  const removedNames = files
+    .flatMap((f) => (f?.status === "removed" ? [f.filename] : f?.status === "renamed" ? [f.previous_filename] : []))
+    .filter(isRecord).map(base);
+  let tipNames;
+  try {
+    // ponytail: API ceilings, 1000 directory entries and 3000 PR files; page or use git trees if a repo outgrows them
+    const listing = await ghJson(["api", `repos/${repo}/contents/docs/decisions?ref=${encodeURIComponent(baseRefName)}`], { env, ghCommand, runChild });
+    tipNames = (Array.isArray(listing) ? listing : []).map((e) => e?.name).filter((n) => typeof n === "string");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    // Only the contents API's "Not Found (HTTP 404)" for a missing directory is an empty tip; a missing base ref ("No commit found for the ref") and every other error refuse.
+    if (!/Not Found \(HTTP 404\)/.test(detail) || /No commit found for the ref/i.test(detail)) return `could not read docs/decisions on ${baseRefName} to check ADR numbers: ${detail}`;
+    tipNames = [];
+  }
+  const collisions = findAdrNumberCollisions({ tipNames, addedNames, removedNames });
+  if (collisions.length === 0) return null;
+  return collisions
+    .map((c) => `PR adds docs/decisions/${c.file} but ${baseRefName} already holds docs/decisions/${c.holder} (ADR-PATH-NUMBERING); rebase onto ${baseRefName} and renumber the record to ${c.nextFree}`)
+    .join("; ");
 }
 
 // Returns a copilot_convergence refusal reason when a current-head Copilot
@@ -640,6 +677,11 @@ export async function mergePr(options, runtime = {}) {
     { env, ghCommand, runChild, ghJson },
   );
 
+  const adrNumberCollisionRefusal = await resolveAdrNumberCollisionRefusal(
+    { repo: options.repo, pr: options.pr, baseRefName: typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "" },
+    { env, ghCommand, runChild, ghJson },
+  ).catch((error) => `could not check ADR numbers: ${error instanceof Error ? error.message : String(error)}`);
+
   const verdict = evaluateMergePreconditions({
     humanApprovedBy: options.humanApprovedBy,
     mergeable: typeof prView?.mergeable === "string" ? prView.mergeable : null,
@@ -663,6 +705,7 @@ export async function mergePr(options, runtime = {}) {
     copilotAbsentReviewDisposition,
     copilotBodyDisposition,
     copilotLaterReviewRefusal,
+    adrNumberCollisionRefusal,
     // Null when workflow.requireRetrospective is unset/false: nothing is read then.
     retrospective: resolveWorkflowConfig(configLoad?.config, "requireRetrospective") === true
       ? resolvePendingRetrospectives({ config: configLoad.config, cwd, env })
