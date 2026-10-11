@@ -1392,6 +1392,49 @@ test("create-pr refuses before gh when the diff adds an issue-citing runtime com
   }
 });
 
+test("create-pr preflight diffs the --head branch, not the cwd HEAD (LOCAL-COMMENT-DISCIPLINE)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-headref-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, {
+      headFiles: [
+        { path: "scripts/sample.mjs", content: "// see #2171 for context\nexport const x = 1;\n" },
+      ],
+    });
+    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
+    execFileSync("git", ["checkout", "-q", "main"], { cwd: tempDir });
+    execFileSync("git", ["reset", "-q", "--hard", "origin/main"], { cwd: tempDir });
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+      "--title", "T", "--body", "no closing keyword", "--lightweight",
+    ], { env, cwd: tempDir, noRecord: true });
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stderr).error, /LOCAL-COMMENT-DISCIPLINE/);
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr refuses with head_unresolvable naming git fetch origin when --head resolves nowhere", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-nohead-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "no-such-branch",
+      "--title", "T", "--body", "no closing keyword", "--lightweight",
+    ], { env, cwd: tempDir, noRecord: true });
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.code, "head_unresolvable");
+    assert.match(payload.error, /head_unresolvable: .*git fetch origin/u);
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("create-pr admits a diff whose issue-citing comment carries the comment-discipline:allow escape marker", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-allow-"));
   try {

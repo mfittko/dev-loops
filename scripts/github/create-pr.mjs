@@ -162,6 +162,7 @@ function isResolvableRef(ref, { cwd, env }) {
     throw err; // malformed ref, I/O error, missing git: fail closed
   }
 }
+const HEAD_UNRESOLVABLE = "head_unresolvable";
 // Both `--repo owner/name` and `--repo=owner/name` — gh accepts either form.
 const REPO_FLAG_PATTERN = /^--repo(?:$|=)/u;
 // An explicit base in any form `gh pr create` accepts: `--base <b>`,
@@ -616,15 +617,28 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // Once the base resolves, evaluateCommentDiscipline runs uncaught: a git I/O
   // error, a malformed-ref rejection, or an evaluator bug propagates and
   // refuses PR creation, matching how the ready boundary lets it throw.
+  let resolvedHead = "HEAD";
   const baseForDiff = hasBase ? getFlagValue(forwardedArgv, BASE_FLAG_PATTERN) : baseDefault;
   if (typeof baseForDiff === "string" && baseForDiff.trim().length > 0) {
     const bareBase = baseForDiff.trim().replace(/^origin\//u, "");
     const diffCwd = runtime.cwd ?? process.cwd();
     const diffEnv = runtime.env ?? process.env;
     if (isResolvableRef(`origin/${bareBase}`, { cwd: diffCwd, env: diffEnv })) {
+      const headFlagValue = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN);
+      if (headFlagValue) {
+        const branch = headFlagValue.trim().replace(/^[^:]*:/u, "");
+        const found = [branch, `origin/${branch}`].find((ref) => isResolvableRef(ref, { cwd: diffCwd, env: diffEnv }));
+        if (!found) {
+          throw Object.assign(
+            parseError(`${HEAD_UNRESOLVABLE}: cannot resolve --head ${branch} locally or as origin/${branch}; run \`git fetch origin\` and retry`),
+            { code: HEAD_UNRESOLVABLE },
+          );
+        }
+        resolvedHead = found;
+      }
       const commentDiscipline = await evaluateCommentDiscipline({
         base: `origin/${bareBase}`,
-        head: "HEAD",
+        head: resolvedHead,
         repoRoot: diffCwd,
         env: diffEnv,
       });
@@ -682,8 +696,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   if (code === 0 && typeof baseForDiff === "string" && baseForDiff.trim().length > 0) {
     const earlySurface = await (runtime.evaluateEarlySurface ?? evaluateEarlySurface)({
       baseRefName: baseForDiff.trim().replace(/^origin\//u, ""),
-      // ponytail: a bare branch name; owner:branch forms do not resolve locally and report unknown
-      head: getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN) ?? "HEAD",
+      head: resolvedHead,
       prBody: body ?? "",
       repoRoot: runtime.cwd ?? process.cwd(),
     });
@@ -711,9 +724,9 @@ if (isDirectCliRun(import.meta.url)) {
     const exitCode = await main();
     process.exitCode = exitCode;
   } catch (error) {
-    // Only the typed pre-PR refusal carries `code` in the envelope; formatCliError forwards it for config_load_failed alone.
+    // Only the typed pre-PR and head refusals carry `code` in the envelope; formatCliError forwards it for config_load_failed alone.
     const envelope = JSON.parse(formatCliError(error));
-    if (error?.code === PRE_PR_REVIEW_MISSING) envelope.code = error.code;
+    if (error?.code === PRE_PR_REVIEW_MISSING || error?.code === HEAD_UNRESOLVABLE) envelope.code = error.code;
     process.stderr.write(`${JSON.stringify(envelope)}\n`);
     process.exitCode = 1;
   }
