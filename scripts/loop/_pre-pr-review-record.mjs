@@ -58,7 +58,7 @@ export function writePrePrReviewRecord({ cwd = process.cwd(), verdict, dispositi
  * `{ ok: false, code: "pre_pr_review_missing", detail }`.
  */
 export async function validatePrePrReview({ cwd = process.cwd(), head: wanted, base, rules } = {}) {
-  const missing = (detail) => ({ ok: false, code: PRE_PR_REVIEW_MISSING, detail: `${detail}. Record the review with: ${RECORD_COMMAND}` });
+  const missing = (detail) => ({ ok: false, code: PRE_PR_REVIEW_MISSING, detail: `${detail} (PRE-PR-BEFORE-FIRST-PUSH). Record the review with: ${RECORD_COMMAND}` });
   const resolve = (ref) => { try { return git(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]); } catch { return null; } };
   let branch = wanted;
   if (!branch) { try { branch = git(cwd, ["symbolic-ref", "--short", "HEAD"]); } catch { /* detached HEAD: compare HEAD only */ } }
