@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { runNodeWithPrePrRecord, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo, repeatedLinesContent } from "../_helpers.mjs";
 
-import { buildCreatePrArgs, detectClosingKeyword, extractClosingIssueNumber, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
+import { buildCreatePrArgs, main as createPrMain, detectClosingKeyword, extractClosingIssueNumber, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
 import { resolveBaseBranch } from "@dev-loops/core/config";
 
 // ADR-TRIPWIRE-EARLY-SURFACE appends one `{adrTripwire,sizeBudget}` JSON line after gh stdout.
@@ -1411,6 +1411,38 @@ test("create-pr preflight diffs the --head branch, not the cwd HEAD (LOCAL-COMME
     assert.equal(result.code, 1);
     assert.match(JSON.parse(result.stderr).error, /LOCAL-COMMENT-DISCIPLINE/);
     assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr early-surface receives the --head ref", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-early-surface-head-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
+    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
+    execFileSync("git", ["checkout", "-q", "main"], { cwd: tempDir });
+    execFileSync("git", ["reset", "-q", "--hard", "origin/main"], { cwd: tempDir });
+    const { env } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    const calls = [];
+    const stdoutWrite = process.stdout.write;
+    process.stdout.write = () => true;
+    try {
+      await createPrMain([
+        "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+        "--title", "T", "--body", "no closing keyword", "--lightweight",
+      ], {
+        cwd: tempDir,
+        env,
+        evaluateEarlySurface: async (args) => { calls.push(args); return {}; },
+        validatePrePrReview: async () => ({ ok: true }),
+        runChild: async () => ({ code: 0, stdout: "", stderr: "" }),
+      });
+    } finally {
+      process.stdout.write = stdoutWrite;
+    }
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].head, "feature");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
