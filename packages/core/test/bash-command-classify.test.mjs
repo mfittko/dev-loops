@@ -876,6 +876,33 @@ test("commandContainsInlineInterpreter handles multi-line heredocs by head (#244
   assert.equal(commandContainsInlineInterpreter("cat > /tmp/r.mjs <<'EOF'\nconsole.log(1)\nEOF"), false);
 });
 
+test("heredoc scan fails closed on pipes, quoted operators, odd delimiters and unclosed bodies (#2442)", () => {
+  // H1: a piped cat/tee heredoc executes
+  assert.equal(commandContainsDetachedWaitTool("cat <<'EOF' | bash\nnode scripts/loop/probe-copilot-review.mjs --pr 5 &\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("cat <<'EOF' | sh\nnode -e 'x'\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("tee tmp/x <<EOF | sh\nnode -e 'x'\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("cat > tmp/f <<'EOF' || true\nnode -e 'x'\nEOF"), false);
+  // M1: operator inside quoted text hides nothing
+  assert.equal(commandContainsInlineInterpreter('echo "a; cat <<EOF"\nnode -e \'x\'\nEOF'), true);
+  // M2: partly quoted or escaped delimiters keep the body; unclosed bodies stay visible
+  assert.equal(commandContainsInlineInterpreter('cat <<EO"F"\nnode -e \'x\'\nEOF'), true);
+  assert.equal(commandContainsInlineInterpreter("cat <<E\\OF\nnode -e 'x'\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("cat <<EO'F'\nnode -e 'x'\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("cat > tmp/f <<'EOF'\nnode -e 'x'\nEND"), true);
+  // Low: dot and empty path segments cannot hide a worktree path
+  assert.equal(commandContainsInlineInterpreter("cat > tmp/./worktrees/s/packages/a.mjs <<'EOF'\nx\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("cat > tmp//worktrees/s/packages/a.mjs <<'EOF'\nx\nEOF"), true);
+});
+
+test("perl and ruby use their own value-flag set (#2442)", () => {
+  for (const form of [
+    "perl -W -e 'x'", "perl -C -e 'x'", "perl -X -e 'x'", "ruby -W -e 'x'",
+    "perl -I lib -pi -e 's/a/b/' f", "perl -M strict -pi -e 's/a/b/' f", "ruby -I lib -e 'x'",
+  ]) assert.equal(commandContainsInlineInterpreter(form), true, `expected deny: ${form}`);
+  assert.equal(commandContainsInlineInterpreter("perl -Mstrict tool.pl"), false);
+  assert.equal(commandContainsInlineInterpreter("perl -W tool.pl"), false);
+});
+
 test("commandContainsDetachedWaitTool ignores inert heredoc and quoted text but denies real waits (#2442)", () => {
   const body = "cat > tmp/f <<'EOF'\nnode scripts/loop/detect-copilot-loop-state.mjs --pr 5 &\nEOF";
   assert.equal(commandContainsDetachedWaitTool(body), false);

@@ -1124,7 +1124,7 @@ export function commandContainsDetachedWaitTool(rawCommand) {
 }
 
 /** Heredoc operator: `<<`, `<<-`, optionally quoted delimiter; never the `<<<` here-string. */
-const HEREDOC_OPERATOR_RE = /(?<!<)<<(?!<)-?\s*(['"]?)([A-Za-z_][\w-]*)\1/;
+const HEREDOC_OPERATOR_RE = /(?<!<)<<(?!<)-?\s*(?:'([A-Za-z_][\w-]*)'|"([A-Za-z_][\w-]*)"|([A-Za-z_][\w-]*))(?=$|[\s;&|<>)])/;
 
 /** A `cat`/`tee` command head (env/wrapper/path prefix tolerated) plus the rest of its segment. */
 const CAT_TEE_HEAD_RE = new RegExp(`^${SHELL_EXEC_PREFIX}(cat|tee)(?:\\s+(.*))?$`);
@@ -1138,7 +1138,7 @@ const CAT_TEE_HEAD_RE = new RegExp(`^${SHELL_EXEC_PREFIX}(cat|tee)(?:\\s+(.*))?$
 function isTempPath(target) {
   const path = target.replace(/^(['"])(.*)\1$/, "$2");
   if (/[$`~]/.test(path)) return false;
-  const parts = path.split("/");
+  const parts = path.split("/").filter((p) => p && p !== ".");
   if (parts.includes("..")) return false;
   const last = parts.lastIndexOf("tmp");
   return last !== -1 && last < parts.length - 1 && parts[last + 1] !== "worktrees";
@@ -1160,8 +1160,11 @@ function scanCatTeeHeredocs(command) {
     out.push(line);
     const op = HEREDOC_OPERATOR_RE.exec(line);
     if (!op) continue;
-    const before = line.slice(0, op.index).split(SHELL_SEGMENT_SEPARATOR).pop();
-    const after = line.slice(op.index + op[0].length).split(SHELL_SEGMENT_SEPARATOR)[0];
+    const prefix = line.slice(0, op.index);
+    if (/['"]/.test(stripQuotedLiterals(prefix))) continue; // operator sits inside quoted text
+    const before = prefix.split(SHELL_SEGMENT_SEPARATOR).pop();
+    const afterRaw = line.slice(op.index + op[0].length);
+    const after = afterRaw.split(SHELL_SEGMENT_SEPARATOR)[0];
     const head = CAT_TEE_HEAD_RE.exec(`${before} ${after}`.trim());
     if (!head) continue;
     const rest = head[2] ?? "";
@@ -1171,7 +1174,13 @@ function scanCatTeeHeredocs(command) {
       const operands = rest.replace(/[\d&]*>>?\s*\S+/g, " ").split(/\s+/).filter((t) => t && !t.startsWith("-"));
       writes.push(...operands);
     }
-    while (++i < lines.length && lines[i].trim() !== op[2]) { /* skip the inert body */ }
+    // A body piped into another command (`cat <<EOF | bash`) executes: keep it.
+    if (/(?<!\|)\|(?!\|)/.test(afterRaw)) continue;
+    // Skip the inert body only when its closing delimiter exists; otherwise keep it visible.
+    const delimiter = op[1] ?? op[2] ?? op[3];
+    let end = i + 1;
+    while (end < lines.length && lines[end].trim() !== delimiter) end++;
+    if (end < lines.length) i = end;
   }
   return { text: out.join("\n"), writes };
 }
@@ -1186,6 +1195,13 @@ const SCRIPT_RUNNER_RE = new RegExp(`^${SHELL_EXEC_PREFIX}(node|bun|python3?|per
 const INTERPRETER_VALUE_FLAGS = new Set([
   "-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "-W", "-X",
 ]);
+
+/** perl and ruby take a module (-M/-m/-r) or include dir (-I) as a separate value; -W/-C/-X are boolean there. */
+const PERL_RUBY_VALUE_FLAGS = new Set(["-I", "-M", "-m", "-r"]);
+
+function valueFlagsFor(bin) {
+  return bin === "perl" || bin === "ruby" ? PERL_RUBY_VALUE_FLAGS : INTERPRETER_VALUE_FLAGS;
+}
 
 /** Whether one command segment is a form `OPS-NO-INLINE-INTERPRETER` denies. */
 function segmentIsInlineInterpreter(segment) {
@@ -1211,7 +1227,7 @@ function segmentIsInlineInterpreter(segment) {
     } else if (!t.startsWith("--") && !/^-[MmrI]/.test(t)) { // perl, ruby: -M/-m/-r name a module, -I an include dir
       if (/^-[A-Za-z0-9]*[eEi]/.test(t)) return true;
     }
-    if (INTERPRETER_VALUE_FLAGS.has(t)) i += 1;
+    if (valueFlagsFor(bin).has(t)) i += 1;
   }
   return false;
 }
@@ -1223,7 +1239,7 @@ function runnerScriptPath(segment) {
   const tokens = (m[2] ?? "").split(/\s+/).filter(Boolean);
   for (let i = 0; i < tokens.length; i++) {
     if (!tokens[i].startsWith("-")) return tokens[i].replace(/^\.\//, "");
-    if (INTERPRETER_VALUE_FLAGS.has(tokens[i])) i += 1;
+    if (valueFlagsFor(m[1].toLowerCase()).has(tokens[i])) i += 1;
   }
   return null;
 }
