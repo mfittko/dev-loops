@@ -170,7 +170,7 @@ const withRepo = (fn) => async () => {
 const onFeature = (dir) => git(dir, "checkout", "-q", "-b", "feature");
 const feature = { head: "feature", base: "main" };
 
-test("a plan-doc promotion branch (docs/**/*.md only) needs no record, but skills prose and logic do", withRepo(async (dir) => {
+test("a plan-doc promotion branch (docs/phases/**/*.md only) needs no record, but skills prose and logic do", withRepo(async (dir) => {
   onFeature(dir);
   commit(dir, "docs/phases/p.md", "# plan\n");
   assert.deepEqual(await validatePrePrReview({ cwd: dir, ...feature }), { ok: true, head: git(dir, "rev-parse", "HEAD"), planDocOnly: true });

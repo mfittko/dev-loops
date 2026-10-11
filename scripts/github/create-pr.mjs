@@ -592,7 +592,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // PRE-PR-BEFORE-FIRST-PUSH guard: a non-lightweight create needs a pre-PR review record for the
   // branch head named by --head (an `owner:` prefix is stripped), else the current HEAD. The head is the
   // local ref, or origin/<head> when only that exists; a local/remote divergence is refused. Plan-doc
-  // promotion (a diff of only docs/**/*.md) is exempt; skills/** prose needs a record.
+  // promotion (a diff of only docs/phases/**/*.md) is exempt; skills/** prose needs a record.
   if (!lightweight) {
     const headFlag = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN);
     const headRef = headFlag ? headFlag.trim().replace(/^[^:]*:/u, "") : undefined;
