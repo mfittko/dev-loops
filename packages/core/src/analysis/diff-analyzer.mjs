@@ -14,7 +14,7 @@
 // Runtime-version files like .nvmrc are REJECTED as config: classifying them
 // config would carry stale clean verdicts across a runtime bump. Unknown fails
 // closed to a full re-review.
-const DOTFILE_CONFIG_BASENAMES = new Set([".devloops"]);
+const DOTFILE_CONFIG_BASENAMES = new Set([".devloops", ".gitignore", ".gitattributes", ".editorconfig", ".dockerignore"]);
 
 // Generic classifier tables. Files are classified by principle (broad extension
 // tables + directory/basename conventions), not by a bespoke per-language rule.
@@ -62,11 +62,13 @@ const CONFIG_EXTENSIONS = new Set([
 ]);
 // Manifest basenames without a config extension.
 const CONFIG_BASENAMES = new Set([
-  "Gemfile", "go.mod", "go.sum", "requirements.txt", "pom.xml", "Dockerfile", "Makefile",
+  "Gemfile", "go.mod", "go.sum", "requirements.txt", "pom.xml", "Dockerfile", "Makefile", "CODEOWNERS",
 ]);
 
 // Prose/documentation extensions.
 const DOCS_EXTENSIONS = new Set([".md", ".markdown", ".rst", ".adoc", ".txt"]);
+// Extensionless license/notice files.
+const DOCS_BASENAME_RE = /^(LICENSE(-.+)?|COPYING|NOTICE|AUTHORS)$/;
 
 // Test conventions. A directory segment named any of these, or a basename token
 // (`*_test.*`, `*_spec.*`, `test_*`, `*.test.*`, `*.spec.*`), marks a test file.
@@ -345,7 +347,7 @@ export function classifyFile(filePath, rules) {
   if (CODE_EXTENSIONS.has(ext) || CODE_BASENAMES.has(base) || (!underDocs && WEB_CODE_EXTENSIONS.has(ext))) {
     return "code";
   }
-  if (fp.startsWith("docs/") || DOCS_EXTENSIONS.has(ext)) {
+  if (fp.startsWith("docs/") || DOCS_EXTENSIONS.has(ext) || DOCS_BASENAME_RE.test(base)) {
     return "docs";
   }
   return "unknown";

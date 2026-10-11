@@ -871,3 +871,18 @@ test("analyzeDiff → resolveDynamicAngles: .devloops + .markdown repro classifi
     ],
   );
 });
+
+test("classifyFile: license and ownership files are not unknown (#2732)", () => {
+  for (const f of [".gitignore", ".gitattributes", ".editorconfig", ".dockerignore", "CODEOWNERS"]) {
+    assert.equal(classifyFile(f), "config", f);
+  }
+  for (const f of ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "COPYING", "NOTICE", "AUTHORS", "LICENSE.md", "LICENSE-MIT.txt"]) {
+    assert.equal(classifyFile(f), "docs", f);
+  }
+  assert.equal(classifyFile(".nvmrc"), "unknown");
+  assert.equal(classifyFile(".ruby-version"), "unknown");
+});
+
+test("classifyFile: .github/CODEOWNERS stays ci (the .github/ rule wins)", () => {
+  assert.equal(classifyFile(".github/CODEOWNERS"), "ci");
+});

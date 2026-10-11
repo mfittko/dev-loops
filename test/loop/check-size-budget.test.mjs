@@ -801,3 +801,18 @@ test("fail-closed: an ambiguous/unparseable changed line is counted as logic, ne
   });
   assert.equal(result.wholeLogicLoc, 1);
 });
+
+test("a license/ownership-only diff passes the size budget with no classify rules (#2732)", () => {
+  const paths = [".gitignore", "CODEOWNERS", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "LICENSE.md"];
+  const result = computeSizeBudget({
+    nameStatusOutput: paths.map((p) => `A\t${p}`).join("\n") + "\n",
+    diffOutput: paths
+      .map((p) => `diff --git a/${p} b/${p}\nnew file mode 100644\n--- /dev/null\n+++ b/${p}\n@@ -0,0 +1,2 @@\n+line one\n+line two\n`)
+      .join(""),
+    numstatOutput: numstatZ(paths.map((p) => [200, 0, p])),
+    sizeConfig: SIZE_CONFIG,
+    rules: null,
+  });
+  assert.equal(result.outcome, "pass");
+  assert.ok(!result.reasons.some((r) => r.includes("unclassified")));
+});
