@@ -116,7 +116,7 @@ Output (stdout, JSON):
     "deferredResolved": <disposition reply+resolve count>,
     "rejectClosed": <answered, judge-rejected question threads reply+resolved this pass (ADR 0088); 0 when none qualify>,
     "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer + reject-close passes; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
-    "foldedFiled": <#2263: operator-visible folded (below gates.<gate>.inlineSeverityFloor) low findings newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); a nit or a non-operator-visible low is never filed>,
+    "foldedFiled": <#2263: operator-visible folded findings (not visible per the judge-disposition rule) newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); on a PR target no comment is posted and it counts the folded entries recorded by their verdict-body marker (issue=<pr>); a nit or a non-operator-visible low is never filed>,
     "followUpIssueNumber"?: <the deferral comment target number (the linked spec issue, or the PR itself); present when the round had a fileable thread target OR a fileable folded finding>,
     "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted; that thread stays unresolved rather than deadlocking the batch (#1882)> }
 

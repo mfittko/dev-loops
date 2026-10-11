@@ -35,7 +35,7 @@ the opt-in findings comment (`gates.postFindingsComments`, `GATE-COMMENT-IDENTIT
 the batched deferral comment (`<!-- dev-loops:deferred-summary -->`) that `judge-pass.mjs` and
 `close-gate-findings.mjs` post for a round's deferred findings, at most one per tool run, on the
 linked spec issue (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`). When the target is the PR itself no
-deferral comment is posted: the verdict body's `Deferred (N)` entries are the record.
+deferral comment is posted: each deferred thread's own stamped marker and reply, and each folded entry's marker in the group it renders under in `Details`, are the record.
 
 `GATE-COMMENT-SUPERSEDE-OUTDATED`: When a new `draft_gate` (resp. `pre_approval_gate`) verdict
 is created, `upsert-checkpoint-verdict.mjs` folds the SAME gate's prior verdict reviews recorded
@@ -67,7 +67,7 @@ without a judge) keeps the severity rule: it is visible when it ranks at or abov
 `gates.<gate>.inlineSeverityFloor`. The floor's valid values are `medium` (default), `low`, `nit`.
 The severity rank order is high, question, medium, low, nit. A `question` NEVER folds at any
 floor, because its resolvable thread blocks gate-close until answered
-(`GATE-EXEC-THREAD-DISPOSITION`). Every other finding FOLDS, regardless of locatability, into the
+(`GATE-EXEC-THREAD-DISPOSITION`). A locatable finding at or above the inline floor, or visible by the rule above, keeps its inline thread whatever its judge disposition (inline thread creation keeps its rules on a create; an update cannot add inline comments). Every other finding FOLDS into the
 verdict body's one `Details` block, grouped by disposition: `Deferred (N)`, `Rejected (N)` and
 `Not judged (N)`. Each folded entry renders as a `file:line`-prefixed (when known)
 severity/angle/summary bullet plus its own INVISIBLE fingerprint+`disposition=deferred` marker at
@@ -90,7 +90,7 @@ visible findings and before the gate-evidence note. It holds the folded groups a
 renders in the verdict body (remaining gate blocker items render as a visible list). The visible
 part holds the gate name, `Reviewed head SHA`, the verdict, the findings summary line, the visible
 findings and `Next action`. `Next action` derives from the visible set: with no `act` finding, no
-blocking-severity finding (visible or suppressed from an earlier round) and no gate blocker it never reads `stay draft and fix`; it reads
+blocking-severity finding (visible or suppressed from an earlier round), no other visible finding (a `question`, an unrecognized severity, or an unjudged finding at or above the floor) and no gate blocker it never reads `stay draft and fix`; it reads
 `rerun gate`. The visible-versus-renderer-only split applies to the main verdict renderer; the fallback poster and the `--findings-json` path keep their own layout. The `Execution mode` and `Blocking severities` lines are renderer-only. They render
 inside one HTML comment (`<!--` and `-->` on their own lines, one field per line) so the posted body
 carries both values and the reader does not see them.
@@ -140,7 +140,7 @@ inline surface.
 `GATE-COMMENT-REVIEWER-STYLE`: reviewers MUST write each finding by these rules.
 
 1. Lead with the point.
-2. Give one action per recommendation. Use numbered steps for more than one action.
+2. Give one action per recommendation, as one short fix statement. The renderer collapses whitespace, so numbered steps flatten into one line.
 3. Write no preamble, recap or closer.
 4. Cap every list at five ranked items. The ledger holds the rest.
 5. Use a matter-of-fact tone.
@@ -375,7 +375,7 @@ finding's record.
 <!-- rule: GATE-COMMENT-VALIDATION-REPORTING -->
 `GATE-COMMENT-VALIDATION-REPORTING`: Keep the visible verdict body compact, deterministic, and
 slightly human-friendly (labels like `Gate review`, `Reviewed head SHA`, `Verdict`,
-`Blocking severities`, `Findings summary`, `Next action`); gate name and reviewed head SHA
+`Findings summary`, `Next action`; `Blocking severities` renders inside the hidden HTML comment); gate name and reviewed head SHA
 MUST appear on labeled field lines from the recognized label set (`Gate review` / `Gate` / `Gate name`; `Reviewed head SHA` / `Head SHA` / `Head SHA reviewed`). Validation reporting
 MUST stay concise by default — command names plus pass/fail status, aggregate counts, and
 current-head CI/check status, never raw passing log streams. Any included command output

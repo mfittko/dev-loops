@@ -2274,10 +2274,37 @@ test("#2263: a nit and a non-operator-visible low fold with no filing (net-reduc
   ));
 });
 
-test("an operator-visible folded low the judge disposed act is not listed — no deferral-comment calls", async () => {
+test("an operator-visible low the judge disposed act is visible, never folds, and so is never listed — no deferral-comment calls", async () => {
   const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true, judgeDisposition: "act" };
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.foldedFiled, 0);
+      assert.equal(result.followUpIssueNumber, undefined);
+    },
+  ));
+});
+
+test("a past-window folded medium the judge rejected is listed in the deferral comment (blocking [high])", async () => {
+  const finding = { severity: "medium", angle: "naming", summary: "rejected medium past the fix window", judgeDisposition: "reject" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [] }),
+      ...deferralCommentEntries(9601, { contains: [fingerprintFinding(finding)] }),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.foldedFiled, 1);
+      assert.equal(result.followUpIssueNumber, 9601);
+    },
+  ));
+});
+
+test("a blocking-severity high the judge rejected is visible, so it is excluded from the folded filing pass", async () => {
+  const finding = { severity: "high", angle: "naming", summary: "rejected high", judgeDisposition: "reject" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [] }),
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.foldedFiled, 0);

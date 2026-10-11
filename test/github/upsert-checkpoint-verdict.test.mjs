@@ -7750,7 +7750,8 @@ async function postDispositionRound(tempDir, findings) {
     inlineReason: "single-agent inline review (test)",
   }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
   const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
-  return { result, body: JSON.parse(postCall.stdinText).body };
+  const posted = JSON.parse(postCall.stdinText);
+  return { result, body: posted.body, posted };
 }
 
 test("upsert-checkpoint-verdict --findings-ledger: the body shows act and blocking findings and folds the rest by judge disposition in one Details block", async () => {
@@ -7781,6 +7782,28 @@ test("upsert-checkpoint-verdict --findings-ledger: the body shows act and blocki
     assert.match(body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=medium angle=coverage round=1 disposition=deferred issue=17 -->$/m);
     assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
   }, { prefix: "dev-loops-upsert-disposition-split-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: inline threads keep today's rules whatever the judge disposition (ng:0)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { result, body, posted } = await postDispositionRound(tempDir, [
+      { severity: "medium", angle: "coverage", summary: "locatable reject medium", judgeDisposition: "reject", files: ["src/db.mjs"], line: 2 },
+      { severity: "medium", angle: "dry", summary: "locatable defer medium", judgeDisposition: "defer", files: ["src/db.mjs"], line: 3 },
+      { severity: "low", angle: "naming", summary: "locatable act low", judgeDisposition: "act", files: ["src/db.mjs"], line: 3 },
+      { severity: "low", angle: "style", summary: "locatable defer low", judgeDisposition: "defer", files: ["src/db.mjs"], line: 2 },
+      { severity: "medium", angle: "scope", summary: "body only reject medium", judgeDisposition: "reject" },
+    ]);
+    assert.equal(result.inlineComments, 3);
+    assert.equal(result.folded, 2);
+    const inline = JSON.stringify(posted.comments);
+    for (const text of ["locatable reject medium", "locatable defer medium", "locatable act low"]) {
+      assert.ok(inline.includes(text), text);
+    }
+    const details = body.slice(body.indexOf("<details>"));
+    for (const text of ["locatable defer low", "body only reject medium"]) {
+      assert.ok(details.includes(text) && !inline.includes(text), text);
+    }
+  }, { prefix: "dev-loops-upsert-disposition-inline-" });
 });
 
 test("upsert-checkpoint-verdict --findings-ledger: with only deferred and rejected findings the next action never says stay draft and fix, and Execution mode renders inside an HTML comment", async () => {

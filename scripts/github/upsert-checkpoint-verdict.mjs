@@ -39,6 +39,7 @@ import {
   findOwnPendingReview,
   findOwnSubmittedReview,
   fingerprintFinding,
+  isBelowInlineFloor,
   isVisibleFinding,
   isLocatableFinding,
   listPrReviews,
@@ -2094,22 +2095,24 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
     repoRoot,
   });
   const candidates = ledger.findings.filter((f) => !suppressed.has(fingerprintFinding(f)));
-  // The judge's verdict, not severity alone, decides visibility
-  // (GATE-COMMENT-INLINE-SEVERITY-FLOOR): act and blocking-severity findings take the
-  // normal inline or body-filed track; every other finding folds into the verdict
-  // body's Details block (see renderVerdictDetailsBlock), regardless of locatability.
+  // The judge's verdict decides BODY visibility only (GATE-COMMENT-INLINE-SEVERITY-FLOOR):
+  // a non-locatable finding that fails isVisibleFinding folds into the verdict body's
+  // Details block (see renderVerdictDetailsBlock). Inline threads keep today's rules: on a
+  // create, a locatable finding at or above the inline floor, or visible (e.g. an act
+  // below the floor), takes the inline track whatever its judge disposition.
   const visibility = { floor: inlineSeverityFloor, blockingSeverities };
-  const folded = candidates.filter((f) => !isVisibleFinding(f, visibility));
-  const nonFolded = candidates.filter((f) => isVisibleFinding(f, visibility));
+  const visible = (f) => isVisibleFinding(f, visibility);
+  const inlineEligible = (f) => visible(f) || !isBelowInlineFloor(f.severity, inlineSeverityFloor);
+  // An update cannot add inline comments (GitHub exposes no endpoint to add one to an
+  // already-submitted review), so only visible candidates body-file on that path.
+  const nonFolded = candidates.filter(isUpdate ? visible : inlineEligible);
+  const folded = candidates.filter((f) => !nonFolded.includes(f));
   const surface = {
     round,
     suppressedCount: ledger.findings.length - candidates.length,
     // Suppressed (earlier-round) findings that are still actionable by the same classification.
-    suppressedActionable: ledger.findings.some((f) => suppressed.has(fingerprintFinding(f)) && isVisibleFinding(f, visibility)),
+    suppressedActionable: ledger.findings.some((f) => suppressed.has(fingerprintFinding(f)) && visible(f)),
     locatable: [],
-    // An update cannot add inline comments (GitHub exposes no endpoint to add
-    // one to an already-submitted review), so every still-at-or-above-floor
-    // candidate body-files on that path — same as before folding existed.
     nonLocatable: nonFolded,
     folded,
   };
@@ -2127,7 +2130,9 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   surface.locatable = [];
   surface.nonLocatable = [];
   for (const finding of nonFolded) {
-    (isLocatableFinding(finding, commentableSet) ? surface.locatable : surface.nonLocatable).push(finding);
+    if (isLocatableFinding(finding, commentableSet)) surface.locatable.push(finding);
+    else if (visible(finding)) surface.nonLocatable.push(finding);
+    else surface.folded.push(finding);
   }
   return surface;
 }

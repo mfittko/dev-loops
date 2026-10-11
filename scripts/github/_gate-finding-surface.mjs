@@ -352,7 +352,9 @@ export async function fetchListedFingerprints(
 
 /**
  * Post a round's deferred findings as ONE batched comment on the linked spec
- * issue (resolveDeferralCommentTarget); a PR target posts nothing. Entries whose fingerprint the target
+ * issue (resolveDeferralCommentTarget); a PR target posts nothing and every entry
+ * counts as recorded by its verdict-body marker (`issue=<pr>`), so a caller's
+ * `foldedFiled` counts those folded entries again on a rerun. Entries whose fingerprint the target
  * already lists are skipped; nothing is posted when none remain. Returns
  * `{ issueNumber, appendedFingerprints }` where `issueNumber` is the target's
  * number (an issue or the PR). Dependencies are injectable for tests;
