@@ -7861,6 +7861,72 @@ test("upsert-checkpoint-verdict --findings-ledger: an act item from --findings-j
   }, { prefix: "dev-loops-upsert-findings-json-act-nextaction-" });
 });
 
+test("upsert-checkpoint-verdict --findings-ledger: --findings-json entries sharing a summary resolve to act whatever their order", async () => {
+  for (const order of [["reject", "act"], ["act", "reject"]]) {
+    await withTempDir(async (tempDir) => {
+      const body = await postWithFindingsJson(
+        tempDir,
+        [{ severity: "low", angle: "naming", summary: "shared low finding" }],
+        order.map((judgeDisposition) => ({ severity: "low", angle: "naming", summary: "shared low finding", judgeDisposition })),
+      );
+      assert.doesNotMatch(body, /disposition=deferred/);
+      assert.doesNotMatch(body, /Rejected \(/);
+      assert.ok(!body.includes("<details>") || !body.slice(body.indexOf("<details>")).includes("shared low finding"));
+      assert.match(body, /shared low finding/);
+    }, { prefix: "dev-loops-upsert-findings-json-prefer-act-" });
+  }
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: a same-head correction folds a deferred medium under Deferred and keeps an act low visible", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [
+      { severity: "medium", angle: "coverage", summary: "defer medium finding", judgeDisposition: "defer" },
+      { severity: "low", angle: "naming", summary: "act low finding", judgeDisposition: "act" },
+    ]);
+    const existingReview = {
+      id: 706,
+      submitted_at: "2026-08-03T10:00:00Z",
+      html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-706",
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate",
+        headSha: SINGLE_SURFACE_HEAD,
+        verdict: "clean",
+        findingsSummary: "no issues found",
+        nextAction: "mark ready for review",
+        executionMode: "inline_single_agent",
+        inlineReason: "single-agent inline review (test)",
+      }),
+    };
+    const { runChild, calls } = makeGhMock([
+      ...singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }),
+      {
+        assertArgs: ["api", "-X", "PUT", "repos/owner/repo/pulls/17/reviews/706", "--input", "-"],
+        stdout: '{"id":706,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-706"}\n',
+      },
+    ]);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "2 findings",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "updated");
+    const put = calls.find((c) => c.args.includes("PUT") && c.args.includes("repos/owner/repo/pulls/17/reviews/706"));
+    const body = JSON.parse(put.stdinText).body;
+    const details = body.slice(body.indexOf("<details>"));
+    const visible = body.slice(0, body.indexOf("<details>"));
+    assert.ok(details.split("\n").includes("**Deferred (1)**"));
+    assert.ok(details.includes("defer medium finding") && !visible.includes("defer medium finding"));
+    assert.ok(visible.includes("act low finding") && !details.includes("act low finding"));
+  }, { prefix: "dev-loops-upsert-update-disposition-fold-" });
+});
+
 test("upsert-checkpoint-verdict --findings-ledger: --findings-json defer and reject dispositions fold unjudged ledger mediums, and an existing ledger disposition is never overwritten", async () => {
   await withTempDir(async (tempDir) => {
     const body = await postWithFindingsJson(

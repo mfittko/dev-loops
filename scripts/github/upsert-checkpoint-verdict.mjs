@@ -2777,7 +2777,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // Copy the judged disposition onto each unjudged ledger finding (same trimmed summary), so body visibility reads it; an existing ledger disposition stays.
     for (const lf of preloadedFindingsLedger?.findings ?? []) {
       if (lf?.judgeDisposition) continue;
-      const judged = flatFindings.find((f) => f.judgeDisposition && f.summary === (typeof lf.summary === "string" ? lf.summary.trim() : lf.summary));
+      // Prefer an act match so an ambiguous summary fails open to visible.
+      const same = (f) => f.judgeDisposition && f.summary === (typeof lf.summary === "string" ? lf.summary.trim() : lf.summary);
+      const judged = flatFindings.find((f) => f.judgeDisposition === "act" && same(f)) ?? flatFindings.find(same);
       if (judged) lf.judgeDisposition = judged.judgeDisposition;
     }
     const actItems = listOpenActItems(flatFindings);
@@ -2833,7 +2835,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
           ? ` No deterministic pre-approval blocker is proven, so "blocked" cannot sit over this completed ledger; the composed checkpoint verdict is "${composedVerdict}".`
           : "");
       const actNote = ledgerVerdict !== preloadedFindingsLedger.overallVerdict
-        ? ` The ledger's severity overallVerdict "${preloadedFindingsLedger.overallVerdict}" is composed with ${listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]).length} open judge act item(s) (ADR 0089).`
+        ? ` The ledger's severity overallVerdict "${preloadedFindingsLedger.overallVerdict}" is composed with ${new Set(listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]).map((f) => `${f.severity}|${typeof f.summary === "string" ? f.summary.trim() : f.summary}`)).size} open judge act item(s) (ADR 0089).`
         : "";
       throw new Error(
         `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}).${actNote}${compositionNote} The verdict must match the fan-in consolidator's computed value composed with any deterministic gate blocker — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = no findings at a blocking severity remain and the judge act list is empty; "findings_present" = the gate found issues at blocking severities or the judge act list is not empty; "blocked" = the fan-in could not complete or a proven deterministic gate blocker (unchecked AC/DoD) prevents crossing. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or omit --verdict to post the composed verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
