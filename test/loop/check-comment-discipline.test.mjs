@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { test } from "bun:test";
 
 import {
@@ -7,6 +10,7 @@ import {
   DEFAULT_MAX_ADDED_COMMENT_BLOCK_LINES,
   ESCAPE_MARKER,
 } from "../../scripts/loop/check-comment-discipline.mjs";
+import { runGitFixture } from "../_helpers.mjs";
 
 // Minimal unified-diff fixture builder: one file header plus a hunk of `+`
 // added lines (and optional context lines prefixed with a space).
@@ -92,6 +96,17 @@ test("evaluateCommentDiscipline fails closed on an implausible git ref (trust bo
   await assert.rejects(() => evaluateCommentDiscipline({ base: "a..b", head: "HEAD" }), /plausible git ref/);
   await assert.rejects(() => evaluateCommentDiscipline({ base: "-x", head: "HEAD" }), /plausible git ref/);
   await assert.rejects(() => evaluateCommentDiscipline({ base: "origin/main", head: ".." }), /plausible git ref/);
+});
+
+test("evaluateCommentDiscipline throws (fails closed) when the base ref does not resolve, so the ready boundary backstops a skipped create-pr preflight", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-comment-discipline-nobase-"));
+  try {
+    runGitFixture(dir, ["init", "-q"]);
+    runGitFixture(dir, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]);
+    await assert.rejects(() => evaluateCommentDiscipline({ base: "origin/main", head: "HEAD", repoRoot: dir }));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("ignores non-runtime files (tests, docs, generated mirrors)", () => {

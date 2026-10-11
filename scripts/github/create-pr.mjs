@@ -628,7 +628,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       const headFlagValue = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN);
       if (headFlagValue) {
         const branch = headFlagValue.trim().replace(/^[^:]*:/u, "");
-        const found = [branch, `origin/${branch}`].find((ref) => isResolvableRef(ref, { cwd: diffCwd, env: diffEnv }));
+        const found = [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`].find((ref) => isResolvableRef(ref, { cwd: diffCwd, env: diffEnv }));
         if (!found) {
           throw Object.assign(
             parseError(`${HEAD_UNRESOLVABLE}: cannot resolve --head ${branch} locally or as origin/${branch}; run \`git fetch origin\` and retry`),
