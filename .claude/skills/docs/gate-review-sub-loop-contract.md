@@ -229,7 +229,7 @@ Cache priming is an optional, non-semantic execution optimization. A harness or 
 once, before any reviewer is dispatched, via `dev-loops-run cli/index.mjs gate resolve-validation`
 with each explicit targeted `gateSuites` entry from `resolveTargetedValidation(changedPaths)`
 from `@dev-loops/core/loop/validation-classify` (or its full-repository
-profile when targeting is unsafe), and MUST persist
+profile when targeting is unsafe or the targeted result has an empty `gateSuites`), and MUST persist
 the result as `<gate>-<headSha>.validation.json` beside the gate-context artifact. When
 that artifact exists, the briefing prefix MUST point every reviewer at it
 (`write-gate-context.mjs --validation-results <path>`), and a reviewer MUST consume it

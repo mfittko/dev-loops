@@ -179,11 +179,12 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       return incomplete("validation config differs from the base branch: a config-source change needs review before validation runs");
     }
     const { mode, fullCommand } = base.validation;
-    const declared = options.profile === "full-repository" && mode === "local" && fullCommand;
+    // A declared command also serves a targeted request in a repo without package.json.
+    const declared = mode === "local" && fullCommand && (options.profile === "full-repository" || !existsSync(path.join(repoRoot, "package.json"))) && fullCommand;
     let pinned = null;
     let artifact;
-    if (options.profile === "full-repository" && mode === "ci-only") {
-      // ADR 0137: current-head CI is the only full-validation authority; no local suite runs.
+    if (mode === "ci-only") {
+      // ADR 0137: current-head CI is the only validation authority for every profile; no local suite runs.
       const ci = await readCi({ repo: options.repo, pr: options.pr });
       const ciStatus = ci.headSha?.toLowerCase() === options.headSha ? deriveLoopCiStatusFromRollup(ci.rollup).status : "wrong-head";
       if (ciStatus !== "success" && ciStatus !== "failure") return incomplete(ciStatus === "wrong-head" ? `PR head ${ci.headSha} differs from requested head` : `current-head CI is ${ciStatus}`);

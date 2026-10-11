@@ -1908,7 +1908,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Validation resolution: gate mode, optional full command, and a path-to-command map. Requires a dev-loops CLI that knows the `validation` key."
+      "description": "Validation resolution: gate mode, optional full command, and a path-to-command map. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*`. Requires a dev-loops CLI that knows the `validation` key."
     }
   },
   "required": [

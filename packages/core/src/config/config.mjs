@@ -279,7 +279,7 @@ export const ValidationConfig = z
       gateSuites: z.array(z.string().min(1)).describe("Explicit gate `--suite` names; `bun run <name>` commands add theirs.").optional(),
     })).describe("Ordered, first-match-wins path-to-command map for targeted worker checks (`resolveTargetedValidation`).").optional(),
   })
-  .describe("Validation resolution: gate mode, optional full command, and a path-to-command map. Requires a dev-loops CLI that knows the `validation` key.");
+  .describe("Validation resolution: gate mode, optional full command, and a path-to-command map. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*`. Requires a dev-loops CLI that knows the `validation` key.");
 
 // A tier's match conditions: EVERY changed file's kind must be in `kinds`
 // (when set) AND the change must stay within `maxFiles`/`maxLines` (when

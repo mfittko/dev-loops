@@ -459,6 +459,31 @@ test("ci-only fails closed on red, pending, missing and wrong-head CI", async ()
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("a mapped targeted request in a ci-only repo without package.json resolves through current-head CI", async () => {
+  const devloops = "version: 1\nvalidation:\n  paths:\n    - match: \"spec/models/**\"\n      surface: models\n      commands: [\"bundle exec rspec {path}\"]\n      gateSuites: [models]\n";
+  const { repoRoot, headSha } = await bareFixture(devloops);
+  try {
+    const targeted = parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "models"]);
+    const green = await resolveValidation(targeted, { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+    assert.equal(green.status, "complete");
+    assert.equal(green.artifact.authority, "ci-authoritative");
+    assert.doesNotMatch(JSON.stringify(green), /package\.json|ENOENT/);
+    const red = await resolveValidation(targeted, { repoRoot, readCi: ciReader(headSha, "FAILURE") });
+    assert.equal(red.status, "failed");
+    assert.equal(red.ok, false);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a targeted request in a local repo without package.json runs the declared full command", async () => {
+  const { repoRoot, headSha } = await bareFixture("version: 1\nvalidation:\n  mode: local\n  fullCommand: echo cargo-test-ran\n");
+  try {
+    const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "models"]), { repoRoot });
+    assert.equal(result.status, "complete");
+    assert.equal(result.artifact.suites[0].command, "echo cargo-test-ran");
+    assert.doesNotMatch(JSON.stringify(result), /package\.json|ENOENT/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("local mode runs the declared non-Node full command without package.json", async () => {
   const { repoRoot, headSha } = await bareFixture("version: 1\nvalidation:\n  mode: local\n  fullCommand: echo cargo-test-ran\n");
   try {
