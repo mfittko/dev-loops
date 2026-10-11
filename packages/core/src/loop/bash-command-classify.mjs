@@ -1194,6 +1194,10 @@ function scanCatTeeHeredocs(command) {
         const blanked = upTo.replace(/(['"])(?:(?!\1).)*\1/gs, (m) => " ".repeat(m.length));
         const opener = blanked.search(/['"]/);
         inertQuoted = opener >= 0 && !EXEC_PAYLOAD_FLAG_RE.test(upTo.slice(0, opener));
+        // A stray apostrophe on an earlier visible line can fake the opener. Trust it only when the operator
+        // line's own unbalanced quote (if any) is the same character; a mismatch fails closed.
+        const localQuote = prefix.replace(/\\['"]/g, "  ").replace(/(['"])(?:(?!\1).)*\1/gs, (m) => " ".repeat(m.length)).match(/['"](?=[^'"]*$)/);
+        if (inertQuoted && localQuote && localQuote[0] !== upTo[opener]) inertQuoted = false;
         // A -c/eval payload runs: its code starts after the opening quote, so classify from there.
         const local = opener - (upTo.length - prefix.length);
         if (opener >= 0 && !inertQuoted && local >= 0) prefix = prefix.slice(local + 1);
