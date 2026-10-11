@@ -445,6 +445,10 @@ test("ci-only fails closed on red, pending, missing and wrong-head CI", async ()
       [ciReader(headSha, null), "incomplete", /none/],
       [async () => ({ headSha, rollup: [{ name: "ci", status: "IN_PROGRESS", conclusion: "" }] }), "incomplete", /pending/],
       [ciReader(other, "SUCCESS"), "incomplete", /differs/],
+      [ciReader(headSha, "SKIPPED"), "incomplete", /ran no checks/],
+      [ciReader(headSha, "NEUTRAL"), "incomplete", /ran no checks/],
+      [async () => ({ headSha, rollup: [{ name: "ci", status: "COMPLETED", conclusion: "SKIPPED" }, { name: "lint", status: "COMPLETED", conclusion: "NEUTRAL" }] }), "incomplete", /ran no checks/],
+      [async () => ({ headSha, rollup: [{ name: "gate-evidence-runner", status: "COMPLETED", conclusion: "SUCCESS" }, { name: "ci", status: "COMPLETED", conclusion: "SKIPPED" }] }), "incomplete", /ran no checks/],
       [async () => { throw new Error("gh unavailable"); }, "incomplete", /gh unavailable/],
     ];
     for (const [readCi, status, reason] of cases) {
@@ -455,6 +459,20 @@ test("ci-only fails closed on red, pending, missing and wrong-head CI", async ()
       assert.equal(artifact.allPassed, false);
       assert.equal(artifact.authority, undefined);
       assert.match(artifact.reason, reason);
+    }
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("ci-only completes when a SUCCESS check run or status context sits beside SKIPPED entries", async () => {
+  const { repoRoot, headSha } = await bareFixture("version: 1\n");
+  try {
+    for (const rollup of [
+      [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+      [{ context: "ci/status", state: "SUCCESS" }],
+      [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }, { name: "docs", status: "COMPLETED", conclusion: "SKIPPED" }, { name: "lint", status: "COMPLETED", conclusion: "NEUTRAL" }],
+    ]) {
+      const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: async () => ({ headSha, rollup }) });
+      assert.equal(result.status, "complete");
     }
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });

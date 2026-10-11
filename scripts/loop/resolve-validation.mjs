@@ -7,7 +7,7 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import { ValidationConfig, resolveValidationConfig } from "@dev-loops/core/config";
-import { deriveLoopCiStatusFromRollup } from "@dev-loops/core/loop/copilot-ci-status";
+import { LOOP_DERIVED_CI_CHECK_NAMES, deriveLoopCiStatusFromRollup, partitionEntriesByCheckName } from "@dev-loops/core/loop/copilot-ci-status";
 
 import { parsePrNumber } from "../_cli-primitives.mjs";
 import { isDirectCliRun } from "../_core-helpers.mjs";
@@ -188,6 +188,10 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       const ci = await readCi({ repo: options.repo, pr: options.pr });
       const ciStatus = ci.headSha?.toLowerCase() === options.headSha ? deriveLoopCiStatusFromRollup(ci.rollup).status : "wrong-head";
       if (ciStatus !== "success" && ciStatus !== "failure") return incomplete(ciStatus === "wrong-head" ? `PR head ${ci.headSha} differs from requested head` : `current-head CI is ${ciStatus}`);
+      // SKIPPED and NEUTRAL count as success in the shared rollup status, but a rollup with no SUCCESS entry ran no suite.
+      const ranSuite = partitionEntriesByCheckName(ci.rollup, LOOP_DERIVED_CI_CHECK_NAMES).rest
+        .some((entry) => String(entry?.conclusion ?? "").toUpperCase() === "SUCCESS" || String(entry?.state ?? "").toUpperCase() === "SUCCESS");
+      if (ciStatus === "success" && !ranSuite) return incomplete("current-head CI ran no checks");
       artifact = { ok: ciStatus === "success", status: ciStatus === "success" ? "complete" : "failed", allPassed: ciStatus === "success", ...(ciStatus === "success" ? { authority: "ci-authoritative" } : { reason: "current-head CI is failure" }), repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, profile: options.profile, generatedAt: new Date().toISOString(), suites: [] };
     } else if (declared) {
       artifact = { ...await runDeclaredFullCommand(declared, options, { repoRoot, env }), profile: options.profile };
