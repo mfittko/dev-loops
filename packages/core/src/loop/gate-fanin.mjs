@@ -971,7 +971,12 @@ function validateAngleResult(result) {
   if (r.verdict === "clean" && r.findings.length > 0) {
     return `angle '${r.angle}' reported clean but carries findings`;
   }
-  if (r.verifiedItems !== undefined) {
+  // An empty verifiedItems array on a non-checklist angle is treated as absent.
+  const emptyOnOtherAngle =
+    Array.isArray(r.verifiedItems) &&
+    r.verifiedItems.length === 0 &&
+    !VERIFIED_ITEMS_ANGLES.has(baseAngleName(r.angle.trim()));
+  if (r.verifiedItems !== undefined && !emptyOnOtherAngle) {
     if (!VERIFIED_ITEMS_ANGLES.has(baseAngleName(r.angle.trim()))) {
       return `angle '${r.angle}' may not carry 'verifiedItems' (only ${[...VERIFIED_ITEMS_ANGLES].join(" and ")} may)`;
     }

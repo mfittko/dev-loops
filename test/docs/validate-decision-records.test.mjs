@@ -7,6 +7,7 @@ import { test } from "bun:test";
 import {
   createGitClient,
   detectIndexErrors,
+  findAdrNumberCollisions,
   firstMeaningfulLine,
   isAcceptedOrSuperseded,
   run,
@@ -514,4 +515,33 @@ test("run(): a clean non-degraded result exits 0 even in CI", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("findAdrNumberCollisions: reports an added name sharing a tip number", () => {
+  assert.deepEqual(
+    findAdrNumberCollisions({ tipNames: ["0000-template.md", "0095-a.md"], addedNames: ["0095-b.md"] }),
+    [{ file: "0095-b.md", prefix: "0095", holder: "0095-a.md", nextFree: "0096" }],
+  );
+});
+
+test("findAdrNumberCollisions: gives each collision its own next free number", () => {
+  assert.deepEqual(
+    findAdrNumberCollisions({ tipNames: ["0095-a.md", "0096-a.md"], addedNames: ["0095-b.md", "0096-b.md"] }).map((c) => c.nextFree),
+    ["0097", "0098"],
+  );
+});
+
+test("findAdrNumberCollisions: no collision on a free number, an already-tipped name, or a repair rename", () => {
+  assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0095-a.md"], addedNames: ["0096-b.md"] }), []);
+  assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0095-a.md"], addedNames: ["0095-a.md"] }), []);
+  assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0095-a.md", "0095-b.md"], addedNames: ["0105-b.md"], removedNames: ["0095-b.md"] }), []);
+});
+
+test("findAdrNumberCollisions: skips two added records sharing a number the tip lacks", () => {
+  assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0095-a.md"], addedNames: ["0096-b.md", "0096-c.md"] }), []);
+});
+
+test("findAdrNumberCollisions: ignores the template and malformed names, and collisions on unadded names", () => {
+  assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0000-template.md"], addedNames: ["0000-template.md", "Bad_Name.md"] }), []);
+  assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0095-a.md", "0095-b.md"], addedNames: ["0096-c.md"] }), []);
 });
