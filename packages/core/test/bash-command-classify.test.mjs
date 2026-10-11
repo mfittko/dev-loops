@@ -839,6 +839,11 @@ test("commandContainsInlineInterpreter: a stray quote on an earlier line or comm
   assert.equal(commandContainsInlineInterpreter("git commit -F - <<EOF\ndon't\nEOF\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("cat <<'EOF' | sh\ndon't\nEOF\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("cat > tmp/n <<EOF\ndon't $(date)\nEOF\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
+  // same-character parity shift and escaped-only quote on the operator line fail closed
+  assert.equal(commandContainsInlineInterpreter("echo x # don't\necho 'a\nb' ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("echo x # don't\necho \\\" ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("echo x # don't\necho \\' ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("git commit -F - <<EOF\nsay \"hi\nEOF\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
