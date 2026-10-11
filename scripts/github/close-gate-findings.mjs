@@ -696,17 +696,20 @@ async function runQuestionRejectClosePass({ repo, pr, gate, headSha, round, thre
 // Folded filing (GATE-COMMENT-INLINE-SEVERITY-FLOOR)
 // ---------------------------------------------------------------------------
 //
-// A finding folded into Details (not visible per isVisibleFinding) never gets an inline/
-// body-filed thread of its own — upsert-checkpoint-verdict.mjs folds it into
-// the verdict body's collapsed Details block instead (renderVerdictDetailsBlock),
-// so it never reaches selectDispositionTargets. The net-reduction filing bar
+// A finding folded into Details (not visible per isVisibleFinding) has no inline thread
+// of its own: upsert-checkpoint-verdict.mjs folds it into the verdict body's collapsed
+// Details block (renderVerdictDetailsBlock), so it never reaches selectDispositionTargets.
+// A non-visible finding at or above the inline floor that has a locatable inline thread is
+// already a thread target, so `threads` excludes its fingerprint here. The net-reduction filing bar
 // (isFileableDeferral) still applies: an operator-visible folded low joins the
 // round's ONE batched deferral comment, exactly like a fileable THREAD target.
 // A nit or a non-operator-visible low is never filed (already recorded,
 // visible, in the Details block itself; that IS its
 // resolved-with-rationale record).
-function selectFoldedFileableEntries({ findings, round, floor, blockingSeverities = [], mediumFixWindow }) {
+function selectFoldedFileableEntries({ findings, round, floor, blockingSeverities = [], mediumFixWindow, threads = [], login }) {
+  const threadFps = new Set(threads.filter((t) => t.author === login).map((t) => parseFindingMarker(t.body)?.fp).filter(Boolean));
   return findings
+    .filter((f) => !threadFps.has(fingerprintFinding(f)))
     .filter((f) => !isVisibleFinding(f, { floor, blockingSeverities }))
     // An act finding goes to the fixer, never the deferral record (ADR 0089);
     // a fingerprint whose ledger entries disagree is ambiguous and fails closed.
@@ -820,7 +823,7 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // comment. An unvalidated config never names the tracker, so the comment
   // target falls back to the PR itself.
   const { threads, snapshot } = await fetchThreadsWithFullBodies({ repo, pr }, gh);
-  const foldedEntries = selectFoldedFileableEntries({ findings, round, floor: inlineSeverityFloor, blockingSeverities: resolvedGateConfig?.blockCleanOnFindingSeverities ?? [], mediumFixWindow });
+  const foldedEntries = selectFoldedFileableEntries({ findings, round, floor: inlineSeverityFloor, blockingSeverities: resolvedGateConfig?.blockCleanOnFindingSeverities ?? [], mediumFixWindow, threads, login });
   const trackerProvider = errors.length > 0 ? null : resolveTrackerProvider(config);
   const { deferredResolved, foldedFiled, followUpIssueNumber, dispositionFailures } = await runDispositionPass(
     { repo, pr, gate, headSha, tmpRoot, repoRoot, round, threads, snapshot, login, mediumFixWindow, findings, foldedEntries, trackerProvider, allowedRefs: options.allowedRefs ?? [] },

@@ -2301,6 +2301,28 @@ test("a past-window folded medium the judge rejected is listed in the deferral c
   ));
 });
 
+test("a past-window locatable reject medium that already has an inline thread is not also listed as a folded entry", async () => {
+  const finding = { severity: "medium", angle: "naming", summary: "rejected medium past the fix window", judgeDisposition: "reject" };
+  const fp = fingerprintFinding(finding);
+  const body = `${buildFindingMarker({ fp, severity: "medium", angle: "naming", round: 1 })}\n**medium** (\`naming\`): rejected medium past the fix window`;
+  const thread = threadNode({ id: "THREAD_LOC_REJ", path: "src/x.mjs", line: 4, commentId: 9400, body });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      ...deferralCommentEntries(9500, { contains: [fp] }),
+      getReviewCommentEntry(9400, body),
+      patchReviewCommentEntry(9400),
+      postReplyEntry(9400, { id: 9401 }),
+      resolveThreadEntry("THREAD_LOC_REJ"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+      assert.equal(result.foldedFiled, 0);
+    },
+  ));
+});
+
 test("a blocking-severity high the judge rejected is visible, so it is excluded from the folded filing pass", async () => {
   const finding = { severity: "high", angle: "naming", summary: "rejected high", judgeDisposition: "reject" };
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(

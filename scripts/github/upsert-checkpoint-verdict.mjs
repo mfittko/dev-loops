@@ -3238,7 +3238,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // blocker has nothing to fix, so the fix-oriented action would point at nothing. A round whose
   // findings were all suppressed by an earlier round keeps its action only when a suppressed finding is still actionable.
   if (findingSurface && options.nextAction === "stay draft and fix"
-    && findingSurface.locatable.length + findingSurface.nonLocatable.length === 0
+    && findingSurface.locatable.filter((f) => isVisibleFinding(f, { floor: activeGateConfig.inlineSeverityFloor, blockingSeverities: activeGateConfig.blockCleanOnFindingSeverities ?? [] })).length + findingSurface.nonLocatable.length === 0
     && !findingSurface.suppressedActionable
     && !(checkpointComposition?.blockers?.length > 0)) {
     options.nextAction = "rerun gate";

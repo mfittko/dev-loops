@@ -11,11 +11,11 @@ Amends [0075](./0075-fold-sub-floor-findings-out-of-inline-threads.md): the verd
 ## Decision
 
 - A finding is visible in the verdict body when the judge disposed it `act`, or when its severity is in `gates.<gate>.blockCleanOnFindingSeverities`. A finding with no judge disposition keeps the 0075 severity floor. A `question` never folds.
-- Every other finding folds into one collapsed `Details` block, grouped as `Deferred (N)`, `Rejected (N)` and `Not judged (N)`. The `Clean (N)` angle roster moves into the same block. Each folded entry keeps its fingerprint marker.
+- Every other finding that has no inline thread folds into one collapsed `Details` block, grouped as `Deferred (N)`, `Rejected (N)` and `Not judged (N)`. The `Clean (N)` angle roster moves into the same block. Each folded entry keeps its fingerprint marker. A locatable finding at or above the inline floor keeps its inline thread on a create, whatever its judge disposition; the judge decides body visibility only.
 - The renderer-only `Execution mode` and `Blocking severities` lines render inside one HTML comment.
 - An inline finding comment shows one short `Problem` and one short `Fix`. Reasoning, evidence and the failing case move into its `Details` block.
-- When the deferral target is the PR, no deferral comment is posted. The verdict body's `Deferred (N)` entries are the record.
+- When the deferral target is the PR, no deferral comment is posted. A deferred finding is recorded by its stamped thread marker and reply, or by its folded marker in the verdict body's `Details` block.
 
 ## Consequences
 
-The visible verdict body holds only `act` and blocking-severity findings, so `Next action` derives from that set. Rejected and deferred findings stay one click away and fingerprint-tracked. A PR receives one gate surface per round. A linked spec issue still receives the deferral comment.
+The visible verdict body holds only `act` and blocking-severity findings, so `Next action` derives from the visible set (act, blocking-severity, question, unrecognized-severity and unjudged findings at or above the floor). Rejected and deferred findings stay one click away and fingerprint-tracked. A PR receives one gate surface per round. A linked spec issue still receives the deferral comment.

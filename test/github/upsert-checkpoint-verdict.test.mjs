@@ -7806,6 +7806,17 @@ test("upsert-checkpoint-verdict --findings-ledger: inline threads keep today's r
   }, { prefix: "dev-loops-upsert-disposition-inline-" });
 });
 
+test("upsert-checkpoint-verdict --findings-ledger: a round whose only finding is a locatable reject medium posts it inline and says rerun gate", async () => {
+  await withTempDir(async (tempDir) => {
+    const { body, posted } = await postDispositionRound(tempDir, [
+      { severity: "medium", angle: "coverage", summary: "locatable reject medium", judgeDisposition: "reject", files: ["src/db.mjs"], line: 2 },
+    ]);
+    assert.ok(JSON.stringify(posted.comments).includes("locatable reject medium"));
+    assert.match(body, /\*\*Next action:\*\* rerun gate/);
+    assert.doesNotMatch(body, /stay draft and fix/);
+  }, { prefix: "dev-loops-upsert-disposition-locatable-nextaction-" });
+});
+
 test("upsert-checkpoint-verdict --findings-ledger: with only deferred and rejected findings the next action never says stay draft and fix, and Execution mode renders inside an HTML comment", async () => {
   await withTempDir(async (tempDir) => {
     const { body } = await postDispositionRound(tempDir, [
