@@ -216,8 +216,12 @@ are found, `0` when clean, `2` for unreadable input (a stdin or `--transcript` f
 Matching rules: a tool name at the start of a command segment (start of line, or after
 `&&`/`||`/`|`/`;`), after the verifier strips `NAME=value` prefixes, a leading wrapper binary
 from `{sudo, env, xargs, time, nice, command}`, and a path prefix; the inline-interpreter forms
-are decided by the shared `OPS-NO-INLINE-INTERPRETER` predicate. The verifier blanks quoted
-literals before splitting segments but does NOT fully parse shell substitution, so prefer
+are decided by the shared `OPS-NO-INLINE-INTERPRETER` predicate, which runs on every line. A line
+with a `python`/`python3` head is reported under that tool and, when the predicate also denies it
+(`python3 -c`, or another denied form on the same line), also as `inline-interpreter`. Each entry
+reports the command as written, not the quote-blanked text. The verifier blanks quoted
+literals before splitting segments, except the payload of a `-c`/`--command`/`eval` flag and a
+double-quoted string holding `$(` or a backtick, which stay visible. It does NOT fully parse shell substitution, so prefer
 single-line, single-purpose commands in transcripts.
 
 ## Cycle scoping — a checkpoint discharges exactly one qualifying completion

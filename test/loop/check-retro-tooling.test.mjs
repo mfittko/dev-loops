@@ -36,10 +36,26 @@ test("agent-level raw gh api is a violation", () => {
 });
 
 test("python and python3 are violations", () => {
-  const { violations } = analyzeTranscript("python3 -c 'import json'\npython script.py");
+  const { violations } = analyzeTranscript("python3 tool.py\npython script.py");
   assert.equal(violations.length, 2);
   assert.match(violations[0], /^python3:/);
   assert.match(violations[1], /^python:/);
+});
+
+test("python -c keeps its python3 violation and is also reported as inline-interpreter (#2442)", () => {
+  const { violations } = analyzeTranscript("python3 -c 'import json'");
+  assert.deepEqual(violations, ["python3: python3 -c 'import json'", "inline-interpreter: python3 -c 'import json'"]);
+});
+
+test("a denied form after a python violation on the same line is still reported (#2442)", () => {
+  const { violations } = analyzeTranscript("python3 tool.py && perl -pi -e 's/a/b/' src/a.mjs");
+  assert.ok(violations.some((v) => v.startsWith("inline-interpreter:")));
+});
+
+test("violations and write-ops report the original command, not the quote-blanked one (#2442)", () => {
+  const gh = `gh api "repos/o/r/pulls?state=open" --jq '.[].number'`;
+  assert.deepEqual(analyzeTranscript(gh).violations, [`gh: ${gh}`]);
+  assert.deepEqual(analyzeTranscript("gh pr ready '982'").allowedWriteOps, ["gh pr ready '982'"]);
 });
 
 test("node -e and node --eval are violations; node scripts/x.mjs is not", () => {
@@ -122,7 +138,7 @@ test("representative mixed transcript classifies correctly", () => {
   ].join("\n");
   const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript(transcript);
   assert.equal(internalToolingOnly, false);
-  assert.equal(violations.length, 4); // gh api, python3, node -e, gh pr merge
+  assert.equal(violations.length, 5); // gh api, python3 (+ inline-interpreter), node -e, gh pr merge
   assert.equal(allowedWriteOps.length, 0); // gh pr merge is no longer allowlisted
 });
 
@@ -133,7 +149,7 @@ test("env-prefixed, wrapper-prefixed, and path-prefixed raw calls are violations
     ["xargs gh api foo", "gh"],
     ["NODE_OPTIONS=x node -e 'x'", "inline-interpreter"],
     ["./node_modules/.bin/gh pr view 1", "gh"],
-    ["/usr/bin/python3 -c 'x'", "python3"],
+    ["/usr/bin/python3 tool.py", "python3"],
   ];
   for (const [line, tool] of cases) {
     const { violations, internalToolingOnly } = analyzeTranscript(line);

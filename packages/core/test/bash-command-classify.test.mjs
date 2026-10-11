@@ -876,6 +876,21 @@ test("commandContainsInlineInterpreter handles multi-line heredocs by head (#244
   assert.equal(commandContainsInlineInterpreter("cat > /tmp/r.mjs <<'EOF'\nconsole.log(1)\nEOF"), false);
 });
 
+test("a cat heredoc inside a double-quoted command substitution is inert unless a -c/eval flag runs it (#2442)", () => {
+  assert.equal(commandContainsInlineInterpreter("git commit -m \"$(cat <<'EOF'\nfix: deny perl -pi -e; sed -i edits\nEOF\n)\""), false);
+  assert.equal(commandContainsInlineInterpreter("gh pr comment 5 --body \"$(cat <<'EOF'\nnode -e x\nEOF\n)\""), false);
+  assert.equal(commandContainsDetachedWaitTool("gh pr comment 5 --body \"$(cat <<'EOF'\nnode -e x & detect-copilot-loop-state.mjs\nEOF\n)\""), false);
+  assert.equal(commandContainsInlineInterpreter("bash -c \"$(cat <<'EOF'\nnode -e x\nEOF\n)\""), true);
+  assert.equal(commandContainsInlineInterpreter("eval \"$(cat <<'EOF'\nnode -e x\nEOF\n)\""), true);
+  // write targets of a substituted cat still reach isTempPath
+  assert.equal(commandContainsInlineInterpreter("git commit -m \"$(cat > src/a.mjs <<'EOF'\nx\nEOF\n)\""), true);
+});
+
+test("every heredoc operator on a line is scanned (#2442)", () => {
+  assert.equal(commandContainsInlineInterpreter("cat > tmp/a <<'A' && cat > src/b.mjs <<'B'\nx\nA\ny\nB"), true);
+  assert.equal(commandContainsInlineInterpreter("cat > tmp/a <<'A' && cat > tmp/b <<'B'\nnode -e x\nA\nsed -i y f\nB"), false);
+});
+
 test("heredoc scan fails closed on pipes, quoted operators, odd delimiters and unclosed bodies (#2442)", () => {
   // H1: a piped cat/tee heredoc executes
   assert.equal(commandContainsDetachedWaitTool("cat <<'EOF' | bash\nnode scripts/loop/probe-copilot-review.mjs --pr 5 &\nEOF"), true);

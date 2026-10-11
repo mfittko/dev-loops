@@ -51,6 +51,17 @@ export const DENIED_INLINE_INTERPRETER_FORMS = [
   "cat > ./r.mjs <<'EOF' && bun run r.mjs",
   "cat > src/tmp/a.mjs <<'EOF'",
   "cat > packages/core/src/tmp/a.mjs <<'EOF'",
+  'cd "$(git rev-parse --show-toplevel)" && cat > packages/core/src/a.mjs <<\'EOF\'',
+  'cd "$(pwd)" && cat > src/a.mjs <<\'EOF\'',
+  'cat > "$(pwd)/src/a.mjs" <<\'EOF\'',
+  'cat > "$(git rev-parse --show-toplevel)/packages/a.mjs" <<\'EOF\'',
+  "cat > $(pwd)/packages/a.mjs <<'EOF'",
+  'cat > tmp/r.mjs <<\'EOF\' && node "tmp/r.mjs"',
+  "cat > tmp/r.mjs <<'EOF' && node 'tmp/r.mjs'",
+  "git commit -F - <<'MSG' && cat > src/a.mjs <<'EOF'",
+  "cat > tmp/a <<'A' && cat > src/b.mjs <<'B'",
+  "cat > tmp/x <<'A'; cat > packages/core/src/a.mjs <<'B'",
+  "python3 tool.py && perl -pi -e 's/a/b/' src/a.mjs",
 ];
 
 /** Forms the matcher allows, including quoted literals that only name an interpreter. */
@@ -73,6 +84,8 @@ export const ALLOWED_INLINE_INTERPRETER_FORMS = [
   "tee tmp/x.md <<'EOF'",
   "cat > /tmp/r.mjs <<'EOF'",
   "git commit -F - <<'MSG'",
+  'cd "$(git rev-parse --show-toplevel)" && cat > tmp/x.md <<\'EOF\'',
+  'echo "use cat <<EOF here"',
   'node scripts/loop/x.mjs --notes "11 were python3 or node -e; python3 -c denied"',
   'node scripts/loop/x.mjs --notes "a \\| node -e b"',
   "node scripts/loop/x.mjs --notes 'perl -0pi -e & ruby -e'",

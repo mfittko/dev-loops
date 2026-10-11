@@ -171,18 +171,17 @@ export function analyzeTranscript(transcript) {
   for (const raw of lines) {
     const line = raw.trim();
     if (line.length === 0 || line.startsWith("#")) continue;
-    let pythonFlagged = false;
+    // Classify on the quote-stripped segments, but report the command as the agent ran it.
     for (const segment of splitSegments(stripQuotedLiterals(line))) {
       const result = classifySegment(segment);
       if (result.kind === "violation") {
-        violations.push(`${result.tool}: ${segment}`);
-        pythonFlagged ||= result.tool.startsWith("python");
+        violations.push(`${result.tool}: ${line}`);
       } else if (result.kind === "allowedWriteOp") {
-        allowedWriteOps.push(segment);
+        allowedWriteOps.push(line);
       }
     }
-    // The gate's predicate (OPS-NO-INLINE-INTERPRETER) on the whole line; a bare python violation already covers its line.
-    if (!pythonFlagged && commandContainsInlineInterpreter(line)) {
+    // The gate's predicate (OPS-NO-INLINE-INTERPRETER) on the whole line, so every denied form is reported.
+    if (commandContainsInlineInterpreter(line)) {
       violations.push(`inline-interpreter: ${line}`);
     }
   }

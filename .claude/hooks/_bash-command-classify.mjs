@@ -940,11 +940,13 @@ export function commandContainsCopilotSummonComment(command) {
  * (`gh issue create --body "while … sleep … done"` must not be flagged). The `s` (dotAll) flag lets
  * `.` match a newline too, so a MULTI-LINE quoted `--body` (a real issue body commonly spans lines) is
  * stripped in full, not just its first line.
- * A quoted string that itself contains a command substitution (`$(...)`) or a backtick (`` `...` ``)
- * is executable code, not inert data — its inner command runs regardless of the surrounding quotes.
- * Blanking it would hide a real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5;
- * done` that the gh/loop-state ban already denies, so such a quoted literal is PRESERVED (fail-closed
- * direction) ahead of the `-c`/`--command`/`eval` exemption check below.
+ * A DOUBLE-quoted string that itself contains a command substitution (`$(...)`) or a backtick
+ * (`` `...` ``) is executable code, not inert data — its inner command runs regardless of the
+ * surrounding quotes. Blanking it would hide a real poll loop such as `while [ "$(gh pr view 5)" !=
+ * MERGED ]; do sleep 5; done` that the gh/loop-state ban already denies, so such a quoted literal is
+ * PRESERVED (fail-closed direction) ahead of the `-c`/`--command`/`eval` exemption check below. A
+ * SINGLE-quoted string with `$(` or a backtick is inert and is blanked, unless the
+ * `-c`/`--command`/`eval` rule below preserves it.
  *
  * The `-c`-cluster/`--command`/`eval` exemption is intentionally coarse in the fail-closed direction:
  * it looks only for a `c` anywhere in a preceding short-flag cluster (or `--command`/`eval`), not for
@@ -1145,11 +1147,21 @@ function isTempPath(target) {
   return last !== -1 && last < parts.length - 1 && parts[last + 1] !== "worktrees";
 }
 
+/** Remove balanced quote pairs; a quote char left over means the position sits inside quoted text. */
+function hasUnbalancedQuote(text) {
+  return /['"]/.test(text.replace(/(['"])(?:(?!\1).)*\1/gs, " "));
+}
+
+/** The `-c`/`--command`/`eval` flag that makes a following quoted string executable shell code. */
+const EXEC_PAYLOAD_FLAG_RE = /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/;
+
 /**
  * Scan the heredocs of a command. The body (and delimiter line) of a heredoc fed to `cat` or `tee` is
  * inert data and is removed from `text`; a heredoc fed to any other head keeps its body, because that
  * body executes. `writes` lists the write target of each cat/tee heredoc (`> T`, `>> T`, or the `tee`
- * operand). Line based, not a shell parser.
+ * operand), for every heredoc operator on a line. A cat/tee heredoc inside a double-quoted `"$(`
+ * command substitution (`git commit -m "$(cat <<'EOF'`) is inert too, unless the quote is the payload
+ * of a `-c`/`eval` flag. Line based, not a shell parser.
  * @param {string} command @returns {{ text: string, writes: string[] }}
  */
 function scanCatTeeHeredocs(command) {
@@ -1159,29 +1171,41 @@ function scanCatTeeHeredocs(command) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     out.push(line);
-    const op = HEREDOC_OPERATOR_RE.exec(line);
-    if (!op) continue;
-    const prefix = line.slice(0, op.index);
-    if (/['"]/.test(stripQuotedLiterals(prefix))) continue; // operator sits inside quoted text
-    const before = prefix.split(SHELL_SEGMENT_SEPARATOR).pop();
-    const afterRaw = line.slice(op.index + op[0].length);
-    const after = afterRaw.split(SHELL_SEGMENT_SEPARATOR)[0];
-    const head = CAT_TEE_HEAD_RE.exec(`${before} ${after}`.trim());
-    if (!head) continue;
-    const rest = head[2] ?? "";
-    if (head[1] === "cat") {
-      for (const m of rest.matchAll(/(?<![\d&])>>?(?!&)\s*([^\s;&|<>]+)/g)) writes.push(m[1]);
-    } else {
-      const operands = rest.replace(/[\d&]*>>?\s*\S+/g, " ").split(/\s+/).filter((t) => t && !t.startsWith("-"));
-      writes.push(...operands);
+    const ops = [...line.matchAll(new RegExp(HEREDOC_OPERATOR_RE.source, "g"))];
+    let pos = i + 1;
+    let skipping = true; // false once an operator leaves its body visible: later bodies cannot be told apart
+    for (let k = 0; k < ops.length; k++) {
+      const op = ops[k];
+      let prefix = line.slice(0, op.index);
+      if (hasUnbalancedQuote(prefix)) {
+        // `"$(cat <<EOF` is a command substitution whose output is data, unless a -c/eval flag runs it.
+        const sub = /^(.*)"\$\(\s*([^"'`]*)$/s.exec(prefix);
+        if (!sub || hasUnbalancedQuote(sub[1]) || EXEC_PAYLOAD_FLAG_RE.test(sub[1])) { skipping = false; continue; } // operator sits inside quoted text
+        prefix = sub[2];
+      }
+      const before = prefix.split(SHELL_SEGMENT_SEPARATOR).pop();
+      const afterRaw = line.slice(op.index + op[0].length, ops[k + 1]?.index);
+      const after = afterRaw.split(SHELL_SEGMENT_SEPARATOR)[0];
+      const head = CAT_TEE_HEAD_RE.exec(`${before} ${after}`.trim());
+      if (!head) { skipping = false; continue; }
+      const rest = head[2] ?? "";
+      if (head[1] === "cat") {
+        for (const m of rest.matchAll(/(?<![\d&])>>?(?!&)\s*([^\s;&|<>]+)/g)) writes.push(m[1]);
+      } else {
+        const operands = rest.replace(/[\d&]*>>?\s*\S+/g, " ").split(/\s+/).filter((t) => t && !t.startsWith("-"));
+        writes.push(...operands);
+      }
+      // A body piped into another command (`cat <<EOF | bash`) executes: keep it.
+      if (/(?<!\|)\|(?!\|)/.test(afterRaw)) { skipping = false; continue; }
+      // Skip the inert body only when its closing delimiter exists; otherwise keep it visible.
+      if (!skipping) continue;
+      const delimiter = op[1] ?? op[2] ?? op[3];
+      let end = pos;
+      while (end < lines.length && lines[end].trim() !== delimiter) end++;
+      if (end >= lines.length) { skipping = false; continue; }
+      pos = end + 1;
     }
-    // A body piped into another command (`cat <<EOF | bash`) executes: keep it.
-    if (/(?<!\|)\|(?!\|)/.test(afterRaw)) continue;
-    // Skip the inert body only when its closing delimiter exists; otherwise keep it visible.
-    const delimiter = op[1] ?? op[2] ?? op[3];
-    let end = i + 1;
-    while (end < lines.length && lines[end].trim() !== delimiter) end++;
-    if (end < lines.length) i = end;
+    i = pos - 1;
   }
   return { text: out.join("\n"), writes };
 }
@@ -1240,7 +1264,7 @@ function runnerScriptPath(segment) {
   const tokens = (m[2] ?? "").split(/\s+/).filter(Boolean);
   if (m[1].toLowerCase() === "bun" && tokens[0] === "run") tokens.shift(); // `bun run <file>`
   for (let i = 0; i < tokens.length; i++) {
-    if (!tokens[i].startsWith("-")) return tokens[i].replace(/^\.\//, "");
+    if (!tokens[i].startsWith("-")) return tokens[i].replace(/^(['"])(.*)\1$/, "$2").replace(/^\.\//, "");
     if (valueFlagsFor(m[1].toLowerCase()).has(tokens[i])) i += 1;
   }
   return null;
@@ -1262,7 +1286,8 @@ export function commandContainsInlineInterpreter(command) {
   const segments = shellSegments(stripQuotedLiterals(text));
   if (segments.some(segmentIsInlineInterpreter)) return true;
   const written = new Set(writes.map((t) => t.replace(/^(['"])(.*)\1$/, "$2").replace(/^\.\//, "")));
-  return written.size > 0 && segments.some((s) => written.has(runnerScriptPath(s)));
+  // Unstripped segments, so a quoted script path (`node "tmp/r.mjs"`) still names the written file.
+  return written.size > 0 && shellSegments(text).some((s) => written.has(runnerScriptPath(s)));
 }
 
 /**
