@@ -33,7 +33,7 @@ Run a closed gate round's THREAD DISPOSITION pass. This helper posts NO review o
 its own: the round's single visible surface is the one PR review
 upsert-checkpoint-verdict.mjs already posted (verdict-marker body + inline finding
 comments). Its only other comment is ONE batched deferral comment per tool run
-(below). Here, every unresolved gate-authored finding thread is reconciled
+on a linked spec issue target (below; none on a PR target). Here, every unresolved gate-authored finding thread is reconciled
 against the current round. A thread whose finding the judge disposed \`act\`
 (current ledger first; on no match, the prior local ledgers, then the thread's
 rendered judge suffix; an ambiguous result at either ledger tier, meaning
@@ -74,9 +74,10 @@ when its own marker carries the explicit operatorVisible signal (the finding's o
 operatorVisible: true, rendered as the marker's ov=1 field); the default (absent/false)
 is NOT filed either. medium (past its fix window) is unchanged: always filed. The
 round's FILEABLE deferrals (thread targets plus folded findings isFileableDeferral files) go
-as ONE batched comment on the comment target: the PR's linked spec issue when
-tracker.provider is github and the PR has exactly one closing issue reference,
-otherwise the PR itself. This tool never creates an issue. A fingerprint the
+as ONE batched comment on the linked spec issue (tracker.provider is github and
+the PR has exactly one closing issue reference). A PR target posts no comment:
+each deferral is recorded in its thread marker (issue=<pr>) and in the verdict
+body's Details markers. This tool never creates an issue. A fingerprint the
 target already lists is not appended again. A FILED thread's marker is stamped
 \`disposition=deferred issue=<n>\` (n = the target's number) before it is resolved, so
 the deferral is never parked only in the thread marker and the ephemeral tmp

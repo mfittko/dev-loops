@@ -800,8 +800,8 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
   is `act` regardless of its severity label. Round 1 is the cheapest fix point, so a real
   AC-relevant `low` is acted up front, never auto-deferred on its label.
 - `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract):
-  the draft is the durable ledger record, and `judge-pass`'s batched deferral comment on the
-  comment target records the deferral (`GATE-EXEC-DEFERRAL-RECORD`). The defer bar is high (net-reduction policy): a `nit` MUST NOT get
+  the draft is the durable ledger record, and `judge-pass`'s batched deferral comment on a linked spec issue target (a PR target posts no comment; the verdict body's Details markers record it)
+  records the deferral (`GATE-EXEC-DEFERRAL-RECORD`). The defer bar is high (net-reduction policy): a `nit` MUST NOT get
   a verdict `disposition` of `defer` (merged into the ledger as `judgeDisposition`; `act` —
   only when it rides an already-planned fix pass — or `reject`, and the resolved thread note
   is its record; this governs the relevance/filing axis only, while the severity-derived
@@ -897,7 +897,8 @@ severity-only disposition or silently skipping spec authority for a wired gate. 
 comment on the deferral comment target via `commentDeferredFindings`
 (`scripts/github/_gate-finding-surface.mjs`). The target is the PR's linked spec issue when
 `tracker.provider` resolves to `github` and the PR has exactly one closing issue reference;
-otherwise it is the PR itself. `judge-pass` never creates an issue and never writes a tracker
+otherwise it is the PR itself, and a PR target posts no comment (the verdict body's Details
+markers carry `issue=<pr>`). `judge-pass` never creates an issue and never writes a tracker
 other than GitHub. The comment goes through the sanctioned `commentIssue` from
 `@dev-loops/core/github/issue-ops`, never a raw `gh` call. `close-gate-findings.mjs`'s own
 severity/round-based defer routes through the SAME `commentDeferredFindings`, so both paths

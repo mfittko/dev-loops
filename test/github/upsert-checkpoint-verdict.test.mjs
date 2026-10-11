@@ -2403,6 +2403,16 @@ test("upsert-checkpoint-verdict a second same-head call is a noop for an inline 
     assert.equal(reparsed.nextAction, inputs.nextAction);
     assert.equal(reparsed.executionMode, inputs.executionMode);
 
+    // The hidden block keeps the delimiter-bearing reason escaped: the only raw
+    // `-->` inside it is its closing line, so no text leaks into the visible body.
+    const hiddenStart = postedBody.lastIndexOf("<!--\n", postedBody.indexOf("Execution mode"));
+    assert.ok(hiddenStart >= 0);
+    const hiddenClose = postedBody.indexOf("\n-->", hiddenStart);
+    assert.ok(hiddenClose > hiddenStart);
+    const hiddenInner = postedBody.slice(hiddenStart + "<!--".length, hiddenClose);
+    assert.ok(hiddenInner.includes(inlineReason.replaceAll("-->", "--&gt;").replaceAll("--!>", "--!&gt;").replaceAll("<!--", "&lt;!--")));
+    assert.ok(!hiddenInner.includes("-->") && !hiddenInner.includes("--!>") && !hiddenInner.includes("<!--"));
+
     // Rendering the SAME inputs again is byte-identical (deterministic render).
     const { runChild: runChild2, calls: calls2 } = makeGhMock([
       ...buildGateCoordinationEntries({
