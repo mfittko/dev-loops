@@ -46,6 +46,11 @@ export const DENIED_INLINE_INTERPRETER_FORMS = [
   "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs",
   "cat > ./r.mjs <<'EOF' && node r.mjs",
   "cat > tmp/r.sh <<'EOF' && bash tmp/r.sh",
+  "cat > tmp/r.mjs <<'EOF' && bun run tmp/r.mjs",
+  "cat > tmp/r.mjs <<'EOF' && bun tmp/r.mjs",
+  "cat > ./r.mjs <<'EOF' && bun run r.mjs",
+  "cat > src/tmp/a.mjs <<'EOF'",
+  "cat > packages/core/src/tmp/a.mjs <<'EOF'",
 ];
 
 /** Forms the matcher allows, including quoted literals that only name an interpreter. */
@@ -55,6 +60,10 @@ export const ALLOWED_INLINE_INTERPRETER_FORMS = [
   "perl tool.pl",
   "perl -Mstrict tool.pl",
   "ruby -rjson tool.rb",
+  "ruby -E UTF-8 tool.rb",
+  "ruby -Eutf-8 tool.rb",
+  "bun run scripts/x.mjs",
+  "cat > ./tmp/x.md <<'EOF'",
   "awk '{print $1}' f",
   "sed -n 1,5p f",
   "sed 's/a/b/' f > tmp/out",

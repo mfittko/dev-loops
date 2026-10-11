@@ -1129,7 +1129,7 @@ const HEREDOC_OPERATOR_RE = /(?<!<)<<(?!<)-?\s*(?:'([A-Za-z_][\w-]*)'|"([A-Za-z_
 const CAT_TEE_HEAD_RE = new RegExp(`^${SHELL_EXEC_PREFIX}(cat|tee)(?:\\s+(.*))?$`);
 
 /**
- * Whether `target` is a temp path: it holds a `tmp/` segment, the segment after the last `tmp/` is not
+ * Whether `target` is a temp path: a relative path leads with `tmp/` or `./tmp/`, an absolute one holds a `tmp/` segment, the segment after the last `tmp/` is not
  * `worktrees`, and it has no `..` segment, `$`, backtick or `~`. Allows `/tmp/x`, `tmp/issues/x`,
  * `<worktree>/tmp/x`; denies `src/a.mjs`, `<repo>/tmp/worktrees/<slug>/src/a.mjs`, `tmp/../src/a.mjs`.
  * @param {string} target @returns {boolean}
@@ -1139,6 +1139,7 @@ function isTempPath(target) {
   if (/[$`~]/.test(path)) return false;
   const parts = path.split("/").filter((p) => p && p !== ".");
   if (parts.includes("..")) return false;
+  if (!path.startsWith("/") && parts[0] !== "tmp") return false; // relative: must lead with tmp/ or ./tmp/
   const last = parts.lastIndexOf("tmp");
   return last !== -1 && last < parts.length - 1 && parts[last + 1] !== "worktrees";
 }
@@ -1196,7 +1197,7 @@ const INTERPRETER_VALUE_FLAGS = new Set([
 ]);
 
 /** perl and ruby take a module (-M/-m/-r) or include dir (-I) as a separate value; -W/-C/-X are boolean there. */
-const PERL_RUBY_VALUE_FLAGS = new Set(["-I", "-M", "-m", "-r"]);
+const PERL_RUBY_VALUE_FLAGS = new Set(["-I", "-M", "-m", "-r", "-E"]);
 
 function valueFlagsFor(bin) {
   return bin === "perl" || bin === "ruby" ? PERL_RUBY_VALUE_FLAGS : INTERPRETER_VALUE_FLAGS;
@@ -1223,8 +1224,8 @@ function segmentIsInlineInterpreter(segment) {
       if (/^-[ep]/.test(t) || t === "--eval" || t.startsWith("--eval=")) return true;
     } else if (bin === "python" || bin === "python3") {
       if (/^-[A-Za-z]*c/.test(t)) return true;
-    } else if (!t.startsWith("--") && !/^-[MmrI]/.test(t)) { // perl, ruby: -M/-m/-r name a module, -I an include dir
-      if (/^-[A-Za-z0-9]*[eEi]/.test(t)) return true;
+    } else if (!t.startsWith("--") && !/^-[MmrI]/.test(t) && !(bin === "ruby" && t.startsWith("-E"))) { // perl, ruby: -M/-m/-r name a module, -I an include dir; ruby -E sets the encoding
+      if ((bin === "perl" ? /^-[A-Za-z0-9]*[eEi]/ : /^-[A-Za-z0-9]*[ei]/).test(t)) return true;
     }
     if (valueFlagsFor(bin).has(t)) i += 1;
   }
@@ -1236,6 +1237,7 @@ function runnerScriptPath(segment) {
   const m = SCRIPT_RUNNER_RE.exec(segment.trim());
   if (!m) return null;
   const tokens = (m[2] ?? "").split(/\s+/).filter(Boolean);
+  if (m[1].toLowerCase() === "bun" && tokens[0] === "run") tokens.shift(); // `bun run <file>`
   for (let i = 0; i < tokens.length; i++) {
     if (!tokens[i].startsWith("-")) return tokens[i].replace(/^\.\//, "");
     if (valueFlagsFor(m[1].toLowerCase()).has(tokens[i])) i += 1;

@@ -175,11 +175,12 @@ An otherwise green PR becomes merge-ready with the violations **recorded**, not 
 ### Internal-tooling-only rule (issue #982) — now advisory
 
 The loop's own execution should use internal dev-loops tooling, not agent-level raw
-`gh`/`python`/`node -e` escape hatches. **It no longer blocks.** The flagged calls
+`gh`/`python` and inline-interpreter escape hatches. **It no longer blocks.** The flagged calls
 are reported as advisory findings via the envelope + PR comment.
 
 **Flagged as raw-call violations:** `gh ...` (including `gh api`, `gh ... --jq`),
-`python` / `python3`, `node -e` / `node --eval` (inline eval). **Allowed (NOT
+`python` / `python3`, and every form `OPS-NO-INLINE-INTERPRETER` denies, reported as tool
+`inline-interpreter`. **Allowed (NOT
 violations):** dev-loops subcommands and `node scripts/*.mjs` invocations — those
 scripts legitimately call `gh`/GraphQL internally; that is the tooling. The rule
 targets the agent's own top-level shell calls, not a script's internals.
@@ -194,8 +195,8 @@ as an `allowedWriteOp`. This legacy classification does not authorize it:
 agent-level call is flagged. None of these findings block anything.
 
 **Inline-interpreter check item:** the raw-call scan below records
-`node -e`/`python3 -c`/heredoc calls, the class barred by `OPS-NO-INLINE-INTERPRETER` in
-[Copilot loop operations](copilot-loop-operations.md), as `rawCallViolations` entries under
+every form barred by `OPS-NO-INLINE-INTERPRETER` in
+[Copilot loop operations](copilot-loop-operations.md), through the same predicate as the Bash gate, as `rawCallViolations` entries (tool `inline-interpreter`) under
 `RETRO-ADVISORY-NEVER-GATE`.
 
 ### Deterministic verifier (findings-producer)
@@ -203,7 +204,7 @@ agent-level call is flagged. None of these findings block anything.
 `node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]` reads a
 newline-delimited transcript of the shell commands the agent ran (one top-level
 command per line, via `--transcript` or stdin) and reports agent-level raw
-`gh`/`python`/`python3`/`node -e`/`node --eval` calls. It is a **findings-producer**:
+`gh`/`python`/`python3` calls and every `OPS-NO-INLINE-INTERPRETER` form (tool `inline-interpreter`). It is a **findings-producer**:
 its JSON output (`{ ok, internalToolingOnly, rawCallViolations, allowedWriteOps }`)
 is returned to the conductor via the envelope's `retrospectiveFindings` field (normalized
 to `{ internalToolingOnly, rawCallViolations, allowedWriteOps }`). It is **not** written to a
@@ -214,8 +215,9 @@ are found, `0` when clean, `2` for unreadable input (a stdin or `--transcript` f
 
 Matching rules: a tool name at the start of a command segment (start of line, or after
 `&&`/`||`/`|`/`;`), after the verifier strips `NAME=value` prefixes, a leading wrapper binary
-from `{sudo, env, xargs, time, nice, command}`, and a path prefix; `node` is a violation only
-with `-e`/`--eval`. It does NOT fully parse shell quoting or substitution, so prefer
+from `{sudo, env, xargs, time, nice, command}`, and a path prefix; the inline-interpreter forms
+are decided by the shared `OPS-NO-INLINE-INTERPRETER` predicate. The verifier blanks quoted
+literals before splitting segments but does NOT fully parse shell substitution, so prefer
 single-line, single-purpose commands in transcripts.
 
 ## Cycle scoping — a checkpoint discharges exactly one qualifying completion

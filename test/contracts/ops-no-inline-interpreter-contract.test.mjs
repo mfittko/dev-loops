@@ -2,6 +2,7 @@
 // file-write rule, the main-agent contract cites it, and agents cite the ID without copying the rule body.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { collectContractMarkdownFiles, extractRuleDefinitions, findEmbeddedRuleBodies } from "../../scripts/docs/validate-rule-ownership.mjs";
 import { assert, fromRepoRoot, readRepo, test } from "../imported-assets-helpers.mjs";
@@ -24,7 +25,7 @@ test("OPS-NO-INLINE-INTERPRETER lists the four classes and the temp-path definit
     "in-place editors",
     "`cat`/`tee` heredoc write whose target is not a temp path",
     "running, in the same command, a file that a `cat`/`tee` heredoc wrote",
-    "A temp path contains a `tmp/` segment",
+    "A temp path starts with `tmp/` or `./tmp/` when relative",
     "is not `worktrees`",
   ]) {
     assert.ok(body.includes(needle), `rule must contain: ${needle}`);
@@ -49,7 +50,7 @@ function agentFiles(dir, toolsPattern) {
   const root = fromRepoRoot(dir);
   return fs.readdirSync(root)
     .filter((name) => name.endsWith(".md"))
-    .map((name) => ({ name, content: fs.readFileSync(path.join(root.pathname, name), "utf8") }))
+    .map((name) => ({ name, content: fs.readFileSync(path.join(fileURLToPath(root), name), "utf8") }))
     .filter(({ content }) => toolsPattern.test(content.match(/^tools:.*$/m)?.[0] ?? ""));
 }
 

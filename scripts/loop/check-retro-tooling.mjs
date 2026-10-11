@@ -68,7 +68,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-
 const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
 
 Reads a newline-delimited transcript of agent shell commands (from --transcript
-or stdin) and reports agent-level raw gh/python/node -e calls (internal-tooling-only
+or stdin) and reports agent-level raw gh/python calls and every OPS-NO-INLINE-INTERPRETER form (tool inline-interpreter; internal-tooling-only
 rule, issue #982).
 
 Options:
