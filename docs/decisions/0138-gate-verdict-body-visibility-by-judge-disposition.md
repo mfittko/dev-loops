@@ -6,7 +6,7 @@ Accepted — 2026-10-11 ([PR 2737](https://github.com/mfittko/dev-loops/pull/273
 
 ## Context
 
-Amends [0075](./0075-fold-sub-floor-findings-out-of-inline-threads.md): the verdict body folded findings by severity alone. A `low` the judge disposed `act` folded out of sight, and a `medium` the judge rejected stayed visible. Amends [0092](./0092-gate-tools-comment-only-blocker-only-filing.md): a round whose deferral target was the PR posted a second deferral comment on the PR next to the verdict review. Amends [0100](./0100-reviewer-verified-items-drive-the-pre-approval-tick.md): it recorded the remaining gate blocker items in a collapsed `<details>` block. Records 0075, 0092 and 0100 stay unedited. [Issue 2722](https://github.com/mfittko/dev-loops/issues/2722) asked for a verdict body that shows only what the reader must act on.
+Amends [0075](./0075-fold-sub-floor-findings-out-of-inline-threads.md): the verdict body folded findings by severity alone. A `low` the judge disposed `act` folded out of sight, and a `medium` the judge rejected stayed visible. Amends [0100](./0100-reviewer-verified-items-drive-the-pre-approval-tick.md): it recorded the remaining gate blocker items in a collapsed `<details>` block. Records 0075 and 0100 stay unedited. [Issue 2722](https://github.com/mfittko/dev-loops/issues/2722) asked for a verdict body that shows only what the reader must act on.
 
 ## Decision
 
@@ -15,8 +15,8 @@ Amends [0075](./0075-fold-sub-floor-findings-out-of-inline-threads.md): the verd
 - Remaining gate blocker items render as a visible list below the `**Gate blockers:**` line, not in a collapsed block.
 - The renderer-only `Execution mode` and `Blocking severities` lines render inside one HTML comment.
 - An inline finding comment shows one short `Problem` and one short `Fix`. Reasoning, evidence and the failing case move into its `Details` block.
-- When the deferral target is the PR, no deferral comment is posted. A deferred finding is recorded by its stamped thread marker and reply, or by its folded marker in the verdict body's `Details` block. Only a Deferred-group folded marker carries `issue=<pr>`; a Rejected or Not judged folded entry is recorded by its marker and bullet without an `issue=` pointer.
+- A Deferred-group folded marker carries `issue=<n>` for its deferral target: the recorded follow-up issue, else the PR. A Rejected or Not judged folded entry carries no `issue=` pointer.
 
 ## Consequences
 
-The visible verdict body holds the visible set (`act`, blocking-severity, `question`, unrecognized-severity and unjudged at-or-above-floor findings), so `Next action` derives from the visible set (act, blocking-severity, question, unrecognized-severity and unjudged findings at or above the floor). Rejected and deferred findings stay one click away and fingerprint-tracked. A PR receives one gate surface per round. A linked spec issue still receives the deferral comment.
+The visible verdict body holds the visible set (`act`, blocking-severity, `question`, unrecognized-severity and unjudged at-or-above-floor findings), so `Next action` derives from the visible set (act, blocking-severity, question, unrecognized-severity and unjudged findings at or above the floor). Rejected and deferred findings stay one click away and fingerprint-tracked.

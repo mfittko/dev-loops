@@ -667,16 +667,17 @@ test("judgePassCli: GitHub tracker + one closing reference — one batched comme
 });
 
 for (const [label, closing] of [["no closing reference", []], ["more than one closing reference", [2425, 2426]]]) {
-  test(`judgePassCli: ${label} — no deferral comment is posted, followUpIssueNumber is the PR number`, async () => {
+  test(`judgePassCli: ${label} — the comment goes to the PR, followUpIssueNumber is the PR number`, async () => {
     const { deps, runCalls, commentCalls } = stubDeferralDeps({ closing });
     const { enriched } = await runDeferRound({ findings: [finding({ summary: "defer this", severity: "low" })], dispositions: [{ index: 0, ...DEFER }], deps });
-    assert.equal(commentCalls.length, 0);
+    assert.equal(commentCalls.length, 1);
+    assert.equal(commentCalls[0].issue, 1658);
     assert.equal(enriched.findings[0].followUpIssueNumber, 1658);
     assertNoIssueCreate(runCalls);
   });
 }
 
-test("judgePassCli: tracker.provider other than github — no deferral comment, with no closing-reference lookup", async () => {
+test("judgePassCli: tracker.provider other than github — the comment goes to the PR, with no closing-reference lookup", async () => {
   const { deps, runCalls, commentCalls } = stubDeferralDeps({ closing: [2425] });
   const { enriched } = await runDeferRound({
     findings: [finding({ summary: "defer this", severity: "low" })],
@@ -685,7 +686,8 @@ test("judgePassCli: tracker.provider other than github — no deferral comment, 
     config: { version: 1, tracker: { provider: "jira" } },
   });
   assert.equal(runCalls.some((args) => args[0] === "pr"), false, "no closing-reference lookup for a non-GitHub tracker");
-  assert.equal(commentCalls.length, 0);
+  assert.equal(commentCalls.length, 1);
+  assert.equal(commentCalls[0].issue, 1658);
   assert.equal(enriched.findings[0].followUpIssueNumber, 1658);
   assertNoIssueCreate(runCalls);
 });

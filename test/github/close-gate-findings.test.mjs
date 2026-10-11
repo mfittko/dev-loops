@@ -1473,6 +1473,7 @@ test("stampDeferredDisposition fails closed when an already-stamped issue= diffe
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
       // No closing reference: the target resolves to the PR, not 9500.
       prViewEntry([]),
+      targetCommentsEntry(PR, [{ body: "<!-- dev-loops:deferred-summary -->\n- `1111000011110000` **medium** (`perf`): stale cache" }]),
       getReviewCommentEntry(6502, legacyStamped),
       // No PATCH, reply or resolve entries: any of them overflows the stub.
     ],
@@ -1550,18 +1551,20 @@ test("a mixed disposition pass comments once, for only the not-yet-listed finger
   ));
 });
 
-// Comment target fallback: with no closing reference, or more than one, the PR itself is the
-// target: no deferral comment is posted and the stamp records the PR number.
+// Comment target fallback: with no closing reference, or more than one, the
+// deferral comment goes to the PR itself and the stamp records the PR number.
 for (const [label, closing] of [["no closing reference", []], ["more than one closing reference", [9500, 9501]]]) {
-  test(`deferral comment target: ${label} — posts no comment, followUpIssueNumber is the PR number`, async () => {
+  test(`deferral comment target: ${label} — comments on the PR, followUpIssueNumber is the PR number`, async () => {
     const thread = openWfnThread({ commentId: 6700, fp: "2222222222222222", id: "THREAD_PR_TARGET" });
     await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
       [
         ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
         prViewEntry(closing),
+        targetCommentsEntry(PR),
+        appendFollowUpIssueEntry(PR, { contains: ["2222222222222222"] }),
         getReviewCommentEntry(6700, wfnBody("2222222222222222")),
         { ...patchReviewCommentEntry(6700), assertArgContains: [`disposition=deferred issue=${PR}`] },
-        { ...postReplyEntry(6700, { id: 7700 }), assertStdinIncludes: ["recorded in this thread's marker", `issue=${PR}`] },
+        postReplyEntry(6700, { id: 7700 }),
         resolveThreadEntry("THREAD_PR_TARGET"),
       ],
       async ({ env, ghCommand, runChild, repoRoot }) => {
@@ -1576,11 +1579,13 @@ for (const [label, closing] of [["no closing reference", []], ["more than one cl
 // A tracker other than GitHub: the comment goes to the PR, with no closing
 // reference lookup at all (a prViewEntry here would be the next stub entry and
 // its args would not match the comments read, failing the run).
-test("deferral comment target: tracker.provider other than github — no comment, no closing-reference lookup", async () => {
+test("deferral comment target: tracker.provider other than github — comments on the PR, no closing-reference lookup", async () => {
   const thread = openWfnThread({ commentId: 6710, fp: "3333333333333333", id: "THREAD_NON_GITHUB" });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      targetCommentsEntry(PR),
+      appendFollowUpIssueEntry(PR, { contains: ["3333333333333333"] }),
       getReviewCommentEntry(6710, wfnBody("3333333333333333")),
       patchReviewCommentEntry(6710),
       postReplyEntry(6710, { id: 7710 }),
@@ -2236,8 +2241,8 @@ test("#1585: unresolvedGateThreadCount reflects the subtraction (must-fix stays,
 });
 
 // ---------------------------------------------------------------------------
-// #2263: folded filing. A finding that isVisibleFinding does not show
-// (upsert-checkpoint-verdict.mjs's renderVerdictDetailsBlock) never gets a
+// #2263: folded filing. A finding below the gate's inline severity floor
+// (upsert-checkpoint-verdict.mjs's renderFoldedFindingsBlock) never gets a
 // thread of its own; its operator-visible lows join the round's ONE batched
 // deferral comment directly from the ledger.
 // ---------------------------------------------------------------------------
@@ -2274,95 +2279,10 @@ test("#2263: a nit and a non-operator-visible low fold with no filing (net-reduc
   ));
 });
 
-test("an operator-visible low the judge disposed act is visible, never folds, and so is never listed — no deferral-comment calls", async () => {
+test("an operator-visible folded low the judge disposed act is not listed — no deferral-comment calls", async () => {
   const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true, judgeDisposition: "act" };
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [] }),
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.foldedFiled, 0);
-      assert.equal(result.followUpIssueNumber, undefined);
-    },
-  ));
-});
-
-test("a past-window folded medium the judge rejected is listed in the deferral comment (blocking [high])", async () => {
-  const finding = { severity: "medium", angle: "naming", summary: "rejected medium past the fix window", judgeDisposition: "reject" };
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
-    [
-      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [] }),
-      ...deferralCommentEntries(9601, { contains: [fingerprintFinding(finding)] }),
-    ],
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.foldedFiled, 1);
-      assert.equal(result.followUpIssueNumber, 9601);
-    },
-  ));
-});
-
-test("a past-window locatable reject medium that already has an inline thread is not also listed as a folded entry", async () => {
-  const finding = { severity: "medium", angle: "naming", summary: "rejected medium past the fix window", judgeDisposition: "reject" };
-  const fp = fingerprintFinding(finding);
-  const body = `${buildFindingMarker({ fp, severity: "medium", angle: "naming", round: 1 })}\n**medium** (\`naming\`): rejected medium past the fix window`;
-  const thread = threadNode({ id: "THREAD_LOC_REJ", path: "src/x.mjs", line: 4, commentId: 9400, body });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
-    [
-      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
-      ...deferralCommentEntries(9500, { contains: [fp] }),
-      getReviewCommentEntry(9400, body),
-      patchReviewCommentEntry(9400),
-      postReplyEntry(9400, { id: 9401 }),
-      resolveThreadEntry("THREAD_LOC_REJ"),
-    ],
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.deferredResolved, 1);
-      assert.equal(result.foldedFiled, 0);
-    },
-  ));
-});
-
-test("a non-primary marker of a merged own inline thread excludes its fingerprint from the folded filing pass", async () => {
-  const finding = { severity: "medium", angle: "naming", summary: "rejected medium past the fix window", judgeDisposition: "reject" };
-  const fp = fingerprintFinding(finding);
-  const markerA = buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "high", angle: "correctness", round: 1 });
-  const markerB = buildFindingMarker({ fp, severity: "medium", angle: "naming", round: 1 });
-  const body = `${markerA}\n${markerB}\n**high** (\`correctness\`): merged inline comment`;
-  const thread = threadNode({ id: "THREAD_MERGED", path: "src/x.mjs", line: 4, commentId: 9410, body });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
-    [
-      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
-      ...deferralCommentEntries(9501, { contains: [fp] }),
-    ],
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.foldedFiled, 0);
-    },
-  ));
-});
-
-test("a marker in a thread authored by another login does not exclude its fingerprint from the folded filing pass", async () => {
-  const finding = { severity: "medium", angle: "naming", summary: "rejected medium past the fix window", judgeDisposition: "reject" };
-  const fp = fingerprintFinding(finding);
-  const body = `${buildFindingMarker({ fp, severity: "medium", angle: "naming", round: 1 })}\n**medium**: foreign thread`;
-  const thread = threadNode({ id: "THREAD_FOREIGN", path: "src/x.mjs", line: 4, commentId: 9420, body, author: "someone-else" });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
-    [
-      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
-      ...deferralCommentEntries(9502, { contains: [fp] }),
-    ],
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.foldedFiled, 1);
-    },
-  ));
-});
-
-test("a blocking-severity high the judge rejected is visible, so it is excluded from the folded filing pass", async () => {
-  const finding = { severity: "high", angle: "naming", summary: "rejected high", judgeDisposition: "reject" };
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
-    roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [] }),
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.foldedFiled, 0);

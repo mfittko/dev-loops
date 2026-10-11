@@ -247,11 +247,9 @@ export function collectFingerprints(text, set) {
 // A `defer` disposition (judge-pass.mjs's relevance defer, or
 // close-gate-findings.mjs's severity/round auto-defer) is recorded as ONE
 // batched comment per tool run (at most one from judge-pass.mjs and one from
-// close-gate-findings.mjs per round) on the linked spec issue (the configured
-// tracker is GitHub and the PR has exactly one closing issue reference). A PR
-// target posts no comment: a thread deferral is recorded in its thread marker
-// (issue=<pr>) and a folded deferral in the verdict body's Details markers. No tool creates an
-// issue here.
+// close-gate-findings.mjs per round) on the comment target: the PR's linked spec issue
+// when the configured tracker is GitHub and the PR has exactly one closing
+// issue reference, otherwise the PR itself. No tool creates an issue here.
 
 // A finding's summary/angle is untrusted free text. The comment body is
 // guarded by commentIssue's guardCommentBodyNoIssuePrIds and renders through
@@ -353,10 +351,8 @@ export async function fetchListedFingerprints(
 }
 
 /**
- * Post a round's deferred findings as ONE batched comment on the linked spec
- * issue (resolveDeferralCommentTarget); a PR target posts nothing and every entry
- * counts as recorded by its folded marker and bullet (a Deferred-group marker also carries `issue=<pr>`), so a caller's
- * `foldedFiled` counts those folded entries again on a rerun. Entries whose fingerprint the target
+ * Post a round's deferred findings as ONE batched comment on the comment
+ * target (resolveDeferralCommentTarget). Entries whose fingerprint the target
  * already lists are skipped; nothing is posted when none remain. Returns
  * `{ issueNumber, appendedFingerprints }` where `issueNumber` is the target's
  * number (an issue or the PR). Dependencies are injectable for tests;
@@ -370,11 +366,6 @@ export async function commentDeferredFindings(
     throw new Error("commentDeferredFindings: entries must be a non-empty array");
   }
   const target = await resolveDeferralCommentTarget({ repo, pr, trackerProvider }, { env, ghCommand, run });
-  // A PR target needs no comment: the verdict body's Deferred group carries each entry's
-  // marker (Deferred-group markers carry issue=<pr>) and is the record, so every entry counts as recorded.
-  if (target === pr) {
-    return { issueNumber: target, appendedFingerprints: new Set(entries.map((entry) => entry.fingerprint)) };
-  }
   const listed = await fetchListedFingerprints({ repo, target }, { env, ghCommand, run });
   const fresh = entries.filter((entry) => !listed.has(entry.fingerprint));
   if (fresh.length > 0) {

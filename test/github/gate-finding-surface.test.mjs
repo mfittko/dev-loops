@@ -1345,12 +1345,11 @@ test("commentDeferredFindings: one closing reference -> ONE batched comment on t
   assert.equal(calls.some((args) => args.includes("create")), false);
 });
 
-test("commentDeferredFindings: no closing reference -> the PR is the target and no comment is posted", async () => {
+test("commentDeferredFindings: no closing reference -> the comment goes to the PR", async () => {
   const { run, calls } = fakeGh();
   const result = await commentDeferredFindings({ repo: "o/r", pr: 42, entries: deferralEntries() }, { run });
   assert.equal(result.issueNumber, 42);
-  assert.deepEqual([...result.appendedFingerprints], ["1111111111111111", "2222222222222222"]);
-  assert.equal(calls.some((args) => args[0] === "issue"), false);
+  assert.deepEqual(calls.at(-1).slice(0, 4), ["issue", "comment", "42", "--repo"]);
 });
 
 test("commentDeferredFindings: a fingerprint the target already lists is not appended again; nothing new posts nothing", async () => {
@@ -1384,7 +1383,7 @@ test("commentDeferredFindings: a bare #<digits> in summary or angle is neutraliz
     { fingerprint: "5555555555555555", severity: "medium", angle: "regression-of-#321", summary: "duplicates #123456 behavior" },
     { fingerprint: "8888888888888888", severity: "medium", angle: "run-of-###55", summary: "duplicate of ##987 and also ###12" },
   ];
-  const { run, calls } = fakeGh({ closing: [{ number: 77, repository: { name: "r", owner: { login: "o" } } }] });
+  const { run, calls } = fakeGh();
   await commentDeferredFindings({ repo: "o/r", pr: 7, entries }, { run });
   const bodyArg = calls.at(-1)[calls.at(-1).indexOf("--body") + 1];
   assert.doesNotMatch(bodyArg, /#\d/);
