@@ -530,6 +530,10 @@ test("findAdrNumberCollisions: no collision on a free number, an already-tipped 
   assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0095-a.md", "0095-b.md"], addedNames: ["0105-b.md"], removedNames: ["0095-b.md"] }), []);
 });
 
+test("findAdrNumberCollisions: skips two added records sharing a number the tip lacks", () => {
+  assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0095-a.md"], addedNames: ["0096-b.md", "0096-c.md"] }), []);
+});
+
 test("findAdrNumberCollisions: ignores the template and malformed names, and collisions on unadded names", () => {
   assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0000-template.md"], addedNames: ["0000-template.md", "Bad_Name.md"] }), []);
   assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0095-a.md", "0095-b.md"], addedNames: ["0096-c.md"] }), []);

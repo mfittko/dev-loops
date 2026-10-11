@@ -759,6 +759,7 @@ async function runMerge(fixture, { threads = [], delta = DOCS_DELTA, prOwn = del
     if (args[0] === "pr" && args[1] === "view" && joined.includes("baseRefName")) return ok("main\n");
     if (args[0] === "pr" && args[1] === "view" && joined.includes("mergeCommit")) return ok({ mergeCommit: { oid: FIX }, state: "MERGED" });
     if (args[0] === "pr" && args[1] === "merge") return ok("");
+    if (joined.includes(`pulls/${PR}/files`)) return ok([[]]);
     if (joined.includes(`pulls/${PR}/reviews`)) return ok([fixture.reviews.map(toRestReview)]);
     if (joined.includes(`issues/${PR}/comments?per_page`)) return ok([[]]);
     if (joined.includes(`issues/${PR}/comments`)) return ok(dispositions.map((d) => JSON.stringify(d)).join("\n"));

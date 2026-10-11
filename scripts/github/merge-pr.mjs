@@ -310,6 +310,7 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
 // record whose number the base branch tip already holds; null otherwise. Reads
 // the tip at merge time, so a record merged after the PR branched still counts.
 async function resolveAdrNumberCollisionRefusal({ repo, pr, baseRefName }, { env, ghCommand, runChild, ghJson }) {
+  if (!baseRefName) return "could not check ADR numbers: the PR base branch name is unknown";
   const files = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/files?per_page=100`],
     { env, ghCommand, runChild },
@@ -323,7 +324,8 @@ async function resolveAdrNumberCollisionRefusal({ repo, pr, baseRefName }, { env
     .filter(isRecord).map(base);
   let tipNames;
   try {
-    const listing = await ghJson(["api", `repos/${repo}/contents/docs/decisions?ref=${baseRefName}`], { env, ghCommand, runChild });
+    // ponytail: API ceilings, 1000 directory entries and 3000 PR files; page or use git trees if a repo outgrows them
+    const listing = await ghJson(["api", `repos/${repo}/contents/docs/decisions?ref=${encodeURIComponent(baseRefName)}`], { env, ghCommand, runChild });
     tipNames = (Array.isArray(listing) ? listing : []).map((e) => e?.name).filter((n) => typeof n === "string");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -675,7 +677,7 @@ export async function mergePr(options, runtime = {}) {
   );
 
   const adrNumberCollisionRefusal = await resolveAdrNumberCollisionRefusal(
-    { repo: options.repo, pr: options.pr, baseRefName: typeof prView?.baseRefName === "string" ? prView.baseRefName : "main" },
+    { repo: options.repo, pr: options.pr, baseRefName: typeof prView?.baseRefName === "string" ? prView.baseRefName : "" },
     { env, ghCommand, runChild, ghJson },
   ).catch((error) => `could not check ADR numbers: ${error instanceof Error ? error.message : String(error)}`);
 

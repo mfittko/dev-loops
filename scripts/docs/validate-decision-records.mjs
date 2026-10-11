@@ -113,6 +113,8 @@ export function findAdrNumberCollisions({ tipNames = [], addedNames = [], remove
   const nextFree = String(highest + 1).padStart(4, "0");
   return detectIndexErrors(names)
     .filter((e) => e.kind === "adr_duplicate_prefix" && added.has(e.file))
+    // Two added records sharing a number the tip lacks: test:docs on the branch owns that collision.
+    .filter((e) => tipNames.some((n) => n !== e.file && n.startsWith(`${e.prefix}-`) && !removed.has(n)))
     .map((e) => ({ file: e.file, prefix: e.prefix, holder: names.find((n) => n !== e.file && n.startsWith(`${e.prefix}-`)), nextFree }));
 }
 

@@ -69,7 +69,10 @@ function makeRuntime({
       env: { GH_TOKEN: "t" },
       ghJson: async (args) => {
         calls.ghJson.push(args);
-        if (args.join(" ").includes("/files?")) return adrPrFiles;
+        if (args.join(" ").includes("/files?")) {
+          if (adrPrFiles instanceof Error) throw adrPrFiles;
+          return adrPrFiles;
+        }
         if (args.join(" ").includes("/contents/docs/decisions")) {
           if (adrTip instanceof Error) throw adrTip;
           return adrTip.map((name) => ({ name }));
@@ -189,9 +192,9 @@ test("adr_tripwire evaluates origin/<base> at the PR head after fetching it", as
   assert.deepEqual(evaluated, [{ base: "origin/main", head: HEAD }]);
 });
 
-test("adr_tripwire refuses as unevaluable when the PR base branch is unreadable", async () => {
+test("adr_number_collision refuses fail-closed when the PR base branch is unreadable", async () => {
   const { runtime, calls } = makeRuntime({ prView: { baseRefName: "" } });
-  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*base branch is unreadable/);
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_number_collision \(.*base branch name is unknown/);
   assert.equal(mergeCalls(calls).length, 0);
 });
 
@@ -1139,6 +1142,21 @@ test("adr_number_collision: any other tip read error refuses fail-closed", async
   assert.equal(threw.mergePrFailure.failures.find((f) => f.precondition === "adr_number_collision").reason,
     "could not read docs/decisions on main to check ADR numbers: gh command failed: HTTP 500");
   assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("adr_number_collision: a failed files-list read refuses fail-closed", async () => {
+  const { runtime, calls } = makeRuntime({ adrPrFiles: new Error("gh command failed: HTTP 500") });
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "adr_number_collision"));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("adr_number_collision: a removed record is subtracted from the tip", async () => {
+  const { runtime } = makeRuntime({
+    adrPrFiles: [adrFile("docs/decisions/0095-a.md", "removed"), adrFile("docs/decisions/0095-b.md")],
+    adrTip: ["0095-a.md"],
+  });
+  assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
 });
 
 test("adr_number_collision: a collision-repair rename merges", async () => {
