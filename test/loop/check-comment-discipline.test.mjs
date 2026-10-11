@@ -103,7 +103,7 @@ test("evaluateCommentDiscipline throws (fails closed) when the base ref does not
   try {
     runGitFixture(dir, ["init", "-q"]);
     runGitFixture(dir, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]);
-    await assert.rejects(() => evaluateCommentDiscipline({ base: "origin/main", head: "HEAD", repoRoot: dir }));
+    await assert.rejects(() => evaluateCommentDiscipline({ base: "origin/main", head: "HEAD", repoRoot: dir }), /origin\/main/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
