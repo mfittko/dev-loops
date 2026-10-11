@@ -2323,6 +2323,42 @@ test("a past-window locatable reject medium that already has an inline thread is
   ));
 });
 
+test("a non-primary marker of a merged own inline thread excludes its fingerprint from the folded filing pass", async () => {
+  const finding = { severity: "medium", angle: "naming", summary: "rejected medium past the fix window", judgeDisposition: "reject" };
+  const fp = fingerprintFinding(finding);
+  const markerA = buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "high", angle: "correctness", round: 1 });
+  const markerB = buildFindingMarker({ fp, severity: "medium", angle: "naming", round: 1 });
+  const body = `${markerA}\n${markerB}\n**high** (\`correctness\`): merged inline comment`;
+  const thread = threadNode({ id: "THREAD_MERGED", path: "src/x.mjs", line: 4, commentId: 9410, body });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      ...deferralCommentEntries(9501, { contains: [fp] }),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.foldedFiled, 0);
+    },
+  ));
+});
+
+test("a marker in a thread authored by another login does not exclude its fingerprint from the folded filing pass", async () => {
+  const finding = { severity: "medium", angle: "naming", summary: "rejected medium past the fix window", judgeDisposition: "reject" };
+  const fp = fingerprintFinding(finding);
+  const body = `${buildFindingMarker({ fp, severity: "medium", angle: "naming", round: 1 })}\n**medium**: foreign thread`;
+  const thread = threadNode({ id: "THREAD_FOREIGN", path: "src/x.mjs", line: 4, commentId: 9420, body, author: "someone-else" });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      ...deferralCommentEntries(9502, { contains: [fp] }),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.foldedFiled, 1);
+    },
+  ));
+});
+
 test("a blocking-severity high the judge rejected is visible, so it is excluded from the folded filing pass", async () => {
   const finding = { severity: "high", angle: "naming", summary: "rejected high", judgeDisposition: "reject" };
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(

@@ -11,6 +11,7 @@ import {
   commentDeferredFindings,
   fetchThreadsWithFullBodies,
   findJudgeDispositionForFingerprint,
+  collectFingerprints,
   fingerprintFinding,
   isVisibleFinding,
   isDeferredAtRound,
@@ -116,7 +117,7 @@ Output (stdout, JSON):
     "deferredResolved": <disposition reply+resolve count>,
     "rejectClosed": <answered, judge-rejected question threads reply+resolved this pass (ADR 0088); 0 when none qualify>,
     "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer + reject-close passes; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
-    "foldedFiled": <#2263: operator-visible folded findings (not visible per the judge-disposition rule) newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); on a PR target no comment is posted and it counts the folded entries recorded by their verdict-body marker (issue=<pr>); a nit or a non-operator-visible low is never filed>,
+    "foldedFiled": <#2263: operator-visible folded findings (not visible per the judge-disposition rule) newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); on a PR target no comment is posted and it counts the folded entries recorded by their folded marker and Details bullet (only a Deferred-group marker carries issue=<pr>); a nit or a non-operator-visible low is never filed>,
     "followUpIssueNumber"?: <the deferral comment target number (the linked spec issue, or the PR itself); present when the round had a fileable thread target OR a fileable folded finding>,
     "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted; that thread stays unresolved rather than deadlocking the batch (#1882)> }
 
@@ -707,7 +708,8 @@ async function runQuestionRejectClosePass({ repo, pr, gate, headSha, round, thre
 // visible, in the Details block itself; that IS its
 // resolved-with-rationale record).
 function selectFoldedFileableEntries({ findings, round, floor, blockingSeverities = [], mediumFixWindow, threads = [], login }) {
-  const threadFps = new Set(threads.filter((t) => t.author === login).map((t) => parseFindingMarker(t.body)?.fp).filter(Boolean));
+  const threadFps = new Set();
+  for (const t of threads) if (t.author === login) collectFingerprints(t.body, threadFps);
   return findings
     .filter((f) => !threadFps.has(fingerprintFinding(f)))
     .filter((f) => !isVisibleFinding(f, { floor, blockingSeverities }))

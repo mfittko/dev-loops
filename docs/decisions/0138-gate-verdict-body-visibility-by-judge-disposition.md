@@ -14,7 +14,7 @@ Amends [0075](./0075-fold-sub-floor-findings-out-of-inline-threads.md): the verd
 - Every other finding that has no inline thread folds into one collapsed `Details` block, grouped as `Deferred (N)`, `Rejected (N)` and `Not judged (N)`. The `Clean (N)` angle roster moves into the same block. Each folded entry keeps its fingerprint marker. A locatable finding at or above the inline floor keeps its inline thread on a create, whatever its judge disposition; the judge decides body visibility only.
 - The renderer-only `Execution mode` and `Blocking severities` lines render inside one HTML comment.
 - An inline finding comment shows one short `Problem` and one short `Fix`. Reasoning, evidence and the failing case move into its `Details` block.
-- When the deferral target is the PR, no deferral comment is posted. A deferred finding is recorded by its stamped thread marker and reply, or by its folded marker in the verdict body's `Details` block.
+- When the deferral target is the PR, no deferral comment is posted. A deferred finding is recorded by its stamped thread marker and reply, or by its folded marker in the verdict body's `Details` block. Only a Deferred-group folded marker carries `issue=<pr>`; a Rejected or Not judged folded entry is recorded by its marker and bullet without an `issue=` pointer.
 
 ## Consequences
 
