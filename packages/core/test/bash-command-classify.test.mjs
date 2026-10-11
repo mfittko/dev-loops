@@ -831,6 +831,12 @@ test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scr
   assert.equal(commandContainsDetachedWaitTool("timeout 600 npm test &"), false);
 });
 
+test("commandContainsInlineInterpreter: a stray quote on an earlier line or comment does not make a real heredoc write inert", () => {
+  assert.equal(commandContainsInlineInterpreter("cat > tmp/n <<'EOF'\ndon't\nEOF\ngit commit -m \"a\nb\" && cat > packages/a.mjs <<EOF\nx\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("# don't\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);
+  assert.equal(commandContainsInlineInterpreter("# don't\necho \"a\nb\" ; tee src/a.mjs <<'EOF'\nx\nEOF"), true);
+});
+
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
   assert.equal(commandContainsInlineInterpreter('node -e "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node --eval "console.log(1)"'), true);

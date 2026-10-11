@@ -1189,7 +1189,9 @@ function scanCatTeeHeredocs(command) {
       }
       if (quoted) {
         // Judge the quote state from the start of the command, so a quote opened on an earlier line counts.
-        const upTo = [...lines.slice(0, i), prefix].join("\n").replace(/\\['"]/g, "  ");
+        // Earlier lines are those still visible (a skipped cat/tee heredoc body is inert) minus `#` comments.
+        const earlier = out.slice(0, -1).filter((l) => !/^\s*#/.test(l));
+        const upTo = [...earlier, prefix].join("\n").replace(/\\['"]/g, "  ");
         const blanked = upTo.replace(/(['"])(?:(?!\1).)*\1/gs, (m) => " ".repeat(m.length));
         const opener = blanked.search(/['"]/);
         inertQuoted = opener >= 0 && !EXEC_PAYLOAD_FLAG_RE.test(upTo.slice(0, opener));
@@ -1304,7 +1306,7 @@ function runnerScriptPath(segment) {
 export function commandContainsInlineInterpreter(command) {
   const { text, writes } = scanCatTeeHeredocs(command);
   if (writes.some((target) => !isTempPath(target))) return true;
-  const segments = shellSegments(stripQuotedLiterals(text, " Q ")); // placeholder keeps a quoted token's position
+  const segments = shellSegments(stripQuotedLiterals(text, "Q ")); // placeholder keeps a quoted token's position; no leading space keeps `--flag="v"` one token
   if (segments.some(segmentIsInlineInterpreter)) return true;
   const written = new Set(writes.map((t) => t.replace(/^(['"])(.*)\1$/, "$2").replace(/^\.\//, "")));
   // Unstripped segments, so a quoted script path (`node "tmp/r.mjs"`) still names the written file.

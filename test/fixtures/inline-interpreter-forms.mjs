@@ -9,6 +9,7 @@ export const DENIED_INLINE_INTERPRETER_FORMS = [
   "node -e 'x'",
   "node --require \"./setup.js\" -e 'console.log(1)'",
   "python3 -W \"ignore\" -c 'x'",
+  "node --require=\"./setup.js\" -e 'x'",
   "perl -I \"lib\" -pi -e 's/a/b/' f",
   "ruby -C \"/tmp\" -e 'x'",
   "bash -c \"cat > packages/a.mjs <<'EOF'\"",
