@@ -1151,6 +1151,7 @@ test("adr_number_collision: a non-404 tip read error whose text contains 404 sti
     'Get "https://api.github.com/repos/o/r/contents/docs/decisions?ref=hotfix-404": dial tcp: i/o timeout',
     "gh: Server Error (HTTP 500) for repos/o/r404/contents/docs/decisions",
     "gh: Not Found-like text without an HTTP 404 status marker",
+    "gh: Repository not found (HTTP 404)",
   ]) {
     const { runtime, calls } = makeRuntime({ adrPrFiles: [adrFile("docs/decisions/0001-a.md")], adrTip: new Error(message) });
     const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
