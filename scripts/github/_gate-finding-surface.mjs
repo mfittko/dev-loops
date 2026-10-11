@@ -249,8 +249,8 @@ export function collectFingerprints(text, set) {
 // batched comment per tool run (at most one from judge-pass.mjs and one from
 // close-gate-findings.mjs per round) on the linked spec issue (the configured
 // tracker is GitHub and the PR has exactly one closing issue reference). A PR
-// target posts no comment: each deferral is recorded in its thread marker
-// (issue=<pr>) and in the verdict body's Details markers. No tool creates an
+// target posts no comment: a thread deferral is recorded in its thread marker
+// (issue=<pr>) and a folded deferral in the verdict body's Details markers. No tool creates an
 // issue here.
 
 // A finding's summary/angle is untrusted free text. The comment body is
