@@ -52,8 +52,9 @@
  *
  * Known limitations (honest):
  *   - Segment splitting is a simple top-level split on `&&`, `||`, `|`, `;` and
- *     does NOT fully parse shell quoting/substitution. A `;`/`|` inside a quoted
- *     argument can over-report (flags a harmless inner token). It catches the
+ *     does NOT fully parse shell quoting/substitution. Separators inside quoted data
+ *     do not split, but the preserved `-c`/`--command`/`eval` payload and double-quoted
+ *     `$(`/backtick strings split like code and can over-report. It catches the
  *     common raw-call forms (incl. the env/wrapper/path-prefixed ones above), but
  *     deeply obfuscated calls — command substitution `$(...)`, aliases, `eval` —
  *     may evade it. Prefer single-line, single-purpose commands in transcripts.

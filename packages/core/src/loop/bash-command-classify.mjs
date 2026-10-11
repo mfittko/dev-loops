@@ -960,9 +960,11 @@ export function commandContainsCopilotSummonComment(command) {
  * quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any
  * other quoted literal and can therefore evade the ban — accepted as a deliberate-evasion class, not
  * a natural shape a genuine poll loop takes.
- * @param {string} command @returns {string}
+ * @param {string} command
+ * @param {string} [blank] replacement for each blanked literal (default one space)
+ * @returns {string}
  */
-export function stripQuotedLiterals(command) {
+export function stripQuotedLiterals(command, blank = " ") {
   return command.replace(/(['"])((?:(?!\1).)*)\1/gs, (match, quote, inner, offset, full) => {
     // A DOUBLE-quoted string containing a command substitution ($()) or backtick is executable code,
     // not inert data — its command runs regardless of the surrounding quotes. Blanking it would hide a
@@ -976,7 +978,7 @@ export function stripQuotedLiterals(command) {
     if (/(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(before)) {
       return match; // executable -c/eval payload — leave the real shell syntax intact
     }
-    return " ";
+    return blank;
   });
 }
 
@@ -1125,7 +1127,7 @@ export function commandContainsDetachedWaitTool(rawCommand) {
 }
 
 /** Heredoc operator: `<<`, `<<-`, optionally quoted delimiter; never the `<<<` here-string. */
-const HEREDOC_OPERATOR_RE = /(?<!<)<<(?!<)-?\s*(?:'([A-Za-z_][\w-]*)'|"([A-Za-z_][\w-]*)"|\\?([A-Za-z_][\w-]*))(?=$|[\s;&|<>)])/;
+const HEREDOC_OPERATOR_RE = /(?<!<)<<(?!<)-?\s*(?:'([A-Za-z_][\w-]*)'|"([A-Za-z_][\w-]*)"|\\?([A-Za-z_][\w-]*))(?=$|[\s;&|<>)"'])/;
 
 /** A `cat`/`tee` command head (env/wrapper/path prefix tolerated) plus the rest of its segment. */
 const CAT_TEE_HEAD_RE = new RegExp(`^${SHELL_EXEC_PREFIX}(cat|tee)(?:\\s+(.*))?$`);
@@ -1177,17 +1179,28 @@ function scanCatTeeHeredocs(command) {
       const op = ops[k];
       let prefix = line.slice(0, op.index);
       let quoted = false;
+      let inertQuoted = false; // operator sits in quoted text that no -c/--command/eval flag runs
       if (hasUnbalancedQuote(prefix)) {
         // `"$(cat <<EOF` is a command substitution whose output is data, unless a -c/eval flag runs it.
         const sub = /^(.*)"\$\(\s*([^"'`]*)$/s.exec(prefix);
         if (!sub || hasUnbalancedQuote(sub[1]) || EXEC_PAYLOAD_FLAG_RE.test(sub[1])) quoted = true; // operator sits inside quoted text
         else prefix = sub[2];
       }
+      if (quoted) {
+        // Judge the quote state from the start of the command, so a quote opened on an earlier line counts.
+        const upTo = [...lines.slice(0, i), prefix].join("\n").replace(/\\['"]/g, "  ");
+        const blanked = upTo.replace(/(['"])(?:(?!\1).)*\1/gs, (m) => " ".repeat(m.length));
+        const opener = blanked.search(/['"]/);
+        inertQuoted = opener >= 0 && !EXEC_PAYLOAD_FLAG_RE.test(upTo.slice(0, opener));
+        // A -c/eval payload runs: its code starts after the opening quote, so classify from there.
+        const local = opener - (upTo.length - prefix.length);
+        if (opener >= 0 && !inertQuoted && local >= 0) prefix = prefix.slice(local + 1);
+      }
       const before = prefix.split(SHELL_SEGMENT_SEPARATOR).pop();
       const afterRaw = line.slice(op.index + op[0].length, ops[k + 1]?.index);
       const after = afterRaw.split(SHELL_SEGMENT_SEPARATOR)[0];
       const head = CAT_TEE_HEAD_RE.exec(`${before} ${after}`.trim());
-      if (!head) { skipping = false; continue; }
+      if (!head || inertQuoted) { skipping = false; continue; }
       const rest = head[2] ?? "";
       if (head[1] === "cat") {
         for (const m of rest.matchAll(/(?<![\d&])>>?(?!&)\s*([^\s;&|<>]+)/g)) writes.push(m[1]);
@@ -1203,6 +1216,9 @@ function scanCatTeeHeredocs(command) {
       let end = pos;
       while (end < lines.length && lines[end].trim() !== delimiter) end++;
       if (end >= lines.length) { skipping = false; continue; }
+      // An unquoted delimiter expands `$(...)` and backticks in the body, so such a body executes: keep it.
+      const delimiterQuoted = op[1] !== undefined || op[2] !== undefined || op[0].includes("\\");
+      if (!delimiterQuoted && lines.slice(pos, end).some((l) => /\$\(|`/.test(l))) { skipping = false; continue; }
       pos = end + 1;
     }
     i = pos - 1;
@@ -1287,7 +1303,7 @@ function runnerScriptPath(segment) {
 export function commandContainsInlineInterpreter(command) {
   const { text, writes } = scanCatTeeHeredocs(command);
   if (writes.some((target) => !isTempPath(target))) return true;
-  const segments = shellSegments(stripQuotedLiterals(text));
+  const segments = shellSegments(stripQuotedLiterals(text, " Q ")); // placeholder keeps a quoted token's position
   if (segments.some(segmentIsInlineInterpreter)) return true;
   const written = new Set(writes.map((t) => t.replace(/^(['"])(.*)\1$/, "$2").replace(/^\.\//, "")));
   // Unstripped segments, so a quoted script path (`node "tmp/r.mjs"`) still names the written file.

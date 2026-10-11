@@ -566,6 +566,13 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   assert.equal(commandContainsDetachedWaitTool("nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1"), true);
   assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop 'node scripts/github/wait-pr-checks.mjs --pr 5'"), true);
   assert.equal(commandContainsDetachedWaitTool("while ! gh pr view 1 --json state --jq .state; do sleep 5; done"), true);
+  // an unquoted-delimiter cat/tee heredoc body expands $(...) and backticks, so a poll loop in it runs
+  const poll = "while true; do gh pr view 5; sleep 5; done";
+  assert.equal(commandContainsDetachedWaitTool(`cat > tmp/x <<EOF\n$(${poll})\nEOF`), true);
+  assert.equal(commandContainsDetachedWaitTool(`cat > tmp/x <<EOF\n\`${poll}\`\nEOF`), true);
+  assert.equal(commandContainsDetachedWaitTool(`tee tmp/x <<-EOF\n$(${poll})\nEOF`), true);
+  assert.equal(commandContainsDetachedWaitTool(`cat > tmp/x <<'EOF'\n$(${poll})\nEOF`), false);
+  assert.equal(commandContainsDetachedWaitTool("cat > tmp/x <<EOF\nplain text & more\nEOF"), false);
   assert.equal(commandContainsDetachedWaitTool("npm test"), false);
   assert.equal(commandContainsDetachedWaitTool("gh pr view 1"), false);
   assert.equal(commandContainsDetachedWaitTool("sleep 5"), false);

@@ -42,7 +42,7 @@ test("python and python3 are violations", () => {
   assert.match(violations[1], /^python:/);
 });
 
-test("python -c keeps its python3 violation and is also reported as inline-interpreter (#2442)", () => {
+test("python3 -c keeps its python3 violation and is also reported as inline-interpreter (#2442)", () => {
   const { violations } = analyzeTranscript("python3 -c 'import json'");
   assert.deepEqual(violations, ["python3: python3 -c 'import json'", "inline-interpreter: python3 -c 'import json'"]);
 });

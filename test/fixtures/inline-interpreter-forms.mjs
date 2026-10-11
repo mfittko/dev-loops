@@ -7,6 +7,11 @@
 /** Forms the matcher denies. */
 export const DENIED_INLINE_INTERPRETER_FORMS = [
   "node -e 'x'",
+  "node --require \"./setup.js\" -e 'console.log(1)'",
+  "python3 -W \"ignore\" -c 'x'",
+  "perl -I \"lib\" -pi -e 's/a/b/' f",
+  "ruby -C \"/tmp\" -e 'x'",
+  "bash -c \"cat > packages/a.mjs <<'EOF'\"",
   "node --eval 'x'",
   "node -p 'x'",
   "bun -e 'x'",
@@ -79,6 +84,10 @@ export const DENIED_INLINE_INTERPRETER_FORMS = [
 export const ALLOWED_INLINE_INTERPRETER_FORMS = [
   "node scripts/loop/x.mjs",
   "python3 tool.py",
+  'python3 "tool.py" -c cfg',
+  'node "scripts/x.mjs" -p 5',
+  'node scripts/loop/x.mjs --notes "python3 -c denied; cat >> packages/a.mjs <<\'EOF\' twice"',
+  "node scripts/loop/x.mjs --notes 'tee src/a.mjs <<EOF'",
   "perl tool.pl",
   "perl -Mstrict tool.pl",
   "ruby -rjson tool.rb",
