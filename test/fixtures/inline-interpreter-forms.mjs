@@ -35,6 +35,8 @@ export const DENIED_INLINE_INTERPRETER_FORMS = [
   "bash -c 'x; node -e y'",
   "eval \"x; perl -pi -e y f\"",
   "cat > packages/a.mjs <<'EOF'",
+  "echo \\\" && cat > packages/core/src/a.mjs <<'EOF'",
+  "echo it\\'s && cat > packages/core/src/a.mjs <<'EOF'",
   "cat >> packages/core/src/a.mjs <<'EOF'",
   "cat <<'EOF' > src/a.mjs",
   "tee src/a.mjs <<'EOF'",

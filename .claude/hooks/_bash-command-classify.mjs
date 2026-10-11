@@ -1177,11 +1177,12 @@ function scanCatTeeHeredocs(command) {
     for (let k = 0; k < ops.length; k++) {
       const op = ops[k];
       let prefix = line.slice(0, op.index);
+      let quoted = false;
       if (hasUnbalancedQuote(prefix)) {
         // `"$(cat <<EOF` is a command substitution whose output is data, unless a -c/eval flag runs it.
         const sub = /^(.*)"\$\(\s*([^"'`]*)$/s.exec(prefix);
-        if (!sub || hasUnbalancedQuote(sub[1]) || EXEC_PAYLOAD_FLAG_RE.test(sub[1])) { skipping = false; continue; } // operator sits inside quoted text
-        prefix = sub[2];
+        if (!sub || hasUnbalancedQuote(sub[1]) || EXEC_PAYLOAD_FLAG_RE.test(sub[1])) quoted = true; // operator sits inside quoted text
+        else prefix = sub[2];
       }
       const before = prefix.split(SHELL_SEGMENT_SEPARATOR).pop();
       const afterRaw = line.slice(op.index + op[0].length, ops[k + 1]?.index);
@@ -1195,8 +1196,8 @@ function scanCatTeeHeredocs(command) {
         const operands = rest.replace(/[\d&]*>>?\s*\S+/g, " ").split(/\s+/).filter((t) => t && !t.startsWith("-"));
         writes.push(...operands);
       }
-      // A body piped into another command (`cat <<EOF | bash`) executes: keep it.
-      if (/(?<!\|)\|(?!\|)/.test(afterRaw)) { skipping = false; continue; }
+      // A body piped into another command (`cat <<EOF | bash`) executes: keep it. A quoted operator keeps its body too.
+      if (quoted || /(?<!\|)\|(?!\|)/.test(afterRaw)) { skipping = false; continue; }
       // Skip the inert body only when its closing delimiter exists; otherwise keep it visible.
       if (!skipping) continue;
       const delimiter = op[1] ?? op[2] ?? op[3];
