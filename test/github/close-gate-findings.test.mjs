@@ -1561,7 +1561,7 @@ for (const [label, closing] of [["no closing reference", []], ["more than one cl
         prViewEntry(closing),
         getReviewCommentEntry(6700, wfnBody("2222222222222222")),
         { ...patchReviewCommentEntry(6700), assertArgContains: [`disposition=deferred issue=${PR}`] },
-        { ...postReplyEntry(6700, { id: 7700 }), assertStdinIncludes: ["recorded in the verdict body's Deferred entry", `issue=${PR}`] },
+        { ...postReplyEntry(6700, { id: 7700 }), assertStdinIncludes: ["recorded in this thread's marker", `issue=${PR}`] },
         resolveThreadEntry("THREAD_PR_TARGET"),
       ],
       async ({ env, ghCommand, runChild, repoRoot }) => {

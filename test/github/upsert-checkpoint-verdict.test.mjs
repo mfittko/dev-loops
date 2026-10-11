@@ -7594,7 +7594,7 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
       { angle: "scope", verdict: "clean", findings: [] },
       { angle: "holistic", verdict: "clean", findings: [] },
       { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: LOCATABLE_FINDING.summary, judgeDisposition: "defer", file: "src/db.mjs", line: 2 }] },
-      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, judgeDisposition: "defer" }] },
+      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, judgeDisposition: "act" }] },
     ]), "utf8");
 
     let postedPayload = null;
@@ -7653,12 +7653,12 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
 
     // The body-only bulleted list carries the non-locatable finding's own
     // text, and the clean angles collapse into one trailing roster line.
-    assert.match(postedPayload.body, /^- 🟠 medium — inconsistent casing in constants _\(coverage\)_$/m);
+    assert.match(postedPayload.body, /^- 🟠 medium — inconsistent casing in constants — judge: _`act`_ _\(coverage\)_$/m);
     assert.match(postedPayload.body, /^\*\*Clean \(3\):\*\* pr-description, scope, holistic$/m);
     // The body-filed finding still stamps its own invisible marker (#1942) —
     // load-bearing for cross-round suppression/deferral, never rendered as
     // visible text.
-    assert.match(postedPayload.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=medium angle=coverage round=1 disposition=deferred -->$/m);
+    assert.match(postedPayload.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=medium angle=coverage round=1 -->$/m);
     // The gate-scoped round marker rides on the same body.
     assert.match(postedPayload.body, /^<!-- dev-loops:gate-findings-review draft_gate [0-9a-f]{40} round=1 -->$/m);
   }, { prefix: "dev-loops-upsert-single-surface-" });
@@ -7817,36 +7817,72 @@ test("upsert-checkpoint-verdict --findings-ledger: a round whose only finding is
   }, { prefix: "dev-loops-upsert-disposition-locatable-nextaction-" });
 });
 
-test("upsert-checkpoint-verdict --findings-ledger: an act item from --findings-json over an unjudged ledger keeps Next action 'stay draft and fix'", async () => {
+async function postWithFindingsJson(tempDir, ledgerFindings, jsonFindings) {
+  const ledgerPath = await writeSingleSurfaceLedger(tempDir, ledgerFindings);
+  const findingsPath = path.join(tempDir, "findings.json");
+  await writeFile(findingsPath, JSON.stringify(jsonFindings), "utf8");
+  const { runChild, calls } = makeGhMock([
+    ...singleSurfaceLeadingEntries(),
+    {
+      assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+      stdout: '{"id":722,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-722"}\n',
+    },
+  ]);
+  await upsertCheckpointVerdict({
+    repo: "owner/repo",
+    pr: 17,
+    gate: "draft_gate",
+    headSha: SINGLE_SURFACE_HEAD,
+    verdict: "findings_present",
+    findingsSummary: "findings",
+    findingsLedger: ledgerPath,
+    findingsJson: findingsPath,
+    nextAction: "stay draft and fix",
+    executionMode: "inline_single_agent",
+    inlineReason: "single-agent inline review (test)",
+  }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+  const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+  return JSON.parse(postCall.stdinText).body;
+}
+
+test("upsert-checkpoint-verdict --findings-ledger: an act item from --findings-json over an unjudged ledger keeps Next action 'stay draft and fix' and renders visible outside Details", async () => {
   await withTempDir(async (tempDir) => {
-    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [{ severity: "low", angle: "naming", summary: "unjudged low finding" }]);
-    const findingsPath = path.join(tempDir, "findings.json");
-    await writeFile(findingsPath, JSON.stringify([{ severity: "low", angle: "naming", summary: "unjudged low finding", judgeDisposition: "act" }]), "utf8");
-    const { runChild, calls } = makeGhMock([
-      ...singleSurfaceLeadingEntries(),
-      {
-        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
-        stdout: '{"id":722,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-722"}\n',
-      },
-    ]);
-    await upsertCheckpointVerdict({
-      repo: "owner/repo",
-      pr: 17,
-      gate: "draft_gate",
-      headSha: SINGLE_SURFACE_HEAD,
-      verdict: "findings_present",
-      findingsSummary: "1 finding",
-      findingsLedger: ledgerPath,
-      findingsJson: findingsPath,
-      nextAction: "stay draft and fix",
-      executionMode: "inline_single_agent",
-      inlineReason: "single-agent inline review (test)",
-    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
-    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
-    const { body } = JSON.parse(postCall.stdinText);
+    const body = await postWithFindingsJson(
+      tempDir,
+      [{ severity: "low", angle: "naming", summary: "unjudged low finding" }],
+      [{ severity: "low", angle: "naming", summary: " unjudged low finding ", judgeDisposition: "act" }],
+    );
     assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
     assert.doesNotMatch(body, /\*\*Next action:\*\* rerun gate/);
+    assert.ok(body.includes("unjudged low finding"));
+    assert.ok(!body.includes("<details>") || !body.slice(body.indexOf("<details>")).includes("unjudged low finding"));
+    assert.doesNotMatch(body, /Not judged/);
+    assert.doesNotMatch(body, /disposition=deferred/);
   }, { prefix: "dev-loops-upsert-findings-json-act-nextaction-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: --findings-json defer and reject dispositions fold unjudged ledger mediums, and an existing ledger disposition is never overwritten", async () => {
+  await withTempDir(async (tempDir) => {
+    const body = await postWithFindingsJson(
+      tempDir,
+      [
+        { severity: "medium", angle: "coverage", summary: "json defer medium" },
+        { severity: "medium", angle: "dry", summary: "json reject medium" },
+        { severity: "low", angle: "naming", summary: "own act low", judgeDisposition: "act" },
+      ],
+      [
+        { severity: "medium", angle: "coverage", summary: "json defer medium", judgeDisposition: "defer" },
+        { severity: "medium", angle: "dry", summary: "json reject medium", judgeDisposition: "reject" },
+        { severity: "low", angle: "naming", summary: "own act low", judgeDisposition: "reject" },
+      ],
+    );
+    assert.match(body, /^\*\*Deferred \(1\)\*\*$/m);
+    assert.match(body, /^\*\*Rejected \(1\)\*\*$/m);
+    const details = body.slice(body.indexOf("<details>"));
+    assert.ok(details.includes("json defer medium") && details.includes("json reject medium"));
+    assert.ok(!details.includes("own act low"));
+    assert.ok(body.includes("own act low"));
+  }, { prefix: "dev-loops-upsert-findings-json-fold-" });
 });
 
 test("upsert-checkpoint-verdict --findings-ledger: with only deferred and rejected findings the next action never says stay draft and fix, and Execution mode renders inside an HTML comment", async () => {

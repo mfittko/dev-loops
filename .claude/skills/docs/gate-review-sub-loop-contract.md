@@ -1186,8 +1186,8 @@ A finding anchored to unchanged code has no in-diff `file:line` and is therefore
 
 (#2263, #2722) `GATE-COMMENT-INLINE-SEVERITY-FLOOR` (owned by
 [Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md)) applies BEFORE the
-locatability split above for NON-locatable findings only: a finding the judge disposed `act`, or one at a
-`blockCleanOnFindingSeverities` severity, takes the inline or body-filed track. Every other finding
+locatability split above: a finding the judge disposed `act`, one at a
+`blockCleanOnFindingSeverities` severity, or a locatable one at or above the inline floor, takes the inline or body-filed track. Every other finding, locatable or not,
 folds into the verdict body's one `Details` section instead, grouped by disposition (`Deferred`,
 `Rejected`, `Not judged`), carrying the same
 fingerprint+`disposition=deferred` marker shape a body-filed finding carries (a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, carries no `disposition` field, like a body-filed `high` marker). A round without a

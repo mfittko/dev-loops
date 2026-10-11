@@ -2774,6 +2774,12 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const judgedSummaries = new Set(flatFindings.filter((f) => f.judgeDisposition).map((f) => f.summary));
     const uncovered = unjudgedLedgerFindings.filter((f) => !judgedSummaries.has(typeof f.summary === "string" ? f.summary.trim() : f.summary));
     if (uncovered.length > 0) throw new Error(unjudgedLedgerMessage(options, canonicalHeadSha, uncovered.length));
+    // Copy the judged disposition onto each unjudged ledger finding (same trimmed summary), so body visibility reads it; an existing ledger disposition stays.
+    for (const lf of preloadedFindingsLedger?.findings ?? []) {
+      if (lf?.judgeDisposition) continue;
+      const judged = flatFindings.find((f) => f.judgeDisposition && f.summary === (typeof lf.summary === "string" ? lf.summary.trim() : lf.summary));
+      if (judged) lf.judgeDisposition = judged.judgeDisposition;
+    }
     const actItems = listOpenActItems(flatFindings);
     enrichedActItems = actItems;
     if (options.verdict === "clean" && actItems.length > 0) {
