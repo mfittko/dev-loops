@@ -101,4 +101,13 @@ export const ALLOWED_INLINE_INTERPRETER_FORMS = [
   'node scripts/loop/x.mjs --notes "a \\| node -e b"',
   "node scripts/loop/x.mjs --notes 'perl -0pi -e & ruby -e'",
   'grep -n "sed -i" README.md',
+  'git commit -m "sleep 5 & node -e x"',
 ];
+
+/**
+ * Commands origin/main denied and the branch allows, found by differential comparison (#2442).
+ * A row here is a fail-open regression the classifier must still fix; no test asserts the array yet.
+ * Empty at the 2026-10-12 comparison: every main-deny/branch-allow command was a quoted literal or
+ * heredoc body, which the closed list treats as inert data.
+ */
+export const PENDING_FAIL_OPEN_REGRESSIONS = [];
