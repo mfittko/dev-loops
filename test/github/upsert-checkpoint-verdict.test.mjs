@@ -8140,9 +8140,9 @@ test("upsert-checkpoint-verdict --findings-ledger: at the default \"medium\" flo
 
 // AC6: routing (fold vs inline vs body-filed) must never touch the verdict
 // itself — blockCleanOnFindingSeverities semantics are computed upstream from
-// the ledger, and a folded low still renders exactly the non-clean verdict
+// the ledger, and a folded nit still renders exactly the non-clean verdict
 // its caller supplied, with the configured blocking-severities line intact.
-test("upsert-checkpoint-verdict --findings-ledger: a folded low finding does not affect blockCleanOnFindingSeverities' verdict rendering (AC6)", async () => {
+test("upsert-checkpoint-verdict --findings-ledger: a folded nit finding does not affect blockCleanOnFindingSeverities' verdict rendering (AC6)", async () => {
   await withTempDir(async (tempDir) => {
     await writeFile(
       path.join(tempDir, ".devloops"),
