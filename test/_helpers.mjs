@@ -568,7 +568,7 @@ export async function runNodeWithPrePrRecord(scriptPath, args = [], options = {}
   const head = headIdx >= 0 ? args[headIdx + 1] : null;
   let cwd = options.cwd;
   let fixture = null;
-  if (head && !cwd) {
+  if (!cwd) {
     fixture = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-fixture-"));
     cwd = fixture;
   }
