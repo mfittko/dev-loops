@@ -322,13 +322,25 @@ describe("consolidateFanin — verdict", () => {
       { angle: "pr-checklist", verdict: "clean", findings: [], verifiedItems: ["   "] },
       { angle: "pr-checklist", verdict: "clean", findings: [], verifiedItems: [42] },
       { angle: "correctness", verdict: "clean", findings: [], verifiedItems: ["item"] },
-      { angle: "correctness", verdict: "clean", findings: [], verifiedItems: [] },
     ];
     for (const entry of cases) {
       const result = consolidateFanin({ angleResults: [entry] });
       assert.equal(result.verdict, "blocked", JSON.stringify(entry));
       assert.match(result.malformed[0].reason, /verifiedItems/);
     }
+  });
+
+  test("verifiedItems: an empty array on determinism and correctness is treated as absent (#2568)", () => {
+    const result = consolidateFanin({
+      angleResults: [
+        { angle: "determinism", verdict: "clean", findings: [], verifiedItems: [] },
+        { angle: "correctness", verdict: "clean", findings: [], verifiedItems: [] },
+        { angle: "security", verdict: "clean", findings: [] },
+      ],
+    });
+    assert.equal(result.verdict, "clean");
+    assert.deepEqual(result.malformed, []);
+    assert.ok(!JSON.stringify(result).includes("verifiedItems"));
   });
 
   test("verifiedItems: accepted on acceptance-criteria, pr-checklist and a delta-suffixed base", () => {
