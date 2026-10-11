@@ -524,6 +524,13 @@ test("findAdrNumberCollisions: reports an added name sharing a tip number", () =
   );
 });
 
+test("findAdrNumberCollisions: gives each collision its own next free number", () => {
+  assert.deepEqual(
+    findAdrNumberCollisions({ tipNames: ["0095-a.md", "0096-a.md"], addedNames: ["0095-b.md", "0096-b.md"] }).map((c) => c.nextFree),
+    ["0097", "0098"],
+  );
+});
+
 test("findAdrNumberCollisions: no collision on a free number, an already-tipped name, or a repair rename", () => {
   assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0095-a.md"], addedNames: ["0096-b.md"] }), []);
   assert.deepEqual(findAdrNumberCollisions({ tipNames: ["0095-a.md"], addedNames: ["0095-a.md"] }), []);

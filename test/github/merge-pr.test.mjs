@@ -192,9 +192,9 @@ test("adr_tripwire evaluates origin/<base> at the PR head after fetching it", as
   assert.deepEqual(evaluated, [{ base: "origin/main", head: HEAD }]);
 });
 
-test("adr_number_collision refuses fail-closed when the PR base branch is unreadable", async () => {
+test("adr_tripwire refuses as unevaluable when the PR base branch is unreadable", async () => {
   const { runtime, calls } = makeRuntime({ prView: { baseRefName: "" } });
-  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_number_collision \(.*base branch name is unknown/);
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*base branch is unreadable/);
   assert.equal(mergeCalls(calls).length, 0);
 });
 
@@ -1133,6 +1133,34 @@ test("adr_number_collision: a PR adding no decision record makes no contents cal
 
 test("adr_number_collision: a 404 on the tip directory is an empty tip", async () => {
   const { runtime } = makeRuntime({ adrPrFiles: [adrFile("docs/decisions/0001-a.md")], adrTip: new Error("gh command failed: gh: Not Found (HTTP 404)") });
+  assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
+});
+
+test("adr_number_collision: refuses fail-closed when the base branch name is unknown or blank and a record is added", async () => {
+  for (const baseRefName of ["", "  "]) {
+    const { runtime, calls } = makeRuntime({ prView: { baseRefName }, adrPrFiles: [adrFile("docs/decisions/0001-a.md")] });
+    const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+    assert.match(threw.mergePrFailure.failures.find((f) => f.precondition === "adr_number_collision").reason, /base branch name is unknown/);
+    assert.equal(contentsCalls(calls).length, 0);
+    assert.equal(mergeCalls(calls).length, 0);
+  }
+});
+
+test("adr_number_collision: a non-404 tip read error whose text contains 404 still refuses", async () => {
+  for (const message of [
+    'Get "https://api.github.com/repos/o/r/contents/docs/decisions?ref=hotfix-404": dial tcp: i/o timeout',
+    "gh: Server Error (HTTP 500) for repos/o/r404/contents/docs/decisions",
+    "gh: Not Found-like text without an HTTP 404 status marker",
+  ]) {
+    const { runtime, calls } = makeRuntime({ adrPrFiles: [adrFile("docs/decisions/0001-a.md")], adrTip: new Error(message) });
+    const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+    assert.match(threw.mergePrFailure.failures.find((f) => f.precondition === "adr_number_collision").reason, /could not read docs\/decisions/);
+    assert.equal(mergeCalls(calls).length, 0);
+  }
+});
+
+test("adr_number_collision: a base-ref-not-found 404 status marker is an empty tip", async () => {
+  const { runtime } = makeRuntime({ adrPrFiles: [adrFile("docs/decisions/0001-a.md")], adrTip: new Error("gh: No commit found for the ref main (HTTP 404)") });
   assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
 });
 

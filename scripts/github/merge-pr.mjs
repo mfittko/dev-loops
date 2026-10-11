@@ -310,7 +310,6 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
 // record whose number the base branch tip already holds; null otherwise. Reads
 // the tip at merge time, so a record merged after the PR branched still counts.
 async function resolveAdrNumberCollisionRefusal({ repo, pr, baseRefName }, { env, ghCommand, runChild, ghJson }) {
-  if (!baseRefName) return "could not check ADR numbers: the PR base branch name is unknown";
   const files = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr}/files?per_page=100`],
     { env, ghCommand, runChild },
@@ -319,6 +318,7 @@ async function resolveAdrNumberCollisionRefusal({ repo, pr, baseRefName }, { env
   const base = (n) => n.slice("docs/decisions/".length);
   const addedNames = files.filter((f) => ["added", "copied", "renamed"].includes(f?.status) && isRecord(f.filename)).map((f) => base(f.filename));
   if (addedNames.length === 0) return null;
+  if (!baseRefName) return "could not check ADR numbers: the PR base branch name is unknown";
   const removedNames = files
     .flatMap((f) => (f?.status === "removed" ? [f.filename] : f?.status === "renamed" ? [f.previous_filename] : []))
     .filter(isRecord).map(base);
@@ -329,7 +329,7 @@ async function resolveAdrNumberCollisionRefusal({ repo, pr, baseRefName }, { env
     tipNames = (Array.isArray(listing) ? listing : []).map((e) => e?.name).filter((n) => typeof n === "string");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    if (!/404|Not Found/i.test(detail)) return `could not read docs/decisions on ${baseRefName} to check ADR numbers: ${detail}`;
+    if (!/\(HTTP 404\)/.test(detail)) return `could not read docs/decisions on ${baseRefName} to check ADR numbers: ${detail}`;
     tipNames = [];
   }
   const collisions = findAdrNumberCollisions({ tipNames, addedNames, removedNames });
@@ -677,7 +677,7 @@ export async function mergePr(options, runtime = {}) {
   );
 
   const adrNumberCollisionRefusal = await resolveAdrNumberCollisionRefusal(
-    { repo: options.repo, pr: options.pr, baseRefName: typeof prView?.baseRefName === "string" ? prView.baseRefName : "" },
+    { repo: options.repo, pr: options.pr, baseRefName: typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "" },
     { env, ghCommand, runChild, ghJson },
   ).catch((error) => `could not check ADR numbers: ${error instanceof Error ? error.message : String(error)}`);
 

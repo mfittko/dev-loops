@@ -110,12 +110,12 @@ export function findAdrNumberCollisions({ tipNames = [], addedNames = [], remove
   const names = tipNames.filter((n) => !removed.has(n));
   for (const n of addedNames) if (!names.includes(n)) names.push(n);
   const highest = Math.max(0, ...names.filter((n) => FILENAME_RE.test(n)).map((n) => Number(n.slice(0, 4))));
-  const nextFree = String(highest + 1).padStart(4, "0");
   return detectIndexErrors(names)
     .filter((e) => e.kind === "adr_duplicate_prefix" && added.has(e.file))
     // Two added records sharing a number the tip lacks: test:docs on the branch owns that collision.
     .filter((e) => tipNames.some((n) => n !== e.file && n.startsWith(`${e.prefix}-`) && !removed.has(n)))
-    .map((e) => ({ file: e.file, prefix: e.prefix, holder: names.find((n) => n !== e.file && n.startsWith(`${e.prefix}-`)), nextFree }));
+    // Each collision gets its own free number so renumbering them all cannot recreate a duplicate.
+    .map((e, i) => ({ file: e.file, prefix: e.prefix, holder: names.find((n) => n !== e.file && n.startsWith(`${e.prefix}-`)), nextFree: String(highest + 1 + i).padStart(4, "0") }));
 }
 
 /**
