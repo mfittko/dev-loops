@@ -84,15 +84,16 @@ export function defaultFetchOrigin(branch, { repoRoot }, exec = execFileSync) {
 }
 
 /**
- * Read and evaluate the standing authorization from `origin/<defaultBranch>`.
+ * Read and parse the `.devloops` family from `origin/<defaultBranch>`.
  * Fetches the branch first and refuses (`fetch_failed`) when the fetch fails.
- * Probes the `.devloops` family in loader order and stops at the first file
- * that exists on the branch; an existing file that cannot be read or parsed
- * counts as malformed (no authorization), never as "try the next name".
+ * Probes the family in loader order and stops at the first file that exists on
+ * the branch; an existing file that cannot be read or parsed is `malformed`,
+ * never "try the next name".
+ * @returns {{ ok: true, parsed: object, defaultBranch: string } | { ok: false, state: string, detail: string, defaultBranch: string|null, noConfigFile?: true }}
  */
-export function readStandingAuthorization({ repoRoot = process.cwd(), defaultBranch, now = new Date(), git = defaultGit, fetchOrigin = defaultFetchOrigin } = {}) {
+export function readDefaultBranchConfig({ repoRoot = process.cwd(), defaultBranch, git = defaultGit, fetchOrigin = defaultFetchOrigin } = {}) {
   const branch = defaultBranch ?? resolveDefaultBranch({ repoRoot, git });
-  const refuse = (state, detail) => ({ inForce: false, state, detail, defaultBranch: branch });
+  const refuse = (state, detail, extra) => ({ ok: false, state, detail, defaultBranch: branch, ...extra });
   if (!branch) return refuse("default_branch_unresolved", "refs/remotes/origin/HEAD is unset; refusing to guess the default branch");
   try {
     fetchOrigin(branch, { repoRoot });
@@ -122,12 +123,20 @@ export function readStandingAuthorization({ repoRoot = process.cwd(), defaultBra
     sourceName = name;
     break;
   }
-  if (source === null) return refuse("missing", `no .devloops on origin/${branch}`);
+  // `noConfigFile`: the ref exists but carries no family file (an absent block, not an unreadable one).
+  if (source === null) return refuse("missing", `no .devloops on origin/${branch}`, { noConfigFile: true });
   let parsed;
   try {
     parsed = (sourceName.endsWith(".json") ? JSON.parse(source) : parseYaml(source)) ?? {};
   } catch {
     return refuse("malformed", `.devloops on origin/${branch} does not parse`);
   }
-  return { ...evaluateStandingAuthorizationRecord(parsed?.standingAuthorizations?.adrTripwireWaiver, now), defaultBranch: branch };
+  return { ok: true, parsed, defaultBranch: branch };
+}
+
+/** Read and evaluate the standing authorization from `origin/<defaultBranch>`. */
+export function readStandingAuthorization({ now = new Date(), ...options } = {}) {
+  const base = readDefaultBranchConfig(options);
+  if (!base.ok) return { inForce: false, state: base.state, detail: base.detail, defaultBranch: base.defaultBranch };
+  return { ...evaluateStandingAuthorizationRecord(base.parsed?.standingAuthorizations?.adrTripwireWaiver, now), defaultBranch: base.defaultBranch };
 }

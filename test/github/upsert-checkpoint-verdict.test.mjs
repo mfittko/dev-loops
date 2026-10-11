@@ -7066,6 +7066,24 @@ async function stageValidationArtifact(repoRoot, { repo = "owner/repo", pr = 17,
     });
   });
 
+  // assertGateValidationArtifact checks existence and head stamp only, so failed, incomplete
+  // and ci-authoritative records all prove the round resolved validation; reviewers read the status.
+  test("assertGateValidationArtifact accepts failed, incomplete and ci-authoritative artifacts stamped with the reviewed head", async () => {
+    const base = { repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: VALIDATION_HEAD, suites: [] };
+    const artifacts = [
+      { ...base, ok: false, status: "failed", allPassed: false, reason: "current-head CI is failure" },
+      { ...base, ok: false, status: "incomplete", allPassed: false, reason: "current-head CI is pending" },
+      { ...base, ok: true, status: "complete", allPassed: true, authority: "ci-authoritative" },
+    ];
+    for (const artifact of artifacts) {
+      await withTempDir(async (tempDir) => {
+        await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");
+        await stageValidationArtifact(tempDir, { gate: "pre_approval_gate", headSha: VALIDATION_HEAD, raw: JSON.stringify(artifact) });
+        await assertGateValidationArtifact(args(tempDir));
+      });
+    }
+  });
+
   test("assertGateValidationArtifact reads a non-default --context-tmp-root and refuses it without the option", async () => {
     await withTempDir(async (tempDir) => {
       await writeFile(path.join(tempDir, ".devloops"), "version: 1\n", "utf8");

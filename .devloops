@@ -247,3 +247,33 @@ standingAuthorizations:
     grantedAt: 2026-10-06
     expires: 2027-01-03
     reason: Queue drain; waive contract-doc tripwires that record no new decision
+
+# Gate validation (ADR 0137, amends ADR 0105). This repo keeps local full
+# validation; consumers default to ci-only. `paths` is this repo's targeted
+# worker map for resolveTargetedValidation: first match wins, one surface per
+# change set, an empty command list pins matching paths to full validation.
+validation:
+  mode: local
+  paths:
+    - { match: "packages/core/test/*.test.mjs", surface: core, commands: ["bun scripts/run-bun-test.mjs {path}"], gateSuites: [test:core] }
+    - { match: "packages/core/package.json", surface: core, commands: ["bun run test:core", "bun run test:pack"] }
+    - { match: "packages/core/**", surface: core, commands: ["bun run assets:check", "bun run test:core"] }
+    - { match: ["test/loop/*.test.mjs", "test/github/*.test.mjs", "test/docs/*.test.mjs", "test/projects/*.test.mjs", "test/pages/*.test.mjs", "test/security/*.test.mjs"], surface: scripts, commands: ["bun scripts/run-bun-test.mjs {path}"], gateSuites: [test:scripts] }
+    - { match: "scripts/claude/generate-claude-assets.mjs", surface: generated, commands: ["bun run assets:check", "bun run test:doc-guard"] }
+    - { match: ["docs/presentations/introducing-dev-loops.html", "test/playwright/intro-deck.spec.mjs"], surface: ui, commands: ["bun run test:playwright:intro-deck"] }
+    - { match: ["docs/presentations/dev-loops-deep-dive.html", "test/playwright/deep-dive.spec.mjs", "test/playwright/deep-dive-deck.spec.mjs"], surface: ui, commands: ["bun run test:playwright:deep-dive"] }
+    - { match: ["docs/presentations/how-dev-loops-decided-itself.html", "test/playwright/how-decided-deck.spec.mjs"], surface: ui, commands: ["bun run test:playwright:how-decided-deck"] }
+    - { match: ["docs/presentations/state-graph-surface.html", "test/playwright/state-graph-surface-deck.spec.mjs"], surface: ui, commands: ["bun run test:playwright:state-graph-surface-deck"] }
+    - { match: ["docs/presentations/finding-the-flow.html", "test/playwright/finding-the-flow-deck.spec.mjs"], surface: ui, commands: ["bun run test:playwright:finding-the-flow-deck"] }
+    - { match: ["docs/articles/introducing-dev-loops.html", "test/playwright/intro-article.spec.mjs"], surface: ui, commands: ["bun run test:playwright:intro-article"] }
+    - { match: ["docs/articles/dev-loops-deep-dive.html", "test/playwright/deep-dive-article.spec.mjs"], surface: ui, commands: ["bun run test:playwright:deep-dive-article"] }
+    - { match: ["docs/articles/how-dev-loops-decided-itself.html", "test/playwright/how-decided-article.spec.mjs"], surface: ui, commands: ["bun run test:playwright:how-decided-article"] }
+    - { match: ["docs/articles/simulator.html", "docs/articles/assets/simulator-model.mjs", "test/playwright/simulator-article.spec.mjs"], surface: ui, commands: ["bun run test:playwright:simulator-article"] }
+    - { match: ["docs/articles/simulator-overview.html", "docs/articles/assets/simulator-overview-model.mjs", "test/playwright/simulator-overview-article.spec.mjs"], surface: ui, commands: ["bun run test:playwright:simulator-overview-article"] }
+    - { match: ["scripts/loop/inspect-run-viewer.mjs", "scripts/loop/inspect-run-viewer/**", "test/playwright/inspect-run-viewer.spec.mjs"], surface: ui, commands: ["bun run test:playwright:viewer"] }
+    - { match: ["docs/presentations/*.html", "docs/articles/*.html", "test/playwright/*.spec.mjs"], surface: unregistered-ui, commands: [] }
+    - { match: ["scripts/**", "cli/**", "lib/**"], surface: scripts, commands: ["bun run test:scripts"] }
+    - { match: ["skills/docs/**", "skills/*/SKILL.md", "docs/**", "AGENTS.md", "README.md"], surface: docs, commands: ["bun run test:docs", "bun run test:doc-guard"] }
+    - { match: ".github/workflows/**", surface: workflow, commands: ["bun run test:workflows"] }
+    - { match: "extension/**", surface: extension, commands: ["bun run test:extension"] }
+    - { match: [".claude/**", "agents/**", "commands/**", "skills/dev-loop/templates/**"], surface: generated, commands: ["bun run assets:check", "bun run test:assets"] }

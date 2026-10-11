@@ -406,7 +406,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "offer-human-handoff": "Offer to assign PR to a human reviewer/assignee",
     "size-budget": "Compute PR size/tier budget outcome (pass/escalate/block; pure computation, no enforcement)",
     "resolve-role": "Resolve a review-operation angle's authoritative reviewer role (persona/prompt/model)",
-    "resolve-validation": "Run full local validation at an exact head with the pinned Bun toolchain",
+    "resolve-validation": "Resolve gate validation at an exact head (ci-only CI evidence, declared full command, or the pinned-Bun verify script)",
     "wait-for-units": "Block until a gate round's dispatched reviewer or judge units are done (read-only)",
   },
   loop: {

@@ -229,11 +229,11 @@ Cache priming is an optional, non-semantic execution optimization. A harness or 
 once, before any reviewer is dispatched, via `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation`
 with each explicit targeted `gateSuites` entry from `resolveTargetedValidation(changedPaths)`
 from `@dev-loops/core/loop/validation-classify` (or its full-repository
-profile when targeting is unsafe), and MUST persist
+profile when targeting is unsafe or the targeted result has an empty `gateSuites`), and MUST persist
 the result as `<gate>-<headSha>.validation.json` beside the gate-context artifact. When
 that artifact exists, the briefing prefix MUST point every reviewer at it
 (`write-gate-context.mjs --validation-results <path>`), and a reviewer MUST consume it
-rather than executing any suite it records. A missing full result remains typed incomplete; it does not authorize a reviewer or worker to run the full suite directly. An `incomplete` resolution of a request whose arguments parsed
+rather than executing any suite it records. A missing full result remains typed incomplete; it does not authorize a reviewer or worker to run the full suite directly. The `.devloops` `validation.mode` (ADR 0137) selects the full-profile authority: in `ci-only` mode (the consumer default) the resolver runs no local suite and writes `status: "complete"` with `authority: "ci-authoritative"` when current-head CI is green (a reviewer treats it as satisfied and raises no gate-evidence finding), `failed` when it is red, and typed `incomplete` when it is pending, missing, on another head or has no SUCCESS check ("current-head CI ran no checks"), for every profile; in `local` mode it runs the declared `validation.fullCommand`, else the `package.json` `verify` script. In `local` mode, a repo without `package.json` serves a targeted request with the declared `validation.fullCommand`, and the artifact records one suite named `full`. The mode and command come from the default branch's `.devloops` (`origin/HEAD`, never the checkout's `workflow.baseBranch`); a default branch with no `.devloops` file means the `ci-only` default. An `incomplete` resolution of a request whose arguments parsed
 writes a typed incomplete artifact at the same path, stamped with the requested head, with
 `status: "incomplete"`, `allPassed: false`, the `reason`, and no suites. It is incomplete
 evidence, never a pass. A request that fails argument parsing, runs in a worktree

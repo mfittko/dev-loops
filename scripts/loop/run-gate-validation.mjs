@@ -270,7 +270,7 @@ const PR_TITLE_READ_TIMEOUT_MS = 10_000;
 // run. execFile's `timeout` kills the gh child, so no live child keeps the event
 // loop (and the CLI process) alive after the artifact prints.
 // DEVLOOPS_SKIP_PR_TITLE_READ=1 skips the read (hermetic tests).
-function runKillable(timeoutMs) {
+export function runKillable(timeoutMs) {
   return (command, args, env) => new Promise((resolve, reject) => {
     execFile(command, args, { env, timeout: timeoutMs, killSignal: "SIGKILL" }, (error, stdout, stderr) => {
       if (error && (error.killed || typeof error.code !== "number")) reject(error);
