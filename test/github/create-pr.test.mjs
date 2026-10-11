@@ -2030,6 +2030,7 @@ test("create-pr refuses with pre_pr_review_missing when --head does not resolve 
     ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
     assert.match(JSON.parse(result.stderr).error, /pre_pr_review_missing: cannot resolve the branch head no-such-branch/u);
+    assert.match(JSON.parse(result.stderr).error, /git fetch origin/u);
     assert.match(JSON.parse(result.stderr).error, /PRE-PR-BEFORE-FIRST-PUSH/u);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
