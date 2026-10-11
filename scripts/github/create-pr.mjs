@@ -18,7 +18,7 @@ import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
 import { evaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
 import { evaluateEarlySurface } from "../loop/early-surface-checks.mjs";
-import { validatePrePrReview } from "../loop/_pre-pr-review-record.mjs";
+import { PRE_PR_REVIEW_MISSING, validatePrePrReview } from "../loop/_pre-pr-review-record.mjs";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
@@ -590,18 +590,20 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     }
   }
   // PRE-PR-BEFORE-FIRST-PUSH guard: a non-lightweight create needs a pre-PR review record for the
-  // branch head named by --head (an `owner:` prefix is stripped), else the current HEAD.
+  // branch head named by --head (an `owner:` prefix is stripped), else the current HEAD. The head is the
+  // local ref, or origin/<head> when only that exists; a local/remote divergence is refused. Plan-doc
+  // promotion (a diff of only docs/**/*.md) is exempt; skills/** prose needs a record.
   if (!lightweight) {
     const headFlag = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN);
     const headRef = headFlag ? headFlag.trim().replace(/^[^:]*:/u, "") : undefined;
     const baseRef = hasBase ? getFlagValue(forwardedArgv, BASE_FLAG_PATTERN) : baseDefault;
-    const review = (runtime.validatePrePrReview ?? validatePrePrReview)({
+    const review = await (runtime.validatePrePrReview ?? validatePrePrReview)({
       cwd: runtime.cwd ?? process.cwd(),
       head: headRef || undefined,
       base: typeof baseRef === "string" && baseRef.trim() ? baseRef.trim().replace(/^origin\//u, "") : undefined,
     });
     if (!review.ok) {
-      throw parseError(`${review.code}: ${review.detail}`);
+      throw Object.assign(parseError(`${review.code}: ${review.detail}`), { code: review.code });
     }
   }
   // LOCAL-COMMENT-DISCIPLINE preflight: refuse before gh is invoked when the
@@ -709,7 +711,10 @@ if (isDirectCliRun(import.meta.url)) {
     const exitCode = await main();
     process.exitCode = exitCode;
   } catch (error) {
-    process.stderr.write(`${formatCliError(error)}\n`);
+    // Only the typed pre-PR refusal carries `code` in the envelope; formatCliError forwards it for config_load_failed alone.
+    const envelope = JSON.parse(formatCliError(error));
+    if (error?.code === PRE_PR_REVIEW_MISSING) envelope.code = error.code;
+    process.stderr.write(`${JSON.stringify(envelope)}\n`);
     process.exitCode = 1;
   }
 }

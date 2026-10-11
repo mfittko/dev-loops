@@ -10,6 +10,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
+import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
 export const PRE_PR_REVIEW_VERDICTS = Object.freeze(["clean", "findings_fixed"]);
@@ -46,29 +47,35 @@ export function writePrePrReviewRecord({ cwd = process.cwd(), verdict, dispositi
 }
 
 /**
- * Validate that a pre-PR review record covers `head` (a branch name, default: HEAD of `cwd`; `origin/<name>` is the fallback): a record for that
- * head, or for an ancestor head when every file changed since is docs or tests. With a bare `base` name, only
- * records reachable in `base..head` count as ancestors, and a branch that changes docs and tests only
- * needs no record. Returns `{ ok: true }` or
+ * Validate that a pre-PR review record covers the PR content. Head resolution: `head` (a branch name,
+ * default: HEAD of `cwd`) resolves to the local ref and to `origin/<head>`. When both exist and name
+ * different commits, the guard refuses (the PR opens at the pushed branch, not the local one); when
+ * only one exists, that one is used. A record for that head covers it, as does a record for an ancestor
+ * head when every file changed since classifies as docs or tests under the repository classify rules.
+ * With a bare `base` name, only records reachable in `base..head` count as ancestors, and a branch whose
+ * whole `base...head` diff is `.md` files under `docs/` (a plan-doc promotion) needs no record; contract
+ * and skill prose under `skills/` always needs one. Returns `{ ok: true }` or
  * `{ ok: false, code: "pre_pr_review_missing", detail }`.
  */
-export function validatePrePrReview({ cwd = process.cwd(), head: wanted, base } = {}) {
+export async function validatePrePrReview({ cwd = process.cwd(), head: wanted, base, rules } = {}) {
   const missing = (detail) => ({ ok: false, code: PRE_PR_REVIEW_MISSING, detail: `${detail}. Record the review with: ${RECORD_COMMAND}` });
-  let head;
-  for (const ref of wanted ? [wanted, `origin/${wanted}`] : ["HEAD"]) {
-    try { head = git(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]); break; } catch { /* try the next ref */ }
-  }
-  if (!head) return missing(`cannot resolve the branch head ${wanted ?? "HEAD"} from git`);
+  const resolve = (ref) => { try { return git(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]); } catch { return null; } };
+  const heads = wanted ? [resolve(wanted), resolve(`origin/${wanted}`)].filter(Boolean) : [resolve("HEAD")].filter(Boolean);
+  if (!heads.length) return missing(`cannot resolve the branch head ${wanted ?? "HEAD"} from git`);
+  if (new Set(heads).size > 1) return missing(`local ${wanted} and origin/${wanted} name different commits, so the PR content is not the reviewed local head`);
+  const [head] = heads;
   const direct = parseValid(path.join(recordDir(cwd), `${head}.json`));
   if (direct && direct.head === head) return { ok: true, head };
-  const docsTestOnly = (files) => files.length > 0 && files.every((f) => ["docs", "test"].includes(classifyFile(f)));
+  if (rules === undefined) rules = resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot: cwd })).config);
+  const docsTest = (f) => ["docs", "test"].includes(classifyFile(f, rules));
   let reachable = null;
   for (const ref of base ? [`origin/${base}`, base] : []) {
     try {
       const set = new Set(git(cwd, ["rev-list", `${ref}..${head}`]).split("\n").filter(Boolean));
       reachable = set;
-      // A branch that changes only docs and tests has no logic to review (a plan-doc promotion).
-      if (docsTestOnly(git(cwd, ["diff", "--name-only", "--no-renames", `${ref}...${head}`]).split("\n").filter(Boolean))) return { ok: true, head, docsTestOnly: true };
+      // A plan-doc promotion changes only docs-tree markdown; skills/** prose never qualifies.
+      const files = git(cwd, ["diff", "--name-only", "--no-renames", `${ref}...${head}`]).split("\n").filter(Boolean);
+      if (files.length > 0 && files.every((f) => f.startsWith("docs/") && f.endsWith(".md") && classifyFile(f, rules) === "docs")) return { ok: true, head, planDocOnly: true };
       break;
     } catch { /* base ref unresolvable: try the next */ }
   }
@@ -80,7 +87,7 @@ export function validatePrePrReview({ cwd = process.cwd(), head: wanted, base } 
     try {
       git(cwd, ["merge-base", "--is-ancestor", record.head, head]);
       const changed = git(cwd, ["diff", "--name-only", "--no-renames", `${record.head}..${head}`]).split("\n").filter(Boolean);
-      if (changed.every((f) => ["docs", "test"].includes(classifyFile(f)))) return { ok: true, head, reviewedHead: record.head };
+      if (changed.every(docsTest)) return { ok: true, head, reviewedHead: record.head };
     } catch { /* not an ancestor, or git failed: not usable */ }
   }
   return missing(`no pre-pr-review record covers branch head ${head.slice(0, 7)} (a record for an older head counts only when later changes touch docs and tests only)`);

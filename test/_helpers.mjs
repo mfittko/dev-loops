@@ -572,7 +572,7 @@ export async function runNodeWithPrePrRecord(scriptPath, args = [], options = {}
     fixture = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-fixture-"));
     cwd = fixture;
   }
-  const git = (...a) => execFileSync("git", a, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const git = (...a) => execFileSync("git", a, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: GIT_FIXTURE_ENV }).trim();
   let created = false;
   if (!options.noRecord && cwd && existsSync(cwd)) {
     try {
