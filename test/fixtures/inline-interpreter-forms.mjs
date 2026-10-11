@@ -43,6 +43,7 @@ export const DENIED_INLINE_INTERPRETER_FORMS = [
   "eval \"x; perl -pi -e y f\"",
   "cat > packages/a.mjs <<'EOF'",
   "cat > src/a.mjs <<\\EOF",
+  "cat > tmp/r.mjs <<\\EOF && node tmp/r.mjs",
   "echo \\\" && cat > packages/core/src/a.mjs <<'EOF'",
   "echo it\\'s && cat > packages/core/src/a.mjs <<'EOF'",
   "cat >> packages/core/src/a.mjs <<'EOF'",
