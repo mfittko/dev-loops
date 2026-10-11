@@ -971,7 +971,7 @@ function validateAngleResult(result) {
   if (r.verdict === "clean" && r.findings.length > 0) {
     return `angle '${r.angle}' reported clean but carries findings`;
   }
-  // An empty array on a non-checklist angle is treated as absent (#2568).
+  // An empty verifiedItems array on a non-checklist angle is treated as absent.
   const emptyOnOtherAngle =
     Array.isArray(r.verifiedItems) &&
     r.verifiedItems.length === 0 &&
