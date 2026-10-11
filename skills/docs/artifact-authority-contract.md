@@ -150,6 +150,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/github/resolve-handoff-candidates.mjs` | Not a gate decision: handoff candidates only |
 | `scripts/github/resolve-tracker-local-spec.mjs` | Not a gate decision: default tracker adapter |
 | `scripts/loop/_loop-evidence.mjs` | Fail closed: library module that throws `ConfigLoadFailedError` to its caller |
+| `scripts/loop/_pre-pr-review-record.mjs` | Fail closed: uses `loadDevLoopConfigStrict`, so a malformed `.devloops` makes the pre-PR review guard refuse |
 | `scripts/loop/detect-agent-stall.mjs` | Not a gate decision: stall detection setting |
 | `scripts/loop/inspect-run-viewer/server.mjs` | Not a gate decision: read-only viewer |
 | `scripts/loop/inspect-run.mjs` | Not a gate decision: read-only report; a `config_load_failed` from Copilot evidence drops that evidence and is named in the report missing marker, with no default fallback |

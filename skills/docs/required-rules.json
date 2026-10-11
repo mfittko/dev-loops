@@ -624,7 +624,7 @@
     },
     {
       "id": "PRE-PR-BEFORE-FIRST-PUSH",
-      "enforcement": "doc"
+      "enforcement": "runtime"
     },
     {
       "id": "PRE-PR-BOUNDED-TWO-ROUNDS",

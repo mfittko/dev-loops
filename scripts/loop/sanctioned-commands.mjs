@@ -58,6 +58,7 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "convert-to-draft": "scripts/github/convert-to-draft.mjs",
     "restore-ready": "scripts/github/restore-ready.mjs",
     "pr-create": "scripts/github/create-pr.mjs",
+    "pre-pr-review-record": "scripts/loop/record-pre-pr-review.mjs",
     "copilot-request": "scripts/github/request-copilot-review.mjs",
     "reply-resolve-thread": "scripts/github/reply-resolve-review-thread.mjs",
     "reply-resolve-threads": "scripts/github/reply-resolve-review-threads.mjs",

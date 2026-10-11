@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { main, enqueueBoardItem, enqueueIssuelessLightweightPr } from "../../scripts/github/create-pr.mjs";
-import { runNode as runNodeHelper, writeGhStub } from "../_helpers.mjs";
+import { runNodeWithPrePrRecord, writeGhStub } from "../_helpers.mjs";
 
 // ADR-TRIPWIRE-EARLY-SURFACE appends one `{adrTripwire,sizeBudget}` JSON line after gh stdout.
 const withoutEarlySurface = (stdout) => stdout.split("\n").filter((line) => !line.startsWith("{\"adrTripwire\"")).join("\n");
 const scriptPath = path.resolve("scripts/github/create-pr.mjs");
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+const runNode = (args = [], options = {}) => runNodeWithPrePrRecord(scriptPath, args, options);
 
 // #1629: linked-PR guard response with NO open linked PR — the happy path a
 // closing-keyword create hits first (detectLinkedIssuePr graphql call) before
