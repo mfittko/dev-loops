@@ -1126,7 +1126,7 @@ export function commandContainsDetachedWaitTool(rawCommand) {
 }
 
 /** Heredoc operator: `<<`, `<<-`, optionally quoted delimiter; never the `<<<` here-string. */
-const HEREDOC_OPERATOR_RE = /(?<!<)<<(?!<)-?\s*(?:'([A-Za-z_][\w-]*)'|"([A-Za-z_][\w-]*)"|([A-Za-z_][\w-]*))(?=$|[\s;&|<>)])/;
+const HEREDOC_OPERATOR_RE = /(?<!<)<<(?!<)-?\s*(?:'([A-Za-z_][\w-]*)'|"([A-Za-z_][\w-]*)"|\\?([A-Za-z_][\w-]*))(?=$|[\s;&|<>)])/;
 
 /** A `cat`/`tee` command head (env/wrapper/path prefix tolerated) plus the rest of its segment. */
 const CAT_TEE_HEAD_RE = new RegExp(`^${SHELL_EXEC_PREFIX}(cat|tee)(?:\\s+(.*))?$`);
@@ -1222,11 +1222,15 @@ const INTERPRETER_VALUE_FLAGS = new Set([
   "-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "-W", "-X",
 ]);
 
-/** perl and ruby take a module (-M/-m/-r) or include dir (-I) as a separate value; -W/-C/-X are boolean there. */
-const PERL_RUBY_VALUE_FLAGS = new Set(["-I", "-M", "-m", "-r", "-E"]);
+/** perl and ruby take a module (-M/-m/-r) or include dir (-I) as a separate value; -W/-C/-X are boolean in perl. */
+const PERL_VALUE_FLAGS = new Set(["-I", "-M", "-m", "-r", "-E"]);
+
+/** ruby also takes a directory operand after -C and -X. */
+const RUBY_VALUE_FLAGS = new Set([...PERL_VALUE_FLAGS, "-C", "-X"]);
 
 function valueFlagsFor(bin) {
-  return bin === "perl" || bin === "ruby" ? PERL_RUBY_VALUE_FLAGS : INTERPRETER_VALUE_FLAGS;
+  if (bin === "ruby") return RUBY_VALUE_FLAGS;
+  return bin === "perl" ? PERL_VALUE_FLAGS : INTERPRETER_VALUE_FLAGS;
 }
 
 /** Whether one command segment is a form `OPS-NO-INLINE-INTERPRETER` denies. */
@@ -1243,7 +1247,7 @@ function segmentIsInlineInterpreter(segment) {
   // Flags are the tokens before the first non-flag token; a later `-e`/`-c` is a script argument.
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
-    if (t.startsWith("<<")) return true; // stdin heredoc (`- <<EOF`, `<<EOF`)
+    if (/^-?<</.test(t)) return true; // stdin heredoc (`- <<EOF`, `-<<EOF`, `<<EOF`)
     if (t === "-") continue;
     if (!t.startsWith("-")) break;
     if (bin === "node" || bin === "bun") {

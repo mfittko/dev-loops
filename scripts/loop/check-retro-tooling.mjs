@@ -172,14 +172,16 @@ export function analyzeTranscript(transcript) {
     const line = raw.trim();
     if (line.length === 0 || line.startsWith("#")) continue;
     // Classify on the quote-stripped segments, but report the command as the agent ran it.
+    // Entries carry the whole line, so each one is reported at most once per line.
+    const entries = new Set();
+    let hasWriteOp = false;
     for (const segment of splitSegments(stripQuotedLiterals(line))) {
       const result = classifySegment(segment);
-      if (result.kind === "violation") {
-        violations.push(`${result.tool}: ${line}`);
-      } else if (result.kind === "allowedWriteOp") {
-        allowedWriteOps.push(line);
-      }
+      if (result.kind === "violation") entries.add(`${result.tool}: ${line}`);
+      else if (result.kind === "allowedWriteOp") hasWriteOp = true;
     }
+    violations.push(...entries);
+    if (hasWriteOp) allowedWriteOps.push(line);
     // The gate's predicate (OPS-NO-INLINE-INTERPRETER) on the whole line, so every denied form is reported.
     if (commandContainsInlineInterpreter(line)) {
       violations.push(`inline-interpreter: ${line}`);
@@ -236,7 +238,7 @@ export async function run(argv, { stdout, stderr, stdin = process.stdin }) {
     return emitResult(payload, { jq: values.jq, silent: values.silent, stdout, stderr });
   }
   if (internalToolingOnly) {
-    stdout.write(`internalToolingOnly: true — no agent-level raw gh/python/node -e calls found.\n`);
+    stdout.write(`internalToolingOnly: true — no agent-level raw gh/python calls or OPS-NO-INLINE-INTERPRETER inline-interpreter forms found.\n`);
     if (allowedWriteOps.length > 0) {
       stdout.write(`Allowed write-ops (no wrapper yet): ${allowedWriteOps.length}\n`);
     }

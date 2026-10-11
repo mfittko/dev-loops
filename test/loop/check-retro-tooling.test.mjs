@@ -259,3 +259,8 @@ test("comment-only transcript is analyzed normally", async () => {
   assert.equal(r.status, 0);
   assert.equal(JSON.parse(r.stdout).internalToolingOnly, true);
 });
+
+test("a line with two violating gh segments yields one entry", () => {
+  const { violations } = analyzeTranscript("gh api a && gh api b");
+  assert.deepEqual(violations, ["gh: gh api a && gh api b"]);
+});
