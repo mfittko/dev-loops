@@ -1159,9 +1159,11 @@ test("adr_number_collision: a non-404 tip read error whose text contains 404 sti
   }
 });
 
-test("adr_number_collision: a base-ref-not-found 404 status marker is an empty tip", async () => {
-  const { runtime } = makeRuntime({ adrPrFiles: [adrFile("docs/decisions/0001-a.md")], adrTip: new Error("gh: No commit found for the ref main (HTTP 404)") });
-  assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
+test("adr_number_collision: a base-ref-not-found 404 refuses fail-closed", async () => {
+  const { runtime, calls } = makeRuntime({ adrPrFiles: [adrFile("docs/decisions/0001-a.md")], adrTip: new Error("gh: No commit found for the ref main (HTTP 404)") });
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.match(threw.mergePrFailure.failures.find((f) => f.precondition === "adr_number_collision").reason, /could not read docs\/decisions/);
+  assert.equal(mergeCalls(calls).length, 0);
 });
 
 test("adr_number_collision: any other tip read error refuses fail-closed", async () => {

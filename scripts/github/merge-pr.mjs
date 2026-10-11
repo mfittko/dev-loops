@@ -329,7 +329,8 @@ async function resolveAdrNumberCollisionRefusal({ repo, pr, baseRefName }, { env
     tipNames = (Array.isArray(listing) ? listing : []).map((e) => e?.name).filter((n) => typeof n === "string");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    if (!/\(HTTP 404\)/.test(detail)) return `could not read docs/decisions on ${baseRefName} to check ADR numbers: ${detail}`;
+    // A 404 for a missing base ref ("No commit found for the ref") is a read failure, not an empty directory.
+    if (!/\(HTTP 404\)/.test(detail) || /No commit found for the ref/i.test(detail)) return `could not read docs/decisions on ${baseRefName} to check ADR numbers: ${detail}`;
     tipNames = [];
   }
   const collisions = findAdrNumberCollisions({ tipNames, addedNames, removedNames });
