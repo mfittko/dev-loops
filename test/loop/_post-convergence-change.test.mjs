@@ -307,3 +307,10 @@ test("isTrivialDocumentationOnlyPath classifies prose docs as trivial but a docs
     assert.equal(isTrivialDocumentationOnlyPath(p), false, `${p} should be non-trivial`);
   }
 });
+
+test("no-rules fallback treats built-in docs basenames as documentation", () => {
+  for (const p of ["LICENSE", "LICENSE-MIT", "COPYING", "NOTICE", "AUTHORS"]) {
+    assert.equal(isTrivialDocumentationOnlyPath(p), true, p);
+  }
+  assert.equal(isTrivialDocumentationOnlyPath("Procfile"), false);
+});

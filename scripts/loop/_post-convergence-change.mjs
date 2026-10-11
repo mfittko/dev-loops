@@ -31,6 +31,8 @@ export function isTrivialDocumentationOnlyPath(filePath, rules) {
   // A code/config/test file hosted under docs/ is NOT trivial documentation:
   // such a change must re-open a post-convergence Copilot round.
   if (normalized.startsWith("docs/")) return classifyFile(normalized) === "docs";
+  // Built-in extensionless docs basenames (LICENSE, COPYING, NOTICE, AUTHORS, LICENSE-*).
+  if (classifyFile(trimmed) === "docs") return true;
   return normalized.endsWith(".md")
     || normalized.endsWith(".markdown")
     || normalized.endsWith(".mdx")
