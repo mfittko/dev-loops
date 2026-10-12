@@ -134,8 +134,10 @@ test("a marker that names no branch is not ended by a remote ref (fail closed)",
 
 test("a merge-base failure other than 'not an ancestor' refuses instead of dropping the marker", async () => {
   await withRepo((root, head) => {
-    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
-    assert.throws(() => checkFixPushAuthority(root, ["b".repeat(40)]));
+    const file = writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
+    const refused = checkFixPushAuthority(root, ["b".repeat(40)]);
+    assert.equal(refused.ok, false);
+    assert.ok(refused.reason.includes(file), refused.reason);
   });
 });
 

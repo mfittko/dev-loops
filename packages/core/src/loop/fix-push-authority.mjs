@@ -59,7 +59,14 @@ export function findActiveSequence({ tmpRoot, head, remoteRef, listBaselines, is
   for (const baseline of listBaselines()) {
     const marker = readSequenceMarker(tmpRoot, baseline);
     if (!marker) continue;
-    const covered = baseline === head || isAncestor(baseline, head) || (marker.branch !== undefined && remoteRef === `refs/heads/${marker.branch}`);
+    let covered;
+    try {
+      covered = baseline === head || isAncestor(baseline, head) || (marker.branch !== undefined && remoteRef === `refs/heads/${marker.branch}`);
+    } catch {
+      // The ancestry test failed (missing object, invalid ref): refuse under this marker, which the refusal reason names (fail closed).
+      active.push({ ...marker, fullGranted: false });
+      continue;
+    }
     if (covered && (marker.branch === undefined || !remoteAdvanced(baseline, marker.branch))) active.push(marker);
   }
   return active.find((m) => !m.fullGranted) ?? active[0] ?? null;

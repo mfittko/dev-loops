@@ -50,9 +50,9 @@ export function checkFixPushAuthority(cwd = process.cwd(), pushedShas = null) {
       throw error;
     }
   };
-  // Exit 1 means "not an ancestor"; any other failure (missing object, invalid ref) throws and the push is refused (fail closed).
+  // Exit 1 means "not an ancestor"; any other failure (missing object, invalid ref) throws and findActiveSequence refuses under that marker (fail closed).
   const isAncestor = (a, b) => { try { git("merge-base", "--is-ancestor", a, b); return true; } catch (error) { if (error?.status === 1) return false; throw error; } };
-  const remoteAdvanced = (baseline, branch) => git("for-each-ref", "--contains", baseline, "--format=%(objectname)", branch ? `refs/remotes/*/${branch}` : "refs/remotes").split("\n").some((sha) => sha && sha !== baseline);
+  const remoteAdvanced = (baseline, branch) => git("for-each-ref", "--contains", baseline, "--format=%(objectname)", `refs/remotes/*/${branch}`).split("\n").some((sha) => sha && sha !== baseline);
   const heads = (pushedShas ?? [git("rev-parse", "HEAD").trim()]).map((p) => typeof p === "string" ? { sha: p } : p);
   let refusedBy = null;
   for (const { sha: head, remoteRef } of heads) {
