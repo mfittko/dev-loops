@@ -975,7 +975,7 @@ test("a handback made by filling the skeleton passes check-pre-push-delta input 
     const candidate = "b".repeat(40);
     const coverage = path.join(path.dirname(files.actList), "coverage.json");
     await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage }));
-    const seam = { stdout: { write: () => {} }, tmpRoot: path.dirname(files.actList), revParse: (_w, rev) => (rev === "HEAD" ? candidate : rev), isAncestor: () => true };
+    const seam = { stdout: { write: () => {} }, tmpRoot: path.dirname(files.actList), revParse: (_w, rev) => (rev === "HEAD" ? candidate : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) };
     const out = runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--site-coverage", coverage], seam);
     assert.equal(out.input.siteCoverage.length, 3);
     // The unfilled skeleton is refused.
