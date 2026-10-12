@@ -140,7 +140,7 @@ fi
     ? `push_lines=$(cat)
 authority_cli="${authorityCli ?? ""}"
 if [ -z "$authority_cli" ] || [ ! -f "$authority_cli" ]; then
-  authority_cli="$(git rev-parse --show-toplevel 2>/dev/null)/scripts/loop/check-fix-push-authority.mjs"
+  authority_cli="$(git rev-parse --show-toplevel 2>/dev/null)/"scripts/loop/check-fix-push-authority.mjs
 fi
 if [ ! -f "$authority_cli" ]; then
   echo "dev-loops: PRE-PUSH-DELTA-PUSH-AUTHORITY the push-authority check script is missing; refusing the push (fail closed). Re-run ensure-worktree to reinstall the hooks." >&2
