@@ -67,7 +67,7 @@ disposition token survived. A medium or low defect thread the judge rejected
 (same lookup) is closed the same way with no answer reply required; its reply
 carries an Examined on merits rationale naming the summary and the judge
 rationale (ADR 0144). A judge-rejected high is never closed here. This never stamps disposition=deferred and never
-files the finding (a question is never fileable); nit is
+files the finding (a rejected finding is never fileable); nit is
 replied-to + resolved immediately, with no fixer cycle. Every resolve-without-fix
 above is ALSO gated on the net-reduction filing bar (#1846): resolving a thread and
 FILING it to the deferral comment are separate decisions. nit is NEVER filed —
