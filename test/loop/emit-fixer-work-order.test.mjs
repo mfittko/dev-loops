@@ -927,7 +927,7 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
     assert.match(query.noSitesReason, /^FILL:/);
     assert.match(await readFile(promptPath, "utf8"), /Start from the `siteCoverage` skeleton/);
     assert.match(await readFile(promptPath, "utf8"), /run the work order's `handbackCheck` command/);
-    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(files.actList)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
+    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(files.actList)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
     const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(threads.workOrder.siteCoverage, undefined);
     const threadsPrompt = await readFile(threads.promptPath, "utf8");
@@ -986,12 +986,12 @@ test("a handback made by filling the skeleton passes check-pre-push-delta input 
     const candidate = "b".repeat(40);
     const coverage = path.join(path.dirname(files.actList), "coverage.json");
     await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage }));
-    const seam = { stdout: { write: () => {} }, tmpRoot: path.dirname(files.actList), revParse: (_w, rev) => (rev === "HEAD" ? candidate : rev), isAncestor: () => true };
-    const out = runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--site-coverage", coverage], seam);
+    const seam = { stdout: { write: () => {} }, tmpRoot: path.dirname(files.actList), revParse: (_w, rev) => (rev === "HEAD" ? candidate : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) };
+    const out = runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--handback", "--site-coverage", coverage], seam);
     assert.equal(out.input.siteCoverage.length, 3);
     // The unfilled skeleton is refused.
     await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage: workOrder.siteCoverage }));
-    assert.throws(() => runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--site-coverage", coverage], seam), /expected fixed or skipped/);
+    assert.throws(() => runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--handback", "--site-coverage", coverage], seam), /expected fixed or skipped/);
   });
 });
 

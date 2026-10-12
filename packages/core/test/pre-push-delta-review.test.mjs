@@ -357,3 +357,188 @@ describe("pre-push results never become gate evidence", () => {
     assert.deepEqual(imports.sort(), ["./fixer-disposition.mjs", "./gate-fanin.mjs", "node:crypto"]);
   });
 });
+
+import { unaddressedStaleSurfaceHits, staleSurfaceTruncatedHit, STALE_SURFACE_TRUNCATED_SITE } from "../src/loop/pre-push-delta-review.mjs";
+import { collectStaleSurfaceHits } from "../src/loop/stale-surface-hits.mjs";
+
+test("surfaceHints is the union of the act item angles and the reviewed round angles", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], angle: "contract-surface" }] });
+  const input = buildDeltaInput({ sequence, candidateHead: B, roundAngles: ["correctness", "determinism", "coverage", "contract-surface"] });
+  assert.deepEqual(input.surfaceHints, ["contract-surface", "correctness", "determinism", "coverage"]);
+  assert.deepEqual(buildDeltaInput({ sequence, candidateHead: B }).surfaceHints, ["contract-surface"]);
+  assert.deepEqual(buildDeltaInput({ sequence, candidateHead: B }).staleSurfaceHits, []);
+});
+
+const RULE_DIFF = [
+  "diff --git a/skills/docs/gate-contract.md b/skills/docs/gate-contract.md",
+  "--- a/skills/docs/gate-contract.md",
+  "+++ b/skills/docs/gate-contract.md",
+  "@@ -3,1 +3,0 @@",
+  "-The reviewer MUST keep every verdict body short. Another kept sentence stays here.",
+  "+Another kept sentence stays here.",
+  "diff --git a/packages/x/lib.mjs b/packages/x/lib.mjs",
+  "--- a/packages/x/lib.mjs",
+  "+++ b/packages/x/lib.mjs",
+  "@@ -1,1 +1,1 @@",
+  "-export function oldHelperName(a) {",
+  "+export function newHelperName(a) {",
+].join("\n");
+
+test("collectStaleSurfaceHits reports a removed sentence pinned elsewhere and a renamed identifier still used", () => {
+  const grep = (needle, { word }) => {
+    if (needle === "The reviewer MUST keep every verdict body short.") return [{ file: "test/contracts/style.test.mjs", line: 23 }];
+    if (needle === "oldHelperName" && word) return [{ file: "scripts/use.mjs", line: 4 }];
+    return [];
+  };
+  const hits = collectStaleSurfaceHits({ diffText: RULE_DIFF, grep });
+  assert.deepEqual(hits.map((h) => [h.kind, h.needle, h.site]), [
+    ["sentence", "The reviewer MUST keep every verdict body short.", "test/contracts/style.test.mjs:23"],
+    ["identifier", "oldHelperName", "scripts/use.mjs:4"],
+  ]);
+  // An identifier that survives in its own file is not removed.
+  const survives = (needle) => (needle === "oldHelperName" ? [{ file: "packages/x/lib.mjs", line: 9 }, { file: "scripts/use.mjs", line: 4 }] : []);
+  assert.deepEqual(collectStaleSurfaceHits({ diffText: RULE_DIFF, grep: survives }), []);
+});
+
+test("an unaddressed stale-surface hit refuses locally_clear; a new finding or a recorded skip reason addresses it", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [ACT_LIST[1]] });
+  const hit = { kind: "sentence", needle: "n", file: "test/contracts/style.test.mjs", line: 23, site: "test/contracts/style.test.mjs:23" };
+  const result = { reviewBaselineHead: A, candidateHead: B, actSetId: sequence.actSetId, actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["e"] }], newFindings: [], widenedReads: [], outcome: "locally_clear" };
+  const errors = (r, extra = {}) => validateDeltaResult(r, { sequence, staleSurfaceHits: [hit], ...extra });
+  assert.match(errors(result).join("\n"), /stale-surface/);
+  assert.deepEqual(errors({ ...result, newFindings: [{ severity: "low", summary: "pin stale", evidence: ["test/contracts/style.test.mjs:23 still pins it"] }] }), []);
+  const siteCoverage = [{ fingerprint: "act-1", returnedSites: [], sites: [{ site: "test/contracts/style.test.mjs:23", status: "skipped", reason: "kept" }] }];
+  assert.deepEqual(unaddressedStaleSurfaceHits([hit], { newFindings: [], siteCoverage }), []);
+  // A result without hits input stays valid (backward compatible).
+  assert.deepEqual(validateDeltaResult(result, { sequence }), []);
+});
+
+test("resolved requires no new defect from the remedy: contract names it", () => {
+  assert.match(fs.readFileSync(new URL("../../../skills/docs/pre-pr-review-contract.md", import.meta.url), "utf8"), /applied remedy introduces no new finding of severity medium or higher/);
+});
+
+import { collectStaleSurface } from "../src/loop/stale-surface-hits.mjs";
+
+const hunk = (file, body, { del = false } = {}) => [
+  `diff --git a/${file} b/${file}`,
+  `--- a/${file}`,
+  `+++ ${del ? "/dev/null" : `b/${file}`}`,
+  "@@ -1,2 +1,0 @@",
+  ...body,
+].join("\n");
+
+test("parseDiff attributes a deleted file to its old path and keeps a removed `-- item` line", () => {
+  const asked = [];
+  const grep = (needle) => { asked.push(needle); return [{ file: "test/pins.test.mjs", line: 3 }]; };
+  const deleted = hunk("skills/docs/old.md", ["-The retired contract sentence stays pinned elsewhere."], { del: true });
+  assert.deepEqual(collectStaleSurfaceHits({ diffText: deleted, grep }).map((h) => h.needle), ["The retired contract sentence stays pinned elsewhere."]);
+  asked.length = 0;
+  const dashed = hunk("skills/docs/list.md", ["--- item one of the removed markdown list is long enough."]);
+  collectStaleSurfaceHits({ diffText: dashed, grep });
+  assert.deepEqual(asked, ["-- item one of the removed markdown list is long enough."]);
+});
+
+test("a Markdown line naming a removed identifier does not suppress its stale hits", () => {
+  const changelog = ["diff --git a/changes/x.md b/changes/x.md", "--- a/changes/x.md", "+++ b/changes/x.md", "@@ -0,0 +1 @@", "+- Rename oldHelperName to newHelperName"].join("\n");
+  const grep = (needle, { word }) => (needle === "oldHelperName" && word ? [{ file: "scripts/use.mjs", line: 4 }] : []);
+  const hits = collectStaleSurfaceHits({ diffText: `${RULE_DIFF}\n${changelog}`, grep });
+  assert.deepEqual(hits.filter((h) => h.kind === "identifier").map((h) => h.site), ["scripts/use.mjs:4"]);
+  // Moved to another code file: still not reported.
+  const moved = [RULE_DIFF, "diff --git a/packages/x/other.mjs b/packages/x/other.mjs", "--- a/packages/x/other.mjs", "+++ b/packages/x/other.mjs", "@@ -0,0 +1 @@", "+export function oldHelperName(a) {"].join("\n");
+  assert.deepEqual(collectStaleSurfaceHits({ diffText: moved, grep }).filter((h) => h.kind === "identifier"), []);
+  // An added caller of the old name is no re-declaration: the stale hit stays.
+  const caller = [RULE_DIFF, "diff --git a/packages/x/other.mjs b/packages/x/other.mjs", "--- a/packages/x/other.mjs", "+++ b/packages/x/other.mjs", "@@ -0,0 +1 @@", "+  oldHelperName(a);"].join("\n");
+  assert.deepEqual(collectStaleSurfaceHits({ diffText: caller, grep }).filter((h) => h.kind === "identifier").map((h) => h.site), ["scripts/use.mjs:4"]);
+});
+
+test("identifiers need a declaration shape, ignore comments and strings, skip common names and honor moves across files", () => {
+  const code = (lines) => hunk("packages/x/lib.mjs", lines.map((l) => `-${l}`));
+  const grepAt = (n) => () => Array.from({ length: n }, (_, i) => ({ file: `f${i}.mjs`, line: 1 }));
+  const needles = (diffText, n = 1) => collectStaleSurfaceHits({ diffText, grep: grepAt(n) }).map((h) => h.needle);
+  assert.deepEqual(needles(code(["export function oldHelper(a) {"])), ["oldHelper"]);
+  // A call, a comment and a string mention are no declaration.
+  assert.deepEqual(needles(code(["  callSomething(plainCallee);", "  // oldCommented removed", '  const msg = "mentionsQuoted";'])), []);
+  assert.deepEqual(needles(code(["export function tooCommonName(a) {"]), 6), []);
+  assert.equal(collectStaleSurface({ diffText: code(["export function tooCommonName(a) {"]), grep: grepAt(6) }).truncated, true);
+  const moved = [code(["export function movedHelper(a) {"]), hunk("packages/x/other.mjs", ["+export function movedHelper(a) {"]).replace("@@ -1,2 +1,0 @@", "@@ -0,0 +1 @@")].join("\n");
+  assert.deepEqual(needles(moved), []);
+});
+
+test("collectStaleSurface flags truncation and lists test and doc hits before source hits", () => {
+  const many = Array.from({ length: 25 }, (_, i) => ({ file: i === 24 ? "test/pin.test.mjs" : `src/f${i}.mjs`, line: i + 1 }));
+  const out = collectStaleSurface({ diffText: hunk("skills/docs/a.md", ["-The removed sentence is long enough to count here."]), grep: () => many });
+  assert.equal(out.truncated, true);
+  assert.equal(out.hits.length, 20);
+  assert.equal(out.hits[0].file, "test/pin.test.mjs");
+  assert.equal(collectStaleSurface({ diffText: hunk("skills/docs/a.md", ["-The removed sentence is long enough to count here."]), grep: () => many.slice(0, 2) }).truncated, false);
+});
+
+test("a skipped site addresses a stale-surface hit only with a non-empty reason", () => {
+  const hit = { kind: "sentence", needle: "n", file: "a/b.mjs", line: 1, site: "a/b.mjs:1" };
+  const coverage = (reason) => [{ fingerprint: "f", returnedSites: [], sites: [{ site: "a/b.mjs:1", status: "skipped", ...(reason === undefined ? {} : { reason }) }] }];
+  assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage("kept") }).length, 0);
+  assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage("  ") }).length, 1);
+  assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage() }).length, 1);
+});
+
+test("a hit file is addressed only as a whole path token, never as a path suffix or substring", () => {
+  const hit = (file) => ({ kind: "sentence", needle: "n", file, line: 1, site: `${file}:1` });
+  const byFinding = (summary) => unaddressedStaleSurfaceHits([hit("skills/dev-loop/SKILL.md")], { newFindings: [{ summary, evidence: [] }] }).length;
+  assert.equal(byFinding("stale line at skills/dev-loop/SKILL.md:12"), 0);
+  assert.equal(byFinding("see `skills/dev-loop/SKILL.md` for the pin"), 0);
+  assert.equal(byFinding("stale line at .claude/skills/dev-loop/SKILL.md:12"), 1);
+  const readme = (summary) => unaddressedStaleSurfaceHits([hit("README.md")], { newFindings: [{ summary, evidence: [] }] }).length;
+  assert.equal(readme("`README.md` still pins the sentence"), 0);
+  assert.equal(readme("stale line in README.md"), 0);
+  assert.equal(readme("stale line in docs/README.md"), 1);
+  assert.equal(readme("naming skills/dev-loop/README.md here"), 1);
+  const skipped = (site) => unaddressedStaleSurfaceHits([hit("README.md")], { siteCoverage: [{ fingerprint: "f", returnedSites: [], sites: [{ site, status: "skipped", reason: "kept" }] }] }).length;
+  assert.equal(skipped("README.md"), 0);
+  assert.equal(skipped("README.md:1"), 0);
+  assert.equal(skipped("docs/README.md:1"), 1);
+});
+
+test("a skipped site with a line suffix addresses only a hit on that line", () => {
+  const hit = { kind: "sentence", needle: "n", file: "skills/docs/x.md", line: 200, site: "skills/docs/x.md:200" };
+  const open = (site, reason = "kept") => unaddressedStaleSurfaceHits([hit], { siteCoverage: [{ fingerprint: "f", returnedSites: [], sites: [{ site, status: "skipped", reason }] }] }).length;
+  assert.equal(open("skills/docs/x.md"), 0);
+  assert.equal(open("skills/docs/x.md:200"), 0);
+  assert.equal(open("skills/docs/x.md:190-210"), 0);
+  assert.equal(open("skills/docs/x.md:10"), 1);
+  assert.equal(open("skills/docs/x.md:10-20"), 1);
+  assert.equal(open("skills/docs/x.md:200", ""), 1);
+  const truncated = staleSurfaceTruncatedHit();
+  assert.equal(unaddressedStaleSurfaceHits([truncated], { siteCoverage: [{ fingerprint: "f", returnedSites: [], sites: [{ site: STALE_SURFACE_TRUNCATED_SITE, status: "skipped", reason: "kept" }] }] }).length, 0);
+});
+
+test("a re-wrapped Markdown paragraph is no removal, and dropped too-common identifiers are named", () => {
+  const grep = () => [{ file: "test/pin.test.mjs", line: 3 }];
+  const rewrap = [
+    "diff --git a/skills/docs/a.md b/skills/docs/a.md", "--- a/skills/docs/a.md", "+++ b/skills/docs/a.md", "@@ -1,2 +1,2 @@",
+    "-The retained sentence is long enough to count and", "-wraps over two lines.", "+The retained sentence is long enough", "+to count and wraps over two lines.",
+  ].join("\n");
+  assert.deepEqual(collectStaleSurface({ diffText: rewrap, grep }).hits, []);
+  const many = Array.from({ length: 6 }, (_, i) => ({ file: `f${i}.mjs`, line: 1 }));
+  const out = collectStaleSurface({ diffText: hunk("packages/x/lib.mjs", ["-export function tooCommonName(a) {"]), grep: () => many });
+  assert.deepEqual(out.truncatedNeedles, [{ kind: "identifier", needle: "tooCommonName", fileCount: 6 }]);
+});
+
+test("removed unpunctuated bullets, headings and table rows are separate needles", () => {
+  const needles = (body) => { const asked = []; collectStaleSurface({ diffText: hunk("skills/docs/a.md", body), grep: (n) => { asked.push(n); return []; } }); return asked; };
+  assert.deepEqual(needles(["-- Lows and nits never block the push", "-- The reviewer reads every changed hunk"]).length, 2);
+  assert.deepEqual(needles(["-- Lows and nits never block the push"]), ["Lows and nits never block the push"]);
+  assert.deepEqual(needles(["-## The reviewer reads every changed hunk"]), ["The reviewer reads every changed hunk"]);
+  assert.deepEqual(needles(["-| Lows and nits never block | The reviewer reads every changed hunk |"]), ["Lows and nits never block", "The reviewer reads every changed hunk"]);
+  assert.deepEqual(needles(["-- Lows and nits never block the push", "-- The reviewer reads every changed hunk"]), ["Lows and nits never block the push", "The reviewer reads every changed hunk"]);
+});
+
+test("parseDiff reads a TAB-suffixed spaced path and fails closed on an unparseable header or orphan hunk line", () => {
+  const grep = () => [{ file: "test/pin.test.mjs", line: 3 }];
+  const sentence = "The spaced path sentence is long enough to count.";
+  const spaced = ["diff --git a/docs/my guide.md b/docs/my guide.md", "--- a/docs/my guide.md\t", "+++ b/docs/my guide.md\t", "@@ -1 +0,0 @@", `-${sentence}`].join("\n");
+  assert.deepEqual(collectStaleSurfaceHits({ diffText: spaced, grep }).map((h) => h.needle), [sentence]);
+  const quoted = ["diff --git a/x b/x", '--- "a/caf\\303\\251.md"', '+++ "b/caf\\303\\251.md"', "@@ -1 +0,0 @@", `-${sentence}`].join("\n");
+  assert.throws(() => collectStaleSurfaceHits({ diffText: quoted, grep }), /could not be parsed/);
+  const orphan = ["diff --git a/x b/x", "@@ -1 +0,0 @@", `-${sentence}`].join("\n");
+  assert.throws(() => collectStaleSurfaceHits({ diffText: orphan, grep }), /no parsed file header/);
+});

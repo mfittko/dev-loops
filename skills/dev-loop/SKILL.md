@@ -255,7 +255,7 @@ After the fixer commits the act-list fix and before it pushes, the dev-loop coor
 delta-mode pre-push review (`PRE-PUSH-DELTA-TRIGGER` in the
 [Pre-push review contract](../docs/pre-pr-review-contract.md#delta-mode)), which owns the
 baseline, input, result, three-review bound and freshness rules. `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta`
-builds the reviewer input and checks each result against the current worktree head.
+builds the reviewer input and checks each result against the current worktree head. On the act-list route, pass the required `--findings-log <the reviewed round's findings log>` to the input run only (never pass `--handback`; only the fixer's emitted `handbackCheck` does); the thread route and the `--result` run take none.
 
 Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md) and Phase 3 of [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) for the full refusal conditions.
 
