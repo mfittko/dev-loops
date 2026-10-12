@@ -8,6 +8,7 @@ import {
   FINDING_MARKER_RE,
   MEDIUM_FIX_WINDOW,
   countUnresolvedGateAuthoredThreads,
+  collectFingerprints,
   commentDeferredFindings,
   fetchThreadsWithFullBodies,
   findJudgeDispositionForFingerprint,
@@ -320,7 +321,7 @@ async function selectDispositionTargets(threads, round, login, mediumFixWindow, 
     if (await isJudgeActThread({ fp: marker.fp, threadBody: thread.body, findings, lookup })) continue;
     // A judge-rejected medium or low is owned by the reject-close pass: never deferred, never filed.
     if (isRejectClosableSeverity(marker.severity)
-      && (await resolveJudgeRejection({ fp: marker.fp, threadBody: thread.body, findings, ...lookup }))?.disposition === "reject") continue;
+      && await resolveThreadRejection({ fp: marker.fp, threadBody: thread.body, findings, ...lookup })) continue;
     // commentId is null whenever list-review-threads.mjs could not resolve a
     // finite databaseId for the thread's first comment. Reject it here (named
     // by threadId) rather than let it reach stampDeferredDisposition and
@@ -651,6 +652,22 @@ async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate,
   return rendered ? { disposition: rendered, rationale: null } : null;
 }
 
+// The single reject-ownership rule both passes read: a thread is reject-owned only when EVERY
+// finding marker on its root (a merged inline comment carries one per member) resolves to reject.
+// Returns the primary marker's judgement (it supplies the closing rationale), else null so the
+// thread falls back to the existing severity path.
+async function resolveThreadRejection({ fp, threadBody, ...rest }) {
+  const fps = new Set([fp]);
+  collectFingerprints(threadBody, fps);
+  let primary = null;
+  for (const memberFp of fps) {
+    const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody, ...rest });
+    if (judgement?.disposition !== "reject") return null;
+    primary ??= judgement;
+  }
+  return primary;
+}
+
 const NO_JUDGE_RATIONALE_TEXT = "the judge rejected this finding on its merits; no rationale text is recorded for it";
 
 // judgeRationale is untrusted free text (the same trust boundary as a
@@ -682,7 +699,7 @@ async function runRejectClosePass({ repo, pr, gate, headSha, round, threads, sna
     if (candidate.severity === "question" && !hasAnswerReply(candidate, snapshot.comments)) continue;
     let judgement;
     try {
-      judgement = await resolveJudgeRejection({ fp: candidate.fp, threadBody: candidate.body, findings, repo, pr, gate, headSha, tmpRoot, repoRoot });
+      judgement = await resolveThreadRejection({ fp: candidate.fp, threadBody: candidate.body, findings, repo, pr, gate, headSha, tmpRoot, repoRoot });
     } catch (err) {
       dispositionFailures.push({ commentId: candidate.commentId, threadId: candidate.threadId, severity: candidate.severity, angle: candidate.angle, error: err instanceof Error ? err.message : String(err) });
       continue;

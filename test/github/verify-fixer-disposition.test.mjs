@@ -755,6 +755,15 @@ test("an act item with no fingerprint field is matched by its derived fingerprin
   });
 });
 
+test("an act item matching a non-primary marker of a merged gate thread root still fails naming the thread", async () => {
+  const merged = `<!-- dev-loops:finding fedcba9876543210 severity=medium angle=correctness round=1 -->\n${ACT_MARKER}\n**Problem:** s`;
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [], { actList: ACT_LIST });
+    const { deps } = runtime([threadsCallEntry([actThread("PRRT_MERGED", [gateComment("c1", 104, merged)])]), userEntry], repoRoot);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /PRRT_MERGED/);
+  });
+});
+
 // Two open gate threads carrying one act fingerprint: each needs its own entry, whatever the API order.
 for (const [name, listOrder, dispositioned] of [
   ["only the API-last thread dispositioned", ["PRRT_A", "PRRT_B"], "PRRT_B"],

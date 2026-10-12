@@ -10,7 +10,7 @@ import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { fingerprintFinding, parseFindingMarker } from "./_gate-finding-surface.mjs";
+import { collectFingerprints, fingerprintFinding } from "./_gate-finding-surface.mjs";
 import { resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
@@ -263,16 +263,18 @@ function threadRootComment(parsed, threadId) {
 // Gate-authored is the authenticated login on the thread ROOT comment, never marker text alone;
 // every matching thread needs its own entry.
 function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin) {
-  if (!Array.isArray(actList)) return;
   const dispositioned = new Set(handoff.dispositions.map((entry) => entry.threadId));
   const openFingerprints = new Map();
   for (const thread of parsed.threads.filter((t) => !t.isResolved)) {
     const root = threadRootComment(parsed, thread.id);
     if (!root || root.author?.login !== gateLogin) continue;
-    const marker = parseFindingMarker(root.body);
-    if (!marker) continue;
-    if (!openFingerprints.has(marker.fp)) openFingerprints.set(marker.fp, new Set());
-    openFingerprints.get(marker.fp).add(thread.id);
+    // A merged inline comment carries one marker per member: index every one, not just the first.
+    const fps = new Set();
+    collectFingerprints(root.body, fps);
+    for (const fp of fps) {
+      if (!openFingerprints.has(fp)) openFingerprints.set(fp, new Set());
+      openFingerprints.get(fp).add(thread.id);
+    }
   }
   const missing = actList
     .flatMap((item) => [item?.fingerprint ?? fingerprintFinding(item)].flatMap((fp) => [...(openFingerprints.get(fp) ?? [])]))
