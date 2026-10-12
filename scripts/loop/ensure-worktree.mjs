@@ -524,6 +524,9 @@ function installGuard(gitCommand, root, explicitBase) {
       // guard.skipped.
       process.stderr.write(`[ensure-worktree] WARN default-branch guard degraded: ${result.reason}\n`);
     }
+    if (result.ok && result.skipped?.some((s) => s.hook === "pre-push")) {
+      process.stderr.write("[ensure-worktree] WARN foreign pre-push hook left untouched: gate fix push authority is not enforced\n");
+    }
     return result;
   } catch (err) {
     const detail = (err?.stderr ?? err?.message ?? "").toString().trim();

@@ -23,6 +23,6 @@ The dev-loops side that owns `scripts/` (`ensure-worktree`) passes the script pa
 Residual gaps:
 
 - `git push --no-verify` skips the git layer, and nothing else stops it.
-- No dev-loops pre-push hook is installed when `core.hooksPath` is set or a foreign `pre-push` hook exists that the guard does not own. The install refuses in both cases, and no push is refused during a gate fix sequence. `ensure-worktree` warns that gate fix push authority is not enforced.
+- No dev-loops pre-push hook is installed when `core.hooksPath` is set or a foreign `pre-push` hook exists that the guard does not own. With `core.hooksPath` set the install refuses, and `ensure-worktree` warns that gate fix push authority is not enforced. With a foreign `pre-push` hook the install skips that slot and still returns ok, and `ensure-worktree` warns that gate fix push authority is not enforced. In both cases no push is refused during a gate fix sequence.
 
 Recovery: an abandoned sequence keeps refusing pushes, and the refusal reason and the shell fallback message name the marker file. Delete `<main worktree>/tmp/gate-delta/<baseline>.sequence`. `emit-fixer-work-order.mjs --phase full` grants the push only for a sequence with a clearing delta record (`nextStep: push` or `push_to_gate`). A `commit_only` round that ends without a fix commit clears its own marker when `check-pre-push-delta.mjs` reports that HEAD equals the baseline.
