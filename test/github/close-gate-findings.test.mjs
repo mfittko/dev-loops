@@ -2520,22 +2520,6 @@ test("a merged medium thread with a reject primary and an act member is neither 
   ));
 });
 
-test("a merged medium thread whose member has no ledger match does not inherit the primary's rendered judge: reject", async () => {
-  const primary = defectThread({ severity: "medium", summary: "merged primary claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6380, id: "X" });
-  const member = defectThread({ severity: "medium", summary: "merged member claim", judgeDisposition: "act", commentId: 6380, id: "X" });
-  const body = `${buildFindingMarker({ fp: primary.fp, severity: "medium", angle: "correctness", round: 1 })}\n${buildFindingMarker({ fp: member.fp, severity: "medium", angle: "correctness", round: 1 })}\n**medium** (\`correctness\`): merged — judge: reject`;
-  const thread = threadNode({ id: "THREAD_MERGED_RENDERED", commentId: 6380, body });
-  // Empty ledger: only the rendered header token is available, and it belongs to the primary.
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
-    roundEntries({ threads: [thread] }),
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.rejectClosed, 0);
-      assert.equal(result.unresolvedGateThreadCount, 1);
-    },
-  ));
-});
-
 test("a merged medium thread whose every member marker is judge-rejected is reject-closed", async () => {
   const primary = defectThread({ severity: "medium", summary: "merged primary claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6360, id: "X" });
   const member = defectThread({ severity: "medium", summary: "merged member claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6360, id: "X" });

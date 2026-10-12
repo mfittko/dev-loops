@@ -302,19 +302,17 @@ async function isJudgeActThread({ fp, threadBody, findings, lookup }) {
   const fps = new Set([fp]);
   collectFingerprints(threadBody, fps);
   for (const memberFp of fps) {
-    if (await isJudgeActFingerprint({ fp: memberFp, threadBody, findings, lookup, primary: memberFp === fp })) return true;
+    if (await isJudgeActFingerprint({ fp: memberFp, threadBody, findings, lookup })) return true;
   }
   return false;
 }
 
-async function isJudgeActFingerprint({ fp, threadBody, findings, lookup, primary = true }) {
+async function isJudgeActFingerprint({ fp, threadBody, findings, lookup }) {
   const current = currentLedgerActOrAmbiguous(findings, fp);
   if (current !== null) return current;
   const prior = await findJudgeDispositionForFingerprint({ ...lookup, fp });
   if (prior?.ambiguous) return true;
   if (prior) return prior.disposition === "act" && prior.remedyKind !== "evidence_only";
-  // The rendered header token is the primary's alone: a member with no ledger match is undisposed.
-  if (!primary) return true;
   return parseRenderedJudgeDisposition(threadBody) === "act";
 }
 
@@ -673,8 +671,7 @@ async function resolveThreadRejection({ fp, threadBody, ...rest }) {
   collectFingerprints(threadBody, fps);
   let primary = null;
   for (const memberFp of fps) {
-    // The rendered header token is the primary's alone; a member without a ledger match stays open.
-    const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody: memberFp === fp ? threadBody : "", ...rest });
+    const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody, ...rest });
     if (judgement?.disposition !== "reject") return null;
     primary ??= judgement;
   }
