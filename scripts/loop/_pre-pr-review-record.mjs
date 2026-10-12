@@ -63,7 +63,7 @@ export async function validatePrePrReview({ cwd = process.cwd(), head: wanted, b
   let branch = wanted;
   if (!branch) { try { branch = git(cwd, ["symbolic-ref", "--short", "HEAD"]); } catch { /* detached HEAD: compare HEAD only */ } }
   const heads = (branch ? [resolve(branch), resolve(`origin/${branch}`)] : [resolve("HEAD")]).filter(Boolean);
-  if (!heads.length) return missing(`cannot resolve the branch head ${branch ?? "HEAD"} from git`);
+  if (!heads.length) return missing(`cannot resolve the branch head ${branch ?? "HEAD"} from git; run git fetch origin and retry`);
   if (new Set(heads).size > 1) return missing(`local ${branch} and origin/${branch} name different commits, so the PR content is not the reviewed local head`);
   const [head] = heads;
   const direct = parseValid(path.join(recordDir(cwd), `${head}.json`));
