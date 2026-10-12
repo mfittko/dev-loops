@@ -174,6 +174,29 @@ test("delta gate: an act-list --phase full without --delta-result refuses and na
   });
 });
 
+test("push authority: commit_only writes the sequence marker ungranted and the full work order grants the fixer", async () => {
+  await withFixture(async ({ head, root, emit }) => {
+    const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
+    await emit({ deltaResult: undefined, phase: "commit_only" });
+    assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), { baselineHead: head, fullGranted: false, branch: "issue-1" });
+    await assert.rejects(emit({ deltaResult: undefined }), /needs --delta-result/);
+    assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a full emit without a delta result does not grant");
+    await emit({});
+    assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), { baselineHead: head, fullGranted: true, branch: "issue-1" });
+    await emit({ deltaResult: undefined, phase: "commit_only" });
+    assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a new commit_only round revokes the grant");
+  });
+});
+
+test("push authority: a custom --tmp-root still writes the marker under the canonical gate-artifact root", async () => {
+  await withFixture(async ({ head, root, emit }) => {
+    const custom = path.join(path.dirname(root), "custom-tmp");
+    await emit({ deltaResult: undefined, phase: "commit_only", tmpRoot: custom });
+    assert.deepEqual(JSON.parse(await readFile(path.join(root, "tmp", "gate-delta", `${head}.sequence`), "utf8")), { baselineHead: head, fullGranted: false, branch: "issue-1" });
+    assert.equal(existsSync(path.join(custom, "gate-delta", `${head}.sequence`)), false);
+  });
+});
+
 test("delta gate: an act-list --phase full with a push-clearing delta result at the PR head emits the delta-result read", async () => {
   await withFixture(async ({ files, emit }) => {
     const unit = await emit({ deltaResult: files.delta });
@@ -943,7 +966,7 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
     assert.match(query.noSitesReason, /^FILL:/);
     assert.match(await readFile(promptPath, "utf8"), /Start from the `siteCoverage` skeleton/);
     assert.match(await readFile(promptPath, "utf8"), /run the work order's `handbackCheck` command/);
-    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(files.actList)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
+    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(files.actList)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
     const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(threads.workOrder.siteCoverage, undefined);
     const threadsPrompt = await readFile(threads.promptPath, "utf8");
@@ -1002,12 +1025,12 @@ test("a handback made by filling the skeleton passes check-pre-push-delta input 
     const candidate = "b".repeat(40);
     const coverage = path.join(path.dirname(files.actList), "coverage.json");
     await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage }));
-    const seam = { stdout: { write: () => {} }, tmpRoot: path.dirname(files.actList), revParse: (_w, rev) => (rev === "HEAD" ? candidate : rev), isAncestor: () => true };
-    const out = runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--site-coverage", coverage], seam);
+    const seam = { stdout: { write: () => {} }, tmpRoot: path.dirname(files.actList), revParse: (_w, rev) => (rev === "HEAD" ? candidate : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) };
+    const out = runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--handback", "--site-coverage", coverage], seam);
     assert.equal(out.input.siteCoverage.length, 3);
     // The unfilled skeleton is refused.
     await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage: workOrder.siteCoverage }));
-    assert.throws(() => runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--site-coverage", coverage], seam), /expected fixed or skipped/);
+    assert.throws(() => runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--handback", "--site-coverage", coverage], seam), /expected fixed or skipped/);
   });
 });
 

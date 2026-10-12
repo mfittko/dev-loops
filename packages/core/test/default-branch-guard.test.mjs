@@ -14,6 +14,9 @@ import {
   renderGuardHook,
 } from "../src/loop/default-branch-guard.mjs";
 
+// The push-authority script is owned by the dev-loops package, so the install is handed its path.
+const AUTHORITY_CLI = path.resolve(import.meta.dirname, "../../../scripts/loop/check-fix-push-authority.mjs");
+
 // The hooks are shell, and the whole point is that they fire inside real git —
 // asserting on their text would pass while the guard silently never ran. So
 // these drive an actual repository and let git invoke them.
@@ -116,7 +119,7 @@ test(`${GUARD_OVERRIDE_ENV}=0 (or any value other than "1") does NOT disable the
 test(`${GUARD_OVERRIDE_ENV}=1 permits pushing to the default branch too — the release runbook's own prescribed command`, async () => {
   const { dir, gitDir, remote } = await repoFixture({ withRemote: true });
   try {
-    installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: AUTHORITY_CLI });
     fs.writeFileSync(path.join(dir, "release-commit.txt"), "release\n");
     git(dir, ["add", "release-commit.txt"]);
     git(dir, ["commit", "--quiet", "-m", "release commit"], { [GUARD_OVERRIDE_ENV]: "1" });
@@ -511,7 +514,7 @@ test("a hook guards MULTIPLE branches when given an array", async () => {
 test("blocks a push to the default branch via an explicit refspec from another branch", async () => {
   const { dir, gitDir, remote } = await repoFixture({ withRemote: true });
   try {
-    installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: AUTHORITY_CLI });
     git(dir, ["checkout", "--quiet", "-b", "issue-9"]);
     fs.writeFileSync(path.join(dir, "sneaky.txt"), "sneaky\n");
     git(dir, ["add", "sneaky.txt"]);
@@ -535,7 +538,7 @@ test("blocks a push to the default branch via an explicit refspec from another b
 test("allows a push to a non-default remote ref", async () => {
   const { dir, gitDir, remote } = await repoFixture({ withRemote: true });
   try {
-    installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: AUTHORITY_CLI });
     git(dir, ["checkout", "--quiet", "-b", "issue-9"]);
     fs.writeFileSync(path.join(dir, "work.txt"), "work\n");
     git(dir, ["add", "work.txt"]);
@@ -644,5 +647,73 @@ test("install: refuses an absolute gitDir that is not actually a git directory",
     assert.equal(fs.existsSync(path.join(notARepo, "hooks")), false, "must not write a stray hooks/ tree");
   } finally {
     await rm(notARepo, { recursive: true, force: true });
+  }
+});
+
+// PRE-PUSH-DELTA-PUSH-AUTHORITY: a real `git push` through the installed pre-push hook. The hook captures git's
+// stdin, pipes it to the check and propagates its exit; the marker lives under the main worktree's tmp/gate-delta.
+test("pre-push refuses a push under an ungranted sequence marker, allows it once granted, and with the check script missing, ignores an ended or granted sequence marker and refuses under an open one", async () => {
+  const { dir, gitDir, remote } = await repoFixture({ withRemote: true });
+  try {
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: AUTHORITY_CLI });
+    git(dir, ["checkout", "--quiet", "-b", "issue-9"]);
+    const baseline = git(dir, ["rev-parse", "HEAD"]).trim();
+    const markerFile = path.join(dir, "tmp", "gate-delta", `${baseline}.sequence`);
+    fs.mkdirSync(path.dirname(markerFile), { recursive: true });
+    fs.writeFileSync(markerFile, `${JSON.stringify({ baselineHead: baseline, fullGranted: false, branch: "issue-9" })}\n`);
+    fs.writeFileSync(path.join(dir, "fix.txt"), "fix\n");
+    git(dir, ["add", "fix.txt"]);
+    git(dir, ["commit", "--quiet", "-m", "fix"]);
+    let refused = "";
+    try {
+      git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    } catch (err) {
+      refused = String(err.stderr ?? "");
+    }
+    assert.match(refused, /PRE-PUSH-DELTA-PUSH-AUTHORITY/);
+    assert.ok(refused.includes(markerFile), "the refusal names the marker file");
+    fs.writeFileSync(markerFile, `${JSON.stringify({ baselineHead: baseline, fullGranted: true, branch: "issue-9" })}\n`);
+    git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    // A hook whose check script is gone (a pruned cache dir) ignores the marker of an ended sequence (the push above advanced origin/issue-9).
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: "/nonexistent/check-fix-push-authority.mjs" });
+    fs.writeFileSync(path.join(dir, "later.txt"), "later\n");
+    git(dir, ["add", "later.txt"]);
+    git(dir, ["commit", "--quiet", "-m", "later"]);
+    git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    // A granted marker whose branch ref is gone (merged and pruned) is ignored too.
+    fs.writeFileSync(markerFile, `${JSON.stringify({ baselineHead: baseline, fullGranted: true, branch: "issue-pruned" })}\n`);
+    fs.writeFileSync(path.join(dir, "granted.txt"), "granted\n");
+    git(dir, ["add", "granted.txt"]);
+    git(dir, ["commit", "--quiet", "-m", "granted"]);
+    git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    // It refuses under an ungranted marker whose branch ref has not advanced.
+    fs.rmSync(markerFile);
+    const openBaseline = git(dir, ["rev-parse", "HEAD"]).trim();
+    const openMarker = path.join(dir, "tmp", "gate-delta", `${openBaseline}.sequence`);
+    fs.writeFileSync(openMarker, `${JSON.stringify({ baselineHead: openBaseline, fullGranted: false, branch: "issue-open" })}\n`);
+    fs.writeFileSync(path.join(dir, "again.txt"), "again\n");
+    git(dir, ["add", "again.txt"]);
+    git(dir, ["commit", "--quiet", "-m", "again"]);
+    let missing = "";
+    try {
+      git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    } catch (err) {
+      missing = String(err.stderr ?? "");
+    }
+    assert.match(missing, /check script is missing/);
+    // A branchless marker (unreadable or malformed) is open too.
+    fs.writeFileSync(openMarker, `${JSON.stringify({ baselineHead: openBaseline, fullGranted: false })}\n`);
+    let branchless = "";
+    try {
+      git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    } catch (err) {
+      branchless = String(err.stderr ?? "");
+    }
+    assert.match(branchless, /check script is missing/);
+    fs.rmSync(openMarker);
+    git(dir, ["push", "--quiet", "origin", "issue-9"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(remote, { recursive: true, force: true });
   }
 });

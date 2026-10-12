@@ -655,6 +655,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "PRE-PUSH-DELTA-PUSH-AUTHORITY",
+      "enforcement": "runtime"
+    },
+    {
       "id": "PRE-PUSH-DELTA-FRESHNESS",
       "enforcement": "doc"
     },
