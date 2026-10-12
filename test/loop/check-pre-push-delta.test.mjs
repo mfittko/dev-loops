@@ -224,3 +224,49 @@ test("with --result a coverage record for an older head is discarded and the sta
   args[args.indexOf("1")] = "3";
   assert.equal(runCli(args, headAt("ccccccc3333333")).outcome, "bounded_out");
 });
+
+const STALE = { kind: "sentence", needle: "n", file: "test/contracts/style.test.mjs", line: 23, site: "test/contracts/style.test.mjs:23" };
+const withStale = (head) => ({ ...headAt(head), staleSurface: () => [STALE] });
+
+test("input mode lists stale-surface hits and the findings-log round angles", () => {
+  const { dir, actList } = fixture();
+  const log = path.join(dir, "log.json");
+  fs.writeFileSync(log, JSON.stringify({ provenance: { distinctReviewers: 2, perAngle: [{ angle: "determinism" }, { angle: "correctness" }] } }));
+  const out = runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s", "--findings-log", log], withStale(B));
+  assert.deepEqual(out.input.staleSurfaceHits, [STALE]);
+  assert.deepEqual(out.input.surfaceHints, ["correctness", "determinism"]);
+});
+
+test("result mode refuses locally_clear for an unaddressed stale-surface hit on both routes", () => {
+  const { dir, actList, result } = fixture();
+  const act = ["--act-list", actList, "--baseline", A, "--result", result, "--invocation", "1"];
+  assert.equal(runCli(act, withStale(B)).nextStep, "fix_and_rereview");
+  assert.match(runCli(act, withStale(B)).errors.join("\n"), /stale-surface/);
+  // Addressed by a new finding naming the file.
+  const addressed = path.join(dir, "addressed.json");
+  const base = JSON.parse(fs.readFileSync(result, "utf8"));
+  fs.writeFileSync(addressed, JSON.stringify({ ...base, newFindings: [{ severity: "low", summary: "stale pin in test/contracts/style.test.mjs", evidence: ["e"] }] }));
+  assert.equal(runCli(["--act-list", actList, "--baseline", A, "--result", addressed, "--invocation", "1"], withStale(B)).nextStep, "push");
+  // Thread route.
+  const { threadsFile } = threadsFixture();
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [
+    { ref: "T1", angle: "review-thread", summary: "fix a", judgeDisposition: "act", file: "a.mjs", line: 1 },
+    { ref: "T2", angle: "review-thread", summary: "fix b", judgeDisposition: "act" },
+  ] });
+  const threadResult = path.join(dir, "thread-result.json");
+  fs.writeFileSync(threadResult, JSON.stringify({
+    reviewBaselineHead: A, candidateHead: B, actSetId: sequence.actSetId,
+    actionableItems: [{ ref: "T1", status: "resolved", evidence: ["e"] }, { ref: "T2", status: "resolved", evidence: ["e"] }],
+    newFindings: [], widenedReads: [], outcome: "locally_clear",
+  }));
+  const threadArgsResult = threadArgs(threadsFile, "--result", threadResult, "--invocation", "1");
+  assert.equal(runCli(threadArgsResult, headAt(B)).nextStep, "push");
+  assert.equal(runCli(threadArgsResult, withStale(B)).nextStep, "fix_and_rereview");
+});
+
+test("--pr-head fails closed when the PR head differs from the recorded pre-delta head", () => {
+  const { actList } = fixture();
+  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "s"];
+  assert.equal(runCli([...args, "--pr-head", A], headAt(B)).ok, true);
+  assert.throws(() => runCli([...args, "--pr-head", "ddddddd4444444"], headAt(B)), /PRE-PUSH-DELTA-PUSH-AUTHORITY/);
+});

@@ -46,6 +46,16 @@ function isOpenResidue(finding) {
   return nonEmpty(finding?.residueOf) && !nonEmpty(finding?.skipReason);
 }
 
+/**
+ * Stale-surface hits that neither a `newFindings[]` entry (its summary, site or evidence names the
+ * hit file) nor a skipped site in `siteCoverage[]` (its site names the hit file) addresses.
+ */
+export function unaddressedStaleSurfaceHits(hits, { newFindings = [], siteCoverage = [] } = {}) {
+  const findingText = newFindings.map((f) => [f?.summary, f?.site, ...(Array.isArray(f?.evidence) ? f.evidence : [])].join("\n"));
+  const skipped = siteCoverage.flatMap((record) => (record?.sites ?? []).filter((s) => s?.status === "skipped").map((s) => String(s.site)));
+  return (hits ?? []).filter((hit) => !findingText.some((t) => t.includes(hit.file)) && !skipped.some((s) => s.includes(hit.file)));
+}
+
 function nonEmpty(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -171,7 +181,7 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
  * the reviewer reads the recorded skip reasons from it.
  * @param {{ sequence: ReturnType<typeof startDeltaSequence>, candidateHead: string, specIdentity?: string|null, siteCoverage?: object[] }} input
  */
-export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, siteCoverage = [] } = {}) {
+export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, siteCoverage = [], roundAngles = [], staleSurfaceHits = [] } = {}) {
   if (!sequence || !nonEmpty(sequence.reviewBaselineHead)) throw new Error("buildDeltaInput requires a delta sequence");
   if (!nonEmpty(candidateHead)) throw new Error("buildDeltaInput requires candidateHead");
   const head = candidateHead.trim();
@@ -184,7 +194,9 @@ export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, 
     actItems: sequence.actItems.map((item) => ({ ...item })),
     specIdentity: nonEmpty(specIdentity) ? specIdentity.trim() : null,
     siteCoverage,
-    surfaceHints: [...new Set(sequence.actItems.map((item) => item.angle).filter(Boolean))],
+    // The act items' angles plus the reviewed gate round's angles (provenance.perAngle).
+    surfaceHints: [...new Set([...sequence.actItems.map((item) => item.angle), ...roundAngles].filter(Boolean))],
+    staleSurfaceHits,
     checklist: [...DELTA_CHECKLIST],
     // The DeltaPrePushReviewResult template the reviewer fills in; validateDeltaResult checks it.
     resultShape: {
@@ -231,7 +243,7 @@ export function deriveDeltaOutcome(result) {
  * @param {{ sequence: ReturnType<typeof startDeltaSequence>, siteCoverage?: object[], membershipOnly?: boolean }} context
  * @returns {string[]}
  */
-export function validateDeltaResult(result, { sequence, siteCoverage = [], membershipOnly = false } = {}) {
+export function validateDeltaResult(result, { sequence, siteCoverage = [], membershipOnly = false, staleSurfaceHits = [] } = {}) {
   const errors = [];
   if (!result || typeof result !== "object") return ["result must be an object"];
   if (result.reviewBaselineHead !== sequence?.reviewBaselineHead) {
@@ -283,6 +295,9 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], membe
   if (!DELTA_OUTCOMES.includes(result.outcome)) errors.push(`outcome ${JSON.stringify(result.outcome)} is unknown`);
   else if (result.outcome === "locally_clear" && deriveDeltaOutcome(result) !== "locally_clear") {
     errors.push("locally_clear requires every act item resolved and no new finding of severity medium or higher");
+  } else if (result.outcome === "locally_clear" && !membershipOnly) {
+    const open = unaddressedStaleSurfaceHits(staleSurfaceHits, { newFindings: findings ?? [], siteCoverage });
+    if (open.length > 0) errors.push(`PRE-PUSH-DELTA-RESULT: locally_clear leaves stale-surface hits unaddressed (a newFindings[] entry naming the file or a skipped siteCoverage[] site is required): ${open.map((h) => h.site).join(", ")}`);
   }
   return errors;
 }
@@ -306,11 +321,11 @@ export function isDeltaResultFresh(result, currentHead) {
  *   ends bounded_out, which authorizes nothing and claims no success.
  * @param {{ sequence: ReturnType<typeof startDeltaSequence>, result: unknown, invocation: number, currentHead: string, siteCoverage?: object[] }} input
  */
-export function decideDeltaNextStep({ sequence, result, invocation, currentHead, siteCoverage } = {}) {
+export function decideDeltaNextStep({ sequence, result, invocation, currentHead, siteCoverage, staleSurfaceHits } = {}) {
   if (!Number.isInteger(invocation) || invocation < 1 || invocation > DELTA_MAX_INVOCATIONS) {
     throw new Error(`invocation must be an integer in 1..${DELTA_MAX_INVOCATIONS}`);
   }
-  const errors = validateDeltaResult(result, { sequence, siteCoverage });
+  const errors = validateDeltaResult(result, { sequence, siteCoverage, staleSurfaceHits });
   const fresh = isDeltaResultFresh(/** @type {any} */ (result), currentHead);
   const clear = errors.length === 0 && fresh && /** @type {any} */ (result).outcome === "locally_clear";
   if (clear) return { outcome: "locally_clear", nextStep: "push", locallyClear: true, errors, fresh };

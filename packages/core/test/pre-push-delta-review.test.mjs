@@ -357,3 +357,73 @@ describe("pre-push results never become gate evidence", () => {
     assert.deepEqual(imports.sort(), ["./fixer-disposition.mjs", "./gate-fanin.mjs", "node:crypto"]);
   });
 });
+
+import { unaddressedStaleSurfaceHits } from "../src/loop/pre-push-delta-review.mjs";
+import { collectStaleSurfaceHits } from "../src/loop/stale-surface-hits.mjs";
+import { decideFixPushAuthority } from "../src/loop/fix-push-authority.mjs";
+
+test("surfaceHints is the union of the act item angles and the reviewed round angles", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], angle: "contract-surface" }] });
+  const input = buildDeltaInput({ sequence, candidateHead: B, roundAngles: ["correctness", "determinism", "coverage", "contract-surface"] });
+  assert.deepEqual(input.surfaceHints, ["contract-surface", "correctness", "determinism", "coverage"]);
+  assert.deepEqual(buildDeltaInput({ sequence, candidateHead: B }).surfaceHints, ["contract-surface"]);
+  assert.deepEqual(buildDeltaInput({ sequence, candidateHead: B }).staleSurfaceHits, []);
+});
+
+const RULE_DIFF = [
+  "diff --git a/skills/docs/gate-contract.md b/skills/docs/gate-contract.md",
+  "--- a/skills/docs/gate-contract.md",
+  "+++ b/skills/docs/gate-contract.md",
+  "@@ -3,1 +3,0 @@",
+  "-The reviewer MUST keep every verdict body short. Another kept sentence stays here.",
+  "+Another kept sentence stays here.",
+  "diff --git a/packages/x/lib.mjs b/packages/x/lib.mjs",
+  "--- a/packages/x/lib.mjs",
+  "+++ b/packages/x/lib.mjs",
+  "@@ -1,1 +1,1 @@",
+  "-export function oldHelperName(a) {",
+  "+export function newHelperName(a) {",
+].join("\n");
+
+test("collectStaleSurfaceHits reports a removed sentence pinned elsewhere and a renamed identifier still used", () => {
+  const grep = (needle, { word }) => {
+    if (needle === "The reviewer MUST keep every verdict body short.") return [{ file: "test/contracts/style.test.mjs", line: 23 }];
+    if (needle === "oldHelperName" && word) return [{ file: "scripts/use.mjs", line: 4 }];
+    return [];
+  };
+  const hits = collectStaleSurfaceHits({ diffText: RULE_DIFF, grep });
+  assert.deepEqual(hits.map((h) => [h.kind, h.needle, h.site]), [
+    ["sentence", "The reviewer MUST keep every verdict body short.", "test/contracts/style.test.mjs:23"],
+    ["identifier", "oldHelperName", "scripts/use.mjs:4"],
+  ]);
+  // An identifier that survives in its own file is not removed.
+  const survives = (needle) => (needle === "oldHelperName" ? [{ file: "packages/x/lib.mjs", line: 9 }, { file: "scripts/use.mjs", line: 4 }] : []);
+  assert.deepEqual(collectStaleSurfaceHits({ diffText: RULE_DIFF, grep: survives }), []);
+});
+
+test("an unaddressed stale-surface hit refuses locally_clear; a new finding or a recorded skip reason addresses it", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [ACT_LIST[1]] });
+  const hit = { kind: "sentence", needle: "n", file: "test/contracts/style.test.mjs", line: 23, site: "test/contracts/style.test.mjs:23" };
+  const result = { reviewBaselineHead: A, candidateHead: B, actSetId: sequence.actSetId, actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["e"] }], newFindings: [], widenedReads: [], outcome: "locally_clear" };
+  const errors = (r, extra = {}) => validateDeltaResult(r, { sequence, staleSurfaceHits: [hit], ...extra });
+  assert.match(errors(result).join("\n"), /stale-surface/);
+  assert.deepEqual(errors({ ...result, newFindings: [{ severity: "low", summary: "pin stale", evidence: ["test/contracts/style.test.mjs:23 still pins it"] }] }), []);
+  const siteCoverage = [{ fingerprint: "act-1", returnedSites: [], sites: [{ site: "test/contracts/style.test.mjs:23", status: "skipped", reason: "kept" }] }];
+  assert.deepEqual(unaddressedStaleSurfaceHits([hit], { newFindings: [], siteCoverage }), []);
+  // A result without hits input stays valid (backward compatible).
+  assert.deepEqual(validateDeltaResult(result, { sequence }), []);
+});
+
+test("resolved requires no new defect from the remedy: contract names it", () => {
+  assert.match(fs.readFileSync(new URL("../../../skills/docs/pre-pr-review-contract.md", import.meta.url), "utf8"), /applied remedy introduces no new finding of severity medium or higher/);
+});
+
+test("decideFixPushAuthority refuses a fix-branch push by anyone but the fixer while a delta candidate awaits the full phase", () => {
+  const push = "git push origin issue-1";
+  assert.equal(decideFixPushAuthority({ command: push, agentType: "dev-loops:pre-pr-reviewer", sequenceActive: true }).decision, "deny");
+  assert.equal(decideFixPushAuthority({ command: push, agentType: "developer", sequenceActive: true }).decision, "deny");
+  assert.equal(decideFixPushAuthority({ command: push, agentType: "fixer", sequenceActive: true }).decision, "allow");
+  assert.equal(decideFixPushAuthority({ command: push, agentType: "developer", sequenceActive: false }).decision, "allow");
+  assert.equal(decideFixPushAuthority({ command: "git status", agentType: "developer", sequenceActive: true }).decision, "allow");
+  assert.equal(decideFixPushAuthority({ command: push, agentType: null, sequenceActive: true }).decision, "allow");
+});

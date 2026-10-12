@@ -31,6 +31,7 @@ import {
   startDeltaSequence,
   threadsToActList,
 } from "@dev-loops/core/loop/pre-push-delta-review";
+import { collectStaleSurfaceHits } from "@dev-loops/core/loop/stale-surface-hits";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 
@@ -55,6 +56,8 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
   --site-coverage <path>  The fixer's commit_only handback { headSha, siteCoverage: [...] } (the work order's outputRef)
                           Omitting it in --result mode reports a coverage gap for every act item with a siteQuery
+  --findings-log <path>   The reviewed gate round's findings log; its provenance.perAngle angles join the surface hints
+  --pr-head <sha>         The PR head just read from GitHub; refused when it differs from --baseline (the head moved)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
   --invocation <n>        1-based delta review invocation in this sequence (max 3)
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
@@ -97,6 +100,8 @@ export function parseCheckPrePushDeltaArgs(argv) {
         baseline: { type: "string" },
         "spec-identity": { type: "string" },
         "site-coverage": { type: "string" },
+        "findings-log": { type: "string" },
+        "pr-head": { type: "string" },
         result: { type: "string" },
         invocation: { type: "string" },
         worktree: { type: "string" },
@@ -129,6 +134,8 @@ export function parseCheckPrePushDeltaArgs(argv) {
     baseline,
     specIdentity,
     siteCoverage: values["site-coverage"] ?? null,
+    findingsLog: values["findings-log"] ?? null,
+    prHead: values["pr-head"]?.trim().toLowerCase() ?? null,
     result: values.result ?? null,
     invocation,
     worktree: values.worktree ?? process.cwd(),
@@ -155,9 +162,32 @@ function gitIsAncestor(worktree, ancestor, descendant) {
   throw new Error(`git merge-base --is-ancestor failed in ${worktree}: ${out.stderr.trim()}`);
 }
 
+// Tracked-file hits of the sentences and identifiers the delta range removed, grepped at the candidate head.
+// A git failure yields no hits, so the check never blocks a head it cannot read.
+function gitStaleSurfaceHits(worktree, baseline, head) {
+  const git = (...args) => spawnSync("git", ["-C", worktree, ...args], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
+  const diff = git("diff", "-U0", "--no-color", `${baseline}..${head}`);
+  if (diff.status !== 0) return [];
+  const grep = (needle, { word }) => {
+    const out = git("grep", "-n", "-I", "-F", ...(word ? ["-w"] : []), "-e", needle, head);
+    if (out.status !== 0) return [];
+    return out.stdout.split("\n").filter(Boolean).flatMap((row) => {
+      const match = /^[^:]*:(.+?):(\d+):/u.exec(row);
+      return match ? [{ file: match[1], line: Number(match[2]) }] : [];
+    });
+  };
+  return collectStaleSurfaceHits({ diffText: diff.stdout, grep });
+}
+
+function roundAnglesOf(findingsLogPath) {
+  if (!findingsLogPath) return [];
+  const perAngle = JSON.parse(readFileSync(findingsLogPath, "utf8"))?.provenance?.perAngle;
+  return Array.isArray(perAngle) ? perAngle.map((row) => row?.angle).filter((angle) => typeof angle === "string" && angle.length > 0) : [];
+}
+
 export function runCli(
   argv = process.argv.slice(2),
-  { revParse = gitRevParse, isAncestor = gitIsAncestor, stdout = process.stdout, tmpRoot } = {},
+  { revParse = gitRevParse, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, stdout = process.stdout, tmpRoot } = {},
 ) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
@@ -170,6 +200,9 @@ export function runCli(
       ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr })
       : JSON.parse(readFileSync(options.actList, "utf8")),
   });
+  if (options.prHead && !(options.prHead.startsWith(sequence.reviewBaselineHead) || sequence.reviewBaselineHead.startsWith(options.prHead))) {
+    throw new Error(`PRE-PUSH-DELTA-PUSH-AUTHORITY: the PR head ${options.prHead} differs from the recorded pre-delta head ${sequence.reviewBaselineHead}: another actor pushed; stop and refresh the gate round`);
+  }
   const currentHead = revParse(options.worktree, "HEAD");
   // The CLI runs before the push, so the fix is unpushed by construction.
   const fixCommitted = currentHead !== sequence.reviewBaselineHead;
@@ -196,10 +229,11 @@ export function runCli(
     // Result mode discards coverage for an older head; decideDeltaNextStep routes the stale result.
     siteCoverage = record.headSha === currentHead ? record.siteCoverage ?? [] : [];
   }
+  const staleSurfaceHits = staleSurface(options.worktree, sequence.reviewBaselineHead, currentHead);
   let payload;
   if (options.result) {
     const result = JSON.parse(readFileSync(options.result, "utf8"));
-    const decision = decideDeltaNextStep({ sequence, result, invocation: options.invocation, currentHead, siteCoverage });
+    const decision = decideDeltaNextStep({ sequence, result, invocation: options.invocation, currentHead, siteCoverage, staleSurfaceHits });
     // Local evidence for the emitter and the fixed-reply guard; never a gate verdict.
     writeGateDeltaRecord({
       tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),
@@ -207,7 +241,7 @@ export function runCli(
     });
     payload = { ok: true, ...decision };
   } else {
-    payload = { ok: true, input: buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage }) };
+    payload = { ok: true, input: buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, roundAngles: roundAnglesOf(options.findingsLog), staleSurfaceHits }) };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;

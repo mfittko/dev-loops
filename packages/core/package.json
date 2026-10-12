@@ -72,6 +72,8 @@
     "./loop/cache-telemetry-evidence": "./src/loop/cache-telemetry-evidence.mjs",
     "./loop/execution-record": "./src/loop/execution-record.mjs",
     "./loop/pre-push-delta-review": "./src/loop/pre-push-delta-review.mjs",
+    "./loop/stale-surface-hits": "./src/loop/stale-surface-hits.mjs",
+    "./loop/fix-push-authority": "./src/loop/fix-push-authority.mjs",
     "./loop/review-dispatch-plan": "./src/loop/review-dispatch-plan.mjs",
     "./loop/review-operation": "./src/loop/review-operation.mjs",
     "./loop/reviewer-loop-state": "./src/loop/reviewer-loop-state.mjs",

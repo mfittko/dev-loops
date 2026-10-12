@@ -31,6 +31,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { JUDGE_AGENT_TYPE, decideBashGate, FIXER_AGENT_TYPE, isFixerPullAttempt, normalizeAgentType, parseSanctionedPullLine } from "./_hook-decisions.mjs";
+import { decideFixPushAuthority } from "./_fix-push-authority.mjs";
 import { listCheckouts, parseFixerPullCommand, recordFixerAgentBinding } from "./_fixer-grants.mjs";
 import {
   commandContainsGhPrReady,
@@ -119,6 +120,23 @@ const isWaitTool = typeof command === "string" && commandContainsDetachedWaitToo
 const isVerifyEntrypoint = typeof command === "string" && commandContainsCodeVerificationEntrypoint(command);
 // The read-only judge may run only its work-order pull and check-judge-decision (ADR 0106); every judge command reaches the decider.
 const isJudge = normalizeAgentType(agentType) === JUDGE_AGENT_TYPE;
+// PRE-PUSH-DELTA-PUSH-AUTHORITY: a subagent other than the fixer may not push a delta candidate that
+// awaits the full phase. The candidate is the worktree HEAD named by a clearing gate-delta record.
+if (decideFixPushAuthority({ command, agentType, sequenceActive: true }).decision === "deny") {
+  let awaiting = false;
+  try {
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
+    const dir = path.join(listCheckouts(cwd)[0].root, "tmp", "gate-delta");
+    awaiting = fs.readdirSync(dir).filter((n) => n.endsWith(".json")).some((n) => {
+      const record = JSON.parse(fs.readFileSync(path.join(dir, n), "utf8"));
+      return record.candidateHead === head && ["push", "push_to_gate"].includes(record.nextStep);
+    });
+  } catch {
+    // No git, no checkout or no delta record: no sequence awaits the full phase.
+  }
+  const push = decideFixPushAuthority({ command, agentType, sequenceActive: awaiting });
+  if (push.decision === "deny") emitDeny(push.reason);
+}
 // A fixer pull attempt reaches the decider, which denies any line other than the exact one.
 const isFixerPull = isFixer && isFixerPullAttempt(command);
 if (
