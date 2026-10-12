@@ -28,10 +28,12 @@ import {
   buildDeltaInput,
   decideDeltaNextStep,
   resolveDeltaTrigger,
+  staleSurfaceTruncatedHit,
   startDeltaSequence,
   threadsToActList,
 } from "@dev-loops/core/loop/pre-push-delta-review";
-import { collectStaleSurfaceHits } from "@dev-loops/core/loop/stale-surface-hits";
+import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { collectStaleSurface } from "@dev-loops/core/loop/stale-surface-hits";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 
@@ -57,7 +59,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --site-coverage <path>  The fixer's commit_only handback { headSha, siteCoverage: [...] } (the work order's outputRef)
                           Omitting it in --result mode reports a coverage gap for every act item with a siteQuery
   --findings-log <path>   The reviewed gate round's findings log; its provenance.perAngle angles join the surface hints
-  --pr-head <sha>         The PR head just read from GitHub; refused when it differs from --baseline (the head moved)
+  --pr-head <sha>         The full PR head SHA just read from GitHub; refused when it differs from --baseline (the head moved)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
   --invocation <n>        1-based delta review invocation in this sequence (max 3)
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
@@ -125,6 +127,8 @@ export function parseCheckPrePushDeltaArgs(argv) {
   if (values.result && invocation === null) throw parseError("--result requires --invocation <1-3>");
   const specIdentity = values["spec-identity"]?.trim() || null;
   if (!values.result && !specIdentity) throw parseError("--spec-identity <id> is required without --result");
+  const prHead = values["pr-head"]?.trim().toLowerCase() ?? null;
+  if (prHead !== null && !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(prHead)) throw parseError("--pr-head must be a full 40- or 64-character commit SHA");
   return {
     help: false,
     actList: values["act-list"] ?? null,
@@ -135,7 +139,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
     specIdentity,
     siteCoverage: values["site-coverage"] ?? null,
     findingsLog: values["findings-log"] ?? null,
-    prHead: values["pr-head"]?.trim().toLowerCase() ?? null,
+    prHead,
     result: values.result ?? null,
     invocation,
     worktree: values.worktree ?? process.cwd(),
@@ -163,20 +167,23 @@ function gitIsAncestor(worktree, ancestor, descendant) {
 }
 
 // Tracked-file hits of the sentences and identifiers the delta range removed, grepped at the candidate head.
-// A git failure yields no hits, so the check never blocks a head it cannot read.
+// A git failure throws (fail closed). When either commit object does not exist locally (the tests'
+// placeholder SHAs), there is no range to read and the check reports no hits.
 function gitStaleSurfaceHits(worktree, baseline, head) {
   const git = (...args) => spawnSync("git", ["-C", worktree, ...args], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
+  if ([baseline, head].some((rev) => git("cat-file", "-e", `${rev}^{commit}`).status !== 0)) return { hits: [], truncated: false };
   const diff = git("diff", "-U0", "--no-color", `${baseline}..${head}`);
-  if (diff.status !== 0) return [];
+  if (diff.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${diff.stderr.trim()}; the stale-surface check cannot read the delta range`);
   const grep = (needle, { word }) => {
     const out = git("grep", "-n", "-I", "-F", ...(word ? ["-w"] : []), "-e", needle, head);
-    if (out.status !== 0) return [];
+    if (out.status === 1) return [];
+    if (out.status !== 0) throw new Error(`git grep failed in ${worktree} (exit ${out.status}): ${out.stderr.trim()}`);
     return out.stdout.split("\n").filter(Boolean).flatMap((row) => {
       const match = /^[^:]*:(.+?):(\d+):/u.exec(row);
       return match ? [{ file: match[1], line: Number(match[2]) }] : [];
     });
   };
-  return collectStaleSurfaceHits({ diffText: diff.stdout, grep });
+  return collectStaleSurface({ diffText: diff.stdout, grep });
 }
 
 function roundAnglesOf(findingsLogPath) {
@@ -200,7 +207,7 @@ export function runCli(
       ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr })
       : JSON.parse(readFileSync(options.actList, "utf8")),
   });
-  if (options.prHead && !(options.prHead.startsWith(sequence.reviewBaselineHead) || sequence.reviewBaselineHead.startsWith(options.prHead))) {
+  if (options.prHead && options.prHead !== sequence.reviewBaselineHead) {
     throw new Error(`PRE-PUSH-DELTA-PUSH-AUTHORITY: the PR head ${options.prHead} differs from the recorded pre-delta head ${sequence.reviewBaselineHead}: another actor pushed; stop and refresh the gate round`);
   }
   const currentHead = revParse(options.worktree, "HEAD");
@@ -229,11 +236,18 @@ export function runCli(
     // Result mode discards coverage for an older head; decideDeltaNextStep routes the stale result.
     siteCoverage = record.headSha === currentHead ? record.siteCoverage ?? [] : [];
   }
-  const staleSurfaceHits = staleSurface(options.worktree, sequence.reviewBaselineHead, currentHead);
+  // A custom `staleSurface` may return the hits array alone.
+  const stale = staleSurface(options.worktree, sequence.reviewBaselineHead, currentHead);
+  const staleSurfaceHits = Array.isArray(stale) ? stale : stale.hits;
+  const staleSurfaceTruncated = Array.isArray(stale) ? false : stale.truncated === true;
   let payload;
   if (options.result) {
     const result = JSON.parse(readFileSync(options.result, "utf8"));
-    const decision = decideDeltaNextStep({ sequence, result, invocation: options.invocation, currentHead, siteCoverage, staleSurfaceHits });
+    // A truncated hit list blocks locally_clear until a finding or a skipped site names the gap.
+    const decision = decideDeltaNextStep({
+      sequence, result, invocation: options.invocation, currentHead, siteCoverage,
+      staleSurfaceHits: staleSurfaceTruncated ? [...staleSurfaceHits, staleSurfaceTruncatedHit()] : staleSurfaceHits,
+    });
     // Local evidence for the emitter and the fixed-reply guard; never a gate verdict.
     writeGateDeltaRecord({
       tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),
@@ -241,7 +255,9 @@ export function runCli(
     });
     payload = { ok: true, ...decision };
   } else {
-    payload = { ok: true, input: buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, roundAngles: roundAnglesOf(options.findingsLog), staleSurfaceHits }) };
+    // PRE-PUSH-DELTA-PUSH-AUTHORITY: mark the sequence active for the push guard (never downgrades a granted marker).
+    writeSequenceMarker({ tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), baselineHead: sequence.reviewBaselineHead });
+    payload = { ok: true, input: buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, roundAngles: roundAnglesOf(options.findingsLog), staleSurfaceHits, staleSurfaceTruncated }) };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;

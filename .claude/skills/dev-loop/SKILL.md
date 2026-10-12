@@ -231,7 +231,7 @@ After the fixer commits the act-list fix and before it pushes, the dev-loop coor
 delta-mode pre-push review (`PRE-PUSH-DELTA-TRIGGER` in the
 [Pre-push review contract](../docs/pre-pr-review-contract.md#delta-mode)), which owns the
 baseline, input, result, three-review bound and freshness rules. `dev-loops-run cli/index.mjs loop pre-push-delta`
-builds the reviewer input and checks each result against the current worktree head.
+builds the reviewer input and checks each result against the current worktree head. Pass `--findings-log <the reviewed round's findings log>` and `--pr-head <the full PR head SHA just read from GitHub>` on both runs, and brief the delta reviewer that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`).
 
 Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md) and Phase 3 of [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) for the full refusal conditions.
 

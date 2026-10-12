@@ -47,12 +47,19 @@ function isOpenResidue(finding) {
 }
 
 /**
+ * The synthetic hit that result mode adds when the stale-surface list was truncated. A
+ * `newFindings[]` entry or a skipped `siteCoverage[]` site (with a reason) naming this token addresses it.
+ */
+export const STALE_SURFACE_TRUNCATED_SITE = "stale-surface-hits-truncated";
+export const staleSurfaceTruncatedHit = () => ({ kind: "truncated", needle: STALE_SURFACE_TRUNCATED_SITE, file: STALE_SURFACE_TRUNCATED_SITE, line: 0, site: STALE_SURFACE_TRUNCATED_SITE });
+
+/**
  * Stale-surface hits that neither a `newFindings[]` entry (its summary, site or evidence names the
  * hit file) nor a skipped site in `siteCoverage[]` (its site names the hit file) addresses.
  */
 export function unaddressedStaleSurfaceHits(hits, { newFindings = [], siteCoverage = [] } = {}) {
   const findingText = newFindings.map((f) => [f?.summary, f?.site, ...(Array.isArray(f?.evidence) ? f.evidence : [])].join("\n"));
-  const skipped = siteCoverage.flatMap((record) => (record?.sites ?? []).filter((s) => s?.status === "skipped").map((s) => String(s.site)));
+  const skipped = siteCoverage.flatMap((record) => (record?.sites ?? []).filter((s) => s?.status === "skipped" && nonEmpty(s.reason)).map((s) => String(s.site)));
   return (hits ?? []).filter((hit) => !findingText.some((t) => t.includes(hit.file)) && !skipped.some((s) => s.includes(hit.file)));
 }
 
@@ -181,7 +188,7 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
  * the reviewer reads the recorded skip reasons from it.
  * @param {{ sequence: ReturnType<typeof startDeltaSequence>, candidateHead: string, specIdentity?: string|null, siteCoverage?: object[] }} input
  */
-export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, siteCoverage = [], roundAngles = [], staleSurfaceHits = [] } = {}) {
+export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, siteCoverage = [], roundAngles = [], staleSurfaceHits = [], staleSurfaceTruncated = false } = {}) {
   if (!sequence || !nonEmpty(sequence.reviewBaselineHead)) throw new Error("buildDeltaInput requires a delta sequence");
   if (!nonEmpty(candidateHead)) throw new Error("buildDeltaInput requires candidateHead");
   const head = candidateHead.trim();
@@ -197,6 +204,8 @@ export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, 
     // The act items' angles plus the reviewed gate round's angles (provenance.perAngle).
     surfaceHints: [...new Set([...sequence.actItems.map((item) => item.angle), ...roundAngles].filter(Boolean))],
     staleSurfaceHits,
+    // Additive: present only when a cap dropped hits; the reviewer must then address the gap (STALE_SURFACE_TRUNCATED_SITE).
+    ...(staleSurfaceTruncated ? { staleSurfaceTruncated: true } : {}),
     checklist: [...DELTA_CHECKLIST],
     // The DeltaPrePushReviewResult template the reviewer fills in; validateDeltaResult checks it.
     resultShape: {

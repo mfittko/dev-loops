@@ -422,8 +422,91 @@ test("decideFixPushAuthority refuses a fix-branch push by anyone but the fixer w
   const push = "git push origin issue-1";
   assert.equal(decideFixPushAuthority({ command: push, agentType: "dev-loops:pre-pr-reviewer", sequenceActive: true }).decision, "deny");
   assert.equal(decideFixPushAuthority({ command: push, agentType: "developer", sequenceActive: true }).decision, "deny");
-  assert.equal(decideFixPushAuthority({ command: push, agentType: "fixer", sequenceActive: true }).decision, "allow");
+  assert.equal(decideFixPushAuthority({ command: push, agentType: "fixer", sequenceActive: true, fullGranted: true }).decision, "allow");
   assert.equal(decideFixPushAuthority({ command: push, agentType: "developer", sequenceActive: false }).decision, "allow");
   assert.equal(decideFixPushAuthority({ command: "git status", agentType: "developer", sequenceActive: true }).decision, "allow");
   assert.equal(decideFixPushAuthority({ command: push, agentType: null, sequenceActive: true }).decision, "allow");
+});
+
+import os from "node:os";
+import path from "node:path";
+import { collectStaleSurface } from "../src/loop/stale-surface-hits.mjs";
+import { findActiveSequence, readSequenceMarker, sequenceMarkerPath, writeSequenceMarker } from "../src/loop/fix-push-authority.mjs";
+
+const hunk = (file, body, { del = false } = {}) => [
+  `diff --git a/${file} b/${file}`,
+  `--- a/${file}`,
+  `+++ ${del ? "/dev/null" : `b/${file}`}`,
+  "@@ -1,2 +1,0 @@",
+  ...body,
+].join("\n");
+
+test("parseDiff attributes a deleted file to its old path and keeps a removed `-- item` line", () => {
+  const asked = [];
+  const grep = (needle) => { asked.push(needle); return [{ file: "test/pins.test.mjs", line: 3 }]; };
+  const deleted = hunk("skills/docs/old.md", ["-The retired contract sentence stays pinned elsewhere."], { del: true });
+  assert.deepEqual(collectStaleSurfaceHits({ diffText: deleted, grep }).map((h) => h.needle), ["The retired contract sentence stays pinned elsewhere."]);
+  asked.length = 0;
+  const dashed = hunk("skills/docs/list.md", ["--- item one of the removed markdown list is long enough."]);
+  collectStaleSurfaceHits({ diffText: dashed, grep });
+  assert.deepEqual(asked, ["-- item one of the removed markdown list is long enough."]);
+});
+
+test("identifiers need a declaration shape, ignore comments and strings, skip common names and honor moves across files", () => {
+  const code = (lines) => hunk("packages/x/lib.mjs", lines.map((l) => `-${l}`));
+  const grepAt = (n) => () => Array.from({ length: n }, (_, i) => ({ file: `f${i}.mjs`, line: 1 }));
+  const needles = (diffText, n = 1) => collectStaleSurfaceHits({ diffText, grep: grepAt(n) }).map((h) => h.needle);
+  assert.deepEqual(needles(code(["export function oldHelper(a) {"])), ["oldHelper"]);
+  // A call, a comment and a string mention are no declaration.
+  assert.deepEqual(needles(code(["  callSomething(plainCallee);", "  // oldCommented removed", '  const msg = "mentionsQuoted";'])), ["callSomething"].filter(() => false));
+  assert.deepEqual(needles(code(["export function tooCommonName(a) {"]), 6), []);
+  assert.equal(collectStaleSurface({ diffText: code(["export function tooCommonName(a) {"]), grep: grepAt(6) }).truncated, true);
+  const moved = [code(["export function movedHelper(a) {"]), hunk("packages/x/other.mjs", ["+export function movedHelper(a) {"]).replace("@@ -1,2 +1,0 @@", "@@ -0,0 +1 @@")].join("\n");
+  assert.deepEqual(needles(moved), []);
+});
+
+test("collectStaleSurface flags truncation and lists test and doc hits before source hits", () => {
+  const many = Array.from({ length: 25 }, (_, i) => ({ file: i === 24 ? "test/pin.test.mjs" : `src/f${i}.mjs`, line: i + 1 }));
+  const out = collectStaleSurface({ diffText: hunk("skills/docs/a.md", ["-The removed sentence is long enough to count here."]), grep: () => many });
+  assert.equal(out.truncated, true);
+  assert.equal(out.hits.length, 20);
+  assert.equal(out.hits[0].file, "test/pin.test.mjs");
+  assert.equal(collectStaleSurface({ diffText: hunk("skills/docs/a.md", ["-The removed sentence is long enough to count here."]), grep: () => many.slice(0, 2) }).truncated, false);
+});
+
+test("a skipped site addresses a stale-surface hit only with a non-empty reason", () => {
+  const hit = { kind: "sentence", needle: "n", file: "a/b.mjs", line: 1, site: "a/b.mjs:1" };
+  const coverage = (reason) => [{ fingerprint: "f", returnedSites: [], sites: [{ site: "a/b.mjs:1", status: "skipped", ...(reason === undefined ? {} : { reason }) }] }];
+  assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage("kept") }).length, 0);
+  assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage("  ") }).length, 1);
+  assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage() }).length, 1);
+});
+
+test("decideFixPushAuthority widens push detection, binds the commit_only fixer and skips echo strings", () => {
+  const deny = (command, agentType = "developer", extra = {}) => decideFixPushAuthority({ command, agentType, sequenceActive: true, ...extra }).decision;
+  for (const command of ["git -c x=y push", "git --no-pager push origin b", "git -C x push", "cd r && git push", "FOO=1 git push", "bash -c 'git push'", "env git push"]) {
+    assert.equal(deny(command), "deny", command);
+  }
+  for (const command of ['echo "git push"', "git pushd", "git status", "grep 'git push' f"]) assert.equal(deny(command), "allow", command);
+  assert.equal(deny("git push", "fixer"), "deny", "the commit_only fixer does not push");
+  assert.equal(deny("git push", "dev-loops:fixer", { fullGranted: true }), "allow");
+  assert.equal(deny("git push", "developer", { fullGranted: true }), "deny");
+  assert.equal(deny("git push", ""), "allow");
+});
+
+test("the sequence marker is written once, never downgraded, read fail-closed and active only until pushed", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "seq-marker-"));
+  assert.equal(readSequenceMarker(tmpRoot, "a1"), null);
+  writeSequenceMarker({ tmpRoot, baselineHead: "a1" });
+  assert.deepEqual(readSequenceMarker(tmpRoot, "a1"), { baselineHead: "a1", fullGranted: false });
+  writeSequenceMarker({ tmpRoot, baselineHead: "a1", fullGranted: true });
+  writeSequenceMarker({ tmpRoot, baselineHead: "a1" });
+  assert.equal(readSequenceMarker(tmpRoot, "a1").fullGranted, true);
+  fs.writeFileSync(sequenceMarkerPath(tmpRoot, "bad"), "{not json");
+  assert.deepEqual(readSequenceMarker(tmpRoot, "bad"), { baselineHead: "bad", fullGranted: false });
+  const find = (head, extra = {}) => findActiveSequence({ tmpRoot, head, listBaselines: () => ["a1"], isAncestor: () => true, onRemote: () => false, ...extra });
+  assert.equal(find("a1")?.baselineHead, "a1");
+  assert.equal(find("c3")?.baselineHead, "a1", "an unpushed descendant of the baseline");
+  assert.equal(find("c3", { onRemote: () => true }), null, "the head moved to a pushed commit");
+  assert.equal(find("c3", { isAncestor: () => false }), null);
 });

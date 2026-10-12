@@ -158,6 +158,18 @@ test("delta gate: an act-list --phase full without --delta-result refuses and na
   });
 });
 
+test("push authority: commit_only writes the sequence marker ungranted and the full work order grants the fixer", async () => {
+  await withFixture(async ({ head, root, emit }) => {
+    const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
+    await emit({ deltaResult: undefined, phase: "commit_only" });
+    assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), { baselineHead: head, fullGranted: false });
+    await emit({});
+    assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), { baselineHead: head, fullGranted: true });
+    await emit({ deltaResult: undefined, phase: "commit_only" });
+    assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, true, "a later commit_only emission does not revoke the grant");
+  });
+});
+
 test("delta gate: an act-list --phase full with a push-clearing delta result at the PR head emits the delta-result read", async () => {
   await withFixture(async ({ files, emit }) => {
     const unit = await emit({ deltaResult: files.delta });

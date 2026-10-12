@@ -269,7 +269,7 @@ test("the gate fix pass and the fixer cross-reference delta mode between the fix
 
 test("delta mode states the decision record, the full-phase refusal and the fixed-reply refusal", () => {
   const doc = readRepo(CONTRACT).replace(/\s+/g, " ");
-  for (const text of ["<tmp-root>/gate-delta/<reviewBaselineHead>.json", "The run without `--result` writes nothing", "refuses `--phase full`", "`--phase commit_only` first", "A fixed reply", "`not_resolved` or `cannot_verify`", "`threadId` or by the fingerprint"]) {
+  for (const text of ["<tmp-root>/gate-delta/<reviewBaselineHead>.json", "The run without `--result` writes no decision record", "refuses `--phase full`", "`--phase commit_only` first", "A fixed reply", "`not_resolved` or `cannot_verify`", "`threadId` or by the fingerprint"]) {
     assert.ok(doc.includes(text), `contract must state: ${text}`);
   }
   assert.doesNotMatch(readRepo("scripts/loop/check-pre-push-delta.mjs"), /Read-only:/, "the --result run is no longer read-only");

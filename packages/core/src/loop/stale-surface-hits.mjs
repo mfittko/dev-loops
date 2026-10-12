@@ -12,55 +12,105 @@ const MIN_SENTENCE = 20;
 const MIN_IDENTIFIER = 6;
 const MAX_HITS_PER_NEEDLE = 20;
 const MAX_HITS = 100;
+// An identifier found in more files than this is too common to be a specific stale reference.
+const MAX_FILES_PER_IDENTIFIER = 5;
 
 const isMarkdown = (file) => /\.md$/i.test(file);
 const isTestFile = (file) => /(^|\/)test\/|\.(test|spec)\.[cm]?[jt]sx?$/.test(file);
+// Tests and docs come first so the caps drop source hits before the hits that pin old text.
+const priority = (file) => (isTestFile(file) ? 0 : isMarkdown(file) ? 1 : 2);
 
-/** Per file: the removed and added line texts of a unified diff. */
+/**
+ * Per file: the removed and added line texts of a unified diff. Hunk state is tracked so a removed
+ * line that starts with `--` is content, and a deleted file (`+++ /dev/null`) keeps its old path.
+ */
 function parseDiff(diffText) {
   const files = [];
   let current = null;
+  let oldPath = null;
+  let inHunk = false;
   for (const line of String(diffText).split("\n")) {
-    const header = /^\+\+\+ b\/(.+)$/.exec(line);
-    if (header) { current = { file: header[1], removed: [], added: [] }; files.push(current); continue; }
-    if (!current || line.startsWith("---") || line.startsWith("@@")) continue;
+    if (line.startsWith("diff --git ")) { inHunk = false; current = null; oldPath = null; continue; }
+    if (!inHunk) {
+      const from = /^--- (?:a\/(.+)|\/dev\/null)$/.exec(line);
+      if (from) { oldPath = from[1] ?? null; continue; }
+      const to = /^\+\+\+ (?:b\/(.+)|\/dev\/null)$/.exec(line);
+      if (to) {
+        const file = to[1] ?? oldPath;
+        if (file) { current = { file, removed: [], added: [] }; files.push(current); }
+        continue;
+      }
+      if (line.startsWith("@@")) inHunk = true;
+      continue;
+    }
+    if (line.startsWith("@@")) continue;
+    if (!current) continue;
     if (line.startsWith("-")) current.removed.push(line.slice(1));
     else if (line.startsWith("+")) current.added.push(line.slice(1));
   }
   return files;
 }
 
-function sentencesOf(file, removed, added) {
-  const addedText = added.join(" ");
+// Code with string literals and comments removed, so only identifiers remain.
+function codeOnly(line) {
+  if (/^\s*(\*|\/\*|\/\/|#)/u.test(line)) return "";
+  return line.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/gu, '""').replace(/\/\*.*?\*\//gu, "").replace(/\/\/.*$/u, "");
+}
+
+const wordsOf = (lines) => new Set(lines.join("\n").match(/[A-Za-z_$][\w$]*/gu) ?? []);
+const escapeRe = (s) => s.replace(/[$]/gu, "\\$");
+
+// A removed identifier counts when a removed line declares it (function, class, binding, method or property).
+function isDeclaredIn(name, codeLines) {
+  const n = escapeRe(name);
+  const declaration = new RegExp(`\\b(?:function\\*?|class|const|let|var|def|fn|func|type|interface|enum|struct)\\s+${n}(?![\\w$])|(?:^|[\\s,{])(?:async\\s+)?${n}\\s*(?:[:=](?!=)|\\([^)]*\\)\\s*\\{)`, "u");
+  return codeLines.some((line) => declaration.test(line));
+}
+
+function sentencesOf(file, removed, addedAll) {
   const candidates = isMarkdown(file)
     ? removed.join(" ").split(/(?<=[.!?])\s+/u)
     : removed.flatMap((line) => [...line.matchAll(/"([^"]+)"|'([^']+)'|`([^`]+)`/gu)].map((m) => m[1] ?? m[2] ?? m[3]));
-  return candidates.map((s) => s.trim()).filter((s) => s.length >= MIN_SENTENCE && !addedText.includes(s));
+  return candidates.map((s) => s.trim()).filter((s) => s.length >= MIN_SENTENCE && !addedAll.includes(s));
 }
 
-function identifiersOf(removed, added) {
-  const words = (lines) => new Set(lines.join("\n").match(/[A-Za-z_$][\w$]*/gu) ?? []);
-  const kept = words(added);
-  return [...words(removed)].filter((w) => w.length >= MIN_IDENTIFIER && !kept.has(w));
+function identifiersOf(removed, addedWordsAll) {
+  const code = removed.map(codeOnly);
+  return [...wordsOf(code)].filter((w) => w.length >= MIN_IDENTIFIER && !addedWordsAll.has(w) && isDeclaredIn(w, code));
 }
 
 /**
  * @param {{ diffText: string, grep: (needle: string, options: { word: boolean }) => Array<{ file: string, line: number }> }} input
  *   grep lists tracked-file hits of a fixed string at the candidate head.
- * @returns {Array<{ kind: "sentence"|"identifier", needle: string, file: string, line: number, site: string }>}
+ * @returns {{ hits: Array<{ kind: "sentence"|"identifier", needle: string, file: string, line: number, site: string }>, truncated: boolean }}
+ *   truncated is true when a cap dropped hits.
  */
-export function collectStaleSurfaceHits({ diffText, grep }) {
+export function collectStaleSurface({ diffText, grep }) {
+  const files = parseDiff(diffText);
+  // "Still added" is diff-wide: text moved to another file is not removed.
+  const addedLines = files.flatMap((f) => f.added);
+  const addedAll = addedLines.join("\n");
+  const addedWordsAll = wordsOf(addedLines.map(codeOnly));
   const hits = [];
-  for (const { file: source, removed, added } of parseDiff(diffText)) {
+  let truncated = false;
+  for (const { file: source, removed } of files) {
     const items = [];
-    if (isMarkdown(source) || isTestFile(source)) items.push(...sentencesOf(source, removed, added).map((needle) => ({ kind: "sentence", needle })));
-    if (!isMarkdown(source)) items.push(...identifiersOf(removed, added).map((needle) => ({ kind: "identifier", needle })));
+    if (isMarkdown(source) || isTestFile(source)) items.push(...sentencesOf(source, removed, addedAll).map((needle) => ({ kind: "sentence", needle })));
+    if (!isMarkdown(source)) items.push(...identifiersOf(removed, addedWordsAll).map((needle) => ({ kind: "identifier", needle })));
     for (const { kind, needle } of items) {
       const found = grep(needle, { word: kind === "identifier" });
       // An identifier that still occurs in the file that dropped it was not removed.
       if (kind === "identifier" && found.some((h) => h.file === source)) continue;
-      for (const { file, line } of found.slice(0, MAX_HITS_PER_NEEDLE)) hits.push({ kind, needle, file, line, site: `${file}:${line}` });
+      if (kind === "identifier" && new Set(found.map((h) => h.file)).size > MAX_FILES_PER_IDENTIFIER) { truncated = true; continue; }
+      const ordered = [...found].sort((a, b) => priority(a.file) - priority(b.file));
+      if (ordered.length > MAX_HITS_PER_NEEDLE) truncated = true;
+      for (const { file, line } of ordered.slice(0, MAX_HITS_PER_NEEDLE)) hits.push({ kind, needle, file, line, site: `${file}:${line}` });
     }
   }
-  return hits.slice(0, MAX_HITS);
+  if (hits.length > MAX_HITS) truncated = true;
+  const kept = hits.map((hit, index) => ({ hit, index })).sort((a, b) => priority(a.hit.file) - priority(b.hit.file) || a.index - b.index).slice(0, MAX_HITS);
+  return { hits: kept.sort((a, b) => a.index - b.index).map((k) => k.hit), truncated };
 }
+
+/** The hits only; use `collectStaleSurface` to learn whether a cap dropped some. */
+export const collectStaleSurfaceHits = (input) => collectStaleSurface(input).hits;
