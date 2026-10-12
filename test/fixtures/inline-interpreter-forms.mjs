@@ -79,6 +79,7 @@ export const DENIED_INLINE_INTERPRETER_FORMS = [
   "cat > tmp/a <<'A' && cat > src/b.mjs <<'B'",
   "cat > tmp/x <<'A'; cat > packages/core/src/a.mjs <<'B'",
   "python3 tool.py && perl -pi -e 's/a/b/' src/a.mjs",
+  "echo it\\'s; node -e 'x'",
 ];
 
 /** Forms the matcher allows, including quoted literals that only name an interpreter. */

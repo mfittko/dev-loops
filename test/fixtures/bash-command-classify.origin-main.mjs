@@ -1,0 +1,1210 @@
+/**
+ * Pure classification of shell command strings for the dev-loop gate boundary.
+ *
+ * Shared by the Pi extension (`extension/post-merge-update.ts`, which re-exports these so its
+ * behavior is unchanged) and the Claude Code PreToolUse Bash hook. Keeping one source of truth
+ * means the `gh pr ready` / merge detection is identical across harnesses.
+ *
+ * Pure and side-effect free.
+ */
+
+/**
+ * The dev-loops repo itself. Retained ONLY for the Pi extension's
+ * (`extension/post-merge-update.ts`) dev-loops-repo SELF-UPDATE scoping (`markPendingUpdate` /
+ * `queueIfEligible`), which is legitimately anchored to this one repo, not to whatever repo the
+ * harness happens to run in. Both harness guard suites — the Claude PreToolUse Bash gate
+ * (`decideBashGate` in `hook-decisions.mjs`) and the Pi extension's `gh pr ready`/`gh pr merge`
+ * guards (`post-merge-update.ts`) — now resolve the managed repo dynamically via
+ * `deriveInManagedRepo` below instead of comparing against this hardcoded slug, so every guard
+ * also applies in a dev-loops-managed consumer repo.
+ */
+export const TARGET_REPO_SLUG = "mfittko/dev-loops";
+
+/** `.devloops` config file extensions checked (in order) to decide whether a repo root is
+ * dev-loops-managed. Shared by every harness that resolves `inManagedContext` from the
+ * filesystem (`fs.existsSync(path.join(repoRoot, \`.devloops${ext}\`))`). */
+export const DEVLOOPS_CONFIG_VARIANTS = ["", ".yaml", ".yml", ".json"];
+
+/**
+ * Whether the current repo counts as "managed" for guard-gating purposes: inside a
+ * dev-loops-managed context (a `.devloops` config exists at its root) AND, when the managed
+ * repo's identity resolves, the cwd repo IS that managed repo. FAIL CLOSED: inside a managed
+ * context whose identity can't be resolved (`managedRepoSlug` null), the guard suite still
+ * applies rather than silently allowing everything.
+ * @param {Object} [params]
+ * @param {boolean} [params.inManagedContext] - Whether a `.devloops` config exists at the repo root.
+ * @param {string|null} [params.managedRepoSlug] - Resolved owner/name of the managed repo, or null.
+ * @param {string|null} [params.repoSlug] - Resolved owner/name of the cwd repo, or null.
+ * @returns {boolean}
+ */
+export function deriveInManagedRepo({ inManagedContext = false, managedRepoSlug = null, repoSlug = null } = {}) {
+  const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
+  const cwdSlug = (repoSlug ?? "").trim().toLowerCase() || null;
+  return Boolean(inManagedContext) && (managedSlug === null || cwdSlug === managedSlug);
+}
+
+/**
+ * Whether an explicit `--repo`/`-R` (or `GH_REPO=`) target is PROVABLY a different repo than the
+ * managed one — both slugs must resolve and differ. An unresolvable managed slug never proves
+ * foreign-ness (fail closed: the guard stays active rather than waving an explicit flag through).
+ * @param {string|null} explicitRepo
+ * @param {string|null} managedRepoSlug
+ * @returns {boolean}
+ */
+export function explicitRepoProvenForeign(explicitRepo, managedRepoSlug) {
+  const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
+  const explicit = (explicitRepo ?? "").trim().toLowerCase() || null;
+  if (managedSlug === null || explicit === null) {
+    return false;
+  }
+  // Both sides must be clean owner/name identities before we can prove foreign: a
+  // managed slug that bypassed the normalizer (e.g. a hostile `acme/widgets;id` test
+  // double) can't be trusted to prove anything about the explicit `--repo` — fail
+  // closed (the managed-repo guard still applies) rather than wave it through.
+  if (!isCleanRepoSlug(managedSlug) || !isCleanRepoSlug(explicit)) {
+    return false;
+  }
+  return explicit !== managedSlug;
+}
+
+/** Flags known to take a value argument for `gh pr ready` (not boolean flags). */
+export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
+
+/**
+ * Shell command separators that terminate one segment and begin the next.
+ * Newline (`\n`) and carriage return (`\r`) are full command terminators in bash
+ * (equivalent to `;`), and the Claude Code Bash tool accepts multi-line command
+ * strings — so a segment must break on them too, else `echo hi\ngh pr create` evades
+ * the gate. Used by all segment-splitting sites (DRY).
+ */
+const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||&|\n|\r)\s*/;
+
+/**
+ * Strip a single balanced surrounding quote pair (`'…'` or `"…"`) from a shell arg value.
+ * A repo flag value may reach us quoted (`--repo 'owner/name'`); the scope check compares against
+ * the bare slug, so quotes must be normalized or a quoted on-target repo evades the guard.
+ * ponytail: single balanced pair only — no full shell tokenization (mismatched/partial quotes stay).
+ * @param {string|null} value @returns {string|null}
+ */
+function stripSurroundingQuotes(value) {
+  if (value == null || value.length < 2) return value;
+  const first = value[0];
+  if ((first === "'" || first === '"') && value[value.length - 1] === first) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+/**
+ * Read an inline `GH_REPO=<value>` env-assignment prefix on a single command segment.
+ * `gh` resolves its target repo from the `GH_REPO` env var, and a segment may set it inline
+ * (`GH_REPO=owner/name gh issue create …`) — same targeting intent as `--repo owner/name`, so the
+ * scope check must treat it the same or an off-cwd redirect evades the guard. Only the
+ * FIRST leading env assignment matching `GH_REPO=` is read (env assignments precede the executable);
+ * the value is quote-normalized. Ambient `process.env.GH_REPO` is out of scope — this is a static
+ * command-string classifier, so only the inline assignment in the string is considered.
+ * @param {string} segment @returns {string|null}
+ */
+function extractGhRepoEnvAssignment(segment) {
+  if (!segment) return null;
+  for (const token of segment.trim().split(/\s+/)) {
+    const assign = token.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!assign) break; // first non-assignment token ends the env-assignment prefix
+    if (assign[1] === "GH_REPO") {
+      return trimToNull(stripSurroundingQuotes(assign[2]));
+    }
+  }
+  return null;
+}
+
+/** @param {string|null|undefined} value @returns {string|null} */
+export function trimToNull(value) {
+  const trimmed = `${value ?? ""}`.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Strict GitHub owner/name identity shape: each of the two path segments is
+ * `[A-Za-z0-9._-]+` — the character set GitHub itself allows in an owner or repo name. A slug
+ * outside this shape (a shell metacharacter, whitespace, path traversal, or an extra `/` segment)
+ * can never be a real GitHub identity.
+ */
+const CLEAN_REPO_SLUG_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+/**
+ * Whether `slug` is a clean `owner/name` GitHub identity (see `CLEAN_REPO_SLUG_RE`). Exported so a
+ * sink that interpolates a repo slug into a shell command string (e.g. the Pi extension's
+ * `gateCommand` in `extension/post-merge-update.ts`) can defense-in-depth guard the interpolation,
+ * on top of `normalizeGitHubRepoSlug` already enforcing this shape at the source.
+ * @param {string|null|undefined} slug @returns {boolean}
+ */
+export function isCleanRepoSlug(slug) {
+  return typeof slug === "string" && CLEAN_REPO_SLUG_RE.test(slug);
+}
+
+/**
+ * Normalize a git remote URL into an `owner/name` slug (lowercased), or null.
+ * A hostile remote (e.g. `git@github.com:acme/widgets;id`) never yields a slug carrying the
+ * injected metacharacters — the extracted candidate must match `CLEAN_REPO_SLUG_RE` or this
+ * returns null instead, so every caller (both harnesses' managed-repo scope checks, and any sink
+ * that interpolates the slug into a shell command) sees either a real GitHub identity or null,
+ * never shell-metacharacter-bearing text.
+ * @param {string} remoteUrl
+ * @returns {string|null}
+ */
+export function normalizeGitHubRepoSlug(remoteUrl) {
+  const normalized = trimToNull(remoteUrl);
+  if (!normalized) {
+    return null;
+  }
+
+  const patterns = [
+    /^git@github\.com:([^\s]+?)(?:\.git)?$/i,
+    /^https?:\/\/github\.com\/([^\s]+?)(?:\.git)?$/i,
+    /^ssh:\/\/git@github\.com\/([^\s]+?)(?:\.git)?$/i,
+    /^git:\/\/github\.com\/([^\s]+?)(?:\.git)?$/i,
+    /^git:github\.com\/([^\s]+?)(?:\.git)?$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (!match) {
+      continue;
+    }
+    const slug = trimToNull(match[1])?.toLowerCase() ?? null;
+    return isCleanRepoSlug(slug) ? slug : null;
+  }
+
+  return null;
+}
+
+function segmentIsGhPrMerge(segment) {
+  if (!/^gh\s+pr\s+merge(?:\s|$)/i.test(segment)) {
+    return false;
+  }
+  const remainder = segment.replace(/^gh\s+pr\s+merge(?:\s|$)/i, "").trim();
+  if (!remainder) {
+    return true;
+  }
+  const firstArg = remainder.match(/^(\S+)/)?.[1]?.toLowerCase() ?? "";
+  return !["--help", "-h"].includes(firstArg);
+}
+
+function isGitMergeCompletionCommand(segment) {
+  if (!/^git\s+merge(?:\s|$)/i.test(segment)) {
+    return false;
+  }
+  const remainder = segment.replace(/^git\s+merge(?:\s|$)/i, "").trim();
+  if (!remainder) {
+    return true;
+  }
+  const firstArg = remainder.match(/^(\S+)/)?.[1]?.toLowerCase() ?? "";
+  return !["--abort", "--continue", "--quit", "--help", "-h"].includes(firstArg);
+}
+
+/** @param {string} command @returns {boolean} */
+export function isMergeCapableCommand(command) {
+  const normalized = command.trim();
+  if (!normalized) {
+    return false;
+  }
+  return normalized
+    .split(SHELL_SEGMENT_SEPARATOR)
+    .some((segment) => segmentIsGhPrMerge(segment) || isGitMergeCompletionCommand(segment));
+}
+
+/** @param {string} command @returns {string} */
+export function firstShellSegment(command) {
+  return command.trim().split(SHELL_SEGMENT_SEPARATOR)[0]?.trim() ?? "";
+}
+
+/** Split a compound shell command into its individual segments. */
+function shellSegments(command) {
+  return command.trim().split(SHELL_SEGMENT_SEPARATOR).map((s) => s.trim()).filter(Boolean);
+}
+
+/** A run of leading `NAME=value` env assignments. */
+const ENV_ASSIGNMENT_RUN = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*";
+
+/**
+ * The `env` wrapper word plus any trailing run (any order/count) of `NAME=value` assignments and the
+ * common `env` options: `-i`/`--ignore-environment`, `-u <NAME>`/`--unset=<NAME>`, `-C <dir>`/
+ * `--chdir=<dir>`, `-S <str>`/`--split-string=<str>`, `--` and a bare `-`. A short option also
+ * takes its argument attached (`-C/w`, `-uX`), and a long option also takes it after a space
+ * (`--chdir /w`), as GNU `env` accepts. Shared by
+ * `SHELL_EXEC_PREFIX` and `VERIFY_EXEC_PREFIX` so both see the same `env` forms.
+ * Ceilings: an `-S` string is one token and is not split into words; any other `env` option is
+ * not covered. The `-C <dir>` target is not resolved, so the caller's repo scoping applies
+ * (fails closed for a managed context).
+ */
+const ENV_WRAPPER =
+  "env(?:\\s+(?:[A-Za-z_][A-Za-z0-9_]*=\\S*|-i|--ignore-environment|-u\\s*\\S+|--unset(?:=|\\s+)\\S+|-C\\s*\\S+|--chdir(?:=|\\s+)\\S+|-S\\s*\\S+|--split-string(?:=|\\s+)\\S+|--|-))*\\s+";
+
+/**
+ * Leading prefix a command segment may carry before its real executable: a run of `NAME=value`
+ * env assignments, zero or more `ENV_WRAPPER` (`env` plus its options/assignments) or
+ * `command`/`exec` wrapper words, and an absolute/relative path on the binary (`/usr/bin/gh`,
+ * `/usr/bin/git`). Shared by every classifier in this file that must catch its verb behind these
+ * forms (`gh pr <verb>`, `git stash`, `env -C /w node -e ...`, ...). See `ENV_WRAPPER` for the
+ * `env` option ceilings.
+ *
+ * Note: this is a pragmatic normalizer, not a full shell tokenizer. Subshell
+ * `(gh pr create)`, `{ …; }` group, `-R=value` short-flag, and backslash-escaped
+ * `\gh` forms are deliberately out of scope.
+ */
+const SHELL_EXEC_PREFIX = `${ENV_ASSIGNMENT_RUN}(?:${ENV_WRAPPER}|(?:command|exec)\\s+)*(?:\\S*/)?`;
+
+/**
+ * Leading prefix a code-verification/build command may carry before its real executable: the
+ * shared `SHELL_EXEC_PREFIX` (env assignments, `ENV_WRAPPER`, `command`/`exec` wrapper words, binary path)
+ * plus `nice`/`timeout` process wrappers, scoped to this classifier only so the sibling `gh`/`git`
+ * classifiers above are not broadened by wrapper forms they never need to tolerate. Covers bare
+ * `nice`, `nice -n <N>`, bare `timeout <duration>`, and `timeout` carrying `-s <sig>`/`-k <dur>`/
+ * `--signal=<sig>`/`--kill-after=<dur>`/`--preserve-status`/`--foreground` before the duration —
+ * the wrapper forms the coordinator's daily verify/build commands are routinely run behind
+ * (`timeout 600 bun run verify`, `nice -n 10 bun run verify`). Not a full flag parser: other
+ * `timeout`/`nice` flags are a known, deliberately uncovered ceiling.
+ *
+ * The `env` forms come from the shared `ENV_WRAPPER` (`env CI=1 bun run verify`,
+ * `env -u DEVLOOPS_COORDINATOR_READONLY bun run verify`, `env -u FOO CI=1 npm test`).
+ * `command`/`exec` do not get the trailing-assignment/option tolerance — no known daily
+ * invocation shape needs it, and adding it would only widen the pattern without a use case.
+ */
+const VERIFY_EXEC_PREFIX =
+  `${ENV_ASSIGNMENT_RUN}(?:${ENV_WRAPPER}|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?`;
+
+/** Reuse the existing wrapper boundary for pure validation classification. */
+export function verificationCommandSegments(command) {
+  const prefix = new RegExp(`^${VERIFY_EXEC_PREFIX}`, "i");
+  return shellSegments(command).map((segment) => segment.replace(prefix, ""));
+}
+
+/**
+ * Build the `gh <subcmd> <verb>` prefix matcher (subcmd = "pr" | "issue").
+ * Tolerates a leading env-assignment/wrapper/path prefix so `GH_TOKEN=x gh pr create`,
+ * `command gh issue create`, and `/usr/bin/gh pr create` are all matched. The same regex
+ * is reused to strip the matched prefix (`segment.replace(re, "")`), so remainder
+ * extraction stays consistent across all matcher/extractor call sites. The `gh` prefix
+ * requirement means node-wrapper commands (`node scripts/github/comment-issue.mjs …`) never
+ * match — their first token is `node`, not `gh`.
+ */
+function ghSubcmdVerbRegex(subcmd, verb) {
+  return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+${subcmd}\\s+${verb}(?:\\s|$)`, "i");
+}
+
+/**
+ * A run of git global options that may appear between `git` and the subcommand: `-C <path>`,
+ * `-c <name>=<value>` (each consumes the following token as its value), `--git-dir=<path>`,
+ * `--work-tree=<path>`, or any other bare flag (`-x`, `--long-option`) that takes no value.
+ * Pragmatic normalizer, not a full git CLI parser.
+ */
+const GIT_GLOBAL_OPTION_RUN =
+  "(?:(?:-C|-c)\\s+\\S+\\s+|--(?:git-dir|work-tree)=\\S+\\s+|--?[A-Za-z][\\w-]*\\s+)*";
+
+/**
+ * Whether `command` contains a `git stash` invocation (any subcommand: bare,
+ * `push`, `pop`, `apply`, `save`, `list`, ...) in ANY shell segment —
+ * including behind an env-assignment/wrapper/path prefix and git global
+ * options between `git` and `stash` (mirrors the `gh` classifiers' tolerance
+ * in this file). Anchored per-segment, so `git stashed` or a path literal
+ * containing "git stash" never match. `refs/stash` is shared by every
+ * worktree over this repo's one `.git` directory, so a stash from one
+ * worktree can pop into another's — the PreToolUse gate blocks it outright
+ * (see `skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout`).
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsGitStash(command) {
+  const re = new RegExp(`^${SHELL_EXEC_PREFIX}git\\s+${GIT_GLOBAL_OPTION_RUN}stash(?:\\s|$)`, "i");
+  return command
+    .split(SHELL_SEGMENT_SEPARATOR)
+    .some((segment) => re.test(segment.trim()));
+}
+
+/** Build the `gh pr <verb>` prefix matcher — delegates to the generic subcmd matcher (DRY). */
+function ghPrVerbRegex(verb) {
+  return ghSubcmdVerbRegex("pr", verb);
+}
+
+/**
+ * Return the first segment in the command that is a `gh <subcmd> <verb>` call (ignoring
+ * --help/-h), or null. Scans ALL segments so compound commands are caught.
+ */
+function findGhSubcmdVerbSegment(command, subcmd, verb) {
+  const re = ghSubcmdVerbRegex(subcmd, verb);
+  for (const segment of shellSegments(command)) {
+    if (!re.test(segment)) continue;
+    const remainder = segment.replace(re, "").trim();
+    if (!remainder) return segment;
+    const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
+    if (!args.includes("--help") && !args.includes("-h")) return segment;
+  }
+  return null;
+}
+
+/**
+ * Extract the `--repo`/`-R` flag value from an already-isolated `gh <subcmd> <verb>` segment.
+ * @param {string} segment @param {string} subcmd @param {string} verb @returns {string|null}
+ */
+function extractRepoFlagFromSubcmdSegment(segment, subcmd, verb) {
+  const re = ghSubcmdVerbRegex(subcmd, verb);
+  if (!segment || !re.test(segment)) return null;
+  const remainder = segment.replace(re, "").trim();
+  if (!remainder) return null;
+  const tokens = remainder.split(/\s+/);
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const lower = token.toLowerCase();
+    if (lower === "-r" || lower === "--repo") {
+      if (i + 1 < tokens.length && !tokens[i + 1].startsWith("-")) return stripSurroundingQuotes(tokens[i + 1]);
+    }
+    const repoEqMatch = token.match(/^(?:--repo|-R)=(.+)$/i);
+    if (repoEqMatch) return stripSurroundingQuotes(repoEqMatch[1]);
+  }
+  // No explicit --repo/-R flag: fall back to an inline GH_REPO= env assignment (flag wins,
+  // mirroring gh's own precedence). This closes the GH_REPO repo-targeting bypass.
+  return extractGhRepoEnvAssignment(segment);
+}
+
+/**
+ * Return one `{ segment, explicitRepo }` entry for EVERY `gh <subcmd> <verb>` segment (ignoring
+ * --help/-h). Mirrors `extractRepoFlagsFromGhPrCreateSegments`.
+ * @param {string} command @param {string} subcmd @param {string} verb
+ * @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+function extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, verb) {
+  const re = ghSubcmdVerbRegex(subcmd, verb);
+  const out = [];
+  for (const segment of shellSegments(command)) {
+    if (!re.test(segment)) continue;
+    const remainder = segment.replace(re, "").trim();
+    if (remainder) {
+      const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
+      if (args.includes("--help") || args.includes("-h")) continue;
+    }
+    out.push({ segment, explicitRepo: extractRepoFlagFromSubcmdSegment(segment, subcmd, verb) });
+  }
+  return out;
+}
+
+/**
+ * The raw external-write verb forms that must be blocked when originating from a subagent:
+ * ad-hoc GitHub issue/PR creation, comments, and edits run directly via `gh` (not the sanctioned
+ * node wrappers). Each entry is `[subcmd, verb]`.
+ */
+const EXTERNAL_WRITE_VERB_FORMS = Object.freeze([
+  ["issue", "create"],
+  ["issue", "comment"],
+  ["issue", "edit"],
+  ["pr", "comment"],
+]);
+
+/**
+ * Whether `command` contains a raw `gh issue create`, `gh issue comment`, `gh issue edit`, or
+ * `gh pr comment` invocation in ANY shell segment (ignoring --help/-h). PreToolUse gate use only — the gate
+ * blocks these when they originate from a subagent context. Node-wrapper commands
+ * (`node scripts/github/comment-issue.mjs …`) never match (first token is `node`, not `gh`).
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsRawExternalWrite(command) {
+  return EXTERNAL_WRITE_VERB_FORMS.some(([subcmd, verb]) => findGhSubcmdVerbSegment(command, subcmd, verb) !== null);
+}
+
+/**
+ * Return `{ segment, explicitRepo }` for every raw external-write segment across all four verb
+ * forms (`gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment`). PreToolUse gate use only —
+ * lets the gate decide in-scope-ness per segment so a leading out-of-scope write can't shield a
+ * later in-scope one. `explicitRepo` is the segment's `--repo`/`-R` value or null.
+ * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+export function extractRepoFlagsFromExternalWriteSegments(command) {
+  return EXTERNAL_WRITE_VERB_FORMS.flatMap(([subcmd, verb]) =>
+    extractRepoFlagsFromGhSubcmdVerbSegments(command, subcmd, verb),
+  );
+}
+
+/**
+ * Return the first segment in the command that is a `gh pr <verb>` call (ignoring --help/-h),
+ * or null. Scans ALL segments so compound commands (`echo ok && gh pr merge 1`) are caught.
+ */
+function findGhPrVerbSegment(command, verb) {
+  return findGhSubcmdVerbSegment(command, "pr", verb);
+}
+
+/**
+ * Generic `gh pr <verb>` detector — checks the FIRST shell segment only.
+ *
+ * Used by the Pi extension's post-execute handler (`onUserBash`) to record that `gh pr ready`
+ * actually ran. First-segment-only is correct for that use: `false && gh pr ready 42` short-
+ * circuits so ready never executes, and the extension should not record a spurious invocation.
+ *
+ * For the Claude Code PreToolUse gate (block before execution), use
+ * `commandContainsGhPrReady`/`commandContainsGhPrMerge` instead — those scan ALL segments.
+ */
+function isGhPrVerbCommand(command, verb) {
+  const re = ghPrVerbRegex(verb);
+  const segment = firstShellSegment(command);
+  if (!segment || !re.test(segment)) return false;
+  const remainder = segment.replace(re, "").trim();
+  if (!remainder) return true;
+  const args = remainder.split(/\s+/).map((a) => a.toLowerCase());
+  return !args.includes("--help") && !args.includes("-h");
+}
+
+/** Extract PR number from a single already-isolated segment (shared by both first- and all-segment paths). */
+function extractPrNumberFromSegment(segment, verb) {
+  const re = ghPrVerbRegex(verb);
+  if (!segment || !re.test(segment)) return null;
+  const remainder = segment.replace(re, "").trim();
+  if (!remainder) {
+    return null;
+  }
+  const tokens = remainder.split(/\s+/);
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.startsWith("-")) {
+      const flagName = token.replace(/=.*$/, "").toLowerCase();
+      if (!token.includes("=") && FLAGS_THAT_TAKE_VALUE.has(flagName)) {
+        i++;
+      }
+      continue;
+    }
+    if (/^\d+$/.test(token)) {
+      const num = Number(token);
+      if (num > 0) {
+        return num;
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
+/** Extract repo flag from a single already-isolated segment. */
+function extractRepoFlagFromSegment(segment, verb) {
+  const re = ghPrVerbRegex(verb);
+  if (!segment || !re.test(segment)) return null;
+  const remainder = segment.replace(re, "").trim();
+  if (!remainder) {
+    return null;
+  }
+  const tokens = remainder.split(/\s+/);
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const lower = token.toLowerCase();
+    if (lower === "-r" || lower === "--repo") {
+      if (i + 1 < tokens.length && !tokens[i + 1].startsWith("-")) {
+        return stripSurroundingQuotes(tokens[i + 1]);
+      }
+    }
+    const repoEqMatch = token.match(/^(?:--repo|-R)=(.+)$/i);
+    if (repoEqMatch) {
+      return stripSurroundingQuotes(repoEqMatch[1]);
+    }
+  }
+  // No explicit --repo/-R flag: fall back to an inline GH_REPO= env assignment (flag wins,
+  // mirroring gh's own precedence). Applied here too so gh pr ready/merge/create scope checks get
+  // consistent GH_REPO handling — the root-cause fix, not just the external-write path.
+  return extractGhRepoEnvAssignment(segment);
+}
+
+/** First-segment extractor for `gh pr <verb>` PR number — Pi extension public API. */
+function extractPrNumberFromGhPrVerb(command, verb) {
+  return extractPrNumberFromSegment(firstShellSegment(command), verb);
+}
+
+/** First-segment extractor for `gh pr <verb>` --repo flag — Pi extension public API. */
+function extractRepoFlagFromGhPrVerb(command, verb) {
+  return extractRepoFlagFromSegment(firstShellSegment(command), verb);
+}
+
+/** @param {string} command @returns {boolean} */
+export function isGhPrReadyCommand(command) {
+  return isGhPrVerbCommand(command, "ready");
+}
+
+/** @param {string} command @returns {number|null} */
+export function extractPrNumberFromGhPrReady(command) {
+  return extractPrNumberFromGhPrVerb(command, "ready");
+}
+
+/** @param {string} command @returns {string|null} */
+export function extractRepoFlagFromGhPrReady(command) {
+  return extractRepoFlagFromGhPrVerb(command, "ready");
+}
+
+/**
+ * Whether `command` contains a `gh pr merge` invocation in the FIRST shell segment,
+ * ignoring `--help`/`-h`. Used by the Pi extension's post-execute handler.
+ * For the Claude Code PreToolUse gate, use `commandContainsGhPrMerge` instead.
+ * @param {string} command @returns {boolean}
+ */
+export function isGhPrMergeCommand(command) {
+  return isGhPrVerbCommand(command, "merge");
+}
+
+/**
+ * Whether `command` contains a `gh pr ready` invocation in ANY shell segment.
+ * For use in the Claude Code PreToolUse gate only — blocks the whole command pre-emptively
+ * regardless of shell short-circuit semantics (`false && gh pr ready 42` is still blocked).
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsGhPrReady(command) {
+  return findGhPrVerbSegment(command, "ready") !== null;
+}
+
+/**
+ * Whether `command` contains a `gh pr merge` invocation in ANY shell segment.
+ * For use in the Claude Code PreToolUse gate only — blocks the whole command pre-emptively.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsGhPrMerge(command) {
+  return findGhPrVerbSegment(command, "merge") !== null;
+}
+
+/** Extract PR number from `gh pr ready` in any shell segment — PreToolUse gate use only. */
+export function extractPrNumberFromGhPrReadyAnywhere(command) {
+  return extractPrNumberFromSegment(findGhPrVerbSegment(command, "ready"), "ready");
+}
+
+/** @param {string} command @returns {string|null} */
+export function extractRepoFlagFromGhPrReadyAnywhere(command) {
+  return extractRepoFlagFromSegment(findGhPrVerbSegment(command, "ready"), "ready");
+}
+
+/** Extract PR number from `gh pr merge` in any shell segment — PreToolUse gate use only. */
+export function extractPrNumberFromGhPrMergeAnywhere(command) {
+  return extractPrNumberFromSegment(findGhPrVerbSegment(command, "merge"), "merge");
+}
+
+/** @param {string} command @returns {string|null} */
+export function extractRepoFlagFromGhPrMergeAnywhere(command) {
+  return extractRepoFlagFromSegment(findGhPrVerbSegment(command, "merge"), "merge");
+}
+
+/**
+ * Whether `command` contains a raw `gh pr create` invocation in ANY shell segment.
+ * PreToolUse gate use only — blocks raw `gh pr create` so PR creation flows through the
+ * canonical wrapper (`scripts/github/create-pr.mjs` / `dev-loops pr create`), which always
+ * creates a draft and self-assigns. The wrapper runs `gh pr create` inside a node child
+ * process, so its Bash command string (`node …/create-pr.mjs …`) never matches this — only a
+ * literal `gh pr create` in the agent's shell command does.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsGhPrCreate(command) {
+  return findGhPrVerbSegment(command, "create") !== null;
+}
+
+/** Extract repo flag from `gh pr create` in any shell segment — PreToolUse gate use only. */
+export function extractRepoFlagFromGhPrCreateAnywhere(command) {
+  return extractRepoFlagFromSegment(findGhPrVerbSegment(command, "create"), "create");
+}
+
+/**
+ * Return one `{ segment, explicitRepo }` entry for EVERY `gh pr create` segment (ignoring
+ * --help/-h), not just the first. PreToolUse gate use only: the create-scope decision must
+ * consider every create segment, so a leading out-of-scope create can't shield a later
+ * in-scope raw create (`gh pr create --repo other/repo && gh pr create --fill`).
+ * `explicitRepo` is the segment's `--repo`/`-R` value or null when none is present.
+ * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+export function extractRepoFlagsFromGhPrCreateSegments(command) {
+  return extractRepoFlagsFromGhSubcmdVerbSegments(command, "pr", "create");
+}
+
+/**
+ * Return `{ segment, explicitRepo }` for every `gh pr merge` segment (ignoring --help/-h) —
+ * PreToolUse gate scope check use only, so a proven-foreign leading segment can't shield a later
+ * managed one. Mirrors `extractRepoFlagsFromGhPrCreateSegments`.
+ * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+export function extractRepoFlagsFromGhPrMergeSegments(command) {
+  return extractRepoFlagsFromGhSubcmdVerbSegments(command, "pr", "merge");
+}
+
+/**
+ * Return `{ segment, explicitRepo }` for every `gh pr ready` segment (ignoring --help/-h) —
+ * PreToolUse gate scope check use only. Mirrors `extractRepoFlagsFromGhPrCreateSegments`.
+ * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+export function extractRepoFlagsFromGhPrReadySegments(command) {
+  return extractRepoFlagsFromGhSubcmdVerbSegments(command, "pr", "ready");
+}
+
+/** @param {string} command @returns {number|null} */
+export function extractPrNumberFromGhPrMerge(command) {
+  return extractPrNumberFromGhPrVerb(command, "merge");
+}
+
+/** @param {string} command @returns {string|null} */
+export function extractRepoFlagFromGhPrMerge(command) {
+  return extractRepoFlagFromGhPrVerb(command, "merge");
+}
+
+// ---------------------------------------------------------------------------
+// gh api URL-path matchers + the six guard-rule classifiers.
+// These make the six rules that describe operations the Bash gate could refuse
+// enforceable at one seam (decideBashGate in hook-decisions.mjs), where raw
+// `gh api` shapes were previously unclassified (anything expressed as a raw API
+// call was invisible to the gate).
+// ---------------------------------------------------------------------------
+
+/** gh api value-taking flags (short forms); each consumes the following token. Lowercase-compared,
+ * covering every value-taking short flag gh api accepts so a flag placed BEFORE the endpoint skips
+ * its value and the real endpoint is still read: -X/--method, -m/--method, -f/--field, -F/--raw-field
+ * (both case-fold to -f), -q/--jq, -p/--preview, -t/--template, -r/--repo. `-h` (help) is EXCLUDED —
+ * it takes no value, and folding it with `-H` (header) would let a mid-command `-h` swallow the real
+ * endpoint and bypass the write-path deny. `-H` stays an exact-token value-taking flag
+ * despite the case-fold. */
+const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-r", "-q", "-p", "-t"]);
+/** gh api value-taking flags (long forms). Each consumes the following token. */
+const GH_API_VALUE_LONG_FLAGS = new Set([
+  "--method", "--field", "--raw-field", "--header", "--repo", "--jq", "--preview",
+  "--template", "--hostname", "--input", "--cache", "--cache-ttl", "--unix-socket",
+]);
+
+function ghApiRegex() {
+  return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+api(?:\\s|$)`, "i");
+}
+
+/**
+ * Return one `{ segment, endpoint }` entry for EVERY `gh api <endpoint>` call (ignoring --help/-h).
+ * `endpoint` is the first positional (non-flag) token after `gh api`, skipping value-taking flags and
+ * their values (`gh api -X POST repos/...`, `gh api --method POST repos/...`). Env-assignment /
+ * `command`/`env`/`exec` wrapper / binary-path prefixes are tolerated via the shared SHELL_EXEC_PREFIX
+ * (`GH_TOKEN=x gh api ...`, `/usr/bin/gh api ...`). Node-wrapper commands (`node scripts/...`) never
+ * match — first token is `node`, not `gh`. The endpoint may be a full URL, a `repos/OWNER/REPO/...`
+ * path (gh api prefixes a bare path with `https://api.github.com/`), or `graphql`.
+ * @param {string} command @returns {{ segment: string, endpoint: string|null }[]}
+ */
+export function extractGhApiEndpointSegments(command) {
+  const re = ghApiRegex();
+  const out = [];
+  for (const segment of shellSegments(command)) {
+    if (!re.test(segment)) continue;
+    const remainder = segment.replace(re, "").replace(/(?:--help|-h)\s*$/i, "").trim();
+    if (!remainder) continue;
+    const tokens = remainder.split(/\s+/);
+    let endpoint = null;
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      if (!token.startsWith("-")) {
+        endpoint = token;
+        break;
+      }
+      // `-h`/`--help` is a boolean help flag (consumes no value); mid-command it must not swallow
+      // the endpoint and silently bypass the write-path deny. `-H` is the case-sensitive header
+      // value flag and stays value-taking here even though `-h` is excluded from the folded set.
+      if (token === "-h" || token === "--help") continue;
+      const lower = token.toLowerCase();
+      if (token === "-H" || GH_API_VALUE_FLAGS.has(lower) || GH_API_VALUE_LONG_FLAGS.has(lower)) {
+        i += 1; // consume the flag's value token
+        // A value that opens with a quote may span whitespace (e.g. `-H "Accept: application/vnd.github+json"`)
+        // — keep consuming tokens until the matching closing quote so the quoted value is skipped whole
+        // and a later positional endpoint is not mis-read as the value's remainder.
+        if (i < tokens.length && (tokens[i][0] === '"' || tokens[i][0] === "'")) {
+          const quote = tokens[i][0];
+          while (i < tokens.length && !tokens[i].endsWith(quote)) i += 1;
+        }
+      }
+    }
+    // A quoted endpoint (`gh api "repos/..."`) carries its surrounding quotes through the tokenizer;
+    // strip them so the write-path/anchor regexes see the bare path.
+    if (endpoint && endpoint.length >= 2 && (endpoint[0] === '"' || endpoint[0] === "'")) {
+      const q = endpoint[0];
+      if (endpoint.endsWith(q)) endpoint = endpoint.slice(1, -1);
+    }
+    out.push({ segment, endpoint });
+  }
+  return out;
+}
+
+/** The `gh api` segments whose endpoint is the dev-loops-managed repo's URL path. Matches the
+ * absolute slug-embedded form (`repos/<managedSlug>/...`) when `managedSlug` resolves, plus the
+ * bare relative form (`issues/...`), which gh api resolves against the cwd repo — the
+ * decideBashGate call site gates the relative form on `inManagedRepo`. When `managedSlug` is null
+ * (the managed repo's identity could not be resolved in a managed context — AC4's fail-closed
+ * case), the absolute arm matches ANY owner/repo rather than a specific slug: identity is unknown,
+ * so an absolute write must be denied regardless of which repo it targets, not waved through for
+ * lack of a slug to compare against. The absolute arm fully regex-escapes a resolved slug (a `.`
+ * in a legitimate repo name must match literally, not as a wildcard) and matches
+ * case-insensitively (GitHub repo identity is case-insensitive). */
+function managedGhApiPathRegex(suffix, managedSlug) {
+  if (!managedSlug) {
+    return new RegExp(`(?:repos/[^/]+/[^/]+/|^)${suffix}`, "i");
+  }
+  const slug = managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  return new RegExp(`(?:repos/${slug}/|^)${suffix}`, "i");
+}
+
+/** Strip a `scheme://host` prefix from an absolute gh api URL endpoint (`https://api.github.com/...`),
+ * yielding the bare `/repos/<slug>/…` path that the write-path anchors match. gh api accepts both a
+ * bare `repos/<slug>/…`/`issues/…` path and an absolute https:// URL, so both must reach the same
+ * anchors or an absolute-URL write bypasses the deny. */
+function normalizeGhApiEndpoint(endpoint) {
+  if (!endpoint) return endpoint;
+  return endpoint.replace(/^https?:\/\/[^/]+/, "").replace(/^\//, "").replace(/\/+$/, "");
+}
+
+/** Whether any `gh api` segment targets the `graphql` endpoint. */
+function ghApiGraphqlSegments(command) {
+  return extractGhApiEndpointSegments(command).filter(({ endpoint }) => endpoint && /^graphql$/i.test(endpoint));
+}
+
+/** Whether a `gh api` segment names an explicit write method (POST/PUT/PATCH/DELETE). gh api
+ * defaults to GET, so the ad-hoc-write predicates require an explicit write method to refuse. */
+function ghApiSegmentHasWriteMethod(segment) {
+  const re = ghApiRegex();
+  if (!re.test(segment)) return false;
+  const tokens = segment.replace(re, "").trim().split(/\s+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    // Only a method FLAG (`--method`, `-X`/`-m`, or an inline `=POST`) declares an explicit write
+    // method. A method-looking token inside a FIELD VALUE (`-F 'body=--method DELETE'`) is data, not
+    // the method flag, so the read gets no write-method deny (token-scoped, not segment-scoped).
+    const m = tokens[i].match(/^(?:--method|-X|-m)(?:=([A-Za-z]+)|([A-Za-z]+))?$/i);
+    if (!m) continue;
+    const inline = m[1] ?? m[2];
+    const value = (inline ?? tokens[i + 1] ?? "").replace(/^["']|["']$/g, "");
+    if (/^(?:POST|PUT|PATCH|DELETE)\b/i.test(value)) return true;
+  }
+  return false;
+}
+
+/**
+ * SUBISSUE-NO-ADHOC-BYPASS: raw `gh api` WRITE to `.../issues/<n>/sub_issues[/priority]` on the
+ * dev-loops-managed repo — the ad-hoc sub-issue mutation that must flow through the sanctioned
+ * `manage-sub-issues` wrapper instead. Actor-independent (the issue's decided policy): the main
+ * agent gets no reserved direct path to sub-issue writes. Anchored on the managed repo's URL path
+ * segment AND an explicit write method, so a `gh api` read or another repo's `sub_issues` write
+ * passes through (no false deny).
+ * @param {string} command @param {string|null} [managedSlug] - Resolved managed-repo slug, or
+ *   null when unresolvable (both the relative and any absolute repos/<owner>/<repo>/ form match then, fail closed).
+ * @returns {boolean}
+ */
+export function commandContainsSubIssueAdHocBypass(command, managedSlug = null) {
+  const re = managedGhApiPathRegex(`issues/\\d+/sub_issues(?:/priority)?(?:\\s|$)`, managedSlug);
+  return extractGhApiEndpointSegments(command).some(
+    ({ segment, endpoint }) => Boolean(endpoint) && re.test(normalizeGhApiEndpoint(endpoint)) && ghApiSegmentHasWriteMethod(segment),
+  );
+}
+
+/**
+ * COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER (REST half): raw `gh api` POST to
+ * `.../pulls/<n>/comments/<m>/replies` on the dev-loops-managed repo — the ad-hoc thread reply
+ * that must flow through `reply-resolve-review-thread(s).mjs`. Actor-independent: no reserved
+ * direct reply path.
+ * @param {string} command @param {string|null} [managedSlug] - Resolved managed-repo slug, or
+ *   null when unresolvable (both the relative and any absolute repos/<owner>/<repo>/ form match then, fail closed).
+ * @returns {boolean}
+ */
+export function commandContainsReplyResolveBypass(command, managedSlug = null) {
+  const re = managedGhApiPathRegex(`pulls/\\d+/comments/\\d+/replies(?:\\s|$)`, managedSlug);
+  return extractGhApiEndpointSegments(command).some(
+    ({ segment, endpoint }) => Boolean(endpoint) && re.test(normalizeGhApiEndpoint(endpoint)) && ghApiSegmentHasWriteMethod(segment),
+  );
+}
+
+/**
+ * COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER (GraphQL half): a raw `gh api graphql` that carries a
+ * `resolveReviewThread` mutation — the ad-hoc GraphQL thread-resolution bypass, which must also flow
+ * through `reply-resolve-review-thread(s).mjs`. `graphql` has no path-host repo (gh api graphql
+ * resolves against the cwd repo), so the surrounding decideBashGate scopes it to the target repo.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsGraphqlResolveReviewThread(command) {
+  return ghApiGraphqlSegments(command).some(({ segment }) => /resolveReviewThread/.test(segment));
+}
+
+/**
+ * COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY (REST half): raw `gh api` write to
+ * `.../pulls/<n>/requested_reviewers` on the dev-loops-managed repo — the ad-hoc Copilot review
+ * request that must flow through `scripts/github/request-copilot-review.mjs`. Actor-independent.
+ * @param {string} command @param {string|null} [managedSlug] - Resolved managed-repo slug, or
+ *   null when unresolvable (both the relative and any absolute repos/<owner>/<repo>/ form match then, fail closed).
+ * @returns {boolean}
+ */
+export function commandContainsCopilotRequestBypass(command, managedSlug = null) {
+  const re = managedGhApiPathRegex(`pulls/\\d+/requested_reviewers(?:\\s|$)`, managedSlug);
+  return extractGhApiEndpointSegments(command).some(
+    ({ segment, endpoint }) => Boolean(endpoint) && re.test(normalizeGhApiEndpoint(endpoint)) && ghApiSegmentHasWriteMethod(segment),
+  );
+}
+
+/** `gh` global repo flags that may sit between `gh` and the subcommand: `-R <slug>`, `-R<slug>`,
+ * `--repo <slug>`, `--repo=<slug>`. */
+const GH_GLOBAL_REPO_FLAGS = "(?:(?:(?:-R|--repo)(?:=|\\s+)|-R)\\S+\\s+)*";
+
+/** `gh [global repo flags] <subcmd> <verb>` prefix matcher; the same regex strips the prefix. */
+function ghBodyWriterRegex(subcmd) {
+  return new RegExp(`^${SHELL_EXEC_PREFIX}gh\\s+${GH_GLOBAL_REPO_FLAGS}${subcmd}\\s+edit(?:\\s|$)`, "i");
+}
+
+/** A `gh pr edit` literal anywhere in a command string, quoted or not. */
+const GH_BODY_WRITER_LITERAL = new RegExp(`\\bgh\\s+${GH_GLOBAL_REPO_FLAGS}pr\\s+edit(?=[\\s"'\`]|$)`, "i");
+
+/** A shell wrapper that hides a command from per-segment inspection: `bash|sh|zsh|dash|ksh -c`, `eval`, `xargs`. */
+const SHELL_WRAPPER_RE = /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*-\S*c|eval|xargs)(?=\s)/;
+
+/**
+ * Shell-word unquoting for flag tokens: the shell strips the quotes, so `'--body'`, `"-F"` and
+ * `-f "body"=x` reach gh as `--body`, `-F` and `-f body=x`. Only a quoted token that is a bare
+ * flag name (or the `body` field name before `=`) is unquoted; quoted values stay quoted.
+ * @param {string} segment @returns {string}
+ */
+function unquoteFlagTokens(segment) {
+  return segment.replace(/(['"])(-{1,2}[A-Za-z][\w-]*(?:=(?:(?!\1).)*)?)\1/g, "$2").replace(/(['"])body\1(?==)/g, "body");
+}
+
+/**
+ * ADR-TRIPWIRE-STANDING-WAIVER (CLI half): a raw `gh pr edit` that sets the body
+ * (`--body`, `--body-file`, `-b`, `-F`), with or without `gh` global repo flags before the subcommand
+ * (`gh -R o/n pr edit ...`). A body write is the path that carries an `adr-tripwire:allow` waiver
+ * line, so it must flow through the launcher's `pr edit` / `pr waive-adr-tripwire`. Quoted values are
+ * blanked first, so a flag-looking word inside a title does not match. A `gh pr edit`
+ * literal inside `bash -c`/`sh -c`/`eval`/`xargs` is denied outright: the wrapper hides the real
+ * flags from segment inspection, so the literal itself is the signal (fail closed). An explicit
+ * `--repo`/`-R` that is provably not `managedSlug` passes through (direct, unwrapped forms only).
+ * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
+ */
+export function commandContainsRawPrBodyEdit(command, managedSlug = null) {
+  if (SHELL_WRAPPER_RE.test(command) && GH_BODY_WRITER_LITERAL.test(command)) return true;
+  const res = [ghBodyWriterRegex("pr")];
+  return shellSegments(command).map(unquoteFlagTokens).some((segment) =>
+    res.some((re) => {
+      if (!re.test(segment)) return false;
+      // An explicit --repo/-R that is provably another repo is out of scope (fail closed otherwise).
+      const repoFlag = /(?:^|\s)(?:--repo|-R)(?:=|\s+)(\S+)/.exec(stripQuotedLiterals(segment));
+      if (repoFlag && explicitRepoProvenForeign(repoFlag[1], managedSlug)) return false;
+      const flags = stripQuotedLiterals(segment.replace(re, " "));
+      return /(?:^|\s)(?:--body(?:-file)?(?=[=\s]|$)|-[bF](?=[=\s]|\S|$))/.test(flags);
+    }));
+}
+
+/**
+ * ADR-TRIPWIRE-STANDING-WAIVER (API half): a raw `gh api` write to `.../pulls/<n>` or
+ * `.../issues/<n>` on the managed repo that carries a `body` field (`-f`/`-F`/`--field`/
+ * `--raw-field body=...`) or an `--input` payload, or a `gh api graphql` call carrying an
+ * `updatePullRequest` mutation. The endpoint may be a bare path, an absolute URL, carry a query
+ * string (`pulls/5?x=1`), or use gh's `{owner}/{repo}` placeholders. A write to a sub-path
+ * (`pulls/<n>/comments`, `issues/<n>/comments`) or without a body field passes through.
+ * @param {string} command @param {string|null} [managedSlug] @returns {boolean}
+ */
+export function commandContainsRawPrBodyApiWrite(command, managedSlug = null) {
+  // A `gh api` literal inside `bash -c`/`eval`/`xargs` hides its flags from segment inspection: mirror the
+  // CLI half and deny the literal when it names a pull/issue path with a body field or `--input`, or `updatePullRequest`.
+  if (SHELL_WRAPPER_RE.test(command) && /\bgh\s+api\b/.test(command)
+    && (/updatePullRequest/.test(command) || (/(?:pulls|issues)\/(?:\d+|\{\})/.test(command) && /body=|--input/.test(command)))) return true;
+  const owner = managedSlug ? `(?:${managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}|\\{owner\\}/\\{repo\\})` : "[^/]+/[^/]+";
+  const re = new RegExp(`^(?:repos/${owner}/)?(?:pulls|issues)/\\d+$`, "i");
+  return extractGhApiEndpointSegments(command).map((e) => ({ ...e, segment: unquoteFlagTokens(e.segment) })).some(({ segment, endpoint }) => {
+    if (endpoint && /^graphql$/i.test(endpoint)) return /updatePullRequest/.test(segment);
+    if (!endpoint || !re.test(normalizeGhApiEndpoint(endpoint).replace(/\?.*$/, ""))) return false;
+    // `--input` supplies the whole payload, so it is a write without a method flag (gh then POSTs).
+    if (/(?:^|\s)--input(?:=|\s)/.test(stripQuotedLiterals(segment))) return true;
+    // gh defaults to POST when a field is present, so only an explicit GET/HEAD makes a body field a read.
+    if (/(?:^|\s)(?:--method|-X|-m)(?:=|\s*)["']?(?:GET|HEAD)\b/i.test(stripQuotedLiterals(segment))) return false;
+    // Not quote-stripped: the field is usually quoted (`-f "body=..."`), so blanking would hide it.
+    return /(?:^|\s)(?:-[fF]|--(?:raw-)?field)(?:=|\s*)["']?body=/.test(segment);
+  });
+}
+
+/**
+ * COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY (comment-summon half): a raw `gh pr comment` body carrying a
+ * bare Copilot summon (`/copilot` or `/copilot re-review`). The agent MUST request Copilot via
+ * `request-copilot-review.mjs`, never by posting a literal `/copilot` comment. Actor-independent: even
+ * the main agent (which may otherwise post `gh pr comment`) must not summon Copilot by comment.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsCopilotSummonComment(command) {
+  if (!findGhSubcmdVerbSegment(command, "pr", "comment")) return false;
+  // A summon is `/copilot`/`/copilot re-review` anchored at the START of the quoted body — a
+  // trailing prose mention (`--body "see /copilot"`) or in-prose `/copilot re-review` never
+  // matches. The `re-review` form allows trailing modifiers (`/copilot re-review now`) so
+  // appending a word cannot defeat the deny. Only `gh pr comment` segments reach here.
+  return /(["'])\s*\/copilot(?:\s+re-review\b(?:\s+[^\s"']+)*|\s*(?:["']|$))/i.test(command);
+}
+
+/**
+ * Blank the CONTENTS of quoted string literals ('...' and "...") to a space, EXCEPT a quote that is
+ * the payload of an executable-code flag — a short-flag cluster CONTAINING `c` ANYWHERE in the
+ * cluster (`sh -c '…'`, `bash -c '…'`, `bash -lc '…'`, `bash -ec '…'`, `bash -cl '…'`, `bash -ci '…'`,
+ * `bash -cx '…'`) — bash treats ANY `-c`-containing short-flag cluster as command-execution
+ * regardless of where `c` sits in the cluster, not only one that ENDS in `c` — optionally followed by
+ * a `--` terminator (`bash -c -- '…'`), a long `--command` flag, or `eval` — that payload is REAL
+ * shell syntax to be executed, not inert data, so blanking it would hide an actual poll-loop
+ * construct wrapped in one of these forms. A real poll loop's structural tokens
+ * (`while`/`until`/`for`/`do`/`sleep`/`done`, a `[ -f … ]` file test) are UNQUOTED shell syntax; a
+ * quoted issue body, `--body` payload, or quoted example that merely mentions them carries them
+ * INSIDE quotes as inert data. Blanking those quoted contents is what lets the poll-loop matchers key
+ * on an actual loop CONSTRUCT rather than the token sequence appearing anywhere in a command
+ * (`gh issue create --body "while … sleep … done"` must not be flagged). The `s` (dotAll) flag lets
+ * `.` match a newline too, so a MULTI-LINE quoted `--body` (a real issue body commonly spans lines) is
+ * stripped in full, not just its first line.
+ * A quoted string that itself contains a command substitution (`$(...)`) or a backtick (`` `...` ``)
+ * is executable code, not inert data — its inner command runs regardless of the surrounding quotes.
+ * Blanking it would hide a real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5;
+ * done` that the gh/loop-state ban already denies, so such a quoted literal is PRESERVED (fail-closed
+ * direction) ahead of the `-c`/`--command`/`eval` exemption check below.
+ *
+ * The `-c`-cluster/`--command`/`eval` exemption is intentionally coarse in the fail-closed direction:
+ * it looks only for a `c` anywhere in a preceding short-flag cluster (or `--command`/`eval`), not for
+ * a shell-interpreter anchor. A non-shell command carrying `-c` (e.g. `grep -ci '<loop text>'`,
+ * `wc -c`) may therefore have its quoted argument preserved too and get over-denied — an accepted
+ * benign false positive, because tightening the exemption to a shell-interpreter anchor would risk a
+ * fail-open (missing a real `sh -c` poll loop), the worse direction.
+ *
+ * ponytail: blanks balanced quote pairs only, with the command-substitution/backtick preserve rule
+ * and the `-c`-cluster/`--command`/`eval` exemption above — no full shell tokenizer (mismatched/
+ * partial quotes and other exec-wrapper flags stay out of scope). Accepted ceiling: a deliberately
+ * quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any
+ * other quoted literal and can therefore evade the ban — accepted as a deliberate-evasion class, not
+ * a natural shape a genuine poll loop takes.
+ * @param {string} command @returns {string}
+ */
+function stripQuotedLiterals(command) {
+  return command.replace(/(['"])((?:(?!\1).)*)\1/gs, (match, _quote, inner, offset, full) => {
+    // A quoted string containing a command substitution ($()) or backtick is executable code, not
+    // inert data — its command runs regardless of the surrounding quotes. Blanking it would hide a
+    // real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done` that the
+    // gh/loop-state ban already denied. Preserve it (fail-closed direction).
+    if (/\$\(|`/.test(inner)) {
+      return match;
+    }
+    const before = full.slice(0, offset);
+    if (/(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(before)) {
+      return match; // executable -c/eval payload — leave the real shell syntax intact
+    }
+    return " ";
+  });
+}
+
+/**
+ * Whether COMMAND is (or contains) a sleep-poll loop over `gh`/`loop-state` — a `while`/`until`/
+ * `for` loop whose body contains both a `sleep` and a `gh` or `loop-state` call. Checked on the
+ * WHOLE command (not per-segment): the loop body is `;`-delimited, so a per-segment split would
+ * separate the loop head from its `sleep`/`gh` body calls and miss the pattern. `gh` must be a
+ * standalone token (not `grep gh-notes`), and `loop-state` must sit at a command-head position
+ * (not a substring inside `grep loop-state x`). Quoted literals are blanked first (see
+ * `stripQuotedLiterals`) so a quoted body/example that merely contains the tokens is not flagged.
+ * @param {string} command @returns {boolean}
+ */
+export function commandIsSleepPollLoop(command) {
+  const whole = stripQuotedLiterals(command.trim());
+  return (
+    /(?:while|until|for)\b/i.test(whole) &&
+    /\bsleep\b/.test(whole) &&
+    /\bgh(?=\s|$)|(?:^|[;&|(])\s*loop-state(?=\s|$)/.test(whole)
+  );
+}
+
+/**
+ * Whether COMMAND is (or contains) a bare FILE-MARKER poll loop: a `while`/`until`/`for` loop that
+ * repeatedly tests for a file's existence/type/permission (`[ -f … ]`, `[[ -e … ]]`, `test -f …`,
+ * `[ -r … ]`, `[ -L … ]`) and sleeps, with NO gated wait-tool. This is the orphan pattern under
+ * Claude Code — a `<tasks>/<id>.done` sentinel Claude Code never writes (completion arrives via
+ * async notification), so the loop never exits and, once backgrounded, orphans with no async wake to
+ * reap it. Distinct from `commandIsSleepPollLoop`, which keys on a `gh`/`loop-state` CALL: this keys
+ * on any bash FILE-test operator (existence, type, or permission — `efsdrwxugkOGLNShb`; string/numeric
+ * tests like `-z`/`-n`/`-t` are deliberately excluded, as those never test a marker FILE), catching a
+ * marker poll that calls no gh/loop-state at all. Verb-independent (while/until/for). Quoted literals
+ * are blanked first (see `stripQuotedLiterals`) so a quoted example or `--body` payload that merely
+ * contains the tokens is NOT flagged.
+ * @param {string} command @returns {boolean}
+ */
+export function commandIsFileMarkerPollLoop(command) {
+  const whole = stripQuotedLiterals(command.trim());
+  return (
+    /(?:while|until|for)\b/i.test(whole) &&
+    /\bsleep\b/.test(whole) &&
+    /(?:\[\[?|\btest\b)\s+(?:!\s+)?-[a-hkprsuwxGLNOS]\b/.test(whole)
+  );
+}
+
+/**
+ * Whether COMMAND contains a bare `&` backgrounding control operator — not `&&` (logical AND) and
+ * not a redirection (`2>&1`, `>&2`, `&>file`, `&>>file`). A coarse whole-string check (no shell
+ * parse): redirection forms are stripped first, then any surviving lone `&` (not immediately
+ * preceded or followed by another `&`) counts.
+ * @param {string} command @returns {boolean}
+ */
+function commandHasBareBackgroundOperator(command) {
+  const withoutRedir = command
+    .replace(/\d*>&\d*-?/g, " ") // 2>&1, 1>&2, >&2, >&-
+    .replace(/&>>?/g, " "); // &>file, &>>file
+  return /(?<!&)&(?!&)/.test(withoutRedir);
+}
+
+/**
+ * The wait/probe helper FAMILY: the Copilot/CI wait tools that MUST run as a bounded FOREGROUND
+ * probe — the `.mjs` helpers (`probe-copilot-review`, `wait-pr-checks`, `detect-copilot-loop-state`,
+ * `run-watch-cycle`, `probe-ci-status` — the sanctioned `ci-status`/`watch-ci` CI-status wait,
+ * skills/dev-loop/SKILL.md's "PR checks/status" entry), `gh run watch`, and the
+ * `dev-loops`/`dev-loops-run` `watch-cycle`/`watch-ci`/`watch-initial`/`gate probe-copilot` CLI
+ * verbs. A coarse ANYWHERE-in-the-string substring/family match (deliberately NOT exec-position
+ * anchored) — see `commandContainsDetachedWaitTool`'s JSDoc for the fail-closed rationale.
+ */
+const WAIT_PROBE_FAMILY_RE = new RegExp(
+  [
+    "probe-copilot-review\\.mjs",
+    "wait-pr-checks\\.mjs",
+    "detect-copilot-loop-state\\.mjs",
+    "run-watch-cycle\\.mjs",
+    "probe-ci-status\\.mjs",
+    "gh\\s+run\\s+watch",
+    "watch-cycle",
+    "watch-ci",
+    "watch-initial",
+    "probe-copilot",
+    "wait-for-units",
+    "wait-for-gate-units\\.mjs",
+  ].join("|"),
+  "i",
+);
+
+/**
+ * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait. This is a UNION of three
+ * independent deny conditions — NOT one big AND (an AND-condition here would inadvertently
+ * narrow the unconditional detach-wrapper ban below to "detach AND family reference", wrongly
+ * allowing a family-less `nohup node build.mjs &`):
+ *
+ *   (1) `nohup`/`disown`/`tmux new-session`/`screen -dm` anywhere in a command segment — denied
+ *       UNCONDITIONALLY, with NO wait/probe-family requirement.
+ *   (2) A `while`/`until`/`for` sleep-poll loop over `gh`/`loop-state` (`commandIsSleepPollLoop`) —
+ *       denied UNCONDITIONALLY — it IS the backgrounding signal.
+ *   (3) OPTION-C, prevention-only scope: a bare `&` background (`commandHasBareBackgroundOperator`,
+ *       including a `timeout …`/`env …`/`sh -c` wrapper of it) that ALSO references the wait/probe
+ *       FAMILY anywhere in the command string (`WAIT_PROBE_FAMILY_RE`) — a coarse substring/family
+ *       match, deliberately NOT exec-position anchored.
+ *
+ * Because (3)'s family match is coarse (anywhere in the string, not the executed token), NO wrapper
+ * can hide the reference from it: `timeout N … &`, `env … &`, `sh -c '… &'`, or a node loader flag
+ * (`node -r ./loader.mjs …/probe-copilot-review.mjs &`, `--require`/`--loader`/`--import`) all still
+ * carry the family token in the backgrounded command text, so all are denied. This trades precision
+ * for guaranteed coverage: a background command that merely MENTIONS a family name as an unrelated
+ * argument (`echo "see probe-copilot-review.mjs" &`) is also denied — a benign false positive,
+ * sanctioned by the issue's non-goals (this is a prevention gate, not an exec-position parser; a
+ * denied benign command simply falls back to the sanctioned foreground path). The precise
+ * exec-position parser this replaced (and the SubagentStop background-shell reaper it fed) is
+ * deferred to a follow-up safety-net effort.
+ *
+ * Actor-independent at the decideBashGate call site: the coordinator/main agent — not only a
+ * subagent — is the actor that leaves these orphaned under Claude Code (no async wake to join a
+ * backgrounded wait), so the gate catches its backgrounding too.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsDetachedWaitTool(command) {
+  const whole = command.trim();
+
+  // (1) Unconditional detach-wrapper ban — no wait/probe-family requirement.
+  const hasDetachWrapper = shellSegments(command).some((segment) => {
+    // `nohup`/`disown` only detach when they head a command (segment start, or right after a
+    // shell operator) — a bare mention (`cat nohup.out`, `echo "nohup banned"`) is not a detach.
+    if (/(?:^|[;&|])\s*(?:nohup|disown)\b/.test(segment)) return true;
+    if (/^tmux\s+new-session\b/i.test(segment)) return true;
+    if (/^screen\s+-dm/i.test(segment)) return true;
+    return false;
+  });
+  if (hasDetachWrapper) {
+    return true;
+  }
+
+  // (2) Unconditional sleep-poll-loop ban — a gh/loop-state poll OR a bare file-marker poll.
+  if (commandIsSleepPollLoop(whole) || commandIsFileMarkerPollLoop(whole)) {
+    return true;
+  }
+
+  // (3) OPTION-C: bare-`&` background AND a wait/probe family reference.
+  if (!commandHasBareBackgroundOperator(whole)) {
+    return false;
+  }
+  return WAIT_PROBE_FAMILY_RE.test(whole);
+}
+
+/** Build a `node`/`python`/`python3` command-head matcher (env/wrapper/path prefix tolerated). */
+function interpreterRegex(bin) {
+  return new RegExp(`^${SHELL_EXEC_PREFIX}${bin}(?:\\s|$)`, "i");
+}
+
+/**
+ * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
+ * heredoc fed to node/python (`node - <<EOF`, `python3 - <<EOF`). Sanctioned output parsing uses
+ * `--jq`/`--silent`, never an inline interpreter. Actor-independent (bars both coordinator and
+ * agent flows). Script-path invocations (running a `.mjs` file, `python3 script.py`) never match.
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsInlineInterpreter(command) {
+  return shellSegments(command).some((segment) => {
+    const s = segment.trim();
+    if (interpreterRegex("node").test(s)) {
+      const code = s.replace(interpreterRegex("node"), "").trim();
+      // Heredoc fed straight to node where node is the command head (`node - <<EOF`, `node <<EOF`),
+      // so `grep node <<EOF` (interpreter is grep) does not false-positive as an inline interpreter.
+      if (/^(?:-\s*)?<</i.test(code)) return true;
+      const tokens = code.split(/\s+/).filter(Boolean);
+      // Node value-taking flags (short + long) each consume the following token. Consuming them lets
+      // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
+      // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
+      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd"]);
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        // `-e`/`-p` may be directly attached to the code (`node -e"console.log(1)"`), which a
+        // prefix match catches; break at the first non-flag token so a later `-e` on a script path
+        // is a script argument.
+        if (t === "-e" || t.startsWith("-e") || t === "--eval" || t.startsWith("--eval=") || t === "-p" || t.startsWith("-p")) return true;
+        if (!t.startsWith("-")) break; // script path reached — a later `-e` is a script argument
+        if (NODE_VALUE_FLAGS.has(t)) { i += 1; continue; } // skip the flag's value token
+      }
+    }
+    if (interpreterRegex("python3?").test(s)) {
+      const code = s.replace(interpreterRegex("python3?"), "").trim();
+      // Heredoc fed straight to python where python is the command head (`python3 - <<EOF`).
+      if (/^(?:-\s*)?<</i.test(code)) return true;
+      const tokens = code.split(/\s+/).filter(Boolean);
+      for (const t of tokens) {
+        if (t === "-c" || t.startsWith("-c")) return true;
+        if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
+      }
+    }
+    return false;
+  });
+}
+
+/**
+ * A package-manager `test`/`verify`/`build` script/task invocation, the `run` keyword optional
+ * (`npm test`, `npm run test`, `bun run verify`, `yarn build`, `pnpm run build`, ...). Anchored on
+ * the executable HEAD (env-assignment/wrapper/path/nice/timeout prefix tolerated via
+ * `VERIFY_EXEC_PREFIX`) so a path that merely contains the word "test" (`cat test/foo.test.mjs`)
+ * never matches — the head token must literally be one of these four package-manager binaries.
+ *
+ * Tolerates a run of binary flags between the binary and `run`/the script name (`bun --bun run
+ * verify`), and a `:`-namespaced sub-script (`test:extension`, `test:core`, `verify:docs`, ...) —
+ * the tail is `(?:[:\s]|$)` rather than `(?:\s|$)` so `npm run test:unit` / `yarn test:ci` match
+ * while `npm run build-docs` (hyphen form, a genuinely different script name) still does not.
+ */
+const PACKAGE_MANAGER_VERIFY_RUN_RE = new RegExp(
+  `^${VERIFY_EXEC_PREFIX}(?:bun|npm|yarn|pnpm)(?:\\s+--\\S+)*\\s+(?:run\\s+)?(?:test|verify|build)(?:[:\\s]|$)`,
+  "i",
+);
+
+/**
+ * `vitest` run directly (any args: `vitest`, `vitest run`, `vitest --coverage`), or via the
+ * `npx`/`bunx` package-runner (`npx vitest run`, `bunx vitest`) or `bun`'s `x` subcommand
+ * (`bun x vitest`).
+ */
+const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x\\s+)?vitest(?:\\s|$)`, "i");
+
+/**
+ * COORDINATOR-VERIFY-BOUNDARY: whether `command` contains a known code-verification/
+ * build entrypoint in ANY shell segment — `bun test`/`bun run verify`/`bun run build`, `vitest`,
+ * `npm test`/`npm run test`/`npm run build`, and the `yarn`/`pnpm` `test`/`build` equivalents
+ * (with or without the `run` keyword). PreToolUse gate use only: the dev-loop COORDINATOR must
+ * delegate these to a fresh WORKER subagent instead of running them inline; a worker subagent may
+ * run them freely (the actor scoping lives in `decideBashGate`, not here).
+ *
+ * Compact orchestration commands the coordinator MAY still run inline never match — their head
+ * token is not a package-manager binary or `vitest` (`dev-loops queue list`, `gh pr checks --json
+ * --jq`, `detect-checkpoint-evidence`, `git log --oneline -1`, `git status --short`).
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsCodeVerificationEntrypoint(command) {
+  return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
+}

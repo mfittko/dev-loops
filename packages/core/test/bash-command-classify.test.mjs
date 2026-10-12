@@ -831,6 +831,13 @@ test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scr
   assert.equal(commandContainsDetachedWaitTool("timeout 600 npm test &"), false);
 });
 
+test("commandContainsInlineInterpreter: an apostrophe in a comment, escape or non-cat heredoc body cannot swallow a later inline interpreter", () => {
+  assert.equal(commandContainsInlineInterpreter("# don't\nnode -e 'console.log(1)'"), true);
+  assert.equal(commandContainsInlineInterpreter("git commit -F - <<'MSG'\ndon't\nMSG\nnode -e 'x'"), true);
+  assert.equal(commandContainsInlineInterpreter("# can't\nnode -e 'x'\n# don't"), true);
+  assert.equal(commandContainsInlineInterpreter("node -e 'x"), true);
+});
+
 test("commandContainsInlineInterpreter: a stray quote on an earlier line or comment does not make a real heredoc write inert", () => {
   assert.equal(commandContainsInlineInterpreter("cat > tmp/n <<'EOF'\ndon't\nEOF\ngit commit -m \"a\nb\" && cat > packages/a.mjs <<EOF\nx\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("# don't\necho \"a\nb\" ; cat > packages/a.mjs <<EOF\nx\nEOF"), true);

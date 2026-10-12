@@ -1236,6 +1236,58 @@ function scanCatTeeHeredocs(command) {
   return { text: out.join("\n"), writes };
 }
 
+const HEREDOC_OPERATOR_STICKY_RE = new RegExp(HEREDOC_OPERATOR_RE.source, "y");
+
+/**
+ * Make quote pairing shell-correct before `stripQuotedLiterals` pairs quotes, so an apostrophe that is not
+ * a quote (in a `#` comment, a backslash-escaped `\'`, or a non-cat heredoc body) cannot pair with a later
+ * real quote and hide the segments between them. Those quote characters become spaces; length is kept.
+ * Returns null when a quote is left unterminated: the caller then scans unstripped text (fail closed).
+ * @param {string} text @returns {string | null}
+ */
+function neutralizeQuoteNoise(text) {
+  let out = "";
+  let state = "n"; // n: unquoted, s: single-quoted, d: double-quoted
+  const pending = []; // heredoc delimiters whose bodies start on the next line
+  const blankQuotes = (s) => s.replace(/['"]/g, " ");
+  for (let i = 0; i < text.length;) {
+    const c = text[i];
+    if (state === "s") {
+      if (c === "'") state = "n";
+      out += c; i += 1;
+    } else if (state === "d") {
+      if (c === "\\" && i + 1 < text.length) { out += c + (text[i + 1] === '"' ? "_" : text[i + 1]); i += 2; continue; }
+      if (c === '"') state = "n";
+      out += c; i += 1;
+    } else if (c === "\\" && i + 1 < text.length) {
+      out += /['"]/.test(text[i + 1]) ? "  " : c + text[i + 1]; i += 2;
+    } else if (c === "#" && (i === 0 || /[\s;&|(]/.test(text[i - 1]))) {
+      const end = text.indexOf("\n", i);
+      const stop = end === -1 ? text.length : end;
+      out += blankQuotes(text.slice(i, stop)); i = stop;
+    } else if (c === "<" && text[i + 1] === "<") {
+      HEREDOC_OPERATOR_STICKY_RE.lastIndex = i;
+      const m = HEREDOC_OPERATOR_STICKY_RE.exec(text);
+      if (m) { pending.push(m[1] ?? m[2] ?? m[3]); out += m[0]; i += m[0].length; } else { out += "<<"; i += 2; }
+      while (text[i] === "<") { out += "<"; i += 1; } // `<<<` here-string
+    } else if (c === "\n" && pending.length) {
+      out += c; i += 1;
+      for (const delimiter of pending.splice(0)) {
+        while (i < text.length) {
+          const end = text.indexOf("\n", i);
+          const line = text.slice(i, end === -1 ? text.length : end);
+          out += blankQuotes(line) + (end === -1 ? "" : "\n"); i += line.length + (end === -1 ? 0 : 1);
+          if (line.trim() === delimiter) break;
+        }
+      }
+    } else {
+      if (c === "'") state = "s"; else if (c === '"') state = "d";
+      out += c; i += 1;
+    }
+  }
+  return state === "n" ? out : null;
+}
+
 /** Command heads whose arguments can carry inline code, a stdin script, or an in-place edit. */
 const INTERPRETER_SEGMENT_RE = new RegExp(`^${SHELL_EXEC_PREFIX}(node|bun|python3?|perl|ruby|g?sed|g?awk)(?:\\s+(.*))?$`, "i");
 
@@ -1313,7 +1365,9 @@ function runnerScriptPath(segment) {
 export function commandContainsInlineInterpreter(command) {
   const { text, writes } = scanCatTeeHeredocs(command);
   if (writes.some((target) => !isTempPath(target))) return true;
-  const segments = shellSegments(stripQuotedLiterals(text, "Q ")); // placeholder keeps a quoted token's position; no leading space keeps `--flag="v"` one token
+  // Quote-stripping needs trustworthy quote pairs. When they are not (unterminated quote), scan the unstripped text.
+  const quoteSafe = neutralizeQuoteNoise(text);
+  const segments = shellSegments(quoteSafe === null ? text : stripQuotedLiterals(quoteSafe, "Q ")); // placeholder keeps a quoted token's position; no leading space keeps `--flag="v"` one token
   if (segments.some(segmentIsInlineInterpreter)) return true;
   const written = new Set(writes.map((t) => t.replace(/^(['"])(.*)\1$/, "$2").replace(/^\.\//, "")));
   // Unstripped segments, so a quoted script path (`node "tmp/r.mjs"`) still names the written file.
