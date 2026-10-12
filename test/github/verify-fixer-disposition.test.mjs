@@ -765,6 +765,20 @@ for (const [name, listOrder, dispositioned] of [
   });
 }
 
+test("the act-thread guard finds the root by databaseId when a reply's node id sorts first", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [], { actList: ACT_LIST });
+    const { deps } = runtime([
+      threadsCallEntry([actThread("PRRT_ACT", [gateComment("c9", 401), gateComment("c1", 402, "reply without marker")])]),
+      userEntry,
+    ], repoRoot);
+    await assert.rejects(
+      verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps),
+      /PRRT_ACT/,
+    );
+  });
+});
+
 test("two open gate threads on one act fingerprint, both dispositioned, pass the act-thread guard", async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, [

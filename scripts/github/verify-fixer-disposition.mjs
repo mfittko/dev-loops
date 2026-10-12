@@ -249,6 +249,15 @@ function buildLiveThreads(parsed) {
   }));
 }
 
+// parseReviewThreads id-sorts comments, so the root is the one with the smallest numeric databaseId
+// (the first comment when no databaseId parses).
+function threadRootComment(parsed, threadId) {
+  const numeric = (c) => (/^\d+$/.test(String(c.databaseId ?? "")) ? Number(c.databaseId) : Infinity);
+  return parsed.comments
+    .filter((c) => c.threadId === threadId)
+    .reduce((root, c) => (root === undefined || numeric(c) < numeric(root) ? c : root), undefined);
+}
+
 // A judge-act item whose fingerprint marks an open inline gate thread is resolved by the fix
 // cycle: the handoff needs a disposition entry for that thread, never a threadless claim.
 // Gate-authored is the authenticated login on the thread ROOT comment, never marker text alone;
@@ -258,7 +267,7 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin) {
   const dispositioned = new Set(handoff.dispositions.map((entry) => entry.threadId));
   const openFingerprints = new Map();
   for (const thread of parsed.threads.filter((t) => !t.isResolved)) {
-    const root = parsed.comments.find((c) => c.threadId === thread.id);
+    const root = threadRootComment(parsed, thread.id);
     if (!root || root.author?.login !== gateLogin) continue;
     const marker = parseFindingMarker(root.body);
     if (!marker) continue;
