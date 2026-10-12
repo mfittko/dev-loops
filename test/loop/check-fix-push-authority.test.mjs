@@ -62,7 +62,7 @@ test("the generated pre-push hook bakes the path its owner supplies, even from o
   assert.equal(baked, owner);
 });
 
-test("the generated pre-push hook refuses every push when no authority script is supplied (fail closed)", () => {
+test("the generated pre-push hook falls back to the checkout script and refuses only when neither file exists (fail closed)", () => {
   const prePush = renderGuardHook("pre-push", ["main"]);
   assert.match(prePush, /authority_cli=""\nif \[ -z "\$authority_cli" \] \|\| \[ ! -f "\$authority_cli" \]; then\n[^\n]*show-toplevel[^\n]*\nfi\nif \[ ! -f "\$authority_cli" \]; then\n[^\n]*PRE-PUSH-DELTA-PUSH-AUTHORITY[^\n]*\n  exit 1\nfi/);
   assert.ok(!prePush.includes("/../"), "no package-layout-relative path");

@@ -72,8 +72,8 @@ function normalizeBranchList(branches) {
  *   (e.g. an explicit `--base`) that REPLACES rather than unions across
  *   installs — see installDefaultBranchGuard's explicitBaseBranches.
  * @param {string|null} authorityCli absolute path of `scripts/loop/check-fix-push-authority.mjs`, resolved by
- *   its owner (the dev-loops side that ships `scripts/`). The pre-push hook refuses every push when it is
- *   absent or missing at run time (fail closed).
+ *   its owner (the dev-loops side that ships `scripts/`). When it is absent or missing at run time the pre-push
+ *   hook falls back to the pushing checkout's scripts/loop copy and refuses every push only when neither file exists (fail closed).
  * @throws {Error} when hookName is not a guarded hook, or any branch is
  *   non-empty and not shell-safe. `hookName` and every branch name are
  *   interpolated straight into the generated script, so THIS function — not
@@ -268,7 +268,7 @@ function readHookState(hookPath) {
  *
  * @param {{ gitDir: string, defaultBranches?: string|string[]|null, explicitBaseBranches?: string|string[]|null, hooksPathOverride?: string|null, authorityCliPath?: string|null }} target
  *   `authorityCliPath` is the absolute path of `scripts/loop/check-fix-push-authority.mjs`, passed by the
- *   dev-loops side that ships it; without it the rendered pre-push hook refuses every push (fail closed).
+ *   dev-loops side that ships it; without it the rendered pre-push hook falls back to the pushing checkout's scripts/loop copy and refuses every push only when neither file exists (fail closed).
  *   `hooksPathOverride` is the repo's `core.hooksPath` when set. Installing into
  *   `$GIT_DIR/hooks` while git reads elsewhere would report success for a guard
  *   that can never fire, so that case refuses instead.
