@@ -138,6 +138,18 @@ test("a commit_only round without a fix commit clears its sequence marker", () =
   assert.equal(fs.existsSync(marker), false);
 });
 
+test("a zero-item act list with a committed fix keeps the sequence marker", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-"));
+  const actList = path.join(dir, "act-list.json");
+  fs.writeFileSync(actList, "[]");
+  const full = `${A}${"0".repeat(26)}`;
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"));
+  const marker = writeSequenceMarker({ tmpRoot, baselineHead: full });
+  const seam = { ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? B : full), isAncestor: () => true };
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"], seam), /non-empty judge act list/);
+  assert.equal(fs.existsSync(marker), true);
+});
+
 test("a baseline that is not an ancestor of HEAD fails", () => {
   const { actList } = fixture();
   const calls = [];

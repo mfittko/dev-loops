@@ -652,7 +652,7 @@ test("install: refuses an absolute gitDir that is not actually a git directory",
 
 // PRE-PUSH-DELTA-PUSH-AUTHORITY: a real `git push` through the installed pre-push hook. The hook captures git's
 // stdin, pipes it to the check and propagates its exit; the marker lives under the main worktree's tmp/gate-delta.
-test("pre-push refuses a push under an ungranted sequence marker, allows it once granted, and allows with no marker when the check script is missing", async () => {
+test("pre-push refuses a push under an ungranted sequence marker, allows it once granted, and with the check script missing, ignores an ended or granted sequence marker and refuses under an open one", async () => {
   const { dir, gitDir, remote } = await repoFixture({ withRemote: true });
   try {
     installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: AUTHORITY_CLI });
@@ -679,6 +679,12 @@ test("pre-push refuses a push under an ungranted sequence marker, allows it once
     fs.writeFileSync(path.join(dir, "later.txt"), "later\n");
     git(dir, ["add", "later.txt"]);
     git(dir, ["commit", "--quiet", "-m", "later"]);
+    git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    // A granted marker whose branch ref is gone (merged and pruned) is ignored too.
+    fs.writeFileSync(markerFile, `${JSON.stringify({ baselineHead: baseline, fullGranted: true, branch: "issue-pruned" })}\n`);
+    fs.writeFileSync(path.join(dir, "granted.txt"), "granted\n");
+    git(dir, ["add", "granted.txt"]);
+    git(dir, ["commit", "--quiet", "-m", "granted"]);
     git(dir, ["push", "--quiet", "origin", "issue-9"]);
     // It refuses while a marker of a sequence that has not ended exists.
     fs.rmSync(markerFile);

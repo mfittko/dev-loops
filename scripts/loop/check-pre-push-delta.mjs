@@ -185,8 +185,12 @@ export function runCli(
   const fixCommitted = currentHead !== sequence.reviewBaselineHead;
   const itemCounts = options.threadsFile ? { threadItemCount: sequence.actItems.length } : { actItemCount: sequence.actItems.length };
   if (resolveDeltaTrigger({ ...itemCounts, fixCommitted }) !== "delta") {
+    if (fixCommitted) {
+      // PRE-PUSH-DELTA-PUSH-AUTHORITY: an unpushed fix commit exists, so the marker stays and keeps guarding the push.
+      throw new Error(`worktree HEAD ${currentHead} differs from the baseline ${sequence.reviewBaselineHead} but the ${options.threadsFile ? "thread" : "act"} list has no items: the delta review has nothing to check, and the sequence marker stays until the fix commit is pushed or the marker is deleted`);
+    }
     // PRE-PUSH-DELTA-PUSH-AUTHORITY: the commit_only round ended without a fix commit, so its marker guards nothing and would only block later pushes.
-    clearSequenceMarker(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),sequence.reviewBaselineHead);
+    clearSequenceMarker(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead);
     throw new Error(`worktree HEAD ${currentHead} equals the baseline: commit the act-list or thread-route fix before the delta review`);
   }
   if (!isAncestor(options.worktree, sequence.reviewBaselineHead, currentHead)) {

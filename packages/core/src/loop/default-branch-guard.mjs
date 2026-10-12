@@ -150,6 +150,7 @@ else
   sequence_marker=""
   for marker_file in "$(dirname "$common_dir")"/tmp/gate-delta/*.sequence; do
     [ -f "$marker_file" ] || continue
+    grep -q '"fullGranted":true' "$marker_file" && continue
     baseline=$(basename "$marker_file" .sequence)
     branch=$(sed -nE 's/.*"branch":"([^"]*)".*/\\1/p' "$marker_file")
     pattern="refs/remotes"
