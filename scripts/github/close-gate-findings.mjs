@@ -389,8 +389,9 @@ async function stampDeferredDisposition({ repo, commentId, round, mediumFixWindo
 // fetched alongside `threads` (fetchThreadsWithFullBodies) — reused as the
 // reply-target validation snapshot rather than re-fetched. `foldedEntries`
 // are the folded findings that clear the filing bar
-// (selectFoldedFileableEntries); they share the round's ONE batched deferral
-// comment with the fileable thread targets.
+// (selectFoldedFileableEntries); on a linked spec issue target they share the
+// round's batched deferral comment with the fileable thread targets (a PR
+// target posts no comment).
 async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, round, threads, snapshot, login, mediumFixWindow, findings = [], foldedEntries = [], trackerProvider, allowedRefs = [] }, { env, ghCommand, runChild }) {
   // GATE-EXEC-THREAD-DISPOSITION: Before stamping, detect any contract-violating disposition=deferred
   // stamps already present on gate-authored threads (a subagent bypass).
@@ -704,8 +705,9 @@ async function runQuestionRejectClosePass({ repo, pr, gate, headSha, round, thre
 // with a locatable inline thread is already a thread target, so `threads`
 // excludes its fingerprint here. The net-reduction filing bar
 // (isFileableDeferral) still applies: an operator-visible folded low or a
-// past-window folded medium joins the round's ONE batched deferral comment,
-// exactly like a fileable THREAD target. A nit or a non-operator-visible low is
+// past-window folded medium joins the round's batched deferral comment,
+// exactly like a fileable THREAD target (on a linked spec issue target only; a
+// PR target posts no comment). A nit or a non-operator-visible low is
 // never filed (its Details entry is its resolved-with-rationale record).
 function selectFoldedFileableEntries({ findings, round, floor, blockingSeverities = [], mediumFixWindow, threads = [], login }) {
   const threadFps = new Set();
@@ -821,9 +823,9 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // earlier round must be reconciled against THIS round regardless of whether
   // this round posted anything of its own.
   // Folded findings (GATE-COMMENT-INLINE-SEVERITY-FLOOR) never get a thread,
-  // so their fileable subset joins the thread pass's ONE batched deferral
-  // comment. An unvalidated config never names the tracker, so the comment
-  // target falls back to the PR itself.
+  // so their fileable subset joins the thread pass's batched deferral comment
+  // on a linked spec issue target only. A PR target, including the
+  // unvalidated-config fallback (no tracker named), posts no comment.
   const { threads, snapshot } = await fetchThreadsWithFullBodies({ repo, pr }, gh);
   const foldedEntries = selectFoldedFileableEntries({ findings, round, floor: inlineSeverityFloor, blockingSeverities: resolvedGateConfig?.blockCleanOnFindingSeverities ?? [], mediumFixWindow, threads, login });
   const trackerProvider = errors.length > 0 ? null : resolveTrackerProvider(config);

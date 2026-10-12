@@ -97,3 +97,23 @@ test("the judge `defer` bullets file a new issue only for a blocker, never via c
     assert.doesNotMatch(bullet, /create-issue\.mjs|files it by hand|new issue is warranted/, `${file}`);
   }
 });
+
+test("the help texts and the judge defer bullet state that a PR target posts no deferral comment", async () => {
+  const usage = async (file, from) => {
+    const text = await readFile(`${repoRoot}${file}`, "utf8");
+    const start = text.indexOf(from);
+    assert.notEqual(start, -1, `${file}: ${from} must exist`);
+    return text.slice(start, text.indexOf("\n`;", start));
+  };
+  assertClaims(await usage("scripts/github/close-gate-findings.mjs", "const USAGE = `"), [
+    ["A PR target posts no comment", "thread marker", "Details markers"],
+  ], "close-gate-findings help");
+  assertClaims(await usage("scripts/loop/judge-pass.mjs", "The round's defers go as"), [
+    ["ONE batched comment", "spec issue target only", "a PR target posts no comment"],
+  ], "judge-pass help");
+  const judge = await readFile(`${repoRoot}agents/judge.agent.md`, "utf8");
+  const start = judge.indexOf("- `defer` — ");
+  assertClaims(judge.slice(start, judge.indexOf("- `reject` — ", start)), [
+    ["batched deferral comment", "linked spec issue target", "on a PR target no comment is posted"],
+  ], "agents/judge.agent.md defer bullet");
+});
