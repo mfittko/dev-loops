@@ -19,7 +19,7 @@ On a drained PR two gate fix commits reached the PR head before the full-phase f
 
 A stray push during a gate fix sequence is refused on both harnesses. The git layer cannot tell agents apart, so after `fullGranted` it admits any pusher and the Claude hook narrows it to the fixer. Pi has no per-agent layer.
 
-The dev-loops side that owns `scripts/` (`ensure-worktree`) passes the script path into the guard install, and the generated `pre-push` hook bakes it. A hook without a script path, or whose script file is gone, refuses every push (fail closed), so a consumer install never skips the layer. A reinstall of the default-branch guard hooks adds the layer to an existing checkout.
+The dev-loops side that owns `scripts/` (`ensure-worktree`) passes the script path into the guard install, and the generated `pre-push` hook bakes it. A baked path that is gone (a pruned worktree or cache directory) falls back to the pushing checkout's own `scripts/loop/check-fix-push-authority.mjs`. A hook with neither script refuses every push (fail closed), so a consumer install never skips the layer. A reinstall of the default-branch guard hooks adds the layer to an existing checkout.
 
 Residual gaps:
 

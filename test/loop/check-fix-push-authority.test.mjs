@@ -64,8 +64,8 @@ test("the generated pre-push hook bakes the path its owner supplies, even from o
 
 test("the generated pre-push hook refuses every push when no authority script is supplied (fail closed)", () => {
   const prePush = renderGuardHook("pre-push", ["main"]);
-  assert.match(prePush, /authority_cli=""\nif \[ -z "\$authority_cli" \] \|\| \[ ! -f "\$authority_cli" \]; then\n[^\n]*PRE-PUSH-DELTA-PUSH-AUTHORITY[^\n]*\n  exit 1\nfi/);
-  assert.ok(!prePush.includes("scripts/loop/check-fix-push-authority.mjs"), "no layout-relative fallback path");
+  assert.match(prePush, /authority_cli=""\nif \[ -z "\$authority_cli" \] \|\| \[ ! -f "\$authority_cli" \]; then\n[^\n]*show-toplevel[^\n]*\nfi\nif \[ ! -f "\$authority_cli" \]; then\n[^\n]*PRE-PUSH-DELTA-PUSH-AUTHORITY[^\n]*\n  exit 1\nfi/);
+  assert.ok(!prePush.includes("/../"), "no package-layout-relative path");
   assert.throws(() => renderGuardHook("pre-push", ["main"], null, "relative/check.mjs"), /absolute path/);
   assert.throws(() => renderGuardHook("pre-push", ["main"], null, "/x/$(evil)/check.mjs"), /absolute path/);
 });

@@ -130,7 +130,8 @@ fi
   // pre-push ONLY: the harness-neutral push gate of PRE-PUSH-DELTA-PUSH-AUTHORITY. It runs before
   // the override-env check, so DEVLOOPS_ALLOW_MAIN never bypasses it. The script path comes from its
   // owner (the dev-loops side that ships scripts/), never from a layout guess inside this package.
-  // No path, or a path that no longer exists, refuses the push (fail closed). The pushed refs git
+  // A baked path that no longer exists (pruned worktree or cache dir) falls back to the pushing
+  // checkout's own scripts/ copy; with neither present the push is refused (fail closed). The pushed refs git
   // sends on stdin are captured once, handed to the check, and replayed to the default-branch loop.
   if (authorityCli !== null && (typeof authorityCli !== "string" || !path.isAbsolute(authorityCli) || /["$`\\\n\r]/u.test(authorityCli))) {
     throw new Error(`authority script path ${JSON.stringify(authorityCli)} must be an absolute path without characters the generated hook's shell would expand`);
@@ -139,6 +140,9 @@ fi
     ? `push_lines=$(cat)
 authority_cli="${authorityCli ?? ""}"
 if [ -z "$authority_cli" ] || [ ! -f "$authority_cli" ]; then
+  authority_cli="$(git rev-parse --show-toplevel 2>/dev/null)/scripts/loop/check-fix-push-authority.mjs"
+fi
+if [ ! -f "$authority_cli" ]; then
   echo "dev-loops: PRE-PUSH-DELTA-PUSH-AUTHORITY the push-authority check script is missing; refusing the push (fail closed). Re-run ensure-worktree to reinstall the hooks." >&2
   exit 1
 fi
