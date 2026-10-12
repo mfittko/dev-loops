@@ -169,7 +169,7 @@ function gitIsAncestor(worktree, ancestor, descendant) {
 
 // Tracked-file hits of the sentences and identifiers the delta range removed, grepped at the candidate head.
 // A git failure throws (fail closed), including a missing baseline or head object. The diff and grep
-// formats are pinned so operator git config (prefix, color, external diff, textconv, algorithm, renames, path quoting) cannot blank the check.
+// formats are pinned so operator git config (prefix, color, external diff, textconv, algorithm, renames, path quoting, submodules) cannot blank the check.
 export function gitStaleSurfaceHits(worktreeArg, baseline, head) {
   // Run from the top level so a subdirectory --worktree cannot scope the diff or grep to that subtree.
   const top = spawnSync("git", ["-C", worktreeArg, "rev-parse", "--show-toplevel"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
@@ -183,7 +183,7 @@ export function gitStaleSurfaceHits(worktreeArg, baseline, head) {
   const diff = git("diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--diff-algorithm=myers", "--no-renames", "--no-relative", "--inter-hunk-context=0", `${baseline}..${head}`);
   if (diff.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${diff.stderr.trim()}; the stale-surface check cannot read the delta range`);
   const grep = (needle, { word }) => {
-    const out = git("grep", "-n", "-I", "--full-name", "-F", "--no-color", ...(word ? ["-w"] : []), "-e", needle, head);
+    const out = git("grep", "-n", "-I", "--full-name", "-F", "--no-color", "--no-recurse-submodules", ...(word ? ["-w"] : []), "-e", needle, head);
     if (out.status === 1) return [];
     if (out.status !== 0) throw new Error(`git grep failed in ${worktree} (exit ${out.status}): ${out.stderr.trim()}`);
     const rows = out.stdout.split("\n").filter(Boolean);
