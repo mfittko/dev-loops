@@ -76,7 +76,7 @@ is NOT filed either. medium (past its fix window) is unchanged: always filed. Th
 round's FILEABLE deferrals (thread targets plus folded findings isFileableDeferral files) go
 as ONE batched comment on the linked spec issue (tracker.provider is github and
 the PR has exactly one closing issue reference). A PR target posts no comment:
-a folded deferral is recorded by its Details marker in the verdict body's Deferred group,
+a folded entry is recorded by its Details marker in the verdict-body group it renders under (Deferred, Rejected or Not judged; only thread and Deferred-group markers carry issue=<pr>),
 a stamped thread by its thread marker (issue=<pr>) plus resolving reply, and a no-stamp thread
 (a non-fileable low, or an in-window medium) by its resolving reply plus the ledger entry. This tool never creates an issue. A fingerprint the
 target already lists is not appended again. A FILED thread's marker is stamped

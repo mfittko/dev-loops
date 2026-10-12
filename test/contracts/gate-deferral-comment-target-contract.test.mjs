@@ -108,7 +108,7 @@ test("the help texts and the judge defer bullet state that a PR target posts no 
     return text.slice(start, text.indexOf("`.trim();", start));
   };
   assertClaims(await usage("scripts/github/close-gate-findings.mjs", "const USAGE = `"), [
-    ["A PR target posts no comment", "thread marker", "Details marker", "no-stamp thread", "ledger entry"],
+    ["A PR target posts no comment", "thread marker", "Details marker", "Deferred, Rejected or Not judged", "no-stamp thread", "ledger entry"],
   ], "close-gate-findings help");
   assertClaims(await usage("scripts/loop/judge-pass.mjs", "The round's defers go as"), [
     ["ONE batched comment", "spec issue target only", "a PR target posts no comment", "no-stamp thread", "ledger"],
