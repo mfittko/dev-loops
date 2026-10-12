@@ -27,13 +27,13 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
 /** The recovery pointer the refusal reason carries. `--phase full` works only after a clearing delta record, so deleting the marker is the general recovery. */
 export const recoveryHint = (markerPath) => markerPath ? ` To recover an abandoned sequence, delete the marker ${markerPath} (emit-fixer-work-order.mjs --phase full grants the push only after a clearing delta record).` : "";
 
-/** The marker for a baseline head, or null when none exists. A malformed marker reads as active, not granted (fail closed). */
+/** The marker for a baseline head, or null when none exists (ENOENT only). A malformed or unreadable marker reads as active, not granted (fail closed). */
 export function readSequenceMarker(tmpRoot, baselineHead) {
   let text;
   try {
     text = readFileSync(sequenceMarkerPath(tmpRoot, baselineHead), "utf8");
-  } catch {
-    return null;
+  } catch (error) {
+    return error?.code === "ENOENT" ? null : { baselineHead, fullGranted: false };
   }
   try {
     const marker = JSON.parse(text);

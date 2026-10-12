@@ -24,3 +24,12 @@ test("a malformed marker file reads as active and not granted", () => {
   const found = findActiveSequence({ tmpRoot, head: "aaa1", ...seams(["aaa1"]) });
   assert.equal(found.fullGranted, false);
 });
+
+test("an unreadable marker (not ENOENT) reads as active and not granted", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "find-active-sequence-"));
+  const file = writeSequenceMarker({ tmpRoot, baselineHead: "aaa1", fullGranted: true });
+  fs.rmSync(file);
+  fs.mkdirSync(file);
+  const found = findActiveSequence({ tmpRoot, head: "aaa1", ...seams(["aaa1"]) });
+  assert.equal(found.fullGranted, false);
+});
