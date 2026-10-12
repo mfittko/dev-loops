@@ -989,11 +989,11 @@ test("a handback made by filling the skeleton passes check-pre-push-delta input 
     const coverageLog = path.join(path.dirname(files.actList), "findings-log.json");
     await writeFile(coverageLog, JSON.stringify({ headSha: head, provenance: { perAngle: [{ angle: "correctness" }] } }));
     const seam = { stdout: { write: () => {} }, tmpRoot: path.dirname(files.actList), revParse: (_w, rev) => (rev === "HEAD" ? candidate : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) };
-    const out = runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--findings-log", coverageLog, "--site-coverage", coverage], seam);
+    const out = runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--handback", "--site-coverage", coverage], seam);
     assert.equal(out.input.siteCoverage.length, 3);
     // The unfilled skeleton is refused.
     await writeFile(coverage, JSON.stringify({ headSha: candidate, siteCoverage: workOrder.siteCoverage }));
-    assert.throws(() => runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--findings-log", coverageLog, "--site-coverage", coverage], seam), /expected fixed or skipped/);
+    assert.throws(() => runCli(["--act-list", files.actList, "--baseline", head, "--spec-identity", "spec@1", "--handback", "--site-coverage", coverage], seam), /expected fixed or skipped/);
   });
 });
 

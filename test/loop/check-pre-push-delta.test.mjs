@@ -314,7 +314,7 @@ test("the production stale-surface adapter reports the hit file and line, whatev
   };
   const expected = ["test/pin.test.mjs:1", "test/pin.test.mjs:2"];
   assert.deepEqual(hitsUnder(), expected);
-  assert.deepEqual(hitsUnder(["diff.noprefix", "true"], ["color.ui", "always"], ["diff.external", "false"], ["diff.algorithm", "histogram"], ["diff.renames", "copies"], ["core.quotePath", "true"]), expected);
+  assert.deepEqual(hitsUnder(["diff.noprefix", "true"], ["color.ui", "always"], ["diff.external", "false"], ["diff.algorithm", "histogram"], ["diff.renames", "copies"], ["diff.orderFile", "/dev/null"], ["core.quotePath", "true"]), expected);
 });
 
 test("the production adapter runs from the top level and ignores diff.relative and diff.interHunkContext", () => {
