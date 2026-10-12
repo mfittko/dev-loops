@@ -154,11 +154,11 @@ export function isBelowInlineFloor(severity, floor) {
 // marker is built rather than let a producer and reader disagree.
 const VALID_MARKER_DISPOSITIONS = new Set(["deferred"]);
 
-// `issue` is the number of the deferral comment target (the linked spec issue
-// or the PR) a `disposition=deferred` finding is recorded on
-// (GATE-EXEC-DEFERRAL-RECORD): a deferral must
-// never live only in the thread marker and the ephemeral tmp ledger, so the
-// marker itself carries the re-attachment pointer.
+// `issue` is the number of the deferral target a `disposition=deferred`
+// finding points at (GATE-EXEC-DEFERRAL-RECORD): the linked spec issue, which
+// gets the batched deferral comment, or the PR, which gets no comment and whose
+// thread marker plus resolving reply are the record. The marker itself carries
+// the re-attachment pointer.
 //
 // `operatorVisible` is the explicit operator-visibility signal a `low`
 // finding's own producer attaches — rendered as the marker's `ov=1` field

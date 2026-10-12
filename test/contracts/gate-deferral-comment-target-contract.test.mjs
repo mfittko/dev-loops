@@ -103,7 +103,7 @@ test("the help texts and the judge defer bullet state that a PR target posts no 
     const text = await readFile(`${repoRoot}${file}`, "utf8");
     const start = text.indexOf(from);
     assert.notEqual(start, -1, `${file}: ${from} must exist`);
-    return text.slice(start, text.indexOf("\n`;", start));
+    return text.slice(start, text.indexOf("`.trim();", start));
   };
   assertClaims(await usage("scripts/github/close-gate-findings.mjs", "const USAGE = `"), [
     ["A PR target posts no comment", "thread marker", "Details markers"],

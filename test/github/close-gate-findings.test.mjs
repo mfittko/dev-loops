@@ -1539,7 +1539,7 @@ test("a mixed disposition pass comments once, for only the not-yet-listed finger
       resolveThreadEntry("THREAD_STAMPED"),
       getReviewCommentEntry(6902, unstamped),
       patchReviewCommentEntry(6902),
-      postReplyEntry(6902, { id: 7902 }),
+      { ...postReplyEntry(6902, { id: 7902 }), assertStdinIncludes: ["recorded in the deferral comment on", "/issues/9500"] },
       resolveThreadEntry("THREAD_UNSTAMPED"),
     ],
     async ({ env, ghCommand, runChild, repoRoot }) => {
@@ -1573,8 +1573,8 @@ for (const [label, closing] of [["no closing reference", []], ["more than one cl
   });
 }
 
-// A tracker other than GitHub: the comment goes to the PR, with no closing
-// reference lookup at all (a prViewEntry here would be the next stub entry and
+// A tracker other than GitHub: the PR is the target and no comment is posted,
+// with no closing reference lookup at all (a prViewEntry here would be the next stub entry and
 // its args would not match the comments read, failing the run).
 test("deferral comment target: tracker.provider other than github — no comment, no closing-reference lookup", async () => {
   const thread = openWfnThread({ commentId: 6710, fp: "3333333333333333", id: "THREAD_NON_GITHUB" });
@@ -2239,8 +2239,9 @@ test("#1585: unresolvedGateThreadCount reflects the subtraction (must-fix stays,
 // ---------------------------------------------------------------------------
 // Folded filing. A finding that isVisibleFinding does not show
 // (upsert-checkpoint-verdict.mjs's renderVerdictDetailsBlock) never gets a
-// thread of its own; its operator-visible lows join the round's ONE batched
-// deferral comment directly from the ledger.
+// thread of its own; its operator-visible lows and past-window mediums join the
+// round's ONE batched deferral comment directly from the ledger (linked spec
+// issue target only; a PR target posts no comment).
 // ---------------------------------------------------------------------------
 
 test("#2263: an operator-visible folded low is listed in ONE deferral comment, with no gate-authored thread of its own", async () => {
