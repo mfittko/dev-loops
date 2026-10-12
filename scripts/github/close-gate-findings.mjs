@@ -80,8 +80,8 @@ a thread deferral is recorded in its thread marker (issue=<pr>) and a folded
 deferral in the verdict body's Details markers. This tool never creates an issue. A fingerprint the
 target already lists is not appended again. A FILED thread's marker is stamped
 \`disposition=deferred issue=<n>\` (n = the target's number) before it is resolved, so
-the deferral is never parked only in the thread marker and the ephemeral tmp
-findings ledger. A contract-violating disposition=deferred stamp — on a question or
+on a linked-issue target the deferral is never parked only in the thread marker and the ephemeral tmp
+findings ledger (on a PR target the stamped marker and the resolving reply are the record). A contract-violating disposition=deferred stamp — on a question or
 in-window medium thread, a nit, a non-operator-visible low (a subagent bypass of
 selectDispositionTargets/isFileableDeferral), or missing its target number — is
 detected and rejected before the pass runs (#1672, #1807, #1846).
@@ -215,8 +215,8 @@ function isGateAutomationReply(body) {
 // Only ever called for a FILEABLE target (isFileableDeferral true) — see
 // unfiledResolutionMessage for the nit/non-operator-visible-low reply. Each
 // reply is distinct by construction (fingerprint/severity/angle plus the
-// window reason) and always names the deferral comment target rather than only
-// the thread marker + ephemeral tmp ledger (GATE-EXEC-DEFERRAL-RECORD).
+// window reason) and names the deferral comment on a linked-issue target, or the
+// thread marker (issue=<pr>) on a PR target (GATE-EXEC-DEFERRAL-RECORD).
 function dispositionMessage({ fp, severity, angle, round, mediumFixWindow, repo, pr, issueNumber, body, operatorVisible }) {
   const meritRationale = buildMeritRationale({ body, severity, operatorVisible, round, mediumFixWindow });
   return `${GATE_DEFERRED_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${windowReason(severity, mediumFixWindow)}; ${issueNumber === pr ? `recorded in this thread's marker (issue=${pr}).` : `recorded in the deferral comment on https://github.com/${repo}/issues/${issueNumber}.`}`;
