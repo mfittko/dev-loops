@@ -34,7 +34,8 @@ No separate verdict issue comment and no separate findings review is posted. Two
 the opt-in findings comment (`gates.postFindingsComments`, `GATE-COMMENT-IDENTITY-DISJOINT`) and
 the batched deferral comment (`<!-- dev-loops:deferred-summary -->`) that `judge-pass.mjs` and
 `close-gate-findings.mjs` post for a round's deferred findings, at most one per tool run, on the
-linked spec issue or the PR (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`).
+linked spec issue (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`). When the target is the PR itself no
+deferral comment is posted: each deferred thread's own stamped marker and reply, and each folded entry's marker in the group it renders under in `Details`, are the record.
 
 `GATE-COMMENT-SUPERSEDE-OUTDATED`: When a new `draft_gate` (resp. `pre_approval_gate`) verdict
 is created, `upsert-checkpoint-verdict.mjs` folds the SAME gate's prior verdict reviews recorded

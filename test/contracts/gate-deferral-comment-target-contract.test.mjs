@@ -45,6 +45,7 @@ test("GATE-EXEC-DEFERRAL-RECORD names the comment target and states no tool crea
     ["otherwise", "the PR itself"],
     ["ONE batched", "deferral comment"],
     ["never selects", "`act`", "prior round"],
+    ["target is the PR itself", "neither tool posts a deferral comment"],
   ], "GATE-EXEC-DEFERRAL-RECORD");
   assert.doesNotMatch(section, /ONE tracked (GitHub )?follow-up issue/, "the old one-follow-up-issue wording must not return");
 });

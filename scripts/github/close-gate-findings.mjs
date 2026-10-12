@@ -11,8 +11,9 @@ import {
   commentDeferredFindings,
   fetchThreadsWithFullBodies,
   findJudgeDispositionForFingerprint,
+  collectFingerprints,
   fingerprintFinding,
-  isBelowInlineFloor,
+  isVisibleFinding,
   isDeferredAtRound,
   isFileableDeferral,
   listPrReviews,
@@ -32,7 +33,7 @@ Run a closed gate round's THREAD DISPOSITION pass. This helper posts NO review o
 its own: the round's single visible surface is the one PR review
 upsert-checkpoint-verdict.mjs already posted (verdict-marker body + inline finding
 comments). Its only other comment is ONE batched deferral comment per tool run
-(below). Here, every unresolved gate-authored finding thread is reconciled
+on a linked spec issue target (below; none on a PR target). Here, every unresolved gate-authored finding thread is reconciled
 against the current round. A thread whose finding the judge disposed \`act\`
 (current ledger first; on no match, the prior local ledgers, then the thread's
 rendered judge suffix; an ambiguous result at either ledger tier, meaning
@@ -72,10 +73,11 @@ resolved-with-rationale in-thread only, no marker stamp. low is filed only
 when its own marker carries the explicit operatorVisible signal (the finding's own
 operatorVisible: true, rendered as the marker's ov=1 field); the default (absent/false)
 is NOT filed either. medium (past its fix window) is unchanged: always filed. The
-round's FILEABLE deferrals (thread targets plus operator-visible folded findings) go
-as ONE batched comment on the comment target: the PR's linked spec issue when
-tracker.provider is github and the PR has exactly one closing issue reference,
-otherwise the PR itself. This tool never creates an issue. A fingerprint the
+round's FILEABLE deferrals (thread targets plus folded findings isFileableDeferral files) go
+as ONE batched comment on the linked spec issue (tracker.provider is github and
+the PR has exactly one closing issue reference). A PR target posts no comment:
+a thread deferral is recorded in its thread marker (issue=<pr>) and a folded
+deferral in the verdict body's Details markers. This tool never creates an issue. A fingerprint the
 target already lists is not appended again. A FILED thread's marker is stamped
 \`disposition=deferred issue=<n>\` (n = the target's number) before it is resolved, so
 the deferral is never parked only in the thread marker and the ephemeral tmp
@@ -116,8 +118,8 @@ Output (stdout, JSON):
     "deferredResolved": <disposition reply+resolve count>,
     "rejectClosed": <answered, judge-rejected question threads reply+resolved this pass (ADR 0088); 0 when none qualify>,
     "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer + reject-close passes; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
-    "foldedFiled": <#2263: operator-visible folded (below gates.<gate>.inlineSeverityFloor) low findings newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); a nit or a non-operator-visible low is never filed>,
-    "followUpIssueNumber"?: <the deferral comment target number (the linked spec issue, or the PR itself); present when the round had a fileable thread target OR a fileable folded finding>,
+    "foldedFiled": <#2263: folded findings isFileableDeferral files (an operator-visible low, or a past-window medium whatever its ov flag; not visible per the judge-disposition rule) newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); on a PR target no comment is posted and it counts the folded entries recorded in the verdict body's Details block under any group (Deferred, Rejected or Not judged; only a Deferred-group marker carries issue=<pr>); a nit or a non-operator-visible low is never filed>,
+    "followUpIssueNumber"?: <the deferral target number (the linked spec issue the comment goes to, or the PR itself, which gets no comment); present when the round had a fileable thread target OR a fileable folded finding>,
     "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted; that thread stays unresolved rather than deadlocking the batch (#1882)> }
 
 ${JQ_OUTPUT_USAGE}
@@ -215,9 +217,9 @@ function isGateAutomationReply(body) {
 // reply is distinct by construction (fingerprint/severity/angle plus the
 // window reason) and always names the deferral comment target rather than only
 // the thread marker + ephemeral tmp ledger (GATE-EXEC-DEFERRAL-RECORD).
-function dispositionMessage({ fp, severity, angle, round, mediumFixWindow, repo, issueNumber, body, operatorVisible }) {
+function dispositionMessage({ fp, severity, angle, round, mediumFixWindow, repo, pr, issueNumber, body, operatorVisible }) {
   const meritRationale = buildMeritRationale({ body, severity, operatorVisible, round, mediumFixWindow });
-  return `${GATE_DEFERRED_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${windowReason(severity, mediumFixWindow)}; recorded in the deferral comment on https://github.com/${repo}/issues/${issueNumber}.`;
+  return `${GATE_DEFERRED_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${windowReason(severity, mediumFixWindow)}; ${issueNumber === pr ? `recorded in this thread's marker (issue=${pr}).` : `recorded in the deferral comment on https://github.com/${repo}/issues/${issueNumber}.`}`;
 }
 
 // Reply for a thread RESOLVED this round but that does NOT clear the
@@ -430,8 +432,8 @@ async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, 
     }
   }
 
-  // ONE batched comment per round on the deferral comment target (the linked
-  // spec issue or the PR), posted BEFORE any stamp/resolve so a crash never
+  // ONE batched comment per round on a linked spec issue target (a PR target
+  // posts no comment), posted BEFORE any stamp/resolve so a crash never
   // resolves a thread whose deferral was not recorded. A fingerprint the
   // target already lists is not appended again, so a retry is idempotent.
   // No issue is ever created (GATE-EXEC-DEFERRAL-RECORD).
@@ -460,7 +462,7 @@ async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, 
   // without its reply.
   for (const target of buildableFileable) {
     try {
-      const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow, repo, issueNumber, body: target.body, operatorVisible: target.operatorVisible });
+      const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow, repo, pr, issueNumber, body: target.body, operatorVisible: target.operatorVisible });
       await stampDeferredDisposition({ repo, commentId: target.commentId, round, mediumFixWindow, issueNumber }, { env, ghCommand, runChild });
       await replyAndMaybeResolve(
         { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
@@ -696,18 +698,21 @@ async function runQuestionRejectClosePass({ repo, pr, gate, headSha, round, thre
 // Folded filing (GATE-COMMENT-INLINE-SEVERITY-FLOOR)
 // ---------------------------------------------------------------------------
 //
-// A finding below the gate's inlineSeverityFloor never gets an inline/
-// body-filed thread of its own — upsert-checkpoint-verdict.mjs folds it into
-// the verdict body's Details block instead (renderVerdictDetailsBlock),
-// so it never reaches selectDispositionTargets. The net-reduction filing bar
-// (isFileableDeferral) still applies: an operator-visible folded low joins the
-// round's ONE batched deferral comment, exactly like a fileable THREAD target.
-// A nit or a non-operator-visible low is never filed (already recorded,
-// visible, in the folded <details> block itself; that IS its
-// resolved-with-rationale record).
-function selectFoldedFileableEntries({ findings, round, floor, mediumFixWindow }) {
+// A finding that isVisibleFinding does not show gets no body-filed entry of its
+// own: upsert-checkpoint-verdict.mjs folds it into the verdict body's collapsed
+// Details block (renderVerdictDetailsBlock). One at or above the inline floor
+// with a locatable inline thread is already a thread target, so `threads`
+// excludes its fingerprint here. The net-reduction filing bar
+// (isFileableDeferral) still applies: an operator-visible folded low or a
+// past-window folded medium joins the round's ONE batched deferral comment,
+// exactly like a fileable THREAD target. A nit or a non-operator-visible low is
+// never filed (its Details entry is its resolved-with-rationale record).
+function selectFoldedFileableEntries({ findings, round, floor, blockingSeverities = [], mediumFixWindow, threads = [], login }) {
+  const threadFps = new Set();
+  for (const t of threads) if (t.author === login) collectFingerprints(t.body, threadFps);
   return findings
-    .filter((f) => isBelowInlineFloor(f.severity, floor))
+    .filter((f) => !threadFps.has(fingerprintFinding(f)))
+    .filter((f) => !isVisibleFinding(f, { floor, blockingSeverities }))
     // An act finding goes to the fixer, never the deferral record (ADR 0089);
     // a fingerprint whose ledger entries disagree is ambiguous and fails closed.
     .filter((f) => isFileableDeferral(f.severity, f.operatorVisible === true, round, mediumFixWindow))
@@ -820,7 +825,7 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // comment. An unvalidated config never names the tracker, so the comment
   // target falls back to the PR itself.
   const { threads, snapshot } = await fetchThreadsWithFullBodies({ repo, pr }, gh);
-  const foldedEntries = selectFoldedFileableEntries({ findings, round, floor: inlineSeverityFloor, mediumFixWindow });
+  const foldedEntries = selectFoldedFileableEntries({ findings, round, floor: inlineSeverityFloor, blockingSeverities: resolvedGateConfig?.blockCleanOnFindingSeverities ?? [], mediumFixWindow, threads, login });
   const trackerProvider = errors.length > 0 ? null : resolveTrackerProvider(config);
   const { deferredResolved, foldedFiled, followUpIssueNumber, dispositionFailures } = await runDispositionPass(
     { repo, pr, gate, headSha, tmpRoot, repoRoot, round, threads, snapshot, login, mediumFixWindow, findings, foldedEntries, trackerProvider, allowedRefs: options.allowedRefs ?? [] },

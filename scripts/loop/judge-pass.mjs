@@ -102,9 +102,13 @@ Inputs:
                                — the deferral comment target's number: the PR's linked
                                spec issue when tracker.provider is github and the PR has
                                exactly one closing reference, otherwise the PR itself.
-                               The round's defers go as ONE batched comment on that
-                               target; this tool never creates an issue. A re-run does
-                               not append a fingerprint the target already lists.
+                               The round's defers go as ONE batched comment on a linked
+                               spec issue target only; a PR target posts no comment and
+                               followUpIssueNumber records the PR number (a threaded
+                               defer is recorded by its thread marker and resolve reply,
+                               a folded one by its Details marker). This tool never
+                               creates an issue. A re-run does not append a fingerprint
+                               the target already lists.
   --repo-root <path>           Root used to resolve relative --findings-file /
                                --judge-verdict / --out / --ledger-out paths
                                (default: process.cwd()).
@@ -522,9 +526,10 @@ function validateFindingsArray(parsed, flagLabel) {
 /**
  * Attach a stable per-finding `fingerprint` to every judge-disposed finding
  * (act/defer/reject — the one-line reject audit entry keys on it too), then
- * post every `defer` disposition as ONE batched comment on the deferral
- * comment target (the linked spec issue or the PR, per the configured
- * tracker). Never creates an issue. Mutates `enriched` in place (each element
+ * post every `defer` disposition as ONE batched comment on the linked spec
+ * issue target. A PR target posts no comment (a threaded defer is recorded by
+ * its thread marker and resolve reply, a folded one by its Details marker).
+ * Never creates an issue. Mutates `enriched` in place (each element
  * already the judge-pass's own fresh copy from `applyJudgeDispositions`). A
  * re-run does not append a fingerprint the target already lists.
  */
@@ -966,8 +971,9 @@ export async function judgePassCli(
     );
   }
 
-  // A `defer` disposition is recorded as one batched comment on the deferral
-  // comment target — never only the ephemeral tmp ledger, and never a new
+  // A `defer` disposition is recorded as one batched comment on a linked spec
+  // issue target (a PR target posts no comment; its verdict body markers are
+  // the record) — never only the ephemeral tmp ledger, and never a new
   // issue. Idempotent across re-runs via the target's listed fingerprints.
   await applyDeferralComment(
     result.enriched,
