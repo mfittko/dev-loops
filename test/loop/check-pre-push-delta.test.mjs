@@ -142,7 +142,7 @@ test("a commit_only round without a fix commit clears its sequence marker", () =
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"));
   const marker = writeSequenceMarker({ tmpRoot, baselineHead: full });
   const seam = { ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? full : full), isAncestor: () => true };
-  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"], seam), /equals the baseline/);
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam), /equals the baseline/);
   assert.equal(fs.existsSync(marker), false);
 });
 
@@ -155,7 +155,7 @@ test("a zero-item act list with a committed fix aborts early and keeps the seque
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"));
   const marker = writeSequenceMarker({ tmpRoot, baselineHead: full });
   const seam = { ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? B : full), isAncestor: () => true };
-  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"], seam), /non-empty judge act list/);
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam), /non-empty judge act list/);
   assert.equal(fs.existsSync(marker), true);
 });
 
@@ -259,7 +259,7 @@ test("with --result a coverage record for an older head is discarded and the sta
 
 test("--pr-head fails closed when the PR head differs from the baseline and passes when equal", () => {
   const { actList } = fixture();
-  const base = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"];
+  const base = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)];
   assert.throws(() => runCli([...base, "--pr-head", "ddddddd4444444"], headAt(B)), /PRE-PUSH-DELTA-PUSH-AUTHORITY.*PR head moved/);
   assert.equal(runCli([...base, "--pr-head", A], headAt(B)).ok, true);
 });
@@ -268,7 +268,7 @@ test("--pr-head fails closed when a well-formed PR head does not resolve locally
   const { actList } = fixture();
   const unfetched = "ddddddd4444444";
   const seam = { ...headAt(B), revParse: (_worktree, rev) => { if (rev === unfetched) throw new Error("unknown revision"); return rev === "HEAD" ? B : rev; } };
-  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--pr-head", unfetched], seam), /unknown revision/);
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A), "--pr-head", unfetched], seam), /unknown revision/);
 });
 
 const STALE = { kind: "sentence", needle: "n", file: "test/contracts/style.test.mjs", line: 23, site: "test/contracts/style.test.mjs:23" };
