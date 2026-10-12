@@ -15,6 +15,7 @@ import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
@@ -277,6 +278,9 @@ export async function emitFixerWorkOrder({
   const tempPath = `${planPath}.tmp-${executionIdentity}`;
   await writeFile(tempPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   await rename(tempPath, planPath);
+  // PRE-PUSH-DELTA-PUSH-AUTHORITY: written last so a refused emit never grants the push; only a full work order grants the fixer.
+  // Always under the canonical gate-artifact root (the location the push-authority check reads), whatever --tmp-root says.
+  writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(cwd), baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName });
   return { ...plan, planPath };
 }
 

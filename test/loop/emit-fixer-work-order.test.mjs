@@ -169,6 +169,29 @@ test("delta gate: an act-list --phase full without --delta-result refuses and na
   });
 });
 
+test("push authority: commit_only writes the sequence marker ungranted and the full work order grants the fixer", async () => {
+  await withFixture(async ({ head, root, emit }) => {
+    const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
+    await emit({ deltaResult: undefined, phase: "commit_only" });
+    assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), { baselineHead: head, fullGranted: false, branch: "issue-1" });
+    await assert.rejects(emit({ deltaResult: undefined }), /needs --delta-result/);
+    assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a full emit without a delta result does not grant");
+    await emit({});
+    assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), { baselineHead: head, fullGranted: true, branch: "issue-1" });
+    await emit({ deltaResult: undefined, phase: "commit_only" });
+    assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a new commit_only round revokes the grant");
+  });
+});
+
+test("push authority: a custom --tmp-root still writes the marker under the canonical gate-artifact root", async () => {
+  await withFixture(async ({ head, root, emit }) => {
+    const custom = path.join(path.dirname(root), "custom-tmp");
+    await emit({ deltaResult: undefined, phase: "commit_only", tmpRoot: custom });
+    assert.deepEqual(JSON.parse(await readFile(path.join(root, "tmp", "gate-delta", `${head}.sequence`), "utf8")), { baselineHead: head, fullGranted: false, branch: "issue-1" });
+    assert.equal(existsSync(path.join(custom, "gate-delta", `${head}.sequence`)), false);
+  });
+});
+
 test("delta gate: an act-list --phase full with a push-clearing delta result at the PR head emits the delta-result read", async () => {
   await withFixture(async ({ files, emit }) => {
     const unit = await emit({ deltaResult: files.delta });

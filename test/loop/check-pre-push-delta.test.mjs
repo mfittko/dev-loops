@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
+import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
 import { parseCheckPrePushDeltaArgs, runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
@@ -135,6 +136,29 @@ test("the baseline resolves to a full SHA, and HEAD equal to the baseline fails"
   assert.throws(() => runCli(args, resolve(full)), /equals the baseline/);
 });
 
+test("a commit_only round without a fix commit clears its sequence marker", () => {
+  const { actList } = fixture();
+  const full = `${A}${"0".repeat(26)}`;
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"));
+  const marker = writeSequenceMarker({ tmpRoot, baselineHead: full });
+  const seam = { ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? full : full), isAncestor: () => true };
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam), /equals the baseline/);
+  assert.equal(fs.existsSync(marker), false);
+});
+
+// The fixCommitted guard in the CLI is defensive: startDeltaSequence rejects an empty list first, so this asserts the marker survives that abort.
+test("a zero-item act list with a committed fix aborts early and keeps the sequence marker", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-"));
+  const actList = path.join(dir, "act-list.json");
+  fs.writeFileSync(actList, "[]");
+  const full = `${A}${"0".repeat(26)}`;
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"));
+  const marker = writeSequenceMarker({ tmpRoot, baselineHead: full });
+  const seam = { ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? B : full), isAncestor: () => true };
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam), /non-empty judge act list/);
+  assert.equal(fs.existsSync(marker), true);
+});
+
 test("a baseline that is not an ancestor of HEAD fails", () => {
   const { actList } = fixture();
   const calls = [];
@@ -231,6 +255,20 @@ test("with --result a coverage record for an older head is discarded and the sta
   assert.equal(runCli(args, headAt("ccccccc3333333")).nextStep, "rereview_current_head");
   args[args.indexOf("1")] = "3";
   assert.equal(runCli(args, headAt("ccccccc3333333")).outcome, "bounded_out");
+});
+
+test("--pr-head fails closed when the PR head differs from the baseline and passes when equal", () => {
+  const { actList } = fixture();
+  const base = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)];
+  assert.throws(() => runCli([...base, "--pr-head", "ddddddd4444444"], headAt(B)), /PRE-PUSH-DELTA-PUSH-AUTHORITY.*PR head moved/);
+  assert.equal(runCli([...base, "--pr-head", A], headAt(B)).ok, true);
+});
+
+test("--pr-head fails closed when a well-formed PR head does not resolve locally", () => {
+  const { actList } = fixture();
+  const unfetched = "ddddddd4444444";
+  const seam = { ...headAt(B), revParse: (_worktree, rev) => { if (rev === unfetched) throw new Error("unknown revision"); return rev === "HEAD" ? B : rev; } };
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A), "--pr-head", unfetched], seam), /unknown revision/);
 });
 
 const STALE = { kind: "sentence", needle: "n", file: "test/contracts/style.test.mjs", line: 23, site: "test/contracts/style.test.mjs:23" };

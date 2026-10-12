@@ -25,6 +25,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
+import { clearSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
   buildDeltaInput,
@@ -57,6 +58,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --repo <owner/name>     Required with --threads-file
   --pr <n>                Required with --threads-file
   --baseline <sha>        reviewBaselineHead: the head the gate round reviewed (hex SHA)
+  --pr-head <sha>         The PR head just read from GitHub; the check fails closed when it differs from --baseline
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
   --site-coverage <path>  The fixer's commit_only handback { headSha, siteCoverage: [...] } (the work order's outputRef)
                           Omitting it in --result mode reports a coverage gap for every act item with a siteQuery
@@ -103,6 +105,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
         repo: { type: "string" },
         pr: { type: "string" },
         baseline: { type: "string" },
+        "pr-head": { type: "string" },
         "spec-identity": { type: "string" },
         "site-coverage": { type: "string" },
         "findings-log": { type: "string" },
@@ -124,6 +127,8 @@ export function parseCheckPrePushDeltaArgs(argv) {
   if (!values.baseline) throw parseError("--baseline <sha> is required");
   const baseline = values.baseline.trim().toLowerCase();
   if (!HEAD_SHA_RE.test(baseline)) throw parseError("--baseline must be a hex commit SHA (7-64 hex characters)");
+  const prHead = values["pr-head"]?.trim().toLowerCase() ?? null;
+  if (prHead !== null && !HEAD_SHA_RE.test(prHead)) throw parseError("--pr-head must be a hex commit SHA (7-64 hex characters)");
   const invocation = values.invocation === undefined ? null : Number(values.invocation);
   if (invocation !== null && !(Number.isInteger(invocation) && invocation >= 1 && invocation <= DELTA_MAX_INVOCATIONS)) {
     throw parseError(`--invocation must be an integer in 1..${DELTA_MAX_INVOCATIONS}`);
@@ -140,6 +145,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
     repo: values.repo ?? null,
     pr: values.pr ? Number(values.pr) : null,
     baseline,
+    prHead,
     specIdentity,
     siteCoverage: values["site-coverage"] ?? null,
     findingsLog: values["findings-log"] ?? null,
@@ -231,11 +237,21 @@ export function runCli(
       ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr })
       : JSON.parse(readFileSync(options.actList, "utf8")),
   });
+  // PRE-PUSH-DELTA-PUSH-AUTHORITY: the PR head moved since the gate round reviewed it (a stray push).
+  if (options.prHead && revParse(options.worktree, options.prHead) !== sequence.reviewBaselineHead) {
+    throw new Error(`PRE-PUSH-DELTA-PUSH-AUTHORITY: PR head ${options.prHead} is not the reviewed baseline ${sequence.reviewBaselineHead}; the PR head moved during the fix sequence, refresh and restart the gate round`);
+  }
   const currentHead = revParse(options.worktree, "HEAD");
   // The CLI runs before the push, so the fix is unpushed by construction.
   const fixCommitted = currentHead !== sequence.reviewBaselineHead;
   const itemCounts = options.threadsFile ? { threadItemCount: sequence.actItems.length } : { actItemCount: sequence.actItems.length };
   if (resolveDeltaTrigger({ ...itemCounts, fixCommitted }) !== "delta") {
+    if (fixCommitted) {
+      // PRE-PUSH-DELTA-PUSH-AUTHORITY: an unpushed fix commit exists, so the marker stays and keeps guarding the push.
+      throw new Error(`worktree HEAD ${currentHead} differs from the baseline ${sequence.reviewBaselineHead} but the ${options.threadsFile ? "thread" : "act"} list has no items: the delta review has nothing to check, and the sequence marker stays until the fix commit is pushed or the marker is deleted`);
+    }
+    // PRE-PUSH-DELTA-PUSH-AUTHORITY: the commit_only round ended without a fix commit, so its marker guards nothing and would only block later pushes.
+    clearSequenceMarker(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead);
     throw new Error(`worktree HEAD ${currentHead} equals the baseline: commit the act-list or thread-route fix before the delta review`);
   }
   if (!isAncestor(options.worktree, sequence.reviewBaselineHead, currentHead)) {
