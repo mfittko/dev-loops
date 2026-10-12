@@ -24,7 +24,7 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
   rmSync(sequenceMarkerPath(tmpRoot, baselineHead), { force: true });
 }
 
-/** The recovery pointer both refusal reasons carry. `--phase full` works only after a clearing delta record, so deleting the marker is the general recovery. */
+/** The recovery pointer the refusal reason carries. `--phase full` works only after a clearing delta record, so deleting the marker is the general recovery. */
 export const recoveryHint = (markerPath) => markerPath ? ` To recover an abandoned sequence, delete the marker ${markerPath} (emit-fixer-work-order.mjs --phase full grants the push only after a clearing delta record).` : "";
 
 /** The marker for a baseline head, or null when none exists. A malformed marker reads as active, not granted (fail closed). */

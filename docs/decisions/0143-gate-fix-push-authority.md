@@ -24,4 +24,4 @@ Residual gaps:
 
 - `git push --no-verify` skips the git layer, and nothing else stops it.
 
-Recovery: an abandoned sequence keeps refusing pushes, and both refusal reasons name the marker file. Delete `<main worktree>/tmp/gate-delta/<baseline>.sequence`. `emit-fixer-work-order.mjs --phase full` grants the push only for a sequence with a clearing delta record (`nextStep: push` or `push_to_gate`). A `commit_only` round that ends without a fix commit clears its own marker when `check-pre-push-delta.mjs` reports that HEAD equals the baseline.
+Recovery: an abandoned sequence keeps refusing pushes, and the refusal reason and the shell fallback message name the marker file. Delete `<main worktree>/tmp/gate-delta/<baseline>.sequence`. `emit-fixer-work-order.mjs --phase full` grants the push only for a sequence with a clearing delta record (`nextStep: push` or `push_to_gate`). A `commit_only` round that ends without a fix commit clears its own marker when `check-pre-push-delta.mjs` reports that HEAD equals the baseline.
