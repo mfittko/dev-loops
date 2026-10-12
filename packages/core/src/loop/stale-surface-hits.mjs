@@ -32,19 +32,22 @@ function parseDiff(diffText) {
   for (const line of String(diffText).split("\n")) {
     if (line.startsWith("diff --git ")) { inHunk = false; current = null; oldPath = null; continue; }
     if (!inHunk) {
-      const from = /^--- (?:a\/(.+)|\/dev\/null)$/.exec(line);
+      // Git appends one TAB to a header path that holds a space.
+      const from = /^--- (?:a\/(.+?)|\/dev\/null)\t?$/.exec(line);
       if (from) { oldPath = from[1] ?? null; continue; }
-      const to = /^\+\+\+ (?:b\/(.+)|\/dev\/null)$/.exec(line);
+      const to = /^\+\+\+ (?:b\/(.+?)|\/dev\/null)\t?$/.exec(line);
       if (to) {
         const file = to[1] ?? oldPath;
         if (file) { current = { file, removed: [], added: [] }; files.push(current); }
         continue;
       }
-      if (line.startsWith("@@")) inHunk = true;
+      // Fail closed: a C-quoted or otherwise unparseable header would drop the file's removed lines.
+      if (/^(?:---|\+\+\+) /.test(line)) throw new Error(`stale-surface diff header could not be parsed: ${line}`);
+      if (line.startsWith("@@")) { inHunk = true; current?.removed.push(""); }
       continue;
     }
-    if (line.startsWith("@@")) continue;
-    if (!current) continue;
+    if (line.startsWith("@@")) { current?.removed.push(""); continue; }
+    if (!current) throw new Error(`stale-surface diff hunk line has no parsed file header: ${line}`);
     if (line.startsWith("-")) current.removed.push(line.slice(1));
     else if (line.startsWith("+")) current.added.push(line.slice(1));
   }
@@ -69,9 +72,30 @@ function isDeclaredIn(name, codeLines) {
 
 const squash = (s) => s.replace(/\s+/gu, " ");
 
+// Removed Markdown lines as blocks: a list item, heading or table row starts a block, a blank line
+// (or a hunk boundary) ends one, and the markers are stripped. Table cells are separate blocks.
+function markdownBlocks(removed) {
+  const blocks = [];
+  let block = null;
+  const flush = () => { if (block) blocks.push(block.join(" ")); block = null; };
+  for (const line of removed) {
+    if (!line.trim()) { flush(); continue; }
+    if (/^\s*\|/u.test(line)) {
+      flush();
+      blocks.push(...line.trim().replace(/^\||\|$/gu, "").split("|"));
+      continue;
+    }
+    const item = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/u.exec(line) ?? /^\s*#{1,6}\s+(.*)$/u.exec(line);
+    if (item) { flush(); block = [item[1]]; continue; }
+    (block ??= []).push(line);
+  }
+  flush();
+  return blocks;
+}
+
 function sentencesOf(file, removed, addedAll) {
   const candidates = isMarkdown(file)
-    ? squash(removed.join(" ")).split(/(?<=[.!?])\s+/u)
+    ? markdownBlocks(removed).flatMap((b) => squash(b).split(/(?<=[.!?])\s+/u))
     : removed.flatMap((line) => [...line.matchAll(/"([^"]+)"|'([^']+)'|`([^`]+)`/gu)].map((m) => m[1] ?? m[2] ?? m[3]));
   return candidates.map((s) => squash(s).trim()).filter((s) => s.length >= MIN_SENTENCE && !addedAll.includes(s));
 }

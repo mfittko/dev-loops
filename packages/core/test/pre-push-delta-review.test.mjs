@@ -495,3 +495,23 @@ test("a re-wrapped Markdown paragraph is no removal, and dropped too-common iden
   const out = collectStaleSurface({ diffText: hunk("packages/x/lib.mjs", ["-export function tooCommonName(a) {"]), grep: () => many });
   assert.deepEqual(out.truncatedNeedles, [{ kind: "identifier", needle: "tooCommonName", fileCount: 6 }]);
 });
+
+test("removed unpunctuated bullets, headings and table rows are separate needles", () => {
+  const needles = (body) => { const asked = []; collectStaleSurface({ diffText: hunk("skills/docs/a.md", body), grep: (n) => { asked.push(n); return []; } }); return asked; };
+  assert.deepEqual(needles(["-- Lows and nits never block the push", "-- The reviewer reads every changed hunk"]).length, 2);
+  assert.deepEqual(needles(["-- Lows and nits never block the push"]), ["Lows and nits never block the push"]);
+  assert.deepEqual(needles(["-## The reviewer reads every changed hunk"]), ["The reviewer reads every changed hunk"]);
+  assert.deepEqual(needles(["-| Lows and nits never block | The reviewer reads every changed hunk |"]), ["Lows and nits never block", "The reviewer reads every changed hunk"]);
+  assert.deepEqual(needles(["-- Lows and nits never block the push", "-- The reviewer reads every changed hunk"]), ["Lows and nits never block the push", "The reviewer reads every changed hunk"]);
+});
+
+test("parseDiff reads a TAB-suffixed spaced path and fails closed on an unparseable header or orphan hunk line", () => {
+  const grep = () => [{ file: "test/pin.test.mjs", line: 3 }];
+  const sentence = "The spaced path sentence is long enough to count.";
+  const spaced = ["diff --git a/docs/my guide.md b/docs/my guide.md", "--- a/docs/my guide.md\t", "+++ b/docs/my guide.md\t", "@@ -1 +0,0 @@", `-${sentence}`].join("\n");
+  assert.deepEqual(collectStaleSurfaceHits({ diffText: spaced, grep }).map((h) => h.needle), [sentence]);
+  const quoted = ["diff --git a/x b/x", '--- "a/caf\\303\\251.md"', '+++ "b/caf\\303\\251.md"', "@@ -1 +0,0 @@", `-${sentence}`].join("\n");
+  assert.throws(() => collectStaleSurfaceHits({ diffText: quoted, grep }), /could not be parsed/);
+  const orphan = ["diff --git a/x b/x", "@@ -1 +0,0 @@", `-${sentence}`].join("\n");
+  assert.throws(() => collectStaleSurfaceHits({ diffText: orphan, grep }), /no parsed file header/);
+});

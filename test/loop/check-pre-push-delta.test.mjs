@@ -13,6 +13,14 @@ const A = "aaaaaaa1111111";
 const B = "bbbbbbb2222222";
 const ACT_LIST = [{ severity: "low", angle: "correctness", summary: "s", judgeDisposition: "act" }];
 
+const LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-log-"));
+// A findings log of the reviewed round at `head`, as the gate round writes it.
+const logFor = (head) => {
+  const p = path.join(LOG_DIR, `${head}.json`);
+  fs.writeFileSync(p, JSON.stringify({ headSha: head, provenance: { perAngle: [{ angle: "correctness" }] } }));
+  return p;
+};
+
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-"));
   const actList = path.join(dir, "act-list.json");
@@ -35,7 +43,7 @@ const headAt = (head, tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-
 
 test("without --result the CLI prints the cumulative delta input for the worktree head", () => {
   const { dir, actList } = fixture();
-  const out = runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"], headAt(B));
+  const out = runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B));
   assert.equal(out.input.diffRange, `${A}..${B}`);
   assert.equal(out.input.specIdentity, "spec@1");
   // Write-free: nothing is written next to the inputs.
@@ -45,7 +53,7 @@ test("without --result the CLI prints the cumulative delta input for the worktre
 test("without --result no decision record is written under the tmp root", () => {
   const { actList } = fixture();
   const seam = headAt(B);
-  runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"], seam);
+  runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam);
   assert.deepEqual(fs.readdirSync(seam.tmpRoot), []);
 });
 
@@ -122,7 +130,7 @@ test("the baseline resolves to a full SHA, and HEAD equal to the baseline fails"
   const { actList } = fixture();
   const full = `${A}${"0".repeat(26)}`;
   const resolve = (head) => ({ ...quiet, revParse: (_worktree, rev) => (rev === "HEAD" ? head : full), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) });
-  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"];
+  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)];
   assert.equal(runCli(args, resolve(B)).input.reviewBaselineHead, full);
   assert.throws(() => runCli(args, resolve(full)), /equals the baseline/);
 });
@@ -137,7 +145,7 @@ test("a baseline that is not an ancestor of HEAD fails", () => {
       return false;
     },
   };
-  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"], seam), /is not an ancestor of worktree HEAD/);
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam), /is not an ancestor of worktree HEAD/);
   assert.deepEqual(calls, [[A, B]]);
 });
 
@@ -158,7 +166,7 @@ test("real git calls ignore an inherited GIT_DIR/GIT_WORK_TREE pointing at anoth
   process.env.GIT_DIR = path.join(dir, "decoy", ".git");
   process.env.GIT_WORK_TREE = path.join(dir, "decoy");
   try {
-    const out = runCli(["--act-list", actList, "--baseline", base, "--spec-identity", "spec@1", "--worktree", path.join(dir, "target")], quiet);
+    const out = runCli(["--act-list", actList, "--baseline", base, "--spec-identity", "spec@1", "--findings-log", logFor(base), "--worktree", path.join(dir, "target")], quiet);
     assert.equal(out.input.diffRange, `${base}..${head}`);
   } finally {
     for (const [key, value] of Object.entries(saved)) {
@@ -186,14 +194,14 @@ test("--site-coverage threads a valid record into the delta input", () => {
   const coverage = path.join(dir, "coverage.json");
   const item = { fingerprint: "fp1", returnedSites: ["s1"], sites: [{ site: "s1", status: "fixed" }] };
   fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [item] }));
-  const out = runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--site-coverage", coverage], headAt(B));
+  const out = runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A), "--site-coverage", coverage], headAt(B));
   assert.equal(out.input.siteCoverage[0].fingerprint, "fp1");
 });
 
 test("--site-coverage fails on a headSha mismatch or malformed JSON", () => {
   const { dir, actList } = fixture();
   const coverage = path.join(dir, "coverage.json");
-  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--site-coverage", coverage];
+  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A), "--site-coverage", coverage];
   fs.writeFileSync(coverage, JSON.stringify({ headSha: A, siteCoverage: [] }));
   assert.throws(() => runCli(args, headAt(B)), /site coverage record names head/);
   fs.writeFileSync(coverage, "{not json");
@@ -205,7 +213,7 @@ test("--site-coverage input mode refuses a record that leaves a siteQuery uncove
   const actList = path.join(dir, "act-list.json");
   fs.writeFileSync(actList, JSON.stringify([{ ...ACT_LIST[0], fingerprint: "fp1", siteQuery: "git grep -n x" }]));
   const coverage = path.join(dir, "coverage.json");
-  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--site-coverage", coverage];
+  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A), "--site-coverage", coverage];
   fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [{ fingerprint: "fp1", returnedSites: ["scripts/loop/consolidate-fanin.mjs:1161-1163"], sites: [] }] }));
   assert.throws(() => runCli(args, headAt(B)), /GATE-EXEC-REMEDIATION-SITE-QUERY/);
   fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [] }));
@@ -267,8 +275,8 @@ test("result mode refuses locally_clear for an unaddressed stale-surface hit on 
 test("a truncated stale-surface list is flagged in the input and blocks locally_clear until a finding names the gap", () => {
   const { dir, actList, result } = fixture();
   const truncated = (head) => ({ ...headAt(head), staleSurface: () => ({ hits: [], truncated: true }) });
-  assert.equal(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s"], truncated(B)).input.staleSurfaceTruncated, true);
-  assert.equal(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s"], headAt(B)).input.staleSurfaceTruncated, undefined);
+  assert.equal(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s", "--findings-log", logFor(A)], truncated(B)).input.staleSurfaceTruncated, true);
+  assert.equal(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s", "--findings-log", logFor(A)], headAt(B)).input.staleSurfaceTruncated, undefined);
   const act = ["--act-list", actList, "--baseline", A, "--result", result, "--invocation", "1"];
   assert.equal(runCli(act, truncated(B)).nextStep, "fix_and_rereview");
   const addressed = path.join(dir, "addressed.json");
@@ -280,24 +288,40 @@ test("a truncated stale-surface list is flagged in the input and blocks locally_
 test("the production stale-surface adapter reports the hit file and line, whatever the operator's git config", () => {
   const { dir, actList } = fixture();
   const root = path.join(dir, "stale-repo");
-  const git = (...args) => spawnSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).stdout.trim();
+  const git = (...args) => {
+    const out = spawnSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8" });
+    assert.equal(out.status, 0, `git ${args.join(" ")}: ${out.stderr}`);
+    return out.stdout.trim();
+  };
   fs.mkdirSync(path.join(root, "test"), { recursive: true });
+  fs.mkdirSync(path.join(root, "docs"), { recursive: true });
   git("init", "-q");
   const sentence = "The delta review reads the changed lines only.";
+  const spaced = "The spaced path file keeps this sentence pinned.";
   fs.writeFileSync(path.join(root, "doc.md"), `${sentence}\n`);
-  fs.writeFileSync(path.join(root, "test", "pin.test.mjs"), `const pinned = "${sentence}";\n`);
+  fs.writeFileSync(path.join(root, "docs", "my guide café.md"), `${spaced}\n`);
+  fs.writeFileSync(path.join(root, "test", "pin.test.mjs"), `const pinned = "${sentence}";\nconst spaced = "${spaced}";\n`);
   git("add", "-A");
   git("commit", "-q", "-m", "c1");
   const base = git("rev-parse", "HEAD");
   fs.writeFileSync(path.join(root, "doc.md"), "Reworded.\n");
+  fs.writeFileSync(path.join(root, "docs", "my guide café.md"), "Reworded too.\n");
   git("commit", "-q", "-a", "-m", "c2");
-  const args = ["--act-list", actList, "--baseline", base, "--spec-identity", "s", "--worktree", root];
+  const args = ["--act-list", actList, "--baseline", base, "--spec-identity", "s", "--findings-log", logFor(base), "--worktree", root];
   const hitsUnder = (...config) => {
     for (const [key, value] of config) git("config", key, value);
-    return runCli(args, quiet).input.staleSurfaceHits.map((h) => h.site);
+    return runCli(args, quiet).input.staleSurfaceHits.map((h) => h.site).sort();
   };
-  assert.deepEqual(hitsUnder(), ["test/pin.test.mjs:1"]);
-  assert.deepEqual(hitsUnder(["diff.noprefix", "true"], ["color.ui", "always"], ["diff.external", "false"]), ["test/pin.test.mjs:1"]);
+  const expected = ["test/pin.test.mjs:1", "test/pin.test.mjs:2"];
+  assert.deepEqual(hitsUnder(), expected);
+  assert.deepEqual(hitsUnder(["diff.noprefix", "true"], ["color.ui", "always"], ["diff.external", "false"], ["diff.algorithm", "histogram"], ["diff.renames", "copies"], ["core.quotePath", "true"]), expected);
+});
+
+test("an act-list input run without --findings-log is refused, the other routes keep their forms", () => {
+  const base = ["--act-list", "a.json", "--baseline", A, "--spec-identity", "s"];
+  assert.throws(() => parseCheckPrePushDeltaArgs(base), /PRE-PUSH-DELTA-INPUT/);
+  assert.equal(parseCheckPrePushDeltaArgs([...base, "--findings-log", "log.json"]).findingsLog, "log.json");
+  assert.equal(parseCheckPrePushDeltaArgs(["--act-list", "a.json", "--baseline", A, "--result", "r.json", "--invocation", "1"]).findingsLog, null);
 });
 
 test("a missing commit object fails the stale-surface check instead of reporting no hits", () => {
@@ -305,7 +329,7 @@ test("a missing commit object fails the stale-surface check instead of reporting
   const root = path.join(dir, "empty-repo");
   fs.mkdirSync(root);
   spawnSync("git", ["-C", root, "init", "-q"]);
-  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s", "--worktree", root], { ...quiet, revParse: (_w, rev) => (rev === "HEAD" ? B : rev), isAncestor: () => true }), /git cat-file/);
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s", "--findings-log", logFor(A), "--worktree", root], { ...quiet, revParse: (_w, rev) => (rev === "HEAD" ? B : rev), isAncestor: () => true }), /git cat-file/);
 });
 
 test("--findings-log is refused on the thread route and validated on the act-list route", () => {
