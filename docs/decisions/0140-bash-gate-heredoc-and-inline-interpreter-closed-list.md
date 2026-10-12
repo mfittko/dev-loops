@@ -10,7 +10,7 @@ Accepted — 2026-10-12 ([issue 2442](https://github.com/mfittko/dev-loops/issue
 
 ## Decision
 
-- Text inside a `cat` or `tee` heredoc body is data. The matcher never scans it for commands.
+- Text inside a `cat` or `tee` heredoc body is data and the matcher does not scan it for commands. This holds only when the heredoc is not piped, the operator is not inside quoted text, the body has a closing delimiter, and the delimiter is quoted or the body holds no `$(` or backtick. Otherwise the body stays visible to the matcher.
 - The denied forms are a closed list in four classes: inline code or a stdin heredoc to `node`, `bun`, `python`, `python3`, `perl` or `ruby`; in-place editors (`sed -i`/`--in-place`, `perl -i`, `ruby -i`, `awk -i inplace`); a `cat`/`tee` heredoc write whose target is not a temp path; and running, in the same command, a file that a heredoc wrote. A form outside the list is allowed until a new decision extends the list.
 - A quoted literal is inert. The exceptions are the payload of `-c`, `--command` and `eval`, and a double-quoted `$(` or backtick substitution, which the matcher still inspects.
 - The Bash gate and the retro matcher in `scripts/loop/check-retro-tooling.mjs` share one predicate, `commandContainsInlineInterpreter`. One fixture table, `test/fixtures/inline-interpreter-forms.mjs`, drives both suites.

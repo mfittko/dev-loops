@@ -72,7 +72,7 @@ test("node -e and node --eval are violations; node scripts/x.mjs is not", () => 
 test("the shared fixture table matches the Bash gate: denied forms are inline-interpreter violations, allowed forms are not (#2442)", () => {
   // A python head keeps its existing `python`/`python3` violation tool; every other denied form is `inline-interpreter`.
   for (const form of DENIED_INLINE_INTERPRETER_FORMS) {
-    assert.ok(analyzeTranscript(form).violations.some((v) => v.startsWith("inline-interpreter:") || /^python3?:/.test(v)), `expected violation: ${form}`);
+    assert.ok(analyzeTranscript(form).violations.some((v) => v.startsWith("inline-interpreter:")), `expected violation: ${form}`);
   }
   for (const form of ALLOWED_INLINE_INTERPRETER_FORMS) {
     assert.ok(!analyzeTranscript(form).violations.some((v) => v.startsWith("inline-interpreter:")), `expected no inline-interpreter violation: ${form}`);

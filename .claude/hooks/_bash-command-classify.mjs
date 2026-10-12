@@ -1330,6 +1330,7 @@ function segmentIsInlineInterpreter(segment) {
     if (bin === "node" || bin === "bun") {
       if (/^-[ep]/.test(t) || t === "--eval" || t.startsWith("--eval=")) return true;
     } else if (bin === "python" || bin === "python3") {
+      if (t.startsWith("-m")) break; // attached module name (`-mcoverage`): the rest are module arguments
       if (/^-[A-Za-z]*c/.test(t)) return true;
     } else if (!t.startsWith("--") && !/^-[MmrI]/.test(t) && !(bin === "ruby" && t.startsWith("-E"))) { // perl, ruby: -M/-m/-r name a module, -I an include dir; ruby -E sets the encoding
       if ((bin === "perl" ? /^-[A-Za-z0-9]*[eEi]/ : /^-[A-Za-z0-9]*[ei]/).test(t)) return true;
@@ -1358,7 +1359,9 @@ function runnerScriptPath(segment) {
  * stdin heredoc to node, bun, python, perl or ruby. (2) In-place editors: `sed -i`, `perl`/`ruby` `-i`,
  * `awk -i inplace`. (3) A cat/tee heredoc write whose target is not a temp path. (4) A cat/tee heredoc
  * write followed by running the written file. Script-path invocations (`node x.mjs`, `python3 tool.py`)
- * never match. Heredoc bodies fed to cat/tee are ignored, and so is quoted data, except a quoted
+ * never match. Heredoc bodies fed to cat/tee are ignored only when the heredoc is not piped, its operator is not
+ * inside quoted text, the body has a closing delimiter, and the delimiter is quoted or the body holds no
+ * `$(`/backtick. Quoted data is ignored too, except a quoted
  * `-c`/`eval` payload or command substitution, which executes (see `stripQuotedLiterals`).
  * @param {string} command @returns {boolean}
  */

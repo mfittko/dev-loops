@@ -80,6 +80,10 @@ export const DENIED_INLINE_INTERPRETER_FORMS = [
   "cat > tmp/x <<'A'; cat > packages/core/src/a.mjs <<'B'",
   "python3 tool.py && perl -pi -e 's/a/b/' src/a.mjs",
   "echo it\\'s; node -e 'x'",
+  "# don't\nnode -e 'console.log(1)'",
+  "git commit -F - <<'MSG'\ndon't\nMSG\nnode -e 'x'",
+  "bash -c 'x; node -e y'",
+  "python3 -Ic 'x'",
 ];
 
 /** Forms the matcher allows, including quoted literals that only name an interpreter. */
@@ -113,12 +117,7 @@ export const ALLOWED_INLINE_INTERPRETER_FORMS = [
   "node scripts/loop/x.mjs --notes 'perl -0pi -e & ruby -e'",
   'grep -n "sed -i" README.md',
   'git commit -m "sleep 5 & node -e x"',
+  "python3 -mcoverage run tool.py",
+  "python3 -mcProfile tool.py",
+  "python3 -m pytest",
 ];
-
-/**
- * Commands origin/main denied and the branch allows, found by differential comparison (#2442).
- * A row here is a fail-open regression the classifier must still fix; no test asserts the array yet.
- * Empty at the 2026-10-12 comparison: every main-deny/branch-allow command was a quoted literal or
- * heredoc body, which the closed list treats as inert data.
- */
-export const PENDING_FAIL_OPEN_REGRESSIONS = [];
