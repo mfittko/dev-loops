@@ -74,7 +74,7 @@ FILING it to the deferral comment are separate decisions. nit is NEVER filed —
 resolved-with-rationale in-thread only, no marker stamp. low is filed only
 when its own marker carries the explicit operatorVisible signal (the finding's own
 operatorVisible: true, rendered as the marker's ov=1 field); the default (absent/false)
-is NOT filed either. medium (past its fix window) is unchanged: always filed. The
+is NOT filed either. medium (past its fix window, not judge-rejected) is always filed. The
 round's FILEABLE deferrals (thread targets plus operator-visible folded findings) go
 as ONE batched comment on the comment target: the PR's linked spec issue when
 tracker.provider is github and the PR has exactly one closing issue reference,

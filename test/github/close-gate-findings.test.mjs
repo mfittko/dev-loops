@@ -2535,6 +2535,7 @@ test("a judge-rejected medium thread with an unparseable summary records a dispo
       assert.equal(result.rejectClosed, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
       assert.equal(result.dispositionFailures[0].severity, "medium");
+      assert.match(result.dispositionFailures[0].error, /no parseable finding summary/);
     },
   ));
 });
@@ -2550,6 +2551,7 @@ for (const [severity, commentId] of [["low", null], ["medium", 0], ["medium", 1.
         assert.equal(result.unresolvedGateThreadCount, 1);
         assert.equal(result.dispositionFailures.length, 1);
         assert.equal(result.dispositionFailures[0].threadId, `THREAD_BAD_ID_${severity}_${commentId}`);
+        assert.match(result.dispositionFailures[0].error, /no valid root commentId/);
       },
     ));
   });
