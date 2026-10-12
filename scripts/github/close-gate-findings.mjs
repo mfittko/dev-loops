@@ -297,7 +297,17 @@ function currentLedgerActOrAmbiguous(findings, fp) {
   return currentMatches.some(isOpenActItem) || dispositions.size > 1;
 }
 
+// A merged thread carries one marker per member: any act or ambiguous member keeps it open.
 async function isJudgeActThread({ fp, threadBody, findings, lookup }) {
+  const fps = new Set([fp]);
+  collectFingerprints(threadBody, fps);
+  for (const memberFp of fps) {
+    if (await isJudgeActFingerprint({ fp: memberFp, threadBody, findings, lookup })) return true;
+  }
+  return false;
+}
+
+async function isJudgeActFingerprint({ fp, threadBody, findings, lookup }) {
   const current = currentLedgerActOrAmbiguous(findings, fp);
   if (current !== null) return current;
   const prior = await findJudgeDispositionForFingerprint({ ...lookup, fp });

@@ -2505,6 +2505,21 @@ for (const memberDisposition of ["act", "defer"]) {
   });
 }
 
+test("a merged medium thread with a reject primary and an act member is neither stamped nor resolved past the fix window", async () => {
+  const primary = defectThread({ severity: "medium", summary: "merged primary claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6370, id: "X" });
+  const member = defectThread({ severity: "medium", summary: "merged member claim", judgeDisposition: "act", commentId: 6370, id: "X" });
+  const thread = mergedThread(primary, member, { id: "THREAD_MERGED_PAST_WINDOW", commentId: 6370 });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [primary.finding, member.finding] }), (ledgerPath) => withGhStub(
+    roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
 test("a merged medium thread whose every member marker is judge-rejected is reject-closed", async () => {
   const primary = defectThread({ severity: "medium", summary: "merged primary claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6360, id: "X" });
   const member = defectThread({ severity: "medium", summary: "merged member claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6360, id: "X" });
