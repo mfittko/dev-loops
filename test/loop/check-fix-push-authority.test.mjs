@@ -55,3 +55,9 @@ test("only the generated pre-push hook runs the check, ahead of the override env
   assert.ok(prePush.indexOf("check-fix-push-authority.mjs") < prePush.indexOf("DEVLOOPS_ALLOW_MAIN"));
   assert.ok(!renderGuardHook("pre-commit", ["main"]).includes("check-fix-push-authority"));
 });
+
+test("the generated pre-push hook bakes the packaged script path so a checkout without its own copy is still gated", () => {
+  const prePush = renderGuardHook("pre-push", ["main"]);
+  const baked = /authority_cli="([^"]+)"\nif \[ -z/.exec(prePush)?.[1];
+  assert.equal(baked, path.resolve("scripts/loop/check-fix-push-authority.mjs"));
+});

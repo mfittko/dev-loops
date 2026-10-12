@@ -1,4 +1,4 @@
-# 0142. Only the full-phase fixer pushes a gate fix commit
+# 0143. Only the full-phase fixer pushes a gate fix commit
 
 ## Status
 
@@ -17,4 +17,13 @@ On a drained PR two gate fix commits reached the PR head before the full-phase f
 
 ## Consequences
 
-A stray push during a gate fix sequence is refused on both harnesses. The git layer cannot tell agents apart, so after `fullGranted` it admits any pusher and the Claude hook narrows it to the fixer. Pi has no per-agent layer. A consumer checkout without the script skips the git layer. A reinstall of the default-branch guard hooks adds the layer to an existing checkout.
+A stray push during a gate fix sequence is refused on both harnesses. The git layer cannot tell agents apart, so after `fullGranted` it admits any pusher and the Claude hook narrows it to the fixer. Pi has no per-agent layer.
+
+The generated `pre-push` hook bakes the path of the package script at install time and falls back to the checkout copy, so a consumer checkout enforces the layer. A reinstall of the default-branch guard hooks adds the layer to an existing checkout.
+
+Residual gaps:
+
+- `git push --no-verify` skips the git layer. On Pi nothing else stops it. The Claude hook still denies that command.
+- The Claude hook resolves the push target directory from the command and its cwd. A compound command such as `cd <worktree> && git push` is read against the original cwd, so the hook sees a narrow window there.
+
+Recovery: an abandoned sequence keeps refusing pushes. Run `emit-fixer-work-order.mjs --phase full` to grant the push, or delete `<tmp-root>/gate-delta/<baseline>.sequence`.

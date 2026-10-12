@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * A shell working directory can silently reset to the primary checkout — after a
@@ -125,10 +126,16 @@ fi
 `
     : "";
   // pre-push ONLY: the harness-neutral push gate of PRE-PUSH-DELTA-PUSH-AUTHORITY. It runs before
-  // the override-env check, so DEVLOOPS_ALLOW_MAIN never bypasses it. A checkout without the
-  // script predates the feature and is skipped, as for the scanner above.
+  // the override-env check, so DEVLOOPS_ALLOW_MAIN never bypasses it. The script path is baked at
+  // render time from the installed package, so a consumer checkout without its own copy still
+  // enforces the gate; the cwd-relative copy is the fallback when the package path is unavailable.
+  const packagedAuthorityCli = fileURLToPath(new URL("../../../../scripts/loop/check-fix-push-authority.mjs", import.meta.url));
+  const bakedAuthorityCli = fs.existsSync(packagedAuthorityCli) ? packagedAuthorityCli : "";
   const pushAuthorityBlock = hookName === "pre-push"
-    ? `authority_cli="scripts/loop/check-fix-push-authority.mjs"
+    ? `authority_cli="${bakedAuthorityCli}"
+if [ -z "$authority_cli" ] || [ ! -f "$authority_cli" ]; then
+  authority_cli="scripts/loop/check-fix-push-authority.mjs"
+fi
 if [ -f "$authority_cli" ]; then
   node "$authority_cli" || exit 1
 fi
