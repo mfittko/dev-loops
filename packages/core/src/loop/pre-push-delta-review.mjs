@@ -59,13 +59,19 @@ const namesPath = (text, file) => new RegExp(`(?<![^\\s\`"'(\\[{<])${escapeRegEx
 
 /**
  * Stale-surface hits that neither a `newFindings[]` entry (its summary, site or evidence names the
- * hit file) nor a skipped site in `siteCoverage[]` (its site names the hit file) addresses.
+ * hit file) nor a skipped site in `siteCoverage[]` (with a reason) addresses. A skipped site that
+ * names a bare file addresses every hit in that file. A skipped site with a `:line` or `:start-end`
+ * suffix addresses only a hit on that line or inside that range.
  */
 export function unaddressedStaleSurfaceHits(hits, { newFindings = [], siteCoverage = [] } = {}) {
   const findingText = newFindings.map((f) => [f?.summary, f?.site, ...(Array.isArray(f?.evidence) ? f.evidence : [])].join("\n"));
-  // A skipped site names the file exactly, with an optional `:line` suffix.
-  const skipped = siteCoverage.flatMap((record) => (record?.sites ?? []).filter((s) => s?.status === "skipped" && nonEmpty(s.reason)).map((s) => String(s.site).trim().replace(/:\d+(?:-\d+)?$/u, "")));
-  return (hits ?? []).filter((hit) => !findingText.some((t) => namesPath(t, hit.file)) && !skipped.includes(hit.file));
+  const skipped = siteCoverage.flatMap((record) => (record?.sites ?? []).filter((s) => s?.status === "skipped" && nonEmpty(s.reason)).map((s) => String(s.site).trim()));
+  const skipAddresses = (site, hit) => {
+    if (site === hit.file) return true;
+    const m = /^(.*):(\d+)(?:-(\d+))?$/u.exec(site);
+    return m !== null && m[1] === hit.file && hit.line >= Number(m[2]) && hit.line <= Number(m[3] ?? m[2]);
+  };
+  return (hits ?? []).filter((hit) => !findingText.some((t) => namesPath(t, hit.file)) && !skipped.some((site) => skipAddresses(site, hit)));
 }
 
 function nonEmpty(value) {

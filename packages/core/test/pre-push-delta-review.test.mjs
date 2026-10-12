@@ -358,7 +358,7 @@ describe("pre-push results never become gate evidence", () => {
   });
 });
 
-import { unaddressedStaleSurfaceHits } from "../src/loop/pre-push-delta-review.mjs";
+import { unaddressedStaleSurfaceHits, staleSurfaceTruncatedHit, STALE_SURFACE_TRUNCATED_SITE } from "../src/loop/pre-push-delta-review.mjs";
 import { collectStaleSurfaceHits } from "../src/loop/stale-surface-hits.mjs";
 
 test("surfaceHints is the union of the act item angles and the reviewed round angles", () => {
@@ -493,8 +493,22 @@ test("a hit file is addressed only as a whole path token, never as a path suffix
   assert.equal(readme("stale line in docs/README.md"), 1);
   assert.equal(readme("naming skills/dev-loop/README.md here"), 1);
   const skipped = (site) => unaddressedStaleSurfaceHits([hit("README.md")], { siteCoverage: [{ fingerprint: "f", returnedSites: [], sites: [{ site, status: "skipped", reason: "kept" }] }] }).length;
-  assert.equal(skipped("README.md:3"), 0);
-  assert.equal(skipped("docs/README.md:3"), 1);
+  assert.equal(skipped("README.md"), 0);
+  assert.equal(skipped("README.md:1"), 0);
+  assert.equal(skipped("docs/README.md:1"), 1);
+});
+
+test("a skipped site with a line suffix addresses only a hit on that line", () => {
+  const hit = { kind: "sentence", needle: "n", file: "skills/docs/x.md", line: 200, site: "skills/docs/x.md:200" };
+  const open = (site, reason = "kept") => unaddressedStaleSurfaceHits([hit], { siteCoverage: [{ fingerprint: "f", returnedSites: [], sites: [{ site, status: "skipped", reason }] }] }).length;
+  assert.equal(open("skills/docs/x.md"), 0);
+  assert.equal(open("skills/docs/x.md:200"), 0);
+  assert.equal(open("skills/docs/x.md:190-210"), 0);
+  assert.equal(open("skills/docs/x.md:10"), 1);
+  assert.equal(open("skills/docs/x.md:10-20"), 1);
+  assert.equal(open("skills/docs/x.md:200", ""), 1);
+  const truncated = staleSurfaceTruncatedHit();
+  assert.equal(unaddressedStaleSurfaceHits([truncated], { siteCoverage: [{ fingerprint: "f", returnedSites: [], sites: [{ site: STALE_SURFACE_TRUNCATED_SITE, status: "skipped", reason: "kept" }] }] }).length, 0);
 });
 
 test("a re-wrapped Markdown paragraph is no removal, and dropped too-common identifiers are named", () => {
