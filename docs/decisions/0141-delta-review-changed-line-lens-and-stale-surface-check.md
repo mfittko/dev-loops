@@ -12,9 +12,9 @@ The pre-push delta review checks a fix commit against the act items of one gate 
 
 ## Decision
 
-- The delta input carries `surfaceHints` as the union of the act items' angles and the angles of the reviewed gate round. The round angles come from `provenance.perAngle` in the findings log that `check-pre-push-delta.mjs --findings-log` reads. The thread route carries the act items' angles only.
+- The delta input carries `surfaceHints` as the union of the act items' angles and the angles of the reviewed gate round. The round angles come from `provenance.perAngle` in the findings log that `check-pre-push-delta.mjs --findings-log` reads. The thread route carries the act items' angles only, and the CLI refuses `--findings-log` there. The CLI also refuses a log without `provenance.perAngle` or with a `headSha` other than the baseline.
 - The reviewer reviews every changed hunk of the delta range, not only the lines that touch an act item.
-- `check-pre-push-delta.mjs` computes `staleSurfaceHits[]` deterministically. It reads the removed sentences and identifiers of the delta range and greps them at the candidate head. A capped hit list sets `staleSurfaceTruncated`, which adds a synthetic hit.
+- `check-pre-push-delta.mjs` computes `staleSurfaceHits[]` deterministically. It reads the removed sentences and identifiers of the delta range and greps them at the candidate head. A capped hit list sets `staleSurfaceTruncated`, which adds a synthetic hit, and the dropped identifiers ride along as `truncatedNeedles[]`. The git formats are pinned, and a missing commit object fails the check.
 - `locally_clear` is refused while a stale-surface hit stays unaddressed. A `newFindings[]` entry that names the hit file, or a skipped `siteCoverage[]` site with a reason, addresses the hit. This holds on the act-list route and the thread route.
 - The status `resolved` requires two conditions. The reported defect is gone, and the applied remedy introduces no new finding of severity medium or higher.
 

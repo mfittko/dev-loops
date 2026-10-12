@@ -67,11 +67,13 @@ function isDeclaredIn(name, codeLines) {
   return codeLines.some((line) => declaration.test(line));
 }
 
+const squash = (s) => s.replace(/\s+/gu, " ");
+
 function sentencesOf(file, removed, addedAll) {
   const candidates = isMarkdown(file)
-    ? removed.join(" ").split(/(?<=[.!?])\s+/u)
+    ? squash(removed.join(" ")).split(/(?<=[.!?])\s+/u)
     : removed.flatMap((line) => [...line.matchAll(/"([^"]+)"|'([^']+)'|`([^`]+)`/gu)].map((m) => m[1] ?? m[2] ?? m[3]));
-  return candidates.map((s) => s.trim()).filter((s) => s.length >= MIN_SENTENCE && !addedAll.includes(s));
+  return candidates.map((s) => squash(s).trim()).filter((s) => s.length >= MIN_SENTENCE && !addedAll.includes(s));
 }
 
 function identifiersOf(removed, addedWordsAll) {
@@ -83,16 +85,17 @@ function identifiersOf(removed, addedWordsAll) {
  * @param {{ diffText: string, grep: (needle: string, options: { word: boolean }) => Array<{ file: string, line: number }> }} input
  *   grep lists tracked-file hits of a fixed string at the candidate head.
  * @returns {{ hits: Array<{ kind: "sentence"|"identifier", needle: string, file: string, line: number, site: string }>, truncated: boolean }}
- *   truncated is true when a cap dropped hits.
+ *   truncated is true when a cap dropped hits; truncatedNeedles names the identifiers dropped as too common.
  */
 export function collectStaleSurface({ diffText, grep }) {
   const files = parseDiff(diffText);
   // "Still added" is diff-wide: text moved to another file is not removed.
   const addedLines = files.flatMap((f) => f.added);
-  const addedAll = addedLines.join("\n");
+  const addedAll = squash(addedLines.join(" "));
   const addedWordsAll = wordsOf(addedLines.map(codeOnly));
   const hits = [];
   let truncated = false;
+  const truncatedNeedles = [];
   for (const { file: source, removed } of files) {
     const items = [];
     if (isMarkdown(source) || isTestFile(source)) items.push(...sentencesOf(source, removed, addedAll).map((needle) => ({ kind: "sentence", needle })));
@@ -101,7 +104,11 @@ export function collectStaleSurface({ diffText, grep }) {
       const found = grep(needle, { word: kind === "identifier" });
       // An identifier that still occurs in the file that dropped it was not removed.
       if (kind === "identifier" && found.some((h) => h.file === source)) continue;
-      if (kind === "identifier" && new Set(found.map((h) => h.file)).size > MAX_FILES_PER_IDENTIFIER) { truncated = true; continue; }
+      if (kind === "identifier" && new Set(found.map((h) => h.file)).size > MAX_FILES_PER_IDENTIFIER) {
+        truncated = true;
+        truncatedNeedles.push({ kind, needle, fileCount: new Set(found.map((h) => h.file)).size });
+        continue;
+      }
       const ordered = [...found].sort((a, b) => priority(a.file) - priority(b.file));
       if (ordered.length > MAX_HITS_PER_NEEDLE) truncated = true;
       for (const { file, line } of ordered.slice(0, MAX_HITS_PER_NEEDLE)) hits.push({ kind, needle, file, line, site: `${file}:${line}` });
@@ -109,7 +116,7 @@ export function collectStaleSurface({ diffText, grep }) {
   }
   if (hits.length > MAX_HITS) truncated = true;
   const kept = hits.map((hit, index) => ({ hit, index })).sort((a, b) => priority(a.hit.file) - priority(b.hit.file) || a.index - b.index).slice(0, MAX_HITS);
-  return { hits: kept.sort((a, b) => a.index - b.index).map((k) => k.hit), truncated };
+  return { hits: kept.sort((a, b) => a.index - b.index).map((k) => k.hit), truncated, truncatedNeedles };
 }
 
 /** The hits only; use `collectStaleSurface` to learn whether a cap dropped some. */

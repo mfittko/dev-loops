@@ -42,7 +42,7 @@ import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { writeGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> [--site-coverage <path>] [--worktree <dir>]
+const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> [--site-coverage <path>] [--findings-log <path>] [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> [--site-coverage <path>] [--worktree <dir>]
        check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list)
 
@@ -57,7 +57,8 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
   --site-coverage <path>  The fixer's commit_only handback { headSha, siteCoverage: [...] } (the work order's outputRef)
                           Omitting it in --result mode reports a coverage gap for every act item with a siteQuery
-  --findings-log <path>   The reviewed gate round's findings log; its provenance.perAngle angles join the surface hints
+  --findings-log <path>   Act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline);
+                          its provenance.perAngle angles join the surface hints. Refused with --threads-file.
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
   --invocation <n>        1-based delta review invocation in this sequence (max 3)
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
@@ -113,6 +114,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
   }
   if (values.help) return { help: true };
   if (Boolean(values["act-list"]) === Boolean(values["threads-file"])) throw parseError("pass exactly one of --act-list <path> and --threads-file <path>");
+  if (values["threads-file"] && values["findings-log"]) throw parseError("--findings-log is refused with --threads-file: PRE-PUSH-DELTA-INPUT gives the thread route the act items' angles only");
   if (values["threads-file"] && !(values.repo && /^[1-9]\d*$/.test(values.pr ?? ""))) throw parseError("--threads-file requires --repo <owner/name> and --pr <n>");
   if (!values.baseline) throw parseError("--baseline <sha> is required");
   const baseline = values.baseline.trim().toLowerCase();
@@ -161,29 +163,41 @@ function gitIsAncestor(worktree, ancestor, descendant) {
 }
 
 // Tracked-file hits of the sentences and identifiers the delta range removed, grepped at the candidate head.
-// A git failure throws (fail closed). When either commit object does not exist locally (the tests'
-// placeholder SHAs), there is no range to read and the check reports no hits.
-function gitStaleSurfaceHits(worktree, baseline, head) {
+// A git failure throws (fail closed), including a missing baseline or head object. The diff and grep
+// formats are pinned so operator git config (prefix, color, external diff, textconv) cannot blank the check.
+export function gitStaleSurfaceHits(worktree, baseline, head) {
   const git = (...args) => spawnSync("git", ["-C", worktree, ...args], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
-  if ([baseline, head].some((rev) => git("cat-file", "-e", `${rev}^{commit}`).status !== 0)) return { hits: [], truncated: false };
-  const diff = git("diff", "-U0", "--no-color", `${baseline}..${head}`);
+  for (const rev of [baseline, head]) {
+    const exists = git("cat-file", "-e", `${rev}^{commit}`);
+    if (exists.status !== 0) throw new Error(`git cat-file ${rev} failed in ${worktree}: ${exists.stderr.trim()}; the stale-surface check cannot read the delta range`);
+  }
+  const diff = git("diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", `${baseline}..${head}`);
   if (diff.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${diff.stderr.trim()}; the stale-surface check cannot read the delta range`);
   const grep = (needle, { word }) => {
-    const out = git("grep", "-n", "-I", "-F", ...(word ? ["-w"] : []), "-e", needle, head);
+    const out = git("grep", "-n", "-I", "-F", "--no-color", ...(word ? ["-w"] : []), "-e", needle, head);
     if (out.status === 1) return [];
     if (out.status !== 0) throw new Error(`git grep failed in ${worktree} (exit ${out.status}): ${out.stderr.trim()}`);
-    return out.stdout.split("\n").filter(Boolean).flatMap((row) => {
+    const rows = out.stdout.split("\n").filter(Boolean);
+    const hits = rows.flatMap((row) => {
       const match = /^[^:]*:(.+?):(\d+):/u.exec(row);
       return match ? [{ file: match[1], line: Number(match[2]) }] : [];
     });
+    if (rows.length > 0 && hits.length === 0) throw new Error(`git grep output could not be parsed in ${worktree}: the stale-surface check fails closed`);
+    return hits;
   };
   return collectStaleSurface({ diffText: diff.stdout, grep });
 }
 
-function roundAnglesOf(findingsLogPath) {
+// The findings log writer stamps `headSha`; the log must be the baseline round's and carry provenance.perAngle.
+function roundAnglesOf(findingsLogPath, baseline) {
   if (!findingsLogPath) return [];
-  const perAngle = JSON.parse(readFileSync(findingsLogPath, "utf8"))?.provenance?.perAngle;
-  return Array.isArray(perAngle) ? perAngle.map((row) => row?.angle).filter((angle) => typeof angle === "string" && angle.length > 0) : [];
+  const log = JSON.parse(readFileSync(findingsLogPath, "utf8"));
+  const perAngle = log?.provenance?.perAngle;
+  if (!Array.isArray(perAngle) || perAngle.length === 0) throw new Error(`--findings-log ${findingsLogPath} has no non-empty provenance.perAngle: pass the reviewed gate round's findings log`);
+  if (typeof log.headSha !== "string" || !(log.headSha.toLowerCase().startsWith(baseline) || baseline.startsWith(log.headSha.toLowerCase()))) {
+    throw new Error(`--findings-log ${findingsLogPath} records head ${log.headSha ?? "(none)"}, not the baseline ${baseline}: pass the findings log of the reviewed round`);
+  }
+  return perAngle.map((row) => row?.angle).filter((angle) => typeof angle === "string" && angle.length > 0);
 }
 
 export function runCli(
@@ -231,6 +245,7 @@ export function runCli(
   const stale = staleSurface(options.worktree, sequence.reviewBaselineHead, currentHead);
   const staleSurfaceHits = Array.isArray(stale) ? stale : stale.hits;
   const staleSurfaceTruncated = Array.isArray(stale) ? false : stale.truncated === true;
+  const truncatedNeedles = Array.isArray(stale) ? [] : stale.truncatedNeedles ?? [];
   let payload;
   if (options.result) {
     const result = JSON.parse(readFileSync(options.result, "utf8"));
@@ -246,7 +261,7 @@ export function runCli(
     });
     payload = { ok: true, ...decision };
   } else {
-    payload = { ok: true, input: buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, roundAngles: roundAnglesOf(options.findingsLog), staleSurfaceHits, staleSurfaceTruncated }) };
+    payload = { ok: true, input: buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, roundAngles: roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;

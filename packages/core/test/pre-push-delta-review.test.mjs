@@ -444,7 +444,7 @@ test("identifiers need a declaration shape, ignore comments and strings, skip co
   const needles = (diffText, n = 1) => collectStaleSurfaceHits({ diffText, grep: grepAt(n) }).map((h) => h.needle);
   assert.deepEqual(needles(code(["export function oldHelper(a) {"])), ["oldHelper"]);
   // A call, a comment and a string mention are no declaration.
-  assert.deepEqual(needles(code(["  callSomething(plainCallee);", "  // oldCommented removed", '  const msg = "mentionsQuoted";'])), ["callSomething"].filter(() => false));
+  assert.deepEqual(needles(code(["  callSomething(plainCallee);", "  // oldCommented removed", '  const msg = "mentionsQuoted";'])), []);
   assert.deepEqual(needles(code(["export function tooCommonName(a) {"]), 6), []);
   assert.equal(collectStaleSurface({ diffText: code(["export function tooCommonName(a) {"]), grep: grepAt(6) }).truncated, true);
   const moved = [code(["export function movedHelper(a) {"]), hunk("packages/x/other.mjs", ["+export function movedHelper(a) {"]).replace("@@ -1,2 +1,0 @@", "@@ -0,0 +1 @@")].join("\n");
@@ -466,4 +466,32 @@ test("a skipped site addresses a stale-surface hit only with a non-empty reason"
   assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage("kept") }).length, 0);
   assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage("  ") }).length, 1);
   assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage() }).length, 1);
+});
+
+test("a hit file is addressed only as a whole path token, never as a path suffix or substring", () => {
+  const hit = (file) => ({ kind: "sentence", needle: "n", file, line: 1, site: `${file}:1` });
+  const byFinding = (summary) => unaddressedStaleSurfaceHits([hit("skills/dev-loop/SKILL.md")], { newFindings: [{ summary, evidence: [] }] }).length;
+  assert.equal(byFinding("stale line at skills/dev-loop/SKILL.md:12"), 0);
+  assert.equal(byFinding("see `skills/dev-loop/SKILL.md` for the pin"), 0);
+  assert.equal(byFinding("stale line at .claude/skills/dev-loop/SKILL.md:12"), 1);
+  const readme = (summary) => unaddressedStaleSurfaceHits([hit("README.md")], { newFindings: [{ summary, evidence: [] }] }).length;
+  assert.equal(readme("`README.md` still pins the sentence"), 0);
+  assert.equal(readme("stale line in README.md"), 0);
+  assert.equal(readme("stale line in docs/README.md"), 1);
+  assert.equal(readme("naming skills/dev-loop/README.md here"), 1);
+  const skipped = (site) => unaddressedStaleSurfaceHits([hit("README.md")], { siteCoverage: [{ fingerprint: "f", returnedSites: [], sites: [{ site, status: "skipped", reason: "kept" }] }] }).length;
+  assert.equal(skipped("README.md:3"), 0);
+  assert.equal(skipped("docs/README.md:3"), 1);
+});
+
+test("a re-wrapped Markdown paragraph is no removal, and dropped too-common identifiers are named", () => {
+  const grep = () => [{ file: "test/pin.test.mjs", line: 3 }];
+  const rewrap = [
+    "diff --git a/skills/docs/a.md b/skills/docs/a.md", "--- a/skills/docs/a.md", "+++ b/skills/docs/a.md", "@@ -1,2 +1,2 @@",
+    "-The retained sentence is long enough to count and", "-wraps over two lines.", "+The retained sentence is long enough", "+to count and wraps over two lines.",
+  ].join("\n");
+  assert.deepEqual(collectStaleSurface({ diffText: rewrap, grep }).hits, []);
+  const many = Array.from({ length: 6 }, (_, i) => ({ file: `f${i}.mjs`, line: 1 }));
+  const out = collectStaleSurface({ diffText: hunk("packages/x/lib.mjs", ["-export function tooCommonName(a) {"]), grep: () => many });
+  assert.deepEqual(out.truncatedNeedles, [{ kind: "identifier", needle: "tooCommonName", fileCount: 6 }]);
 });

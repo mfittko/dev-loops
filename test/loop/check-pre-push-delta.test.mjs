@@ -31,7 +31,7 @@ function fixture() {
 }
 
 const quiet = { stdout: { write: () => {} } };
-const headAt = (head, tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"))) => ({ ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev), isAncestor: () => true });
+const headAt = (head, tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"))) => ({ ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) });
 
 test("without --result the CLI prints the cumulative delta input for the worktree head", () => {
   const { dir, actList } = fixture();
@@ -121,7 +121,7 @@ test("with --result the CLI authorizes the push only for the reviewed head", () 
 test("the baseline resolves to a full SHA, and HEAD equal to the baseline fails", () => {
   const { actList } = fixture();
   const full = `${A}${"0".repeat(26)}`;
-  const resolve = (head) => ({ ...quiet, revParse: (_worktree, rev) => (rev === "HEAD" ? head : full), isAncestor: () => true });
+  const resolve = (head) => ({ ...quiet, revParse: (_worktree, rev) => (rev === "HEAD" ? head : full), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) });
   const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"];
   assert.equal(runCli(args, resolve(B)).input.reviewBaselineHead, full);
   assert.throws(() => runCli(args, resolve(full)), /equals the baseline/);
@@ -231,7 +231,7 @@ const withStale = (head) => ({ ...headAt(head), staleSurface: () => [STALE] });
 test("input mode lists stale-surface hits and the findings-log round angles", () => {
   const { dir, actList } = fixture();
   const log = path.join(dir, "log.json");
-  fs.writeFileSync(log, JSON.stringify({ provenance: { distinctReviewers: 2, perAngle: [{ angle: "determinism" }, { angle: "correctness" }] } }));
+  fs.writeFileSync(log, JSON.stringify({ headSha: A, provenance: { distinctReviewers: 2, perAngle: [{ angle: "determinism" }, { angle: "correctness" }] } }));
   const out = runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s", "--findings-log", log], withStale(B));
   assert.deepEqual(out.input.staleSurfaceHits, [STALE]);
   assert.deepEqual(out.input.surfaceHints, ["correctness", "determinism"]);
@@ -275,4 +275,52 @@ test("a truncated stale-surface list is flagged in the input and blocks locally_
   const base = JSON.parse(fs.readFileSync(result, "utf8"));
   fs.writeFileSync(addressed, JSON.stringify({ ...base, newFindings: [{ severity: "low", summary: "stale-surface-hits-truncated: read the remaining hits by hand", evidence: ["e"] }] }));
   assert.equal(runCli(["--act-list", actList, "--baseline", A, "--result", addressed, "--invocation", "1"], truncated(B)).nextStep, "push");
+});
+
+test("the production stale-surface adapter reports the hit file and line, whatever the operator's git config", () => {
+  const { dir, actList } = fixture();
+  const root = path.join(dir, "stale-repo");
+  const git = (...args) => spawnSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).stdout.trim();
+  fs.mkdirSync(path.join(root, "test"), { recursive: true });
+  git("init", "-q");
+  const sentence = "The delta review reads the changed lines only.";
+  fs.writeFileSync(path.join(root, "doc.md"), `${sentence}\n`);
+  fs.writeFileSync(path.join(root, "test", "pin.test.mjs"), `const pinned = "${sentence}";\n`);
+  git("add", "-A");
+  git("commit", "-q", "-m", "c1");
+  const base = git("rev-parse", "HEAD");
+  fs.writeFileSync(path.join(root, "doc.md"), "Reworded.\n");
+  git("commit", "-q", "-a", "-m", "c2");
+  const args = ["--act-list", actList, "--baseline", base, "--spec-identity", "s", "--worktree", root];
+  const hitsUnder = (...config) => {
+    for (const [key, value] of config) git("config", key, value);
+    return runCli(args, quiet).input.staleSurfaceHits.map((h) => h.site);
+  };
+  assert.deepEqual(hitsUnder(), ["test/pin.test.mjs:1"]);
+  assert.deepEqual(hitsUnder(["diff.noprefix", "true"], ["color.ui", "always"], ["diff.external", "false"]), ["test/pin.test.mjs:1"]);
+});
+
+test("a missing commit object fails the stale-surface check instead of reporting no hits", () => {
+  const { dir, actList } = fixture();
+  const root = path.join(dir, "empty-repo");
+  fs.mkdirSync(root);
+  spawnSync("git", ["-C", root, "init", "-q"]);
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s", "--worktree", root], { ...quiet, revParse: (_w, rev) => (rev === "HEAD" ? B : rev), isAncestor: () => true }), /git cat-file/);
+});
+
+test("--findings-log is refused on the thread route and validated on the act-list route", () => {
+  const { dir, actList } = fixture();
+  const logWith = (body) => {
+    const p = path.join(dir, `log-${Math.random().toString(36).slice(2)}.json`);
+    fs.writeFileSync(p, JSON.stringify(body));
+    return p;
+  };
+  const base = ["--act-list", actList, "--baseline", A, "--spec-identity", "s"];
+  const good = logWith({ headSha: A, provenance: { perAngle: [{ angle: "correctness" }] } });
+  assert.deepEqual(runCli([...base, "--findings-log", good], headAt(B)).input.surfaceHints, ["correctness"]);
+  assert.throws(() => runCli([...base, "--findings-log", logWith({ headSha: A })], headAt(B)), /perAngle/);
+  assert.throws(() => runCli([...base, "--findings-log", logWith({ headSha: "ccccccc3333333", provenance: { perAngle: [{ angle: "correctness" }] } })], headAt(B)), /not the baseline/);
+  const { threadsFile } = threadsFixture();
+  assert.throws(() => parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s", "--findings-log", good]), /refused with --threads-file/);
+  assert.equal(parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s"]).findingsLog, null);
 });
