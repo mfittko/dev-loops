@@ -20,7 +20,7 @@ test("reviewer style rule states the seven output rules and references the deslo
   const block = ruleBlock(read("skills/docs/gate-review-comment-contract.md"), "GATE-COMMENT-REVIEWER-STYLE");
   for (const phrase of [
     "Lead with the point.",
-    "Give one action per recommendation. Use numbered steps for more than one action.",
+    "Give one action per recommendation, as one short fix statement.",
     "Write no preamble, recap or closer.",
     "Cap every list at five ranked items.",
     "Use a matter-of-fact tone.",

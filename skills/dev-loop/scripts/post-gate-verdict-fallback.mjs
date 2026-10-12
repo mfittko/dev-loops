@@ -408,7 +408,10 @@ export function renderFallbackGateReviewCommentBody({
     && blockCleanOnFindingSeverities.length > 0
   ) {
     const sevs = blockCleanOnFindingSeverities.join(", ");
-    lines.push(`**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`);
+    // Renderer-only line: hidden in an HTML comment, one field per line at column 0.
+    const hidden = `**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`
+      .replaceAll("-->", "--&gt;").replaceAll("--!>", "--!&gt;").replaceAll("<!--", "&lt;!--");
+    lines.push("<!--", hidden, "-->");
   }
   lines.push(
     "",

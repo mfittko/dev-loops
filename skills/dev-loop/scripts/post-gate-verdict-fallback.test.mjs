@@ -126,7 +126,7 @@ test("renderFallbackGateReviewCommentBody includes blocking severities for findi
     nextAction: "stay draft and fix",
     blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"],
   });
-  assert.match(body, /\*\*Blocking severities:\*\* must-fix, worth-fixing-now/);
+  assert.match(body, /^<!--\n\*\*Blocking severities:\*\* must-fix, worth-fixing-now[^\n]*\n-->$/m);
   assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
 });
 

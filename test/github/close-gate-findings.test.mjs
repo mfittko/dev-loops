@@ -2242,7 +2242,7 @@ test("#1585: unresolvedGateThreadCount reflects the subtraction (must-fix stays,
 
 // ---------------------------------------------------------------------------
 // #2263: folded filing. A finding below the gate's inline severity floor
-// (upsert-checkpoint-verdict.mjs's renderFoldedFindingsBlock) never gets a
+// (upsert-checkpoint-verdict.mjs's renderVerdictDetailsBlock) never gets a
 // thread of its own; its operator-visible lows join the round's ONE batched
 // deferral comment directly from the ledger.
 // ---------------------------------------------------------------------------

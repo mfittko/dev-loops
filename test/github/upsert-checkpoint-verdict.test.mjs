@@ -2362,6 +2362,76 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
   }
 });
 
+test("upsert-checkpoint-verdict a second same-head call is a noop for an inline reason with HTML comment delimiters (#2722)", async () => {
+  for (const inlineReason of ["x --> y", "a --!> b", "c <!-- d"]) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-idempotent-"));
+  const headSha = "abc1234000000000000000000000000000000000";
+  const inputs = {
+    repo: "owner/repo",
+    pr: 17,
+    gate: "draft_gate",
+    headSha,
+    verdict: "clean",
+    findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
+    findingsSummary: "no issues found",
+    nextAction: "mark ready for review",
+    executionMode: "inline_single_agent",
+    inlineReason,
+  };
+
+  try {
+    // First call: no prior comment, so it renders + posts fresh.
+    const { runChild: runChild1, calls: calls1 } = makeGhMock([
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-103"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+    const created = await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChild1, repoRoot: fanoutDisabledRepoRoot });
+    assert.equal(created.action, "created");
+
+    const postCall = calls1.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews"));
+    const postedBody = JSON.parse(postCall.stdinText).body;
+
+    // Re-parsing the posted body recovers exactly the fields that were rendered
+    // in — this is what the same-head noop compare (~1517) relies on.
+    const reparsed = parseGateReviewCommentBody(postedBody);
+    assert.ok(reparsed !== null);
+    assert.equal(reparsed.verdict, inputs.verdict);
+    assert.equal(reparsed.findingsSummary, inputs.findingsSummary);
+    assert.equal(reparsed.nextAction, inputs.nextAction);
+    assert.equal(reparsed.executionMode, inputs.executionMode);
+
+    // The hidden block keeps the delimiter-bearing reason escaped: the only raw
+    // `-->` inside it is its closing line, so no text leaks into the visible body.
+    const hiddenStart = postedBody.lastIndexOf("<!--\n", postedBody.indexOf("Execution mode"));
+    assert.ok(hiddenStart >= 0);
+    const hiddenClose = postedBody.indexOf("\n-->", hiddenStart);
+    assert.ok(hiddenClose > hiddenStart);
+    const hiddenInner = postedBody.slice(hiddenStart + "<!--".length, hiddenClose);
+    assert.ok(hiddenInner.includes(inlineReason.replaceAll("-->", "--&gt;").replaceAll("--!>", "--!&gt;").replaceAll("<!--", "&lt;!--")));
+    assert.ok(!hiddenInner.includes("-->") && !hiddenInner.includes("--!>") && !hiddenInner.includes("<!--"));
+
+    // Rendering the SAME inputs again is byte-identical (deterministic render).
+    const { runChild: runChild2, calls: calls2 } = makeGhMock([
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        issueComments: [{ id: 103, body: postedBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-103", updated_at: "2026-08-03T00:00:00Z" }],
+      }),
+    ], { repeatLastOnOverflow: true });
+    const second = await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChild2, repoRoot: fanoutDisabledRepoRoot });
+    assert.equal(second.action, "noop");
+    assert.equal(second.commentId, 103);
+    // Same-head noop means no create/update comment call fires.
+    assert.ok(!calls2.some((c) => c.args.includes("repos/owner/repo/pulls/17/reviews")));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+});
+
 // AC1 (issue 2008 / ADR-0061): optional --spec-authority stamps the RETURNED
 // result on the created/noop paths; absent it is a pure no-op.
 test("upsert-checkpoint-verdict: --spec-authority stamps the returned created/noop result; absent is a no-op", async () => {
@@ -7534,7 +7604,7 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
       { angle: "scope", verdict: "clean", findings: [] },
       { angle: "holistic", verdict: "clean", findings: [] },
       { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: LOCATABLE_FINDING.summary, judgeDisposition: "defer", file: "src/db.mjs", line: 2 }] },
-      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, judgeDisposition: "defer" }] },
+      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary, judgeDisposition: "act" }] },
     ]), "utf8");
 
     let postedPayload = null;
@@ -7593,12 +7663,12 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
 
     // The body-only bulleted list carries the non-locatable finding's own
     // text, and the clean angles collapse into one trailing roster line.
-    assert.match(postedPayload.body, /^- 🟠 medium — inconsistent casing in constants _\(coverage\)_$/m);
+    assert.match(postedPayload.body, /^- 🟠 medium — inconsistent casing in constants — judge: _`act`_ _\(coverage\)_$/m);
     assert.match(postedPayload.body, /^\*\*Clean \(3\):\*\* pr-description, scope, holistic$/m);
     // The body-filed finding still stamps its own invisible marker (#1942) —
     // load-bearing for cross-round suppression/deferral, never rendered as
     // visible text.
-    assert.match(postedPayload.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=medium angle=coverage round=1 disposition=deferred -->$/m);
+    assert.match(postedPayload.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=medium angle=coverage round=1 -->$/m);
     // The gate-scoped round marker rides on the same body.
     assert.match(postedPayload.body, /^<!-- dev-loops:gate-findings-review draft_gate [0-9a-f]{40} round=1 -->$/m);
   }, { prefix: "dev-loops-upsert-single-surface-" });
@@ -7658,13 +7728,250 @@ test("upsert-checkpoint-verdict --findings-ledger: at the default floor, a locat
 
     // The collapsed <details> block carries both folded findings' visible text.
     assert.match(posted.body, /<details>/);
-    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /<summary>Details<\/summary>/);
+    assert.match(posted.body, /^\*\*Not judged \(2\)\*\*$/m);
     assert.match(posted.body, /`src\/db\.mjs:2` \*\*low\*\* \(`naming`\): inconsistent casing of a local constant/);
     assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
     // Each folded finding still stamps its own invisible marker, deferred.
     assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 disposition=deferred -->$/m);
     assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 disposition=deferred -->$/m);
   }, { prefix: "dev-loops-upsert-fold-default-floor-" });
+});
+
+async function postDispositionRound(tempDir, findings) {
+  const ledgerPath = await writeSingleSurfaceLedger(tempDir, findings);
+  const { runChild, calls } = makeGhMock([
+    ...singleSurfaceLeadingEntries(),
+    {
+      assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+      stdout: '{"id":721,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-721"}\n',
+    },
+  ]);
+  const result = await upsertCheckpointVerdict({
+    repo: "owner/repo",
+    pr: 17,
+    gate: "draft_gate",
+    headSha: SINGLE_SURFACE_HEAD,
+    verdict: "findings_present",
+    findingsSummary: `${findings.length} findings`,
+    findingsLedger: ledgerPath,
+    nextAction: "stay draft and fix",
+    executionMode: "inline_single_agent",
+    inlineReason: "single-agent inline review (test)",
+  }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+  const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+  const posted = JSON.parse(postCall.stdinText);
+  return { result, body: posted.body, posted };
+}
+
+test("upsert-checkpoint-verdict --findings-ledger: the body shows act and blocking findings and folds the rest by judge disposition in one Details block", async () => {
+  await withTempDir(async (tempDir) => {
+    const { result, body } = await postDispositionRound(tempDir, [
+      { severity: "low", angle: "naming", summary: "act low finding", judgeDisposition: "act" },
+      { severity: "medium", angle: "coverage", summary: "defer medium finding", judgeDisposition: "defer" },
+      { severity: "medium", angle: "dry", summary: "reject medium finding", judgeDisposition: "reject" },
+      { severity: "must-fix", angle: "security", summary: "reject high finding", judgeDisposition: "reject" },
+      { severity: "low", angle: "style", summary: "unjudged low finding" },
+    ]);
+    assert.equal(result.bodyFiled, 2);
+    assert.equal(result.folded, 3);
+    const details = body.slice(body.indexOf("<details>"));
+    const visible = body.slice(0, body.indexOf("<details>"));
+    assert.equal(body.match(/<details>/g).length, 1);
+    for (const text of ["act low finding", "reject high finding"]) {
+      assert.ok(visible.includes(text) && !details.includes(text), text);
+    }
+    for (const text of ["defer medium finding", "reject medium finding", "unjudged low finding"]) {
+      assert.ok(details.includes(text) && !visible.includes(text), text);
+    }
+    for (const header of ["**Deferred (1)**", "**Rejected (1)**", "**Not judged (1)**"]) {
+      assert.ok(details.split("\n").includes(header), header);
+    }
+    // The act finding never carries a deferral stamp; a folded deferred one keeps it.
+    assert.match(body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 -->$/m);
+    assert.match(body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=medium angle=coverage round=1 disposition=deferred issue=17 -->$/m);
+    assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
+  }, { prefix: "dev-loops-upsert-disposition-split-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: inline threads keep today's rules whatever the judge disposition (ng:0)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { result, body, posted } = await postDispositionRound(tempDir, [
+      { severity: "medium", angle: "coverage", summary: "locatable reject medium", judgeDisposition: "reject", files: ["src/db.mjs"], line: 2 },
+      { severity: "medium", angle: "dry", summary: "locatable defer medium", judgeDisposition: "defer", files: ["src/db.mjs"], line: 3 },
+      { severity: "low", angle: "naming", summary: "locatable act low", judgeDisposition: "act", files: ["src/db.mjs"], line: 3 },
+      { severity: "low", angle: "style", summary: "locatable defer low", judgeDisposition: "defer", files: ["src/db.mjs"], line: 2 },
+      { severity: "medium", angle: "scope", summary: "body only reject medium", judgeDisposition: "reject" },
+    ]);
+    assert.equal(result.inlineComments, 3);
+    assert.equal(result.folded, 2);
+    const inline = JSON.stringify(posted.comments);
+    for (const text of ["locatable reject medium", "locatable defer medium", "locatable act low"]) {
+      assert.ok(inline.includes(text), text);
+    }
+    const details = body.slice(body.indexOf("<details>"));
+    for (const text of ["locatable defer low", "body only reject medium"]) {
+      assert.ok(details.includes(text) && !inline.includes(text), text);
+    }
+  }, { prefix: "dev-loops-upsert-disposition-inline-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: a round whose only finding is a locatable reject medium posts it inline and says rerun gate", async () => {
+  await withTempDir(async (tempDir) => {
+    const { body, posted } = await postDispositionRound(tempDir, [
+      { severity: "medium", angle: "coverage", summary: "locatable reject medium", judgeDisposition: "reject", files: ["src/db.mjs"], line: 2 },
+    ]);
+    assert.ok(JSON.stringify(posted.comments).includes("locatable reject medium"));
+    assert.match(body, /\*\*Next action:\*\* rerun gate/);
+    assert.doesNotMatch(body, /stay draft and fix/);
+  }, { prefix: "dev-loops-upsert-disposition-locatable-nextaction-" });
+});
+
+async function postWithFindingsJson(tempDir, ledgerFindings, jsonFindings) {
+  const ledgerPath = await writeSingleSurfaceLedger(tempDir, ledgerFindings);
+  const findingsPath = path.join(tempDir, "findings.json");
+  await writeFile(findingsPath, JSON.stringify(jsonFindings), "utf8");
+  const { runChild, calls } = makeGhMock([
+    ...singleSurfaceLeadingEntries(),
+    {
+      assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+      stdout: '{"id":722,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-722"}\n',
+    },
+  ]);
+  await upsertCheckpointVerdict({
+    repo: "owner/repo",
+    pr: 17,
+    gate: "draft_gate",
+    headSha: SINGLE_SURFACE_HEAD,
+    verdict: "findings_present",
+    findingsSummary: "findings",
+    findingsLedger: ledgerPath,
+    findingsJson: findingsPath,
+    nextAction: "stay draft and fix",
+    executionMode: "inline_single_agent",
+    inlineReason: "single-agent inline review (test)",
+  }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+  const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+  return JSON.parse(postCall.stdinText).body;
+}
+
+test("upsert-checkpoint-verdict --findings-ledger: an act item from --findings-json over an unjudged ledger keeps Next action 'stay draft and fix' and renders visible outside Details", async () => {
+  await withTempDir(async (tempDir) => {
+    const body = await postWithFindingsJson(
+      tempDir,
+      [{ severity: "low", angle: "naming", summary: "unjudged low finding" }],
+      [{ severity: "low", angle: "naming", summary: " unjudged low finding ", judgeDisposition: "act" }],
+    );
+    assert.match(body, /\*\*Next action:\*\* stay draft and fix/);
+    assert.doesNotMatch(body, /\*\*Next action:\*\* rerun gate/);
+    assert.ok(body.includes("unjudged low finding"));
+    assert.ok(!body.includes("<details>") || !body.slice(body.indexOf("<details>")).includes("unjudged low finding"));
+    assert.doesNotMatch(body, /Not judged/);
+    assert.doesNotMatch(body, /disposition=deferred/);
+  }, { prefix: "dev-loops-upsert-findings-json-act-nextaction-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: --findings-json entries sharing a summary resolve to act whatever their order", async () => {
+  for (const order of [["reject", "act"], ["act", "reject"]]) {
+    await withTempDir(async (tempDir) => {
+      const body = await postWithFindingsJson(
+        tempDir,
+        [{ severity: "low", angle: "naming", summary: "shared low finding" }],
+        order.map((judgeDisposition) => ({ severity: "low", angle: "naming", summary: "shared low finding", judgeDisposition })),
+      );
+      assert.doesNotMatch(body, /disposition=deferred/);
+      assert.doesNotMatch(body, /Rejected \(/);
+      assert.ok(!body.includes("<details>") || !body.slice(body.indexOf("<details>")).includes("shared low finding"));
+      assert.match(body, /shared low finding/);
+    }, { prefix: "dev-loops-upsert-findings-json-prefer-act-" });
+  }
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: a same-head correction folds a deferred medium under Deferred and keeps an act low visible", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [
+      { severity: "medium", angle: "coverage", summary: "defer medium finding", judgeDisposition: "defer" },
+      { severity: "low", angle: "naming", summary: "act low finding", judgeDisposition: "act" },
+    ]);
+    const existingReview = {
+      id: 706,
+      submitted_at: "2026-08-03T10:00:00Z",
+      html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-706",
+      body: renderGateReviewCommentBody({
+        gate: "draft_gate",
+        headSha: SINGLE_SURFACE_HEAD,
+        verdict: "clean",
+        findingsSummary: "no issues found",
+        nextAction: "mark ready for review",
+        executionMode: "inline_single_agent",
+        inlineReason: "single-agent inline review (test)",
+      }),
+    };
+    const { runChild, calls } = makeGhMock([
+      ...singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }),
+      {
+        assertArgs: ["api", "-X", "PUT", "repos/owner/repo/pulls/17/reviews/706", "--input", "-"],
+        stdout: '{"id":706,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-706"}\n',
+      },
+    ]);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "2 findings",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "updated");
+    const put = calls.find((c) => c.args.includes("PUT") && c.args.includes("repos/owner/repo/pulls/17/reviews/706"));
+    const body = JSON.parse(put.stdinText).body;
+    const details = body.slice(body.indexOf("<details>"));
+    const visible = body.slice(0, body.indexOf("<details>"));
+    assert.ok(details.split("\n").includes("**Deferred (1)**"));
+    assert.ok(details.includes("defer medium finding") && !visible.includes("defer medium finding"));
+    assert.ok(visible.includes("act low finding") && !details.includes("act low finding"));
+  }, { prefix: "dev-loops-upsert-update-disposition-fold-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: --findings-json defer and reject dispositions fold unjudged ledger mediums, and an existing ledger disposition is never overwritten", async () => {
+  await withTempDir(async (tempDir) => {
+    const body = await postWithFindingsJson(
+      tempDir,
+      [
+        { severity: "medium", angle: "coverage", summary: "json defer medium" },
+        { severity: "medium", angle: "dry", summary: "json reject medium" },
+        { severity: "low", angle: "naming", summary: "own act low", judgeDisposition: "act" },
+      ],
+      [
+        { severity: "medium", angle: "coverage", summary: "json defer medium", judgeDisposition: "defer" },
+        { severity: "medium", angle: "dry", summary: "json reject medium", judgeDisposition: "reject" },
+        { severity: "low", angle: "naming", summary: "own act low", judgeDisposition: "reject" },
+      ],
+    );
+    assert.match(body, /^\*\*Deferred \(1\)\*\*$/m);
+    assert.match(body, /^\*\*Rejected \(1\)\*\*$/m);
+    const details = body.slice(body.indexOf("<details>"));
+    assert.ok(details.includes("json defer medium") && details.includes("json reject medium"));
+    assert.ok(!details.includes("own act low"));
+    assert.ok(body.includes("own act low"));
+  }, { prefix: "dev-loops-upsert-findings-json-fold-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: with only deferred and rejected findings the next action never says stay draft and fix, and Execution mode renders inside an HTML comment", async () => {
+  await withTempDir(async (tempDir) => {
+    const { body } = await postDispositionRound(tempDir, [
+      { severity: "medium", angle: "coverage", summary: "defer medium finding", judgeDisposition: "defer" },
+      { severity: "medium", angle: "dry", summary: "reject medium finding", judgeDisposition: "reject" },
+    ]);
+    assert.match(body, /\*\*Next action:\*\* rerun gate/);
+    assert.doesNotMatch(body, /stay draft and fix/);
+    assert.match(body, /^<!--\n\*\*Execution mode:\*\* inline_single_agent — single-agent inline review \(test\)\n\*\*Blocking severities:\*\* [^\n]+\n-->$/m);
+    assert.match(body, /^\*\*Reviewed head SHA:\*\* `/m);
+  }, { prefix: "dev-loops-upsert-disposition-nextaction-" });
 });
 
 // #2263: an ALL-folded round (every candidate ranks below the inline severity
@@ -7710,7 +8017,8 @@ test("upsert-checkpoint-verdict --findings-ledger: an all-folded round (every ca
     const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
     const posted = JSON.parse(postCall.stdinText);
     assert.equal(posted.comments.length, 0);
-    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /<summary>Details<\/summary>/);
+    assert.match(posted.body, /^\*\*Not judged \(2\)\*\*$/m);
   }, { prefix: "dev-loops-upsert-fold-all-folded-no-files-fetch-" });
 });
 
@@ -7783,7 +8091,8 @@ test("upsert-checkpoint-verdict --findings-ledger: lowering inlineSeverityFloor 
     const posted = JSON.parse(postCall.stdinText);
     assert.equal(posted.comments.length, 2);
     assert.match(JSON.stringify(posted.comments), /inconsistent casing of a local constant/);
-    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(1\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /<summary>Details<\/summary>/);
+    assert.match(posted.body, /^\*\*Not judged \(1\)\*\*$/m);
     assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
   }, { prefix: "dev-loops-upsert-fold-lowered-floor-" });
 });
@@ -7833,23 +8142,24 @@ test("upsert-checkpoint-verdict --findings-ledger: at the default \"medium\" flo
     assert.match(JSON.stringify(posted.comments), /why parameterize here instead of an ORM\?/);
     // The low finding folds into the collapsed <details> block instead.
     assert.doesNotMatch(JSON.stringify(posted.comments), /inconsistent casing of a local constant/);
-    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(1\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /<summary>Details<\/summary>/);
+    assert.match(posted.body, /^\*\*Not judged \(1\)\*\*$/m);
     assert.match(posted.body, /inconsistent casing of a local constant/);
   }, { prefix: "dev-loops-upsert-fold-question-default-medium-floor-" });
 });
 
 // AC6: routing (fold vs inline vs body-filed) must never touch the verdict
 // itself — blockCleanOnFindingSeverities semantics are computed upstream from
-// the ledger, and a folded low still renders exactly the non-clean verdict
+// the ledger, and a folded nit still renders exactly the non-clean verdict
 // its caller supplied, with the configured blocking-severities line intact.
-test("upsert-checkpoint-verdict --findings-ledger: a folded low finding does not affect blockCleanOnFindingSeverities' verdict rendering (AC6)", async () => {
+test("upsert-checkpoint-verdict --findings-ledger: a folded nit finding does not affect blockCleanOnFindingSeverities' verdict rendering (AC6)", async () => {
   await withTempDir(async (tempDir) => {
     await writeFile(
       path.join(tempDir, ".devloops"),
       "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    blockCleanOnFindingSeverities: [high, medium, low]\n",
       "utf8",
     );
-    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_LOW_FINDING]);
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_NIT_FINDING]);
     const entries = [
       ...singleSurfaceLeadingEntries(),
       {
@@ -7883,7 +8193,7 @@ test("upsert-checkpoint-verdict --findings-ledger: a folded low finding does not
     // as the caller supplied them, unaffected by the finding's own folding.
     assert.match(posted.body, /^\*\*Verdict:\*\* findings_present$/m);
     assert.match(posted.body, /^\*\*Blocking severities:\*\* high, medium, low \(clean requires no findings matching these severities\)$/m);
-    assert.match(posted.body, /inconsistent casing of a local constant/);
+    assert.match(posted.body, /trailing whitespace/);
   }, { prefix: "dev-loops-upsert-fold-blocking-severities-" });
 });
 
@@ -8000,7 +8310,7 @@ test("upsert-checkpoint-verdict --findings-ledger: an identical same-head rerun 
         headSha: SINGLE_SURFACE_HEAD,
         verdict: "findings_present",
         findingsSummary: "1 finding",
-        nextAction: "stay draft and fix",
+        nextAction: "rerun gate",
         executionMode: "inline_single_agent",
         inlineReason: "single-agent inline review (test)",
         round: 1,
@@ -8146,7 +8456,7 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --fin
       "        enabled: false",
       "",
     ].join("\n"), "utf8");
-    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [{ ...BODY_FILED_FINDING, judgeDisposition: "defer" }], {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [{ ...BODY_FILED_FINDING, judgeDisposition: "act" }], {
       provenance: {
         distinctReviewers: 2,
         perAngle: [
@@ -8355,7 +8665,8 @@ test("#2263: --gate review --findings-ledger folds locatable low/nit findings at
 
     // Both fold into the verdict body's collapsed <details> block instead.
     assert.match(posted.body, /<details>/);
-    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /<summary>Details<\/summary>/);
+    assert.match(posted.body, /^\*\*Not judged \(2\)\*\*$/m);
     assert.match(posted.body, /`src\/db\.mjs:2` \*\*low\*\* \(`naming`\): inconsistent casing of a local constant/);
     assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
     assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 disposition=deferred -->$/m);
@@ -10413,7 +10724,8 @@ test("#2389 regression: a clean ledger plus an unchecked PR-body DoD item posts 
     assert.match(body, /\*\*Verdict:\*\* blocked/);
     assert.match(body, /\*\*Review verdict:\*\* clean/);
     assert.match(body, /\*\*Gate blockers:\*\* 1 unchecked PR-body Definition of done\n/);
-    assert.match(body, /<details>\n<summary>Remaining gate blocker items \(1\)<\/summary>\n\n- unchecked PR-body Definition of done: `post-merge smoke run recorded`\n\n<\/details>/);
+    assert.match(body, /\*\*Remaining gate blocker items \(1\)\*\*\n\n- unchecked PR-body Definition of done: `post-merge smoke run recorded`/);
+    assert.doesNotMatch(body, /<details>/);
     assert.match(body, /\*\*Next action:\*\* rerun gate/);
     assert.equal(result.reviewVerdict, "clean");
     assert.deepEqual(result.gateBlockers, [{ kind: "unchecked PR-body Definition of done", item: "post-merge smoke run recorded" }]);
@@ -10606,7 +10918,7 @@ test("gate blockers: the counts line carries no criterion text and the collapsed
     const body = postedBody();
     const countsLine = body.split("\n").find((line) => line.startsWith("**Gate blockers:**"));
     assert.equal(countsLine, "**Gate blockers:** 1 unchecked PR-body Acceptance criteria; 12 unchecked PR-body Definition of done");
-    assert.match(body, /<summary>Remaining gate blocker items \(13\)<\/summary>/);
+    assert.match(body, /\*\*Remaining gate blocker items \(13\)\*\*/);
     for (const item of ["ac item open", ...Array.from({ length: 12 }, (_, i) => `dod item ${i + 1}`)]) {
       assert.equal(body.split("\n").filter((line) => line.endsWith(`: \`${item}\``)).length, 1, item);
     }
@@ -11657,4 +11969,16 @@ test("upsert-checkpoint-verdict posts pre_approval_gate for a docs-only head bum
   assert.equal(parsed.action, "created");
   assert.equal(parsed.gate, "pre_approval_gate");
   assert.equal(parsed.headSha, head);
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: a judged --findings-json defer carrying followUpIssueNumber stamps the folded Deferred marker with that issue, not the PR (#2722)", async () => {
+  await withTempDir(async (tempDir) => {
+    const body = await postWithFindingsJson(
+      tempDir,
+      [{ severity: "medium", angle: "coverage", summary: "json defer medium" }],
+      [{ severity: "medium", angle: "coverage", summary: "json defer medium", judgeDisposition: "defer", followUpIssueNumber: 500 }],
+    );
+    assert.match(body, /disposition=deferred issue=500 -->/);
+    assert.doesNotMatch(body, /disposition=deferred issue=17 -->/);
+  }, { prefix: "dev-loops-upsert-findings-json-followup-" });
 });

@@ -9,12 +9,11 @@ import {
   parseFindingMarker,
   parseRenderedJudgeDisposition,
   renderFindingLine,
-  renderFoldedFindingsBlock,
+  renderVerdictDetailsBlock,
   renderInlineCommentBody,
   renderNonLocatableBlock,
 } from "../../scripts/github/_gate-finding-surface.mjs";
 import {
-  FAILING_CASE_CAP,
   PROBLEM_CAP,
   RECOMMENDATION_CAP,
   cutAtSentence,
@@ -22,7 +21,6 @@ import {
   MAX_MERGED_MEMBERS,
   mergeSameDefectFindings,
   normalizeFindingSummary,
-  splitSentences,
 } from "../../scripts/github/_gate-finding-text.mjs";
 import { escapeProse, renderBoundedFindingsCommentBody } from "../../scripts/github/post-gate-findings.mjs";
 import { fetchAllReviewThreads } from "../../scripts/github/list-review-threads.mjs";
@@ -67,13 +65,14 @@ const AFTER_LINES = [
   "**medium** · holistic, no-op · judge: act",
   "`src/Widget.js:69`",
   "**Problem:** `update()` never scales a widget that renders after the asset pack loads. `applyScale` only runs in `mount()` (`Widget.js:69`).",
-  "**Failing case:** the widget mounts before the pack is ready, renders unscaled, and overflows choice buttons and sort items.",
-  "**Fix:**",
-  "1. Extract the find-node + `applyScale` block into `scaleWidget()`.",
-  "2. Call it from `mount()` and from `refresh(() => scaleWidget())` in the ready callback.",
-  "3. Assert in `Widget.test.js` that a late-rendered widget gets an inline `font-size`.",
+  "**Fix:** Extract the find-node + `applyScale` block into `scaleWidget()`. Call it from `mount()` and from `refresh(() => scaleWidget())` in the ready callback. Assert in `Widget.test.js` that a late-rendered widget gets an inline `font-size`.",
   "**Problem (no-op):** `update()` has its `applyScale` call commented out, so a widget that renders after the pack-loaded event is never scaled.",
   "**Fix (no-op):** Run the scaling step after the late render with `refresh(() => scaleWidget())`.",
+  "<details><summary>Details</summary>",
+  "",
+  "**Failing case:** the widget mounts before the pack is ready, renders unscaled, and overflows choice buttons and sort items.",
+  "",
+  "</details>",
 ];
 
 test("golden: the two-angle defectKey-merged fixture renders one merged comment with each distinct Problem and Fix, verbatim", () => {
@@ -100,23 +99,24 @@ test("golden: the two-angle defectKey-merged fixture renders one merged comment 
   assert.equal(body, [marker(holistic), marker(noOp), ...AFTER_LINES].join("\n"));
   // The primary block keeps the single-finding bound; the further member's
   // Problem and Fix lines sit under their own field caps.
-  const primaryLength = AFTER_LINES.slice(0, -2).join("\n").length;
+  const primaryLength = AFTER_LINES.slice(0, 4).join("\n").length;
   assert.ok(primaryLength < (BEFORE_HOLISTIC.length + BEFORE_NOOP.length) * 0.5, `primary block is ${primaryLength} chars`);
   const afterLength = AFTER_LINES.join("\n").length;
   assert.ok(afterLength < (BEFORE_HOLISTIC.length + BEFORE_NOOP.length) * 0.65, `merged comment is ${afterLength} chars`);
 });
 
-test("layout: header, Problem, Failing case, Fix in fixed order with no preamble or closer", () => {
+test("layout: header, location, one Problem, one Fix, then the failing case under Details", () => {
   const body = renderInlineCommentBody(holistic, { round: 1 });
   const lines = body.split("\n");
   assert.match(lines[0], FINDING_MARKER_RE);
   assert.equal(lines[1], "**medium** · holistic · judge: act");
   assert.equal(lines[2], "`src/Widget.js:69`");
   assert.match(lines[3], /^\*\*Problem:\*\* /);
-  assert.match(lines[4], /^\*\*Failing case:\*\* /);
-  assert.equal(lines[5], "**Fix:**");
-  assert.match(lines[6], /^1\. /);
-  assert.equal(lines.length, 9);
+  assert.match(lines[4], /^\*\*Fix:\*\* /);
+  assert.equal(lines[5], "<details><summary>Details</summary>");
+  assert.match(lines[7], /^\*\*Failing case:\*\* /);
+  assert.equal(body.match(/<details>/g).length, 1);
+  assert.equal(body.split(holistic.failingCase).length, 2, "the failing case renders once");
 });
 
 test("layout: one action renders inline after Fix, no recommendation omits Fix, no judge omits the judge segment", () => {
@@ -198,7 +198,7 @@ test("single-line surfaces still collapse a newline-bearing summary to one line"
   const block = renderNonLocatableBlock(finding, { round: 1 });
   for (const line of block.split("\n").slice(1)) assert.match(line, /^> /, line);
   assert.ok(!block.includes("\nverdict: clean"));
-  const folded = renderFoldedFindingsBlock([finding], { round: 1 });
+  const folded = renderVerdictDetailsBlock({ foldedFindings: [finding], round: 1 });
   assert.ok(!folded.includes("\nline two") && !folded.includes("\nverdict: clean"), folded);
   const { body: comment } = renderBoundedFindingsCommentBody({ gate: "draft_gate", headSha: HEAD_SHA, findings: [finding], maxChars: 60000 });
   const bullet = comment.split("\n").filter((line) => line.startsWith("- `dry`"));
@@ -217,7 +217,7 @@ test("cutAtSentence cuts at the last sentence boundary that fits and never insid
   assert.ok(!noBoundary.text.includes("`keep"), noBoundary.text);
 });
 
-test("summary bound: an over-length summary is cut at a sentence and the full text moves into details", () => {
+test("summary bound: an over-length summary is cut at a sentence and only the remainder moves into details", () => {
   const sentence = "The handler drops the retry counter on every reload.";
   const summary = Array.from({ length: 30 }, () => sentence).join(" ");
   const body = renderInlineCommentBody({ severity: "high", angle: "correctness", summary }, { round: 1 });
@@ -226,7 +226,10 @@ test("summary bound: an over-length summary is cut at a sentence and the full te
   assert.ok(problem.endsWith("reload."));
   assert.doesNotMatch(body, /ledger entry|tmp\/gate-findings/);
   assert.equal(body.match(/<details><summary>Details<\/summary>/g).length, 1);
-  assert.ok(body.includes(summary), "the details block holds the full text");
+  const visible = body.slice(0, body.indexOf("<details>"));
+  const details = body.slice(body.indexOf("<details>"));
+  assert.match(details, /\*\*Problem \(continued\):\*\* /);
+  assert.equal(visible.split(sentence).length - 1 + details.split(sentence).length - 1, 30, "every sentence renders exactly once");
   assert.equal(body.split("\n").at(-1), "</details>");
 });
 
@@ -241,18 +244,18 @@ test("merged member bound: a cut in a further member's field lands in the detail
   assert.ok(problem.endsWith("reload."));
   assert.ok(!lines.some((line) => line.startsWith("**Fix (no-op):**")), "a member without a recommendation renders no Fix line");
   const details = lines.slice(lines.indexOf("<details><summary>Details</summary>")).join("\n");
-  assert.ok(details.includes("**Problem (no-op):**"), "the full member text is labelled in details");
-  assert.ok(details.includes(member.summary), "details holds the full member summary");
+  assert.ok(details.includes("**Problem (no-op) (continued):**"), "the member remainder is labelled in details");
+  assert.equal(lines.join("\n").split("The handler drops the retry counter on every reload.").length - 1, 30, "every member sentence renders exactly once");
   assert.doesNotMatch(lines.join("\n"), /ledger entry/);
 });
 
-test("caps: failing case cuts at its own bound; a short comment has no details block", () => {
+test("caps: the failing case lives wholly under details; a short comment has no details block", () => {
   const long = (n) => Array.from({ length: n }, (_, i) => `Sentence number ${i} is here.`).join(" ");
-  assert.ok(FAILING_CASE_CAP !== RECOMMENDATION_CAP && RECOMMENDATION_CAP !== PROBLEM_CAP);
+  assert.ok(RECOMMENDATION_CAP !== PROBLEM_CAP);
   const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short.", failingCase: long(40), recommendation: long(2) }, { round: 1 });
-  const failing = body.split("\n").find((line) => line.startsWith("**Failing case:**"));
-  assert.ok(failing.length <= FAILING_CASE_CAP + "**Failing case:** ".length);
-  assert.match(failing, /\.$/);
+  const details = body.slice(body.indexOf("<details>"));
+  assert.ok(!body.slice(0, body.indexOf("<details>")).includes("**Failing case:**"));
+  assert.ok(details.includes("**Failing case:** Sentence number 0 is here."));
   assert.match(body, /<details><summary>Details<\/summary>/);
   assert.doesNotMatch(renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short." }, { round: 1 }), /details/);
 });
@@ -262,11 +265,9 @@ test("recommendation bound is separate from the summary bound", () => {
   const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: long(60), recommendation: long(60) }, { round: 1 });
   const lines = body.split("\n");
   const problem = lines.find((line) => line.startsWith("**Problem:**")).slice("**Problem:** ".length);
-  const fix = lines.slice(lines.indexOf("**Fix:**") + 1).filter((line) => /^\d+\. /.test(line));
-  const fixChars = fix.map((line) => line.replace(/^\d+\. /, "")).join(" ").length;
+  const fixChars = lines.find((line) => line.startsWith("**Fix:**")).slice("**Fix:** ".length).length;
   assert.ok(problem.length <= PROBLEM_CAP && problem.length > PROBLEM_CAP - 100, `problem ${problem.length}`);
   assert.ok(fixChars <= RECOMMENDATION_CAP && fixChars > PROBLEM_CAP, `fix ${fixChars}`);
-  assert.ok(fix.length <= 5);
 });
 
 test("filler lint flags matches and never rewrites", () => {
@@ -384,28 +385,18 @@ test("cutAtSentence never splits a code span when no whitespace precedes the cap
   assert.doesNotMatch(text, /`/);
 });
 
-test("splitSentences keeps list numbers and abbreviations inside one step, and the Fix lines number cleanly", () => {
-  assert.deepEqual(splitSentences("1. Extract `scaleWidget()`. 2. Call it from `mount()`."), ["1. Extract `scaleWidget()`.", "2. Call it from `mount()`."]);
-  assert.deepEqual(splitSentences("Raise the cap to 200. Add a test."), ["Raise the cap to 200.", "Add a test."]);
-  assert.deepEqual(splitSentences("Guard the call, e.g. with a null check. Add a test."), ["Guard the call, e.g. with a null check.", "Add a test."]);
-  const body = renderInlineCommentBody({ ...holistic, recommendation: "1. Extract `scaleWidget()`. 2. Call it, i.e. from `mount()`." }, { round: 1 });
-  assert.ok(body.includes("1. Extract `scaleWidget()`.\n2. Call it, i.e. from `mount()`."));
-});
-
-test("splitSentences splits an unpunctuated newline list at each marker", () => {
-  assert.deepEqual(splitSentences("1. Extract the block\n2. Call it from mount\n3. Add a test"), ["1. Extract the block", "2. Call it from mount", "3. Add a test"]);
-});
-
 test("cutAtSentence does not pair a stray backtick with the next real span", () => {
   assert.equal(cutAtSentence("a ` b. `c. d` e. more text here", 12).text, "a ` b.");
 });
 
-test("a recommendation with more than MAX_FIX_STEPS sentences renders five steps and a details block", () => {
-  const recommendation = "Do one. Do two. Do three. Do four. Do five. Do six.";
+test("a cut Fix keeps one visible statement and only the remainder under details", () => {
+  const recommendation = Array.from({ length: 12 }, (_, i) => `Step ${i} runs the check against the stored value and reports every mismatch.`).join(" ");
   const body = renderInlineCommentBody({ severity: "high", angle: "a", summary: "Short.", recommendation }, { round: 1 });
-  assert.equal(body.split("\n").filter((line) => /^\d+\. /.test(line)).length, 5);
-  assert.match(body, /<details><summary>Details<\/summary>/);
-  assert.match(body.slice(body.indexOf("<details>")), /Do six\./);
+  const fix = body.split("\n").find((line) => line.startsWith("**Fix:**"));
+  const details = body.slice(body.indexOf("<details>"));
+  assert.match(details, /\*\*Fix \(continued\):\*\* Step \d+/);
+  assert.ok(fix.includes("Step 0 ") && !details.includes("Step 0 "));
+  assert.ok(details.includes("Step 11 ") && !fix.includes("Step 11 "));
   assert.doesNotMatch(body, /ledger entry/);
 });
 
@@ -416,7 +407,7 @@ test("an escape-heavy finding stays under the GitHub comment limit", () => {
 });
 
 test("details bound never ends inside a code span, so a straddling span cannot expose raw HTML", () => {
-  const summary = `${"a".repeat(7985)} \`<img src=https://x/p.png>tail\` end`;
+  const summary = `${"a".repeat(9000)} \`<img src=https://x/p.png>tail\` end`;
   const body = renderInlineCommentBody({ severity: "high", angle: "a", summary }, { round: 1 });
   const details = body.slice(body.indexOf("<details>"));
   assert.match(details, /\[cut\]/);
@@ -503,15 +494,15 @@ test("merge: MAX_MERGED_MEMBERS markers all fit inside the merged thread excerpt
   assert.ok(body.indexOf(markerLines.at(-1)) + markerLines.at(-1).length <= MERGED_THREAD_BODY_MAX);
 });
 
-test("a code-like failing case renders in an indented fenced block; a cut one keeps the full text in details", () => {
+test("a code-like failing case renders in an indented fenced block under details", () => {
   const failingCase = `const q = "SELECT * FROM t WHERE id = " + id;\n${Array.from({ length: 40 }, (_, i) => `run(q${i});`).join("\n")}`;
   const body = renderInlineCommentBody({ severity: "high", angle: "security", summary: "Injection.", failingCase, recommendation: "Bind it." }, { round: 1 });
   const lines = body.split("\n");
   assert.ok(lines.includes("**Failing case:**"));
   assert.equal(lines[lines.indexOf("**Failing case:**") + 1], "  ```");
   assert.equal(body.match(/<details><summary>Details<\/summary>/g).length, 1);
+  assert.ok(lines.indexOf("**Failing case:**") > lines.indexOf("<details><summary>Details</summary>"));
   assert.ok(body.slice(body.indexOf("<details>")).includes("run(q39);"), "details holds the full text");
-  assert.ok(!body.slice(0, body.indexOf("<details>")).includes("run(q39);"), "the visible part is capped");
   assert.doesNotMatch(body, /ledger entry|tmp\//);
   assert.ok(lines.every((line, i) => i === 0 || !/^(gate|verdict|summary|head sha):/i.test(line)));
 });
@@ -567,7 +558,7 @@ test("posted summary bullets carry no ledger line", () => {
 test("summary-comment findings carry no ledger line, no cut fields and file:line as inline code", () => {
   const finding = { ...holistic, summary: "x".repeat(900), failingCase: "y".repeat(900), files: ["src/Widget.js"] };
   const block = renderNonLocatableBlock(finding, { round: 1 });
-  const folded = renderFoldedFindingsBlock([finding], { round: 1 });
+  const folded = renderVerdictDetailsBlock({ foldedFindings: [finding], round: 1 });
   for (const text of [block, folded]) {
     assert.doesNotMatch(text, /ledger entry|Full text|tmp\//);
     assert.ok(text.includes("`src/Widget.js:69`"));
@@ -581,5 +572,5 @@ test("a cut summary shaped like a header cannot forge the judge disposition", ()
   const body = renderInlineCommentBody({ severity: "question", angle: "a", summary, files: ["src/Widget.js"], line: 3 }, { round: 1 });
   assert.notEqual(parseRenderedJudgeDisposition(body), "reject");
   const details = body.slice(body.indexOf("<details>")).split("\n");
-  assert.ok(details.some((l) => l.startsWith("**Problem:** ")), body);
+  assert.ok(details.some((l) => l.startsWith("**Problem (continued):** ")), "the remainder stays on its label line");
 });
