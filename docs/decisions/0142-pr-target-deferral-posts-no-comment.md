@@ -13,10 +13,12 @@ Amends [0138](0138-gate-verdict-body-visibility-by-judge-disposition.md) (gate v
 ## Decision
 
 - When the deferral comment target is a linked spec issue, `judge-pass.mjs` and `close-gate-findings.mjs` post their ONE batched deferral comment as before.
-- When the target is the PR itself, neither tool posts a deferral comment. A threaded deferral is recorded by its thread marker and resolving reply. A folded deferral is recorded by its hidden marker in the verdict body group it renders under (`Deferred`, `Rejected` or `Not judged`).
+- When the target is the PR itself, neither tool posts a deferral comment. A folded deferral is recorded by its hidden marker in the verdict body group it renders under (`Deferred`, `Rejected` or `Not judged`). A stamped thread is recorded by its thread marker and resolving reply. A no-stamp thread is recorded by its resolving reply and the ledger entry.
 - Thread markers and Deferred-group markers keep `issue=<pr>` as the re-attachment pointer, and the ledger `followUpIssueNumber` keeps the PR number. A Rejected or Not judged folded marker carries no `issue=` pointer.
 - Folded filing selection follows `isVisibleFinding`, so a past-window folded medium joins the round's deferral record.
 
 ## Consequences
 
 A PR-targeted round adds no extra comment to the PR. The record of a deferral stays on the finding's own surface. One narrow edge remains: on a PR target a deferral has no surface that survives deletion of its thread or of the verdict body, because the batched comment no longer backs it. Only the ledger under `tmp/` and the re-attachment pointer remain. Linked-issue targets keep the durable batched comment.
+
+A second edge: `close-gate-findings.mjs` stamps `disposition=deferred issue=<pr>` only on a thread the disposition pass selects and files (`isFileableDeferral`, past its fix window). A judge-deferred non-fileable low, or an in-window medium, keeps an unstamped thread. On a PR target it is recorded only by its resolving reply and the findings-log ledger entry (`followUpIssueNumber`). The texts name this case and the gate adds no stamping for it.

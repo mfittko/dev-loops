@@ -157,7 +157,8 @@ const VALID_MARKER_DISPOSITIONS = new Set(["deferred"]);
 // `issue` is the number of the deferral target a `disposition=deferred`
 // finding points at (GATE-EXEC-DEFERRAL-RECORD): the linked spec issue, which
 // gets the batched deferral comment, or the PR, which gets no comment and whose
-// thread marker plus resolving reply are the record. The marker itself carries
+// stamped-thread marker plus resolving reply (or a no-stamp thread's reply plus
+// ledger entry) are the record. The marker itself carries
 // the re-attachment pointer.
 //
 // `operatorVisible` is the explicit operator-visibility signal a `low`
@@ -249,8 +250,9 @@ export function collectFingerprints(text, set) {
 // batched comment per tool run (at most one from judge-pass.mjs and one from
 // close-gate-findings.mjs per round) on the linked spec issue (the configured
 // tracker is GitHub and the PR has exactly one closing issue reference). A PR
-// target posts no comment: a thread deferral is recorded in its thread marker
-// (issue=<pr>) and a folded deferral in the verdict body's Details markers. No tool creates an
+// target posts no comment: a folded deferral is recorded by its Details marker, a stamped
+// thread by its thread marker (issue=<pr>) plus resolving reply, a no-stamp thread by its
+// resolving reply plus the ledger entry. No tool creates an
 // issue here.
 
 // A finding's summary/angle is untrusted free text. The comment body is
@@ -355,7 +357,8 @@ export async function fetchListedFingerprints(
 /**
  * Post a round's deferred findings as ONE batched comment on the linked spec
  * issue (resolveDeferralCommentTarget); a PR target posts nothing and every entry
- * counts as recorded: a threaded entry by its thread marker (`issue=<pr>`) and resolving reply, a folded
+ * counts as recorded: a stamped thread by its thread marker (`issue=<pr>`) and resolving reply, a no-stamp
+ * thread by its resolving reply and the ledger entry, a folded
  * entry by its Details marker in the verdict body (a Deferred-group marker also carries `issue=<pr>`), so a caller's
  * `foldedFiled` counts those folded entries again on a rerun. Entries whose fingerprint the target
  * already lists are skipped; nothing is posted when none remain. Returns
@@ -371,8 +374,8 @@ export async function commentDeferredFindings(
     throw new Error("commentDeferredFindings: entries must be a non-empty array");
   }
   const target = await resolveDeferralCommentTarget({ repo, pr, trackerProvider }, { env, ghCommand, run });
-  // A PR target needs no comment: a threaded entry is recorded by its thread marker (issue=<pr>)
-  // and resolving reply, a folded entry by its Details marker in the verdict body, so every entry counts as recorded.
+  // A PR target needs no comment: a stamped thread is recorded by its thread marker (issue=<pr>)
+  // and resolving reply, a no-stamp thread by its reply and the ledger entry, a folded entry by its Details marker in the verdict body, so every entry counts as recorded.
   if (target === pr) {
     return { issueNumber: target, appendedFingerprints: new Set(entries.map((entry) => entry.fingerprint)) };
   }
