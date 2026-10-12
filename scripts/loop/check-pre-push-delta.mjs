@@ -59,6 +59,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
                           Omitting it in --result mode reports a coverage gap for every act item with a siteQuery
   --findings-log <path>   Required on the act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline);
                           its provenance.perAngle angles join the surface hints (PRE-PUSH-DELTA-INPUT). Refused with --threads-file.
+  --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
   --invocation <n>        1-based delta review invocation in this sequence (max 3)
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
@@ -102,6 +103,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
         "spec-identity": { type: "string" },
         "site-coverage": { type: "string" },
         "findings-log": { type: "string" },
+        handback: { type: "boolean" },
         result: { type: "string" },
         invocation: { type: "string" },
         worktree: { type: "string" },
@@ -126,7 +128,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
   if (values.result && invocation === null) throw parseError("--result requires --invocation <1-3>");
   const specIdentity = values["spec-identity"]?.trim() || null;
   if (!values.result && !specIdentity) throw parseError("--spec-identity <id> is required without --result");
-  if (values["act-list"] && !values.result && !values["findings-log"]) throw parseError("--findings-log <path> is required on the act-list input run: PRE-PUSH-DELTA-INPUT makes the reviewed round's angles part of the surface hints");
+  if (values["act-list"] && !values.result && !values.handback && !values["findings-log"]) throw parseError("--findings-log <path> is required on the act-list input run: PRE-PUSH-DELTA-INPUT makes the reviewed round's angles part of the surface hints");
   return {
     help: false,
     actList: values["act-list"] ?? null,

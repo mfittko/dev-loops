@@ -321,6 +321,7 @@ test("an act-list input run without --findings-log is refused, the other routes 
   const base = ["--act-list", "a.json", "--baseline", A, "--spec-identity", "s"];
   assert.throws(() => parseCheckPrePushDeltaArgs(base), /PRE-PUSH-DELTA-INPUT/);
   assert.equal(parseCheckPrePushDeltaArgs([...base, "--findings-log", "log.json"]).findingsLog, "log.json");
+  assert.equal(parseCheckPrePushDeltaArgs([...base, "--handback"]).findingsLog, null);
   assert.equal(parseCheckPrePushDeltaArgs(["--act-list", "a.json", "--baseline", A, "--result", "r.json", "--invocation", "1"]).findingsLog, null);
 });
 
