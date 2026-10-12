@@ -169,7 +169,7 @@ function gitIsAncestor(worktree, ancestor, descendant) {
 
 // Tracked-file hits of the sentences and identifiers the delta range removed, grepped at the candidate head.
 // A git failure throws (fail closed), including a missing baseline or head object. The diff and grep
-// formats are pinned so operator git config (prefix, color, external diff, textconv, algorithm, renames, path quoting, submodules) cannot blank the check.
+// formats are pinned so operator git config (prefix, color, external diff, textconv, algorithm, renames, path quoting, submodules, diff.orderFile via -O/dev/null, relative paths via --no-relative, hunk merging via --inter-hunk-context=0) cannot blank the check.
 export function gitStaleSurfaceHits(worktreeArg, baseline, head) {
   // Run from the top level so a subdirectory --worktree cannot scope the diff or grep to that subtree.
   const top = spawnSync("git", ["-C", worktreeArg, "rev-parse", "--show-toplevel"], { encoding: "utf8", env: gitEnvNoDirOverrides() });

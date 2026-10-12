@@ -4,7 +4,7 @@
 
 Accepted — 2026-10-12 ([issue 2740](https://github.com/mfittko/dev-loops/issues/2740))
 
-Extends: 0094 ([record](./0094-pre-push-reviewer-delta-mode.md)) and 0131 ([record](./0131-pre-push-delta-thread-route-and-decision-record.md)). Both records stay unedited.
+Amends: 0094 ([record](./0094-pre-push-reviewer-delta-mode.md)): the act angles as the surface hints, and the `locally_clear` condition. Extends: 0131 ([record](./0131-pre-push-delta-thread-route-and-decision-record.md)). Both records stay unedited.
 
 ## Context
 
@@ -18,7 +18,7 @@ The pre-push delta review checks a fix commit against the act items of one gate 
 - `locally_clear` is refused while a stale-surface hit stays unaddressed. A `newFindings[]` entry that names the hit file, or a skipped `siteCoverage[]` site with a reason, addresses the hit. This holds on the act-list route and the thread route.
 - The status `resolved` requires two conditions. The reported defect is gone, and the applied remedy introduces no new finding of severity medium or higher.
 
-This ADR extends ADR 0094 and ADR 0131. It does not amend their bodies.
+This ADR amends two decisions of ADR 0094 (the surface hints and the `locally_clear` condition) and extends ADR 0131. The bodies of both records stay unedited.
 
 ## Consequences
 

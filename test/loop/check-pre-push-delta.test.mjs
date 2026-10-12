@@ -255,6 +255,10 @@ test("result mode refuses locally_clear for an unaddressed stale-surface hit on 
   const base = JSON.parse(fs.readFileSync(result, "utf8"));
   fs.writeFileSync(addressed, JSON.stringify({ ...base, newFindings: [{ severity: "low", summary: "stale pin in test/contracts/style.test.mjs", evidence: ["e"] }] }));
   assert.equal(runCli(["--act-list", actList, "--baseline", A, "--result", addressed, "--invocation", "1"], withStale(B)).nextStep, "push");
+  // Addressed by a recorded skip reason in the site coverage record.
+  const coverage = path.join(dir, "skip-coverage.json");
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [{ fingerprint: "fp-skip", returnedSites: [STALE.site], sites: [{ site: STALE.site, status: "skipped", reason: "false positive" }] }] }));
+  assert.equal(runCli([...act, "--site-coverage", coverage], withStale(B)).nextStep, "push");
   // Thread route.
   const { threadsFile } = threadsFixture();
   const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [
