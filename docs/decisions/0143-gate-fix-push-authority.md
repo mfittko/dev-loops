@@ -26,4 +26,4 @@ Residual gaps:
 - `git push --no-verify` skips the git layer. On Pi nothing else stops it. The Claude hook still denies that command.
 - The Claude hook resolves the push target directory from the command and its cwd, and decides on the HEAD of that checkout, not on the pushed refs. A compound command such as `cd <worktree> && git push` is read against the original cwd, and a push of the fix branch by name from another checkout is not caught by the Claude hook. The git layer closes the second case, because it tests the pushed shas. Pi relies on the git layer alone.
 
-Recovery: an abandoned sequence keeps refusing pushes. Run `emit-fixer-work-order.mjs --phase full` to grant the push, or delete `<tmp-root>/gate-delta/<baseline>.sequence`.
+Recovery: an abandoned sequence keeps refusing pushes. Run `emit-fixer-work-order.mjs --phase full` to grant the push, or delete `<main worktree>/tmp/gate-delta/<baseline>.sequence`.
