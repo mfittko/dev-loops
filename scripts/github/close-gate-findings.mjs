@@ -78,7 +78,7 @@ as ONE batched comment on the linked spec issue (tracker.provider is github and
 the PR has exactly one closing issue reference). A PR target posts no comment:
 a folded entry is recorded by its Details marker in the verdict-body group it renders under (Deferred, Rejected or Not judged; only thread and Deferred-group markers carry issue=<pr>),
 a stamped thread by its thread marker (issue=<pr>) plus resolving reply, and a no-stamp thread
-(a non-fileable low, or an in-window medium) by its resolving reply plus the ledger entry. This tool never creates an issue. A fingerprint the
+(an immediately deferred, non-fileable low) by its resolving reply plus the ledger entry. An in-window medium has only its ledger entry and its open thread, which still blocks, until its fix window passes. This tool never creates an issue. A fingerprint the
 target already lists is not appended again. A FILED thread's marker is stamped
 \`disposition=deferred issue=<n>\` (n = the target's number) before it is resolved, so
 on a linked-issue target the deferral is never parked only in the thread marker and the ephemeral tmp
