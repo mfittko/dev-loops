@@ -149,7 +149,13 @@ else
   common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
   sequence_marker=""
   for marker_file in "$(dirname "$common_dir")"/tmp/gate-delta/*.sequence; do
-    [ -f "$marker_file" ] && sequence_marker="$marker_file"
+    [ -f "$marker_file" ] || continue
+    baseline=$(basename "$marker_file" .sequence)
+    branch=$(sed -nE 's/.*"branch":"([^"]*)".*/\\1/p' "$marker_file")
+    pattern="refs/remotes"
+    [ -n "$branch" ] && pattern="refs/remotes/*/$branch"
+    advanced=$(git for-each-ref --contains "$baseline" --format='%(objectname)' "$pattern" 2>/dev/null | grep -v "$baseline")
+    [ -z "$advanced" ] && sequence_marker="$marker_file"
   done
   if [ -n "$sequence_marker" ]; then
     echo "dev-loops: PRE-PUSH-DELTA-PUSH-AUTHORITY a gate fix sequence marker exists ($sequence_marker) and the push-authority check script is missing; refusing the push (fail closed). Re-run ensure-worktree to reinstall the hooks, or delete the marker if the sequence was abandoned." >&2
@@ -277,7 +283,7 @@ function readHookState(hookPath) {
  *
  * @param {{ gitDir: string, defaultBranches?: string|string[]|null, explicitBaseBranches?: string|string[]|null, hooksPathOverride?: string|null, authorityCliPath?: string|null }} target
  *   `authorityCliPath` is the absolute path of `scripts/loop/check-fix-push-authority.mjs`, passed by the
- *   dev-loops side that ships it; without it the rendered pre-push hook falls back to the pushing checkout's scripts/loop copy and refuses every push only when neither file exists (fail closed).
+ *   dev-loops side that ships it; without it the rendered pre-push hook falls back to the pushing checkout's scripts/loop copy and refuses a push only when neither file exists and a marker of a sequence that has not ended exists (fail closed).
  *   `hooksPathOverride` is the repo's `core.hooksPath` when set. Installing into
  *   `$GIT_DIR/hooks` while git reads elsewhere would report success for a guard
  *   that can never fire, so that case refuses instead.

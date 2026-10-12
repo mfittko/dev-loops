@@ -674,11 +674,20 @@ test("pre-push refuses a push under an ungranted sequence marker, allows it once
     assert.ok(refused.includes(markerFile), "the refusal names the marker file");
     fs.writeFileSync(markerFile, `${JSON.stringify({ baselineHead: baseline, fullGranted: true, branch: "issue-9" })}\n`);
     git(dir, ["push", "--quiet", "origin", "issue-9"]);
-    // A hook whose check script is gone (a pruned cache dir) refuses only while a marker exists.
+    // A hook whose check script is gone (a pruned cache dir) ignores the marker of an ended sequence (the push above advanced origin/issue-9).
     installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: "/nonexistent/check-fix-push-authority.mjs" });
     fs.writeFileSync(path.join(dir, "later.txt"), "later\n");
     git(dir, ["add", "later.txt"]);
     git(dir, ["commit", "--quiet", "-m", "later"]);
+    git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    // It refuses while a marker of a sequence that has not ended exists.
+    fs.rmSync(markerFile);
+    const openBaseline = git(dir, ["rev-parse", "HEAD"]).trim();
+    const openMarker = path.join(dir, "tmp", "gate-delta", `${openBaseline}.sequence`);
+    fs.writeFileSync(openMarker, `${JSON.stringify({ baselineHead: openBaseline, fullGranted: false, branch: "issue-open" })}\n`);
+    fs.writeFileSync(path.join(dir, "again.txt"), "again\n");
+    git(dir, ["add", "again.txt"]);
+    git(dir, ["commit", "--quiet", "-m", "again"]);
     let missing = "";
     try {
       git(dir, ["push", "--quiet", "origin", "issue-9"]);
@@ -686,7 +695,7 @@ test("pre-push refuses a push under an ungranted sequence marker, allows it once
       missing = String(err.stderr ?? "");
     }
     assert.match(missing, /check script is missing/);
-    fs.rmSync(markerFile);
+    fs.rmSync(openMarker);
     git(dir, ["push", "--quiet", "origin", "issue-9"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
