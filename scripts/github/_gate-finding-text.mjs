@@ -7,9 +7,7 @@ import { resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fani
 // Per-field caps in characters. The problem cap is the summary bound. The
 // recommendation has its own bound. The durable ledger keeps the full text.
 export const PROBLEM_CAP = 400;
-export const FAILING_CASE_CAP = 240;
 export const RECOMMENDATION_CAP = 500;
-export const MAX_FIX_STEPS = 5;
 
 // Marks each index of `text` that lies inside a code span or code fence.
 function codeMask(text) {
@@ -56,19 +54,6 @@ function sentenceEnds(text) {
   }
   ends.sort((a, b) => a - b);
   return ends;
-}
-
-export function splitSentences(text) {
-  const trimmed = String(text).trim();
-  const sentences = [];
-  let start = 0;
-  for (const end of sentenceEnds(trimmed)) {
-    sentences.push(trimmed.slice(start, end).trim());
-    start = end;
-  }
-  const rest = trimmed.slice(start).trim();
-  if (rest.length > 0) sentences.push(rest);
-  return sentences;
 }
 
 // Cuts `text` to at most `cap` characters at the last sentence boundary that

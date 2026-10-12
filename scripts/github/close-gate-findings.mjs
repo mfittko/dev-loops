@@ -698,7 +698,7 @@ async function runQuestionRejectClosePass({ repo, pr, gate, headSha, round, thre
 //
 // A finding below the gate's inlineSeverityFloor never gets an inline/
 // body-filed thread of its own — upsert-checkpoint-verdict.mjs folds it into
-// the verdict body's collapsed <details> block instead (renderFoldedFindingsBlock),
+// the verdict body's Details block instead (renderVerdictDetailsBlock),
 // so it never reaches selectDispositionTargets. The net-reduction filing bar
 // (isFileableDeferral) still applies: an operator-visible folded low joins the
 // round's ONE batched deferral comment, exactly like a fileable THREAD target.

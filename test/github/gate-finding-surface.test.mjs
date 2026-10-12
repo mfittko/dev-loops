@@ -28,7 +28,8 @@ import {
   normalizePrReviewsPayload,
   parseFindingMarker,
   readGateFindingsLedger,
-  renderFoldedFindingsBlock,
+  renderVerdictDetailsBlock,
+  isVisibleFinding,
   renderInlineCommentBody,
   renderNonLocatableBlock,
   resolveGateRound,
@@ -471,22 +472,23 @@ test("renderNonLocatableBlock: the line ref renders inside files[0]'s own code s
 });
 
 // ---------------------------------------------------------------------------
-// #2263: renderFoldedFindingsBlock — the collapsed <details> surface for
-// findings folded below the inline severity floor.
+// renderVerdictDetailsBlock — the collapsed <details> surface for
+// findings that isVisibleFinding does not show.
 // ---------------------------------------------------------------------------
 
-test("renderFoldedFindingsBlock: empty input renders nothing", () => {
-  assert.equal(renderFoldedFindingsBlock([], { round: 1 }), "");
+test("renderVerdictDetailsBlock: empty input renders nothing", () => {
+  assert.equal(renderVerdictDetailsBlock({ round: 1 }), "");
 });
 
-test("renderFoldedFindingsBlock: renders a collapsed <details> with a per-finding marker and a file:line + summary bullet", () => {
+test("renderVerdictDetailsBlock: renders a collapsed <details> with a per-finding marker and a file:line + summary bullet", () => {
   const findings = [
     { severity: "low", angle: "naming", summary: "casing nit", files: ["src/a.mjs"], line: 12 },
     { severity: "nit", angle: "style", summary: "trailing whitespace" },
   ];
-  const block = renderFoldedFindingsBlock(findings, { round: 2 });
+  const block = renderVerdictDetailsBlock({ foldedFindings: findings, round: 2 });
   assert.match(block, /^<details>$/m);
-  assert.match(block, /^<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>$/m);
+  assert.match(block, /^<summary>Details<\/summary>$/m);
+  assert.match(block, /^\*\*Not judged \(2\)\*\*$/m);
   assert.match(block, /^<\/details>$/m);
   assert.match(block, /^- `src\/a\.mjs:12` \*\*low\*\* \(`naming`\): casing nit$/m);
   assert.match(block, /^- \*\*nit\*\* \(`style`\): trailing whitespace$/m);
@@ -501,24 +503,69 @@ test("renderFoldedFindingsBlock: renders a collapsed <details> with a per-findin
   }
 });
 
-test("renderFoldedFindingsBlock: an operatorVisible finding's marker carries ov=1", () => {
+test("renderVerdictDetailsBlock: groups folded findings by judge disposition and holds the clean roster", () => {
+  const findings = [
+    { severity: "medium", angle: "a", summary: "deferred one", judgeDisposition: "defer" },
+    { severity: "medium", angle: "b", summary: "rejected one", judgeDisposition: "reject" },
+    { severity: "low", angle: "c", summary: "unjudged one" },
+  ];
+  const block = renderVerdictDetailsBlock({ foldedFindings: findings, cleanRosterLine: "**Clean (2):** x, y", round: 1 });
+  assert.equal(block.match(/<details>/g).length, 1);
+  for (const header of ["**Deferred (1)**", "**Rejected (1)**", "**Not judged (1)**", "**Clean (2):** x, y"]) {
+    assert.ok(block.split("\n").includes(header), header);
+  }
+  assert.equal(block.split("\n").filter((l) => l.startsWith("<!-- dev-loops:finding ")).length, 3);
+  assert.equal(renderVerdictDetailsBlock({ cleanRosterLine: "**Clean (1):** x", round: 1 }).includes("Deferred"), false);
+  assert.equal(renderVerdictDetailsBlock({ round: 1 }), "");
+});
+
+test("isVisibleFinding: act and blocking severities are visible whatever the floor; unjudged follows the floor; other judged findings fold", () => {
+  const v = { floor: "medium", blockingSeverities: ["high"] };
+  assert.equal(isVisibleFinding({ severity: "low", judgeDisposition: "act" }, v), true);
+  assert.equal(isVisibleFinding({ severity: "high", judgeDisposition: "reject" }, v), true);
+  assert.equal(isVisibleFinding({ severity: "medium", judgeDisposition: "defer" }, v), false);
+  assert.equal(isVisibleFinding({ severity: "medium", judgeDisposition: "reject" }, v), false);
+  assert.equal(isVisibleFinding({ severity: "low" }, v), false);
+  assert.equal(isVisibleFinding({ severity: "medium" }, v), true);
+  assert.equal(isVisibleFinding({ severity: "low", judgeDisposition: "reject" }, v), false);
+  for (const judgeDisposition of ["reject", "defer"]) {
+    assert.equal(isVisibleFinding({ severity: "question", judgeDisposition }, v), true);
+    assert.equal(isVisibleFinding({ severity: "bogus", judgeDisposition }, v), true);
+  }
+});
+
+test("renderVerdictDetailsBlock: a Deferred marker stamps followUpIssueNumber, else the PR", () => {
+  const issueOf = (f) => parseFindingMarker(renderVerdictDetailsBlock({ foldedFindings: [f], round: 1, pr: 7 }).split("\n").find((l) => l.startsWith("<!-- dev-loops:finding "))).issue;
+  const base = { severity: "low", angle: "a", summary: "s", judgeDisposition: "defer" };
+  assert.equal(issueOf({ ...base, followUpIssueNumber: 500 }), 500);
+  assert.equal(issueOf(base), 7);
+});
+
+test("buildNonLocatableFindingMarker: an act finding never carries disposition=deferred", () => {
+  const act = parseFindingMarker(buildNonLocatableFindingMarker({ severity: "low", angle: "a", summary: "s", judgeDisposition: "act" }, { round: 1 }));
+  assert.ok(!act.disposition);
+  const defer = parseFindingMarker(buildNonLocatableFindingMarker({ severity: "low", angle: "a", summary: "s", judgeDisposition: "defer" }, { round: 1 }));
+  assert.equal(defer.disposition, "deferred");
+});
+
+test("renderVerdictDetailsBlock: an operatorVisible finding's marker carries ov=1", () => {
   const findings = [{ severity: "low", angle: "naming", summary: "casing nit", operatorVisible: true }];
-  const block = renderFoldedFindingsBlock(findings, { round: 1 });
+  const block = renderVerdictDetailsBlock({ foldedFindings: findings, round: 1 });
   const markerLine = block.split("\n").find((line) => line.startsWith("<!-- dev-loops:finding "));
   assert.match(markerLine, /ov=1/);
   assert.equal(parseFindingMarker(markerLine).operatorVisible, true);
 });
 
-test("renderFoldedFindingsBlock: a folded finding's marker matches buildNonLocatableFindingMarker exactly (shared render path)", () => {
+test("renderVerdictDetailsBlock: a folded finding's marker matches buildNonLocatableFindingMarker exactly (shared render path)", () => {
   const finding = { severity: "nit", angle: "style", summary: "trailing whitespace" };
-  const block = renderFoldedFindingsBlock([finding], { round: 3 });
+  const block = renderVerdictDetailsBlock({ foldedFindings: [finding], round: 3 });
   const markerLine = block.split("\n").find((line) => line.startsWith("<!-- dev-loops:finding "));
   assert.equal(markerLine, buildNonLocatableFindingMarker(finding, { round: 3 }));
 });
 
-test("renderFoldedFindingsBlock: sanitizes a hostile summary/angle and neutralizes a bare Copilot summon", () => {
+test("renderVerdictDetailsBlock: sanitizes a hostile summary/angle and neutralizes a bare Copilot summon", () => {
   const findings = [{ severity: "low", angle: "naming", summary: "ask @copilot to re-review <script>alert(1)</script>" }];
-  const block = renderFoldedFindingsBlock(findings, { round: 1 });
+  const block = renderVerdictDetailsBlock({ foldedFindings: findings, round: 1 });
   assert.ok(!/<script>/i.test(block), `must never carry a raw HTML tag, got: ${JSON.stringify(block)}`);
   assert.ok(containsBareCopilotSummon(block) === false, "a bare @copilot summon must be neutralized");
 });
@@ -1367,4 +1414,18 @@ test("fetchDraftGateEvidence: preApprovalCurrentHeadClean needs a clean, contrac
   assert.equal(await run([comment(body({ verdict: "findings_present" }))]), false);
   assert.equal(await run([comment(body({ findingsSummary: "", nextAction: "" }))]), false);
   assert.equal(await run([]), false);
+});
+
+test("renderVerdictDetailsBlock: a Deferred entry carries issue=<pr> in its marker; other groups do not", () => {
+  const block = renderVerdictDetailsBlock({
+    foldedFindings: [
+      { severity: "medium", angle: "coverage", summary: "defer me", judgeDisposition: "defer" },
+      { severity: "low", angle: "style", summary: "unjudged" },
+    ],
+    round: 1,
+    pr: 17,
+  });
+  const markers = block.split("\n").filter((line) => line.startsWith("<!-- dev-loops:finding "));
+  assert.equal(parseFindingMarker(markers[0]).issue, 17);
+  assert.equal(parseFindingMarker(markers[1]).issue, null);
 });
