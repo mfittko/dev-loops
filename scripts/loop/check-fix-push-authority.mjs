@@ -6,8 +6,7 @@
  * a gate fix sequence is active for any pushed sha (the sha is the baseline or descends from it, and the PR
  * branch's remote ref has not advanced past the baseline) and the full work order has not granted the push;
  * exit 0 allows it. A parse error or git failure refuses (fail closed). With no ref lines the HEAD of
- * the checkout is tested. Agent identity is unknown to git, so this layer binds every pusher; the
- * Claude Bash hook adds the per-agent-type check on top.
+ * the checkout is tested. Agent identity is unknown to git, so this check binds every pusher.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
