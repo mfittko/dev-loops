@@ -23,6 +23,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
+import { clearSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
   buildDeltaInput,
@@ -184,6 +185,8 @@ export function runCli(
   const fixCommitted = currentHead !== sequence.reviewBaselineHead;
   const itemCounts = options.threadsFile ? { threadItemCount: sequence.actItems.length } : { actItemCount: sequence.actItems.length };
   if (resolveDeltaTrigger({ ...itemCounts, fixCommitted }) !== "delta") {
+    // PRE-PUSH-DELTA-PUSH-AUTHORITY: the commit_only round ended without a fix commit, so its marker guards nothing and would only block later pushes.
+    clearSequenceMarker(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),sequence.reviewBaselineHead);
     throw new Error(`worktree HEAD ${currentHead} equals the baseline: commit the act-list or thread-route fix before the delta review`);
   }
   if (!isAncestor(options.worktree, sequence.reviewBaselineHead, currentHead)) {

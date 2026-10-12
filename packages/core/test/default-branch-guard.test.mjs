@@ -649,3 +649,47 @@ test("install: refuses an absolute gitDir that is not actually a git directory",
     await rm(notARepo, { recursive: true, force: true });
   }
 });
+
+// PRE-PUSH-DELTA-PUSH-AUTHORITY: a real `git push` through the installed pre-push hook. The hook captures git's
+// stdin, pipes it to the check and propagates its exit; the marker lives under the main worktree's tmp/gate-delta.
+test("pre-push refuses a push under an ungranted sequence marker, allows it once granted, and allows with no marker when the check script is missing", async () => {
+  const { dir, gitDir, remote } = await repoFixture({ withRemote: true });
+  try {
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: AUTHORITY_CLI });
+    git(dir, ["checkout", "--quiet", "-b", "issue-9"]);
+    const baseline = git(dir, ["rev-parse", "HEAD"]).trim();
+    const markerFile = path.join(dir, "tmp", "gate-delta", `${baseline}.sequence`);
+    fs.mkdirSync(path.dirname(markerFile), { recursive: true });
+    fs.writeFileSync(markerFile, `${JSON.stringify({ baselineHead: baseline, fullGranted: false, branch: "issue-9" })}\n`);
+    fs.writeFileSync(path.join(dir, "fix.txt"), "fix\n");
+    git(dir, ["add", "fix.txt"]);
+    git(dir, ["commit", "--quiet", "-m", "fix"]);
+    let refused = "";
+    try {
+      git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    } catch (err) {
+      refused = String(err.stderr ?? "");
+    }
+    assert.match(refused, /PRE-PUSH-DELTA-PUSH-AUTHORITY/);
+    assert.ok(refused.includes(markerFile), "the refusal names the marker file");
+    fs.writeFileSync(markerFile, `${JSON.stringify({ baselineHead: baseline, fullGranted: true, branch: "issue-9" })}\n`);
+    git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    // A hook whose check script is gone (a pruned cache dir) refuses only while a marker exists.
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: "/nonexistent/check-fix-push-authority.mjs" });
+    fs.writeFileSync(path.join(dir, "later.txt"), "later\n");
+    git(dir, ["add", "later.txt"]);
+    git(dir, ["commit", "--quiet", "-m", "later"]);
+    let missing = "";
+    try {
+      git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    } catch (err) {
+      missing = String(err.stderr ?? "");
+    }
+    assert.match(missing, /check script is missing/);
+    fs.rmSync(markerFile);
+    git(dir, ["push", "--quiet", "origin", "issue-9"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(remote, { recursive: true, force: true });
+  }
+});

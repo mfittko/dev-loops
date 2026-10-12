@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { renderGuardHook } from "@dev-loops/core/loop/default-branch-guard";
 import { checkFixPushAuthority, parsePushedShas } from "../../scripts/loop/check-fix-push-authority.mjs";
 import { withTempDir } from "../_helpers.mjs";
@@ -62,9 +62,9 @@ test("the generated pre-push hook bakes the path its owner supplies, even from o
   assert.equal(baked, owner);
 });
 
-test("the generated pre-push hook falls back to the checkout script and refuses only when neither file exists (fail closed)", () => {
+test("the generated pre-push hook falls back to the checkout script and, with neither file, refuses only while a sequence marker exists", () => {
   const prePush = renderGuardHook("pre-push", ["main"]);
-  assert.match(prePush, /authority_cli=""\nif \[ -z "\$authority_cli" \] \|\| \[ ! -f "\$authority_cli" \]; then\n[^\n]*show-toplevel[^\n]*\nfi\nif \[ ! -f "\$authority_cli" \]; then\n[^\n]*PRE-PUSH-DELTA-PUSH-AUTHORITY[^\n]*\n  exit 1\nfi/);
+  assert.match(prePush, /authority_cli=""\nif \[ -z "\$authority_cli" \] \|\| \[ ! -f "\$authority_cli" \]; then\n[^\n]*show-toplevel[^\n]*\nfi\nif \[ -f "\$authority_cli" \]; then\n[^\n]*node "\$authority_cli" \|\| exit 1\nelse\n[\s\S]*gate-delta\/\*\.sequence[\s\S]*PRE-PUSH-DELTA-PUSH-AUTHORITY[^\n]*\n    exit 1\n  fi\nfi/);
   assert.ok(!prePush.includes("/../"), "no package-layout-relative path");
   assert.throws(() => renderGuardHook("pre-push", ["main"], null, "relative/check.mjs"), /absolute path/);
   assert.throws(() => renderGuardHook("pre-push", ["main"], null, "/x/$(evil)/check.mjs"), /absolute path/);
@@ -93,5 +93,29 @@ test("the guarded sha is refused when pushed from a checkout whose HEAD is elsew
     const malformed = spawnSync("node", [path.resolve("scripts/loop/check-fix-push-authority.mjs")], { cwd: root, env, encoding: "utf8", input: "garbage\n" });
     assert.equal(malformed.status, 1);
     assert.match(malformed.stderr, /fail closed/);
+  });
+});
+
+test("only the PR branch's remote ref ends the sequence; a stacked remote ref of another branch does not", async () => {
+  await withRepo(async (root, head, git) => {
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head, branch: "issue-a" });
+    git("commit", "-q", "--allow-empty", "-m", "stacked");
+    const stacked = git("rev-parse", "HEAD").trim();
+    git("update-ref", "refs/remotes/origin/issue-b", stacked);
+    assert.equal(checkFixPushAuthority(root, [stacked]).ok, false, "a stacked origin/issue-b does not end the sequence of issue-a");
+    git("update-ref", "refs/remotes/origin/issue-a", stacked);
+    assert.deepEqual(checkFixPushAuthority(root, [stacked]), { ok: true }, "the PR branch's own remote ref advanced");
+  });
+});
+
+test("the refusal names the marker file and the delete recovery", async () => {
+  await withRepo(async (root, head) => {
+    const file = writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
+    const refused = checkFixPushAuthority(root);
+    assert.equal(refused.ok, false);
+    assert.ok(refused.reason.includes(file), refused.reason);
+    assert.match(refused.reason, /delete the marker/);
+    clearSequenceMarker(path.join(root, "tmp"), head);
+    assert.deepEqual(checkFixPushAuthority(root), { ok: true }, "a cleared marker (a commit_only round without a fix commit) guards nothing");
   });
 });

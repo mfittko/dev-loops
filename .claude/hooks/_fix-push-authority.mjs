@@ -7,7 +7,7 @@
  * `commit_only` fixer work order is emitted (ungranted) and rewritten with `fullGranted` when the
  * `full` work order is emitted. The hooks read it. Pure of git: the caller supplies the facts.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 // Shell segment starts: a newline, `;`, `&`, `|`, a subshell or brace group, `$(` or a backtick.
@@ -45,12 +45,20 @@ export function pushTargetDir(command, cwd) {
 export const sequenceMarkerPath = (tmpRoot, baselineHead) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence`);
 
 /** Record that a fix sequence is active for a baseline head; a `commit_only` emit writes it ungranted, a `full` emit granted. */
-export function writeSequenceMarker({ tmpRoot, baselineHead, fullGranted = false }) {
+export function writeSequenceMarker({ tmpRoot, baselineHead, fullGranted = false, branch }) {
   const file = sequenceMarkerPath(tmpRoot, baselineHead);
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify({ baselineHead, fullGranted })}\n`);
+  writeFileSync(file, `${JSON.stringify({ baselineHead, fullGranted, ...(typeof branch === "string" && branch ? { branch } : {}) })}\n`);
   return file;
 }
+
+/** Remove the marker of a sequence that ended without a fix commit: nothing was committed, so nothing stays guarded. */
+export function clearSequenceMarker(tmpRoot, baselineHead) {
+  rmSync(sequenceMarkerPath(tmpRoot, baselineHead), { force: true });
+}
+
+/** The recovery pointer both refusal reasons carry. `--phase full` works only after a clearing delta record, so deleting the marker is the general recovery. */
+export const recoveryHint = (markerPath) => markerPath ? ` To recover an abandoned sequence, delete the marker ${markerPath} (emit-fixer-work-order.mjs --phase full grants the push only after a clearing delta record).` : "";
 
 /** The marker for a baseline head, or null when none exists. A malformed marker reads as active, not granted (fail closed). */
 export function readSequenceMarker(tmpRoot, baselineHead) {
@@ -62,7 +70,7 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
   }
   try {
     const marker = JSON.parse(text);
-    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true };
+    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true, branch: typeof marker.branch === "string" ? marker.branch : undefined };
   } catch {
     // Falls through to the fail-closed reading.
   }
@@ -71,22 +79,22 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
 
 /**
  * The marker of the sequence that is active at `head`, or null. A sequence is active while the
- * worktree head is its baseline or descends from it, and no remote ref has advanced past the
- * baseline (a push ended it). With several active markers a non-granted one wins, so a stale
+ * tested commit is its baseline or descends from it, and the remote ref of the marker's branch
+ * (any remote ref when the marker names none) has not advanced past the baseline (a push ended it). With several active markers a non-granted one wins, so a stale
  * granted marker cannot admit a commit_only fixer push.
- * @param {{ tmpRoot: string, head: string, listBaselines: () => string[], isAncestor: (a: string, b: string) => boolean, remoteAdvanced: (baseline: string) => boolean }} input
+ * @param {{ tmpRoot: string, head: string, listBaselines: () => string[], isAncestor: (a: string, b: string) => boolean, remoteAdvanced: (baseline: string, branch?: string) => boolean }} input
  */
 export function findActiveSequence({ tmpRoot, head, listBaselines, isAncestor, remoteAdvanced }) {
   const active = [];
   for (const baseline of listBaselines()) {
     const marker = readSequenceMarker(tmpRoot, baseline);
-    if (marker && (baseline === head || isAncestor(baseline, head)) && !remoteAdvanced(baseline)) active.push(marker);
+    if (marker && (baseline === head || isAncestor(baseline, head)) && !remoteAdvanced(baseline, marker.branch)) active.push(marker);
   }
   return active.find((m) => !m.fullGranted) ?? active[0] ?? null;
 }
 
 /** @returns {{ decision: "allow"|"deny", reason?: string }} */
-export function decideFixPushAuthority({ command, agentType, sequenceActive, fullGranted = false }) {
+export function decideFixPushAuthority({ command, agentType, sequenceActive, fullGranted = false, markerPath }) {
   if (typeof command !== "string" || !isGitPush(command) || sequenceActive !== true) return { decision: "allow" };
   // The main agent (no subagent type) is the operator; only subagents are bound by the sequence.
   if (typeof agentType !== "string" || agentType.length === 0) return { decision: "allow" };
@@ -94,6 +102,6 @@ export function decideFixPushAuthority({ command, agentType, sequenceActive, ful
   if (agentType.split(":").pop() === "fixer" && fullGranted === true) return { decision: "allow" };
   return {
     decision: "deny",
-    reason: "PRE-PUSH-DELTA-PUSH-AUTHORITY: a gate fix sequence is active; only the full-phase fixer pushes the fix branch, after the full work order is emitted. Hand the committed candidate back unpushed.",
+    reason: `PRE-PUSH-DELTA-PUSH-AUTHORITY: a gate fix sequence is active; only the full-phase fixer pushes the fix branch, after the full work order is emitted. Hand the committed candidate back unpushed.${recoveryHint(markerPath)}`,
   };
 }

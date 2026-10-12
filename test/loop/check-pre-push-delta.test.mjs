@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
+import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
 import { parseCheckPrePushDeltaArgs, runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
@@ -125,6 +126,16 @@ test("the baseline resolves to a full SHA, and HEAD equal to the baseline fails"
   const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"];
   assert.equal(runCli(args, resolve(B)).input.reviewBaselineHead, full);
   assert.throws(() => runCli(args, resolve(full)), /equals the baseline/);
+});
+
+test("a commit_only round without a fix commit clears its sequence marker", () => {
+  const { actList } = fixture();
+  const full = `${A}${"0".repeat(26)}`;
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"));
+  const marker = writeSequenceMarker({ tmpRoot, baselineHead: full });
+  const seam = { ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? full : full), isAncestor: () => true };
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"], seam), /equals the baseline/);
+  assert.equal(fs.existsSync(marker), false);
 });
 
 test("a baseline that is not an ancestor of HEAD fails", () => {

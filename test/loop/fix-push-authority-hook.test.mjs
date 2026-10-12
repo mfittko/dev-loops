@@ -149,3 +149,35 @@ test("pushTargetDir folds every -C cumulatively and fails closed on --git-dir an
   assert.equal(pushTargetDir("git --git-dir x push", cwd), null);
   assert.equal(pushTargetDir('git -C "$X" push', cwd), null);
 });
+
+test("an unresolvable push target is denied only while a sequence marker exists", async () => {
+  await withRepo(async (root, head) => {
+    for (const command of ['git -C "$WT" push origin b', "git -C ~/wt push origin b", "git --git-dir=x push origin b"]) {
+      assert.equal(bash(root, command, "developer").decision, "allow", `no marker: ${command}`);
+    }
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
+    for (const command of ['git -C "$WT" push origin b', "git -C ~/wt push origin b", "git --git-dir=x push origin b"]) {
+      assert.equal(bash(root, command, "developer").decision, "deny", `marker: ${command}`);
+    }
+  });
+});
+
+test("a marker deny names the marker file and the delete recovery", async () => {
+  await withRepo(async (root, head) => {
+    const file = writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
+    const out = bash(root, "git push origin b", "developer");
+    assert.equal(out.decision, "deny");
+    assert.ok(out.reason.includes(file), out.reason);
+    assert.match(out.reason, /delete the marker/);
+  });
+});
+
+test("a stacked remote ref of another branch does not end the sequence of the marker's branch", async () => {
+  await withRepo(async (root, head) => {
+    const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root, env: env(), encoding: "utf8" });
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head, branch: "issue-a" });
+    git("commit", "-q", "--allow-empty", "-m", "stacked");
+    git("update-ref", "refs/remotes/origin/issue-b", git("rev-parse", "HEAD").trim());
+    assert.equal(bash(root, "git push origin issue-a", "developer").decision, "deny");
+  });
+});

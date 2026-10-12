@@ -73,7 +73,8 @@ function normalizeBranchList(branches) {
  *   installs — see installDefaultBranchGuard's explicitBaseBranches.
  * @param {string|null} authorityCli absolute path of `scripts/loop/check-fix-push-authority.mjs`, resolved by
  *   its owner (the dev-loops side that ships `scripts/`). When it is absent or missing at run time the pre-push
- *   hook falls back to the pushing checkout's scripts/loop copy and refuses every push only when neither file exists (fail closed).
+ *   hook falls back to the pushing checkout's scripts/loop copy and refuses a push only when neither file exists and a
+ *   sequence marker exists under the main worktree's tmp/gate-delta (fail closed); with no marker it allows.
  * @throws {Error} when hookName is not a guarded hook, or any branch is
  *   non-empty and not shell-safe. `hookName` and every branch name are
  *   interpolated straight into the generated script, so THIS function — not
@@ -131,7 +132,7 @@ fi
   // the override-env check, so DEVLOOPS_ALLOW_MAIN never bypasses it. The script path comes from its
   // owner (the dev-loops side that ships scripts/), never from a layout guess inside this package.
   // A baked path that no longer exists (pruned worktree or cache dir) falls back to the pushing
-  // checkout's own scripts/ copy; with neither present the push is refused (fail closed). The pushed refs git
+  // checkout's own scripts/ copy; with neither present the push is refused only while a sequence marker exists (fail closed). The pushed refs git
   // sends on stdin are captured once, handed to the check, and replayed to the default-branch loop.
   if (authorityCli !== null && (typeof authorityCli !== "string" || !path.isAbsolute(authorityCli) || /["$`\\\n\r]/u.test(authorityCli))) {
     throw new Error(`authority script path ${JSON.stringify(authorityCli)} must be an absolute path without characters the generated hook's shell would expand`);
@@ -142,11 +143,19 @@ authority_cli="${authorityCli ?? ""}"
 if [ -z "$authority_cli" ] || [ ! -f "$authority_cli" ]; then
   authority_cli="$(git rev-parse --show-toplevel 2>/dev/null)/"scripts/loop/check-fix-push-authority.mjs
 fi
-if [ ! -f "$authority_cli" ]; then
-  echo "dev-loops: PRE-PUSH-DELTA-PUSH-AUTHORITY the push-authority check script is missing; refusing the push (fail closed). Re-run ensure-worktree to reinstall the hooks." >&2
-  exit 1
+if [ -f "$authority_cli" ]; then
+  printf '%s\\n' "$push_lines" | node "$authority_cli" || exit 1
+else
+  common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  sequence_marker=""
+  for marker_file in "$(dirname "$common_dir")"/tmp/gate-delta/*.sequence; do
+    [ -f "$marker_file" ] && sequence_marker="$marker_file"
+  done
+  if [ -n "$sequence_marker" ]; then
+    echo "dev-loops: PRE-PUSH-DELTA-PUSH-AUTHORITY a gate fix sequence marker exists ($sequence_marker) and the push-authority check script is missing; refusing the push (fail closed). Re-run ensure-worktree to reinstall the hooks, or delete the marker if the sequence was abandoned." >&2
+    exit 1
+  fi
 fi
-printf '%s\\n' "$push_lines" | node "$authority_cli" || exit 1
 `
     : "";
   const header = `#!/bin/sh

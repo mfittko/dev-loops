@@ -3,7 +3,8 @@
  * check-fix-push-authority: harness-neutral push gate for PRE-PUSH-DELTA-PUSH-AUTHORITY
  * (skills/docs/pre-pr-review-contract.md). The generated git pre-push hook runs it with git's
  * `<local ref> <local sha> <remote ref> <remote sha>` lines on stdin. Exit 1 refuses the push while
- * a gate fix sequence is active for any pushed sha and the full work order has not granted the push;
+ * a gate fix sequence is active for any pushed sha (the sha is the baseline or descends from it, and the PR
+ * branch's remote ref has not advanced past the baseline) and the full work order has not granted the push;
  * exit 0 allows it. A parse error or git failure refuses (fail closed). With no ref lines the HEAD of
  * the checkout is tested. Agent identity is unknown to git, so this layer binds every pusher; the
  * Claude Bash hook adds the per-agent-type check on top.
@@ -12,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
-import { findActiveSequence } from "@dev-loops/core/loop/fix-push-authority";
+import { findActiveSequence, recoveryHint, sequenceMarkerPath } from "@dev-loops/core/loop/fix-push-authority";
 
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
@@ -48,14 +49,15 @@ export function checkFixPushAuthority(cwd = process.cwd(), pushedShas = null) {
     }
   };
   const isAncestor = (a, b) => { try { git("merge-base", "--is-ancestor", a, b); return true; } catch { return false; } };
-  const remoteAdvanced = (baseline) => git("for-each-ref", "--contains", baseline, "--format=%(objectname)", "refs/remotes").split("\n").some((sha) => sha && sha !== baseline);
+  const remoteAdvanced = (baseline, branch) => git("for-each-ref", "--contains", baseline, "--format=%(objectname)", branch ? `refs/remotes/*/${branch}` : "refs/remotes").split("\n").some((sha) => sha && sha !== baseline);
   const heads = pushedShas ?? [git("rev-parse", "HEAD").trim()];
-  const refused = heads.some((head) => {
+  let refusedBy = null;
+  for (const head of heads) {
     const sequence = findActiveSequence({ tmpRoot, head, listBaselines, isAncestor, remoteAdvanced });
-    return sequence !== null && sequence.fullGranted !== true;
-  });
-  return refused
-    ? { ok: false, reason: "PRE-PUSH-DELTA-PUSH-AUTHORITY: a gate fix sequence is active and the full work order has not been emitted; only the full-phase fixer pushes the fix branch." }
+    if (sequence !== null && sequence.fullGranted !== true) { refusedBy = sequence; break; }
+  }
+  return refusedBy
+    ? { ok: false, reason: `PRE-PUSH-DELTA-PUSH-AUTHORITY: a gate fix sequence is active and the full work order has not been emitted; only the full-phase fixer pushes the fix branch.${recoveryHint(sequenceMarkerPath(tmpRoot, refusedBy.baselineHead))}` }
     : { ok: true };
 }
 
