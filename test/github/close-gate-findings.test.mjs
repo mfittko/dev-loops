@@ -981,7 +981,7 @@ for (const [label, reply] of [
   });
 }
 
-// The reject-close pass's per-candidate failure path (runQuestionRejectClosePass,
+// The reject-close pass's per-candidate failure path (runRejectClosePass,
 // mirrors runDispositionPass's own #1973/#1882 fail-closed handling): when
 // the reply POST itself fails (a transient gh/API error, not a guard
 // refusal), the candidate is recorded in dispositionFailures with severity
