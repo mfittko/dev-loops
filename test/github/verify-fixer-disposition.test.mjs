@@ -795,14 +795,16 @@ test("two open gate threads on one act fingerprint, both dispositioned, pass the
 });
 
 // Only a thread whose ROOT comment is authored by the gate login is an act thread.
-for (const [name, nodes] of [
+for (const [name, nodes, isResolved] of [
   ["a root comment authored by a non-gate login quoting the marker", [gateComment("c1", 301, undefined, "someone-else")]],
   ["a marker only on a reply comment, not the root", [gateComment("c1", 302, "root without marker"), gateComment("c2", 303)]],
+  ["a resolved gate thread carrying the act fingerprint", [gateComment("c1", 304)], true],
+  ["an open gate thread whose fingerprint is not on the act list", [gateComment("c1", 305, ACT_MARKER.replace(ACT_FP, "fedcba9876543210"))]],
 ]) {
   test(`the act-thread guard ignores ${name}`, async () => {
     await withRepoRoot(async (repoRoot) => {
       const fixerPlan = await deliver(repoRoot, [], { actList: ACT_LIST });
-      const { deps } = runtime([threadsCallEntry([actThread("PRRT_FOREIGN", nodes)]), userEntry], repoRoot);
+      const { deps } = runtime([threadsCallEntry([actThread("PRRT_FOREIGN", nodes, isResolved)]), userEntry], repoRoot);
       const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
       assert.equal(result.ok, true);
     });
