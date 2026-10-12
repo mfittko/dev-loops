@@ -11,14 +11,29 @@ import path from "node:path";
 
 // A `git push` at command position (after `;`, `&&`, `|`, `(`, `$(`, a backtick or `sh -c "`),
 // past env assignments, a launcher word and git's global options (`-C x`, `-c x=y`, `--no-pager`, ...).
-const PUSH_RE = /(?:^|[;&|(`]|\$\(|\b(?:ba|z)?sh\s+-c\s+['"])\s*(?:\w+=\S*\s+)*(?:(?:env|command|exec|time|sudo|xargs)\s+)*git(?:\s+(?:-[Cc]\s+\S+|--[\w-]+(?:=\S+)?))*\s+push(?=[\s'"`;&|)]|$)/u;
+const PUSH_RE = /(?:^|[;&|(`]|\$\(|\b(?:ba|z)?sh\s+-c\s+['"])\s*(?:\w+=\S*\s+)*(?:(?:env|command|exec|time|sudo|xargs)\s+)*git((?:\s+(?:-[Cc]\s+\S+|--[\w-]+(?:=\S+)?))*)\s+push(?=[\s'"`;&|)]|$)/u;
+
+/**
+ * The directory a `git ... push` runs in, as the last `-C <dir>` of its global options (last wins).
+ * Returns undefined for no `-C` and null when the directory is not a plain literal (unresolvable).
+ */
+export function pushTargetDir(command) {
+  const options = typeof command === "string" ? PUSH_RE.exec(command)?.[1] : undefined;
+  const dirs = [...(options ?? "").matchAll(/\s-C\s+(\S+)/gu)];
+  if (dirs.length === 0) return undefined;
+  const dir = dirs[dirs.length - 1][1].replace(/^(['"])(.*)\1$/u, "$2");
+  return /[$`~*?'"\\]/u.test(dir) ? null : dir;
+}
 
 export const sequenceMarkerPath = (tmpRoot, baselineHead) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence`);
 
-/** Record that a fix sequence is active for a baseline head; never downgrades a granted marker. */
-export function writeSequenceMarker({ tmpRoot, baselineHead, fullGranted = false }) {
+/**
+ * Record that a fix sequence is active for a baseline head. A non-granted write keeps a granted
+ * marker (the delta check re-runs inside the full phase) unless `reset` starts a new commit_only round.
+ */
+export function writeSequenceMarker({ tmpRoot, baselineHead, fullGranted = false, reset = false }) {
   const file = sequenceMarkerPath(tmpRoot, baselineHead);
-  if (!fullGranted && readSequenceMarker(tmpRoot, baselineHead)?.fullGranted === true) return file;
+  if (!fullGranted && !reset && readSequenceMarker(tmpRoot, baselineHead)?.fullGranted === true) return file;
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify({ baselineHead, fullGranted })}\n`);
   return file;
@@ -43,16 +58,18 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
 
 /**
  * The marker of the sequence that is active at `head`, or null. A sequence is active while the
- * worktree head is its baseline, or descends from it and is not yet on any remote ref; a push by
- * the full-phase fixer or a moved head ends it.
- * @param {{ tmpRoot: string, head: string, listBaselines: () => string[], isAncestor: (a: string, b: string) => boolean, onRemote: (head: string) => boolean }} input
+ * worktree head is its baseline, or descends from it, and no remote ref has advanced past the
+ * baseline (a push ended it). With several active markers a non-granted one wins, so a stale
+ * granted marker cannot admit a commit_only fixer push.
+ * @param {{ tmpRoot: string, head: string, listBaselines: () => string[], isAncestor: (a: string, b: string) => boolean, remoteAdvanced: (baseline: string) => boolean }} input
  */
-export function findActiveSequence({ tmpRoot, head, listBaselines, isAncestor, onRemote }) {
+export function findActiveSequence({ tmpRoot, head, listBaselines, isAncestor, remoteAdvanced }) {
+  const active = [];
   for (const baseline of listBaselines()) {
     const marker = readSequenceMarker(tmpRoot, baseline);
-    if (marker && (baseline === head || (isAncestor(baseline, head) && !onRemote(head)))) return marker;
+    if (marker && (baseline === head || isAncestor(baseline, head)) && !remoteAdvanced(baseline)) active.push(marker);
   }
-  return null;
+  return active.find((m) => !m.fullGranted) ?? active[0] ?? null;
 }
 
 /** @returns {{ decision: "allow"|"deny", reason?: string }} */

@@ -58,6 +58,43 @@ test("after the full work order only the fixer may push", async () => {
   });
 });
 
+test("a push ends the sequence, a stale granted marker cannot admit commit_only, and git -C targets the named worktree", async () => {
+  await withRepo(async (root, head) => {
+    const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root, env: env(), encoding: "utf8" });
+    const tmpRoot = path.join(root, "tmp");
+    const remote = path.join(path.dirname(root), "remote.git");
+    execFileSync("git", ["init", "-q", "--bare", remote], { env: env() });
+    git("remote", "add", "origin", remote);
+    writeSequenceMarker({ tmpRoot, baselineHead: head, fullGranted: true });
+    git("commit", "-q", "--allow-empty", "-m", "fix");
+    const fixHead = git("rev-parse", "HEAD").trim();
+    writeSequenceMarker({ tmpRoot, baselineHead: fixHead });
+    assert.equal(bash(root, "git push origin main", "fixer").decision, "deny", "stale granted marker with a non-granted one");
+    // -C resolves relative to the hook cwd and names the worktree; an unresolvable -C fails closed.
+    const outside = path.dirname(root);
+    assert.equal(bash(outside, "git -C repo push origin main", "fixer").decision, "deny");
+    assert.equal(bash(outside, "git -C repo -C nowhere push origin main", "developer").decision, "deny");
+    assert.equal(bash(outside, "git -C nowhere -C repo push origin main", "developer").decision, "deny");
+    assert.equal(bash(outside, 'git -C "$X" push origin main', "developer").decision, "deny");
+  });
+  await withRepo(async (root, head) => {
+    const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root, env: env(), encoding: "utf8" });
+    const remote = path.join(path.dirname(root), "remote.git");
+    execFileSync("git", ["init", "-q", "--bare", remote], { env: env() });
+    git("remote", "add", "origin", remote);
+    git("push", "-q", "origin", "main");
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head, fullGranted: true });
+    git("commit", "-q", "--allow-empty", "-m", "fix");
+    assert.equal(bash(root, "git push origin main", "fixer").decision, "allow");
+    assert.equal(bash(root, "git push origin main", "developer").decision, "deny");
+    // The sequence ends once the remote advances past the baseline: a later local commit is no longer guarded.
+    git("push", "-q", "origin", "main");
+    git("commit", "-q", "--allow-empty", "-m", "later");
+    assert.equal(bash(root, "git push origin main", "developer").decision, "allow");
+    assert.equal(bash(path.dirname(root), "git -C repo push origin main", "developer").decision, "allow");
+  });
+});
+
 test("a malformed marker file fails closed and a marker for another baseline is ignored", async () => {
   await withRepo(async (root, head) => {
     await mkdir(path.join(root, "tmp", "gate-delta"), { recursive: true });
@@ -70,4 +107,10 @@ test("a malformed marker file fails closed and a marker for another baseline is 
     writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: "f".repeat(40) });
     assert.equal(bash(root, "git push origin b", "developer").decision, "allow");
   });
+});
+
+test("a git query failure denies a subagent push while a missing gate-delta directory allows it", async () => {
+  await withTempDir(async (dir) => {
+    assert.equal(bash(await realpath(dir), "git push origin b", "developer").decision, "deny", "not a git repository");
+  }, { prefix: "dev-loops-push-authority-nogit-" });
 });

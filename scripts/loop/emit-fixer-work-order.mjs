@@ -225,7 +225,7 @@ export async function emitFixerWorkOrder({
   if (typeof prState?.headRefName !== "string" || !prState.headRefName) throw new Refusal(`PR ${repo}#${pr} reports no headRefName; mutation authority is missing`);
   if (String(prState.headRefOid ?? "").toLowerCase() !== headSha) throw new Refusal(`PR ${repo}#${pr} head is ${prState.headRefOid}, not --head-sha ${headSha}; conflicting authority, refresh and re-emit`);
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: the push guard reads this marker; only a full work order grants the fixer a push.
-  writeSequenceMarker({ tmpRoot, baselineHead: headSha, fullGranted: phase === "full" });
+  writeSequenceMarker({ tmpRoot, baselineHead: headSha, fullGranted: phase === "full", reset: phase !== "full" });
 
   const contracts = await Promise.all(FIXER_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });

@@ -504,9 +504,14 @@ test("the sequence marker is written once, never downgraded, read fail-closed an
   assert.equal(readSequenceMarker(tmpRoot, "a1").fullGranted, true);
   fs.writeFileSync(sequenceMarkerPath(tmpRoot, "bad"), "{not json");
   assert.deepEqual(readSequenceMarker(tmpRoot, "bad"), { baselineHead: "bad", fullGranted: false });
-  const find = (head, extra = {}) => findActiveSequence({ tmpRoot, head, listBaselines: () => ["a1"], isAncestor: () => true, onRemote: () => false, ...extra });
+  const find = (head, extra = {}) => findActiveSequence({ tmpRoot, head, listBaselines: () => ["a1"], isAncestor: () => true, remoteAdvanced: () => false, ...extra });
   assert.equal(find("a1")?.baselineHead, "a1");
   assert.equal(find("c3")?.baselineHead, "a1", "an unpushed descendant of the baseline");
-  assert.equal(find("c3", { onRemote: () => true }), null, "the head moved to a pushed commit");
+  assert.equal(find("c3", { remoteAdvanced: () => true }), null, "a push ended the sequence");
   assert.equal(find("c3", { isAncestor: () => false }), null);
+  writeSequenceMarker({ tmpRoot, baselineHead: "a1", reset: true });
+  assert.equal(readSequenceMarker(tmpRoot, "a1").fullGranted, false, "a new commit_only round does not inherit the grant");
+  writeSequenceMarker({ tmpRoot, baselineHead: "b2", fullGranted: true });
+  assert.equal(find("c3", { listBaselines: () => ["b2", "a1"] }).fullGranted, false, "a non-granted marker wins over a stale granted one");
+  assert.equal(find("c3", { listBaselines: () => ["b2"] }).fullGranted, true);
 });
