@@ -317,6 +317,36 @@ test("the production stale-surface adapter reports the hit file and line, whatev
   assert.deepEqual(hitsUnder(["diff.noprefix", "true"], ["color.ui", "always"], ["diff.external", "false"], ["diff.algorithm", "histogram"], ["diff.renames", "copies"], ["core.quotePath", "true"]), expected);
 });
 
+test("the production adapter runs from the top level and ignores diff.relative and diff.interHunkContext", () => {
+  const { dir, actList } = fixture();
+  const root = path.join(dir, "sub-repo");
+  const git = (...args) => {
+    const out = spawnSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8" });
+    assert.equal(out.status, 0, `git ${args.join(" ")}: ${out.stderr}`);
+    return out.stdout.trim();
+  };
+  fs.mkdirSync(path.join(root, "sub"), { recursive: true });
+  fs.mkdirSync(path.join(root, "test"), { recursive: true });
+  git("init", "-q");
+  const first = "Alpha rule text describing the gate behavior";
+  const third = "and the second clause ends here.";
+  fs.writeFileSync(path.join(root, "a.md"), `${first}\nkept middle line\n${third}\n`);
+  fs.writeFileSync(path.join(root, "test", "pin.test.mjs"), `const a = "${first}";\nconst b = "${third}";\n`);
+  fs.writeFileSync(path.join(root, "sub", "x.txt"), "x\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "c1");
+  const base = git("rev-parse", "HEAD");
+  fs.writeFileSync(path.join(root, "a.md"), "kept middle line\n");
+  git("commit", "-q", "-a", "-m", "c2");
+  const args = ["--act-list", actList, "--baseline", base, "--spec-identity", "s", "--findings-log", logFor(base), "--worktree", path.join(root, "sub")];
+  const hits = () => runCli(args, quiet).input.staleSurfaceHits.map((h) => `${h.file}:${h.line}`).sort();
+  const expected = ["test/pin.test.mjs:1", "test/pin.test.mjs:2"];
+  assert.deepEqual(hits(), expected);
+  git("config", "diff.relative", "true");
+  git("config", "diff.interHunkContext", "1");
+  assert.deepEqual(hits(), expected);
+});
+
 test("an act-list input run without --findings-log is refused, the other routes keep their forms", () => {
   const base = ["--act-list", "a.json", "--baseline", A, "--spec-identity", "s"];
   assert.throws(() => parseCheckPrePushDeltaArgs(base), /PRE-PUSH-DELTA-INPUT/);
@@ -349,6 +379,16 @@ test("--findings-log is refused on the thread route and validated on the act-lis
   assert.throws(() => runCli([...base, "--findings-log", logWith({ headSha: A })], headAt(B)), /perAngle/);
   for (const headSha of ["", "a"]) assert.throws(() => runCli([...base, "--findings-log", logWith({ headSha, provenance: { perAngle: [{ angle: "correctness" }] } })], headAt(B)), /not the baseline/);
   assert.throws(() => runCli([...base, "--findings-log", logWith({ headSha: "ccccccc3333333", provenance: { perAngle: [{ angle: "correctness" }] } })], headAt(B)), /not the baseline/);
+  const inline = { executionMode: "inline_single_agent", findings: [{ angle: "correctness" }, { angle: "correctness" }] };
+  assert.deepEqual(runCli([...base, "--findings-log", logWith({ headSha: A, ...inline })], headAt(B)).input.surfaceHints, ["correctness"]);
+  assert.throws(() => runCli([...base, "--findings-log", logWith({ headSha: "ccccccc3333333", ...inline })], headAt(B)), /not the baseline/);
+  assert.throws(() => runCli([...base, "--findings-log", logWith({ headSha: A, executionMode: "fanout_fanin" })], headAt(B)), /perAngle/);
+  const sha256 = "d".repeat(64);
+  const sha256Args = ["--act-list", actList, "--baseline", sha256, "--spec-identity", "s"];
+  const perAngle = { provenance: { perAngle: [{ angle: "correctness" }] } };
+  assert.deepEqual(runCli([...sha256Args, "--findings-log", logWith({ headSha: sha256, ...perAngle })], headAt(B)).input.surfaceHints, ["correctness"]);
+  assert.throws(() => runCli([...sha256Args, "--findings-log", logWith({ headSha: "e".repeat(64), ...perAngle })], headAt(B)), /not the baseline/);
+  assert.throws(() => runCli([...base, "--findings-log", logWith({ headSha: "not-a-sha", ...perAngle })], headAt(B)), /not the baseline/);
   const { threadsFile } = threadsFixture();
   assert.throws(() => parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s", "--findings-log", good]), /refused with --threads-file/);
   assert.equal(parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s"]).findingsLog, null);

@@ -43,6 +43,7 @@ import { writeGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> [--site-coverage <path>] [--worktree <dir>]
+       check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --result <path> --invocation <1-3> [--site-coverage <path>] [--worktree <dir>]
        check-pre-push-delta.mjs --threads-file <path> --repo <owner/name> --pr <n> --baseline <sha> ...   (thread route: replaces --act-list)
 
@@ -169,16 +170,20 @@ function gitIsAncestor(worktree, ancestor, descendant) {
 // Tracked-file hits of the sentences and identifiers the delta range removed, grepped at the candidate head.
 // A git failure throws (fail closed), including a missing baseline or head object. The diff and grep
 // formats are pinned so operator git config (prefix, color, external diff, textconv, algorithm, renames, path quoting) cannot blank the check.
-export function gitStaleSurfaceHits(worktree, baseline, head) {
+export function gitStaleSurfaceHits(worktreeArg, baseline, head) {
+  // Run from the top level so a subdirectory --worktree cannot scope the diff or grep to that subtree.
+  const top = spawnSync("git", ["-C", worktreeArg, "rev-parse", "--show-toplevel"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+  if (top.status !== 0 || !top.stdout.trim()) throw new Error(`git rev-parse --show-toplevel failed in ${worktreeArg}: ${top.stderr.trim()}; the stale-surface check cannot locate the repository`);
+  const worktree = top.stdout.trim();
   const git = (...args) => spawnSync("git", ["-C", worktree, "-c", "core.quotePath=false", ...args], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
   for (const rev of [baseline, head]) {
     const exists = git("cat-file", "-e", `${rev}^{commit}`);
     if (exists.status !== 0) throw new Error(`git cat-file ${rev} failed in ${worktree}: ${exists.stderr.trim()}; the stale-surface check cannot read the delta range`);
   }
-  const diff = git("diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--diff-algorithm=myers", "--no-renames", `${baseline}..${head}`);
+  const diff = git("diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--diff-algorithm=myers", "--no-renames", "--no-relative", "--inter-hunk-context=0", `${baseline}..${head}`);
   if (diff.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${diff.stderr.trim()}; the stale-surface check cannot read the delta range`);
   const grep = (needle, { word }) => {
-    const out = git("grep", "-n", "-I", "-F", "--no-color", ...(word ? ["-w"] : []), "-e", needle, head);
+    const out = git("grep", "-n", "-I", "--full-name", "-F", "--no-color", ...(word ? ["-w"] : []), "-e", needle, head);
     if (out.status === 1) return [];
     if (out.status !== 0) throw new Error(`git grep failed in ${worktree} (exit ${out.status}): ${out.stderr.trim()}`);
     const rows = out.stdout.split("\n").filter(Boolean);
@@ -197,10 +202,15 @@ function roundAnglesOf(findingsLogPath, baseline) {
   if (!findingsLogPath) return [];
   const log = JSON.parse(readFileSync(findingsLogPath, "utf8"));
   const perAngle = log?.provenance?.perAngle;
-  if (!Array.isArray(perAngle) || perAngle.length === 0) throw new Error(`--findings-log ${findingsLogPath} has no non-empty provenance.perAngle: pass the reviewed gate round's findings log`);
-  if (typeof log.headSha !== "string" || !/^[0-9a-f]{7,40}$/iu.test(log.headSha) || !(log.headSha.toLowerCase().startsWith(baseline) || baseline.startsWith(log.headSha.toLowerCase()))) {
-    throw new Error(`--findings-log ${findingsLogPath} records head ${log.headSha ?? "(none)"}, not the baseline ${baseline}: pass the findings log of the reviewed round`);
+  const logHead = typeof log?.headSha === "string" ? log.headSha.trim().toLowerCase() : "";
+  if (!HEAD_SHA_RE.test(logHead) || !(logHead.startsWith(baseline) || baseline.startsWith(logHead))) {
+    throw new Error(`--findings-log ${findingsLogPath} records head ${log?.headSha ?? "(none)"}, not the baseline ${baseline}: pass the findings log of the reviewed round`);
   }
+  // An inline_single_agent round writes no provenance: take the angles of its findings.
+  if (log.executionMode === "inline_single_agent" && !Array.isArray(perAngle)) {
+    return [...new Set((Array.isArray(log.findings) ? log.findings : []).map((f) => f?.angle).filter((a) => typeof a === "string" && a.length > 0))];
+  }
+  if (!Array.isArray(perAngle) || perAngle.length === 0) throw new Error(`--findings-log ${findingsLogPath} has no non-empty provenance.perAngle: pass the reviewed gate round's findings log`);
   return perAngle.map((row) => row?.angle).filter((angle) => typeof angle === "string" && angle.length > 0);
 }
 
