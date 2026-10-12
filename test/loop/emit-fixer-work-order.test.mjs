@@ -789,7 +789,7 @@ test("F7: emit, pull, mutate in authority and verify the disposition; missing ma
     assert.equal(hook(wt, outputRef), "allow");
     await mkdir(path.dirname(outputRef), { recursive: true });
     await writeFile(outputRef, JSON.stringify({ headSha: head, dispositions: [], siteCoverage: [{ fingerprint: "act-1", returnedSites: ["src/a.mjs"], sites: [{ site: "src/a.mjs", status: "fixed" }] }] }));
-    const { runChild } = makeGhMock([{ assertArgs: ["pr", "view"], stdout: `${JSON.stringify({ headRefOid: head })}\n` }, { assertArgs: ["api", "graphql"], stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } })}\n` }]);
+    const { runChild } = makeGhMock([{ assertArgs: ["pr", "view"], stdout: `${JSON.stringify({ headRefOid: head })}\n` }, { assertArgs: ["api", "graphql"], stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } })}\n` }, { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "bot" })}\n` }]);
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath }, { env: runIdFreeEnv(), runChild, repoRoot: wt });
     assert.equal(result.complete, true);
     assert.ok(result.checkpointPath.startsWith(path.join(root, "tmp")));
