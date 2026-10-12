@@ -74,7 +74,7 @@ function normalizeBranchList(branches) {
  * @param {string|null} authorityCli absolute path of `scripts/loop/check-fix-push-authority.mjs`, resolved by
  *   its owner (the dev-loops side that ships `scripts/`). When it is absent or missing at run time the pre-push
  *   hook falls back to the pushing checkout's scripts/loop copy and refuses a push only when neither file exists and a
- *   sequence marker that is not fullGranted and whose branch ref has not advanced exists under the main worktree's tmp/gate-delta (fail closed); otherwise it allows. While such a marker is open it refuses every push from the repository.
+ *   sequence marker that is not fullGranted and whose branch ref has not advanced (or that names no branch) exists under the main worktree's tmp/gate-delta (fail closed); otherwise it allows. While such a marker is open it refuses every push from the repository.
  * @throws {Error} when hookName is not a guarded hook, or any branch is
  *   non-empty and not shell-safe. `hookName` and every branch name are
  *   interpolated straight into the generated script, so THIS function — not
@@ -153,8 +153,8 @@ else
     grep -q '"fullGranted":true' "$marker_file" && continue
     baseline=$(basename "$marker_file" .sequence)
     branch=$(sed -nE 's/.*"branch":"([^"]*)".*/\\1/p' "$marker_file")
-    pattern="refs/remotes"
-    [ -n "$branch" ] && pattern="refs/remotes/*/$branch"
+    if [ -z "$branch" ]; then sequence_marker="$marker_file"; continue; fi
+    pattern="refs/remotes/*/$branch"
     advanced=$(git for-each-ref --contains "$baseline" --format='%(objectname)' "$pattern" 2>/dev/null | grep -v "$baseline")
     [ -z "$advanced" ] && sequence_marker="$marker_file"
   done
@@ -284,7 +284,7 @@ function readHookState(hookPath) {
  *
  * @param {{ gitDir: string, defaultBranches?: string|string[]|null, explicitBaseBranches?: string|string[]|null, hooksPathOverride?: string|null, authorityCliPath?: string|null }} target
  *   `authorityCliPath` is the absolute path of `scripts/loop/check-fix-push-authority.mjs`, passed by the
- *   dev-loops side that ships it; without it the rendered pre-push hook falls back to the pushing checkout's scripts/loop copy and refuses a push only when neither file exists and a marker that is not fullGranted and whose branch ref has not advanced exists (fail closed).
+ *   dev-loops side that ships it; without it the rendered pre-push hook falls back to the pushing checkout's scripts/loop copy and refuses a push only when neither file exists and a marker that is not fullGranted and whose branch ref has not advanced (or that names no branch) exists (fail closed).
  *   `hooksPathOverride` is the repo's `core.hooksPath` when set. Installing into
  *   `$GIT_DIR/hooks` while git reads elsewhere would report success for a guard
  *   that can never fire, so that case refuses instead.

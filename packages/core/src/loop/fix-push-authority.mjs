@@ -46,16 +46,21 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
 
 /**
  * The marker of the sequence that is active at `head`, or null. A sequence is active while the
- * tested commit is its baseline or descends from it, and the remote ref of the marker's branch
- * (any remote ref when the marker names none) has not advanced past the baseline (a push ended it). With several active markers a non-granted one wins, so a stale
+ * tested commit is its baseline or descends from it, or when the push targets the marker's branch
+ * (`remoteRef`, whatever the pushed sha is, so a force-push of a rewritten commit is covered), and the remote ref
+ * of the marker's branch has not advanced past the baseline (a push ended it). A marker that names no branch
+ * (unreadable or malformed) cannot be ended by a remote ref: it stays active until deleted (fail closed).
+ * With several active markers a non-granted one wins, so a stale
  * granted marker cannot admit a commit_only fixer push.
- * @param {{ tmpRoot: string, head: string, listBaselines: () => string[], isAncestor: (a: string, b: string) => boolean, remoteAdvanced: (baseline: string, branch?: string) => boolean }} input
+ * @param {{ tmpRoot: string, head: string, remoteRef?: string, listBaselines: () => string[], isAncestor: (a: string, b: string) => boolean, remoteAdvanced: (baseline: string, branch: string) => boolean }} input
  */
-export function findActiveSequence({ tmpRoot, head, listBaselines, isAncestor, remoteAdvanced }) {
+export function findActiveSequence({ tmpRoot, head, remoteRef, listBaselines, isAncestor, remoteAdvanced }) {
   const active = [];
   for (const baseline of listBaselines()) {
     const marker = readSequenceMarker(tmpRoot, baseline);
-    if (marker && (baseline === head || isAncestor(baseline, head)) && !remoteAdvanced(baseline, marker.branch)) active.push(marker);
+    if (!marker) continue;
+    const covered = baseline === head || isAncestor(baseline, head) || (marker.branch !== undefined && remoteRef === `refs/heads/${marker.branch}`);
+    if (covered && (marker.branch === undefined || !remoteAdvanced(baseline, marker.branch))) active.push(marker);
   }
   return active.find((m) => !m.fullGranted) ?? active[0] ?? null;
 }

@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, realpath } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
 import { clearSequenceMarker, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
@@ -117,5 +118,34 @@ test("the refusal names the marker file and the delete recovery", async () => {
     assert.match(refused.reason, /delete the marker/);
     clearSequenceMarker(path.join(root, "tmp"), head);
     assert.deepEqual(checkFixPushAuthority(root), { ok: true }, "a cleared marker (a commit_only round without a fix commit) guards nothing");
+  });
+});
+
+test("a marker that names no branch is not ended by a remote ref (fail closed)", async () => {
+  await withRepo(async (root, head, git) => {
+    const file = writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
+    git("commit", "-q", "--allow-empty", "-m", "next");
+    git("update-ref", "refs/remotes/origin/any", git("rev-parse", "HEAD").trim());
+    assert.equal(checkFixPushAuthority(root).ok, false);
+    writeFileSync(file, "{not json");
+    assert.equal(checkFixPushAuthority(root).ok, false, "a malformed marker keeps guarding");
+  });
+});
+
+test("a merge-base failure other than 'not an ancestor' refuses instead of dropping the marker", async () => {
+  await withRepo((root, head) => {
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
+    assert.throws(() => checkFixPushAuthority(root, ["b".repeat(40)]));
+  });
+});
+
+test("a force-push of a non-descendant sha to the marked branch is refused; another branch is not", async () => {
+  await withRepo(async (root, head, git) => {
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head, branch: "issue-a" });
+    git("checkout", "-q", "--orphan", "rewritten");
+    git("commit", "-q", "--allow-empty", "-m", "rewrite");
+    const rewritten = git("rev-parse", "HEAD").trim();
+    assert.equal(checkFixPushAuthority(root, [{ sha: rewritten, remoteRef: "refs/heads/issue-a" }]).ok, false);
+    assert.deepEqual(checkFixPushAuthority(root, [{ sha: rewritten, remoteRef: "refs/heads/issue-b" }]), { ok: true });
   });
 });
