@@ -446,6 +446,9 @@ test("a Markdown line naming a removed identifier does not suppress its stale hi
   // Moved to another code file: still not reported.
   const moved = [RULE_DIFF, "diff --git a/packages/x/other.mjs b/packages/x/other.mjs", "--- a/packages/x/other.mjs", "+++ b/packages/x/other.mjs", "@@ -0,0 +1 @@", "+export function oldHelperName(a) {"].join("\n");
   assert.deepEqual(collectStaleSurfaceHits({ diffText: moved, grep }).filter((h) => h.kind === "identifier"), []);
+  // An added caller of the old name is no re-declaration: the stale hit stays.
+  const caller = [RULE_DIFF, "diff --git a/packages/x/other.mjs b/packages/x/other.mjs", "--- a/packages/x/other.mjs", "+++ b/packages/x/other.mjs", "@@ -0,0 +1 @@", "+  oldHelperName(a);"].join("\n");
+  assert.deepEqual(collectStaleSurfaceHits({ diffText: caller, grep }).filter((h) => h.kind === "identifier").map((h) => h.site), ["scripts/use.mjs:4"]);
 });
 
 test("identifiers need a declaration shape, ignore comments and strings, skip common names and honor moves across files", () => {

@@ -100,9 +100,9 @@ function sentencesOf(file, removed, addedAll) {
   return candidates.map((s) => squash(s).trim()).filter((s) => s.length >= MIN_SENTENCE && !addedAll.includes(s));
 }
 
-function identifiersOf(removed, addedWordsAll) {
+function identifiersOf(removed, addedCode) {
   const code = removed.map(codeOnly);
-  return [...wordsOf(code)].filter((w) => w.length >= MIN_IDENTIFIER && !addedWordsAll.has(w) && isDeclaredIn(w, code));
+  return [...wordsOf(code)].filter((w) => w.length >= MIN_IDENTIFIER && isDeclaredIn(w, code) && !isDeclaredIn(w, addedCode));
 }
 
 /**
@@ -116,15 +116,15 @@ export function collectStaleSurface({ diffText, grep }) {
   // "Still added" is diff-wide: text moved to another file is not removed.
   const addedLines = files.flatMap((f) => f.added);
   const addedAll = squash(addedLines.join(" "));
-  // Only code files count as re-adding an identifier: a prose mention in Markdown is no re-declaration.
-  const addedWordsAll = wordsOf(files.filter((f) => !isMarkdown(f.file)).flatMap((f) => f.added).map(codeOnly));
+  // Only a declaration shape on an added code line re-adds an identifier: a call or a Markdown mention does not.
+  const addedCode = files.filter((f) => !isMarkdown(f.file)).flatMap((f) => f.added).map(codeOnly);
   const hits = [];
   let truncated = false;
   const truncatedNeedles = [];
   for (const { file: source, removed } of files) {
     const items = [];
     if (isMarkdown(source) || isTestFile(source)) items.push(...sentencesOf(source, removed, addedAll).map((needle) => ({ kind: "sentence", needle })));
-    if (!isMarkdown(source)) items.push(...identifiersOf(removed, addedWordsAll).map((needle) => ({ kind: "identifier", needle })));
+    if (!isMarkdown(source)) items.push(...identifiersOf(removed, addedCode).map((needle) => ({ kind: "identifier", needle })));
     for (const { kind, needle } of items) {
       const found = grep(needle, { word: kind === "identifier" });
       // An identifier that still occurs in the file that dropped it was not removed.
