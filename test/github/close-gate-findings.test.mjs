@@ -2526,13 +2526,14 @@ test("a merged medium thread with no ledger entries and a rendered judge: reject
   const primary = defectThread({ severity: "medium", summary: "merged primary claim", judgeDisposition: "reject", commentId: 6380, id: "X" });
   const member = defectThread({ severity: "medium", summary: "merged member claim", judgeDisposition: "act", commentId: 6380, id: "X" });
   const merged = mergedThread(primary, member, { id: "THREAD_MERGED_RENDERED", commentId: 6380 });
-  const thread = threadNode({ id: "THREAD_MERGED_RENDERED", commentId: 6380, body: `${merged.comments.nodes[0].body} — judge: reject` });
+  const thread = threadNode({ id: "THREAD_MERGED_RENDERED", commentId: 6380, body: `${merged.comments.nodes[0].body}\n**medium** · correctness · judge: reject` });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread] }),
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.rejectClosed, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.equal(result.dispositionFailures, undefined);
     },
   ));
 });
@@ -2541,13 +2542,14 @@ test("a merged medium thread whose primary is ledger-rejected and member has no 
   const primary = defectThread({ severity: "medium", summary: "merged primary claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6381, id: "X" });
   const member = defectThread({ severity: "medium", summary: "merged member claim", judgeDisposition: "reject", commentId: 6381, id: "X" });
   const merged = mergedThread(primary, member, { id: "THREAD_MERGED_NOMEMBER", commentId: 6381 });
-  const thread = threadNode({ id: "THREAD_MERGED_NOMEMBER", commentId: 6381, body: `${merged.comments.nodes[0].body} — judge: reject` });
+  const thread = threadNode({ id: "THREAD_MERGED_NOMEMBER", commentId: 6381, body: `${merged.comments.nodes[0].body}\n**medium** · correctness · judge: reject` });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [primary.finding] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread] }),
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.rejectClosed, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.equal(result.dispositionFailures, undefined);
     },
   ));
 });
