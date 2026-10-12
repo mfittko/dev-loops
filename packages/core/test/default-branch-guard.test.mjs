@@ -686,7 +686,7 @@ test("pre-push refuses a push under an ungranted sequence marker, allows it once
     git(dir, ["add", "granted.txt"]);
     git(dir, ["commit", "--quiet", "-m", "granted"]);
     git(dir, ["push", "--quiet", "origin", "issue-9"]);
-    // It refuses while a marker of a sequence that has not ended exists.
+    // It refuses under an ungranted marker whose branch ref has not advanced.
     fs.rmSync(markerFile);
     const openBaseline = git(dir, ["rev-parse", "HEAD"]).trim();
     const openMarker = path.join(dir, "tmp", "gate-delta", `${openBaseline}.sequence`);

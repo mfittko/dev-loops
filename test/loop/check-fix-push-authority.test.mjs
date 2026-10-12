@@ -62,7 +62,7 @@ test("the generated pre-push hook bakes the path its owner supplies, even from o
   assert.equal(baked, owner);
 });
 
-test("the generated pre-push hook falls back to the checkout script and, with neither file, refuses only while a sequence marker exists", () => {
+test("the generated pre-push hook falls back to the checkout script and, with neither file, refuses only under an ungranted sequence marker whose branch ref has not advanced", () => {
   const prePush = renderGuardHook("pre-push", ["main"]);
   assert.match(prePush, /authority_cli=""\nif \[ -z "\$authority_cli" \] \|\| \[ ! -f "\$authority_cli" \]; then\n[^\n]*show-toplevel[^\n]*\nfi\nif \[ -f "\$authority_cli" \]; then\n[^\n]*node "\$authority_cli" \|\| exit 1\nelse\n[\s\S]*gate-delta\/\*\.sequence[\s\S]*PRE-PUSH-DELTA-PUSH-AUTHORITY[^\n]*\n    exit 1\n  fi\nfi/);
   assert.ok(!prePush.includes("/../"), "no package-layout-relative path");
