@@ -181,6 +181,15 @@ test("push authority: commit_only writes the sequence marker ungranted and the f
   });
 });
 
+test("push authority: a custom --tmp-root still writes the marker under the canonical gate-artifact root", async () => {
+  await withFixture(async ({ head, root, emit }) => {
+    const custom = path.join(path.dirname(root), "custom-tmp");
+    await emit({ deltaResult: undefined, phase: "commit_only", tmpRoot: custom });
+    assert.deepEqual(JSON.parse(await readFile(path.join(root, "tmp", "gate-delta", `${head}.sequence`), "utf8")), { baselineHead: head, fullGranted: false });
+    assert.equal(existsSync(path.join(custom, "gate-delta", `${head}.sequence`)), false);
+  });
+});
+
 test("delta gate: an act-list --phase full with a push-clearing delta result at the PR head emits the delta-result read", async () => {
   await withFixture(async ({ files, emit }) => {
     const unit = await emit({ deltaResult: files.delta });

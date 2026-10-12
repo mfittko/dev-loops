@@ -37,6 +37,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parse as parseYaml } from "yaml";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
@@ -496,6 +497,9 @@ function resolveHooksInstallTarget(gitCommand, root) {
   return { gitDir, hooksPathOverride };
 }
 
+// The push-authority check ships with this package (scripts/), so this side resolves its own path (PRE-PUSH-DELTA-PUSH-AUTHORITY).
+const AUTHORITY_CLI_PATH = fileURLToPath(new URL("./check-fix-push-authority.mjs", import.meta.url));
+
 function installGuard(gitCommand, root, explicitBase) {
   try {
     const { gitDir, hooksPathOverride } = resolveHooksInstallTarget(gitCommand, root);
@@ -505,6 +509,7 @@ function installGuard(gitCommand, root, explicitBase) {
       defaultBranches: repoDefault,
       explicitBaseBranches: explicitBranch,
       hooksPathOverride,
+      authorityCliPath: AUTHORITY_CLI_PATH,
     });
     if (!result.ok) {
       // A structured refusal (core.hooksPath set, unsafe branch name, bad

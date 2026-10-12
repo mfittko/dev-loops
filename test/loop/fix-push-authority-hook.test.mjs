@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
-import { sequenceMarkerPath, writeSequenceMarker } from "../../.claude/hooks/_fix-push-authority.mjs";
+import { pushTargetDir, sequenceMarkerPath, writeSequenceMarker } from "../../.claude/hooks/_fix-push-authority.mjs";
 import { runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 
 const BASH_HOOK = path.resolve(".claude/hooks/pre-tool-use-bash-gate.mjs");
@@ -39,7 +39,7 @@ test("without a sequence marker every push is allowed", async () => {
 test("with a marker written before any delta result a non-fixer and the commit_only fixer are refused", async () => {
   await withRepo(async (root, head) => {
     writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
-    for (const [command, agentType] of [["git push origin b", "dev-loops:pre-pr-reviewer"], ["git -C x push", "developer"], ["git -c x=y push", "developer"], ["git --no-pager push", "developer"], ["git push", "fixer"], ["git push", "dev-loops:fixer"]]) {
+    for (const [command, agentType] of [["git push origin b", "dev-loops:pre-pr-reviewer"], ["git -C . push", "developer"], ["git -c x=y push", "developer"], ["git --no-pager push", "developer"], ["git push", "fixer"], ["git push", "dev-loops:fixer"]]) {
       const out = bash(root, command, agentType);
       assert.equal(out.decision, "deny", `${agentType}: ${command}`);
       assert.match(out.reason, /PRE-PUSH-DELTA-PUSH-AUTHORITY/);
@@ -109,8 +109,43 @@ test("a malformed marker file fails closed and a marker for another baseline is 
   });
 });
 
-test("a git query failure denies a subagent push while a missing gate-delta directory allows it", async () => {
+test("a git query failure denies a subagent push", async () => {
   await withTempDir(async (dir) => {
     assert.equal(bash(await realpath(dir), "git push origin b", "developer").decision, "deny", "not a git repository");
   }, { prefix: "dev-loops-push-authority-nogit-" });
+});
+
+test("a marker deny names the sequence, distinct from the fail-closed git-error reason", async () => {
+  await withRepo(async (root, head) => {
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
+    assert.match(bash(root, "git -C . push origin b", "developer").reason, /a gate fix sequence is active/);
+    assert.match(bash(root, "git -C x push origin b", "developer").reason, /could not resolve the push target or read git state/);
+  });
+});
+
+test("a push is found at every shell segment start and not in non-push commands", async () => {
+  await withRepo(async (root, head) => {
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
+    for (const command of [
+      "cd wt\ngit push --no-verify origin b",
+      "if true; then git push origin b; fi",
+      "{ git push origin b; }",
+      "timeout 60 git push origin b",
+      "/usr/bin/git push origin b",
+      "git -C . push origin b",
+    ]) assert.equal(bash(root, command, "developer").decision, "deny", command);
+    for (const command of ["git status", "echo git push", "git log --grep push"]) assert.equal(bash(root, command, "developer").decision, "allow", command);
+  });
+});
+
+test("pushTargetDir folds every -C cumulatively and fails closed on --git-dir and --work-tree", () => {
+  const cwd = path.resolve("/repo");
+  assert.equal(pushTargetDir("git push", cwd), cwd);
+  assert.equal(pushTargetDir("git -C . push", cwd), cwd);
+  assert.equal(pushTargetDir("git -C a -C b push", cwd), path.join(cwd, "a", "b"));
+  assert.equal(pushTargetDir("git -C /abs -C wt push", cwd), path.resolve("/abs/wt"));
+  assert.equal(pushTargetDir("git --git-dir=x push", cwd), null);
+  assert.equal(pushTargetDir("git --work-tree=y push", cwd), null);
+  assert.equal(pushTargetDir("git --git-dir x push", cwd), null);
+  assert.equal(pushTargetDir('git -C "$X" push', cwd), null);
 });

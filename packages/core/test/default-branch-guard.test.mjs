@@ -14,6 +14,9 @@ import {
   renderGuardHook,
 } from "../src/loop/default-branch-guard.mjs";
 
+// The push-authority script is owned by the dev-loops package, so the install is handed its path.
+const AUTHORITY_CLI = path.resolve(import.meta.dirname, "../../../scripts/loop/check-fix-push-authority.mjs");
+
 // The hooks are shell, and the whole point is that they fire inside real git —
 // asserting on their text would pass while the guard silently never ran. So
 // these drive an actual repository and let git invoke them.
@@ -116,7 +119,7 @@ test(`${GUARD_OVERRIDE_ENV}=0 (or any value other than "1") does NOT disable the
 test(`${GUARD_OVERRIDE_ENV}=1 permits pushing to the default branch too — the release runbook's own prescribed command`, async () => {
   const { dir, gitDir, remote } = await repoFixture({ withRemote: true });
   try {
-    installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: AUTHORITY_CLI });
     fs.writeFileSync(path.join(dir, "release-commit.txt"), "release\n");
     git(dir, ["add", "release-commit.txt"]);
     git(dir, ["commit", "--quiet", "-m", "release commit"], { [GUARD_OVERRIDE_ENV]: "1" });
@@ -511,7 +514,7 @@ test("a hook guards MULTIPLE branches when given an array", async () => {
 test("blocks a push to the default branch via an explicit refspec from another branch", async () => {
   const { dir, gitDir, remote } = await repoFixture({ withRemote: true });
   try {
-    installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: AUTHORITY_CLI });
     git(dir, ["checkout", "--quiet", "-b", "issue-9"]);
     fs.writeFileSync(path.join(dir, "sneaky.txt"), "sneaky\n");
     git(dir, ["add", "sneaky.txt"]);
@@ -535,7 +538,7 @@ test("blocks a push to the default branch via an explicit refspec from another b
 test("allows a push to a non-default remote ref", async () => {
   const { dir, gitDir, remote } = await repoFixture({ withRemote: true });
   try {
-    installDefaultBranchGuard({ gitDir, defaultBranches: "main" });
+    installDefaultBranchGuard({ gitDir, defaultBranches: "main", authorityCliPath: AUTHORITY_CLI });
     git(dir, ["checkout", "--quiet", "-b", "issue-9"]);
     fs.writeFileSync(path.join(dir, "work.txt"), "work\n");
     git(dir, ["add", "work.txt"]);

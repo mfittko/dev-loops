@@ -125,10 +125,9 @@ const isJudge = normalizeAgentType(agentType) === JUDGE_AGENT_TYPE;
 if (decideFixPushAuthority({ command, agentType, sequenceActive: true }).decision === "deny") {
   let sequence = null;
   try {
-    // The push runs in its `git -C <dir>` target (last wins, relative to the hook cwd); head and remote queries use it too.
-    const dir = pushTargetDir(command);
-    if (dir === null) throw new Error("the git -C directory is not a literal path");
-    const gitCwd = dir === undefined ? cwd : path.resolve(cwd, dir);
+    // The push runs in its `git -C <dir>` target (each -C relative to the previous one, the first to the hook cwd); head and remote queries use it too.
+    const gitCwd = pushTargetDir(command, cwd);
+    if (gitCwd === null) throw new Error("the git -C directory is not a literal path, or --git-dir/--work-tree is set");
     const git = (...args) => execFileSync("git", args, { cwd: gitCwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     const head = git("rev-parse", "HEAD").trim();
     const tmpRoot = path.join(listCheckouts(gitCwd)[0].root, "tmp");

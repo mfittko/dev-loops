@@ -231,3 +231,10 @@ test("--pr-head fails closed when the PR head differs from the baseline and pass
   assert.throws(() => runCli([...base, "--pr-head", "ddddddd4444444"], headAt(B)), /PRE-PUSH-DELTA-PUSH-AUTHORITY.*PR head moved/);
   assert.equal(runCli([...base, "--pr-head", A], headAt(B)).ok, true);
 });
+
+test("--pr-head fails closed when a well-formed PR head does not resolve locally", () => {
+  const { actList } = fixture();
+  const unfetched = "ddddddd4444444";
+  const seam = { ...headAt(B), revParse: (_worktree, rev) => { if (rev === unfetched) throw new Error("unknown revision"); return rev === "HEAD" ? B : rev; } };
+  assert.throws(() => runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--pr-head", unfetched], seam), /unknown revision/);
+});

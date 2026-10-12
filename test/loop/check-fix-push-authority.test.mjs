@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { renderGuardHook } from "@dev-loops/core/loop/default-branch-guard";
-import { checkFixPushAuthority } from "../../scripts/loop/check-fix-push-authority.mjs";
+import { checkFixPushAuthority, parsePushedShas } from "../../scripts/loop/check-fix-push-authority.mjs";
 import { withTempDir } from "../_helpers.mjs";
 
 const env = { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
@@ -50,14 +50,48 @@ test("the CLI exits 1 while a sequence is ungranted", async () => {
 });
 
 test("only the generated pre-push hook runs the check, ahead of the override env", () => {
-  const prePush = renderGuardHook("pre-push", ["main"]);
+  const prePush = renderGuardHook("pre-push", ["main"], null, "/x/check-fix-push-authority.mjs");
   assert.ok(prePush.indexOf("check-fix-push-authority.mjs") !== -1);
   assert.ok(prePush.indexOf("check-fix-push-authority.mjs") < prePush.indexOf("DEVLOOPS_ALLOW_MAIN"));
-  assert.ok(!renderGuardHook("pre-commit", ["main"]).includes("check-fix-push-authority"));
+  assert.ok(!renderGuardHook("pre-commit", ["main"], null, "/x/check-fix-push-authority.mjs").includes("check-fix-push-authority"));
 });
 
-test("the generated pre-push hook bakes the packaged script path so a checkout without its own copy is still gated", () => {
+test("the generated pre-push hook bakes the path its owner supplies, even from outside core", () => {
+  const owner = "/opt/consumer/node_modules/dev-loops/scripts/loop/check-fix-push-authority.mjs";
+  const baked = /authority_cli="([^"]*)"\n/.exec(renderGuardHook("pre-push", ["main"], null, owner))?.[1];
+  assert.equal(baked, owner);
+});
+
+test("the generated pre-push hook refuses every push when no authority script is supplied (fail closed)", () => {
   const prePush = renderGuardHook("pre-push", ["main"]);
-  const baked = /authority_cli="([^"]+)"\nif \[ -z/.exec(prePush)?.[1];
-  assert.equal(baked, path.resolve("scripts/loop/check-fix-push-authority.mjs"));
+  assert.match(prePush, /authority_cli=""\nif \[ -z "\$authority_cli" \] \|\| \[ ! -f "\$authority_cli" \]; then\n[^\n]*PRE-PUSH-DELTA-PUSH-AUTHORITY[^\n]*\n  exit 1\nfi/);
+  assert.ok(!prePush.includes("scripts/loop/check-fix-push-authority.mjs"), "no layout-relative fallback path");
+  assert.throws(() => renderGuardHook("pre-push", ["main"], null, "relative/check.mjs"), /absolute path/);
+  assert.throws(() => renderGuardHook("pre-push", ["main"], null, "/x/$(evil)/check.mjs"), /absolute path/);
+});
+
+test("pushed shas come from git's stdin lines; deletions are skipped and a malformed line throws", () => {
+  const a = "a".repeat(40);
+  assert.deepEqual(parsePushedShas(`refs/heads/b ${a} refs/heads/b ${"0".repeat(40)}\nrefs/heads/c ${"0".repeat(40)} refs/heads/c ${a}\n`), [a]);
+  assert.deepEqual(parsePushedShas(""), []);
+  assert.throws(() => parsePushedShas("not a push line"), /malformed pre-push line/);
+  assert.throws(() => parsePushedShas(`refs/heads/b zzz refs/heads/b ${a}`), /malformed pre-push line/);
+});
+
+test("the guarded sha is refused when pushed from a checkout whose HEAD is elsewhere", async () => {
+  await withRepo(async (root, head, git) => {
+    git("branch", "fix");
+    git("checkout", "-q", "--orphan", "other");
+    git("commit", "-q", "--allow-empty", "-m", "elsewhere");
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
+    assert.deepEqual(checkFixPushAuthority(root), { ok: true }, "HEAD is not under the baseline");
+    assert.equal(checkFixPushAuthority(root, [head]).ok, false);
+    const lines = `refs/heads/fix ${head} refs/heads/fix ${"0".repeat(40)}\n`;
+    const run = spawnSync("node", [path.resolve("scripts/loop/check-fix-push-authority.mjs")], { cwd: root, env, encoding: "utf8", input: lines });
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /PRE-PUSH-DELTA-PUSH-AUTHORITY/);
+    const malformed = spawnSync("node", [path.resolve("scripts/loop/check-fix-push-authority.mjs")], { cwd: root, env, encoding: "utf8", input: "garbage\n" });
+    assert.equal(malformed.status, 1);
+    assert.match(malformed.stderr, /fail closed/);
+  });
 });
