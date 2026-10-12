@@ -194,7 +194,7 @@ function roundAnglesOf(findingsLogPath, baseline) {
   const log = JSON.parse(readFileSync(findingsLogPath, "utf8"));
   const perAngle = log?.provenance?.perAngle;
   if (!Array.isArray(perAngle) || perAngle.length === 0) throw new Error(`--findings-log ${findingsLogPath} has no non-empty provenance.perAngle: pass the reviewed gate round's findings log`);
-  if (typeof log.headSha !== "string" || !(log.headSha.toLowerCase().startsWith(baseline) || baseline.startsWith(log.headSha.toLowerCase()))) {
+  if (typeof log.headSha !== "string" || !/^[0-9a-f]{7,40}$/iu.test(log.headSha) || !(log.headSha.toLowerCase().startsWith(baseline) || baseline.startsWith(log.headSha.toLowerCase()))) {
     throw new Error(`--findings-log ${findingsLogPath} records head ${log.headSha ?? "(none)"}, not the baseline ${baseline}: pass the findings log of the reviewed round`);
   }
   return perAngle.map((row) => row?.angle).filter((angle) => typeof angle === "string" && angle.length > 0);

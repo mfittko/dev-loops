@@ -319,6 +319,7 @@ test("--findings-log is refused on the thread route and validated on the act-lis
   const good = logWith({ headSha: A, provenance: { perAngle: [{ angle: "correctness" }] } });
   assert.deepEqual(runCli([...base, "--findings-log", good], headAt(B)).input.surfaceHints, ["correctness"]);
   assert.throws(() => runCli([...base, "--findings-log", logWith({ headSha: A })], headAt(B)), /perAngle/);
+  for (const headSha of ["", "a"]) assert.throws(() => runCli([...base, "--findings-log", logWith({ headSha, provenance: { perAngle: [{ angle: "correctness" }] } })], headAt(B)), /not the baseline/);
   assert.throws(() => runCli([...base, "--findings-log", logWith({ headSha: "ccccccc3333333", provenance: { perAngle: [{ angle: "correctness" }] } })], headAt(B)), /not the baseline/);
   const { threadsFile } = threadsFixture();
   assert.throws(() => parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s", "--findings-log", good]), /refused with --threads-file/);
