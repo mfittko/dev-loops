@@ -355,7 +355,8 @@ export async function fetchListedFingerprints(
 /**
  * Post a round's deferred findings as ONE batched comment on the linked spec
  * issue (resolveDeferralCommentTarget); a PR target posts nothing and every entry
- * counts as recorded by its folded marker and bullet (a Deferred-group marker also carries `issue=<pr>`), so a caller's
+ * counts as recorded: a threaded entry by its thread marker (`issue=<pr>`) and resolving reply, a folded
+ * entry by its Details marker in the verdict body (a Deferred-group marker also carries `issue=<pr>`), so a caller's
  * `foldedFiled` counts those folded entries again on a rerun. Entries whose fingerprint the target
  * already lists are skipped; nothing is posted when none remain. Returns
  * `{ issueNumber, appendedFingerprints }` where `issueNumber` is the target's
@@ -370,8 +371,8 @@ export async function commentDeferredFindings(
     throw new Error("commentDeferredFindings: entries must be a non-empty array");
   }
   const target = await resolveDeferralCommentTarget({ repo, pr, trackerProvider }, { env, ghCommand, run });
-  // A PR target needs no comment: the verdict body's Deferred group carries each entry's
-  // marker (Deferred-group markers carry issue=<pr>) and is the record, so every entry counts as recorded.
+  // A PR target needs no comment: a threaded entry is recorded by its thread marker (issue=<pr>)
+  // and resolving reply, a folded entry by its Details marker in the verdict body, so every entry counts as recorded.
   if (target === pr) {
     return { issueNumber: target, appendedFingerprints: new Set(entries.map((entry) => entry.fingerprint)) };
   }

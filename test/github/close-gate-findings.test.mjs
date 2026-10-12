@@ -2361,10 +2361,11 @@ test("a marker in a thread authored by another login does not exclude its finger
   ));
 });
 
-test("a blocking-severity high the judge rejected is visible, so it is excluded from the folded filing pass", async () => {
-  const finding = { severity: "high", angle: "naming", summary: "rejected high", judgeDisposition: "reject" };
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+test("a configured blocking-severity medium the judge rejected is visible, so it is excluded from the folded filing pass", async () => {
+  const finding = { severity: "medium", angle: "naming", summary: "rejected medium past the fix window", judgeDisposition: "reject" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStubAndConfig(
     roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [] }),
+    { version: 1, gates: { draft: { blockCleanOnFindingSeverities: ["high", "medium"] } } },
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.foldedFiled, 0);
