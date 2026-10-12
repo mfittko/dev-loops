@@ -516,7 +516,7 @@ function installGuard(gitCommand, root, explicitBase) {
       // gitDir) is otherwise silent: emitResult strips `guard` entirely under
       // --jq/--silent, the documented invocation style, so this stderr line is
       // the only signal an operator gets that nothing was installed.
-      process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${result.reason}\n`);
+      process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${result.reason} (gate fix push authority is not enforced either)\n`);
     } else if (result.reason) {
       // ok:true degraded states that carry a reason (a dropped unsafe explicit
       // base, an inert or all-foreign install) surface the same way. A
@@ -527,7 +527,7 @@ function installGuard(gitCommand, root, explicitBase) {
     return result;
   } catch (err) {
     const detail = (err?.stderr ?? err?.message ?? "").toString().trim();
-    process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${detail}\n`);
+    process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${detail} (gate fix push authority is not enforced either)\n`);
     // Same shape as installDefaultBranchGuard's own refuse(): one skipped
     // entry per guarded hook, not an empty list that reads as "nothing is
     // unguarded" when in fact neither hook could be installed.

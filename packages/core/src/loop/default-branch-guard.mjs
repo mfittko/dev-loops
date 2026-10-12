@@ -74,7 +74,7 @@ function normalizeBranchList(branches) {
  * @param {string|null} authorityCli absolute path of `scripts/loop/check-fix-push-authority.mjs`, resolved by
  *   its owner (the dev-loops side that ships `scripts/`). When it is absent or missing at run time the pre-push
  *   hook falls back to the pushing checkout's scripts/loop copy and refuses a push only when neither file exists and a
- *   sequence marker that is not fullGranted and whose branch ref has not advanced exists under the main worktree's tmp/gate-delta (fail closed); otherwise it allows.
+ *   sequence marker that is not fullGranted and whose branch ref has not advanced exists under the main worktree's tmp/gate-delta (fail closed); otherwise it allows. While such a marker is open it refuses every push from the repository.
  * @throws {Error} when hookName is not a guarded hook, or any branch is
  *   non-empty and not shell-safe. `hookName` and every branch name are
  *   interpolated straight into the generated script, so THIS function — not
