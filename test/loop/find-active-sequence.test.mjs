@@ -33,3 +33,31 @@ test("an unreadable marker (not ENOENT) reads as active and not granted", () => 
   const found = findActiveSequence({ tmpRoot, head: "aaa1", ...seams(["aaa1"]) });
   assert.equal(found.fullGranted, false);
 });
+
+const throwing = (baselines) => ({ listBaselines: () => baselines, isAncestor: () => { throw new Error("missing object"); }, remoteAdvanced: () => false });
+
+test("a granted marker whose baseline object is missing is skipped (push admitted)", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "find-active-sequence-"));
+  writeSequenceMarker({ tmpRoot, baselineHead: "aaa1", fullGranted: true, branch: "issue-9" });
+  assert.equal(findActiveSequence({ tmpRoot, head: "ccc3", ...throwing(["aaa1"]) }), null);
+});
+
+test("a granted marker covering the head with the branch not advanced is admitted", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "find-active-sequence-"));
+  writeSequenceMarker({ tmpRoot, baselineHead: "aaa1", fullGranted: true, branch: "issue-9" });
+  assert.equal(findActiveSequence({ tmpRoot, head: "aaa1", ...seams(["aaa1"]) }).fullGranted, true);
+});
+
+test("an ungranted marker whose baseline object is missing still refuses", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "find-active-sequence-"));
+  writeSequenceMarker({ tmpRoot, baselineHead: "aaa1", fullGranted: false, branch: "issue-9" });
+  const found = findActiveSequence({ tmpRoot, head: "ccc3", ...throwing(["aaa1"]) });
+  assert.equal(found.baselineHead, "aaa1");
+  assert.equal(found.fullGranted, false);
+});
+
+test("an ungranted marker covering the head refuses", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "find-active-sequence-"));
+  writeSequenceMarker({ tmpRoot, baselineHead: "aaa1", fullGranted: false, branch: "issue-9" });
+  assert.equal(findActiveSequence({ tmpRoot, head: "aaa1", ...seams(["aaa1"]) }).fullGranted, false);
+});
