@@ -2520,6 +2520,38 @@ test("a merged medium thread with a reject primary and an act member is neither 
   ));
 });
 
+// The rendered header suffix carries only the primary's disposition: a non-primary member with no
+// ledger evidence must not inherit it, or an act member would be reject-closed.
+test("a merged medium thread with no ledger entries and a rendered judge: reject header is not reject-closed", async () => {
+  const primary = defectThread({ severity: "medium", summary: "merged primary claim", judgeDisposition: "reject", commentId: 6380, id: "X" });
+  const member = defectThread({ severity: "medium", summary: "merged member claim", judgeDisposition: "act", commentId: 6380, id: "X" });
+  const merged = mergedThread(primary, member, { id: "THREAD_MERGED_RENDERED", commentId: 6380 });
+  const thread = threadNode({ id: "THREAD_MERGED_RENDERED", commentId: 6380, body: `${merged.comments.nodes[0].body} — judge: reject` });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
+test("a merged medium thread whose primary is ledger-rejected and member has no ledger entry is not reject-closed", async () => {
+  const primary = defectThread({ severity: "medium", summary: "merged primary claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6381, id: "X" });
+  const member = defectThread({ severity: "medium", summary: "merged member claim", judgeDisposition: "reject", commentId: 6381, id: "X" });
+  const merged = mergedThread(primary, member, { id: "THREAD_MERGED_NOMEMBER", commentId: 6381 });
+  const thread = threadNode({ id: "THREAD_MERGED_NOMEMBER", commentId: 6381, body: `${merged.comments.nodes[0].body} — judge: reject` });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [primary.finding] }), (ledgerPath) => withGhStub(
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
 test("a merged medium thread whose every member marker is judge-rejected is reject-closed", async () => {
   const primary = defectThread({ severity: "medium", summary: "merged primary claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6360, id: "X" });
   const member = defectThread({ severity: "medium", summary: "merged member claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6360, id: "X" });

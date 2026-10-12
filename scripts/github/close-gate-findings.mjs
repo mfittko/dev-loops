@@ -510,7 +510,8 @@ async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, 
 }
 
 // ---------------------------------------------------------------------------
-// Reject-close pass: an answered, judge-rejected `question` thread (ADR 0088)
+// Reject-close pass: an answered judge-rejected `question` (ADR 0088) or a
+// judge-rejected medium/low defect thread (ADR 0144)
 // ---------------------------------------------------------------------------
 //
 // A `question` thread is NEVER selected by selectDispositionTargets above
@@ -520,8 +521,10 @@ async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, 
 // answer-and-resolve path is never invoked for it — GATE-EXEC-ACT-LIST-SCOPE,
 // out of scope to change) had no sanctioned resolution path at all once
 // someone answered it: unresolvedGateThreadCount could never reach 0. This
-// pass closes ONLY that one case; an unanswered question, or an answered
-// question the judge did NOT reject, is untouched and keeps blocking.
+// pass closes that case and, per ADR 0144, a medium or low defect thread whose
+// every marker resolves to reject (a high is never reject-closed). An
+// unanswered question, or an answered question the judge did NOT reject, is
+// untouched and keeps blocking.
 
 // A resolving ANSWER REPLY: a non-empty comment on the thread OTHER than its
 // own finding/marker comment (thread.commentId). `comments` is the FULL
@@ -671,7 +674,9 @@ async function resolveThreadRejection({ fp, threadBody, ...rest }) {
   collectFingerprints(threadBody, fps);
   let primary = null;
   for (const memberFp of fps) {
-    const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody, ...rest });
+    // The rendered header suffix (tier 3) carries only the primary's disposition, so a
+    // non-primary member never reads it: with no ledger evidence it stays open.
+    const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody: memberFp === fp ? threadBody : "", ...rest });
     if (judgement?.disposition !== "reject") return null;
     primary ??= judgement;
   }
