@@ -1473,7 +1473,6 @@ test("stampDeferredDisposition fails closed when an already-stamped issue= diffe
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
       // No closing reference: the target resolves to the PR, not 9500.
       prViewEntry([]),
-      targetCommentsEntry(PR, [{ body: "<!-- dev-loops:deferred-summary -->\n- `1111000011110000` **medium** (`perf`): stale cache" }]),
       getReviewCommentEntry(6502, legacyStamped),
       // No PATCH, reply or resolve entries: any of them overflows the stub.
     ],
@@ -1540,7 +1539,7 @@ test("a mixed disposition pass comments once, for only the not-yet-listed finger
       resolveThreadEntry("THREAD_STAMPED"),
       getReviewCommentEntry(6902, unstamped),
       patchReviewCommentEntry(6902),
-      postReplyEntry(6902, { id: 7902 }),
+      { ...postReplyEntry(6902, { id: 7902 }), assertStdinIncludes: ["recorded in the deferral comment on", "/issues/9500"] },
       resolveThreadEntry("THREAD_UNSTAMPED"),
     ],
     async ({ env, ghCommand, runChild, repoRoot }) => {
@@ -1551,20 +1550,18 @@ test("a mixed disposition pass comments once, for only the not-yet-listed finger
   ));
 });
 
-// Comment target fallback: with no closing reference, or more than one, the
-// deferral comment goes to the PR itself and the stamp records the PR number.
+// Comment target fallback: with no closing reference, or more than one, the PR itself is the
+// target: no deferral comment is posted and the stamp records the PR number.
 for (const [label, closing] of [["no closing reference", []], ["more than one closing reference", [9500, 9501]]]) {
-  test(`deferral comment target: ${label} — comments on the PR, followUpIssueNumber is the PR number`, async () => {
+  test(`deferral comment target: ${label} — posts no comment, followUpIssueNumber is the PR number`, async () => {
     const thread = openWfnThread({ commentId: 6700, fp: "2222222222222222", id: "THREAD_PR_TARGET" });
     await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
       [
         ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
         prViewEntry(closing),
-        targetCommentsEntry(PR),
-        appendFollowUpIssueEntry(PR, { contains: ["2222222222222222"] }),
         getReviewCommentEntry(6700, wfnBody("2222222222222222")),
         { ...patchReviewCommentEntry(6700), assertArgContains: [`disposition=deferred issue=${PR}`] },
-        postReplyEntry(6700, { id: 7700 }),
+        { ...postReplyEntry(6700, { id: 7700 }), assertStdinIncludes: ["recorded in this thread's marker", `issue=${PR}`] },
         resolveThreadEntry("THREAD_PR_TARGET"),
       ],
       async ({ env, ghCommand, runChild, repoRoot }) => {
@@ -1576,16 +1573,14 @@ for (const [label, closing] of [["no closing reference", []], ["more than one cl
   });
 }
 
-// A tracker other than GitHub: the comment goes to the PR, with no closing
-// reference lookup at all (a prViewEntry here would be the next stub entry and
+// A tracker other than GitHub: the PR is the target and no comment is posted,
+// with no closing reference lookup at all (a prViewEntry here would be the next stub entry and
 // its args would not match the comments read, failing the run).
-test("deferral comment target: tracker.provider other than github — comments on the PR, no closing-reference lookup", async () => {
+test("deferral comment target: tracker.provider other than github — no comment, no closing-reference lookup", async () => {
   const thread = openWfnThread({ commentId: 6710, fp: "3333333333333333", id: "THREAD_NON_GITHUB" });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
-      targetCommentsEntry(PR),
-      appendFollowUpIssueEntry(PR, { contains: ["3333333333333333"] }),
       getReviewCommentEntry(6710, wfnBody("3333333333333333")),
       patchReviewCommentEntry(6710),
       postReplyEntry(6710, { id: 7710 }),
@@ -2128,10 +2123,11 @@ test("a config load error keeps the default worthFixingNowFixWindow in the dispo
 
 test("a config load error keeps the default inlineSeverityFloor and a null trackerProvider", async () => {
   // Configured floor "nit" would keep the low inline; the error falls back to
-  // "medium", so the low folds into the deferral comment on the PR itself.
+  // "medium" and a null tracker provider, so the low folds and the PR is the
+  // target. A PR target posts no comment, so the stub list has no comment entry.
   const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true };
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStubAndConfig(
-    [...roundEntries({ threads: [] }), targetCommentsEntry(42, []), appendFollowUpIssueEntry(42, { contains: [fingerprintFinding(finding)] })],
+    [...roundEntries({ threads: [] })],
     { version: 1, futureKnob: true, tracker: { provider: "linear" }, gates: { draft: { inlineSeverityFloor: "nit" } } },
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
@@ -2241,10 +2237,11 @@ test("#1585: unresolvedGateThreadCount reflects the subtraction (must-fix stays,
 });
 
 // ---------------------------------------------------------------------------
-// #2263: folded filing. A finding below the gate's inline severity floor
+// Folded filing. A finding below the inline floor
 // (upsert-checkpoint-verdict.mjs's renderVerdictDetailsBlock) never gets a
 // thread of its own; its operator-visible lows join the round's ONE batched
-// deferral comment directly from the ledger.
+// deferral comment directly from the ledger (linked spec issue target only; a
+// PR target posts no comment).
 // ---------------------------------------------------------------------------
 
 test("#2263: an operator-visible folded low is listed in ONE deferral comment, with no gate-authored thread of its own", async () => {
