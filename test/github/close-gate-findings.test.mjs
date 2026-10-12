@@ -2493,6 +2493,7 @@ test("a judge-rejected high thread is never reject-closed and still counts as un
       assert.equal(result.rejectClosed, 0);
       assert.equal(result.deferredResolved, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.equal(result.dispositionFailures, undefined);
     },
   ));
 });
@@ -2505,6 +2506,7 @@ test("a judge-deferred in-window medium stays open", async () => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.rejectClosed, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.equal(result.dispositionFailures, undefined);
     },
   ));
 });
@@ -2518,6 +2520,7 @@ test("disagreeing current-ledger dispositions for one fingerprint leave a medium
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.rejectClosed, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.equal(result.dispositionFailures, undefined);
     },
   ));
 });
@@ -2535,6 +2538,22 @@ test("a judge-rejected medium thread with an unparseable summary records a dispo
     },
   ));
 });
+
+for (const [severity, commentId] of [["low", null], ["medium", 0], ["medium", 1.5]]) {
+  test(`a judge-rejected ${severity} thread with commentId ${commentId} stays open and names the threadId in dispositionFailures`, async () => {
+    const { finding, thread } = defectThread({ severity, summary: `a ${severity} claim with a bad id`, judgeDisposition: "reject", judgeRationale: "No.", commentId, id: `THREAD_BAD_ID_${severity}_${commentId}` });
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+      roundEntries({ threads: [thread] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.rejectClosed, 0);
+        assert.equal(result.unresolvedGateThreadCount, 1);
+        assert.equal(result.dispositionFailures.length, 1);
+        assert.equal(result.dispositionFailures[0].threadId, `THREAD_BAD_ID_${severity}_${commentId}`);
+      },
+    ));
+  });
+}
 
 test("a medium thread rejected only in a PRIOR round's ledger is reject-closed", async () => {
   const finding = { severity: "medium", angle: "perf", summary: "stale cache not invalidated" };

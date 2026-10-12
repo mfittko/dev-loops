@@ -566,7 +566,7 @@ function selectRejectCloseCandidates(threads, login) {
     if (thread.author !== login) continue;
     const marker = parseFindingMarker(thread.body);
     if (!marker || (marker.severity !== "question" && !isRejectClosableSeverity(marker.severity))) continue;
-    if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) continue;
+    // An invalid commentId is kept: runRejectClosePass names it in dispositionFailures once the judge rejects it.
     candidates.push({ threadId: thread.threadId, commentId: thread.commentId, severity: marker.severity, fp: marker.fp, angle: marker.angle, body: thread.body });
   }
   return candidates;
@@ -688,6 +688,10 @@ async function runRejectClosePass({ repo, pr, gate, headSha, round, threads, sna
       continue;
     }
     if (!judgement || judgement.disposition !== "reject") continue;
+    if (!Number.isInteger(candidate.commentId) || candidate.commentId <= 0) {
+      dispositionFailures.push({ commentId: candidate.commentId, threadId: candidate.threadId, severity: candidate.severity, angle: candidate.angle, error: `judge-rejected thread ${candidate.threadId} has no valid root commentId (${String(candidate.commentId)}); left open` });
+      continue;
+    }
     try {
       const message = rejectCloseMessage({ fp: candidate.fp, severity: candidate.severity, angle: candidate.angle, round, rationale: judgement.rationale, body: candidate.body });
       await replyAndMaybeResolve(
