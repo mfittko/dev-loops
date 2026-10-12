@@ -278,7 +278,7 @@ test("delta mode states the decision record, the full-phase refusal and the fixe
 test("the Copilot follow-up skill emits commit_only, runs the thread-route delta review, then emits full", () => {
   const skill = readRepo("skills/copilot-pr-followup/SKILL.md");
   const line = skill.split("\n").find((l) => l.includes("--phase commit_only --threads-file")) ?? "";
-  for (const text of ["check-pre-push-delta.mjs --threads-file", "--baseline <headRefOid> --spec-identity <id>", "--baseline <headRefOid> --result <path> --invocation <1-3>", "`--result` run", "`PRE-PUSH-DELTA-TRIGGER`", "`--phase full`"]) {
+  for (const text of ["check-pre-push-delta.mjs --threads-file", "--baseline <headRefOid> --pr-head <PR head just read from GitHub> --spec-identity <id>", "--baseline <headRefOid> --pr-head <PR head just read from GitHub> --result <path> --invocation <1-3>", "`--result` run", "`PRE-PUSH-DELTA-TRIGGER`", "`--phase full`"]) {
     assert.ok(line.includes(text), `follow-up skill must state: ${text}`);
   }
   assert.doesNotMatch(skill, /--phase full --threads-file/);
