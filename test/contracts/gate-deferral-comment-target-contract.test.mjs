@@ -96,3 +96,11 @@ test("the judge `defer` bullets file a new issue only for a blocker, never via c
     assert.doesNotMatch(bullet, /create-issue\.mjs|files it by hand|new issue is warranted/, `${file}`);
   }
 });
+
+test("GATE-EXEC-THREAD-DISPOSITION reject-closes judge-rejected medium and low threads and keeps a judge-rejected high open (ADR 0144)", async () => {
+  const section = ruleSection(await readFile(`${repoRoot}${CONTRACT}`, "utf8"), "GATE-EXEC-THREAD-DISPOSITION");
+  assertClaims(section, [
+    ["close-gate-findings.mjs", "reject-closes", "medium or low"],
+    ["judge-rejected high", "never reject-closed", "roundCapReached"],
+  ], "judge-rejected reject-close scope");
+});

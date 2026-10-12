@@ -702,3 +702,33 @@ test("the finding marker is found on any comment of the thread, not only the id-
     assert.deepEqual(result.incomplete.map((entry) => [entry.failedStep, entry.deltaStatus]), [["delta_blocked", "not_resolved"]]);
   });
 });
+
+test("a full-phase handoff that omits a disposition entry for an open gate thread carrying a judge-act fingerprint fails and names the thread", async () => {
+  const marker = "<!-- dev-loops:finding 0123456789abcdef severity=medium angle=correctness round=1 -->";
+  const actList = [{ fingerprint: "0123456789abcdef", severity: "medium", summary: "s", judgeDisposition: "act" }];
+  const liveThreads = threadsCallEntry([
+    { id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: `${marker}\n**Problem:** s`, author: { login: "gate", __typename: "User" } }] } },
+  ]);
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [], { actList });
+    const { deps } = runtime([liveThreads], repoRoot);
+    await assert.rejects(
+      verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps),
+      /PRRT_ACT/,
+    );
+  });
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_ACT", fixingCommitSha: FIX_SHA, disposition: "tackled" }], { actList });
+    const { deps } = runtime([
+      liveThreads,
+      compareEntry(FIX_SHA, "ahead"),
+      { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_ACT", isResolved: true } } } })}\n` },
+      threadsCallEntry([
+        { id: "PRRT_ACT", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `${marker}\n**Problem:** s`, author: { login: "gate", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+      ]),
+    ], repoRoot);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.equal(result.complete, true);
+  });
+});

@@ -1709,7 +1709,8 @@ for (const [label, priorDispositions] of [
   });
 }
 
-for (const [mediumDisposition, lowDisposition] of [["defer", "reject"], ["reject", "defer"]]) {
+// A judge-rejected medium or low is reject-closed instead (ADR 0144).
+for (const [mediumDisposition, lowDisposition] of [["defer", "defer"]]) {
   test(`the same threads with a ${mediumDisposition} medium and a ${lowDisposition} low ARE still selected`, async () => {
     const { findings, threads, mediumFp, mediumBody } = actExclusionFixtures(mediumDisposition, lowDisposition);
     await withLedgerFile(makeLedger({ gate: "draft_gate", findings }), (ledgerPath) => withGhStub(
@@ -2422,6 +2423,119 @@ test("a tied prior-ledger remedyKind disagreement (same disposition) is ambiguou
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.rejectClosed, 0);
       assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0144: reject-close a judge-rejected medium or low defect thread
+// ---------------------------------------------------------------------------
+
+function defectThread({ severity, summary, judgeDisposition, judgeRationale, commentId, id, angle = "correctness" }) {
+  const finding = { severity, angle, summary, judgeDisposition, ...(judgeRationale ? { judgeRationale } : {}) };
+  const fp = fingerprintFinding(finding);
+  const body = `${buildFindingMarker({ fp, severity, angle, round: 1 })}\n**Problem:** ${summary}`;
+  return { finding, fp, thread: threadNode({ id, commentId, body }) };
+}
+
+for (const severity of ["medium", "low"]) {
+  test(`a judge-rejected ${severity} defect thread is reply-resolved with the summary and judge rationale, never deferred or filed`, async () => {
+    const { finding, thread } = defectThread({ severity, summary: `the ${severity} claim about parsing`, judgeDisposition: "reject", judgeRationale: "The claim contradicts the spec.", commentId: 6300, id: `THREAD_${severity}_REJECTED` });
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+      [
+        ...roundEntries({ threads: [thread] }),
+        {
+          assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6300/replies`, "--input", "-"],
+          assertStdinIncludes: ["Examined on merits:", `the ${severity} claim about parsing`, "The claim contradicts the spec."],
+          stdout: `${JSON.stringify({ id: 7300, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7300` })}\n`,
+        },
+        resolveThreadEntry(`THREAD_${severity}_REJECTED`),
+      ],
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.rejectClosed, 1);
+        assert.equal(result.deferredResolved, 0);
+        assert.equal(result.followUpIssueNumber, undefined);
+        assert.equal(result.unresolvedGateThreadCount, 0);
+      },
+    ));
+  });
+}
+
+test("a judge-rejected high thread is never reject-closed and still counts as unresolved", async () => {
+  const { finding, thread } = defectThread({ severity: "high", summary: "a high claim", judgeDisposition: "reject", judgeRationale: "Out of scope.", commentId: 6310, id: "THREAD_HIGH_REJECTED" });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
+test("a judge-deferred in-window medium stays open", async () => {
+  const { finding, thread } = defectThread({ severity: "medium", summary: "a deferred medium claim", judgeDisposition: "defer", judgeRationale: "Later.", commentId: 6320, id: "THREAD_MEDIUM_DEFERRED" });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
+test("disagreeing current-ledger dispositions for one fingerprint leave a medium thread open", async () => {
+  const { finding, thread } = defectThread({ severity: "medium", summary: "an ambiguous medium claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6330, id: "THREAD_MEDIUM_AMBIGUOUS" });
+  const twin = { ...finding, angle: "other", judgeDisposition: "defer" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding, twin] }), (ledgerPath) => withGhStub(
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
+test("a judge-rejected medium thread with an unparseable summary records a dispositionFailures entry and stays open", async () => {
+  const { finding, fp } = defectThread({ severity: "medium", summary: "a claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6340, id: "X" });
+  const thread = threadNode({ id: "THREAD_MEDIUM_NO_SUMMARY", commentId: 6340, body: buildFindingMarker({ fp, severity: "medium", angle: "correctness", round: 1 }) });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.equal(result.dispositionFailures[0].severity, "medium");
+    },
+  ));
+});
+
+test("a medium thread rejected only in a PRIOR round's ledger is reject-closed", async () => {
+  const finding = { severity: "medium", angle: "perf", summary: "stale cache not invalidated" };
+  const fp = fingerprintFinding(finding);
+  const body = `${buildFindingMarker({ fp, severity: "medium", angle: "perf", round: 1 })}\n**Problem:** stale cache not invalidated`;
+  const thread = threadNode({ id: "THREAD_PRIOR_REJECT", commentId: 6350, body });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [thread] }),
+      postReplyEntry(6350, { id: 7350 }),
+      resolveThreadEntry("THREAD_PRIOR_REJECT"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+      await mkdir(findingsDir, { recursive: true });
+      await writeFile(
+        path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ ...finding, judgeDisposition: "reject", judgeRationale: "prior reject" }] }),
+        "utf8",
+      );
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 1);
+      assert.equal(result.unresolvedGateThreadCount, 0);
     },
   ));
 });
