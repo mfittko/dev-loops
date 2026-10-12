@@ -7,6 +7,7 @@ import { mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promi
 import path from "node:path";
 import { test } from "bun:test";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
+import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
@@ -21,7 +22,11 @@ const PULL = path.resolve("scripts/github/pull-work-order.mjs");
 const HOOK = path.resolve(".claude/hooks/pre-tool-use-write-guard.mjs");
 const REPO = "o/r";
 const PR = 7;
-const ACT = [{ severity: "high", angle: "correctness", summary: "null deref", file: "src/a.mjs", line: 3, judgeDisposition: "act", siteQuery: "git grep -n deref -- src" }];
+// An act item as judge-pass emits it: carrying the canonical fingerprint.
+const withFp = (item) => ({ ...item, fingerprint: fingerprintFinding(item) });
+const ACT = [withFp({ severity: "high", angle: "correctness", summary: "null deref", file: "src/a.mjs", line: 3, judgeDisposition: "act", siteQuery: "git grep -n deref -- src" })];
+// A delta item ref is the act item's fingerprint.
+const ACT_REF = ACT[0].fingerprint;
 const THREADS = { ok: true, repo: REPO, pr: PR, threads: [{ threadId: "T1", commentId: 1, body: "fix", isResolved: false, isOutdated: false, path: "src/a.mjs", line: 3 }] };
 
 // An inherited GIT_DIR/GIT_WORK_TREE (a git hook of another repo) must not change a decision.
@@ -41,14 +46,14 @@ const deltaResultFor = (head, over = {}) => ({
   reviewBaselineHead: head,
   candidateHead: "c".repeat(40),
   actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: ACT }).actSetId,
-  actionableItems: [{ ref: "act-1", status: "not_resolved", evidence: ["deref still unguarded"] }],
+  actionableItems: [{ ref: ACT_REF, status: "not_resolved", evidence: ["deref still unguarded"] }],
   newFindings: [],
   widenedReads: [],
   outcome: "bounded_out",
   ...over,
 });
 const clearingDeltaFor = (head, over = {}) => deltaResultFor(head, {
-  actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["guarded"] }], outcome: "locally_clear", ...over,
+  actionableItems: [{ ref: ACT_REF, status: "resolved", evidence: ["guarded"] }], outcome: "locally_clear", ...over,
 });
 let clock = 1_790_000_000_000;
 const nextExecution = () => `f${clock++}-0000abcd`;
@@ -153,7 +158,7 @@ const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ 
 
 test("F1: a judge-act finding below the inline floor still reaches the work order through the act list", async () => {
   await withFixture(async ({ files, emit }) => {
-    const lowAct = [{ severity: "nit", angle: "naming", summary: "rename the local", judgeDisposition: "act" }];
+    const lowAct = [{ severity: "nit", angle: "naming", summary: "rename the local", judgeDisposition: "act" }].map(withFp);
     await writeFile(files.actList, JSON.stringify(lowAct));
     const { workOrder } = await emit({ deltaResult: undefined, phase: "commit_only" });
     assert.equal(workOrder.source, "act-list");
@@ -182,7 +187,7 @@ test("delta gate: an act-list --phase full refuses without a delta record for th
     await rm(recordPath);
     for (const bad of [
       deltaResultFor(head, { outcome: "needs_fix" }),
-      deltaResultFor(head, { actionableItems: [{ ref: "act-1", status: "resolved", evidence: ["e"] }] }),
+      deltaResultFor(head, { actionableItems: [{ ref: ACT_REF, status: "resolved", evidence: ["e"] }] }),
       clearingDeltaFor("b".repeat(40)),
     ]) {
       await writeFile(files.delta, JSON.stringify(bad));
@@ -209,20 +214,20 @@ test("delta gate: the decided nextStep in the record clears, whatever outcome th
 
 test("delta gate: an act-list --phase full binds the --delta-result to the record's item statuses", async () => {
   await withFixture(async ({ head, files, emit, writeRecord }) => {
-    const items = [{ ref: "act-1", status: "resolved" }];
+    const items = [{ ref: ACT_REF, status: "resolved" }];
     // Accepted: the clearing result whose pairs equal the record's items.
     await writeRecord({ items });
     assert.equal((await emit({ keepRecord: true })).workOrder.phase, "full");
     // Accepted: a stale invocation-3 bounded_out result whose items are the record's.
     await writeFile(files.delta, JSON.stringify(deltaResultFor(head)));
-    await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", invocation: 3, items: [{ ref: "act-1", status: "not_resolved" }] });
+    await writeRecord({ nextStep: "push_to_gate", outcome: "bounded_out", invocation: 3, items: [{ ref: ACT_REF, status: "not_resolved" }] });
     assert.equal((await emit({ keepRecord: true })).workOrder.phase, "full");
     // Rejected: the invocation-1 needs_fix result (act-1 not_resolved) while a later record for the act set holds a push decision with act-1 resolved.
     await writeRecord({ items });
     await assert.rejects(emit({ keepRecord: true }), /item statuses differ from the delta record/);
     // Rejected: a clearing result whose statuses differ from the record's items.
     await writeFile(files.delta, JSON.stringify(clearingDeltaFor(head)));
-    await writeRecord({ items: [{ ref: "act-1", status: "cannot_verify" }] });
+    await writeRecord({ items: [{ ref: ACT_REF, status: "cannot_verify" }] });
     await assert.rejects(emit({ keepRecord: true }), /item statuses differ from the delta record/);
   });
 });
@@ -245,8 +250,8 @@ test("delta gate: a threads --phase full refuses a non-clearing record and names
 
 test("delta gate: a threads --phase full refuses a record whose refs are not all threads in the threads file", async () => {
   await withFixture(async ({ files, emit, writeRecord }) => {
-    await writeRecord({ items: [{ ref: "T1", status: "resolved" }, { ref: "act-1", status: "resolved" }] });
-    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), /not threads in the threads file[^]*"act-1"/);
+    await writeRecord({ items: [{ ref: "T1", status: "resolved" }, { ref: ACT_REF, status: "resolved" }] });
+    await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads }), new RegExp(`not threads in the threads file[^]*"${ACT_REF}"`));
   });
 });
 
@@ -296,6 +301,16 @@ test("F1: free-form brief, payload override and summary-file substitution exit 2
   }
 });
 
+test("an act-list item with a missing or non-canonical fingerprint refuses", async () => {
+  await withFixture(async ({ files, emit }) => {
+    const { fingerprint, ...unfingerprinted } = ACT[0];
+    for (const bad of [unfingerprinted, { ...ACT[0], fingerprint: "0123456789abcdef" }]) {
+      await writeFile(files.actList, JSON.stringify([bad]));
+      await assert.rejects(emit(), /fingerprint is (missing|not the canonical)/, JSON.stringify(bad));
+    }
+  });
+});
+
 test("F1: missing or conflicting source and authority refuse before dispatch", async () => {
   await withFixture(async ({ wt, head, files, emit }) => {
     await assert.rejects(emit({ actListFile: path.join(wt, "missing.json") }), /required fixer source act-list is missing/);
@@ -340,11 +355,11 @@ test("F1/F4: changing act list, threads, allowed paths, branch, phase or head ch
       await emit({ headSha: "b".repeat(40), phase: "commit_only", deltaResult: undefined, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) }),
       await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }),
     ];
-    const widened = [...ACT, { ...ACT[0], line: 9 }];
+    const widened = [...ACT, withFp({ ...ACT[0], summary: "second", line: 9 })];
     await writeFile(files.actList, JSON.stringify(widened));
     await writeFile(files.delta, JSON.stringify(clearingDeltaFor(head, {
       actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: widened }).actSetId,
-      actionableItems: ["act-1", "act-2"].map((ref) => ({ ref, status: "resolved", evidence: ["guarded"] })),
+      actionableItems: widened.map((item) => item.fingerprint).map((ref) => ({ ref, status: "resolved", evidence: ["guarded"] })),
     })));
     await writeRecord({ actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: widened }).actSetId });
     variants.push(await emit());
@@ -393,7 +408,7 @@ test("F2: Claude and Pi initial, resumed and replacement adapter payloads are th
   delete process.env.DEVLOOPS_AGENT_OVERRIDES;
   try {
   await withFixture(async ({ root, wt, head, files, writeRecord }) => {
-    await writeRecord({ items: [{ ref: "act-1", status: "resolved" }] });
+    await writeRecord({ items: [{ ref: ACT_REF, status: "resolved" }] });
     const bin = path.join(root, "tmp", "bin");
     await mkdir(bin, { recursive: true });
     await writeFile(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ headRefName: "issue-1", headRefOid: head })}'\n`);
@@ -552,7 +567,7 @@ test("F3: delta mode emits at the PR head; after a local fix commit a second com
 
 test("F4: two checkout roots emit equal digests with independently valid materializations", async () => {
   await withFixture(async ({ root, wt, head, files, emit, recordPath, writeRecord }) => {
-    await writeRecord({ items: [{ ref: "act-1", status: "resolved" }] });
+    await writeRecord({ items: [{ ref: ACT_REF, status: "resolved" }] });
     const clone = path.join(path.dirname(root), "clone");
     git(path.dirname(root), "clone", "-q", root, clone);
     git(clone, "branch", "-q", "issue-1", `origin/issue-1`);
@@ -788,7 +803,7 @@ test("F7: emit, pull, mutate in authority and verify the disposition; missing ma
     const [outputRef] = unit.workOrder.outputRefs;
     assert.equal(hook(wt, outputRef), "allow");
     await mkdir(path.dirname(outputRef), { recursive: true });
-    await writeFile(outputRef, JSON.stringify({ headSha: head, dispositions: [], siteCoverage: [{ fingerprint: "act-1", returnedSites: ["src/a.mjs"], sites: [{ site: "src/a.mjs", status: "fixed" }] }] }));
+    await writeFile(outputRef, JSON.stringify({ headSha: head, dispositions: [], siteCoverage: [{ fingerprint: ACT_REF, returnedSites: ["src/a.mjs"], sites: [{ site: "src/a.mjs", status: "fixed" }] }] }));
     const { runChild } = makeGhMock([{ assertArgs: ["pr", "view"], stdout: `${JSON.stringify({ headRefOid: head })}\n` }, { assertArgs: ["api", "graphql"], stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } })}\n` }, { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "bot" })}\n` }]);
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath }, { env: runIdFreeEnv(), runChild, repoRoot: wt });
     assert.equal(result.complete, true);
@@ -879,7 +894,7 @@ test("regenerate: the rendered line is present and the materialization hash stil
 
 test("regenerate: the rule is identical for the claude and pi harness CLI adapters", async () => {
   await withFixture(async ({ root, wt, head, files, writeRecord }) => {
-    await writeRecord({ items: [{ ref: "act-1", status: "resolved" }] });
+    await writeRecord({ items: [{ ref: ACT_REF, status: "resolved" }] });
     await addGenerator(wt);
     const bin = path.join(root, "tmp", "bin");
     await mkdir(bin, { recursive: true });
@@ -903,18 +918,19 @@ test("regenerate: the rule is identical for the claude and pi harness CLI adapte
 // ---------------------------------------------------------------------------
 
 const SKELETON_ACT = [
-  { severity: "high", angle: "correctness", summary: "doc lag", judgeDisposition: "act", fingerprint: "fp-doc", siteQuery: "git grep -n lag", statedSurfaces: ["docs/a.md", "docs/b.md"], acceptedForms: ["--x"] },
-  { severity: "low", angle: "correctness", summary: "unqueried", judgeDisposition: "act", fingerprint: "fp-none" },
-  { severity: "low", angle: "correctness", summary: "query only", judgeDisposition: "act", fingerprint: "fp-query", siteQuery: "git grep -n q" },
-  { severity: "low", angle: "correctness", summary: "matcher", judgeDisposition: "act", fingerprint: "fp-rej", siteQuery: "git grep -n m", acceptedForms: ["--a=b"], rejectedForms: ["keep spacing"] },
-];
+  { severity: "high", angle: "correctness", summary: "doc lag", judgeDisposition: "act", siteQuery: "git grep -n lag", statedSurfaces: ["docs/a.md", "docs/b.md"], acceptedForms: ["--x"] },
+  { severity: "low", angle: "correctness", summary: "unqueried", judgeDisposition: "act" },
+  { severity: "low", angle: "correctness", summary: "query only", judgeDisposition: "act", siteQuery: "git grep -n q" },
+  { severity: "low", angle: "correctness", summary: "matcher", judgeDisposition: "act", siteQuery: "git grep -n m", acceptedForms: ["--a=b"], rejectedForms: ["keep spacing"] },
+].map(withFp);
+const [FP_DOC, , FP_QUERY, FP_REJ] = SKELETON_ACT.map((f) => f.fingerprint);
 
 test("commit_only work order carries a siteCoverage skeleton built from the act list", async () => {
   await withFixture(async ({ files, emit }) => {
     await writeFile(files.actList, JSON.stringify(SKELETON_ACT));
     const { workOrder, promptPath } = await emit({ phase: "commit_only", deltaResult: undefined });
     // The item without a siteQuery gets no entry.
-    assert.deepEqual(workOrder.siteCoverage.map((r) => r.fingerprint), ["fp-doc", "fp-query", "fp-rej"]);
+    assert.deepEqual(workOrder.siteCoverage.map((r) => r.fingerprint), [FP_DOC, FP_QUERY, FP_REJ]);
     const [doc, query, rej] = workOrder.siteCoverage;
     assert.deepEqual(doc.returnedSites, []);
     assert.match(doc.noSitesReason, /^FILL:/);
@@ -959,9 +975,9 @@ test("handbackCheck is machine-local: two commit_only emissions with different e
 test("the skeleton merges a shared fingerprint and dedupes repeated site texts", async () => {
   await withFixture(async ({ files, emit }) => {
     await writeFile(files.actList, JSON.stringify([
-      { severity: "low", angle: "correctness", summary: "one", judgeDisposition: "act", fingerprint: "fp", siteQuery: "q1", statedSurfaces: ["a.md", "a.md", "--x"], acceptedForms: ["--x"] },
-      { severity: "low", angle: "holistic", summary: "two", judgeDisposition: "act", fingerprint: "fp", siteQuery: "q2", statedSurfaces: ["b.md", "a.md"] },
-    ]));
+      { severity: "low", angle: "correctness", summary: "one", judgeDisposition: "act", siteQuery: "q1", statedSurfaces: ["a.md", "a.md", "--x"], acceptedForms: ["--x"] },
+      { severity: "low", angle: "holistic", summary: "one", judgeDisposition: "act", siteQuery: "q2", statedSurfaces: ["b.md", "a.md"] },
+    ].map(withFp)));
     const { workOrder } = await emit({ phase: "commit_only", deltaResult: undefined });
     assert.equal(workOrder.siteCoverage.length, 1);
     assert.deepEqual(workOrder.siteCoverage[0].returnedSites, []);

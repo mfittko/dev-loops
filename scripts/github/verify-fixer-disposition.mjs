@@ -10,7 +10,7 @@ import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { parseFindingMarker } from "./_gate-finding-surface.mjs";
+import { fingerprintFinding, parseFindingMarker } from "./_gate-finding-surface.mjs";
 import { resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
@@ -275,7 +275,7 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin) {
     openFingerprints.get(marker.fp).add(thread.id);
   }
   const missing = actList
-    .flatMap((item) => [...(openFingerprints.get(item?.fingerprint) ?? [])])
+    .flatMap((item) => [item?.fingerprint ?? fingerprintFinding(item)].flatMap((fp) => [...(openFingerprints.get(fp) ?? [])]))
     .filter((threadId) => !dispositioned.has(threadId));
   if (missing.length > 0) {
     throw new Error(`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the handoff has no disposition entry for open gate thread(s) ${[...new Set(missing)].join(", ")} that carry a judge-act fingerprint; an act item with an open inline gate thread is never threadless, record it as tackled and reply-resolve the thread`);

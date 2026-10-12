@@ -12,6 +12,7 @@ import {
   parseVerifyFixerDispositionCliArgs,
   verifyFixerDisposition,
 } from "../../scripts/github/verify-fixer-disposition.mjs";
+import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { pullReceiptPath, verifyPulledResult, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
 
 const REPO = "owner/repo";
@@ -741,6 +742,16 @@ test("a full-phase handoff that omits a disposition entry for an open gate threa
     ], repoRoot);
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
     assert.equal(result.complete, true);
+  });
+});
+
+test("an act item with no fingerprint field is matched by its derived fingerprint, so an undispositioned open gate thread still fails", async () => {
+  const derived = fingerprintFinding({ summary: "s" });
+  const marker = ACT_MARKER.replace(ACT_FP, derived);
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [], { actList: [{ severity: "medium", summary: "s", judgeDisposition: "act" }] });
+    const { deps } = runtime([threadsCallEntry([actThread("PRRT_DERIVED", [gateComment("c1", 103, `${marker}\n**Problem:** s`)])]), userEntry], repoRoot);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /PRRT_DERIVED/);
   });
 });
 
