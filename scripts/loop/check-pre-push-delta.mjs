@@ -128,6 +128,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
   if (values.result && invocation === null) throw parseError("--result requires --invocation <1-3>");
   const specIdentity = values["spec-identity"]?.trim() || null;
   if (!values.result && !specIdentity) throw parseError("--spec-identity <id> is required without --result");
+  if (values.handback && !(values["act-list"] && values["site-coverage"] && !values.result)) throw parseError("--handback is the fixer handbackCheck flag: it requires --act-list and --site-coverage and refuses --result; the coordinator input run never passes it");
   if (values["act-list"] && !values.result && !values.handback && !values["findings-log"]) throw parseError("--findings-log <path> is required on the act-list input run: PRE-PUSH-DELTA-INPUT makes the reviewed round's angles part of the surface hints");
   return {
     help: false,
