@@ -138,7 +138,8 @@ test("a commit_only round without a fix commit clears its sequence marker", () =
   assert.equal(fs.existsSync(marker), false);
 });
 
-test("a zero-item act list with a committed fix keeps the sequence marker", () => {
+// The fixCommitted guard in the CLI is defensive: startDeltaSequence rejects an empty list first, so this asserts the marker survives that abort.
+test("a zero-item act list with a committed fix aborts early and keeps the sequence marker", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-"));
   const actList = path.join(dir, "act-list.json");
   fs.writeFileSync(actList, "[]");

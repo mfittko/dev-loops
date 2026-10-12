@@ -74,7 +74,7 @@ function normalizeBranchList(branches) {
  * @param {string|null} authorityCli absolute path of `scripts/loop/check-fix-push-authority.mjs`, resolved by
  *   its owner (the dev-loops side that ships `scripts/`). When it is absent or missing at run time the pre-push
  *   hook falls back to the pushing checkout's scripts/loop copy and refuses a push only when neither file exists and a
- *   sequence marker exists under the main worktree's tmp/gate-delta (fail closed); with no marker it allows.
+ *   sequence marker that is not fullGranted and whose branch ref has not advanced exists under the main worktree's tmp/gate-delta (fail closed); otherwise it allows.
  * @throws {Error} when hookName is not a guarded hook, or any branch is
  *   non-empty and not shell-safe. `hookName` and every branch name are
  *   interpolated straight into the generated script, so THIS function — not
@@ -132,7 +132,7 @@ fi
   // the override-env check, so DEVLOOPS_ALLOW_MAIN never bypasses it. The script path comes from its
   // owner (the dev-loops side that ships scripts/), never from a layout guess inside this package.
   // A baked path that no longer exists (pruned worktree or cache dir) falls back to the pushing
-  // checkout's own scripts/ copy; with neither present the push is refused only while a sequence marker exists (fail closed). The pushed refs git
+  // checkout's own scripts/ copy; with neither present the push is refused only under a marker that is not fullGranted and whose branch ref has not advanced (fail closed). The pushed refs git
   // sends on stdin are captured once, handed to the check, and replayed to the default-branch loop.
   if (authorityCli !== null && (typeof authorityCli !== "string" || !path.isAbsolute(authorityCli) || /["$`\\\n\r]/u.test(authorityCli))) {
     throw new Error(`authority script path ${JSON.stringify(authorityCli)} must be an absolute path without characters the generated hook's shell would expand`);
@@ -284,7 +284,7 @@ function readHookState(hookPath) {
  *
  * @param {{ gitDir: string, defaultBranches?: string|string[]|null, explicitBaseBranches?: string|string[]|null, hooksPathOverride?: string|null, authorityCliPath?: string|null }} target
  *   `authorityCliPath` is the absolute path of `scripts/loop/check-fix-push-authority.mjs`, passed by the
- *   dev-loops side that ships it; without it the rendered pre-push hook falls back to the pushing checkout's scripts/loop copy and refuses a push only when neither file exists and a marker of a sequence that has not ended exists (fail closed).
+ *   dev-loops side that ships it; without it the rendered pre-push hook falls back to the pushing checkout's scripts/loop copy and refuses a push only when neither file exists and a marker that is not fullGranted and whose branch ref has not advanced exists (fail closed).
  *   `hooksPathOverride` is the repo's `core.hooksPath` when set. Installing into
  *   `$GIT_DIR/hooks` while git reads elsewhere would report success for a guard
  *   that can never fire, so that case refuses instead.
