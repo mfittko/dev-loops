@@ -551,15 +551,14 @@ function hasAnswerReply(thread, comments) {
   });
 }
 
-// Every unresolved, gate-authored QUESTION thread — narrowed to "answered"
-// (hasAnswerReply) and "judge-rejected" (resolveJudgeRejection) by the
-// caller below, not here: this selection step only needs identity/marker
-// shape, mirroring selectDispositionTargets above.
 function isRejectClosableSeverity(severity) {
   return severity === "medium" || severity === "low";
 }
 
-// A medium or low defect thread qualifies without an answer reply; a question needs one.
+// Every unresolved, gate-authored question, medium or low thread (ADR 0144; a high is never
+// reject-closed). Narrowing to "answered" (questions only, hasAnswerReply) and "judge-rejected"
+// (resolveJudgeRejection) happens in the caller; this step only checks identity and marker shape,
+// mirroring selectDispositionTargets above.
 function selectRejectCloseCandidates(threads, login) {
   const candidates = [];
   for (const thread of threads) {
@@ -669,9 +668,10 @@ function rejectCloseMessage({ fp, severity, angle, round, rationale, body }) {
   return `${head}Examined on merits: "${summary}" was reviewed against current scope and acceptance criteria; the judge rejected the finding — ${rationaleText}.`;
 }
 
-// Reply + resolve every answered, judge-rejected question candidate. Never
-// stamps disposition=deferred (this is not a deferral) and never files a
-// deferral comment (a question is never fileable, isFileableDeferral). A
+// Reply + resolve every answered judge-rejected question and every judge-rejected medium or low
+// defect thread (ADR 0144; a question needs an answer reply, a defect does not). Never stamps
+// disposition=deferred (this is not a deferral) and never files a deferral comment (a
+// rejected finding is never fileable). A
 // per-candidate failure is recorded in dispositionFailures rather than
 // deadlocking the batch, mirroring runDispositionPass.
 async function runRejectClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs = [] }, { env, ghCommand, runChild }) {

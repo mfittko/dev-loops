@@ -2462,6 +2462,28 @@ for (const severity of ["medium", "low"]) {
   });
 }
 
+test("a judge-rejected medium past the fix window is reject-closed, never stamped deferred or filed", async () => {
+  const { finding, thread } = defectThread({ severity: "medium", summary: "a past-window medium claim", judgeDisposition: "reject", judgeRationale: "The claim contradicts the spec.", commentId: 6305, id: "THREAD_MEDIUM_PAST_WINDOW" });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      {
+        assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6305/replies`, "--input", "-"],
+        assertStdinIncludes: ["Examined on merits:", "The claim contradicts the spec."],
+        stdout: `${JSON.stringify({ id: 7305, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7305` })}\n`,
+      },
+      resolveThreadEntry("THREAD_MEDIUM_PAST_WINDOW"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.round, 4);
+      assert.equal(result.rejectClosed, 1);
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.followUpIssueNumber, undefined);
+    },
+  ));
+});
+
 test("a judge-rejected high thread is never reject-closed and still counts as unresolved", async () => {
   const { finding, thread } = defectThread({ severity: "high", summary: "a high claim", judgeDisposition: "reject", judgeRationale: "Out of scope.", commentId: 6310, id: "THREAD_HIGH_REJECTED" });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(

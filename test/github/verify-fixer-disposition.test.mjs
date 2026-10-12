@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -483,6 +483,7 @@ test("site coverage riding a fingerprinted thread entry satisfies the act item's
       threadsCallEntry([
         { id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
       ]),
+      { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` },
       compareEntry(FIX_SHA, "identical"),
     ], repoRoot);
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
@@ -703,32 +704,93 @@ test("the finding marker is found on any comment of the thread, not only the id-
   });
 });
 
-test("a full-phase handoff that omits a disposition entry for an open gate thread carrying a judge-act fingerprint fails and names the thread", async () => {
-  const marker = "<!-- dev-loops:finding 0123456789abcdef severity=medium angle=correctness round=1 -->";
-  const actList = [{ fingerprint: "0123456789abcdef", severity: "medium", summary: "s", judgeDisposition: "act" }];
-  const liveThreads = threadsCallEntry([
-    { id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: `${marker}\n**Problem:** s`, author: { login: "gate", __typename: "User" } }] } },
-  ]);
+const ACT_FP = "0123456789abcdef";
+const ACT_MARKER = `<!-- dev-loops:finding ${ACT_FP} severity=medium angle=correctness round=1 -->`;
+const ACT_LIST = [{ fingerprint: ACT_FP, severity: "medium", summary: "s", judgeDisposition: "act" }];
+const userEntry = { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` };
+const gateComment = (id, databaseId, body = `${ACT_MARKER}\n**Problem:** s`, login = "gate") => ({ id, databaseId, body, author: { login, __typename: "User" } });
+const actThread = (id, comments, isResolved = false) => ({ id, isResolved, comments: { nodes: comments } });
+
+async function checkpointFiles(repoRoot) {
+  const entries = await readdir(path.join(repoRoot, "tmp"), { recursive: true }).catch(() => []);
+  return entries.filter((entry) => path.basename(entry).startsWith("fixer-disposition-"));
+}
+
+test("a full-phase handoff that omits a disposition entry for an open gate thread carrying a judge-act fingerprint fails, names the thread and writes no checkpoint", async () => {
+  const liveThreads = threadsCallEntry([actThread("PRRT_ACT", [gateComment("c1", 101)])]);
   await withRepoRoot(async (repoRoot) => {
-    const fixerPlan = await deliver(repoRoot, [], { actList });
-    const { deps } = runtime([liveThreads], repoRoot);
+    const fixerPlan = await deliver(repoRoot, [], { actList: ACT_LIST });
+    const { deps } = runtime([liveThreads, userEntry], repoRoot);
     await assert.rejects(
       verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps),
       /PRRT_ACT/,
     );
+    assert.deepEqual(await checkpointFiles(repoRoot), []);
   });
   await withRepoRoot(async (repoRoot) => {
-    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_ACT", fixingCommitSha: FIX_SHA, disposition: "tackled" }], { actList });
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_ACT", fixingCommitSha: FIX_SHA, disposition: "tackled" }], { actList: ACT_LIST });
     const { deps } = runtime([
       liveThreads,
+      userEntry,
       compareEntry(FIX_SHA, "ahead"),
       { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
       { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_ACT", isResolved: true } } } })}\n` },
       threadsCallEntry([
-        { id: "PRRT_ACT", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `${marker}\n**Problem:** s`, author: { login: "gate", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+        actThread("PRRT_ACT", [gateComment("c1", 101), { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }], true),
       ]),
     ], repoRoot);
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
     assert.equal(result.complete, true);
   });
 });
+
+// Two open gate threads carrying one act fingerprint: each needs its own entry, whatever the API order.
+for (const [name, listOrder, dispositioned] of [
+  ["only the API-last thread dispositioned", ["PRRT_A", "PRRT_B"], "PRRT_B"],
+  ["only the API-first thread dispositioned", ["PRRT_A", "PRRT_B"], "PRRT_A"],
+]) {
+  test(`two open gate threads on one act fingerprint fail naming the undispositioned one (${name})`, async () => {
+    const missing = dispositioned === "PRRT_A" ? "PRRT_B" : "PRRT_A";
+    await withRepoRoot(async (repoRoot) => {
+      const fixerPlan = await deliver(repoRoot, [{ threadId: dispositioned, fixingCommitSha: FIX_SHA, disposition: "tackled" }], { actList: ACT_LIST });
+      const { deps } = runtime([
+        threadsCallEntry(listOrder.map((id, i) => actThread(id, [gateComment(`c${i}`, 200 + i)]))),
+        userEntry,
+      ], repoRoot);
+      await assert.rejects(
+        verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps),
+        new RegExp(missing),
+      );
+    });
+  });
+}
+
+test("two open gate threads on one act fingerprint, both dispositioned, pass the act-thread guard", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [
+      { threadId: "PRRT_A", fixingCommitSha: FIX_SHA, disposition: "deferred" },
+      { threadId: "PRRT_B", fixingCommitSha: FIX_SHA, disposition: "deferred" },
+    ], { actList: ACT_LIST });
+    const { deps } = runtime([
+      threadsCallEntry([actThread("PRRT_A", [gateComment("c1", 201)]), actThread("PRRT_B", [gateComment("c2", 202)])]),
+      userEntry,
+    ], repoRoot);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    assert.deepEqual(result.incomplete, []);
+  });
+});
+
+// Only a thread whose ROOT comment is authored by the gate login is an act thread.
+for (const [name, nodes] of [
+  ["a root comment authored by a non-gate login quoting the marker", [gateComment("c1", 301, undefined, "someone-else")]],
+  ["a marker only on a reply comment, not the root", [gateComment("c1", 302, "root without marker"), gateComment("c2", 303)]],
+]) {
+  test(`the act-thread guard ignores ${name}`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const fixerPlan = await deliver(repoRoot, [], { actList: ACT_LIST });
+      const { deps } = runtime([threadsCallEntry([actThread("PRRT_FOREIGN", nodes)]), userEntry], repoRoot);
+      const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+      assert.equal(result.ok, true);
+    });
+  });
+}
