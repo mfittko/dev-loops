@@ -31,6 +31,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { JUDGE_AGENT_TYPE, decideBashGate, FIXER_AGENT_TYPE, isFixerPullAttempt, normalizeAgentType, parseSanctionedPullLine } from "./_hook-decisions.mjs";
+import { decideFixPushAuthority, findActiveSequence, pushTargetDir } from "./_fix-push-authority.mjs";
 import { listCheckouts, parseFixerPullCommand, recordFixerAgentBinding } from "./_fixer-grants.mjs";
 import {
   commandContainsGhPrReady,
@@ -119,6 +120,38 @@ const isWaitTool = typeof command === "string" && commandContainsDetachedWaitToo
 const isVerifyEntrypoint = typeof command === "string" && commandContainsCodeVerificationEntrypoint(command);
 // The read-only judge may run only its work-order pull and check-judge-decision (ADR 0106); every judge command reaches the decider.
 const isJudge = normalizeAgentType(agentType) === JUDGE_AGENT_TYPE;
+// PRE-PUSH-DELTA-PUSH-AUTHORITY: while a gate fix sequence is active (a marker written when the
+// commit_only work order is emitted), a subagent may push only as the fixer after the full work order.
+if (decideFixPushAuthority({ command, agentType, sequenceActive: true }).decision === "deny") {
+  let sequence = null;
+  try {
+    // The push runs in its `git -C <dir>` target (last wins, relative to the hook cwd); head and remote queries use it too.
+    const dir = pushTargetDir(command);
+    if (dir === null) throw new Error("the git -C directory is not a literal path");
+    const gitCwd = dir === undefined ? cwd : path.resolve(cwd, dir);
+    const git = (...args) => execFileSync("git", args, { cwd: gitCwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const head = git("rev-parse", "HEAD").trim();
+    const tmpRoot = path.join(listCheckouts(gitCwd)[0].root, "tmp");
+    sequence = findActiveSequence({
+      tmpRoot,
+      head,
+      listBaselines: () => {
+        try {
+          return fs.readdirSync(path.join(tmpRoot, "gate-delta")).filter((n) => n.endsWith(".sequence")).map((n) => n.slice(0, -".sequence".length));
+        } catch (error) {
+          if (error?.code === "ENOENT") return []; // No gate-delta directory: no sequence was ever started.
+          throw error;
+        }
+      },
+      isAncestor: (a, b) => { try { git("merge-base", "--is-ancestor", a, b); return true; } catch { return false; } },
+      remoteAdvanced: (baseline) => git("for-each-ref", "--contains", baseline, "--format=%(objectname)", "refs/remotes").split("\n").some((sha) => sha && sha !== baseline),
+    });
+  } catch {
+    emitDeny("PRE-PUSH-DELTA-PUSH-AUTHORITY: could not resolve the push target or read git state while checking for an active gate fix sequence; refusing the push (fail closed).");
+  }
+  const push = decideFixPushAuthority({ command, agentType, sequenceActive: sequence !== null, fullGranted: sequence?.fullGranted === true });
+  if (push.decision === "deny") emitDeny(push.reason);
+}
 // A fixer pull attempt reaches the decider, which denies any line other than the exact one.
 const isFixerPull = isFixer && isFixerPullAttempt(command);
 if (

@@ -224,3 +224,10 @@ test("with --result a coverage record for an older head is discarded and the sta
   args[args.indexOf("1")] = "3";
   assert.equal(runCli(args, headAt("ccccccc3333333")).outcome, "bounded_out");
 });
+
+test("--pr-head fails closed when the PR head differs from the baseline and passes when equal", () => {
+  const { actList } = fixture();
+  const base = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"];
+  assert.throws(() => runCli([...base, "--pr-head", "ddddddd4444444"], headAt(B)), /PRE-PUSH-DELTA-PUSH-AUTHORITY.*PR head moved/);
+  assert.equal(runCli([...base, "--pr-head", A], headAt(B)).ok, true);
+});

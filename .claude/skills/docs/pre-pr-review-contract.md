@@ -146,7 +146,8 @@ fixer and owns the push. The sequence is:
    head, because the emitter pins the GitHub PR head and the local fix commits
    descend from it.
 2. The dev-loop coordinator dispatches one fresh delta reviewer for the current
-   worktree head.
+   worktree head, passing `--pr-head <the full PR head SHA just read from GitHub>` to
+   the check, and briefs it that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`).
 3. The coordinator follows the CLI `nextStep`. On `nextStep: fix_and_rereview`,
    it dispatches a fresh fixer again, commit-only, and returns to step 2. It
    emits a new work order with `--delta-result <result>` at the PR head.
@@ -215,6 +216,9 @@ DeltaPrePushReviewResult {
 
 <!-- rule: PRE-PUSH-DELTA-EXIT-BOUND -->
 `PRE-PUSH-DELTA-EXIT-BOUND`: `locally_clear` MUST require every claimed act item `resolved`, none `cannot_verify`, no new non-residue finding of severity medium or higher, and no residue finding (`PRE-PUSH-DELTA-RESIDUE`) that lacks a `skipReason` equal to the recorded reason for its site. Medium or higher means `high`, `question` or `medium`. A sequence MUST NOT exceed three delta review invocations, one fresh reviewer each, with no fan-out. When the third review is not locally clear, the outcome is `bounded_out` with the residual evidence: no fourth review runs, the committed candidate is pushed into the normal gate path, and no success is claimed. At the third review the bound takes precedence over `PRE-PUSH-DELTA-FRESHNESS`: a stale result also ends `bounded_out`, and the current worktree head is pushed into the normal gate path, because `bounded_out` authorizes nothing and claims no success.
+
+<!-- rule: PRE-PUSH-DELTA-PUSH-AUTHORITY -->
+`PRE-PUSH-DELTA-PUSH-AUTHORITY`: during a gate fix sequence only the full-phase fixer pushes the fix commit. `emit-fixer-work-order.mjs --phase commit_only` starts the sequence and writes the marker `<tmp-root>/gate-delta/<reviewBaselineHead>.sequence`; `--phase full` flips it to `fullGranted`. A marker is active while the worktree head is its baseline, or descends from it and is on no remote ref. A push or a moved head ends it, and an unreadable marker reads as active and not granted. Two layers enforce the rule. The harness-neutral layer is the generated git `pre-push` hook, which runs `scripts/loop/check-fix-push-authority.mjs` and refuses every push while a marker is active and not granted, on Pi and Claude Code alike; `DEVLOOPS_ALLOW_MAIN` does not bypass it. The Claude Bash gate hook adds a per-agent check: it refuses a `git push` (including `git -C x push`, `git -c x=y push` and `git --no-pager push`) from every subagent except the fixer after `fullGranted`; the main agent is the operator and is not bound. The delta reviewer and the `commit_only` fixer MUST NOT push. `check-pre-push-delta.mjs --pr-head <full sha>` fails closed when the PR head read from GitHub differs from `--baseline`, which detects a PR head that moved during the sequence. `emit-fixer-work-order.mjs` refuses a PR head that is not `--head-sha`.
 
 <!-- rule: PRE-PUSH-DELTA-FRESHNESS -->
 `PRE-PUSH-DELTA-FRESHNESS`: before each invocation the fix MUST be committed and `candidateHead` read from the worktree. A result whose `candidateHead` differs from the current worktree head MUST NOT authorize the push; a head change outside the loop needs a new review against the current candidate.

@@ -124,12 +124,22 @@ if [ -f "$scan_cli" ]; then
 fi
 `
     : "";
+  // pre-push ONLY: the harness-neutral push gate of PRE-PUSH-DELTA-PUSH-AUTHORITY. It runs before
+  // the override-env check, so DEVLOOPS_ALLOW_MAIN never bypasses it. A checkout without the
+  // script predates the feature and is skipped, as for the scanner above.
+  const pushAuthorityBlock = hookName === "pre-push"
+    ? `authority_cli="scripts/loop/check-fix-push-authority.mjs"
+if [ -f "$authority_cli" ]; then
+  node "$authority_cli" || exit 1
+fi
+`
+    : "";
   const header = `#!/bin/sh
 # ${GUARD_MARKER}
 # Refuses a ${hookName} that would land on a guarded default branch. Installed
 # in the common hook directory, so linked worktrees run it too — their branch
 # is not one of the guarded ones, which is what lets their work through.
-${secretScanBlock}if [ "\${${GUARD_OVERRIDE_ENV}}" = "1" ]; then
+${secretScanBlock}${pushAuthorityBlock}if [ "\${${GUARD_OVERRIDE_ENV}}" = "1" ]; then
   exit 0
 fi
 defaults="${defaults}"
