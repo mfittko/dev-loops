@@ -8,7 +8,7 @@ Accepted — 2026-10-12 ([issue 2745](https://github.com/mfittko/dev-loops/issue
 
 Amends [0092](./0092-gate-tools-comment-only-blocker-only-filing.md): it decided that the batched deferral comment goes to the linked spec issue or, when there is none, to the PR. On a PR target the comment duplicated records the gate already holds: each deferred thread carries a stamped marker and a resolving reply, and each folded finding carries its own hidden marker in the verdict body.
 
-Amends 0138 (gate verdict body visibility by judge disposition): its Deferred-group marker bullet now also states that the folded marker is the deferral record when the target is the PR. Records 0092 and 0138 stay unedited.
+Amends [0138](0138-gate-verdict-body-visibility-by-judge-disposition.md) (gate verdict body visibility by judge disposition): its Deferred-group marker bullet now also states that the folded marker is the deferral record when the target is the PR. Records 0092 and 0138 stay unedited.
 
 ## Decision
 
