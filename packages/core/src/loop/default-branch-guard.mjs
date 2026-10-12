@@ -132,7 +132,7 @@ fi
   // the override-env check, so DEVLOOPS_ALLOW_MAIN never bypasses it. The script path comes from its
   // owner (the dev-loops side that ships scripts/), never from a layout guess inside this package.
   // A baked path that no longer exists (pruned worktree or cache dir) falls back to the pushing
-  // checkout's own scripts/ copy; with neither present the push is refused only under a marker that is not fullGranted and whose branch ref has not advanced (fail closed). The pushed refs git
+  // checkout's own scripts/ copy; with neither present the push is refused only under a marker that is not fullGranted and whose branch ref has not advanced (or that names no branch) (fail closed). The pushed refs git
   // sends on stdin are captured once, handed to the check, and replayed to the default-branch loop.
   if (authorityCli !== null && (typeof authorityCli !== "string" || !path.isAbsolute(authorityCli) || /["$`\\\n\r]/u.test(authorityCli))) {
     throw new Error(`authority script path ${JSON.stringify(authorityCli)} must be an absolute path without characters the generated hook's shell would expand`);

@@ -701,6 +701,15 @@ test("pre-push refuses a push under an ungranted sequence marker, allows it once
       missing = String(err.stderr ?? "");
     }
     assert.match(missing, /check script is missing/);
+    // A branchless marker (unreadable or malformed) is open too.
+    fs.writeFileSync(openMarker, `${JSON.stringify({ baselineHead: openBaseline, fullGranted: false })}\n`);
+    let branchless = "";
+    try {
+      git(dir, ["push", "--quiet", "origin", "issue-9"]);
+    } catch (err) {
+      branchless = String(err.stderr ?? "");
+    }
+    assert.match(branchless, /check script is missing/);
     fs.rmSync(openMarker);
     git(dir, ["push", "--quiet", "origin", "issue-9"]);
   } finally {
