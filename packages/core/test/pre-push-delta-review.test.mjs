@@ -438,6 +438,16 @@ test("parseDiff attributes a deleted file to its old path and keeps a removed `-
   assert.deepEqual(asked, ["-- item one of the removed markdown list is long enough."]);
 });
 
+test("a Markdown line naming a removed identifier does not suppress its stale hits", () => {
+  const changelog = ["diff --git a/changes/x.md b/changes/x.md", "--- a/changes/x.md", "+++ b/changes/x.md", "@@ -0,0 +1 @@", "+- Rename oldHelperName to newHelperName"].join("\n");
+  const grep = (needle, { word }) => (needle === "oldHelperName" && word ? [{ file: "scripts/use.mjs", line: 4 }] : []);
+  const hits = collectStaleSurfaceHits({ diffText: `${RULE_DIFF}\n${changelog}`, grep });
+  assert.deepEqual(hits.filter((h) => h.kind === "identifier").map((h) => h.site), ["scripts/use.mjs:4"]);
+  // Moved to another code file: still not reported.
+  const moved = [RULE_DIFF, "diff --git a/packages/x/other.mjs b/packages/x/other.mjs", "--- a/packages/x/other.mjs", "+++ b/packages/x/other.mjs", "@@ -0,0 +1 @@", "+export function oldHelperName(a) {"].join("\n");
+  assert.deepEqual(collectStaleSurfaceHits({ diffText: moved, grep }).filter((h) => h.kind === "identifier"), []);
+});
+
 test("identifiers need a declaration shape, ignore comments and strings, skip common names and honor moves across files", () => {
   const code = (lines) => hunk("packages/x/lib.mjs", lines.map((l) => `-${l}`));
   const grepAt = (n) => () => Array.from({ length: n }, (_, i) => ({ file: `f${i}.mjs`, line: 1 }));

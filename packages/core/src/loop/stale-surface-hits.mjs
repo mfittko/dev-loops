@@ -116,7 +116,8 @@ export function collectStaleSurface({ diffText, grep }) {
   // "Still added" is diff-wide: text moved to another file is not removed.
   const addedLines = files.flatMap((f) => f.added);
   const addedAll = squash(addedLines.join(" "));
-  const addedWordsAll = wordsOf(addedLines.map(codeOnly));
+  // Only code files count as re-adding an identifier: a prose mention in Markdown is no re-declaration.
+  const addedWordsAll = wordsOf(files.filter((f) => !isMarkdown(f.file)).flatMap((f) => f.added).map(codeOnly));
   const hits = [];
   let truncated = false;
   const truncatedNeedles = [];

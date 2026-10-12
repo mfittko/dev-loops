@@ -8,15 +8,17 @@
  *
  * - without --result: prints the neutral reviewer input for the current
  *   worktree head (cumulative baseline..candidate range, act refs, spec
- *   identity, surface hints, checklist);
+ *   identity, surface hints (act angles and the round angles of --findings-log),
+ *   staleSurfaceHits[], checklist);
  * - with --result: validates the reviewer's DeltaPrePushReviewResult against
  *   the current worktree head, prints the next step and records the decision at
  *   <tmp-root>/gate-delta/<baseline>.json (last write wins; local evidence only,
  *   PRE-PUSH-DELTA-NOT-GATE-EVIDENCE).
  *
  * The run without --result is write-free: it reads the act list (or the
- * unresolved-threads file of the thread route), the result file and
- * `git rev-parse HEAD`, and writes only to stdout. All logic lives in
+ * unresolved-threads file of the thread route), the result file, the
+ * --findings-log file and `git rev-parse HEAD`, runs the stale-surface reads
+ * (`git cat-file`, `git diff`, `git grep`), and writes only to stdout. All logic lives in
  * @dev-loops/core/loop/pre-push-delta-review.
  */
 import { spawnSync } from "node:child_process";
