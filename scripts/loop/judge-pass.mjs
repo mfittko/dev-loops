@@ -975,10 +975,10 @@ export async function judgePassCli(
   }
 
   // A `defer` disposition is recorded as one batched comment on a linked spec
-  // issue target (a PR target posts no comment; a folded defer's Details marker, a stamped
-  // thread's marker plus reply, or a no-stamp thread's reply plus ledger entry, is
-  // the record) — never only the ephemeral tmp ledger, and never a new
-  // issue. Idempotent across re-runs via the target's listed fingerprints.
+  // issue target, never only the ephemeral tmp ledger, and never a new issue.
+  // A PR target posts no comment: a folded defer's Details marker, a stamped
+  // thread's marker plus reply, or a no-stamp thread's reply plus ledger entry
+  // is the record. Idempotent across re-runs via the target's listed fingerprints.
   await applyDeferralComment(
     result.enriched,
     { repo: options.repo, pr: Number(options.pr), trackerProvider },

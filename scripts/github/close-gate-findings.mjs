@@ -11,9 +11,8 @@ import {
   commentDeferredFindings,
   fetchThreadsWithFullBodies,
   findJudgeDispositionForFingerprint,
-  collectFingerprints,
   fingerprintFinding,
-  isVisibleFinding,
+  isBelowInlineFloor,
   isDeferredAtRound,
   isFileableDeferral,
   listPrReviews,
@@ -73,7 +72,7 @@ resolved-with-rationale in-thread only, no marker stamp. low is filed only
 when its own marker carries the explicit operatorVisible signal (the finding's own
 operatorVisible: true, rendered as the marker's ov=1 field); the default (absent/false)
 is NOT filed either. medium (past its fix window) is unchanged: always filed. The
-round's FILEABLE deferrals (thread targets plus folded findings isFileableDeferral files) go
+round's FILEABLE deferrals (thread targets plus operator-visible folded findings) go
 as ONE batched comment on the linked spec issue (tracker.provider is github and
 the PR has exactly one closing issue reference). A PR target posts no comment:
 a folded entry is recorded by its Details marker in the verdict-body group it renders under (Deferred, Rejected or Not judged; only thread and Deferred-group markers carry issue=<pr>),
@@ -119,7 +118,7 @@ Output (stdout, JSON):
     "deferredResolved": <disposition reply+resolve count>,
     "rejectClosed": <answered, judge-rejected question threads reply+resolved this pass (ADR 0088); 0 when none qualify>,
     "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer + reject-close passes; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
-    "foldedFiled": <#2263: folded findings isFileableDeferral files (an operator-visible low, or a past-window medium whatever its ov flag; not visible per the judge-disposition rule) newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); on a PR target no comment is posted and it counts the folded entries recorded in the verdict body's Details block under any group (Deferred, Rejected or Not judged; only a Deferred-group marker carries issue=<pr>); a nit or a non-operator-visible low is never filed>,
+    "foldedFiled": <#2263: operator-visible folded (below gates.<gate>.inlineSeverityFloor) low findings newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); on a PR target no comment is posted and it counts the folded entries recorded in the verdict body's Details block under any group (Deferred, Rejected or Not judged; only a Deferred-group marker carries issue=<pr>); a nit or a non-operator-visible low is never filed>,
     "followUpIssueNumber"?: <the deferral target number (the linked spec issue the comment goes to, or the PR itself, which gets no comment); present when the round had a fileable thread target OR a fileable folded finding>,
     "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted; that thread stays unresolved rather than deadlocking the batch (#1882)> }
 
@@ -700,22 +699,19 @@ async function runQuestionRejectClosePass({ repo, pr, gate, headSha, round, thre
 // Folded filing (GATE-COMMENT-INLINE-SEVERITY-FLOOR)
 // ---------------------------------------------------------------------------
 //
-// A finding that isVisibleFinding does not show gets no body-filed entry of its
-// own: upsert-checkpoint-verdict.mjs folds it into the verdict body's collapsed
-// Details block (renderVerdictDetailsBlock). One at or above the inline floor
-// with a locatable inline thread is already a thread target, so `threads`
-// excludes its fingerprint here. The net-reduction filing bar
-// (isFileableDeferral) still applies: an operator-visible folded low or a
-// past-window folded medium joins the round's batched deferral comment,
-// exactly like a fileable THREAD target (on a linked spec issue target only; a
-// PR target posts no comment). A nit or a non-operator-visible low is
-// never filed (its Details entry is its resolved-with-rationale record).
-function selectFoldedFileableEntries({ findings, round, floor, blockingSeverities = [], mediumFixWindow, threads = [], login }) {
-  const threadFps = new Set();
-  for (const t of threads) if (t.author === login) collectFingerprints(t.body, threadFps);
+// A finding below the gate's inlineSeverityFloor never gets an inline/
+// body-filed thread of its own — upsert-checkpoint-verdict.mjs folds it into
+// the verdict body's Details block instead (renderVerdictDetailsBlock),
+// so it never reaches selectDispositionTargets. The net-reduction filing bar
+// (isFileableDeferral) still applies: an operator-visible folded low joins the
+// round's batched deferral comment, exactly like a fileable THREAD target (on a
+// linked spec issue target only; a PR target posts no comment).
+// A nit or a non-operator-visible low is never filed (already recorded,
+// visible, in the folded <details> block itself; that IS its
+// resolved-with-rationale record).
+function selectFoldedFileableEntries({ findings, round, floor, mediumFixWindow }) {
   return findings
-    .filter((f) => !threadFps.has(fingerprintFinding(f)))
-    .filter((f) => !isVisibleFinding(f, { floor, blockingSeverities }))
+    .filter((f) => isBelowInlineFloor(f.severity, floor))
     // An act finding goes to the fixer, never the deferral record (ADR 0089);
     // a fingerprint whose ledger entries disagree is ambiguous and fails closed.
     .filter((f) => isFileableDeferral(f.severity, f.operatorVisible === true, round, mediumFixWindow))
@@ -828,7 +824,7 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // on a linked spec issue target only. A PR target, including the
   // unvalidated-config fallback (no tracker named), posts no comment.
   const { threads, snapshot } = await fetchThreadsWithFullBodies({ repo, pr }, gh);
-  const foldedEntries = selectFoldedFileableEntries({ findings, round, floor: inlineSeverityFloor, blockingSeverities: resolvedGateConfig?.blockCleanOnFindingSeverities ?? [], mediumFixWindow, threads, login });
+  const foldedEntries = selectFoldedFileableEntries({ findings, round, floor: inlineSeverityFloor, mediumFixWindow });
   const trackerProvider = errors.length > 0 ? null : resolveTrackerProvider(config);
   const { deferredResolved, foldedFiled, followUpIssueNumber, dispositionFailures } = await runDispositionPass(
     { repo, pr, gate, headSha, tmpRoot, repoRoot, round, threads, snapshot, login, mediumFixWindow, findings, foldedEntries, trackerProvider, allowedRefs: options.allowedRefs ?? [] },

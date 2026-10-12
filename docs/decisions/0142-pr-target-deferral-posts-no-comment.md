@@ -15,7 +15,6 @@ Amends [0138](0138-gate-verdict-body-visibility-by-judge-disposition.md) (gate v
 - When the deferral comment target is a linked spec issue, `judge-pass.mjs` and `close-gate-findings.mjs` post their ONE batched deferral comment as before.
 - When the target is the PR itself, neither tool posts a deferral comment. A folded deferral is recorded by its hidden marker in the verdict body group it renders under (`Deferred`, `Rejected` or `Not judged`). A stamped thread is recorded by its thread marker and resolving reply. A no-stamp thread is recorded by its resolving reply and the ledger entry.
 - Thread markers and Deferred-group markers keep `issue=<pr>` as the re-attachment pointer, and the ledger `followUpIssueNumber` keeps the PR number. A Rejected or Not judged folded marker carries no `issue=` pointer.
-- Folded filing selection follows `isVisibleFinding`, so a past-window folded medium joins the round's deferral record.
 
 ## Consequences
 

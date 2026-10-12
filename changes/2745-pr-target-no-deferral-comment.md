@@ -5,5 +5,3 @@
 - A stamped thread is recorded by its thread marker (`issue=<pr>`) plus the resolving reply (#2745)
 - A no-stamp thread (a non-fileable low) is recorded by its resolving reply plus the ledger entry (#2745)
 - A linked spec issue target is unchanged; see ADR 0142 (#2745)
-- A past-window folded medium finding joins the round's deferral record (#2745)
-- Folded-filing selection follows the same visibility rule as the verdict body (#2745)
