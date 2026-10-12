@@ -236,7 +236,7 @@ function validateFindingsArray(parsed, flagLabel) {
     // GATE-EXEC-DEFERRAL-RECORD: a judge-pass-enriched finding may carry a stable `fingerprint`
     // ([0-9a-f]{16}, matching the finding-marker regex) and a `defer` finding
     // additionally carries `followUpIssueNumber` (the deferral comment
-    // target number: the linked spec issue or the PR). Both optional; a malformed fingerprint fails closed.
+    // target number: the linked spec issue, or the PR, which gets no comment). Both optional; a malformed fingerprint fails closed.
     if (typeof f.fingerprint === "string" && f.fingerprint.trim().length > 0) {
       const fp = f.fingerprint.trim();
       if (!/^[0-9a-f]{16}$/.test(fp)) {

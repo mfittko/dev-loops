@@ -34,7 +34,8 @@ No separate verdict issue comment and no separate findings review is posted. Two
 the opt-in findings comment (`gates.postFindingsComments`, `GATE-COMMENT-IDENTITY-DISJOINT`) and
 the batched deferral comment (`<!-- dev-loops:deferred-summary -->`) that `judge-pass.mjs` and
 `close-gate-findings.mjs` post for a round's deferred findings, at most one per tool run, on the
-linked spec issue or the PR (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`).
+linked spec issue (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`). When the target is the PR itself no
+deferral comment is posted: a folded entry is recorded by its marker in the group it renders under in `Details`, a stamped thread by its thread marker plus resolving reply, and a no-stamp thread (an immediately deferred, non-fileable low) by its resolving reply plus the ledger entry. An in-window medium has only its ledger entry and its open thread, which still blocks, until its fix window passes.
 
 `GATE-COMMENT-SUPERSEDE-OUTDATED`: When a new `draft_gate` (resp. `pre_approval_gate`) verdict
 is created, `upsert-checkpoint-verdict.mjs` folds the SAME gate's prior verdict reviews recorded
@@ -69,7 +70,7 @@ floor, because its resolvable thread blocks gate-close until answered
 (`GATE-EXEC-THREAD-DISPOSITION`). A locatable finding at or above the inline floor, or visible by the rule above, keeps its inline thread whatever its judge disposition (inline thread creation keeps its rules on a create; an update cannot add inline comments). Every other finding FOLDS into the
 verdict body's one `Details` block, grouped by disposition: `Deferred (N)`, `Rejected (N)` and
 `Not judged (N)`. Each folded entry renders as a `file:line`-prefixed (when known)
-severity/angle/summary bullet plus its own INVISIBLE fingerprint+`disposition=deferred` marker (a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, carries no `disposition` field, like a body-filed `high` marker) at
+severity/angle/summary bullet plus its own INVISIBLE fingerprint marker (`disposition=deferred` on every folded entry that is not `high` and not `act`, Rejected and Not judged included; a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, carries no `disposition` field, like a body-filed `high` marker) at
 line start, the same shape a body-filed marker carries, so cross-round fingerprint suppression
 still applies and a folded finding renders exactly once. A deferred finding keeps its deferral
 comment or `issue=<n>` link, so folding hides no record (a folded Deferred marker carries `issue=<n>` for its deferral target: the recorded follow-up issue (`followUpIssueNumber`), else the PR). An `act` finding never folds and its
