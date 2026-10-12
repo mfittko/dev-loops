@@ -100,6 +100,14 @@ test("the judge `defer` bullets file a new issue only for a blocker, never via c
   }
 });
 
+test("GATE-EXEC-THREAD-DISPOSITION reject-closes judge-rejected medium and low threads and keeps a judge-rejected high open (ADR 0144)", async () => {
+  const section = ruleSection(await readFile(`${repoRoot}${CONTRACT}`, "utf8"), "GATE-EXEC-THREAD-DISPOSITION");
+  assertClaims(section, [
+    ["close-gate-findings.mjs", "reject-closes", "medium or low"],
+    ["judge-rejected high", "never reject-closed", "roundCapReached"],
+  ], "judge-rejected reject-close scope");
+});
+
 test("the help texts and the judge defer bullet state that a PR target posts no deferral comment", async () => {
   const usage = async (file, from) => {
     const text = await readFile(`${repoRoot}${file}`, "utf8");

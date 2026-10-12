@@ -10,6 +10,8 @@ import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { collectFingerprints, fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
@@ -30,6 +32,9 @@ claims to have tackled since its last push is fully disposed (commit contained
 by the observed PR head, replied with that commit's evidence, resolved, and
 re-verified live) before the loop may request/dispatch/post another review or
 gate round.
+An act-list work order also fails (exit 1) when a judge-act fingerprint marks an open gate
+thread (root comment authored by the gate login) and the handoff has no disposition entry for
+it; the error names the thread id and no checkpoint is written.
 Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
@@ -208,8 +213,8 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   const handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
   // GATE-EXEC-REMEDIATION-SITE-QUERY: an act-list work order's items with a siteQuery need a coverage record.
   const actRead = (order.requiredReads ?? []).find((read) => read?.kind === "act-list");
+  let actList = null;
   if (actRead) {
-    let actList;
     try {
       const actBytes = await readFile(actRead.path);
       if (createHash("sha256").update(actBytes).digest("hex") !== String(actRead.sha256 ?? "").replace(/^sha256:/, "")) {
@@ -229,6 +234,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   }
   return {
     handoff,
+    actList,
     delivery: { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity },
   };
 }
@@ -243,6 +249,41 @@ function buildLiveThreads(parsed) {
   }));
 }
 
+// parseReviewThreads id-sorts comments, so the root is the one with the smallest numeric databaseId
+// (the first comment when no databaseId parses).
+function threadRootComment(parsed, threadId) {
+  const numeric = (c) => (/^\d+$/.test(String(c.databaseId ?? "")) ? Number(c.databaseId) : Infinity);
+  return parsed.comments
+    .filter((c) => c.threadId === threadId)
+    .reduce((root, c) => (root === undefined || numeric(c) < numeric(root) ? c : root), undefined);
+}
+
+// A judge-act item whose fingerprint marks an open inline gate thread is resolved by the fix
+// cycle: the handoff needs a disposition entry for that thread, never a threadless claim.
+// Gate-authored is the authenticated login on the thread ROOT comment, never marker text alone;
+// every matching thread needs its own entry.
+function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin) {
+  const dispositioned = new Set(handoff.dispositions.map((entry) => entry.threadId));
+  const openFingerprints = new Map();
+  for (const thread of parsed.threads.filter((t) => !t.isResolved)) {
+    const root = threadRootComment(parsed, thread.id);
+    if (!root || root.author?.login !== gateLogin) continue;
+    // A merged inline comment carries one marker per member: index every one, not just the first.
+    const fps = new Set();
+    collectFingerprints(root.body, fps);
+    for (const fp of fps) {
+      if (!openFingerprints.has(fp)) openFingerprints.set(fp, new Set());
+      openFingerprints.get(fp).add(thread.id);
+    }
+  }
+  const missing = actList
+    .flatMap((item) => [item?.fingerprint ?? fingerprintFinding(item)].flatMap((fp) => [...(openFingerprints.get(fp) ?? [])]))
+    .filter((threadId) => !dispositioned.has(threadId));
+  if (missing.length > 0) {
+    throw new Error(`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the handoff has no disposition entry for open gate thread(s) ${[...new Set(missing)].join(", ")} that carry a judge-act fingerprint; an act item with an open inline gate thread is never threadless, record it as tackled and reply-resolve the thread`);
+  }
+}
+
 export async function verifyFixerDisposition(
   options,
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot = process.cwd() } = {},
@@ -252,17 +293,20 @@ export async function verifyFixerDisposition(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, delivery } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, actList, delivery } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
   const liveHead = live.code === 0 ? (() => { try { return JSON.parse(live.stdout).headRefOid; } catch { return null; } })() : null;
   if (liveHead !== options.headSha) {
     throw new Error(`--head-sha ${options.headSha} is not the live PR head ${liveHead ?? `(unreadable: ${(live.stderr || "").trim()})`}; refresh the PR state before verifying`);
   }
+  // A refused handoff writes no checkpoint: capture and assert before the write.
+  const initialSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
+  if (Array.isArray(actList)) {
+    assertActItemThreadsDisposed(actList, handoff, initialSnapshot, await resolveAuthenticatedLogin({ env, ghCommand, runChild }));
+  }
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery }, null, 2)}\n`, "utf8");
-
-  const initialSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
 
   const tackledShas = [...new Set(
     handoff.dispositions
