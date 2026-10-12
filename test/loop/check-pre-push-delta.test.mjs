@@ -42,11 +42,11 @@ test("without --result the CLI prints the cumulative delta input for the worktre
   assert.deepEqual(fs.readdirSync(dir).sort(), ["act-list.json", "result.json"]);
 });
 
-test("without --result only the sequence marker, no decision record, is written under the tmp root", () => {
+test("without --result no decision record is written under the tmp root", () => {
   const { actList } = fixture();
   const seam = headAt(B);
   runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1"], seam);
-  assert.deepEqual(fs.readdirSync(path.join(seam.tmpRoot, "gate-delta")), [`${A}.sequence`]);
+  assert.deepEqual(fs.readdirSync(seam.tmpRoot), []);
 });
 
 test("with --result the CLI records the decision for the baseline, and the last write wins", () => {
@@ -264,17 +264,6 @@ test("result mode refuses locally_clear for an unaddressed stale-surface hit on 
   assert.equal(runCli(threadArgsResult, withStale(B)).nextStep, "fix_and_rereview");
 });
 
-test("--pr-head fails closed when the PR head differs from the recorded pre-delta head and must be a full SHA", () => {
-  const FA = "a".repeat(40);
-  const FB = "b".repeat(40);
-  const { actList } = fixture();
-  const args = ["--act-list", actList, "--baseline", FA, "--spec-identity", "s"];
-  assert.equal(runCli([...args, "--pr-head", FA.toUpperCase()], headAt(FB)).ok, true);
-  assert.throws(() => runCli([...args, "--pr-head", "c".repeat(40)], headAt(FB)), /PRE-PUSH-DELTA-PUSH-AUTHORITY/);
-  // A prefix of the recorded head is not equal to it.
-  assert.throws(() => parseCheckPrePushDeltaArgs([...args, "--pr-head", FA.slice(0, 12)]), /full 40- or 64-character/);
-});
-
 test("a truncated stale-surface list is flagged in the input and blocks locally_clear until a finding names the gap", () => {
   const { dir, actList, result } = fixture();
   const truncated = (head) => ({ ...headAt(head), staleSurface: () => ({ hits: [], truncated: true }) });
@@ -286,15 +275,4 @@ test("a truncated stale-surface list is flagged in the input and blocks locally_
   const base = JSON.parse(fs.readFileSync(result, "utf8"));
   fs.writeFileSync(addressed, JSON.stringify({ ...base, newFindings: [{ severity: "low", summary: "stale-surface-hits-truncated: read the remaining hits by hand", evidence: ["e"] }] }));
   assert.equal(runCli(["--act-list", actList, "--baseline", A, "--result", addressed, "--invocation", "1"], truncated(B)).nextStep, "push");
-});
-
-test("input mode writes the sequence marker for the push guard and a later input run keeps a granted marker", () => {
-  const { actList } = fixture();
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-marker-"));
-  runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s"], headAt(B, tmpRoot));
-  const marker = path.join(tmpRoot, "gate-delta", `${A}.sequence`);
-  assert.deepEqual(JSON.parse(fs.readFileSync(marker, "utf8")), { baselineHead: A, fullGranted: false });
-  fs.writeFileSync(marker, JSON.stringify({ baselineHead: A, fullGranted: true }));
-  runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s"], headAt(B, tmpRoot));
-  assert.equal(JSON.parse(fs.readFileSync(marker, "utf8")).fullGranted, true);
 });

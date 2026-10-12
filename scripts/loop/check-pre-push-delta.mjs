@@ -32,7 +32,6 @@ import {
   startDeltaSequence,
   threadsToActList,
 } from "@dev-loops/core/loop/pre-push-delta-review";
-import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { collectStaleSurface } from "@dev-loops/core/loop/stale-surface-hits";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
@@ -59,7 +58,6 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --site-coverage <path>  The fixer's commit_only handback { headSha, siteCoverage: [...] } (the work order's outputRef)
                           Omitting it in --result mode reports a coverage gap for every act item with a siteQuery
   --findings-log <path>   The reviewed gate round's findings log; its provenance.perAngle angles join the surface hints
-  --pr-head <sha>         The full PR head SHA just read from GitHub; refused when it differs from --baseline (the head moved)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
   --invocation <n>        1-based delta review invocation in this sequence (max 3)
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
@@ -103,7 +101,6 @@ export function parseCheckPrePushDeltaArgs(argv) {
         "spec-identity": { type: "string" },
         "site-coverage": { type: "string" },
         "findings-log": { type: "string" },
-        "pr-head": { type: "string" },
         result: { type: "string" },
         invocation: { type: "string" },
         worktree: { type: "string" },
@@ -127,8 +124,6 @@ export function parseCheckPrePushDeltaArgs(argv) {
   if (values.result && invocation === null) throw parseError("--result requires --invocation <1-3>");
   const specIdentity = values["spec-identity"]?.trim() || null;
   if (!values.result && !specIdentity) throw parseError("--spec-identity <id> is required without --result");
-  const prHead = values["pr-head"]?.trim().toLowerCase() ?? null;
-  if (prHead !== null && !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(prHead)) throw parseError("--pr-head must be a full 40- or 64-character commit SHA");
   return {
     help: false,
     actList: values["act-list"] ?? null,
@@ -139,7 +134,6 @@ export function parseCheckPrePushDeltaArgs(argv) {
     specIdentity,
     siteCoverage: values["site-coverage"] ?? null,
     findingsLog: values["findings-log"] ?? null,
-    prHead,
     result: values.result ?? null,
     invocation,
     worktree: values.worktree ?? process.cwd(),
@@ -207,9 +201,6 @@ export function runCli(
       ? threadsToActList(JSON.parse(readFileSync(options.threadsFile, "utf8")), { repo: options.repo, pr: options.pr })
       : JSON.parse(readFileSync(options.actList, "utf8")),
   });
-  if (options.prHead && options.prHead !== sequence.reviewBaselineHead) {
-    throw new Error(`PRE-PUSH-DELTA-PUSH-AUTHORITY: the PR head ${options.prHead} differs from the recorded pre-delta head ${sequence.reviewBaselineHead}: another actor pushed; stop and refresh the gate round`);
-  }
   const currentHead = revParse(options.worktree, "HEAD");
   // The CLI runs before the push, so the fix is unpushed by construction.
   const fixCommitted = currentHead !== sequence.reviewBaselineHead;
@@ -255,8 +246,6 @@ export function runCli(
     });
     payload = { ok: true, ...decision };
   } else {
-    // PRE-PUSH-DELTA-PUSH-AUTHORITY: mark the sequence active for the push guard (never downgrades a granted marker).
-    writeSequenceMarker({ tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), baselineHead: sequence.reviewBaselineHead });
     payload = { ok: true, input: buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, roundAngles: roundAnglesOf(options.findingsLog), staleSurfaceHits, staleSurfaceTruncated }) };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });

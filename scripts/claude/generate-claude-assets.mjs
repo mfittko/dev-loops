@@ -137,7 +137,6 @@ const HOOK_BUNDLE = [
   { source: "packages/core/src/loop/main-checkout-ff.mjs", target: ".claude/hooks/_main-checkout-ff.mjs", rewrites: [] },
   // Fixer grant loader binds each plan to its workOrderDigest (ADR 0106).
   { source: "packages/core/src/loop/work-order-digest.mjs", target: ".claude/hooks/_work-order-digest.mjs", rewrites: [] },
-  { source: "packages/core/src/loop/fix-push-authority.mjs", target: ".claude/hooks/_fix-push-authority.mjs", rewrites: [] },
   // One retirement predicate for the pull and the fixer hooks (ADR 0107).
   { source: "packages/core/src/loop/gate-round-retirement.mjs", target: ".claude/hooks/_gate-round-retirement.mjs", rewrites: [] },
 ];

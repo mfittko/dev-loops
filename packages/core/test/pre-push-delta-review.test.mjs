@@ -360,7 +360,6 @@ describe("pre-push results never become gate evidence", () => {
 
 import { unaddressedStaleSurfaceHits } from "../src/loop/pre-push-delta-review.mjs";
 import { collectStaleSurfaceHits } from "../src/loop/stale-surface-hits.mjs";
-import { decideFixPushAuthority } from "../src/loop/fix-push-authority.mjs";
 
 test("surfaceHints is the union of the act item angles and the reviewed round angles", () => {
   const sequence = startDeltaSequence({ reviewBaselineHead: A, actList: [{ ...ACT_LIST[0], angle: "contract-surface" }] });
@@ -418,20 +417,7 @@ test("resolved requires no new defect from the remedy: contract names it", () =>
   assert.match(fs.readFileSync(new URL("../../../skills/docs/pre-pr-review-contract.md", import.meta.url), "utf8"), /applied remedy introduces no new finding of severity medium or higher/);
 });
 
-test("decideFixPushAuthority refuses a fix-branch push by anyone but the fixer while a delta candidate awaits the full phase", () => {
-  const push = "git push origin issue-1";
-  assert.equal(decideFixPushAuthority({ command: push, agentType: "dev-loops:pre-pr-reviewer", sequenceActive: true }).decision, "deny");
-  assert.equal(decideFixPushAuthority({ command: push, agentType: "developer", sequenceActive: true }).decision, "deny");
-  assert.equal(decideFixPushAuthority({ command: push, agentType: "fixer", sequenceActive: true, fullGranted: true }).decision, "allow");
-  assert.equal(decideFixPushAuthority({ command: push, agentType: "developer", sequenceActive: false }).decision, "allow");
-  assert.equal(decideFixPushAuthority({ command: "git status", agentType: "developer", sequenceActive: true }).decision, "allow");
-  assert.equal(decideFixPushAuthority({ command: push, agentType: null, sequenceActive: true }).decision, "allow");
-});
-
-import os from "node:os";
-import path from "node:path";
 import { collectStaleSurface } from "../src/loop/stale-surface-hits.mjs";
-import { findActiveSequence, readSequenceMarker, sequenceMarkerPath, writeSequenceMarker } from "../src/loop/fix-push-authority.mjs";
 
 const hunk = (file, body, { del = false } = {}) => [
   `diff --git a/${file} b/${file}`,
@@ -480,38 +466,4 @@ test("a skipped site addresses a stale-surface hit only with a non-empty reason"
   assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage("kept") }).length, 0);
   assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage("  ") }).length, 1);
   assert.equal(unaddressedStaleSurfaceHits([hit], { siteCoverage: coverage() }).length, 1);
-});
-
-test("decideFixPushAuthority widens push detection, binds the commit_only fixer and skips echo strings", () => {
-  const deny = (command, agentType = "developer", extra = {}) => decideFixPushAuthority({ command, agentType, sequenceActive: true, ...extra }).decision;
-  for (const command of ["git -c x=y push", "git --no-pager push origin b", "git -C x push", "cd r && git push", "FOO=1 git push", "bash -c 'git push'", "env git push"]) {
-    assert.equal(deny(command), "deny", command);
-  }
-  for (const command of ['echo "git push"', "git pushd", "git status", "grep 'git push' f"]) assert.equal(deny(command), "allow", command);
-  assert.equal(deny("git push", "fixer"), "deny", "the commit_only fixer does not push");
-  assert.equal(deny("git push", "dev-loops:fixer", { fullGranted: true }), "allow");
-  assert.equal(deny("git push", "developer", { fullGranted: true }), "deny");
-  assert.equal(deny("git push", ""), "allow");
-});
-
-test("the sequence marker is written once, never downgraded, read fail-closed and active only until pushed", () => {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "seq-marker-"));
-  assert.equal(readSequenceMarker(tmpRoot, "a1"), null);
-  writeSequenceMarker({ tmpRoot, baselineHead: "a1" });
-  assert.deepEqual(readSequenceMarker(tmpRoot, "a1"), { baselineHead: "a1", fullGranted: false });
-  writeSequenceMarker({ tmpRoot, baselineHead: "a1", fullGranted: true });
-  writeSequenceMarker({ tmpRoot, baselineHead: "a1" });
-  assert.equal(readSequenceMarker(tmpRoot, "a1").fullGranted, true);
-  fs.writeFileSync(sequenceMarkerPath(tmpRoot, "bad"), "{not json");
-  assert.deepEqual(readSequenceMarker(tmpRoot, "bad"), { baselineHead: "bad", fullGranted: false });
-  const find = (head, extra = {}) => findActiveSequence({ tmpRoot, head, listBaselines: () => ["a1"], isAncestor: () => true, remoteAdvanced: () => false, ...extra });
-  assert.equal(find("a1")?.baselineHead, "a1");
-  assert.equal(find("c3")?.baselineHead, "a1", "an unpushed descendant of the baseline");
-  assert.equal(find("c3", { remoteAdvanced: () => true }), null, "a push ended the sequence");
-  assert.equal(find("c3", { isAncestor: () => false }), null);
-  writeSequenceMarker({ tmpRoot, baselineHead: "a1", reset: true });
-  assert.equal(readSequenceMarker(tmpRoot, "a1").fullGranted, false, "a new commit_only round does not inherit the grant");
-  writeSequenceMarker({ tmpRoot, baselineHead: "b2", fullGranted: true });
-  assert.equal(find("c3", { listBaselines: () => ["b2", "a1"] }).fullGranted, false, "a non-granted marker wins over a stale granted one");
-  assert.equal(find("c3", { listBaselines: () => ["b2"] }).fullGranted, true);
 });
