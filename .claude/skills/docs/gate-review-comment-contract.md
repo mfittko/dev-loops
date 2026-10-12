@@ -70,7 +70,7 @@ floor, because its resolvable thread blocks gate-close until answered
 (`GATE-EXEC-THREAD-DISPOSITION`). A locatable finding at or above the inline floor, or visible by the rule above, keeps its inline thread whatever its judge disposition (inline thread creation keeps its rules on a create; an update cannot add inline comments). Every other finding FOLDS into the
 verdict body's one `Details` block, grouped by disposition: `Deferred (N)`, `Rejected (N)` and
 `Not judged (N)`. Each folded entry renders as a `file:line`-prefixed (when known)
-severity/angle/summary bullet plus its own INVISIBLE fingerprint marker (`disposition=deferred` only in the Deferred group; a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, carries no `disposition` field, like a body-filed `high` marker) at
+severity/angle/summary bullet plus its own INVISIBLE fingerprint marker (`disposition=deferred` on every folded entry that is not `high` and not `act`, Rejected and Not judged included; a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, carries no `disposition` field, like a body-filed `high` marker) at
 line start, the same shape a body-filed marker carries, so cross-round fingerprint suppression
 still applies and a folded finding renders exactly once. A deferred finding keeps its deferral
 comment or `issue=<n>` link, so folding hides no record (a folded Deferred marker carries `issue=<n>` for its deferral target: the recorded follow-up issue (`followUpIssueNumber`), else the PR). An `act` finding never folds and its
