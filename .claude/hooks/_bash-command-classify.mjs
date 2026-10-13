@@ -1232,6 +1232,30 @@ const PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_
 const PACKAGE_MANAGER_COMMAND = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(?!${RUN_WORD}(?:\\s|$))[\\w:][\\w:-]*(?:\\s|$)`, "i");
 // An opaque value-taking option before a recognizable validation script cannot grant worker execution.
 const OPAQUE_PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:${RUN_WORD}(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+)?${VALIDATION_SCRIPT}(?:\\s|$)`, "i");
+const RUNTIME_VALUE_FLAGS = new Set([
+  "-r", "--require", "--preload", "--import", "-l", "--loader", "--experimental-loader", "--env-file", "--env-file-if-exists", "--conditions", "-C", "--cwd", "-c", "--config",
+  "--title", "--redirect-warnings", "--port", "--max-old-space-size", "--inspect-port", "--diagnostic-dir", "--openssl-config", "--icu-data-dir", "--input-type", "--stack-trace-limit",
+  "--cpu-prof-name", "--cpu-prof-dir", "--cpu-prof-interval", "--heap-prof-name", "--heap-prof-dir", "--heap-prof-interval", "--elide-lines", "-F", "--filter", "--shell", "--install",
+  "--watch-kill-signal", "--fetch-preconnect", "--max-http-header-size", "--dns-result-order", "--disable-warning", "--unhandled-rejections", "--console-depth", "--user-agent",
+  "--cron-title", "--cron-period", "--main-fields", "--extension-order", "--tsconfig-override", "-d", "--define", "--drop", "--feature", "--jsx-factory", "--jsx-fragment", "--jsx-import-source", "--jsx-runtime",
+]);
+
+// Strip launcher options, consuming their values so a preload path cannot become the entrypoint.
+function normalizeRuntimeLaunch(segment) {
+  const words = segment.split(/\s+/);
+  const runtime = words[0];
+  if (runtime !== "bun" && runtime !== "node") return segment;
+  let i = 1;
+  let ran = false;
+  while (i < words.length) {
+    const word = words[i];
+    if (runtime === "bun" && word === "run" && !ran) { ran = true; i += 1; continue; }
+    if (word === "--") { i += 1; break; }
+    if (!word.startsWith("-") || word === "--test") break;
+    i += RUNTIME_VALUE_FLAGS.has(word) ? 2 : 1;
+  }
+  return [runtime, ...(ran ? ["run"] : []), ...words.slice(i)].join(" ");
+}
 
 function hasOnlyExactTestSelectors(args = "") {
   const words = args.trim().split(/\s+/).filter(Boolean);
@@ -1254,17 +1278,18 @@ export function classifyValidationCommand(command) {
   const suites = new Set();
   let targeted = false;
   for (const segment of verificationCommandSegments(command)) {
-    const scriptPath = segment.match(/^(?:(?:bun|node)(?:\s+--\S+)*(?:\s+run)?(?:\s+--\S+)*\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
+    const launch = normalizeRuntimeLaunch(segment);
+    const scriptPath = launch.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
     const normalizedPath = scriptPath ? posix.normalize(scriptPath) : "";
     if (normalizedPath === "verify.mjs" || /(?:^|\/)scripts\/verify\.mjs$/.test(normalizedPath)) return "full-repository";
-    const bunTest = segment.match(/^bun\s+test(?:\s+(.*))?$/i);
+    const bunTest = launch.match(/^bun\s+test(?:\s+(.*))?$/i);
     if (bunTest) {
       if (!hasOnlyExactTestSelectors(bunTest[1])) return "full-repository";
       targeted = true;
       continue;
     }
     if (TEST_ALIAS.test(segment)) return "full-repository";
-    const packageRun = segment.match(PACKAGE_MANAGER_RUN);
+    const packageRun = segment.match(PACKAGE_MANAGER_RUN) ?? launch.match(PACKAGE_MANAGER_RUN);
     if (packageRun) {
       const name = packageRun[1].toLowerCase();
       if (["test", "verify"].includes(name)) return "full-repository";
@@ -1273,7 +1298,7 @@ export function classifyValidationCommand(command) {
       continue;
     }
     if (!PACKAGE_MANAGER_COMMAND.test(segment) && OPAQUE_PACKAGE_MANAGER_RUN.test(segment)) return "full-repository";
-    const runner = segment.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?(?:[\w./-]+\/)?run-bun-test\.mjs(?:\s+(.*))?$/);
+    const runner = launch.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?(?:[\w./-]+\/)?run-bun-test\.mjs(?:\s+(.*))?$/);
     if (runner) {
       const args = runner[1] ?? "";
       if (/(?:^|\s)[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?(?:\s|$)/.test(args) && !hasOnlyExactTestSelectors(args)) return "full-repository";
@@ -1281,7 +1306,7 @@ export function classifyValidationCommand(command) {
       targeted = true;
       continue;
     }
-    const direct = segment.match(/^(?:node\s+--test|(?:npx|bunx|bun\s+x)?\s*vitest)(?:\s+(.*))?$/i);
+    const direct = launch.match(/^(?:node\s+--test|(?:npx|bunx|bun\s+x)?\s*vitest)(?:\s+(.*))?$/i);
     if (direct) {
       if (!hasOnlyExactTestSelectors((direct[1] ?? "").replace(/^run(?:\s|$)/, ""))) return "full-repository";
       targeted = true;

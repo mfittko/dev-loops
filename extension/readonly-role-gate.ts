@@ -1,4 +1,4 @@
-import { classifyValidationCommand, isReadSearchCommand } from '@dev-loops/core/loop/bash-command-classify';
+import { classifyValidationCommand, isReadSearchCommand, isReviewerContractCommand } from '@dev-loops/core/loop/bash-command-classify';
 import { EXECUTION_IDENTITY_RE } from '@dev-loops/core/loop/work-order-digest';
 import { NATIVE_PI_PARENT_SESSION_MARKER, isNativePiAsyncContext } from '@dev-loops/core/loop/run-context';
 
@@ -102,14 +102,14 @@ export function decidePiToolCall({ toolName, input, agentType }: {
   if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
   if (parseSanctionedPullLine(command)) return { block: false };
   if (agentType === 'judge' && JUDGE_DECISION_CHECK_RE.test(command.trim()) && !command.includes('..')) return { block: false };
-  if (READ_SEARCH_ROLES.has(agentType) && isReadSearchCommand(command)) return { block: false };
+  if (READ_SEARCH_ROLES.has(agentType) && (isReadSearchCommand(command) || isReviewerContractCommand(command))) return { block: false };
   return {
     block: true,
     reason:
       `Read-only role boundary (#2509): role "${agentType || '(unresolved role: fail closed)'}" may run only its dispatched ` +
       '`dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line' +
       (agentType === 'judge' ? ' or `dev-loops-run scripts/loop/check-judge-decision.mjs --file tmp/gate-judge/<path>.json`' : '') +
-      (READ_SEARCH_ROLES.has(agentType) ?' and shell-inert read or search commands' : '') +
+      (READ_SEARCH_ROLES.has(agentType) ?' and shell-inert reads, searches or contract-mandated read-only commands' : '') +
       '. Never run shell, test or build commands.',
   };
 }

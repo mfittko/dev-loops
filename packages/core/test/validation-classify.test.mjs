@@ -86,6 +86,20 @@ test("validation commands have one shared classification", () => {
   for (const [command, expected] of cases) assert.equal(classifyValidationCommand(command), expected, command);
 });
 
+test("runtime launch options preserve direct-script reach and consume their values", () => {
+  for (const launcher of ["bun --bun run --silent", "bun --cwd /work run --preload setup.mjs", "bun run --cwd /work --preload=setup.mjs", "bun --port 3000 run --config bunfig.toml", "node --no-warnings", "node --require setup.mjs --import=init.mjs", "node --env-file envfile --conditions development", "node --max-old-space-size 4096"]) {
+    assert.equal(classifyValidationCommand(`${launcher} scripts/verify.mjs`), "full-repository", launcher);
+    assert.equal(classifyValidationCommand(`${launcher} scripts/run-bun-test.mjs test/loop/a.test.mjs`), "targeted", launcher);
+    assert.equal(classifyValidationCommand(`${launcher} scripts/run-bun-test.mjs --all && bun run test:docs && bun run test:workflows`), "full-repository", launcher);
+    assert.equal(classifyValidationCommand(`${launcher} scripts/github/view-pr.mjs`), "non-validation", launcher);
+  }
+  for (const command of ["node --require scripts/verify.mjs scripts/github/view-pr.mjs", "bun --preload scripts/verify.mjs run scripts/github/view-pr.mjs", "node scripts/github/view-pr.mjs scripts/verify.mjs"]) {
+    assert.equal(classifyValidationCommand(command), "non-validation", command);
+  }
+  for (const command of ["bun --preload setup.mjs run verify", "bun run --cwd /work --port 3000 verify", "bun --preload setup.mjs test", "node --no-warnings --test", "bun run --silent test test/loop/a.test.mjs"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+  for (const command of ["bun --preload setup.mjs run test:core", "bun --cwd /work test test/loop/a.test.mjs", "node --no-warnings --test test/loop/a.test.mjs"]) assert.equal(classifyValidationCommand(command), "targeted", command);
+});
+
 test("changed surfaces select existing checks and unknown or mixed changes fail closed", () => {
   const cases = [
     [["packages/core/src/loop/validation-classify.mjs"], ["bun run assets:check", "bun run test:core"], ["assets:check", "test:core"]],

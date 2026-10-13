@@ -205,8 +205,8 @@ export async function emitFixerWorkOrder({
   const dir = path.resolve(buildFixerDir({ repo, pr, tmpRoot }));
   const paths = [...new Set((allowedPaths.length > 0 ? allowedPaths : ["."]).map(normalizeAllowedPath))].sort();
   const abs = (p) => path.resolve(cwd, p);
-  // Producers record suite log paths repo-relative: resolve them against the checkout that owns the validation record (the directory above its last tmp/ segment), not the caller cwd.
-  const recordOwnerRoot = validationFile ? (() => { const p = abs(validationFile); const i = p.lastIndexOf(`${path.sep}tmp${path.sep}`); return i <= 0 ? cwd : p.slice(0, i); })() : cwd;
+  // Producers record suite logs repo-relative; an external temporary record keeps the explicit cwd.
+  const recordOwnerRoot = validationFile ? (() => { const p = abs(validationFile); const i = p.lastIndexOf(`${path.sep}tmp${path.sep}`); const root = p.slice(0, i); return i > 0 && existsSync(path.join(root, ".git")) ? root : cwd; })() : cwd;
 
   const source = actListFile ? await readSource("act-list", abs(actListFile)) : threadsFile ? await readSource("threads", abs(threadsFile)) : await readSource("validation", abs(validationFile));
   const validationLogs = [];

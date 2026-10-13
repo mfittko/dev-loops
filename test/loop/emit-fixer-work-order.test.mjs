@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, realpathSync } from "node:fs";
-import { mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -71,6 +71,19 @@ test("#2470: a repo-relative suite outputPath resolves against the record's chec
   assert.equal(log.path, path.join(root, "tmp/src/unit.log"));
   await rm(log.path);
   await assert.rejects(emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, validationFile, phase: "commit_only" }), /log/);
+}));
+
+test("#2470: an external temporary validation record resolves logs against the explicit cwd", async () => withFixture(async ({ wt, head, emit }) => {
+  const dir = await realpath(await mkdtemp("/tmp/dev-loops-validation-external-"));
+  try {
+    const validationFile = path.join(dir, "validation.json");
+    const outputPath = "tmp/unit.log";
+    await mkdir(path.join(wt, "tmp"), { recursive: true });
+    await writeFile(path.join(wt, outputPath), "test failed\n");
+    await writeFile(validationFile, JSON.stringify({ headSha: head, status: "failed", allPassed: false, suites: [{ name: "unit", exitCode: 1, outputPath }] }));
+    const plan = await emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, validationFile, phase: "commit_only" });
+    assert.equal(plan.workOrder.requiredReads.find((r) => r.kind === "validation-log").path, path.join(wt, outputPath));
+  } finally { await rm(dir, { recursive: true, force: true }); }
 }));
 
 // An inherited GIT_DIR/GIT_WORK_TREE (a git hook of another repo) must not change a decision.

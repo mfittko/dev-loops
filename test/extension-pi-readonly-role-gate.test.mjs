@@ -93,6 +93,30 @@ test("Pi reviewer reads and searches but cannot run tests or builds", async () =
   }
 });
 
+test("Pi and Claude reviewers admit the same contract reads and deny active forms", async () => {
+  const allowed = [
+    "gh api repos/o/r/pulls/1/reviews", "gh api repos/o/r/pulls/1/commits",
+    "gh api --paginate -X GET repos/o/r/pulls/1/reviews", "gh pr view 1 --json body",
+    "dev-loops-run cli/index.mjs gate resolve-role --gate pre_approval_gate --angle correctness",
+  ];
+  const denied = [
+    "gh api --method POST repos/o/r/pulls/1/reviews", "gh api repos/o/r/pulls/1/reviews -f event=APPROVE",
+    "gh api repos/o/r/pulls/1/reviews -F event=APPROVE", "gh api repos/o/r/pulls/1/reviews --field event=APPROVE",
+    "gh api repos/o/r/pulls/1/reviews --raw-field event=APPROVE", "gh api repos/o/r/pulls/1/reviews --input body.json",
+    "gh api repos/o/r/pulls/1/reviews; bun test", "gh api repos/o/r/pulls/1/reviews | cat",
+    "gh pr view $(id)", "gh pr view 1 && bun test", "bun run verify", "bun run build",
+    "dev-loops-run cli/index.mjs gate resolve-role --gate x; bun test",
+  ];
+  for (const [commands, block] of [[allowed, false], [denied, true]]) {
+    for (const command of commands) {
+      assert.equal(decideBashGate({ command, agentType: "review" }).decision, block ? "deny" : "allow", command);
+      assert.equal((await callAs("review", command)).block, block, command);
+      assert.equal((await callAs("dev-loops:review", command)).block, block, command);
+    }
+  }
+  for (const command of allowed) assert.equal((await callAs("judge", command)).block, true, command);
+});
+
 test("Pi tool_call fails closed on a blank marker and leaves the unmarked and non-read-only callers alone", async () => {
   for (const marker of ["", "  ", "dev-loops:"]) assert.equal((await callAs(marker, "ls")).block, true, JSON.stringify(marker));
   assert.equal((await callAs("dev-loops: judge", "rm -rf /")).block, true);
@@ -349,6 +373,20 @@ test("registered Pi handler keeps worker targeted checks and mutation tools whil
     }
   }
 });
+test("launcher options preserve worker admission on Pi and Claude", async () => {
+  const full = ["bun --bun run scripts/verify.mjs", "bun run --silent scripts/verify.mjs", "bun --cwd /work run --preload setup.mjs scripts/verify.mjs", "node --require setup.mjs --no-warnings scripts/verify.mjs", "bun run --port 3000 verify", "node --no-warnings --test"];
+  const targeted = ["bun run --cwd /work scripts/run-bun-test.mjs test/loop/a.test.mjs", "node --require setup.mjs scripts/run-bun-test.mjs test/loop/a.test.mjs", "bun --preload setup.mjs run test:core"];
+  const reads = ["bun run --cwd /work scripts/github/view-pr.mjs", "node --require scripts/verify.mjs scripts/github/view-pr.mjs"];
+  for (const role of ["developer", "fixer"]) {
+    for (const [commands, block] of [[full, true], [[...targeted, ...reads], false]]) {
+      for (const command of commands) {
+        assert.equal(decideBashGate({ command, agentType: role }).decision, block ? "deny" : "allow", command);
+        assert.equal((await callAs(role, command)).block, block, command);
+      }
+    }
+  }
+});
+
 test("registered Pi handler denies before a would-be validation process starts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-validation-boundary-"));
   const sentinel = path.join(root, "child-started");
