@@ -1254,7 +1254,7 @@ export function classifyValidationCommand(command) {
   const suites = new Set();
   let targeted = false;
   for (const segment of verificationCommandSegments(command)) {
-    const scriptPath = segment.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
+    const scriptPath = segment.match(/^(?:(?:bun|node)(?:\s+--\S+)*(?:\s+run)?(?:\s+--\S+)*\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
     const normalizedPath = scriptPath ? posix.normalize(scriptPath) : "";
     if (normalizedPath === "verify.mjs" || /(?:^|\/)scripts\/verify\.mjs$/.test(normalizedPath)) return "full-repository";
     const bunTest = segment.match(/^bun\s+test(?:\s+(.*))?$/i);

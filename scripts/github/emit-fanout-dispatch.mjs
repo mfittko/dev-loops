@@ -108,7 +108,8 @@ Output (stdout, JSON):
   A validation-evidence refusal (exit 1) instead emits { "ok": false,
   "refusal": "validation_failed|validation_incomplete|semantic_harness_unqualified",
   "validationResultsPath": "...", "reason": "...", "suites"?: [...] } with no
-  "error" field; read "refusal", not "error", for it.
+  "error" field; read "refusal", not "error", for it. semantic_harness_unqualified
+  fires for any gate and carries { refusal, reason } without validationResultsPath.
   On success this step ALSO persists its emitted round plan to the keyed
   <gate>-<headSha>.emit-plan.json sibling of the gate-context bundle
   (buildGateEmitPlanPath, GATE-EXEC-FANOUT-DISPATCH-EMIT) — body = the emitter's
@@ -128,11 +129,11 @@ Exit codes:
      derive a colliding scope, a unit's invariant-prefix record is missing /
      suffix could not be composed, an angle has no resolvable prompt, or a
      composed work order exceeds REVIEWER_WORK_ORDER_MAX_BYTES (30 KB) or
-     carries an inline "diff --git" line; or, for a lifecycle gate whose
+     carries an inline "diff --git" line; the semantic harness is unqualified
+     (Codex) (semantic_harness_unqualified); or, for a lifecycle gate whose
      context carries scope.validationResultsPath, the present validation record
-     is red (validation_failed), incomplete or stamped with another head
-     (validation_incomplete), or the semantic harness is unqualified (Codex)
-     (semantic_harness_unqualified). An absent record does not refuse here.
+     is red (validation_failed) or incomplete or stamped with another head
+     (validation_incomplete). An absent record does not refuse here.
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, filesystem
      error, or invalid --jq filter)`.trim();
 
