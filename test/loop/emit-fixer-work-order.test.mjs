@@ -41,10 +41,16 @@ test("#2470: validation source binds text logs and preserves PR authority", asyn
   assert.deepEqual(plan.workOrder.requiredReads.map((r) => r.kind), ["validation", "validation-log"]);
   assert.equal(plan.workOrder.mutationAuthority.branch, "issue-1");
   assert.equal(plan.workOrder.siteCoverage, undefined);
+  const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
+  assert.equal(existsSync(marker), false, "validation repairs do not start a delta push sequence");
   assert.match(await readFile(plan.promptPath, "utf8"), /unit/);
   assert.doesNotMatch(await readFile(plan.promptPath, "utf8"), /Write the site coverage record/);
   await writeFile(log, "changed");
   assert.match((await locateFixerUnit({ ref: plan.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] })).stale, /validation-log/);
+  await emit();
+  const previousMarker = await readFile(marker, "utf8");
+  await emit(args);
+  assert.equal(await readFile(marker, "utf8"), previousMarker, "validation repairs preserve existing delta push authority");
   await assert.rejects(emit({ ...args, actListFile: files.actList }), /exactly one/);
   await assert.rejects(emit({ ...args, phase: "full" }), /commit_only/);
   for (const over of [{ status: "incomplete" }, { allPassed: true }, { headSha: "a".repeat(40) }]) {

@@ -42,8 +42,26 @@ import {
   commandIsFileMarkerPollLoop,
   commandContainsInlineInterpreter,
   commandContainsCodeVerificationEntrypoint,
+  isReadSearchCommand,
 } from "../src/loop/bash-command-classify.mjs";
 import { decideBashGate } from "../src/claude/hook-decisions.mjs";
+
+test("reviewer scripts accept inert quoted diagnostics without allowing shell execution", () => {
+  const blocked = "dev-loops-run scripts/github/emit-reviewer-blocked.mjs --reason";
+  for (const command of [
+    `${blocked} 'validation record has wrong head'`,
+    `${blocked} "validation record is absent, unreadable, or invalid JSON"`,
+    "dev-loops-run scripts/github/verify-fresh-review-context.mjs --reason 'validation record has wrong head'",
+  ]) assert.equal(isReadSearchCommand(command), true, command);
+  for (const command of [
+    `${blocked} 'wrong head' && bun run verify`,
+    `${blocked} "$(id)"`,
+    `${blocked} "\u0060id\u0060"`,
+    `${blocked} 'wrong head' > result.json`,
+    `${blocked} 'wrong head' | cut -c1-2`,
+    "dev-loops-run scripts/github/other.mjs --reason 'wrong head'",
+  ]) assert.equal(isReadSearchCommand(command), false, command);
+});
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
   assert.equal(TARGET_REPO_SLUG, "mfittko/dev-loops");

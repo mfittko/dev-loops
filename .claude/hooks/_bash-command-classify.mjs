@@ -1254,7 +1254,7 @@ export function classifyValidationCommand(command) {
       targeted = true;
       continue;
     }
-    const packageRun = segment.match(/^(?:bun|npm|pnpm|yarn)(?:\s+(?:(?:--prefix|--dir|--cwd)\s+\S+|--\S+))*\s+(?:run\s+)?(test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)(?:\s|$)/i);
+    const packageRun = segment.match(/^(?:bun|npm|pnpm|yarn)(?:\s+(?:(?:--prefix|--dir|--cwd)\s+\S+|--\S+))*\s+(?:run(?:\s+(?:(?:--prefix|--dir|--cwd)\s+\S+|--\S+))*\s+)?(test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)(?:\s|$)/i);
     if (packageRun) {
       const name = packageRun[1].toLowerCase();
       if (["test", "verify"].includes(name)) return "full-repository";
@@ -1334,9 +1334,9 @@ export function isReadSearchCommand(rawCommand) {
   // Strip the mandated `cd <path> && ` and `git -C <path> ` forms first; their paths allow safe characters only.
   const command = rawCommand.trim().replace(CD_PREFIX_RE, '').replace(GIT_C_RE, 'git ');
   if (/[\n\r]/.test(command)) return false;
-  if (REVIEWER_SCRIPT_RE.test(command) && !SHELL_ACTIVE_RE.test(command)) return true;
   const words = tokenize(command);
   if (!words) return false;
+  if (REVIEWER_SCRIPT_RE.test(command) && words.every((w) => w.quoted || w.value !== '|')) return true;
   const pipe = words.findIndex((w) => !w.quoted && w.value === '|');
   let readWords = words;
   if (pipe !== -1) {

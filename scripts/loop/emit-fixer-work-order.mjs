@@ -304,7 +304,7 @@ export async function emitFixerWorkOrder({
   await rename(tempPath, planPath);
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: written last so a refused emit never grants the push; only a full work order grants the fixer.
   // Always under the canonical gate-artifact root (the location the push-authority check reads), whatever --tmp-root says.
-  writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(cwd), baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName });
+  if (!validationFile) writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(cwd), baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName });
   return { ...plan, planPath };
 }
 
