@@ -267,7 +267,7 @@ test("the child env drops inherited run-id markers without mutating the caller e
 });
 
 test("the child env drops every async-context and harness marker without mutating the caller env", async () => {
-  const stripped = [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER];
+  const stripped = [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER, "CODEX_THREAD_ID"];
   const env = { ...Object.fromEntries(stripped.map((marker) => [marker, "1"])), UNRELATED_VAR: "kept" };
   const before = { ...env };
   let childEnv;
@@ -286,6 +286,29 @@ test("the child env drops every async-context and harness marker without mutatin
   for (const marker of stripped) assert.ok(!(marker in childEnv), `${marker} must not reach the child`);
   assert.deepEqual(env, before);
   assert.equal(childEnv.UNRELATED_VAR, "kept");
+});
+
+test("the default child env drops the Codex marker without mutating process.env", async () => {
+  const original = process.env.CODEX_THREAD_ID;
+  process.env.CODEX_THREAD_ID = "fixture-codex";
+  try {
+    let childEnv;
+    const code = await runBunTest(["example.test.mjs"], {
+      captureFactory: async () => memoryCapture(" 1 pass\n 0 fail\nRan 1 test across 1 file. [1.00ms]\n", []),
+      spawnImpl: (command, args, options) => {
+        childEnv = options.env;
+        return fakeChild(() => {})(command, args, options);
+      },
+      stdout: { write() {} },
+      stderr: { write() {} },
+    });
+    assert.equal(code, 0);
+    assert.ok(!("CODEX_THREAD_ID" in childEnv));
+    assert.equal(process.env.CODEX_THREAD_ID, "fixture-codex");
+  } finally {
+    if (original === undefined) delete process.env.CODEX_THREAD_ID;
+    else process.env.CODEX_THREAD_ID = original;
+  }
 });
 
 test("successful wrapper runs remove their real diagnostic spool", async () => {
