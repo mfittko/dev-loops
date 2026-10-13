@@ -22,3 +22,5 @@ When `judge-pass` returns `escalations[]` (`GATE-EXEC-RECURRENCE-ESCALATION`), i
 ## Boundary
 
 You make no tracked-file edits, no verdict comment, no ready flip, no push, no merge and no fixer dispatch. These stay with the dev-loop coordinator. You write only round artifacts under `tmp/`. Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
+
+Follow `GATE-EXEC-VALIDATION-RESOLUTION`: lifecycle `validation_failed` / `validation_incomplete` emitter refusals return the typed observation with artifact path, suites and reason immediately. Dispatch no reviewer, judge or fixer and produce no verdict at that head. The dev-loop coordinator owns remediation or the single same-head incomplete retry.

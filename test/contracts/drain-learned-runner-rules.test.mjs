@@ -120,10 +120,10 @@ test("GATE-EXEC-VALIDATION-RESOLUTION names the verdict writer as its enforcemen
     ["fails argument parsing", "removes the artifact", "writes none", "verdict writer refuses"],
     ["argument-parsing cleanup", "inside the checkout", "`--tmp-root`", "outside the checkout", "prior artifact"],
     ["exception", "typed incomplete artifact", "head check", "confirms the requested head"],
-    ["absent, unreadable, incomplete", "different head SHA", "MUST report a gate-evidence finding", "MUST NOT"],
+    ["absent, unreadable, incomplete", "different head SHA", "MUST return typed `validation_incomplete`", "blocked artifacts for all assigned angles", "no completed angles", "MUST NOT"],
     ["typed incomplete artifact", "satisfies this check"],
     ["verdict writer checks only", "presence", "readability", "head stamp"],
-    ["gate-evidence finding path", "not the verdict writer", "prevents a `clean` verdict", "incomplete artifact"],
+    ["reviewer blocked-evidence path", "not the verdict writer", "prevents a `clean` verdict", "incomplete artifact"],
     ["`--tmp-root`", "`upsert-checkpoint-verdict.mjs --context-tmp-root <path>`"],
   ], "GATE-EXEC-VALIDATION-RESOLUTION");
 });

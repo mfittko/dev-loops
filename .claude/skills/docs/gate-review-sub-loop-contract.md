@@ -224,6 +224,10 @@ The volatile tail follows that boundary and holds only values the stable rendere
 
 Cache priming is an optional, non-semantic execution optimization. A harness or execution adapter MAY prime internally only when its capability and measured economics justify it. Priming MUST NOT change review semantics or evidence, reduce reviewer independence, serialize a completion-only lead reviewer before the wave, or become a fan-in or verdict precondition. Where cache telemetry is exposed, a round MAY record creation and read events at `<gate>-<headSha>.cache-telemetry.json` (`@dev-loops/core/loop/cache-telemetry-evidence`); `GATE-EXEC-CACHE-TELEMETRY` validates a recorded artifact. Opaque or unavailable telemetry records `cacheReuseVerified: false` with a reason: it is never described as verified reuse, and missing telemetry never fails the gate. These workflows use Pi/Claude Code agent harnesses, not a raw-API path: the conductor cannot set `prompt_cache_key` or explicit breakpoints, so do not add a verification pass or invent a cache pin. The prefix-hash, required-read hash, sentinel, same-head rebuild/retirement, and fan-in provenance checks stay load-bearing and unchanged.
 
+The lifecycle emitter checks the single `scope.validationResultsPath` before any reviewer work-order write. A present exact-head failed record (`allPassed:false`, `status:failed`, or a nonzero suite exit code) returns `validation_failed` with that artifact path, the failing suite names/outputPath pairs, and its reason. A present incomplete, unreadable or wrong-head record returns `validation_incomplete` with its path and reason. Neither observation is a gate verdict: the gate coordinator dispatches no reviewer, judge or fixer and returns the observation; the dev-loop coordinator posts no verdict at the refused head. Missing evidence has no new pre-fanout stop, and standalone `review` has no red-validation stop.
+
+The dev-loop coordinator alone handles `validation_failed`: emit `emit-fixer-work-order.mjs --validation-file <artifact> --phase commit_only` with the current PR authority and harness, dispatch its printed payload unchanged, then own the authorized push/checkpoint and start a fresh validation round at the new head. The order binds the failed record and every failing suite's text log; no finding fingerprint or review-thread identity is invented. Red CI with no suite logs preserves its reason and empty suite set. For `validation_incomplete`, dispatch no fixer: retry exactly once at the same head through a fresh gate coordinator and `gate resolve-validation`; a second incomplete result at that head stops for the operator. A new head resets that retry count.
+
 <!-- rule: GATE-EXEC-VALIDATION-RESOLUTION -->
 `GATE-EXEC-VALIDATION-RESOLUTION`: The preamble MUST resolve the round's validation set exactly
 once, before any reviewer is dispatched, via `dev-loops-run cli/index.mjs gate resolve-validation`
@@ -243,16 +247,18 @@ verdict writer refuses the post as absent. The argument-parsing cleanup deletes 
 artifact inside the checkout: a parse failure under a `--tmp-root` that resolves outside
 the checkout leaves that root's prior artifact in place. An exception writes the typed incomplete artifact only when a head
 check at that point confirms the requested head. A reviewer that finds the artifact absent, unreadable, incomplete,
-or stamped with a different head SHA MUST report a gate-evidence finding; it
+or stamped with a different head SHA MUST return typed `validation_incomplete` and emit blocked artifacts for all assigned angles with no completed angles through `emit-reviewer-blocked.mjs --reason <diagnostic>`; it
 MUST NOT silently run the suite itself and MUST NOT treat the gap as clean. The verdict writer
 enforces this rule: `upsert-checkpoint-verdict.mjs` refuses a `fanout_fanin` verdict post when
 the head's `<gate>-<headSha>.validation.json` is absent, unreadable, or stamped with a different
 head SHA. A typed incomplete artifact satisfies this check. The verdict writer checks only the
-artifact's presence, readability and head stamp. The reviewer gate-evidence finding path, not the verdict
+artifact's presence, readability and head stamp. The reviewer blocked-evidence path, not the verdict
 writer, prevents a `clean` verdict over an incomplete artifact. The refusal names the artifact and `run-gate-validation.mjs`. It applies under the
 same `gates.requireFanoutEvidence` condition as the durable-ledger refusal. When the round resolved its validation under an explicit `--tmp-root`, pass that same path as `upsert-checkpoint-verdict.mjs --context-tmp-root <path>` (default `tmp`).
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
+
+Reviewers and judges consume the same context `scope.validationResultsPath`, bound by its recorded hash and requested head. Validation remains a field-level read, not a required full JSON read. They never execute tests, builds or validation, including a suite absent from the record. Missing, wrong-head, changed or incomplete evidence means reviewer blocked/judge `validation_incomplete`, with no fallback validation or judge verdict. Semantic dispatch resolves the active harness with `resolveRuntimeHarness` and checks the recorded context harness; Codex remains explicitly unqualified and fails closed without a supported pre-process enforcement boundary. A harness label or cache capability is no qualification evidence.
 
 <!-- rule: GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT -->
 **Reviewer-budget preflight.** Before fan-out, read the harness's exposed remaining reviewer budget and pass it as `write-gate-context.mjs --available-reviewers <n>`. Read `artifact.fanout.preflight`, derived by `reviewerBudgetPreflight` (`@dev-loops/core/loop/gate-fanin`). It compares the budget with required dispatch units (fresh angles plus re-verifications, grouped where applicable), not the raw angle count.

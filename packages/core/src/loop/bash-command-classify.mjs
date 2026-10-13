@@ -1246,7 +1246,7 @@ export function classifyValidationCommand(command) {
   for (const segment of verificationCommandSegments(command)) {
     const scriptPath = segment.match(/^(?:(?:bun|node)\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
     const normalizedPath = scriptPath ? posix.normalize(scriptPath) : "";
-    if (["verify.mjs", "scripts/verify.mjs"].includes(normalizedPath) || normalizedPath.endsWith("/scripts/verify.mjs")) return "full-repository";
+    if (normalizedPath === "verify.mjs" || /(?:^|\/)scripts\/verify\.mjs$/.test(normalizedPath)) return "full-repository";
     const bunTest = segment.match(/^bun\s+test(?:\s+(.*))?$/i);
     if (bunTest) {
       if (!hasOnlyExactTestSelectors(bunTest[1])) return "full-repository";
