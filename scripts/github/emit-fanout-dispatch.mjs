@@ -97,7 +97,8 @@ Output (stdout, JSON):
       "promptBytes": <n>, "sectionBytes": { "prefix": <n>, "volatile": <n>, "suffix": <n> },
       "workOrder": { "role", "target", "operation", "roundIdentity", "headSha", "configSha256", "assignedAngles",
         "angleInstructions": [ { "angle": "...", "persona": "...", "prompt": "..." } ],
-        "validationResultsPath"?, "requiredReads", "outputRefs", "executionRules" } } ] }
+        "validationResultsPath", "requiredReads", "outputRefs", "executionRules" } } ] }
+  workOrder.validationResultsPath is always present: a string pointer or null.
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups

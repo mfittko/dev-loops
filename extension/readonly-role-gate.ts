@@ -1,6 +1,9 @@
 import { classifyValidationCommand, isReadSearchCommand, isReviewerContractCommand } from '@dev-loops/core/loop/bash-command-classify';
 import { EXECUTION_IDENTITY_RE } from '@dev-loops/core/loop/work-order-digest';
 import { NATIVE_PI_PARENT_SESSION_MARKER, isNativePiAsyncContext } from '@dev-loops/core/loop/run-context';
+import { fileURLToPath } from 'node:url';
+
+const TRUSTED_CLI_PATH = fileURLToPath(new URL('../cli/index.mjs', import.meta.url));
 
 /**
  * Pi enforcement of the read-only role boundary
@@ -102,7 +105,7 @@ export function decidePiToolCall({ toolName, input, agentType }: {
   if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
   if (parseSanctionedPullLine(command)) return { block: false };
   if (agentType === 'judge' && JUDGE_DECISION_CHECK_RE.test(command.trim()) && !command.includes('..')) return { block: false };
-  if (READ_SEARCH_ROLES.has(agentType) && (isReadSearchCommand(command) || isReviewerContractCommand(command))) return { block: false };
+  if (READ_SEARCH_ROLES.has(agentType) && (isReadSearchCommand(command) || isReviewerContractCommand(command, TRUSTED_CLI_PATH))) return { block: false };
   return {
     block: true,
     reason:

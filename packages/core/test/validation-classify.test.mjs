@@ -64,6 +64,16 @@ test("validation commands have one shared classification", () => {
     ["npm t", "full-repository"],
     ["npm tst", "full-repository"],
     ["pnpm t", "full-repository"],
+    ["npm it", "full-repository"],
+    ["npm install-test", "full-repository"],
+    ["npm cit", "full-repository"],
+    ["npm install-ci-test", "full-repository"],
+    ["npm clean-install-test", "full-repository"],
+    ["npm sit", "full-repository"],
+    ["pnpm it", "full-repository"],
+    ["pnpm install-test", "full-repository"],
+    ["npm --prefix . it", "full-repository"],
+    ["pnpm --dir . install-test", "full-repository"],
     ["npm run-script verify", "full-repository"],
     ["npm rum verify", "full-repository"],
     ["npm urn test", "full-repository"],
@@ -98,6 +108,16 @@ test("runtime launch options preserve direct-script reach and consume their valu
   }
   for (const command of ["bun --preload setup.mjs run verify", "bun run --cwd /work --port 3000 verify", "bun --preload setup.mjs test", "node --no-warnings --test", "bun run --silent test test/loop/a.test.mjs"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
   for (const command of ["bun --preload setup.mjs run test:core", "bun --cwd /work test test/loop/a.test.mjs", "node --no-warnings --test test/loop/a.test.mjs"]) assert.equal(classifyValidationCommand(command), "targeted", command);
+});
+
+test("unlisted runtime options cannot hide a full entrypoint behind their value", () => {
+  for (const launcher of ["node --watch-path .", "node --report-dir out", "node --report-filename report.json", "node --heapsnapshot-signal SIGUSR2", "node --trace-event-categories node", "node --localstorage-file storage.json", "node --future-option value", "bun --future-option value run", "node --future-option value --another-option out", "node --future-option setup.mjs"]) {
+    assert.equal(classifyValidationCommand(`${launcher} scripts/verify.mjs`), "full-repository", launcher);
+    assert.equal(classifyValidationCommand(`${launcher} scripts/run-bun-test.mjs test/loop/a.test.mjs`), "targeted", launcher);
+    assert.equal(classifyValidationCommand(`${launcher} scripts/github/view-pr.mjs`), "non-validation", launcher);
+  }
+  for (const command of ["node --future-option value --test", "bun --future-option value run verify", "bun run --future-option value verify"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+  for (const command of ["node --no-warnings scripts/github/view-pr.mjs scripts/verify.mjs", "node --trace-warnings scripts/github/view-pr.mjs scripts/verify.mjs", "bun run --silent scripts/github/view-pr.mjs scripts/verify.mjs", "node --report-dir out scripts/github/view-pr.mjs scripts/verify.mjs", "node --future-option value scripts/github/view-pr.mjs scripts/verify.mjs", "node --require scripts/verify.mjs --future-option value scripts/github/view-pr.mjs"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
 });
 
 test("changed surfaces select existing checks and unknown or mixed changes fail closed", () => {

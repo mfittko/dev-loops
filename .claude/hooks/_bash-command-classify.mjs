@@ -1225,9 +1225,9 @@ const EXACT_TEST_FILE = /^[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const RUNNER_VALUE_FLAGS = new Set(["--timeout", "--test-name-pattern", "--test-reporter", "--test-reporter-destination", "--reporter", "--test-timeout", "--test-concurrency", "--test-shard", "--max-workers", "--filter"]);
 const PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+(?:(?:--prefix|--dir|--cwd|--loglevel|--workspace|--filter|--cache|--registry|--userconfig|--config|--modules-folder|--use-yarnrc|-w|-C)\s+\S+|--?[\w-]+=\S+|(?:--silent|--quiet|--verbose|--bun|--if-present|--ignore-scripts|--offline|--frozen-lockfile|--recursive|-[sqrd]+)(?=\s|$)))*`;
 const VALIDATION_SCRIPT = String.raw`(?:test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)`;
-// npm/pnpm built-in aliases: run-script|rum|urn for run, t|tst for test.
+// npm/pnpm aliases and install-and-test commands all run the test script.
 const RUN_WORD = String.raw`(?:run-script|run|rum|urn)`;
-const TEST_ALIAS = new RegExp(`^(?:npm|pnpm)${PACKAGE_MANAGER_OPTIONS}\\s+(?:t|tst)(?:\\s|$)`, "i");
+const TEST_ALIAS = new RegExp(`^(?:npm|pnpm)${PACKAGE_MANAGER_OPTIONS}\\s+(?:t|tst|it|install-test|cit|install-ci-test|clean-install-test|sit)(?:\\s|$)`, "i");
 const PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(${VALIDATION_SCRIPT})(?:\\s|$)`, "i");
 const PACKAGE_MANAGER_COMMAND = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(?!${RUN_WORD}(?:\\s|$))[\\w:][\\w:-]*(?:\\s|$)`, "i");
 // An opaque value-taking option before a recognizable validation script cannot grant worker execution.
@@ -1239,22 +1239,28 @@ const RUNTIME_VALUE_FLAGS = new Set([
   "--watch-kill-signal", "--fetch-preconnect", "--max-http-header-size", "--dns-result-order", "--disable-warning", "--unhandled-rejections", "--console-depth", "--user-agent",
   "--cron-title", "--cron-period", "--main-fields", "--extension-order", "--tsconfig-override", "-d", "--define", "--drop", "--feature", "--jsx-factory", "--jsx-fragment", "--jsx-import-source", "--jsx-runtime",
 ]);
+const RUNTIME_BOOLEAN_FLAGS = new Set(["--bun", "-b", "--silent", "--no-warnings", "--trace-warnings", "--no-deprecation", "--trace-deprecation", "--watch", "--hot", "--expose-gc", "--preserve-symlinks", "--preserve-symlinks-main"]);
 
-// Strip launcher options, consuming their values so a preload path cannot become the entrypoint.
-function normalizeRuntimeLaunch(segment) {
+// Unknown prefix flags may consume a value; preserve both interpretations until an entrypoint.
+function runtimeLaunches(segment) {
   const words = segment.split(/\s+/);
   const runtime = words[0];
-  if (runtime !== "bun" && runtime !== "node") return segment;
-  let i = 1;
-  let ran = false;
-  while (i < words.length) {
-    const word = words[i];
-    if (runtime === "bun" && word === "run" && !ran) { ran = true; i += 1; continue; }
-    if (word === "--") { i += 1; break; }
-    if (!word.startsWith("-") || word === "--test") break;
-    i += RUNTIME_VALUE_FLAGS.has(word) ? 2 : 1;
+  if (runtime !== "bun" && runtime !== "node") return [segment];
+  const prefixes = [{ i: 1, ran: false }];
+  const launches = [];
+  for (let { i, ran } of prefixes) {
+    while (i < words.length) {
+      const word = words[i];
+      if (runtime === "bun" && word === "run" && !ran) { ran = true; i += 1; continue; }
+      if (word === "--") { i += 1; break; }
+      if (!word.startsWith("-") || word === "--test") break;
+      if (RUNTIME_VALUE_FLAGS.has(word)) { i += 2; continue; }
+      if (!word.includes("=") && !RUNTIME_BOOLEAN_FLAGS.has(word) && words[i + 1] && !words[i + 1].startsWith("-")) prefixes.push({ i: i + 2, ran });
+      i += 1;
+    }
+    launches.push([runtime, ...(ran ? ["run"] : []), ...words.slice(i)].join(" "));
   }
-  return [runtime, ...(ran ? ["run"] : []), ...words.slice(i)].join(" ");
+  return launches;
 }
 
 function hasOnlyExactTestSelectors(args = "") {
@@ -1278,38 +1284,39 @@ export function classifyValidationCommand(command) {
   const suites = new Set();
   let targeted = false;
   for (const segment of verificationCommandSegments(command)) {
-    const launch = normalizeRuntimeLaunch(segment);
-    const scriptPath = launch.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
-    const normalizedPath = scriptPath ? posix.normalize(scriptPath) : "";
-    if (normalizedPath === "verify.mjs" || /(?:^|\/)scripts\/verify\.mjs$/.test(normalizedPath)) return "full-repository";
-    const bunTest = launch.match(/^bun\s+test(?:\s+(.*))?$/i);
-    if (bunTest) {
-      if (!hasOnlyExactTestSelectors(bunTest[1])) return "full-repository";
-      targeted = true;
-      continue;
-    }
-    if (TEST_ALIAS.test(segment)) return "full-repository";
-    const packageRun = segment.match(PACKAGE_MANAGER_RUN) ?? launch.match(PACKAGE_MANAGER_RUN);
-    if (packageRun) {
-      const name = packageRun[1].toLowerCase();
-      if (["test", "verify"].includes(name)) return "full-repository";
-      suites.add(name);
-      targeted = true;
-      continue;
-    }
-    if (!PACKAGE_MANAGER_COMMAND.test(segment) && OPAQUE_PACKAGE_MANAGER_RUN.test(segment)) return "full-repository";
-    const runner = launch.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?(?:[\w./-]+\/)?run-bun-test\.mjs(?:\s+(.*))?$/);
-    if (runner) {
-      const args = runner[1] ?? "";
-      if (/(?:^|\s)[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?(?:\s|$)/.test(args) && !hasOnlyExactTestSelectors(args)) return "full-repository";
-      if (/(?:^|\s)--all(?:\s|$)/.test(args) || !hasOnlyExactTestSelectors(args)) suites.add("test:all");
-      targeted = true;
-      continue;
-    }
-    const direct = launch.match(/^(?:node\s+--test|(?:npx|bunx|bun\s+x)?\s*vitest)(?:\s+(.*))?$/i);
-    if (direct) {
-      if (!hasOnlyExactTestSelectors((direct[1] ?? "").replace(/^run(?:\s|$)/, ""))) return "full-repository";
-      targeted = true;
+    for (const launch of runtimeLaunches(segment)) {
+      const scriptPath = launch.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
+      const normalizedPath = scriptPath ? posix.normalize(scriptPath) : "";
+      if (normalizedPath === "verify.mjs" || /(?:^|\/)scripts\/verify\.mjs$/.test(normalizedPath)) return "full-repository";
+      const bunTest = launch.match(/^bun\s+test(?:\s+(.*))?$/i);
+      if (bunTest) {
+        if (!hasOnlyExactTestSelectors(bunTest[1])) return "full-repository";
+        targeted = true;
+        continue;
+      }
+      if (TEST_ALIAS.test(segment)) return "full-repository";
+      const packageRun = segment.match(PACKAGE_MANAGER_RUN) ?? launch.match(PACKAGE_MANAGER_RUN);
+      if (packageRun) {
+        const name = packageRun[1].toLowerCase();
+        if (["test", "verify"].includes(name)) return "full-repository";
+        suites.add(name);
+        targeted = true;
+        continue;
+      }
+      if (!PACKAGE_MANAGER_COMMAND.test(segment) && OPAQUE_PACKAGE_MANAGER_RUN.test(segment)) return "full-repository";
+      const runner = launch.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?(?:[\w./-]+\/)?run-bun-test\.mjs(?:\s+(.*))?$/);
+      if (runner) {
+        const args = runner[1] ?? "";
+        if (/(?:^|\s)[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?(?:\s|$)/.test(args) && !hasOnlyExactTestSelectors(args)) return "full-repository";
+        if (/(?:^|\s)--all(?:\s|$)/.test(args) || !hasOnlyExactTestSelectors(args)) suites.add("test:all");
+        targeted = true;
+        continue;
+      }
+      const direct = launch.match(/^(?:node\s+--test|(?:npx|bunx|bun\s+x)?\s*vitest)(?:\s+(.*))?$/i);
+      if (direct) {
+        if (!hasOnlyExactTestSelectors((direct[1] ?? "").replace(/^run(?:\s|$)/, ""))) return "full-repository";
+        targeted = true;
+      }
     }
   }
   if (FULL_SUITES.every((suite) => suites.has(suite)) || [...COMPONENT_SUITES].every((suite) => suites.has(suite))) return "full-repository";
@@ -1422,12 +1429,15 @@ function reviewFlagArgs(words, { bare, valued, getValue = new Set() }) {
   return positional;
 }
 
-/** Whether `rawCommand` is one unchained, read-only form of `gh api .../pulls/<n>/(reviews|commits)`, `gh pr view` or `gate resolve-role`. */
-export function isReviewerContractCommand(rawCommand) {
+/** Read-only reviewer forms; Pi supplies its installed CLI path to admit the contract's Node helper. */
+export function isReviewerContractCommand(rawCommand, trustedCliPath = null) {
   const command = rawCommand.trim();
   if (SHELL_ACTIVE_RE.test(command)) return false;
   if (REVIEW_RESOLVE_ROLE_RE.test(command)) return true;
   const words = command.split(/\s+/);
+  if (trustedCliPath && words[0] === 'node' && words[1] === trustedCliPath) {
+    return REVIEW_RESOLVE_ROLE_RE.test(['dev-loops-run', 'cli/index.mjs', ...words.slice(2)].join(' '));
+  }
   if (words[0] !== 'gh' || words.slice(1).some((w) => !REVIEW_PLAIN_VALUE_RE.test(w) && !w.startsWith('-'))) return false;
   if (words[1] === 'api') {
     const positional = reviewFlagArgs(words.slice(2), { bare: new Set(['--paginate']), valued: new Set(['--jq', '-q', '-X', '--method']), getValue: new Set(['-X', '--method']) });

@@ -117,6 +117,16 @@ test("Pi and Claude reviewers admit the same contract reads and deny active form
   for (const command of allowed) assert.equal((await callAs("judge", command)).block, true, command);
 });
 
+test("Pi reviewer admits only the installed package's Node resolve-role helper", async () => {
+  const line = `node ${repoRoot}/cli/index.mjs gate resolve-role --gate pre_approval_gate --angle correctness`;
+  for (const role of ["review", "dev-loops:review"]) {
+    assert.deepEqual(await callAs(role, line), { block: false });
+    for (const command of [line.replace(repoRoot, "/untrusted"), line.replace("cli/index.mjs", "scripts/other.mjs"), line.replace("resolve-role", "resolve-validation"), line.replace("node ", "node --require evil.mjs "), `${line}; id`, `${line} | cat`, `${line} $(id)`]) assert.equal((await callAs(role, command)).block, true, command);
+  }
+  assert.equal((await callAs("judge", line)).block, true);
+  assert.equal(decideBashGate({ command: line, agentType: "review" }).decision, "deny");
+});
+
 test("Pi tool_call fails closed on a blank marker and leaves the unmarked and non-read-only callers alone", async () => {
   for (const marker of ["", "  ", "dev-loops:"]) assert.equal((await callAs(marker, "ls")).block, true, JSON.stringify(marker));
   assert.equal((await callAs("dev-loops: judge", "rm -rf /")).block, true);
@@ -374,9 +384,9 @@ test("registered Pi handler keeps worker targeted checks and mutation tools whil
   }
 });
 test("launcher options preserve worker admission on Pi and Claude", async () => {
-  const full = ["bun --bun run scripts/verify.mjs", "bun run --silent scripts/verify.mjs", "bun --cwd /work run --preload setup.mjs scripts/verify.mjs", "node --require setup.mjs --no-warnings scripts/verify.mjs", "bun run --port 3000 verify", "node --no-warnings --test"];
-  const targeted = ["bun run --cwd /work scripts/run-bun-test.mjs test/loop/a.test.mjs", "node --require setup.mjs scripts/run-bun-test.mjs test/loop/a.test.mjs", "bun --preload setup.mjs run test:core"];
-  const reads = ["bun run --cwd /work scripts/github/view-pr.mjs", "node --require scripts/verify.mjs scripts/github/view-pr.mjs"];
+  const full = ["npm it", "npm install-test", "npm cit", "npm install-ci-test", "npm clean-install-test", "npm sit", "pnpm it", "pnpm install-test", "bun --bun run scripts/verify.mjs", "bun run --silent scripts/verify.mjs", "bun --cwd /work run --preload setup.mjs scripts/verify.mjs", "node --require setup.mjs --no-warnings scripts/verify.mjs", "bun run --port 3000 verify", "node --no-warnings --test", "node --watch-path . scripts/verify.mjs", "node --report-dir out scripts/verify.mjs", "node --future-option value scripts/verify.mjs", "bun --future-option value run verify"];
+  const targeted = ["bun run --cwd /work scripts/run-bun-test.mjs test/loop/a.test.mjs", "node --require setup.mjs scripts/run-bun-test.mjs test/loop/a.test.mjs", "bun --preload setup.mjs run test:core", "node --report-dir out scripts/run-bun-test.mjs test/loop/a.test.mjs", "bun --future-option value run scripts/run-bun-test.mjs test/loop/a.test.mjs"];
+  const reads = ["bun run --cwd /work scripts/github/view-pr.mjs", "node --require scripts/verify.mjs scripts/github/view-pr.mjs", "node --report-dir out scripts/github/view-pr.mjs scripts/verify.mjs", "node --no-warnings scripts/github/view-pr.mjs scripts/verify.mjs"];
   for (const role of ["developer", "fixer"]) {
     for (const [commands, block] of [[full, true], [[...targeted, ...reads], false]]) {
       for (const command of commands) {
