@@ -30,6 +30,22 @@ test("opaque package options cannot hide test aliases or run-script validation",
   for (const command of ["npm --tag x install", "pnpm --script-shell sh install", "npm install --tag x t", "npm run lint --tag x tst", "bun --tag x t", "yarn --script-shell sh install-test"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
 });
 
+test("package option values retain quoted and escaped whitespace as one shell word", () => {
+  for (const pm of ["npm", "pnpm", "bun", "yarn"]) {
+    for (const value of ['"my dir"', "'my dir'", "my\\ dir", 'my" dir"', '"my \\"dir\\""']) {
+      for (const options of [`--prefix ${value}`, `--prefix=${value}`, `--tag ${value}`, `--tag=${value}`]) {
+        for (const command of [`${pm} ${options} run verify`, `${pm} run ${options} verify`, `${pm} ${options} test`]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+        const reach = options.startsWith("--prefix") || options.includes("=") ? "targeted" : "full-repository";
+        for (const command of [`${pm} ${options} run test:core`, `${pm} run ${options} test:core`]) assert.equal(classifyValidationCommand(command), reach, command);
+        for (const command of [`${pm} ${options} install`, `${pm} ${options} run lint`, `${pm} run ${options} lint`, `${pm} run lint ${options} verify`]) assert.equal(classifyValidationCommand(command), "non-validation", command);
+        if (pm === "npm" || pm === "pnpm") {
+          for (const alias of ["t", "tst", "it", "install-test", "cit", "install-ci-test", "clean-install-test", "sit"]) assert.equal(classifyValidationCommand(`${pm} ${options} ${alias}`), "full-repository", `${pm} ${options} ${alias}`);
+        }
+      }
+    }
+  }
+});
+
 test("validation commands have one shared classification", () => {
   const cases = [
     ["git status --short", "non-validation"],

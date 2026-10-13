@@ -1223,7 +1223,9 @@ const COMPONENT_SUITES = new Set(["test:core", "test:scripts", "test:assets", "t
 const FULL_SUITES = ["test:all", "test:docs", "test:workflows"];
 const EXACT_TEST_FILE = /^[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const RUNNER_VALUE_FLAGS = new Set(["--timeout", "--test-name-pattern", "--test-reporter", "--test-reporter-destination", "--reporter", "--test-timeout", "--test-concurrency", "--test-shard", "--max-workers", "--filter"]);
-const PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+(?:(?:--prefix|--dir|--cwd|--loglevel|--workspace|--filter|--cache|--registry|--userconfig|--config|--modules-folder|--use-yarnrc|-w|-C)\s+\S+|--?[\w-]+=\S+|(?:--silent|--quiet|--verbose|--bun|--if-present|--ignore-scripts|--offline|--frozen-lockfile|--recursive|-[sqrd]+)(?=\s|$)))*`;
+// Quoted parts and escapes keep whitespace inside an option value, never a command word.
+const PACKAGE_MANAGER_WORD = String.raw`(?:[^\s'"\\]|\\[\s\S]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')+`;
+const PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+(?:(?:--prefix|--dir|--cwd|--loglevel|--workspace|--filter|--cache|--registry|--userconfig|--config|--modules-folder|--use-yarnrc|-w|-C)\s+${PACKAGE_MANAGER_WORD}|--?[\w-]+=${PACKAGE_MANAGER_WORD}|(?:--silent|--quiet|--verbose|--bun|--if-present|--ignore-scripts|--offline|--frozen-lockfile|--recursive|-[sqrd]+)(?=\s|$)))*`;
 const VALIDATION_SCRIPT = String.raw`(?:test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)`;
 // npm/pnpm aliases and install-and-test commands all run the test script.
 const RUN_WORD = String.raw`(?:run-script|run|rum|urn)`;
@@ -1232,7 +1234,7 @@ const TEST_ALIAS = new RegExp(`^(?:npm|pnpm)${PACKAGE_MANAGER_OPTIONS}\\s+${TEST
 const PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(${VALIDATION_SCRIPT})(?:\\s|$)`, "i");
 const PACKAGE_MANAGER_COMMAND = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(?!${RUN_WORD}(?:\\s|$))[\\w:][\\w:-]*(?:\\s|$)`, "i");
 // An opaque value-taking option before a recognizable validation script cannot grant worker execution.
-const OPAQUE_PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+-\S+(?:\s+\S+)?)*`;
+const OPAQUE_PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+-${PACKAGE_MANAGER_WORD}(?:\s+${PACKAGE_MANAGER_WORD})?)*`;
 const OPAQUE_PACKAGE_MANAGER_RUN = new RegExp(`^(?:(?:bun|npm|pnpm|yarn)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+)?${VALIDATION_SCRIPT}|(?:npm|pnpm)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+${TEST_ALIAS_WORD})(?:\\s|$)`, "i");
 const RUNTIME_VALUE_FLAGS = new Set([
   "-r", "--require", "--preload", "--import", "-l", "--loader", "--experimental-loader", "--env-file", "--env-file-if-exists", "--conditions", "-C", "--cwd", "-c", "--config",

@@ -410,6 +410,19 @@ test("opaque package options keep test aliases blocked on Pi and Claude", async 
   }
 });
 
+test("quoted package option values preserve full-run denial and safe commands on Pi and Claude", async () => {
+  const full = ['npm --tag "a b" t', "pnpm --tag 'a b' cit", "npm --prefix my\\ dir test", 'pnpm run --prefix "my dir" verify', 'npm --tag="a b" run verify'];
+  const safe = ['npm --prefix "my dir" run test:core', "pnpm run --prefix my\\ dir test:core", 'npm --tag "a b" install', "npm run --prefix 'my dir' lint", 'npm run lint --prefix="my dir" verify'];
+  for (const role of ["developer", "fixer"]) {
+    for (const [commands, block] of [[full, true], [safe, false]]) {
+      for (const command of commands) {
+        assert.equal(decideBashGate({ command, agentType: role }).decision, block ? "deny" : "allow", `${role}: ${command}`);
+        assert.equal((await callAs(role, command)).block, block, `${role}: ${command}`);
+      }
+    }
+  }
+});
+
 test("registered Pi handler denies before a would-be validation process starts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-validation-boundary-"));
   const sentinel = path.join(root, "child-started");

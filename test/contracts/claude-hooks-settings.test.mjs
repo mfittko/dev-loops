@@ -1013,6 +1013,20 @@ test("Bash hook denies normalized wrappers and full aggregates for workers", () 
   }
 });
 
+test("Bash hook keeps quoted package values within worker validation boundaries", () => {
+  for (const agent_type of ["developer", "fixer"]) {
+    for (const [commands, denied] of [
+      [['npm --tag "a b" t', "npm --prefix my\\ dir test", 'pnpm run --prefix "my dir" verify'], true],
+      [['npm --prefix "my dir" run test:core', "pnpm run --prefix my\\ dir test:core", 'npm --tag "a b" install'], false],
+    ]) {
+      for (const command of commands) {
+        const r = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
+        assert.equal(r.json?.hookSpecificOutput?.permissionDecision ?? "allow", denied ? "deny" : "allow", `${agent_type}: ${command}`);
+      }
+    }
+  }
+});
+
 test("Bash hook keeps native role and malformed-command behavior", () => {
   for (const command of [undefined, 42]) {
     for (const agent_type of ["review", "judge"]) assert.equal(runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, agent_type, cwd: repoRoot}).json?.hookSpecificOutput?.permissionDecision, "deny");
