@@ -1770,7 +1770,7 @@ test("semantic roles refuse validation and workers use resolver-owned full evide
     for (const command of full) {
       const d = decideBashGate({command, agentType});
       assert.equal(d.decision, "deny", `${agentType}: ${command}`);
-      assert.match(d.reason, /`dev-loops gate resolve-validation`/);
+      assert.match(d.reason, /`dev-loops-run cli\/index\.mjs gate resolve-validation`/);
     }
     for (const command of [...targeted, "git status", "npm -s install", "npm run lint --opaque verify", "bun run build"]) assert.equal(decideBashGate({command, agentType}).decision, "allow", `${agentType}: ${command}`);
   }
