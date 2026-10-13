@@ -8,6 +8,8 @@ Proposed
 
 [ADR 0105](./0105-targeted-validation-and-full-run-authority.md) assigns targeted checks to workers and local full-repository validation to one resolver; it leaves runtime enforcement to a later slice. [Issue #2470](https://github.com/mfittko/dev-loops/issues/2470), implemented by [PR #2754](https://github.com/mfittko/dev-loops/pull/2754), supplies that boundary and moves gate participants onto the resolver's evidence. The shared docs-review prompts previously directed reviewers to execute mechanical link validation, contrary to the review role's evidence-only responsibility.
 
+Operator acceptance is recorded in [the issue acceptance comment](https://github.com/mfittko/dev-loops/issues/2470#issuecomment-6155777358).
+
 This record extends ADR 0105. It preserves [ADR 0136](./0136-judge-bash-boundary-allows-decision-check.md)'s sanctioned judge-decision check and [ADR 0137](./0137-validation-modes-and-consumer-configured-commands.md)'s validation modes and trusted command source. Those accepted records remain unchanged. <!-- secret-scan:allow public ADR links, no credential value -->
 
 ## Decision
