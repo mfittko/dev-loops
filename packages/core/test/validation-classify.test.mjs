@@ -15,6 +15,21 @@ test("package-manager options preserve validation reach and opaque validation fa
   for (const command of ["npm run --opaque value lint", "npm install --opaque value", "npm run lint --opaque verify", "npm -s install verify", "npm --loglevel silent run lint verify"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
 });
 
+test("opaque package options cannot hide test aliases or run-script validation", () => {
+  for (const pm of ["npm", "pnpm"]) {
+    for (const alias of ["t", "tst", "it", "install-test", "cit", "install-ci-test", "clean-install-test", "sit"]) {
+      for (const options of ["--tag x", "--script-shell sh", "--node-options x"]) {
+        for (const command of [`${pm} ${options} ${alias}`, `${pm} ${alias} ${options}`]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+      }
+    }
+    for (const run of ["run", "run-script", "rum", "urn"]) {
+      for (const command of [`${pm} --tag x ${run} verify`, `${pm} ${run} --tag x verify`]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+      for (const command of [`${pm} --tag x ${run} lint`, `${pm} ${run} --tag x t`, `${pm} ${run} --tag x install-test`]) assert.equal(classifyValidationCommand(command), "non-validation", command);
+    }
+  }
+  for (const command of ["npm --tag x install", "pnpm --script-shell sh install", "npm install --tag x t", "npm run lint --tag x tst", "bun --tag x t", "yarn --script-shell sh install-test"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
+});
+
 test("validation commands have one shared classification", () => {
   const cases = [
     ["git status --short", "non-validation"],

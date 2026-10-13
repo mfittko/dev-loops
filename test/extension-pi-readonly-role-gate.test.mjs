@@ -397,6 +397,19 @@ test("launcher options preserve worker admission on Pi and Claude", async () => 
   }
 });
 
+test("opaque package options keep test aliases blocked on Pi and Claude", async () => {
+  for (const role of ["developer", "fixer"]) {
+    for (const command of ["npm --tag x t", "npm --script-shell sh tst", "npm --node-options x it", "pnpm --tag x cit"]) {
+      assert.equal(decideBashGate({ command, agentType: role }).decision, "deny", `${role}: ${command}`);
+      assert.equal((await callAs(role, command)).block, true, `${role}: ${command}`);
+    }
+    for (const command of ["npm run --tag x t", "npm install --tag x t", "npm run -s test:core"]) {
+      assert.equal(decideBashGate({ command, agentType: role }).decision, "allow", `${role}: ${command}`);
+      assert.deepEqual(await callAs(role, command), { block: false }, `${role}: ${command}`);
+    }
+  }
+});
+
 test("registered Pi handler denies before a would-be validation process starts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-validation-boundary-"));
   const sentinel = path.join(root, "child-started");

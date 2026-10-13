@@ -1227,11 +1227,13 @@ const PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+(?:(?:--prefix|--dir|--cwd|--lo
 const VALIDATION_SCRIPT = String.raw`(?:test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)`;
 // npm/pnpm aliases and install-and-test commands all run the test script.
 const RUN_WORD = String.raw`(?:run-script|run|rum|urn)`;
-const TEST_ALIAS = new RegExp(`^(?:npm|pnpm)${PACKAGE_MANAGER_OPTIONS}\\s+(?:t|tst|it|install-test|cit|install-ci-test|clean-install-test|sit)(?:\\s|$)`, "i");
+const TEST_ALIAS_WORD = String.raw`(?:t|tst|it|install-test|cit|install-ci-test|clean-install-test|sit)`;
+const TEST_ALIAS = new RegExp(`^(?:npm|pnpm)${PACKAGE_MANAGER_OPTIONS}\\s+${TEST_ALIAS_WORD}(?:\\s|$)`, "i");
 const PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(${VALIDATION_SCRIPT})(?:\\s|$)`, "i");
 const PACKAGE_MANAGER_COMMAND = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(?!${RUN_WORD}(?:\\s|$))[\\w:][\\w:-]*(?:\\s|$)`, "i");
 // An opaque value-taking option before a recognizable validation script cannot grant worker execution.
-const OPAQUE_PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:${RUN_WORD}(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+)?${VALIDATION_SCRIPT}(?:\\s|$)`, "i");
+const OPAQUE_PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+-\S+(?:\s+\S+)?)*`;
+const OPAQUE_PACKAGE_MANAGER_RUN = new RegExp(`^(?:(?:bun|npm|pnpm|yarn)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+)?${VALIDATION_SCRIPT}|(?:npm|pnpm)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+${TEST_ALIAS_WORD})(?:\\s|$)`, "i");
 const RUNTIME_VALUE_FLAGS = new Set([
   "-r", "--require", "--preload", "--import", "-l", "--loader", "--experimental-loader", "--env-file", "--env-file-if-exists", "--conditions", "-C", "--cwd", "-c", "--config",
   "--title", "--redirect-warnings", "--port", "--max-old-space-size", "--inspect-port", "--diagnostic-dir", "--openssl-config", "--icu-data-dir", "--input-type", "--stack-trace-limit",
