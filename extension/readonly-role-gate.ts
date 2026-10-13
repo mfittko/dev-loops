@@ -1,3 +1,4 @@
+import { classifyValidationCommand, isReadSearchCommand } from '@dev-loops/core/loop/bash-command-classify';
 import { EXECUTION_IDENTITY_RE } from '@dev-loops/core/loop/work-order-digest';
 import { NATIVE_PI_PARENT_SESSION_MARKER, isNativePiAsyncContext } from '@dev-loops/core/loop/run-context';
 
@@ -31,90 +32,6 @@ const pluginNamespace = (agentType: string) => {
 const READ_SEARCH_ROLES = new Set(['review']);
 export const BASH_RESTRICTED_ROLES = Object.freeze(['judge', 'review']);
 
-// Read and search programs. Test and build runners (bun, npm, node, vitest, make) are absent.
-const READ_PROGRAMS = new Set(['cat', 'head', 'tail', 'wc', 'ls', 'grep', 'rg', 'stat', 'file', 'diff', 'jq', 'find']);
-const READ_GIT_SUBCOMMANDS = new Set(['diff', 'log', 'show', 'status', 'ls-files', 'grep', 'blame', 'rev-parse', 'cat-file']);
-// Shell-inert commands only: no chaining, redirection, substitution or newlines.
-// Quotes and glob characters are denied too: the shell would strip or expand them into flags the gate never saw.
-const SHELL_ACTIVE_RE = /[;&|<>`$\n\r(){}\\'"*?[\]]/;
-
-// The reviewer contract's mandated sentinel and bound-escape scripts, and its `cd <worktree> && ...` prefix.
-const REVIEWER_SCRIPT_RE = /^dev-loops-run scripts\/github\/(?:verify-fresh-review-context|emit-reviewer-blocked)\.mjs(?: .*)?$/;
-const CD_PREFIX_RE = /^cd (?:"[\w./-]+"|[\w./-]+) && /;
-const GIT_C_RE = /^git -C (?:"[\w./-]+"|[\w./-]+) /;
-// Flags that make an allowed program execute another program or write a file. Git accepts unique prefixes, so match prefixes.
-const EXEC_FLAG_RE = /^(?:-[^-\s]*O|--op|--out|--ext|--tex)/;
-const RG_PRE_RE = /^--pre(?:-glob)?(?:=|$)/;
-const FIND_EXEC_RE = /^-(?:exec|execdir|ok|okdir|delete|fprint\w*|fls)$/;
-
-type Word = { value: string; quoted: boolean };
-
-// A word is fully unquoted, fully single-quoted or fully double-quoted. Returns null for anything else.
-// An unquoted `|` alone is the pipe token. Double quotes may not hold `$`, a backtick, `\` or `!`.
-function tokenize(command: string): Word[] | null {
-  const words: Word[] = [];
-  let i = 0;
-  while (i < command.length) {
-    if (/[ \t]/.test(command[i])) {
-      i += 1;
-      continue;
-    }
-    const quote = command[i] === "'" || command[i] === '"' ? command[i] : null;
-    let value: string;
-    if (quote) {
-      const end = command.indexOf(quote, i + 1);
-      if (end === -1) return null;
-      value = command.slice(i + 1, end);
-      if (/[\n\r]/.test(value) || (quote === '"' && /[$`\\!]/.test(value))) return null;
-      i = end + 1;
-      if (i < command.length && !/[ \t]/.test(command[i])) return null;
-    } else {
-      let end = i;
-      while (end < command.length && !/[ \t]/.test(command[end])) end += 1;
-      value = command.slice(i, end);
-      if (value !== '|' && SHELL_ACTIVE_RE.test(value)) return null;
-      i = end;
-    }
-    words.push({ value, quoted: quote !== null });
-  }
-  return words;
-}
-
-const CUT_RE = /^-c\d+-\d+$/;
-
-function isReadSearchCommand(rawCommand: string): boolean {
-  // Strip the mandated `cd <path> && ` and `git -C <path> ` forms first; their paths allow safe characters only.
-  const command = rawCommand.trim().replace(CD_PREFIX_RE, '').replace(GIT_C_RE, 'git ');
-  if (/[\n\r]/.test(command)) return false;
-  if (REVIEWER_SCRIPT_RE.test(command) && !SHELL_ACTIVE_RE.test(command)) return true;
-  const words = tokenize(command);
-  if (!words) return false;
-  const pipe = words.findIndex((w) => !w.quoted && w.value === '|');
-  let readWords = words;
-  if (pipe !== -1) {
-    // One bounded pipe, to `cut -c<N>-<M>` only.
-    const rest = words.slice(pipe + 1);
-    if (rest.length !== 2 || rest.some((w) => w.quoted || w.value === '|')) return false;
-    if (rest[0].value !== 'cut' || !CUT_RE.test(rest[1].value)) return false;
-    readWords = words.slice(0, pipe);
-  }
-  if (readWords.length === 0 || readWords.some((w) => w.quoted && w.value.startsWith('-'))) return false;
-  let tokens = readWords;
-  const program = tokens[0];
-  if (program.quoted) return false;
-  if (program.value === 'git') {
-    tokens = tokens.slice(1);
-    if (!tokens[0] || tokens[0].quoted || !READ_GIT_SUBCOMMANDS.has(tokens[0].value)) return false;
-  } else if (!READ_PROGRAMS.has(program.value)) {
-    return false;
-  }
-  const args = tokens.slice(1).map((w) => w.value);
-  if (args.some((t) => EXEC_FLAG_RE.test(t))) return false;
-  if (program.value === 'rg' && args.some((t) => RG_PRE_RE.test(t) || /^--host/.test(t))) return false;
-  if (program.value === 'file' && args.some((t) => /^-[^-\s]*C/.test(t) || /^--comp/.test(t))) return false;
-  if (program.value === 'find' && args.some((t) => FIND_EXEC_RE.test(t))) return false;
-  return true;
-}
 export type PiToolCallDecision = { block: false } | { block: true; reason: string };
 
 /** Every dev-loops agent role: the `name` frontmatter of `agents/*.agent.md`. */
@@ -178,8 +95,11 @@ export function decidePiToolCall({ toolName, input, agentType }: {
   agentType: string | null;
 }): PiToolCallDecision {
   if (agentType === null || toolName !== 'bash') return { block: false };
-  if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
   const command = typeof input?.command === 'string' ? input.command : '';
+  if (['developer', 'fixer'].includes(agentType) && classifyValidationCommand(command) === 'full-repository') {
+    return { block: true, reason: 'Full validation boundary: developers and fixers run targeted checks only. Request full evidence through `dev-loops gate resolve-validation`.' };
+  }
+  if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
   if (parseSanctionedPullLine(command)) return { block: false };
   if (agentType === 'judge' && JUDGE_DECISION_CHECK_RE.test(command.trim()) && !command.includes('..')) return { block: false };
   if (READ_SEARCH_ROLES.has(agentType) && isReadSearchCommand(command)) return { block: false };

@@ -1,52 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join, posix } from "node:path";
+import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { matchesGlob } from "../analysis/diff-analyzer.mjs";
 import { ValidationConfig } from "../config/config.mjs";
-import { verificationCommandSegments } from "./bash-command-classify.mjs";
-
-const COMPONENT_SUITES = new Set(["test:core", "test:scripts", "test:assets", "test:extension", "test:dev-loop", "test:pack", "test:docs", "test:workflows"]);
-const FULL_SUITES = ["test:all", "test:docs", "test:workflows"];
-const EXACT_TEST_FILE = /^(?:run\s+)?[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?(?:\s|$)/;
-
-/** Classify a shell command's validation reach, including compound commands. */
-export function classifyValidationCommand(command) {
-  if (/(?:^|[;&|\n])\s*\.\/scripts\/verify\.mjs(?:\s|$)/.test(command)) return "full-repository";
-  const suites = new Set();
-  let targeted = false;
-  for (const segment of verificationCommandSegments(command)) {
-    const scriptPath = segment.match(/^(?:(?:bun|node)\s+)?((?:\.\/)?scripts\/[\w./-]+\.mjs)(?:\s|$)/)?.[1];
-    if (scriptPath && posix.normalize(scriptPath) === "scripts/verify.mjs") return "full-repository";
-    const bunTest = segment.match(/^bun\s+test(?:\s+(.*))?$/i);
-    if (bunTest) {
-      if (!EXACT_TEST_FILE.test(bunTest[1] ?? "")) return "full-repository";
-      targeted = true;
-      continue;
-    }
-    const packageRun = segment.match(/^(?:bun|npm|pnpm|yarn)(?:\s+(?:(?:--prefix|--dir|--cwd)\s+\S+|--\S+))*\s+(?:run\s+)?(test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)(?:\s|$)/i);
-    if (packageRun) {
-      const name = packageRun[1].toLowerCase();
-      if (["test", "verify"].includes(name)) return "full-repository";
-      suites.add(name);
-      targeted = true;
-      continue;
-    }
-    const runner = segment.match(/^(?:bun|node)\s+scripts\/run-bun-test\.mjs(?:\s+(.*))?$/);
-    if (runner) {
-      if (/(?:^|\s)--all(?:\s|$)/.test(runner[1] ?? "") || !EXACT_TEST_FILE.test(runner[1] ?? "")) suites.add("test:all");
-      targeted = true;
-      continue;
-    }
-    const direct = segment.match(/^(?:node\s+--test|(?:npx|bunx|bun\s+x)?\s*vitest)(?:\s+(.*))?$/i);
-    if (direct) {
-      if (!EXACT_TEST_FILE.test(direct[1] ?? "")) return "full-repository";
-      targeted = true;
-    }
-  }
-  if (FULL_SUITES.every((suite) => suites.has(suite)) || [...COMPONENT_SUITES].every((suite) => suites.has(suite))) return "full-repository";
-  return targeted ? "targeted" : "non-validation";
-}
+export { classifyValidationCommand } from "./bash-command-classify.mjs";
 
 // The `.devloops` family in loader order (the list DEVLOOPS_CONFIG_PATHS holds in scripts/loop/check-adr-tripwire.mjs; core cannot import scripts).
 const DEVLOOPS_FAMILY = [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json"];

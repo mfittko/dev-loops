@@ -2,6 +2,8 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { READONLY_SUBAGENT_ROLES, decideBashGate } from "@dev-loops/core/claude/hook-decisions";
@@ -95,7 +97,7 @@ test("Pi tool_call fails closed on a blank marker and leaves the unmarked and no
   for (const marker of ["", "  ", "dev-loops:"]) assert.equal((await callAs(marker, "ls")).block, true, JSON.stringify(marker));
   assert.equal((await callAs("dev-loops: judge", "rm -rf /")).block, true);
   assert.deepEqual(await callAs(undefined, "bun run test"), { block: false });
-  assert.deepEqual(await callAs("developer", "bun run test"), { block: false });
+  assert.deepEqual(await callAs("developer", "bun test test/foo.test.mjs"), { block: false });
   assert.deepEqual(await callAs("judge", "bun run test", "read"), { block: false });
 });
 
@@ -163,7 +165,7 @@ test("every roster role resolves to its capability", async () => {
   for (const name of names) {
     assert.deepEqual(await callAs(name, PULL), { block: false }, name);
     assert.equal((await callAs(name, "cat README.md")).block, name === "judge", `${name} cat`);
-    assert.equal((await callAs(name, "bun run test")).block, name === "judge" || name === "review", `${name} bun`);
+    assert.equal((await callAs(name, "bun run test")).block, ["judge", "review", "developer", "fixer"].includes(name), `${name} bun`);
   }
 });
 
@@ -189,7 +191,7 @@ test("role resolution fails closed per the resolution table", async () => {
   // A lone child flag without the parent marker is not native-async evidence: unrestricted.
   assert.deepEqual(await callWith("base prompt", "ls", "bash", { PI_SUBAGENT_CHILD: "1" }), { block: false });
   assert.deepEqual(await callWith("base prompt", "ls"), { block: false });
-  assert.deepEqual(await callWith(tag("developer"), "bun run test", "bash", childEnv, "child-1"), { block: false });
+  assert.deepEqual(await callWith(tag("developer"), "bun test test/foo.test.mjs", "bash", childEnv, "child-1"), { block: false });
   assert.deepEqual(await callWith(tag("judge"), PULL, "bash", childEnv, "child-1"), { block: false });
   assert.equal((await callWith(tag("judge"), "cat README.md", "bash", childEnv, "child-1")).block, true);
   assert.deepEqual(await callWith(`${tag("judge")} ${tag("dev-loops:judge")}`, PULL), { block: false });
@@ -334,4 +336,31 @@ test("a read-only Pi session never runs the mutation-capable post-merge hooks", 
       else process.env[name] = prior;
     }
   }
+});
+
+test("registered Pi handler keeps worker targeted checks and mutation tools while denying full runs", async () => {
+  for (const role of ["developer", "fixer", "dev-loops:developer", "dev-loops:fixer"]) {
+    for (const command of ["bun test test/foo.test.mjs", "bun run test:core", "bun scripts/run-bun-test.mjs test/foo.test.mjs", "git status"]) assert.deepEqual(await callAs(role, command), {block: false}, `${role}: ${command}`);
+    for (const toolName of ["read", "edit", "write"]) assert.deepEqual(await callAs(role, "", toolName), {block: false});
+    for (const command of ["bun run verify", "npm test", "bun test", "node --test", "node scripts/verify.mjs", "bun test test/foo.test.mjs test", "bash -lc 'npm test'", '"bun" run "verify"', "env -u DEVLOOPS_COORDINATOR_READONLY timeout 30 nice -n 10 command /usr/local/bin/bun run verify", "bun run test:all && bun run test:docs && bun run test:workflows"]) {
+      const result = await callAs(role, command);
+      assert.equal(result.block, true, `${role}: ${command}`);
+      assert.match(result.reason, /dev-loops gate resolve-validation/);
+    }
+  }
+});
+test("registered Pi handler denies before a would-be validation process starts", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-validation-boundary-"));
+  const sentinel = path.join(root, "child-started");
+  fs.mkdirSync(path.join(root, "scripts"));
+  fs.writeFileSync(path.join(root, "scripts/verify.mjs"), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(sentinel)}, 'started');`);
+  try {
+    for (const role of ["review", "judge", "developer", "fixer"]) {
+      const command = "node scripts/verify.mjs";
+      const result = await callAs(role, command);
+      if (!result.block) spawnSync("sh", ["-c", command], {cwd: root, timeout: 10000});
+      assert.equal(fs.existsSync(sentinel), false, `${role}: denied before child execution`);
+      assert.equal(result.block, true);
+    }
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });

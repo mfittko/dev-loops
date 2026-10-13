@@ -96,3 +96,20 @@ test("readValidationPaths probes the .devloops family and parses .json as JSON",
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
 });
+
+test("exact selectors cannot widen to directories or globs; wrappers keep validation reach", () => {
+  for (const command of ["bun test test/foo.test.mjs test", "node --test test/foo.test.mjs test/*.test.mjs", "vitest run test/foo.spec.ts src", "bun scripts/run-bun-test.mjs test/foo.test.mjs test", "sh -c 'bun run verify'", 'bash -lc "npm test"', '"bun" run "verify"', "env -u DEVLOOPS_COORDINATOR_READONLY nice -n 10 timeout 30 command /usr/local/bin/bun test"]) {
+    assert.equal(classifyValidationCommand(command), "full-repository", command);
+  }
+  for (const command of ["bun test --timeout 3000 test/foo.test.mjs test/bar.test.mjs", "node --test --test-reporter spec test/foo.test.mjs", "vitest run 'test/foo.spec.ts' --reporter verbose"]) {
+    assert.equal(classifyValidationCommand(command), "targeted", command);
+  }
+});
+
+test("normalized direct scripts retain full reach behind wrappers and absolute paths", () => {
+  for (const command of ["env CI=1 ./scripts/../scripts/verify.mjs", "node /work/scripts/verify.mjs", "bun ./scripts/run-bun-test.mjs --all && bun run test:docs && bun run test:workflows"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+});
+
+test("literal shell wrappers preserve multiline full execution", () => {
+  assert.equal(classifyValidationCommand("sh -c 'bun run verify\necho done'"), "full-repository");
+});

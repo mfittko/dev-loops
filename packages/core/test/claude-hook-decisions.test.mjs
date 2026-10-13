@@ -574,7 +574,7 @@ test("decideBashGate's verify-boundary deny for a gate coordinator names its own
 
 test("decideBashGate ALLOWS a worker subagent running a code-verification entrypoint under strict coordinator enforcement", () => {
   const d = decideBashGate({
-    command: "bun run verify",
+    command: "bun test packages/core/test/foo.test.mjs",
     repoSlug: TARGET,
     inManagedContext: true,
     managedRepoSlug: TARGET,
@@ -613,7 +613,7 @@ test("decideBashGate DENIES a namespaced dev-loops:dev-loop coordinator running 
 
 test("decideBashGate ALLOWS a namespaced dev-loops:developer worker running a code-verification entrypoint under strict coordinator enforcement (#2082 pre-PR review)", () => {
   const d = decideBashGate({
-    command: "bun run verify",
+    command: "bun run test:core",
     repoSlug: TARGET,
     inManagedContext: true,
     managedRepoSlug: TARGET,
@@ -1493,8 +1493,8 @@ test("decideBashGate lets the judge run only the sanctioned work-order pull, fai
     assert.equal(d.decision, "deny", String(command));
     assert.match(d.reason, /`dev-loops-run scripts\/github\/pull-work-order\.mjs <executionIdentity>`/);
   }
-  assert.equal(decideBashGate({ command: "bun test", agentType: "review" }).decision, "allow");
-  assert.equal(decideBashGate({ command: "dev-loops-run scripts/github/pull-work-order.mjs r1-abcdef12-u0 > /dev/null", agentType: "review" }).decision, "allow");
+  assert.equal(decideBashGate({ command: "bun test", agentType: "review" }).decision, "deny");
+  assert.equal(decideBashGate({ command: "dev-loops-run scripts/github/pull-work-order.mjs r1-abcdef12-u0 > /dev/null", agentType: "review" }).decision, "deny");
   assert.equal(decideBashGate({ command: "dev-loops-run scripts/github/pull-work-order.mjs f1-abcdef12; echo x", agentType: "developer" }).decision, "allow");
 });
 
@@ -1525,7 +1525,7 @@ test("decideBashGate denies a fixer pull that is not the exact sanctioned line a
       assert.match(d.reason, /or the emitted 3-flag line \(`--ref`, `--digest`, `--execution`\) when your dispatch carried that form/);
     }
   }
-  assert.equal(decideBashGate({ command: "bun test", agentType: "fixer" }).decision, "allow");
+  assert.equal(decideBashGate({ command: "bun test", agentType: "fixer" }).decision, "deny");
 });
 
 test("decideJudgeWriteGuard lets the judge write only its verdict files under an anchored gate-judge root, fail-closed (ADR 0106)", () => {
@@ -1757,5 +1757,30 @@ test("decideBashGate denies hardened raw body-write forms in launcher-only wordi
     "gh issue edit 5 --repo other/repo --body-file i.md",
   ]) {
     assert.equal(gate(command).decision, "allow", command);
+  }
+});
+
+test("semantic roles refuse validation and workers use resolver-owned full evidence", () => {
+  const full = ["bun run verify", "npm test", "bun test", "node scripts/verify.mjs", "bun run test:all && bun run test:docs && bun run test:workflows", "env -u DEVLOOPS_COORDINATOR_READONLY nice -n 10 timeout 30 command /usr/local/bin/bun run verify", "bash -lc 'npm test'", '"bun" run "verify"'];
+  const targeted = ["bun test test/foo.test.mjs", "bun run test:core", "bun scripts/run-bun-test.mjs test/foo.test.mjs"];
+  for (const agentType of ["review", "judge", "dev-loops:review", "dev-loops:judge"]) {
+    for (const command of [...full, ...targeted, "bun run build"]) assert.equal(decideBashGate({command, agentType}).decision, "deny", `${agentType}: ${command}`);
+  }
+  for (const agentType of ["developer", "fixer", "dev-loops:developer", "dev-loops:fixer"]) {
+    for (const command of full) {
+      const d = decideBashGate({command, agentType});
+      assert.equal(d.decision, "deny", `${agentType}: ${command}`);
+      assert.match(d.reason, /dev-loops gate resolve-validation/);
+    }
+    for (const command of [...targeted, "git status", "bun run build"]) assert.equal(decideBashGate({command, agentType}).decision, "allow", `${agentType}: ${command}`);
+  }
+  for (const agentType of [null, "quality", "docs", "unknown"]) assert.equal(decideBashGate({command: "bun run verify", agentType}).decision, "allow");
+});
+
+test("coordinator direct verify scripts use the existing opt-in boundary", () => {
+  for (const agentType of ["dev-loop", "gate-coordinator"]) {
+    assert.equal(decideBashGate({command: "node scripts/verify.mjs", agentType, enforceCoordinator: true}).decision, "deny");
+    assert.equal(decideBashGate({command: "node scripts/verify.mjs", agentType}).decision, "allow");
+    assert.equal(decideBashGate({command: "dev-loops-run cli/index.mjs gate resolve-validation", agentType, enforceCoordinator: true}).decision, "allow");
   }
 });

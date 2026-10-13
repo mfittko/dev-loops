@@ -1,4 +1,6 @@
 // GENERATED from packages/core/src/loop/bash-command-classify.mjs by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate.
+import { posix } from "node:path";
+
 /**
  * Pure classification of shell command strings for the dev-loop gate boundary.
  *
@@ -276,8 +278,15 @@ const VERIFY_EXEC_PREFIX =
 
 /** Reuse the existing wrapper boundary for pure validation classification. */
 export function verificationCommandSegments(command) {
+  if (typeof command !== "string") return [];
+  const shellWrapper = new RegExp(`(^|[;&|\\n])\\s*${VERIFY_EXEC_PREFIX}(?:ba|z|da|k)?sh\\s+-[lc]*c\\s+(['"])([\\s\\S]*?)\\2`, "gi");
+  // shortcut: bounded literal shell wrappers only; opaque scripts need a supported process boundary.
+  for (let depth = 0; depth < 4; depth += 1) command = command.replace(shellWrapper, "$1$3");
   const prefix = new RegExp(`^${VERIFY_EXEC_PREFIX}`, "i");
-  return shellSegments(command).map((segment) => segment.replace(prefix, ""));
+  return shellSegments(command).map((segment) => {
+    const unquoted = segment.replace(/(['"])([\w./:@=-]+)\1/g, "$2");
+    return unquoted.replace(prefix, "");
+  });
 }
 
 /**
@@ -1208,4 +1217,149 @@ const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x
  */
 export function commandContainsCodeVerificationEntrypoint(command) {
   return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
+}
+
+const COMPONENT_SUITES = new Set(["test:core", "test:scripts", "test:assets", "test:extension", "test:dev-loop", "test:pack", "test:docs", "test:workflows"]);
+const FULL_SUITES = ["test:all", "test:docs", "test:workflows"];
+const EXACT_TEST_FILE = /^[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?$/;
+const RUNNER_VALUE_FLAGS = new Set(["--timeout", "--test-name-pattern", "--test-reporter", "--test-reporter-destination", "--reporter", "--test-timeout", "--test-concurrency", "--test-shard", "--max-workers", "--filter"]);
+
+function hasOnlyExactTestSelectors(args = "") {
+  const words = args.trim().split(/\s+/).filter(Boolean);
+  let selectors = 0;
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (word.startsWith("-")) {
+      if (RUNNER_VALUE_FLAGS.has(word) && !words[++i]) return false;
+      continue;
+    }
+    if (!EXACT_TEST_FILE.test(word)) return false;
+    selectors += 1;
+  }
+  return selectors > 0;
+}
+
+/** Classify a shell command's validation reach, including compound commands. */
+export function classifyValidationCommand(command) {
+  if (/(?:^|[;&|\n])\s*\.\/scripts\/verify\.mjs(?:\s|$)/.test(command)) return "full-repository";
+  const suites = new Set();
+  let targeted = false;
+  for (const segment of verificationCommandSegments(command)) {
+    const scriptPath = segment.match(/^(?:(?:bun|node)\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
+    const normalizedPath = scriptPath ? posix.normalize(scriptPath) : "";
+    if (["verify.mjs", "scripts/verify.mjs"].includes(normalizedPath) || normalizedPath.endsWith("/scripts/verify.mjs")) return "full-repository";
+    const bunTest = segment.match(/^bun\s+test(?:\s+(.*))?$/i);
+    if (bunTest) {
+      if (!hasOnlyExactTestSelectors(bunTest[1])) return "full-repository";
+      targeted = true;
+      continue;
+    }
+    const packageRun = segment.match(/^(?:bun|npm|pnpm|yarn)(?:\s+(?:(?:--prefix|--dir|--cwd)\s+\S+|--\S+))*\s+(?:run\s+)?(test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)(?:\s|$)/i);
+    if (packageRun) {
+      const name = packageRun[1].toLowerCase();
+      if (["test", "verify"].includes(name)) return "full-repository";
+      suites.add(name);
+      targeted = true;
+      continue;
+    }
+    const runner = segment.match(/^(?:(?:bun|node)\s+)?(?:[\w./-]+\/)?run-bun-test\.mjs(?:\s+(.*))?$/);
+    if (runner) {
+      const args = runner[1] ?? "";
+      if (/(?:^|\s)[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?(?:\s|$)/.test(args) && !hasOnlyExactTestSelectors(args)) return "full-repository";
+      if (/(?:^|\s)--all(?:\s|$)/.test(args) || !hasOnlyExactTestSelectors(args)) suites.add("test:all");
+      targeted = true;
+      continue;
+    }
+    const direct = segment.match(/^(?:node\s+--test|(?:npx|bunx|bun\s+x)?\s*vitest)(?:\s+(.*))?$/i);
+    if (direct) {
+      if (!hasOnlyExactTestSelectors((direct[1] ?? "").replace(/^run(?:\s|$)/, ""))) return "full-repository";
+      targeted = true;
+    }
+  }
+  if (FULL_SUITES.every((suite) => suites.has(suite)) || [...COMPONENT_SUITES].every((suite) => suites.has(suite))) return "full-repository";
+  return targeted ? "targeted" : "non-validation";
+}
+
+
+// Read and search programs. Test and build runners (bun, npm, node, vitest, make) are absent.
+const READ_PROGRAMS = new Set(['cat', 'head', 'tail', 'wc', 'ls', 'grep', 'rg', 'stat', 'file', 'diff', 'jq', 'find']);
+const READ_GIT_SUBCOMMANDS = new Set(['diff', 'log', 'show', 'status', 'ls-files', 'grep', 'blame', 'rev-parse', 'cat-file']);
+// Shell-inert commands only: no chaining, redirection, substitution or newlines.
+// Quotes and glob characters are denied too: the shell would strip or expand them into flags the gate never saw.
+const SHELL_ACTIVE_RE = /[;&|<>`$\n\r(){}\\'"*?[\]]/;
+
+// The reviewer contract's mandated sentinel and bound-escape scripts, and its `cd <worktree> && ...` prefix.
+const REVIEWER_SCRIPT_RE = /^dev-loops-run scripts\/github\/(?:verify-fresh-review-context|emit-reviewer-blocked)\.mjs(?: .*)?$/;
+const CD_PREFIX_RE = /^cd (?:"[\w./-]+"|[\w./-]+) && /;
+const GIT_C_RE = /^git -C (?:"[\w./-]+"|[\w./-]+) /;
+// Flags that make an allowed program execute another program or write a file. Git accepts unique prefixes, so match prefixes.
+const EXEC_FLAG_RE = /^(?:-[^-\s]*O|--op|--out|--ext|--tex)/;
+const RG_PRE_RE = /^--pre(?:-glob)?(?:=|$)/;
+const FIND_EXEC_RE = /^-(?:exec|execdir|ok|okdir|delete|fprint\w*|fls)$/;
+
+// A word is fully unquoted, fully single-quoted or fully double-quoted. Returns null for anything else.
+// An unquoted `|` alone is the pipe token. Double quotes may not hold `$`, a backtick, `\` or `!`.
+function tokenize(command) {
+  const words = [];
+  let i = 0;
+  while (i < command.length) {
+    if (/[ \t]/.test(command[i])) {
+      i += 1;
+      continue;
+    }
+    const quote = command[i] === "'" || command[i] === '"' ? command[i] : null;
+    let value;
+    if (quote) {
+      const end = command.indexOf(quote, i + 1);
+      if (end === -1) return null;
+      value = command.slice(i + 1, end);
+      if (/[\n\r]/.test(value) || (quote === '"' && /[$`\\!]/.test(value))) return null;
+      i = end + 1;
+      if (i < command.length && !/[ \t]/.test(command[i])) return null;
+    } else {
+      let end = i;
+      while (end < command.length && !/[ \t]/.test(command[end])) end += 1;
+      value = command.slice(i, end);
+      if (value !== '|' && SHELL_ACTIVE_RE.test(value)) return null;
+      i = end;
+    }
+    words.push({ value, quoted: quote !== null });
+  }
+  return words;
+}
+
+const CUT_RE = /^-c\d+-\d+$/;
+
+export function isReadSearchCommand(rawCommand) {
+  // Strip the mandated `cd <path> && ` and `git -C <path> ` forms first; their paths allow safe characters only.
+  const command = rawCommand.trim().replace(CD_PREFIX_RE, '').replace(GIT_C_RE, 'git ');
+  if (/[\n\r]/.test(command)) return false;
+  if (REVIEWER_SCRIPT_RE.test(command) && !SHELL_ACTIVE_RE.test(command)) return true;
+  const words = tokenize(command);
+  if (!words) return false;
+  const pipe = words.findIndex((w) => !w.quoted && w.value === '|');
+  let readWords = words;
+  if (pipe !== -1) {
+    // One bounded pipe, to `cut -c<N>-<M>` only.
+    const rest = words.slice(pipe + 1);
+    if (rest.length !== 2 || rest.some((w) => w.quoted || w.value === '|')) return false;
+    if (rest[0].value !== 'cut' || !CUT_RE.test(rest[1].value)) return false;
+    readWords = words.slice(0, pipe);
+  }
+  if (readWords.length === 0 || readWords.some((w) => w.quoted && w.value.startsWith('-'))) return false;
+  let tokens = readWords;
+  const program = tokens[0];
+  if (program.quoted) return false;
+  if (program.value === 'git') {
+    tokens = tokens.slice(1);
+    if (!tokens[0] || tokens[0].quoted || !READ_GIT_SUBCOMMANDS.has(tokens[0].value)) return false;
+  } else if (!READ_PROGRAMS.has(program.value)) {
+    return false;
+  }
+  const args = tokens.slice(1).map((w) => w.value);
+  if (args.some((t) => EXEC_FLAG_RE.test(t))) return false;
+  if (program.value === 'rg' && args.some((t) => RG_PRE_RE.test(t) || /^--host/.test(t))) return false;
+  if (program.value === 'file' && args.some((t) => /^-[^-\s]*C/.test(t) || /^--comp/.test(t))) return false;
+  if (program.value === 'find' && args.some((t) => FIND_EXEC_RE.test(t))) return false;
+  return true;
 }

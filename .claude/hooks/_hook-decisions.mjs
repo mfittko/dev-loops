@@ -15,6 +15,8 @@ import { isUnderWorktreePath } from "./_worktree-guard.mjs";
 import { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE } from "./_work-order-digest.mjs";
 import {
   deriveInManagedRepo,
+  classifyValidationCommand,
+  isReadSearchCommand,
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
   commandContainsGhPrCreate,
@@ -185,6 +187,16 @@ export function decideBashGate({
         "files with Read/Grep/Glob; never run shell, test or build commands.",
     };
   }
+  const role = normalizeAgentType(agentType);
+  if (role === "review") {
+    return parseSanctionedPullLine(command) || (typeof command === "string" && isReadSearchCommand(command)) ? ALLOW : {
+      decision: "deny",
+      reason: "Reviewer read-only boundary: run only the dispatched pull, sentinel/blocked-result commands, or shell-inert read/search commands. Consume validation evidence; never run test or build processes.",
+    };
+  }
+  if (["developer", "fixer"].includes(role) && classifyValidationCommand(command) === "full-repository") {
+    return { decision: "deny", reason: "Full validation boundary: developers and fixers run targeted checks only. Request full evidence through `dev-loops gate resolve-validation`." };
+  }
   // The fixer's binding is recorded only for the exact pull line (ADR 0107), so a modified one denies with the fix.
   if (normalizeAgentType(agentType) === FIXER_AGENT_TYPE && isFixerPullAttempt(command) && !parseSanctionedPullLine(command)) {
     return {
@@ -208,7 +220,7 @@ export function decideBashGate({
   // agent_type discriminator. Opt-in via the same `DEVLOOPS_COORDINATOR_READONLY=1` flag as the
   // write-guard boundary; default fail-open. Not scoped to `inManagedRepo` — this is a local
   // command-invocation boundary (which binary ran), not a GitHub-repo-targeting one.
-  if (enforceCoordinator && COORDINATOR_AGENT_TYPES.has(normalizeAgentType(agentType)) && commandContainsCodeVerificationEntrypoint(command)) {
+  if (enforceCoordinator && COORDINATOR_AGENT_TYPES.has(normalizeAgentType(agentType)) && (commandContainsCodeVerificationEntrypoint(command) || classifyValidationCommand(command) !== "non-validation")) {
     // A gate coordinator dispatches no worker (decideAgentDispatch), so its reason names its own path.
     const reason = normalizeAgentType(agentType) === GATE_COORDINATOR_AGENT_TYPE
       ? "COORDINATOR-VERIFY-BOUNDARY: the gate coordinator must not run code-verification/build " +

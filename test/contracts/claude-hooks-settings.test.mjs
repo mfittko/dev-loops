@@ -41,6 +41,7 @@ function runHook(script, payload, env = {}) {
     input: JSON.stringify(payload),
     encoding: "utf8",
     env: { ...childEnv, ...env },
+    timeout: 10000,
   });
   let json = null;
   try {
@@ -177,7 +178,7 @@ test("bash-gate hook lets the judge run only its work-order pull; shell, test an
   for (const command of ["npm test", "bun run verify", "cat /etc/passwd", `${pull}; id`, `${pull} > out.txt`, `${pull} $(id)`, `${pull} && bun test`, `${pull}\nid`]) {
     assert.equal(decide(command), "deny", command);
   }
-  assert.equal(decide("npm test", "review"), "allow", "other workers keep their shell");
+  assert.equal(decide("npm test", "review"), "deny", "semantic reviewers consume validation evidence");
 });
 
 test("write-guard hook lets the judge write only its verdict files under a checkout's tmp/gate-judge/ (ADR 0106)", () => {
@@ -352,10 +353,10 @@ test("bash-gate hook denies a dev-loop coordinator running bun run verify under 
   assert.match(json.hookSpecificOutput.permissionDecisionReason, /COORDINATOR-VERIFY-BOUNDARY/);
 });
 
-test("bash-gate hook allows a worker subagent running bun run verify under strict coordinator enforcement (e2e)", () => {
+test("bash-gate hook allows a worker subagent running targeted checks under strict coordinator enforcement (e2e)", () => {
   const { code, json } = runHook(
     "pre-tool-use-bash-gate.mjs",
-    { tool_name: "Bash", tool_input: { command: "bun run verify" }, cwd: repoRoot, agent_type: "developer" },
+    { tool_name: "Bash", tool_input: { command: "bun run test:core" }, cwd: repoRoot, agent_type: "developer" },
     { DEVLOOPS_COORDINATOR_READONLY: "1" },
   );
   assert.equal(code, 0);
@@ -385,10 +386,10 @@ test("bash-gate hook denies a namespaced dev-loops:dev-loop coordinator running 
   assert.match(json.hookSpecificOutput.permissionDecisionReason, /COORDINATOR-VERIFY-BOUNDARY/);
 });
 
-test("bash-gate hook allows a namespaced dev-loops:developer worker running bun run verify under strict coordinator enforcement (#2082 pre-PR review, e2e)", () => {
+test("bash-gate hook allows a namespaced dev-loops:developer worker running targeted tests under strict coordinator enforcement (#2082 pre-PR review, e2e)", () => {
   const { code, json } = runHook(
     "pre-tool-use-bash-gate.mjs",
-    { tool_name: "Bash", tool_input: { command: "bun run verify" }, cwd: repoRoot, agent_type: "dev-loops:developer" },
+    { tool_name: "Bash", tool_input: { command: "bun test test/foo.test.mjs" }, cwd: repoRoot, agent_type: "dev-loops:developer" },
     { DEVLOOPS_COORDINATOR_READONLY: "1" },
   );
   assert.equal(code, 0);
@@ -956,5 +957,56 @@ test("write-guard hook denies a submodule git-dir hook write (rev-parse succeeds
     assert.equal(decisionOf(main, hook, undefined, { DEVLOOPS_MAIN_AGENT_READONLY: "1", DEVLOOPS_ALLOW_MAIN: "1" }), "deny", "main agent");
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("Bash hook denies semantic and worker full commands before a would-be child starts", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "validation-boundary-"));
+  const sentinel = path.join(root, "child-started");
+  fs.mkdirSync(path.join(root, "scripts"));
+  fs.writeFileSync(path.join(root, "scripts/verify.mjs"), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(sentinel)}, 'started');`);
+  try {
+    for (const agent_type of ["review", "judge", "developer", "fixer", "dev-loops:review", "dev-loops:developer", "dev-loops:fixer"]) {
+      const command = "node scripts/verify.mjs";
+      const result = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: root, agent_type});
+      assert.equal(result.code, 0);
+      if (result.json?.hookSpecificOutput?.permissionDecision !== "deny") spawnSync("sh", ["-c", command], {cwd: root, timeout: 10000});
+      assert.equal(fs.existsSync(sentinel), false, `${agent_type}: denied before child execution`);
+      assert.equal(result.json?.hookSpecificOutput?.permissionDecision, "deny", agent_type);
+    }
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
+test("Bash hook preserves reviewer reads and refuses targeted validation and execution escapes", () => {
+  for (const command of ["bun test test/foo.test.mjs", "bun run build", "node --test test/foo.test.mjs", "rg --pre id foo", "git diff --output=x"]) {
+    const r = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type: "review"});
+    assert.equal(r.json?.hookSpecificOutput?.permissionDecision, "deny", command);
+  }
+  for (const command of ["rg 'foo bar' src", "git -C /w/tree diff", "dev-loops-run scripts/github/emit-reviewer-blocked.mjs --head abc", "cd /w/tree && dev-loops-run scripts/github/verify-fresh-review-context.mjs --context-path a.json"]) {
+    assert.equal(runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type: "review"}).json, null, command);
+  }
+});
+
+test("Bash hook routes direct verification scripts through coordinator opt-in", () => {
+  for (const agent_type of ["dev-loop", "gate-coordinator"]) {
+    const payload = {tool_name: "Bash", tool_input: {command: "node scripts/verify.mjs"}, cwd: repoRoot, agent_type};
+    assert.equal(runHook("pre-tool-use-bash-gate.mjs", payload, {DEVLOOPS_COORDINATOR_READONLY: "1"}).json?.hookSpecificOutput?.permissionDecision, "deny");
+    assert.equal(runHook("pre-tool-use-bash-gate.mjs", payload).json, null);
+  }
+});
+
+test("Bash hook denies normalized wrappers and full aggregates for workers", () => {
+  for (const agent_type of ["developer", "fixer"]) {
+    for (const command of ["env -u DEVLOOPS_COORDINATOR_READONLY timeout 30 nice -n 10 command /usr/local/bin/bun run verify", "bash -lc 'npm test'", '"bun" run "verify"', "bun test test/foo.test.mjs test", "node --test", "bun run test:all && bun run test:docs && bun run test:workflows"]) {
+      const r = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
+      assert.equal(r.json?.hookSpecificOutput?.permissionDecision, "deny", `${agent_type}: ${command}`);
+      assert.match(r.json.hookSpecificOutput.permissionDecisionReason, /dev-loops gate resolve-validation/);
+    }
+  }
+});
+
+test("Bash hook keeps native role and malformed-command behavior", () => {
+  for (const command of [undefined, 42]) {
+    for (const agent_type of ["review", "judge"]) assert.equal(runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, agent_type, cwd: repoRoot}).json?.hookSpecificOutput?.permissionDecision, "deny");
+    for (const agent_type of ["developer", "fixer", null, 42]) assert.equal(runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, agent_type, cwd: repoRoot}).json, null);
   }
 });
