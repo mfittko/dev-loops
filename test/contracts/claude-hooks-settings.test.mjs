@@ -965,14 +965,16 @@ test("Bash hook denies semantic and worker full commands before a would-be child
   const sentinel = path.join(root, "child-started");
   fs.mkdirSync(path.join(root, "scripts"));
   fs.writeFileSync(path.join(root, "scripts/verify.mjs"), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(sentinel)}, 'started');`);
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { verify: "node scripts/verify.mjs" } }));
   try {
     for (const agent_type of ["review", "judge", "developer", "fixer", "dev-loops:review", "dev-loops:developer", "dev-loops:fixer"]) {
-      const command = "node scripts/verify.mjs";
-      const result = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: root, agent_type});
-      assert.equal(result.code, 0);
-      if (result.json?.hookSpecificOutput?.permissionDecision !== "deny") spawnSync("sh", ["-c", command], {cwd: root, timeout: 10000});
-      assert.equal(fs.existsSync(sentinel), false, `${agent_type}: denied before child execution`);
-      assert.equal(result.json?.hookSpecificOutput?.permissionDecision, "deny", agent_type);
+      for (const command of ["node scripts/verify.mjs", "npm run -s verify", "npm -s run verify", "npm run --loglevel silent verify", "npm --loglevel silent run verify"]) {
+        const result = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: root, agent_type});
+        assert.equal(result.code, 0);
+        if (result.json?.hookSpecificOutput?.permissionDecision !== "deny") spawnSync("sh", ["-c", command], {cwd: root, timeout: 10000});
+        assert.equal(fs.existsSync(sentinel), false, `${agent_type}: ${command}: denied before child execution`);
+        assert.equal(result.json?.hookSpecificOutput?.permissionDecision, "deny", `${agent_type}: ${command}`);
+      }
     }
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });
@@ -996,6 +998,11 @@ test("Bash hook routes direct verification scripts through coordinator opt-in", 
 
 test("Bash hook denies normalized wrappers and full aggregates for workers", () => {
   for (const agent_type of ["developer", "fixer"]) {
+    for (const command of ["npm run -s test:core", "npm --loglevel silent run test:core", "npm -s install"]) {
+      const r = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
+      assert.equal(r.code, 0);
+      assert.equal(r.json, null, `${agent_type}: ${command}`);
+    }
     for (const command of ["env -u DEVLOOPS_COORDINATOR_READONLY timeout 30 nice -n 10 command /usr/local/bin/bun run verify", "bash -lc 'npm test'", '"bun" run "verify"', "bun test test/foo.test.mjs test", "node --test", "bun run test:all && bun run test:docs && bun run test:workflows"]) {
       const r = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
       assert.equal(r.json?.hookSpecificOutput?.permissionDecision, "deny", `${agent_type}: ${command}`);

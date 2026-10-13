@@ -340,9 +340,9 @@ test("a read-only Pi session never runs the mutation-capable post-merge hooks", 
 
 test("registered Pi handler keeps worker targeted checks and mutation tools while denying full runs", async () => {
   for (const role of ["developer", "fixer", "dev-loops:developer", "dev-loops:fixer"]) {
-    for (const command of ["bun test test/foo.test.mjs", "bun run test:core", "bun scripts/run-bun-test.mjs test/foo.test.mjs", "git status"]) assert.deepEqual(await callAs(role, command), {block: false}, `${role}: ${command}`);
+    for (const command of ["npm run -s test:core", "npm --loglevel silent run test:core", "npm run -w core --prefix . test:core", "npm -s install", "npm run lint --opaque verify", "bun test test/foo.test.mjs", "bun run test:core", "bun scripts/run-bun-test.mjs test/foo.test.mjs", "git status"]) assert.deepEqual(await callAs(role, command), {block: false}, `${role}: ${command}`);
     for (const toolName of ["read", "edit", "write"]) assert.deepEqual(await callAs(role, "", toolName), {block: false});
-    for (const command of ["bun run verify", "npm test", "bun test", "node --test", "node scripts/verify.mjs", "bun test test/foo.test.mjs test", "bash -lc 'npm test'", '"bun" run "verify"', "env -u DEVLOOPS_COORDINATOR_READONLY timeout 30 nice -n 10 command /usr/local/bin/bun run verify", "bun run test:all && bun run test:docs && bun run test:workflows"]) {
+    for (const command of ["npm run -s verify", "npm -s run verify", "npm run --loglevel silent verify", "npm --loglevel silent run verify", "npm run --opaque value verify", "npm run -s test:all && npm --loglevel silent run test:docs && npm run -w core test:workflows", "bun run verify", "npm test", "bun test", "node --test", "node scripts/verify.mjs", "bun test test/foo.test.mjs test", "bash -lc 'npm test'", '"bun" run "verify"', "env -u DEVLOOPS_COORDINATOR_READONLY timeout 30 nice -n 10 command /usr/local/bin/bun run verify", "bun run test:all && bun run test:docs && bun run test:workflows"]) {
       const result = await callAs(role, command);
       assert.equal(result.block, true, `${role}: ${command}`);
       assert.match(result.reason, /dev-loops gate resolve-validation/);

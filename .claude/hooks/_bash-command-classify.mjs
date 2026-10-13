@@ -1223,6 +1223,12 @@ const COMPONENT_SUITES = new Set(["test:core", "test:scripts", "test:assets", "t
 const FULL_SUITES = ["test:all", "test:docs", "test:workflows"];
 const EXACT_TEST_FILE = /^[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const RUNNER_VALUE_FLAGS = new Set(["--timeout", "--test-name-pattern", "--test-reporter", "--test-reporter-destination", "--reporter", "--test-timeout", "--test-concurrency", "--test-shard", "--max-workers", "--filter"]);
+const PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+(?:(?:--prefix|--dir|--cwd|--loglevel|--workspace|--filter|--cache|--registry|--userconfig|--config|--modules-folder|--use-yarnrc|-w|-C)\s+\S+|--?[\w-]+=\S+|(?:--silent|--quiet|--verbose|--bun|--if-present|--ignore-scripts|--offline|--frozen-lockfile|--recursive|-[sqrd]+)(?=\s|$)))*`;
+const VALIDATION_SCRIPT = String.raw`(?:test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)`;
+const PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:run${PACKAGE_MANAGER_OPTIONS}\\s+)?(${VALIDATION_SCRIPT})(?:\\s|$)`, "i");
+const PACKAGE_MANAGER_COMMAND = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:run${PACKAGE_MANAGER_OPTIONS}\\s+)?(?!run(?:\\s|$))[\\w:][\\w:-]*(?:\\s|$)`, "i");
+// An opaque value-taking option before a recognizable validation script cannot grant worker execution.
+const OPAQUE_PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:run(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+)?${VALIDATION_SCRIPT}(?:\\s|$)`, "i");
 
 function hasOnlyExactTestSelectors(args = "") {
   const words = args.trim().split(/\s+/).filter(Boolean);
@@ -1254,7 +1260,7 @@ export function classifyValidationCommand(command) {
       targeted = true;
       continue;
     }
-    const packageRun = segment.match(/^(?:bun|npm|pnpm|yarn)(?:\s+(?:(?:--prefix|--dir|--cwd)\s+\S+|--\S+))*\s+(?:run(?:\s+(?:(?:--prefix|--dir|--cwd)\s+\S+|--\S+))*\s+)?(test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)(?:\s|$)/i);
+    const packageRun = segment.match(PACKAGE_MANAGER_RUN);
     if (packageRun) {
       const name = packageRun[1].toLowerCase();
       if (["test", "verify"].includes(name)) return "full-repository";
@@ -1262,6 +1268,7 @@ export function classifyValidationCommand(command) {
       targeted = true;
       continue;
     }
+    if (!PACKAGE_MANAGER_COMMAND.test(segment) && OPAQUE_PACKAGE_MANAGER_RUN.test(segment)) return "full-repository";
     const runner = segment.match(/^(?:(?:bun|node)\s+)?(?:[\w./-]+\/)?run-bun-test\.mjs(?:\s+(.*))?$/);
     if (runner) {
       const args = runner[1] ?? "";

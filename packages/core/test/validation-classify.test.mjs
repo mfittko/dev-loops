@@ -2,6 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { classifyValidationCommand, resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
 
+test("package-manager options preserve validation reach and opaque validation fails closed", () => {
+  for (const pm of ["npm", "bun", "pnpm", "yarn"]) {
+    for (const options of ["-s", "--loglevel silent", "--loglevel=silent", "--workspace core", "-w core", "--prefix . --dir . --cwd .", "--cache /tmp/cache --registry https://registry.npmjs.org"]) {
+      for (const command of [`${pm} ${options} run verify`, `${pm} run ${options} verify`, `${pm} ${options} test`]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+      for (const command of [`${pm} ${options} run test:core`, `${pm} run ${options} test:core`]) assert.equal(classifyValidationCommand(command), "targeted", command);
+      assert.equal(classifyValidationCommand(`${pm} run ${options} test:all && ${pm} ${options} run test:docs && ${pm} run ${options} test:workflows`), "full-repository");
+      assert.equal(classifyValidationCommand(`${pm} ${options} install`), "non-validation");
+    }
+  }
+  for (const command of ["npm run --opaque value verify", "npm --opaque value run verify", "npm run --opaque value test:core"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+  for (const command of ["npm run --opaque value lint", "npm install --opaque value", "npm run lint --opaque verify", "npm -s install verify", "npm --loglevel silent run lint verify"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
+});
+
 test("validation commands have one shared classification", () => {
   const cases = [
     ["git status --short", "non-validation"],

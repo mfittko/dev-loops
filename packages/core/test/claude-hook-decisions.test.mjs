@@ -1761,8 +1761,8 @@ test("decideBashGate denies hardened raw body-write forms in launcher-only wordi
 });
 
 test("semantic roles refuse validation and workers use resolver-owned full evidence", () => {
-  const full = ["bun run verify", "npm test", "bun test", "node scripts/verify.mjs", "bun run test:all && bun run test:docs && bun run test:workflows", "env -u DEVLOOPS_COORDINATOR_READONLY nice -n 10 timeout 30 command /usr/local/bin/bun run verify", "bash -lc 'npm test'", '"bun" run "verify"'];
-  const targeted = ["bun test test/foo.test.mjs", "bun run test:core", "bun scripts/run-bun-test.mjs test/foo.test.mjs"];
+  const full = ["npm run -s verify", "npm -s run verify", "npm run --loglevel silent verify", "npm --loglevel silent run verify", "npm run --opaque value verify", "npm run -s test:all && npm --loglevel silent run test:docs && npm run -w core test:workflows", "bun run verify", "npm test", "bun test", "node scripts/verify.mjs", "bun run test:all && bun run test:docs && bun run test:workflows", "env -u DEVLOOPS_COORDINATOR_READONLY nice -n 10 timeout 30 command /usr/local/bin/bun run verify", "bash -lc 'npm test'", '"bun" run "verify"'];
+  const targeted = ["npm run -s test:core", "npm --loglevel silent run test:core", "npm run -w core --prefix . test:core", "bun test test/foo.test.mjs", "bun run test:core", "bun scripts/run-bun-test.mjs test/foo.test.mjs"];
   for (const agentType of ["review", "judge", "dev-loops:review", "dev-loops:judge"]) {
     for (const command of [...full, ...targeted, "bun run build"]) assert.equal(decideBashGate({command, agentType}).decision, "deny", `${agentType}: ${command}`);
   }
@@ -1772,7 +1772,7 @@ test("semantic roles refuse validation and workers use resolver-owned full evide
       assert.equal(d.decision, "deny", `${agentType}: ${command}`);
       assert.match(d.reason, /dev-loops-run cli\/index\.mjs gate resolve-validation/);
     }
-    for (const command of [...targeted, "git status", "bun run build"]) assert.equal(decideBashGate({command, agentType}).decision, "allow", `${agentType}: ${command}`);
+    for (const command of [...targeted, "git status", "npm -s install", "npm run lint --opaque verify", "bun run build"]) assert.equal(decideBashGate({command, agentType}).decision, "allow", `${agentType}: ${command}`);
   }
   for (const agentType of [null, "quality", "docs", "unknown"]) assert.equal(decideBashGate({command: "bun run verify", agentType}).decision, "allow");
 });
