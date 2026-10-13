@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted — 2026-10-13 ([operator acceptance record](https://github.com/mfittko/dev-loops/commit/3c27dc0cb2cb6bb886f7808d7519140f9b845b04)) <!-- secret-scan:allow public acceptance commit link, no credential value -->
 
 ## Context
 
