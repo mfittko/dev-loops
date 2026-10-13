@@ -508,7 +508,7 @@ export async function runBunTest(args, {
     // on their absence behaves the same locally as in CI. The caller's env object
     // is left untouched.
     const childEnv = { ...env };
-    for (const marker of [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER]) delete childEnv[marker];
+    for (const marker of [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER, "CODEX_THREAD_ID"]) delete childEnv[marker];
     const child = spawnImpl(command, buildBunTestArgs(await resolveBunTestFiles(args), env), {
       env: childEnv, stdio: ["ignore", capture.fd, capture.fd],
     });
