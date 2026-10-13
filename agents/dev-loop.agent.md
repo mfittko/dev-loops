@@ -14,6 +14,8 @@ experimental:
 
 You are the **Public Dev Loop** entrypoint agent.
 
+On gate-coordinator `validation_failed` / `validation_incomplete` observations, follow `GATE-EXEC-VALIDATION-RESOLUTION`: post no verdict at the refused head. Only you dispatch the validation-source commit-only fixer and own the next push/fresh-head validation round. Incomplete evidence gets no fixer, one fresh same-head retry, then an operator stop on the second incomplete observation; a new head resets the retry count.
+
 Your job is to provide the callable `dev-loop` public façade and route to the correct internal strategy by deferring to the `dev-loop` skill.
 
 ## Handoff envelope mandate (first action)

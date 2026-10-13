@@ -7,6 +7,7 @@ import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helper
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { canonicalizeScope } from "./_gate-names.mjs";
 import { renderRequiredReadLine } from "./write-gate-context.mjs";
+import { readValidationEvidence } from "./_validation-evidence.mjs";
 const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>] [--context-path <path>]
        [--prefix-hash <sha256>|--prefix-file <path>] [--same-head-retry]
 Verify that the current scoped-reviewer session has fresh context.
@@ -243,13 +244,15 @@ async function readSentinelPrefixHash(sentinelPath) {
 // with that hash and byte count, and every other `required: true` entry is
 // readable, else a reason naming the failing read. An unparseable artifact is
 // a failure: its required reads cannot be proven.
-async function verifyRequiredReads(contextPath, cwd) {
+async function verifyRequiredReads(contextPath, cwd, headSha) {
   let artifact;
   try {
     artifact = JSON.parse(await readFile(contextPath, "utf8"));
   } catch (err) {
     return `gate-context artifact is unreadable (${err.code ?? err.message}), so its required reads cannot be verified`;
   }
+  const validation = await readValidationEvidence({ context: artifact, headSha: headSha ?? artifact?.scope?.headSha, cwd });
+  if (validation.refusal === "validation_incomplete") return validation;
   const reads = Array.isArray(artifact?.requiredReads) ? artifact.requiredReads : [];
   for (const read of reads) {
     const hashed = typeof read?.sha256 === "string";
@@ -424,9 +427,9 @@ async function main(argv = process.argv.slice(2)) {
       }, false);
     }
     // Reference seeding: every hashed required read the builder bound into the
-    // prefix must still match, before the sentinel exists. An artifact without
-    // requiredReads (legacy or --prefix-file) has nothing to check.
-    const readFailure = await verifyRequiredReads(resolvedContextPath, cwd);
+    // prefix must still match, before the sentinel exists. Validation also
+    // requires the shared pointer, its hash binding and the requested head.
+    const readFailure = await verifyRequiredReads(resolvedContextPath, cwd, round);
     if (readFailure !== null) {
       return finish({
         ok: true,
@@ -435,7 +438,8 @@ async function main(argv = process.argv.slice(2)) {
         round: round ?? null,
         gateContextPath: contextPathArg,
         gateContextPresent: true,
-        reason: `${readFailure} — refusing to review from missing or stale evidence. Emit a blocked result via emit-reviewer-blocked.mjs (omit --completed-angles); never judge from a summary or partial read.`,
+        ...(typeof readFailure === "object" ? { refusal: readFailure.refusal, validationResultsPath: readFailure.validationResultsPath } : {}),
+        reason: `${typeof readFailure === "object" ? readFailure.reason : readFailure} — refusing to review from missing or stale evidence. Emit a blocked result via emit-reviewer-blocked.mjs --reason <this diagnostic> (omit --completed-angles); never run validation or judge from a summary or partial read.`,
       }, false);
     }
   }

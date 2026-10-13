@@ -22,7 +22,7 @@ import {
   enforceReviewerUnitBound,
 } from "@dev-loops/core/loop/reviewer-unit-bound";
 
-const USAGE = `Usage: emit-reviewer-blocked.mjs --head-sha <sha> --angles <csv> --model-turns <n> --tool-calls <n> --findings-dir <dir> [--run <id>] [--completed-angles <csv>] [--max-model-turns <n> --max-tool-calls <n>] [--harness <pi|claude|codex>] [--help]
+const USAGE = `Usage: emit-reviewer-blocked.mjs --head-sha <sha> --angles <csv> --model-turns <n> --tool-calls <n> --findings-dir <dir> [--run <id>] [--completed-angles <csv>] [--reason <evidence refusal>] [--max-model-turns <n> --max-tool-calls <n>] [--harness <pi|claude|codex>] [--help]
 Live reviewer-unit-bound enforcement: calls enforceReviewerUnitBound with the
 given consumption/coverage and, only when it reports blocked, writes one
 "blocked" per-angle findings artifact per unreviewed angle to --findings-dir —
@@ -135,6 +135,11 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
   const jqSyntaxError = preflightJqFilter(jq);
   if (jqSyntaxError !== undefined) return jqSyntaxError;
   const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
+  const reasonArg = resolveFlagValue(argv, "--reason");
+  if (reasonArg === "" || (reasonArg && completedAngles?.length > 0)) {
+    process.stderr.write(`${formatCliError(parseError("--reason needs a non-empty evidence refusal and no --completed-angles"))}\n`);
+    return 2;
+  }
 
   let modelTurns;
   let toolCalls;
@@ -152,6 +157,7 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
       completedAngles,
       budget,
     });
+    if (reasonArg) result = { ...result, ok: false, verdict: "blocked", reason: reasonArg, unreviewedAngles: angles };
   } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;

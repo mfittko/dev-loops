@@ -214,6 +214,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     }
     const afterProblem = currentTreeProblem();
     if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem.reason}`, afterProblem);
+    artifact.status = artifact.allPassed ? "complete" : "failed";
     await mkdir(path.dirname(artifactPath), { recursive: true });
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
     // HEAD can move between the check above and the write: re-check after it.

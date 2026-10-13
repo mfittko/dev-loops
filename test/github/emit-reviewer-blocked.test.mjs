@@ -9,6 +9,13 @@ import { consolidateFanin } from "@dev-loops/core/loop/gate-fanin";
 const HEAD_SHA = "c".repeat(40);
 const RUN = "run-1";
 
+test("#2470: explicit validation refusal blocks every assigned angle with diagnostic provenance", async () => withTmpDir(async (dir) => {
+  assert.equal(await main(["--head-sha", HEAD_SHA, "--angles", "a,b", "--model-turns", "0", "--tool-calls", "0", "--findings-dir", dir, "--reason", "validation record has wrong head"]), 0);
+  const artifacts = await readArtifacts(dir);
+  assert.equal(artifacts.length, 2);
+  assert.ok(artifacts.every((artifact) => artifact.reason === "validation record has wrong head" && artifact.verdict === "blocked"));
+}));
+
 async function withTmpDir(fn) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-reviewer-blocked-"));
   try {

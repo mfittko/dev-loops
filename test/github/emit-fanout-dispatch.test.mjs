@@ -47,6 +47,43 @@ const PR = "7";
 const PREFIX_BYTES = "## Invariant prefix\nrepo: o/r\nhead: c\n";
 const VOLATILE_BYTES = "# volatile tail\ngate: pre_approval_gate\n";
 
+for (const gate of ["draft_gate", "pre_approval_gate", "review"]) {
+  test(`#2470: ${gate} validation refusal is deterministic and precedes reviewer writes`, async () => withTmpDir(async (root) => {
+    const validationPath = path.join(root, "validation.json");
+    const dir = await seedBundle(root, { gate, artifactExtra: { scope: { validationResultsPath: validationPath } } });
+    const args = ["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA];
+    await writeFile(path.join(dir, `${gate}-${HEAD_SHA}.emit-plan.json`), JSON.stringify({ ok: true, count: 1 }));
+    await writeFile(validationPath, JSON.stringify({ headSha: HEAD_SHA, status: "failed", allPassed: false, suites: [{ name: "unit", exitCode: 1, outputPath: "/tmp/unit.log" }, { name: "ok", exitCode: 0 }] }));
+    const first = runEmitCli(args, { cwd: root, timeout: 90000 });
+    const payload = JSON.parse(first.stdout);
+    if (gate === "review") { assert.equal(first.status, 0, first.stderr); return; }
+    assert.equal(first.status, 1, first.stderr);
+    assert.equal(payload.refusal, "validation_failed");
+    assert.equal(payload.validationResultsPath, validationPath);
+    assert.deepEqual(payload.suites, [{ name: "unit", outputPath: "/tmp/unit.log" }]);
+    assert.deepEqual(JSON.parse(runEmitCli(args, { cwd: root, timeout: 90000 }).stdout), payload);
+    assert.deepEqual((await readdir(dir)).filter((f) => /emit-plan|suffix|work-order/.test(f)), []);
+    await writeFile(validationPath, JSON.stringify({ headSha: HEAD_SHA, status: "incomplete", allPassed: false, reason: "pending CI", suites: [] }));
+    const incomplete = JSON.parse(runEmitCli(args, { cwd: root, timeout: 90000 }).stdout);
+    assert.equal(incomplete.refusal, "validation_incomplete");
+    assert.equal(incomplete.reason, "pending CI");
+    await writeFile(validationPath, JSON.stringify({ headSha: HEAD_SHA, status: "complete", allPassed: true, suites: [{ name: "missing-exit-code" }] }));
+    assert.equal(JSON.parse(runEmitCli(args, { cwd: root, timeout: 90000 }).stdout).refusal, "validation_incomplete");
+    await writeFile(validationPath, JSON.stringify({ headSha: HEAD_SHA, status: "complete", allPassed: true, suites: [] }));
+    assert.equal(runEmitCli(args, { cwd: root, timeout: 90000 }).status, 0);
+  }));
+}
+test("#2470: recorded Codex is unqualified", async () => withTmpDir(async (root) => {
+  await seedBundle(root, { artifactExtra: { harness: "codex" } });
+  const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: root, timeout: 90000 });
+  assert.equal(JSON.parse(result.stdout).refusal, "semantic_harness_unqualified");
+}));
+test("#2470: active Codex refuses semantic dispatch even with recorded Pi", async () => withTmpDir(async (root) => {
+  await seedBundle(root, { artifactExtra: { harness: "pi" } });
+  const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: root, timeout: 90000, env: { ...process.env, CLAUDECODE: undefined, CODEX_THREAD_ID: "fixture-codex" } });
+  assert.equal(JSON.parse(result.stdout).refusal, "semantic_harness_unqualified");
+}));
+
 // A CONFIGURED group (design-simplicity — in the shipped gates.fanout.groups),
 // an AUTO-CHUNK leftover unit (group:...), and a singleton. Both multi-angle
 // units — configured or auto-chunk — share one reviewer each (issue 2180 /

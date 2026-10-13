@@ -23,10 +23,11 @@ import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { readValidationEvidence } from "../github/_validation-evidence.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
+const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path> | --validation-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
 or the unresolved review threads (list-review-threads.mjs --unresolved-only), plus the
 optional pre-push delta result (dev-loops loop pre-push-delta). --phase full needs a clearing
@@ -42,6 +43,7 @@ It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N
 Each run supersedes the previous emission for this PR. Dispatch the printed
 dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
 unsupported harness refuses. It accepts no brief, payload or summary input.
+--validation-file accepts only failed exact-head validation and binds every failing suite's text log; use commit_only and hand back the unpushed commit, without synthetic findings or thread dispositions.
 Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2 usage/IO error.`;
 
 // ref = fixer:<owner/repo>#<pr>:<headSha>:<executionIdentity>; executionIdentity = f<emit ms>-<8 hex>.
@@ -122,7 +124,9 @@ export function renderWorkOrder(workOrder) {
   const [dispositionPath] = workOrder.outputRefs;
   // headRefName is PR-supplied: JSON-quote it (and paths) so a backtick cannot close a span and inject prose.
   const { branch, allowedPaths } = workOrder.mutationAuthority;
-  const task = workOrder.phase === "commit_only"
+  const task = workOrder.source === "validation"
+    ? `Repair failed validation suites ${JSON.stringify(workOrder.failingSuites)} using the bound record and text logs, per agents/fixer.agent.md. Commit the repair and hand back the unpushed commit SHA and targeted-check results. No push or thread replies; write no finding, thread disposition or site coverage record. The coordinator owns the next push and a fresh gate validation round.`
+    : workOrder.phase === "commit_only"
     ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.handbackCheck ? " Before you hand back, run the work order's \`handbackCheck\` command from your worktree and correct the record until it exits 0 (skip it when you made no commit)." : ""}`
     :`Apply and commit any fixes not yet committed, then push, reply to and resolve the addressed threads per agents/fixer.agent.md (pass \`--disposition fixed\` and the full 40-character SHA of the fixing commit in each fixed reply), then write the disposition handoff \`{ headSha, dispositions: [...] }\` (headSha = the pushed PR head) to \`${dispositionPath}\`. Also write \`siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }]\` in that handoff, ${workOrder.siteCoverage ? "starting from the \`siteCoverage\` skeleton in the work order JSON below (fill it as the commit_only phase describes), " : ""}one entry per act item that has a siteQuery (threadless items included): verify-fixer-disposition refuses a handoff without it. A threadless act item gets no disposition handoff entry; every entry's \`threadId\` is a review-thread node id.`;
   return `# Fixer work order (ADR 0106)
@@ -188,20 +192,33 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads }) {
  * and `fetchPr` are injectable for tests.
  */
 export async function emitFixerWorkOrder({
-  repo, pr, headSha, phase, actListFile, gate, threadsFile, deltaResult, allowedPaths = [], cwd = process.cwd(), tmpRoot,
+  repo, pr, headSha, phase, actListFile, gate, threadsFile, validationFile, deltaResult, allowedPaths = [], cwd = process.cwd(), tmpRoot,
   fetchPr = defaultFetchPr, executionIdentity = `f${Date.now()}-${randomBytes(4).toString("hex")}`,
 }) {
   if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Refusal(`--head-sha must be a full 40- or 64-char lowercase SHA, got ${headSha}`);
   if (!FIXER_PHASES.includes(phase)) throw new Refusal(`--phase must be one of ${FIXER_PHASES.join(", ")}, got ${phase}`);
-  if (Boolean(actListFile) === Boolean(threadsFile)) throw new Refusal("pass exactly one of --act-list-file and --threads-file");
+  if ([actListFile, threadsFile, validationFile].filter(Boolean).length !== 1) throw new Refusal("pass exactly one of --act-list-file, --threads-file and --validation-file");
   if (actListFile && !GATE_NAMES.includes(gate)) throw new Refusal(`--act-list-file needs --gate ${GATE_NAMES.join("|")}, got ${gate}`);
-  if (threadsFile && gate) throw new Refusal("--gate applies only to an --act-list-file source");
+  if (!actListFile && gate) throw new Refusal("--gate applies only to an --act-list-file source");
+  if (validationFile && phase !== "commit_only") throw new Refusal("--validation-file supports commit_only; the coordinator owns push and fresh validation");
   tmpRoot ??= resolveGateArtifactTmpRoot(cwd);
   const dir = path.resolve(buildFixerDir({ repo, pr, tmpRoot }));
   const paths = [...new Set((allowedPaths.length > 0 ? allowedPaths : ["."]).map(normalizeAllowedPath))].sort();
   const abs = (p) => path.resolve(cwd, p);
 
-  const source = actListFile ? await readSource("act-list", abs(actListFile)) : await readSource("threads", abs(threadsFile));
+  const source = actListFile ? await readSource("act-list", abs(actListFile)) : threadsFile ? await readSource("threads", abs(threadsFile)) : await readSource("validation", abs(validationFile));
+  const validationLogs = [];
+  if (validationFile) {
+    const validation = await readValidationEvidence({ context: { scope: { validationResultsPath: abs(validationFile) } }, headSha, cwd, requireBinding: false });
+    if (validation.refusal !== "validation_failed" || source.parsed.headSha !== headSha || source.parsed.status !== "failed" || source.parsed.allPassed !== false || !Array.isArray(source.parsed.suites)) throw new Refusal(`validation source must be status:failed, allPassed:false at requested head ${headSha}: ${validation.reason ?? "validation passed"}`);
+    for (const suite of source.parsed.suites.filter((suite) => suite.exitCode !== 0)) {
+      if (typeof suite.name !== "string" || typeof suite.outputPath !== "string" || !suite.outputPath) throw new Refusal("failing validation suite has no name or text log outputPath");
+      const logPath = abs(suite.outputPath);
+      const bytes = await readFile(logPath).catch(() => null);
+      if (bytes === null) throw new Refusal(`required validation log is missing or unreadable: ${logPath}`);
+      validationLogs.push({ kind: "validation-log", path: logPath, sha256: sha256(bytes), bytes: bytes.length, required: true });
+    }
+  }
   const isActItem = (f) => f?.judgeDisposition === "act" && VALID_SEVERITIES.has(f.severity) && typeof f.summary === "string" && f.summary.trim() !== "";
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
@@ -247,7 +264,8 @@ export async function emitFixerWorkOrder({
     authority: { sourceDigest: jsonContentDigest(source.parsed), deltaResultDigest: delta ? jsonContentDigest(delta.parsed) : undefined },
     mutationAuthority: { repo, pr: Number(pr), branch: prState.headRefName, allowedPaths: paths },
     contracts,
-    requiredReads: [source.read, ...(delta ? [delta.read] : [])],
+    requiredReads: [source.read, ...validationLogs, ...(delta ? [delta.read] : [])],
+    failingSuites: validationFile ? source.parsed.suites.filter((suite) => suite.exitCode !== 0).map((suite) => suite.name) : undefined,
     outputRefs: [outputRef],
     siteCoverage: actListFile ? buildSiteCoverageSkeleton(source.parsed) : undefined,
     handbackCheck: phase === "commit_only" && actListFile
@@ -398,7 +416,7 @@ registerWorkOrderRole("fixer", {
   locate: locateFixerUnit,
   validate: (order) => {
     const kinds = new Set((Array.isArray(order.requiredReads) ? order.requiredReads : []).map((read) => read?.kind));
-    return !kinds.has("act-list") && !kinds.has("threads") ? "fixer work order has no act-list or threads required read"
+    return !kinds.has("act-list") && !kinds.has("threads") && !kinds.has("validation") ? "fixer work order has no act-list, threads or validation required read"
       : typeof order.mutationAuthority?.branch !== "string" ? "fixer work order names no mutation authority branch"
         : !Array.isArray(order.mutationAuthority.allowedPaths) || order.mutationAuthority.allowedPaths.length === 0 ? "fixer work order names no allowed paths"
           : !Array.isArray(order.outputRefs) || order.outputRefs.length !== 1 ? "fixer work order names no single disposition outputRef"
@@ -410,7 +428,7 @@ registerWorkOrderRole("fixer", {
 export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), fetchPr } = {}) {
   const { values } = parseArgs({ args: argv, options: {
     repo: { type: "string" }, pr: { type: "string" }, "head-sha": { type: "string" }, phase: { type: "string" },
-    "act-list-file": { type: "string" }, gate: { type: "string" }, "threads-file": { type: "string" },
+    "act-list-file": { type: "string" }, gate: { type: "string" }, "threads-file": { type: "string" }, "validation-file": { type: "string" },
     "delta-result": { type: "string" }, "allowed-path": { type: "string", multiple: true },
     "tmp-root": { type: "string" }, harness: { type: "string" }, help: { type: "boolean", short: "h" },
     ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -432,7 +450,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     buildFixerDispatchPayload({ harness: values.harness, plan: {} }); // refuse an unknown harness before emitting
     const plan = await emitFixerWorkOrder({
       repo: values.repo, pr: values.pr, headSha: values["head-sha"].toLowerCase(), phase: values.phase,
-      actListFile: values["act-list-file"], gate: values.gate, threadsFile: values["threads-file"],
+      actListFile: values["act-list-file"], gate: values.gate, threadsFile: values["threads-file"], validationFile: values["validation-file"],
       deltaResult: values["delta-result"], allowedPaths: values["allowed-path"] ?? [], cwd,
       ...(values["tmp-root"] ? { tmpRoot: path.resolve(cwd, values["tmp-root"]) } : {}),
       ...(fetchPr ? { fetchPr } : {}),

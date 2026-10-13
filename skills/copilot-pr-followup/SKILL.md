@@ -593,6 +593,8 @@ The post-merge hook also fast-forwards the main checkout's local `main` to `orig
 
 ## Validation policy
 
+Follow `GATE-EXEC-VALIDATION-RESOLUTION` for lifecycle emitter `validation_failed` / `validation_incomplete` observations: the gate coordinator returns without reviewer/judge/fixer dispatch; the dev-loop coordinator posts no verdict at that head, owns the validation-source commit-only fixer on failure and the fresh-head round, or retries incomplete evidence once at the same head and then stops for the operator. A new head resets the retry count. Read the owning [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) for the exact artifact and dispatch authority.
+
 Follow [Validation Policy](../docs/validation-policy.md). Default to the narrowest deterministic targeted check; local full-repository runs go only through `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation`. For repo-local examples: `bun run test:dev-loop` for skill scripts, contract tests for templates, `git diff --check` for docs. When CI runs exist, use `gh run watch` or `detect-copilot-loop-state.mjs` instead of `sleep`-based polling. Distinguish: locally validated, full current-head CI or sanctioned full evidence, awaiting CI, and incomplete evidence.
 
 ## Confirmation checkpoints

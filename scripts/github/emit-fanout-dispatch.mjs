@@ -8,6 +8,7 @@ import { VERIFIED_ITEMS_ANGLES, baseAngleName } from "@dev-loops/core/loop/gate-
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
+import { readValidationEvidence, semanticHarnessRefusal } from "./_validation-evidence.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE, dispatchPromptLayoutRecordPath } from "./record-dispatch-prompt-layout.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, workOrderDigest, writeExecutionIndex } from "./_work-order-protocol.mjs";
 import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, renderRequiredReadLine } from "./write-gate-context.mjs";
@@ -495,6 +496,16 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const jqSyntaxError = preflightJqFilter(jq);
   if (jqSyntaxError !== undefined) return jqSyntaxError;
 
+  const harnessRefusal = semanticHarnessRefusal(artifact);
+  if (harnessRefusal) return finish({ ok: false, ...harnessRefusal }, false);
+  if (LIFECYCLE_GATES.includes(gate) && artifact?.scope?.validationResultsPath) {
+    const validation = await readValidationEvidence({ context: artifact, headSha, cwd: process.cwd(), requireBinding: false });
+    // Absence remains a reviewer/judge consumer failure, not a new pre-fanout gate.
+    if (validation.refusal && !validation.absent) {
+      return finish({ ok: false, refusal: validation.refusal, validationResultsPath: validation.validationResultsPath, reason: validation.reason, ...(validation.suites ? { suites: validation.suites } : {}) }, false);
+    }
+  }
+
   const fanout = artifact?.fanout;
   if (!fanout || typeof fanout !== "object") {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — gate-context artifact at ${JSON.stringify(contextPath)} carries no fanout dispatch plan — re-run write-gate-context.mjs (a thin briefing with no --base emits no fanout plan)` }, false);
@@ -755,11 +766,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       roundIdentity: { gate, headSha, prefixSha256 },
       headSha,
       configSha256,
+      validationResultsPath: artifact?.scope?.validationResultsPath ?? null,
       assignedAngles: angles,
       angleInstructions,
       requiredReads: unitReads.length > 0 ? [...sharedReads.filter((read) => read.kind !== "evidence"), ...unitReads] : sharedReads,
       outputRefs: angles.map((angle) => path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`)),
-      executionRules: { budget, prohibited: PROHIBITED_REVIEWER_OPERATIONS, widening: REVIEWER_WIDENING_RULE },
+      executionRules: { budget, prohibited: PROHIBITED_REVIEWER_OPERATIONS, widening: REVIEWER_WIDENING_RULE, validation: "Consume the hash-bound exact-head validation record only; never execute tests, builds or validation. Missing or incomplete evidence means blocked, no fallback run" },
     };
     // Pull transport (ADR 0106): the coordinator relays only this compact
     // envelope; the reviewer pulls and verifies its work order itself.

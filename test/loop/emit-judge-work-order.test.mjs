@@ -20,11 +20,35 @@ const pull = (plan, cwd, over = {}) => node("scripts/github/pull-work-order.mjs"
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout).refusal);
 const seed = (root, over = {}) => seedJudgeSources(root, { headSha: HEAD, ...over });
 
+test("#2470: judge consumes bound validation and refuses absent/wrong-head evidence", async () => withDir(async (root) => {
+  const sources = await seed(root);
+  const plan = await emitJudgeWorkOrder(sources);
+  const read = plan.workOrder.requiredReads.find((r) => r.kind === "validation");
+  assert.equal(read.path, path.join(root, "judge-fixture/validation.json"));
+  await rm(read.path);
+  assert.equal(refusal(pull(plan, root)), "stale_dispatch", "vanished validation invalidates an emitted judge order");
+  await assert.rejects(emitJudgeWorkOrder(sources), (e) => e.refusal === "validation_incomplete");
+  await seed(root);
+  const contextPath = path.join(root, buildGateContextPath(sources));
+  const context = JSON.parse(await readFile(contextPath, "utf8"));
+  const bytes = JSON.stringify({ headSha: "a".repeat(40), status: "complete", allPassed: true, suites: [] });
+  await writeFile(read.path, bytes);
+  Object.assign(context.requiredReads.find((r) => r.kind === "validation"), { sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length });
+  await writeFile(contextPath, JSON.stringify(context));
+  await assert.rejects(emitJudgeWorkOrder(sources), (e) => e.refusal === "validation_incomplete" && /head/.test(e.message));
+}));
+test("#2470: active Codex judge producer refuses before materializing an order", async () => withDir(async (root) => {
+  const sources = await seed(root);
+  const result = spawnSync("node", [path.resolve("scripts/loop/emit-judge-work-order.mjs"), "--repo", sources.repo, "--pr", String(sources.pr), "--gate", sources.gate, "--head-sha", HEAD, "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, timeout: 90000, encoding: "utf8", env: { ...process.env, CLAUDECODE: undefined, CODEX_THREAD_ID: "fixture-codex" } });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(JSON.parse(result.stdout).refusal, "semantic_harness_unqualified");
+}));
+
 test("J1: the producer derives the work order from the round's sources, pins their digests, and accepts no brief", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
     const plan = await emitJudgeWorkOrder(sources);
-    assert.deepEqual(plan.workOrder.requiredReads.map((read) => read.kind), ["findings", "spec", "spec-identity", "evidence"]);
+    assert.deepEqual(plan.workOrder.requiredReads.map((read) => read.kind), ["findings", "spec", "spec-identity", "evidence", "validation"]);
     assert.match(plan.workOrder.authority.specDigest, /^sha256:/);
     assert.deepEqual(plan.workOrder.contracts.map((c) => c.path), ["agents/judge.agent.md", "skills/docs/spec-authority-contract.md"]);
     const cli = (extra) => node("scripts/loop/emit-judge-work-order.mjs", ["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD,

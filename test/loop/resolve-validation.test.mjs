@@ -62,6 +62,7 @@ test("full validation resolves through gate CLI and preserves the legacy artifac
     assert.equal(out.code, 0, out.stderr);
     const result = JSON.parse(out.stdout);
     assert.equal(result.status, "complete");
+    assert.equal(result.artifact.status, "complete", "the persisted record carries the consumer status");
     assert.equal(result.profile, "full-repository");
     assert.equal(result.headSha, headSha);
     assert.equal(result.toolchain, `bun@${bunVersion}`);
@@ -82,6 +83,7 @@ test("failed full suite returns an unsuccessful public result and retains failur
     const result = JSON.parse(out.stdout);
     assert.equal(result.ok, false);
     assert.equal(result.status, "failed");
+    assert.equal(result.artifact.status, "failed", "the persisted record admits the validation fixer source");
     assert.equal(result.artifact.allPassed, false);
     assert.equal(result.artifact.suites[0].exitCode, 2);
     assert.deepEqual(JSON.parse(await readFile(path.join(repoRoot, result.artifactPath), "utf8")), result.artifact);

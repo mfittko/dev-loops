@@ -212,6 +212,8 @@ any record type. Full per-writer flag detail: Gate Review Sub-Loop Contract Phas
 
 **Gate fan-out dispatch (inline imperative — #1637):** When the gate coordinator (`GATE-EXEC-GATE-COORDINATOR` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md)) dispatches the `draft_gate` / `pre_approval_gate` fan-out (parallel fresh-context reviewers seeded from the one neutral context bundle), it MUST join their results through the sanctioned fan-in CLI — not by hand-rolling the wait. Never hand-roll reviewer dispatch via `Promise.all(runs.run)` + transcript-tailing; await each reviewer's findings artifact at its deterministic output path (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) and consolidate via ONE call, always with `--spec-authority <identity-path>` from above:
 
+Before dispatch, follow `GATE-EXEC-VALIDATION-RESOLUTION` for `validation_failed` / `validation_incomplete`: return the typed observation, dispatch no semantic units or fixer, and post no verdict. The dev-loop coordinator owns failure repair/fresh-head validation and the one same-head incomplete retry followed by operator stop.
+
 ```sh
 node <dev-loops-package-root>/cli/index.mjs gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate> \
   --expected-dispatch-units <n> --out <findings-json-path> --ledger-out <ledger-path> \

@@ -9,6 +9,33 @@ import { renderRequiredReadLine } from "../../scripts/github/write-gate-context.
 
 const scriptPath = path.resolve("scripts/github/verify-fresh-review-context.mjs");
 
+test("#2470: reviewer validation admission blocks absent/wrong-head evidence before sentinel creation", async () => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-review-validation-")));
+  try {
+    const headSha = "a".repeat(40);
+    const contextPath = path.join(root, "context.json");
+    const validationPath = path.join(root, "validation.json");
+    const context = { scope: { headSha, validationResultsPath: validationPath }, requiredReads: [] };
+    const run = () => runScript(["--context-path", contextPath, "--prefix-hash", "a".repeat(64)], { cwd: root, timeout: 90000 });
+    await writeFile(contextPath, JSON.stringify(context));
+    assert.equal(JSON.parse(run().stdout).refusal, "validation_incomplete");
+    await writeFile(contextPath, JSON.stringify({ scope: { headSha }, requiredReads: [] }));
+    assert.equal(JSON.parse(run().stdout).refusal, "validation_incomplete");
+    await writeFile(validationPath, JSON.stringify({ headSha, allPassed: true, status: "complete", suites: [] }));
+    await writeFile(contextPath, JSON.stringify({ ...context, requiredReads: [{ kind: "validation" }] }));
+    assert.equal(JSON.parse(run().stdout).refusal, "validation_incomplete");
+    for (const recordedHead of ["b".repeat(40), headSha]) {
+      const bytes = JSON.stringify({ headSha: recordedHead, allPassed: true, status: "complete", suites: [] });
+      await writeFile(validationPath, bytes);
+      context.requiredReads = [{ kind: "validation", path: validationPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length, required: false }];
+      await writeFile(contextPath, JSON.stringify(context));
+      const result = run();
+      assert.equal(result.status, recordedHead === headSha ? 0 : 1, result.stderr);
+      if (recordedHead !== headSha) assert.equal(JSON.parse(result.stdout).refusal, "validation_incomplete");
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 function runScript(args = [], opts = {}) {
   return spawnSync("node", [scriptPath, ...args], {
     encoding: "utf8",
@@ -327,7 +354,7 @@ test("verify-fresh-review-context --context-path fails closed when the gate-cont
     assert.equal(output.sentinelCreated, false);
     const ctxRelPath = "tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.json";
     await mkdir(path.join(tmpDir, "tmp", "gate-context", "owner-repo", "pr-1"), { recursive: true });
-    await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify({ adjacentCode: { files: [] } }) + "\n", "utf8");
+    await seedValidationContext(tmpDir, ctxRelPath);
     const retry = runScript(["--scope", "coverage", "--context-path", ctxRelPath, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(retry.status, 0, retry.stderr);
     const retryOutput = JSON.parse(retry.stdout.trim());
@@ -344,7 +371,7 @@ test("verify-fresh-review-context --context-path passes through when the gate-co
     const ctxDir = path.join(tmpDir, "tmp", "gate-context", "owner-repo", "pr-1");
     await mkdir(ctxDir, { recursive: true });
     const ctxRelPath = "tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.json";
-    await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify({ adjacentCode: { files: [] } }) + "\n", "utf8");
+    await seedValidationContext(tmpDir, ctxRelPath);
     const result = runScript(["--scope", "coverage", "--context-path", ctxRelPath, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout.trim());
@@ -813,7 +840,7 @@ async function seedRequiredReads(tmpDir) {
   const files = {
     evidence: [`${ctxRelDir}/draft_gate-abc1234.briefing-evidence.txt`, "## PR body\nevidence\n"],
     diff: [`${ctxRelDir}/draft_gate-abc1234.diff`, "diff --git a/x b/x\n"],
-    validation: [`${ctxRelDir}/draft_gate-abc1234.validation.json`, "{\"allPassed\":true}\n"], // secret-scan:allow fixture artifact path (not a secret)
+    validation: [`${ctxRelDir}/draft_gate-abc1234.validation.json`, JSON.stringify({ headSha: "a".repeat(40), allPassed: true, status: "complete", suites: [] })], // secret-scan:allow fixture artifact path (not a secret)
     "scoped-evidence": [`${ctxRelDir}/draft_gate-abc1234.briefing-docs-only.txt`, "## Docs-only slice\nvariant\n"], // secret-scan:allow fixture artifact path (not a secret)
   };
   const requiredReads = [];
@@ -823,8 +850,15 @@ async function seedRequiredReads(tmpDir) {
   }
   const ctxRelPath = `${ctxRelDir}/draft_gate-abc1234.json`; // secret-scan:allow fixture artifact path (not a secret)
   requiredReads.push({ kind: "context", path: ctxRelPath, required: false });
-  await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify({ requiredReads }) + "\n", "utf8");
+  await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify({ scope: { headSha: "a".repeat(40), validationResultsPath: files.validation[0] }, requiredReads }) + "\n", "utf8");
   return { ctxRelPath, files };
+}
+
+async function seedValidationContext(root, contextPath) {
+  const validationResultsPath = path.join(root, "validation.json");
+  const bytes = JSON.stringify({ headSha: "a".repeat(40), allPassed: true, status: "complete", suites: [] });
+  await writeFile(validationResultsPath, bytes);
+  await writeFile(path.join(root, contextPath), JSON.stringify({ scope: { headSha: "a".repeat(40), validationResultsPath }, requiredReads: [{ kind: "validation", path: validationResultsPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length, required: false }] }));
 }
 
 test("verify-fresh-review-context --context-path verifies every hashed required read before creating the sentinel", async () => {
@@ -844,7 +878,7 @@ test("verify-fresh-review-context --context-path verifies every hashed required 
       const output = JSON.parse(result.stdout.trim());
       assert.equal(output.fresh, false, label);
       assert.equal(output.sentinelCreated, false, label);
-      assert.match(output.reason, /required read/, label);
+      assert.match(output.reason, /required read|hash-bound validation read/, label);
       assert.match(output.reason, namePattern, label);
       assert.match(output.reason, /emit-reviewer-blocked\.mjs/, `${label}: the refusal tells the reviewer to block`);
       assert.match(output.reason, /omit --completed-angles/, label);

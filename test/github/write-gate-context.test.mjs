@@ -3477,6 +3477,8 @@ test("dogfood round-trip: CLI-built briefing prefix verifies clean across two re
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     await mkdir(path.join(repoRoot, "tmp"), { recursive: true });
+    const validationResultsPath = path.join(repoRoot, "tmp/validation.json");
+    await writeFile(validationResultsPath, JSON.stringify({ headSha, allPassed: true, status: "complete", suites: [] }));
     await main([
       "--repo", "owner/repo", "--pr", "60", "--gate", "draft_gate",
       "--head-sha", headSha,
@@ -3485,6 +3487,7 @@ test("dogfood round-trip: CLI-built briefing prefix verifies clean across two re
       "--pr-body", "Fixes the helper.",
       "--acceptance-criteria", "#900",
       "--issue-body", "The helper must return the right value.",
+      "--validation-results", validationResultsPath,
     ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({ repo: "owner/repo", pr: 60, gate: "draft_gate", headSha }, { repoRoot });
@@ -3495,7 +3498,7 @@ test("dogfood round-trip: CLI-built briefing prefix verifies clean across two re
     const contextPath = buildGateContextPath({ repo: "owner/repo", pr: 60, gate: "draft_gate", headSha });
 
     const r1 = spawnSync("node", [contextGuardPath, "--scope", "scope-a", "--context-path", contextPath, "--prefix-file", prefixPath], { cwd: repoRoot, encoding: "utf8" });
-    assert.equal(r1.status, 0, r1.stderr);
+    assert.equal(r1.status, 0, r1.stderr || r1.stdout);
     const r2 = spawnSync("node", [contextGuardPath, "--scope", "scope-b", "--context-path", contextPath, "--prefix-file", prefixPath], { cwd: repoRoot, encoding: "utf8" });
     assert.equal(r2.status, 0, r2.stderr);
 
@@ -3518,9 +3521,12 @@ test("linked worktree + main-anchored ledger: the sentinel runs from the worktre
   try {
     git(mainRoot, ["worktree", "add", "-q", "--detach", linked, headSha]);
     await mkdir(path.join(mainRoot, "tmp", "gate-findings"), { recursive: true });
+    const validationResultsPath = path.join(linked, "validation.json");
+    await writeFile(validationResultsPath, JSON.stringify({ headSha, allPassed: true, status: "complete", suites: [] }));
     await main([
       "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate", "--head-sha", headSha,
       "--angles", '["scope"]', "--base", baseSha, "--pr-body", "Fixes the helper.",
+      "--validation-results", validationResultsPath,
     ], { repoRoot: linked, run: stubGhRun });
     const identity = { repo: "owner/repo", pr: 61, gate: "draft_gate", headSha };
     const contextPath = buildGateContextPath(identity);
@@ -4150,7 +4156,8 @@ test("renderBriefingEvidence: validationResultsPath present appends the section 
     "`status: \"complete\"` and `authority: \"ci-authoritative\"` ran no local suite by design: current-head CI",
     "is its evidence, so it satisfies gate evidence. If the record",
     "is absent, unreadable, incomplete, or stamped with a head SHA other than abc1234, say so",
-    "as a gate-evidence finding instead of substituting your own run.",
+    "as validation_incomplete: stop and emit blocked for every assigned angle via",
+    "emit-reviewer-blocked.mjs --reason <diagnostic>, with no completed angles. Never substitute your own run.",
   ].join("\n");
   assert.ok(r1.text.endsWith(expectedSection + "\n"), "section is the LAST content, exact wording");
   // Appears exactly once, and after the "## Changed files" section that
@@ -4180,7 +4187,7 @@ test("writeGateContext: --validation-results records the absolute path at scope.
 
     const onDisk = await readFile(path.resolve(repoRoot, result.evidencePath), "utf8");
     assert.match(onDisk, /## Validation results at this head/);
-    assert.ok(onDisk.trim().endsWith("as a gate-evidence finding instead of substituting your own run."));
+    assert.ok(onDisk.trim().endsWith("emit-reviewer-blocked.mjs --reason <diagnostic>, with no completed angles. Never substitute your own run."));
     assert.ok(onDisk.includes(`  ${validationResultsFile}`));
 
     const reread = await readGateContext({
@@ -4331,6 +4338,8 @@ test("dogfood: an orchestrator-supplied --prefix-file record verifies clean via 
     const orchestratorPrefixPath = path.join(repoRoot, "tmp", "orchestrator-prefix.txt");
     const orchestratorPrefixText = "# Orchestrator briefing\n\nThe orchestrator's own prefix bytes.\n";
     await writeFile(orchestratorPrefixPath, orchestratorPrefixText, "utf8");
+    const validationResultsPath = path.join(repoRoot, "tmp/validation.json");
+    await writeFile(validationResultsPath, JSON.stringify({ headSha, allPassed: true, status: "complete", suites: [] }));
 
     await main([
       "--repo", "owner/repo", "--pr", "90", "--gate", "draft_gate",
@@ -4338,6 +4347,7 @@ test("dogfood: an orchestrator-supplied --prefix-file record verifies clean via 
       "--angles", '["scope"]',
       "--base", baseSha,
       "--prefix-file", orchestratorPrefixPath,
+      "--validation-results", validationResultsPath,
     ], { repoRoot, run: stubGhRun });
 
     const artifact = await readGateContext({ repo: "owner/repo", pr: 90, gate: "draft_gate", headSha }, { repoRoot });
@@ -7917,6 +7927,23 @@ test("writeGateContext persists the evidence file and binds it, the diff, and va
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("#2470: prefix-file mode preserves the single hash-bound validation pointer", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prefix-validation-"));
+  try {
+    const validationResultsPath = path.join(repoRoot, "validation.json");
+    const bytes = JSON.stringify({ headSha: "a".repeat(40), allPassed: true, status: "complete", suites: [] });
+    await writeFile(validationResultsPath, bytes);
+    const prefixFile = path.join(repoRoot, "prefix.txt");
+    await writeFile(prefixFile, "custom invariant bytes");
+    const result = await writeGateContext({ ...parseWriteGateContextCliArgs(["--repo", "o/r", "--pr", "3", "--gate", "draft_gate", "--head-sha", "a".repeat(40), "--angles", '["scope"]']), validationResultsPath, prefixFile }, { repoRoot });
+    assert.equal(result.artifact.scope.validationResultsPath, validationResultsPath);
+    const read = result.artifact.requiredReads.find((r) => r.kind === "validation");
+    assert.equal(read.path, validationResultsPath);
+    assert.equal(read.required, false);
+    assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
 test("writeGateContext: a large lockfile hunk never enters the required diff read, in inline or pointer mode", async () => {

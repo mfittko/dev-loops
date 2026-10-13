@@ -18,6 +18,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath } from "../github/_gate-artifact-paths.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { readValidationEvidence, semanticHarnessRefusal } from "../github/_validation-evidence.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
@@ -64,6 +65,7 @@ Adjudicate every finding in the \`findings\` read per agents/judge.agent.md, aga
 Read every \`required\` entry below IN FULL before any judgment. If one is missing, unreadable, or its sha256 differs, stop and report which read failed; never write a verdict.
 Write exactly two artifacts: the relevance verdict to \`${verdictPath}\` and the spec-authority verdict to \`${specVerdictPath}\`.
 Widening: ${JUDGE_WIDENING_RULE}.
+Validation: consume the bound validation record field by field. Never execute tests, builds, or validation; absent, wrong-head or incomplete evidence means validation_incomplete, no verdict.
 
 ## Required reads
 
@@ -107,6 +109,10 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   // write-gate-context records the evidence path relative to the checkout that owns tmpRoot (<checkout>/tmp).
   const evidence = await readSource("evidence", path.resolve(path.dirname(abs(tmpRoot)), evidenceRead.path));
   if (evidence.read.sha256 !== evidenceRead.sha256) throw new Refusal(`gate-context evidence ${evidenceRead.path} changed since the round was built; rebuild the round context`);
+  const harnessRefusal = semanticHarnessRefusal(context);
+  if (harnessRefusal) throw new WorkOrderRefusal(harnessRefusal.refusal, harnessRefusal.reason);
+  const validation = await readValidationEvidence({ context, headSha, cwd: path.dirname(abs(tmpRoot)) });
+  if (validation.refusal === "validation_incomplete") throw new WorkOrderRefusal(validation.refusal, validation.reason);
   const priors = [];
   for (const prior of priorVerdicts) priors.push(await readSource("prior-judge-verdict", abs(prior)));
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
@@ -125,10 +131,11 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
       priorVerdictDigests: priors.map((prior) => sha256Hex(parseSource(prior))),
     },
     contracts,
-    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read)],
+    validationResultsPath: validation.validationResultsPath,
+    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, validation.read, ...priors.map((prior) => prior.read)],
     // Per-round paths: a superseded round's late verdict never lands where this round's is read.
     outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],
-    executionRules: { widening: JUDGE_WIDENING_RULE, contract: "agents/judge.agent.md" },
+    executionRules: { widening: JUDGE_WIDENING_RULE, validation: "Consume validation only; never execute tests, builds or validation", contract: "agents/judge.agent.md" },
   };
   const identityTriple = {
     workOrderRef: `judge:${repo}#${pr}:${gate}:${headSha}:${roundId}`,
@@ -225,7 +232,7 @@ registerWorkOrderRole("judge", {
   locate: locateJudgeUnit,
   validate: (order) => {
     const kinds = new Set((Array.isArray(order.requiredReads) ? order.requiredReads : []).map((read) => read?.kind));
-    const missing = ["findings", "spec", "spec-identity", "evidence"].filter((kind) => !kinds.has(kind));
+    const missing = ["findings", "spec", "spec-identity", "evidence", "validation"].filter((kind) => !kinds.has(kind));
     return missing.length > 0 ? `judge work order is missing required read(s) ${missing.join(", ")}`
       : typeof order.authority?.specDigest !== "string" || typeof order.authority?.findingsDigest !== "string" ? "judge work order pins no spec or findings digest"
         : !Array.isArray(order.outputRefs) || order.outputRefs.length !== 2 ? "judge work order names no two verdict outputRefs"

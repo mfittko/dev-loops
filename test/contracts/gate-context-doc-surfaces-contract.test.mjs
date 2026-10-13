@@ -30,6 +30,17 @@ import {
 
 const srcUrl = new URL("../../scripts/github/write-gate-context.mjs", import.meta.url);
 
+test("#2470: validation refusal keeps remediation and retry authority with dev-loop", async () => {
+  const contract = await readFile(new URL("../../skills/docs/gate-review-sub-loop-contract.md", import.meta.url), "utf8");
+  assert.match(contract, /validation_failed/);
+  assert.match(contract, /validation_incomplete/);
+  assert.match(contract, /gate coordinator dispatches no reviewer, judge or fixer/);
+  assert.match(contract, /posts no verdict at the refused head/);
+  assert.match(contract, /retry exactly once at the same head/);
+  assert.match(contract, /second incomplete result at that head stops for the operator/);
+  assert.match(contract, /new head resets that retry count/i);
+});
+
 test("write-gate-context --help: --acceptance-criteria and --issue-body describe multi-issue resolution and fail-closed (#1541)", async () => {
   const src = await readFile(srcUrl, "utf8");
   const acLine = src.split("\n").find((l) => l.startsWith("  --acceptance-criteria <ptr>"));

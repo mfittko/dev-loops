@@ -38,7 +38,13 @@ export async function seedJudgeSources(root, { repo = "o/r", pr = 7, gate = "pre
   await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);
   const contextPath = path.join(root, buildGateContextPath({ repo, pr, gate, headSha }));
   await mkdir(path.dirname(contextPath), { recursive: true });
-  await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: evidence.length, required: true }] }));
+  const validationPath = path.join(root, "judge-fixture/validation.json");
+  const validation = JSON.stringify({ headSha, status: "complete", allPassed: true, suites: [] });
+  await writeFile(validationPath, validation);
+  await writeFile(contextPath, JSON.stringify({ scope: { headSha, validationResultsPath: validationPath }, requiredReads: [
+    { kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: evidence.length, required: true },
+    { kind: "validation", path: validationPath, sha256: createHash("sha256").update(validation).digest("hex"), bytes: validation.length, required: false },
+  ] }));
   return { repo, pr, gate, headSha, findingsFile, specFile, identityFile, cwd: root };
 }
 

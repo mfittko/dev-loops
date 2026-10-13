@@ -29,6 +29,33 @@ const ACT = [withFp({ severity: "high", angle: "correctness", summary: "null der
 const ACT_REF = ACT[0].fingerprint;
 const THREADS = { ok: true, repo: REPO, pr: PR, threads: [{ threadId: "T1", commentId: 1, body: "fix", isResolved: false, isOutdated: false, path: "src/a.mjs", line: 3 }] };
 
+test("#2470: validation source binds text logs and preserves PR authority", async () => withFixture(async ({ root, wt, head, files, emit }) => {
+  const validationFile = path.join(root, "tmp/src/validation.json");
+  const log = path.join(root, "tmp/src/unit.log");
+  await writeFile(log, "test failed: expected true\n");
+  const record = { headSha: head, status: "failed", allPassed: false, suites: [{ name: "unit", exitCode: 1, outputPath: log }] };
+  const args = { actListFile: undefined, gate: undefined, deltaResult: undefined, validationFile, phase: "commit_only" };
+  await writeFile(validationFile, JSON.stringify(record));
+  const plan = await emit(args);
+  assert.equal(plan.workOrder.source, "validation");
+  assert.deepEqual(plan.workOrder.requiredReads.map((r) => r.kind), ["validation", "validation-log"]);
+  assert.equal(plan.workOrder.mutationAuthority.branch, "issue-1");
+  assert.equal(plan.workOrder.siteCoverage, undefined);
+  assert.match(await readFile(plan.promptPath, "utf8"), /unit/);
+  assert.doesNotMatch(await readFile(plan.promptPath, "utf8"), /Write the site coverage record/);
+  await writeFile(log, "changed");
+  assert.match((await locateFixerUnit({ ref: plan.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] })).stale, /validation-log/);
+  await assert.rejects(emit({ ...args, actListFile: files.actList }), /exactly one/);
+  await assert.rejects(emit({ ...args, phase: "full" }), /commit_only/);
+  for (const over of [{ status: "incomplete" }, { allPassed: true }, { headSha: "a".repeat(40) }]) {
+    await writeFile(validationFile, JSON.stringify({ ...record, ...over }));
+    await assert.rejects(emit(args), /validation/);
+  }
+  await writeFile(validationFile, JSON.stringify(record));
+  await rm(log);
+  await assert.rejects(emit(args), /log/);
+}));
+
 // An inherited GIT_DIR/GIT_WORK_TREE (a git hook of another repo) must not change a decision.
 const gitFreeEnv = () => ({ ...runIdFreeEnv(), GIT_DIR: undefined, GIT_WORK_TREE: undefined });
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitFreeEnv() }).trim();
@@ -337,7 +364,7 @@ test("an act-list item with a missing or non-canonical fingerprint refuses", asy
 test("F1: missing or conflicting source and authority refuse before dispatch", async () => {
   await withFixture(async ({ wt, head, files, emit }) => {
     await assert.rejects(emit({ actListFile: path.join(wt, "missing.json") }), /required fixer source act-list is missing/);
-    await assert.rejects(emit({ actListFile: undefined }), /exactly one of --act-list-file and --threads-file/);
+    await assert.rejects(emit({ actListFile: undefined }), /exactly one of --act-list-file, --threads-file and --validation-file/);
     await assert.rejects(emit({ threadsFile: files.threads }), /exactly one of/);
     await assert.rejects(emit({ gate: undefined }), /needs --gate/);
     await assert.rejects(emit({ actListFile: files.threads }), /not a non-empty judge-pass --out array/);
