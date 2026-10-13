@@ -205,6 +205,8 @@ export async function emitFixerWorkOrder({
   const dir = path.resolve(buildFixerDir({ repo, pr, tmpRoot }));
   const paths = [...new Set((allowedPaths.length > 0 ? allowedPaths : ["."]).map(normalizeAllowedPath))].sort();
   const abs = (p) => path.resolve(cwd, p);
+  // Producers record suite log paths repo-relative: resolve them against the checkout that owns the validation record (the directory above its last tmp/ segment), not the caller cwd.
+  const recordOwnerRoot = validationFile ? (() => { const p = abs(validationFile); const i = p.lastIndexOf(`${path.sep}tmp${path.sep}`); return i === -1 ? cwd : p.slice(0, i); })() : cwd;
 
   const source = actListFile ? await readSource("act-list", abs(actListFile)) : threadsFile ? await readSource("threads", abs(threadsFile)) : await readSource("validation", abs(validationFile));
   const validationLogs = [];
@@ -213,7 +215,7 @@ export async function emitFixerWorkOrder({
     if (validation.refusal !== "validation_failed" || source.parsed.headSha !== headSha || source.parsed.status !== "failed" || source.parsed.allPassed !== false || !Array.isArray(source.parsed.suites)) throw new Refusal(`validation source must be status:failed, allPassed:false at requested head ${headSha}: ${validation.reason ?? "validation passed"}`);
     for (const suite of source.parsed.suites.filter((suite) => suite.exitCode !== 0)) {
       if (typeof suite.name !== "string" || typeof suite.outputPath !== "string" || !suite.outputPath) throw new Refusal("failing validation suite has no name or text log outputPath");
-      const logPath = abs(suite.outputPath);
+      const logPath = path.resolve(recordOwnerRoot, suite.outputPath);
       const bytes = await readFile(logPath).catch(() => null);
       if (bytes === null) throw new Refusal(`required validation log is missing or unreadable: ${logPath}`);
       validationLogs.push({ kind: "validation-log", path: logPath, sha256: sha256(bytes), bytes: bytes.length, required: true });

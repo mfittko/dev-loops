@@ -62,6 +62,17 @@ test("#2470: validation source binds text logs and preserves PR authority", asyn
   await assert.rejects(emit(args), /log/);
 }));
 
+test("#2470: a repo-relative suite outputPath resolves against the record's checkout, not the caller cwd", async () => withFixture(async ({ root, head, emit }) => {
+  const validationFile = path.join(root, "tmp/src/validation.json");
+  await writeFile(path.join(root, "tmp/src/unit.log"), "test failed\n");
+  await writeFile(validationFile, JSON.stringify({ headSha: head, status: "failed", allPassed: false, suites: [{ name: "unit", exitCode: 1, outputPath: "tmp/src/unit.log" }] }));
+  const plan = await emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, validationFile, phase: "commit_only" });
+  const log = plan.workOrder.requiredReads.find((r) => r.kind === "validation-log");
+  assert.equal(log.path, path.join(root, "tmp/src/unit.log"));
+  await rm(log.path);
+  await assert.rejects(emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, validationFile, phase: "commit_only" }), /log/);
+}));
+
 // An inherited GIT_DIR/GIT_WORK_TREE (a git hook of another repo) must not change a decision.
 const gitFreeEnv = () => ({ ...runIdFreeEnv(), GIT_DIR: undefined, GIT_WORK_TREE: undefined });
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitFreeEnv() }).trim();

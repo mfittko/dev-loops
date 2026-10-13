@@ -107,6 +107,7 @@ Output (stdout, JSON):
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": false, "reason": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": true, "reason": "required read <kind> ..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": true, "reason": "gate-context artifact is unreadable ..." }
+  { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": true, "refusal": "validation_incomplete", "validationResultsPath": "...", "reason": "..." }
   repoRoot (fresh runs only) is the directory the sentinel ran in. With
   --context-path it is worktree-local (the locality guard proved it); without
   that flag it is simply the invocation cwd, unvalidated. Reviewer shells
@@ -124,7 +125,11 @@ Exit codes:
      outside the reviewer's working directory, OR (with --context-path) a
      requiredReads entry of that artifact is missing or unreadable, or a
      hashed one no longer matches its recorded sha256 or byte count, OR (with
-     --context-path) the artifact itself is not parseable JSON, OR (with --prefix-file) the
+     --context-path) the artifact itself is not parseable JSON, OR (with
+     --context-path) the validation evidence is incomplete (refusal
+     validation_incomplete: no scope.validationResultsPath pointer, an unbound or
+     hash-mismatched validation read, a record for another head, or an
+     incomplete record), OR (with --prefix-file) the
      prefix file is missing, or a hashed line of its "## Required reads"
      section no longer matches the file on disk, OR (with --same-head-retry) the existing
      sentinel's recorded prefix hash does not match the given one (or records

@@ -1761,7 +1761,7 @@ test("decideBashGate denies hardened raw body-write forms in launcher-only wordi
 });
 
 test("semantic roles refuse validation and workers use resolver-owned full evidence", () => {
-  const full = ["npm run -s verify", "npm -s run verify", "npm run --loglevel silent verify", "npm --loglevel silent run verify", "npm run --opaque value verify", "npm run -s test:all && npm --loglevel silent run test:docs && npm run -w core test:workflows", "bun run verify", "npm test", "bun test", "node scripts/verify.mjs", "bun run test:all && bun run test:docs && bun run test:workflows", "env -u DEVLOOPS_COORDINATOR_READONLY nice -n 10 timeout 30 command /usr/local/bin/bun run verify", "bash -lc 'npm test'", '"bun" run "verify"'];
+  const full = ["npm run -s verify", "npm t", "pnpm t", "npm run-script verify", "npm rum verify", "bun run ./scripts/verify.mjs", "npm -s run verify", "npm run --loglevel silent verify", "npm --loglevel silent run verify", "npm run --opaque value verify", "npm run -s test:all && npm --loglevel silent run test:docs && npm run -w core test:workflows", "bun run verify", "npm test", "bun test", "node scripts/verify.mjs", "bun run test:all && bun run test:docs && bun run test:workflows", "env -u DEVLOOPS_COORDINATOR_READONLY nice -n 10 timeout 30 command /usr/local/bin/bun run verify", "bash -lc 'npm test'", '"bun" run "verify"'];
   const targeted = ["npm run -s test:core", "npm --loglevel silent run test:core", "npm run -w core --prefix . test:core", "bun test test/foo.test.mjs", "bun run test:core", "bun scripts/run-bun-test.mjs test/foo.test.mjs"];
   for (const agentType of ["review", "judge", "dev-loops:review", "dev-loops:judge"]) {
     for (const command of [...full, ...targeted, "bun run build"]) assert.equal(decideBashGate({command, agentType}).decision, "deny", `${agentType}: ${command}`);
@@ -1770,7 +1770,7 @@ test("semantic roles refuse validation and workers use resolver-owned full evide
     for (const command of full) {
       const d = decideBashGate({command, agentType});
       assert.equal(d.decision, "deny", `${agentType}: ${command}`);
-      assert.match(d.reason, /dev-loops-run cli\/index\.mjs gate resolve-validation/);
+      assert.match(d.reason, /`dev-loops gate resolve-validation`/);
     }
     for (const command of [...targeted, "git status", "npm -s install", "npm run lint --opaque verify", "bun run build"]) assert.equal(decideBashGate({command, agentType}).decision, "allow", `${agentType}: ${command}`);
   }
@@ -1783,4 +1783,29 @@ test("coordinator direct verify scripts use the existing opt-in boundary", () =>
     assert.equal(decideBashGate({command: "node scripts/verify.mjs", agentType}).decision, "allow");
     assert.equal(decideBashGate({command: "dev-loops-run cli/index.mjs gate resolve-validation", agentType, enforceCoordinator: true}).decision, "allow");
   }
+});
+
+test("reviewers keep the contract-mandated read-only gh and resolve-role commands", () => {
+  for (const command of [
+    "gh api repos/o/r/pulls/1/reviews",
+    "gh api repos/o/r/pulls/1/commits",
+    "gh api --paginate repos/o/r/pulls/1/reviews",
+    "gh api -X GET repos/o/r/pulls/1/reviews",
+    "gh pr view 1 --json body",
+    "dev-loops-run cli/index.mjs gate resolve-role --gate pre_approval_gate --angle correctness",
+  ]) assert.equal(decideBashGate({ command, agentType: "review" }).decision, "allow", command);
+  for (const command of [
+    "gh api -X POST repos/o/r/pulls/1/reviews",
+    "gh api --method POST repos/o/r/pulls/1/reviews",
+    "gh api repos/o/r/pulls/1/reviews -f event=APPROVE",
+    "gh api repos/o/r/pulls/1/reviews --input body.json",
+    "gh api repos/o/r/pulls/1/reviews; bun test",
+    "gh api repos/o/r/issues/1/comments",
+    "gh pr view 1 && npm test",
+    "gh pr merge 1",
+    "dev-loops-run cli/index.mjs gate resolve-role --gate x; bun test",
+    "dev-loops-run cli/index.mjs gate resolve-validation",
+    "bun run verify",
+    "npm test",
+  ]) assert.equal(decideBashGate({ command, agentType: "review" }).decision, "deny", command);
 });

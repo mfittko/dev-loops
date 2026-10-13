@@ -43,6 +43,8 @@ function runHook(script, payload, env = {}) {
     env: { ...childEnv, ...env },
     timeout: 10000,
   });
+  // A timed-out or killed hook has empty stdout, which an allow assertion would read as "allowed".
+  assert.ok(!res.error && res.status !== null, `hook ${script} did not exit normally: ${res.error?.message ?? res.signal}`);
   let json = null;
   try {
     json = res.stdout.trim() ? JSON.parse(res.stdout) : null;
@@ -1006,7 +1008,7 @@ test("Bash hook denies normalized wrappers and full aggregates for workers", () 
     for (const command of ["env -u DEVLOOPS_COORDINATOR_READONLY timeout 30 nice -n 10 command /usr/local/bin/bun run verify", "bash -lc 'npm test'", '"bun" run "verify"', "bun test test/foo.test.mjs test", "node --test", "bun run test:all && bun run test:docs && bun run test:workflows"]) {
       const r = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
       assert.equal(r.json?.hookSpecificOutput?.permissionDecision, "deny", `${agent_type}: ${command}`);
-      assert.match(r.json.hookSpecificOutput.permissionDecisionReason, /dev-loops-run cli\/index\.mjs gate resolve-validation/);
+      assert.match(r.json.hookSpecificOutput.permissionDecisionReason, /`dev-loops gate resolve-validation`/);
     }
   }
 });

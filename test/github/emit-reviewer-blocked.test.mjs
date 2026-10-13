@@ -281,3 +281,10 @@ test("j) the floor budget applies without the flags; one flag alone or an out-of
     assert.equal(await main([...base, "--max-model-turns", "96", "--max-tool-calls", "100"]), 2);
   });
 });
+
+test("--reason usage errors exit 2: empty value, and combined with --completed-angles", async () => withTmpDir(async (dir) => {
+  const base = ["--head-sha", HEAD_SHA, "--angles", "a", "--model-turns", "0", "--tool-calls", "0", "--findings-dir", dir];
+  assert.equal(await main([...base, "--reason", ""]), 2);
+  assert.equal(await main([...base, "--reason", "x", "--completed-angles", "a"]), 2);
+  assert.deepEqual(await readArtifacts(dir), []);
+}));

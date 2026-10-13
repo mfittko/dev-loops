@@ -97,7 +97,7 @@ Output (stdout, JSON):
       "promptBytes": <n>, "sectionBytes": { "prefix": <n>, "volatile": <n>, "suffix": <n> },
       "workOrder": { "role", "target", "operation", "roundIdentity", "headSha", "configSha256", "assignedAngles",
         "angleInstructions": [ { "angle": "...", "persona": "...", "prompt": "..." } ],
-        "requiredReads", "outputRefs", "executionRules" } } ] }
+        "validationResultsPath"?, "requiredReads", "outputRefs", "executionRules" } } ] }
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
@@ -105,6 +105,10 @@ Output (stdout, JSON):
   A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
+  A validation-evidence refusal (exit 1) instead emits { "ok": false,
+  "refusal": "validation_failed|validation_incomplete|semantic_harness_unqualified",
+  "validationResultsPath": "...", "reason": "...", "suites"?: [...] } with no
+  "error" field; read "refusal", not "error", for it.
   On success this step ALSO persists its emitted round plan to the keyed
   <gate>-<headSha>.emit-plan.json sibling of the gate-context bundle
   (buildGateEmitPlanPath, GATE-EXEC-FANOUT-DISPATCH-EMIT) — body = the emitter's
@@ -124,7 +128,11 @@ Exit codes:
      derive a colliding scope, a unit's invariant-prefix record is missing /
      suffix could not be composed, an angle has no resolvable prompt, or a
      composed work order exceeds REVIEWER_WORK_ORDER_MAX_BYTES (30 KB) or
-     carries an inline "diff --git" line
+     carries an inline "diff --git" line; or, for a lifecycle gate whose
+     context carries scope.validationResultsPath, the present validation record
+     is red (validation_failed), incomplete or stamped with another head
+     (validation_incomplete), or the semantic harness is unqualified (Codex)
+     (semantic_harness_unqualified). An absent record does not refuse here.
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, filesystem
      error, or invalid --jq filter)`.trim();
 

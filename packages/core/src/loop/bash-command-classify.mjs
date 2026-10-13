@@ -1224,10 +1224,13 @@ const EXACT_TEST_FILE = /^[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const RUNNER_VALUE_FLAGS = new Set(["--timeout", "--test-name-pattern", "--test-reporter", "--test-reporter-destination", "--reporter", "--test-timeout", "--test-concurrency", "--test-shard", "--max-workers", "--filter"]);
 const PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+(?:(?:--prefix|--dir|--cwd|--loglevel|--workspace|--filter|--cache|--registry|--userconfig|--config|--modules-folder|--use-yarnrc|-w|-C)\s+\S+|--?[\w-]+=\S+|(?:--silent|--quiet|--verbose|--bun|--if-present|--ignore-scripts|--offline|--frozen-lockfile|--recursive|-[sqrd]+)(?=\s|$)))*`;
 const VALIDATION_SCRIPT = String.raw`(?:test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)`;
-const PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:run${PACKAGE_MANAGER_OPTIONS}\\s+)?(${VALIDATION_SCRIPT})(?:\\s|$)`, "i");
-const PACKAGE_MANAGER_COMMAND = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:run${PACKAGE_MANAGER_OPTIONS}\\s+)?(?!run(?:\\s|$))[\\w:][\\w:-]*(?:\\s|$)`, "i");
+// npm/pnpm built-in aliases: run-script|rum|urn for run, t|tst for test.
+const RUN_WORD = String.raw`(?:run-script|run|rum|urn)`;
+const TEST_ALIAS = new RegExp(`^(?:npm|pnpm)${PACKAGE_MANAGER_OPTIONS}\\s+(?:t|tst)(?:\\s|$)`, "i");
+const PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(${VALIDATION_SCRIPT})(?:\\s|$)`, "i");
+const PACKAGE_MANAGER_COMMAND = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(?!${RUN_WORD}(?:\\s|$))[\\w:][\\w:-]*(?:\\s|$)`, "i");
 // An opaque value-taking option before a recognizable validation script cannot grant worker execution.
-const OPAQUE_PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:run(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+)?${VALIDATION_SCRIPT}(?:\\s|$)`, "i");
+const OPAQUE_PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:${RUN_WORD}(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+)?${VALIDATION_SCRIPT}(?:\\s|$)`, "i");
 
 function hasOnlyExactTestSelectors(args = "") {
   const words = args.trim().split(/\s+/).filter(Boolean);
@@ -1250,7 +1253,7 @@ export function classifyValidationCommand(command) {
   const suites = new Set();
   let targeted = false;
   for (const segment of verificationCommandSegments(command)) {
-    const scriptPath = segment.match(/^(?:(?:bun|node)\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
+    const scriptPath = segment.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
     const normalizedPath = scriptPath ? posix.normalize(scriptPath) : "";
     if (normalizedPath === "verify.mjs" || /(?:^|\/)scripts\/verify\.mjs$/.test(normalizedPath)) return "full-repository";
     const bunTest = segment.match(/^bun\s+test(?:\s+(.*))?$/i);
@@ -1259,6 +1262,7 @@ export function classifyValidationCommand(command) {
       targeted = true;
       continue;
     }
+    if (TEST_ALIAS.test(segment)) return "full-repository";
     const packageRun = segment.match(PACKAGE_MANAGER_RUN);
     if (packageRun) {
       const name = packageRun[1].toLowerCase();
@@ -1268,7 +1272,7 @@ export function classifyValidationCommand(command) {
       continue;
     }
     if (!PACKAGE_MANAGER_COMMAND.test(segment) && OPAQUE_PACKAGE_MANAGER_RUN.test(segment)) return "full-repository";
-    const runner = segment.match(/^(?:(?:bun|node)\s+)?(?:[\w./-]+\/)?run-bun-test\.mjs(?:\s+(.*))?$/);
+    const runner = segment.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?(?:[\w./-]+\/)?run-bun-test\.mjs(?:\s+(.*))?$/);
     if (runner) {
       const args = runner[1] ?? "";
       if (/(?:^|\s)[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?(?:\s|$)/.test(args) && !hasOnlyExactTestSelectors(args)) return "full-repository";
@@ -1368,4 +1372,44 @@ export function isReadSearchCommand(rawCommand) {
   if (program.value === 'file' && args.some((t) => /^-[^-\s]*C/.test(t) || /^--comp/.test(t))) return false;
   if (program.value === 'find' && args.some((t) => FIND_EXEC_RE.test(t))) return false;
   return true;
+}
+
+// Read-only commands the review contract mandates (agents/review.agent.md): delta bounds, PR description, angle roles.
+const REVIEW_API_ENDPOINT_RE = /^repos\/[\w.-]+\/[\w.-]+\/pulls\/\d+\/(?:reviews|commits)$/;
+const REVIEW_PLAIN_VALUE_RE = /^[\w./:=,@#-]+$/;
+const REVIEW_RESOLVE_ROLE_RE = /^dev-loops-run cli\/index\.mjs gate resolve-role(?: [\w./:=,@-]+)*$/;
+
+// Accepts one flag set; `valued` flags consume the next word. Returns the positional words, or null on any other flag.
+function reviewFlagArgs(words, { bare, valued, getValue = new Set() }) {
+  const positional = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const w = words[i];
+    if (bare.has(w)) continue;
+    if (valued.has(w)) {
+      if (i + 1 >= words.length || (getValue.has(w) && words[i + 1].toUpperCase() !== 'GET')) return null;
+      i += 1;
+      continue;
+    }
+    if (w.startsWith('-')) return null;
+    positional.push(w);
+  }
+  return positional;
+}
+
+/** Whether `rawCommand` is one unchained, read-only form of `gh api .../pulls/<n>/(reviews|commits)`, `gh pr view` or `gate resolve-role`. */
+export function isReviewerContractCommand(rawCommand) {
+  const command = rawCommand.trim();
+  if (SHELL_ACTIVE_RE.test(command)) return false;
+  if (REVIEW_RESOLVE_ROLE_RE.test(command)) return true;
+  const words = command.split(/\s+/);
+  if (words[0] !== 'gh' || words.slice(1).some((w) => !REVIEW_PLAIN_VALUE_RE.test(w) && !w.startsWith('-'))) return false;
+  if (words[1] === 'api') {
+    const positional = reviewFlagArgs(words.slice(2), { bare: new Set(['--paginate']), valued: new Set(['--jq', '-q', '-X', '--method']), getValue: new Set(['-X', '--method']) });
+    return positional?.length === 1 && REVIEW_API_ENDPOINT_RE.test(positional[0]);
+  }
+  if (words[1] === 'pr' && words[2] === 'view') {
+    const positional = reviewFlagArgs(words.slice(3), { bare: new Set(['--comments', '-c']), valued: new Set(['--json', '--jq', '-q', '--repo', '-R']) });
+    return positional !== null && positional.length <= 1;
+  }
+  return false;
 }

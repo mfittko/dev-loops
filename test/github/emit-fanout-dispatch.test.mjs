@@ -73,6 +73,19 @@ for (const gate of ["draft_gate", "pre_approval_gate", "review"]) {
     assert.equal(runEmitCli(args, { cwd: root, timeout: 90000 }).status, 0);
   }));
 }
+test("#2470: an absent validation file does not stop fan-out and a wrong-head record refuses validation_incomplete", async () => withTmpDir(async (root) => {
+  const validationPath = path.join(root, "validation.json");
+  const dir = await seedBundle(root, { artifactExtra: { scope: { validationResultsPath: validationPath } } });
+  const args = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+  const absent = runEmitCli(args, { cwd: root, timeout: 90000 });
+  assert.equal(absent.status, 0, absent.stderr);
+  assert.ok(JSON.parse(absent.stdout).count > 0);
+  await writeFile(validationPath, JSON.stringify({ headSha: "d".repeat(40), status: "complete", allPassed: true, suites: [] }));
+  const wrongHead = runEmitCli(args, { cwd: root, timeout: 90000 });
+  assert.equal(wrongHead.status, 1);
+  assert.equal(JSON.parse(wrongHead.stdout).refusal, "validation_incomplete");
+  assert.deepEqual((await readdir(dir)).filter((f) => /emit-plan|work-order/.test(f)), []);
+}));
 test("#2470: recorded Codex is unqualified", async () => withTmpDir(async (root) => {
   await seedBundle(root, { artifactExtra: { harness: "codex" } });
   const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: root, timeout: 90000 });

@@ -24,8 +24,8 @@ import {
 
 const USAGE = `Usage: emit-reviewer-blocked.mjs --head-sha <sha> --angles <csv> --model-turns <n> --tool-calls <n> --findings-dir <dir> [--run <id>] [--completed-angles <csv>] [--reason <evidence refusal>] [--max-model-turns <n> --max-tool-calls <n>] [--harness <pi|claude|codex>] [--help]
 Live reviewer-unit-bound enforcement: calls enforceReviewerUnitBound with the
-given consumption/coverage and, only when it reports blocked, writes one
-"blocked" per-angle findings artifact per unreviewed angle to --findings-dir —
+given consumption/coverage and, only when it reports blocked or --reason forces it, writes one
+"blocked" per-angle findings artifact per unreviewed angle to --findings-dir (with --reason, always, for every assigned angle) —
 the shape consolidate-fanin.mjs already refuses to consolidate as clean.
 Required:
   --head-sha <sha>               The FULL 40- or 64-char hex reviewed head SHA.
@@ -37,6 +37,9 @@ Optional:
   --run <id>                    Round/run identifier (unit.run). Defaults to --head-sha
                                  when omitted — the round identity a reviewer always has.
   --completed-angles <csv>        Comma-separated angles actually covered before budget ran out.
+  --reason <diagnostic>          Force a blocked result for EVERY assigned angle, regardless of budget, carrying this
+                                 diagnostic (the validation_incomplete evidence refusal). Non-empty; incompatible with
+                                 --completed-angles.
   --max-model-turns <n>          The unit's model-turn budget, as printed in its dispatch suffix
                                  (${REVIEWER_UNIT_BUDGET_FLOOR.maxModelTurns}..${REVIEWER_UNIT_BUDGET_CAP.maxModelTurns}).
   --max-tool-calls <n>           The unit's tool-call budget, as printed in its dispatch suffix
@@ -50,7 +53,8 @@ Exit codes:
   0  Blocked artifact(s) written
   1  Refused: the unit is within budget and fully covered (nothing to emit —
      write normal per-angle artifacts instead), or --jq predicate false
-  2  Usage/argument error, an out-of-range budget, or a malformed
+  2  Usage/argument error (including an empty --reason, or --reason combined with
+     --completed-angles), an out-of-range budget, or a malformed
      unit/consumed shape rejected by enforceReviewerUnitBound itself`.trim();
 
 const parseError = buildParseError(USAGE);

@@ -16,6 +16,7 @@ import {
   deriveInManagedRepo,
   classifyValidationCommand,
   isReadSearchCommand,
+  isReviewerContractCommand,
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
   commandContainsGhPrCreate,
@@ -188,13 +189,13 @@ export function decideBashGate({
   }
   const role = normalizeAgentType(agentType);
   if (role === "review") {
-    return parseSanctionedPullLine(command) || (typeof command === "string" && isReadSearchCommand(command)) ? ALLOW : {
+    return parseSanctionedPullLine(command) || (typeof command === "string" && (isReadSearchCommand(command) || isReviewerContractCommand(command))) ? ALLOW : {
       decision: "deny",
-      reason: "Reviewer read-only boundary: run only the dispatched pull, sentinel/blocked-result commands, or shell-inert read/search commands. Consume validation evidence; never run test or build processes.",
+      reason: "Reviewer read-only boundary: run only the dispatched pull, sentinel/blocked-result commands, shell-inert read/search commands, or the read-only `gh api repos/<o>/<r>/pulls/<n>/(reviews|commits)`, `gh pr view` and `gate resolve-role` forms. Consume validation evidence; never run test or build processes.",
     };
   }
   if (["developer", "fixer"].includes(role) && classifyValidationCommand(command) === "full-repository") {
-    return { decision: "deny", reason: "Full validation boundary: developers and fixers run targeted checks only. Request full evidence through `dev-loops-run cli/index.mjs gate resolve-validation`." };
+    return { decision: "deny", reason: "Full validation boundary: developers and fixers run targeted checks only. Request full evidence through `dev-loops gate resolve-validation`." };
   }
   // The fixer's binding is recorded only for the exact pull line (ADR 0107), so a modified one denies with the fix.
   if (normalizeAgentType(agentType) === FIXER_AGENT_TYPE && isFixerPullAttempt(command) && !parseSanctionedPullLine(command)) {
