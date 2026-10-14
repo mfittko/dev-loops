@@ -143,6 +143,23 @@ test("F1: a PR branch name with a backtick stays JSON-quoted in the rendered pro
   });
 });
 
+test("F1: emitted bootstrap locates the authority worktree before relative contract and source reads", async () => {
+  await withFixture(async ({ emit }) => {
+    const unit = await emit();
+    const rule = unit.workOrder.executionRules.mutation;
+    assert.match(rule, /before reading any relative contract or source path, run `git worktree list --porcelain`/);
+    assert.match(rule, /Match a `branch` record literally to `refs\/heads\/` plus mutationAuthority.branch/);
+    assert.match(rule, /exactly one matching checked-out worktree and an absolute `worktree` root, otherwise stop/);
+    assert.match(rule, /absolute root as the explicit cwd of every subsequent tool call\/subprocess/);
+    assert.match(rule, /including contract digest verification/);
+    assert.match(rule, /pull subprocess does not change later tool-call cwd/);
+    assert.match(rule, /Keep every contract\/source hash, branch, allowed-path and phase check/);
+    const text = await readFile(unit.promptPath, "utf8");
+    const prefix = text.slice(0, text.indexOf("\n## Required reads\n"));
+    assert.ok(prefix.includes(rule), "the bootstrap must be visible before relative required-read paths");
+  });
+});
+
 test("F1: a delta result that does not belong to this act list and head refuses before dispatch", async () => {
   await withFixture(async ({ head, files, emit }) => {
     await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);

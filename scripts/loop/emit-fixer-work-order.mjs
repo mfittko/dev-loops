@@ -257,7 +257,7 @@ export async function emitFixerWorkOrder({
       contract: "agents/fixer.agent.md",
       phase,
       validation: VALIDATION_RULE,
-      mutation: "Mutate only files under mutationAuthority.allowedPaths on mutationAuthority.branch",
+      mutation: "After a successful pull, before reading any relative contract or source path, run `git worktree list --porcelain` in the current repository. Match a `branch` record literally to `refs/heads/` plus mutationAuthority.branch (no pattern or shell evaluation); require exactly one matching checked-out worktree and an absolute `worktree` root, otherwise stop and report the refusal. Use that absolute root as the explicit cwd of every subsequent tool call/subprocess (or resolve each repo-relative path against it), including contract digest verification; the pull subprocess does not change later tool-call cwd. Do not create or switch worktrees or invent a root. Keep every contract/source hash, branch, allowed-path and phase check. Mutate only files under mutationAuthority.allowedPaths on mutationAuthority.branch",
       regenerate: existsSync(path.join(resolveRepoRoot(cwd), "scripts/claude/generate-claude-assets.mjs")) ? REGENERATE_RULE : undefined,
     },
   };
