@@ -20,6 +20,27 @@ const pull = (plan, cwd, over = {}) => node("scripts/github/pull-work-order.mjs"
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout).refusal);
 const seed = (root, over = {}) => seedJudgeSources(root, { headSha: HEAD, ...over });
 
+test("Codex bootstrap precedes every pinned read and binds contracts to the emitting toolchain", async () => {
+  await withDir(async (root) => {
+    const plan = await emitJudgeWorkOrder(await seed(root));
+    const result = pull(plan, root);
+    assert.equal(result.status, 0, result.stderr);
+    const setup = result.stdout.indexOf("## Codex after-pull setup");
+    assert.ok(setup >= 0 && setup < result.stdout.indexOf("Read every `required`"));
+    assert.match(result.stdout, /command -v shasum/);
+    assert.match(result.stdout, /No inline Python or Node/);
+    assert.equal(plan.workOrder.executionRules.contract, path.resolve("agents/judge.agent.md"));
+    for (const contract of plan.workOrder.contracts) {
+      assert.equal(contract.digest, createHash("sha256").update(await readFile(path.resolve(contract.path))).digest("hex"));
+    }
+    const moved = structuredClone(plan.workOrder);
+    moved.executionRules.contract = "/other/toolchain/agents/judge.agent.md";
+    assert.equal(workOrderDigest(moved), plan.workOrderDigest, "absolute locator is local material, not semantic identity");
+    await writeFile(plan.planPath, JSON.stringify({ ...plan, workOrder: moved }));
+    assert.equal(refusal(pull(plan, root)), "local_materialization_integrity_failure");
+  });
+});
+
 test("J1: the producer derives the work order from the round's sources, pins their digests, and accepts no brief", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
