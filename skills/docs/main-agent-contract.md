@@ -165,6 +165,10 @@ When a user triggers the dev loop, the main agent must immediately dispatch the
 and all subsequent implementation steps. The main agent never runs `node <dev-loops-package-root>/cli/index.mjs loop startup`
 directly.
 
+## Codex fixer dispatch
+
+Inside `dev-loop`, emit `--harness codex` and pass the exact `dispatchPayload` to `collaboration.spawn_agent`. Its only fields are `task_name` (derived from the validated fixer execution identity), unchanged pointer `message` and `fork_turns: "none"`; never append setup or unsupported fields. Rebuilding does not resume an actor. The fresh child learns its rules after the canonical pull from the pinned [fixer contract](../../agents/fixer.agent.md#codex-after-pull-setup), including truthful child-scoped neutral run binding and propagation under actual managed permissions. Codex has no Claude native role or hook enforcement.
+
 ## Async dispatch posture (Pi)
 
 When the main agent dispatches the `dev-loop` async subagent in an interactive session, it MUST

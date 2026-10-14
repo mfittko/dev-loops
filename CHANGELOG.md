@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- The canonical fixer emitter supports exact fresh Codex collaboration payloads and pinned after-pull run setup (#2770)
+
 - `pr create` refuses with `pre_pr_review_missing` unless `loop pre-pr-review` recorded the branch head; `--lightweight` and `docs/phases/**/*.md`-only branches are exempt (#2618)
 - A pre-push check refuses a gate fix push until the full work order is emitted; no hook means no check, and `ensure-worktree` warns (#2748)
 
