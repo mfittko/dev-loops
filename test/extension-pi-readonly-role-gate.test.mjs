@@ -424,6 +424,17 @@ test("literal shell residues and opaque vitest launches reach both worker guards
   }
 });
 
+test("wrapper, heredoc and canonical-launcher fixes preserve both worker boundaries", async () => {
+  const literalBody = "git commit -m \"$(cat <<'EOF'\nfix `npm test` and (bun run verify)\nEOF\n)\"";
+  for (const role of ["developer", "fixer"]) for (const [commands, block] of [
+    [["timeout --signal KILL 60 npm test", "env -S 'npm test'", "dev-loops-run --repo-root /work scripts/verify.mjs"], true],
+    [["nice -n10 bun test test/foo.test.mjs", "dev-loops-run scripts/run-bun-test.mjs test/foo.test.mjs", literalBody], false],
+  ]) for (const command of commands) {
+    assert.equal(decideBashGate({ command, agentType: role }).decision, block ? "deny" : "allow", `${role}: ${command}`);
+    assert.equal((await callAs(role, command)).block, block, `${role}: ${command}`);
+  }
+});
+
 test("opaque package options keep test aliases blocked on Pi and Claude", async () => {
   for (const role of ["developer", "fixer"]) {
     for (const command of ["npm --tag x t", "npm --script-shell sh tst", "npm --node-options x it", "pnpm --tag x cit"]) {

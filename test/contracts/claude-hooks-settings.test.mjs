@@ -1035,6 +1035,17 @@ test("generated Bash hook denies literal shell residues and opaque vitest launch
   }
 });
 
+test("generated Bash hook preserves wrapper, launcher and inert-heredoc routing", () => {
+  const literalBody = "git commit -m \"$(cat <<'EOF'\nfix `npm test` and (bun run verify)\nEOF\n)\"";
+  for (const [commands, denied] of [
+    [["nice -10 npm test", "env -S 'npm test'", "dev-loops-run --repo-root /work scripts/verify.mjs"], true],
+    [["nice -n10 bun test test/foo.test.mjs", literalBody], false],
+  ]) for (const command of commands) {
+    const result = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type: "fixer"});
+    assert.equal(result.json?.hookSpecificOutput?.permissionDecision === "deny", denied, command);
+  }
+});
+
 test("Bash hook keeps native role and malformed-command behavior", () => {
   for (const command of [undefined, 42]) {
     for (const agent_type of ["review", "judge"]) assert.equal(runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, agent_type, cwd: repoRoot}).json?.hookSpecificOutput?.permissionDecision, "deny");

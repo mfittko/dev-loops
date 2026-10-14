@@ -129,6 +129,10 @@ test("package script reach follows aliases and refuses recursion or unknown shel
   assert.equal(classifyPackageSuites(["test:quick"], scripts), "full-repository");
   assert.equal(classifyPackageSuites(["composed"], scripts), "full-repository");
   assert.equal(classifyPackageSuites(["test:quick"], { ...scripts, "test:quick": "bun scripts/../scripts/verify.mjs" }), "full-repository");
+  assert.throws(() => classifyPackageSuites(["test:quick"], { ...scripts, "test:quick": "timeout --signal KILL 60 bun run verify" }), /Cannot classify package script/);
+  for (const body of ["env -S 'bun run verify'", "dev-loops-run --repo-root /work scripts/verify.mjs"]) {
+    assert.equal(classifyPackageSuites(["test:quick"], { ...scripts, "test:quick": body }), "full-repository", body);
+  }
   assert.throws(() => classifyPackageSuites(["a"], scripts), /Recursive package script/);
   assert.throws(() => classifyPackageSuites(["unknown"], scripts), /Cannot classify package script/);
   assert.throws(() => classifyPackageSuites(["test:quick"], { "test:quick": "bun scripts/run-full.mjs" }), /Cannot classify package script/);

@@ -277,15 +277,35 @@ const VERIFY_EXEC_PREFIX =
 
 // Validation needs shell words, while the mutation and read/search guards keep their own boundaries.
 // Read literal substitution bodies only; never evaluate variables or scripts.
+function quotedHeredoc(command, index) {
+  const header = command.slice(index).match(/^<<(-?)[ \t]*(?:'([^']+)'|"([^"]+)"|\\([\w]+))/);
+  if (!header) return null;
+  const start = command.indexOf("\n", index + header[0].length);
+  if (start < 0) return null;
+  const delimiter = header[2] ?? header[3] ?? header[4];
+  let end = start + 1;
+  while (end < command.length) {
+    const newline = command.indexOf("\n", end);
+    const lineEnd = newline < 0 ? command.length : newline;
+    const line = command.slice(end, lineEnd);
+    if ((header[1] ? line.replace(/^\t+/, "") : line) === delimiter) return { start, end: lineEnd };
+    end = lineEnd + 1;
+  }
+  return { start, end: command.length };
+}
+
 function substitutionEnd(command, start, backtick) {
   const quotes = [null];
+  let heredoc = null;
   for (let i = start; i < command.length; i += 1) {
     const char = command[i], next = command[i + 1], quote = quotes.at(-1);
+    if (heredoc?.start === i) { i = heredoc.end; heredoc = null; continue; }
     if (char === "\\" && quote !== "'") { i += 1; continue; }
     if (backtick && char === "`") return i;
     if (char === "$" && next === "(" && quote !== "'") { quotes.push(null); i += 1; continue; }
     if (quote) { if (char === quote) quotes[quotes.length - 1] = null; continue; }
     if (char === "'" || char === '"') { quotes[quotes.length - 1] = char; continue; }
+    if (char === "<" && next === "<") heredoc = quotedHeredoc(command, i);
     if (!backtick && char === "(") quotes.push(null);
     if (!backtick && char === ")") { quotes.pop(); if (quotes.length === 0) return i; }
   }
@@ -294,6 +314,7 @@ function substitutionEnd(command, start, backtick) {
 
 function validationShellSegments(command, depth = 0) {
   const segments = [];
+  let heredoc = null;
   let words = [], word = "", started = false, quote = null, uncertain = false, redirectTarget = false;
   const finishWord = () => {
     if (started) {
@@ -313,6 +334,7 @@ function validationShellSegments(command, depth = 0) {
   };
   for (let i = 0; i < command.length; i += 1) {
     const char = command[i], next = command[i + 1];
+    if (heredoc?.start === i) { finishSegment(); i = heredoc.end; heredoc = null; continue; }
     if (char === "\\" && quote !== "'") {
       if (next === "\n") { i += 1; continue; }
       if (next === undefined) { uncertain = true; continue; }
@@ -347,7 +369,7 @@ function validationShellSegments(command, depth = 0) {
       const operator = command.slice(i).match(/^(?:&>>?|[<>](?:[>&]|<)?)/)[0];
       if (/^\d+$/.test(word)) { word = ""; started = false; }
       else finishWord();
-      if (operator === "<<") uncertain = true;
+      if (operator === "<<") { uncertain = true; heredoc = quotedHeredoc(command, i); }
       redirectTarget = true;
       i += operator.length - 1;
       continue;
@@ -370,17 +392,26 @@ function validationShellSegments(command, depth = 0) {
 function verificationWrapperLaunches(text) {
   const words = text.match(new RegExp(PACKAGE_MANAGER_WORD, "g")) ?? [];
   const wrapper = words[0]?.split("/").at(-1);
-  if (!["time", "nohup", "command", "exec"].includes(wrapper)) return [text];
+  if (!["time", "nohup", "command", "exec", "nice", "timeout", "env"].includes(wrapper)) return [text];
   const commandStart = words.findIndex((word, index) => index > 0 && !word.startsWith("-"));
   if (wrapper === "command" && words.slice(1, commandStart < 0 ? undefined : commandStart).some((word) => /^-[vV]+$/.test(word))) return [text];
   const positions = [1], launches = [];
   for (let i of positions) {
     while (i < words.length && words[i].startsWith("-")) {
       if (words[i] === "--") { i += 1; break; }
+      if (wrapper === "env" && /^(?:-S|--split-string)(?:=|$)/.test(words[i])) {
+        const value = words[i].includes("=") ? words[i].slice(words[i].indexOf("=") + 1) : words[++i];
+        if (value) launches.push([value.startsWith('"') ? JSON.parse(value) : value, ...words.slice(i + 1)].join(" "));
+        i = words.length;
+        break;
+      }
+      if ((wrapper === "env" && /^(?:-u|-C|--unset|--chdir)$/.test(words[i])) || (wrapper === "nice" && words[i] === "-n")) { i += 2; continue; }
       // Unknown options may consume a value; retain both literal interpretations.
       if (!words[i].includes("=") && words[i + 1] && !words[i + 1].startsWith("-")) positions.push(i + 2);
       i += 1;
     }
+    if (wrapper === "timeout") i += 1; // The duration precedes the executable, after wrapper options.
+    if (wrapper === "env") while (/^[A-Za-z_]\w*=/.test(words[i] ?? "")) i += 1;
     if (i < words.length) launches.push(words.slice(i).join(" "));
   }
   return launches;
@@ -1377,8 +1408,9 @@ const RUNTIME_BOOLEAN_FLAGS = new Set(["--bun", "-b", "--silent", "--no-warnings
 
 // Unknown prefix flags may consume a value; preserve both interpretations until an entrypoint.
 function runtimeLaunches(segment) {
-  const words = segment.split(/\s+/);
+  const words = segment.match(new RegExp(PACKAGE_MANAGER_WORD, "g")) ?? [];
   const runtime = words[0];
+  if (runtime === "dev-loops-run") return [`node ${words.slice(words[1] === "--repo-root" ? 3 : 1).join(" ")}`];
   if (runtime !== "bun" && runtime !== "node") return [segment];
   const prefixes = [{ i: 1, ran: false }];
   const launches = [];
@@ -1418,7 +1450,7 @@ export function classifyValidationCommand(command) {
   const suites = new Set();
   let targeted = false;
   for (const { text: segment, uncertain } of normalizedVerificationSegments(command)) {
-    if (uncertain && /^(?:bun|npm|pnpm|yarn|node|vitest|npx|bunx)(?:\s|$)/i.test(segment)) return "full-repository";
+    if (uncertain && /^(?:bun|npm|pnpm|yarn|node|vitest|npx|bunx|dev-loops-run)(?:\s|$)/i.test(segment)) return "full-repository";
     for (const launch of runtimeLaunches(segment)) {
       const scriptPath = launch.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
       const normalizedPath = scriptPath ? posix.normalize(scriptPath) : "";

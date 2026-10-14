@@ -2,6 +2,41 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { classifyValidationCommand, resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
 
+test("option-bearing wrappers preserve command ownership and literal split strings", () => {
+  for (const prefix of ["nice -10", "nice -n10", "timeout -v 60", "timeout --signal KILL 60", "timeout --future value 60", "env -v", "env --debug", "env --future value"]) {
+    assert.equal(classifyValidationCommand(`${prefix} npm test`), "full-repository", prefix);
+    assert.equal(classifyValidationCommand(`${prefix} bun test test/foo.test.mjs`), "targeted", prefix);
+    assert.equal(classifyValidationCommand(`${prefix} git status`), "non-validation", prefix);
+  }
+  assert.equal(classifyValidationCommand("env -S 'npm test'"), "full-repository");
+  assert.equal(classifyValidationCommand("env --split-string='bun run verify'"), "full-repository");
+  assert.equal(classifyValidationCommand("env -S 'bun test test/foo.test.mjs'"), "targeted");
+  assert.equal(classifyValidationCommand("env -S 'git status'"), "non-validation");
+  assert.equal(classifyValidationCommand("env -u npm echo test"), "non-validation");
+});
+
+test("quoted heredoc substitution bodies stay inert while actual commands still classify", () => {
+  const body = "fix: classify `npm test` aliases\n(bun run verify)\nbun run verify\n$(npm test)";
+  for (const delimiter of ["'EOF'", '"EOF"', "\\EOF"]) {
+    for (const outer of ["git commit -m", "gh pr comment 2754 --body"]) {
+      const command = `${outer} "$(cat <<${delimiter}\n${body}\nEOF\n)"`;
+      assert.equal(classifyValidationCommand(command), "non-validation", command);
+    }
+  }
+  assert.equal(classifyValidationCommand("echo \"$(npm test <<'EOF'\ntext\nEOF\n)\""), "full-repository");
+  assert.equal(classifyValidationCommand("echo \"$(cat <<'EOF'\ntext\nEOF\nnpm test\n)\""), "full-repository");
+});
+
+test("canonical script launcher uses existing script validation ownership", () => {
+  for (const prefix of ["dev-loops-run", "dev-loops-run --repo-root /work", 'dev-loops-run --repo-root "my work"']) {
+    assert.equal(classifyValidationCommand(`${prefix} scripts/verify.mjs`), "full-repository", prefix);
+    assert.equal(classifyValidationCommand(`${prefix} scripts/run-bun-test.mjs --all && bun run test:docs && bun run test:workflows`), "full-repository", prefix);
+    assert.equal(classifyValidationCommand(`${prefix} scripts/run-bun-test.mjs test/foo.test.mjs`), "targeted", prefix);
+    assert.equal(classifyValidationCommand(`${prefix} scripts/github/view-pr.mjs scripts/verify.mjs`), "non-validation", prefix);
+    assert.equal(classifyValidationCommand(`${prefix} cli/index.mjs gate resolve-validation`), "non-validation", prefix);
+  }
+});
+
 test("literal nested command positions and wrapper options preserve validation reach", () => {
   assert.equal(classifyValidationCommand("command -p npm test -v"), "full-repository");
   for (const command of ["time -p bun run verify", "/usr/bin/time -v npm test", "command -p npm test", "echo $(bun run verify)", "x=$(npm test)", "echo `npm test`", 'echo "$(npm test)"', "echo $(echo $(npm test))", "case x in *) npm test;; esac", "case x in a) echo ok;; b) npm test;; esac", "f() { npm test; }; f", "function f() { bun run verify; }"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
