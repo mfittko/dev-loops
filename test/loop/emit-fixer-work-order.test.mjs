@@ -172,6 +172,19 @@ test("F1: bootstrap teaches permitted reads and immediate denial stop before ver
     const canonical = await readFile("agents/fixer.agent.md", "utf8");
     const generated = await readFile(".claude/agents/fixer.md", "utf8");
     const setup = (body) => body.slice(body.indexOf("## Codex after-pull setup"), body.indexOf("## Authorized remediation sites"));
+    for (const delivery of [rule, setup(canonical)]) {
+      assert.match(delivery, /Under Codex only, before an authorized Git write to protected shared Git metadata, use `tools\.exec_command`/);
+      assert.match(delivery, /`tools\.exec_command` with `sandbox_permissions: "require_escalated"` and a factual `justification` up front when the actual managed environment requires it/);
+      assert.match(delivery, /do not probe with a write expected to be denied/);
+      assert.match(delivery, /configured targeted suites needing shared Git metadata or local sockets/);
+      assert.match(delivery, /subject to normal approval review and never broadens the pulled branch, paths or phase/);
+      assert.match(delivery, /staging, staged secret scan and commit as three separate tool invocations; inspect each native exit before the next/);
+      assert.match(delivery, /A failed stage permits no scan or commit; a scanner hit or error stops the actor/);
+      assert.match(delivery, /ordinary command-input error or executed failing test is not automatically a permission\/classifier denial/);
+      assert.match(delivery, /supported recovery only if there was no real denial/);
+    }
+    assert.match(canonical, /6\. Stage the authorized changes and check success before running `node scripts\/security\/scan-staged-diff\.mjs`/);
+    assert.doesNotMatch(canonical, /Before staging or committing, run/);
     assert.match(setup(canonical), /stops this actor immediately/);
     assert.match(setup(canonical), /If tool output is truncated, read bounded ranges separately and do not proceed until every required read is complete/);
     assert.match(setup(canonical), /actual collaboration parent\/child task identities.*`CODEX_THREAD_ID`/);
