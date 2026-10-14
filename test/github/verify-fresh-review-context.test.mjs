@@ -808,12 +808,15 @@ test("verify-fresh-review-context reports the validated repo root on fresh runs 
 });
 
 async function seedRequiredReads(tmpDir) {
+  const { seedValidation } = await import('./_validation-fixture.mjs');
+  const legacy = await readFile(path.join(tmpDir, 'validation.json'), 'utf8').then(JSON.parse, () => null);
+  const artifact = legacy ?? (await seedValidation(tmpDir, { headSha: 'HEAD', record: { status: 'complete', allPassed: true, suites: [] } })).artifact;
   const ctxRelDir = "tmp/gate-context/owner-repo/pr-1";
   await mkdir(path.join(tmpDir, ctxRelDir), { recursive: true });
   const files = {
     evidence: [`${ctxRelDir}/draft_gate-abc1234.briefing-evidence.txt`, "## PR body\nevidence\n"],
     diff: [`${ctxRelDir}/draft_gate-abc1234.diff`, "diff --git a/x b/x\n"],
-    validation: [`${ctxRelDir}/draft_gate-abc1234.validation.json`, "{\"allPassed\":true}\n"], // secret-scan:allow fixture artifact path (not a secret)
+    validation: [`${ctxRelDir}/draft_gate-abc1234.validation.json`, JSON.stringify(artifact)], // secret-scan:allow fixture artifact path (not a secret)
     "scoped-evidence": [`${ctxRelDir}/draft_gate-abc1234.briefing-docs-only.txt`, "## Docs-only slice\nvariant\n"], // secret-scan:allow fixture artifact path (not a secret)
   };
   const requiredReads = [];
@@ -823,7 +826,7 @@ async function seedRequiredReads(tmpDir) {
   }
   const ctxRelPath = `${ctxRelDir}/draft_gate-abc1234.json`; // secret-scan:allow fixture artifact path (not a secret)
   requiredReads.push({ kind: "context", path: ctxRelPath, required: false });
-  await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify({ requiredReads }) + "\n", "utf8");
+  await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify({ requiredReads, scope: { validationResultsPath: files.validation[0] } }) + "\n", "utf8");
   return { ctxRelPath, files };
 }
 
@@ -972,7 +975,7 @@ test("verify-fresh-review-context --prefix-file refuses a hashless or malformed 
       ["malformed line", [...lines, evidenceLine.replace("(sha256 ", "(sha256:")], 1],
     ];
     for (const [label, manifest, status] of cases) {
-      await rm(path.join(tmpDir, "tmp", "checkpoint-context-sentinel-draft-gate-coverage.json"), { force: true });
+      for (const name of await readdir(path.join(tmpDir, "tmp"))) if (name.startsWith('checkpoint-context-sentinel-')) await rm(path.join(tmpDir, "tmp", name));
       await writeFile(path.join(tmpDir, "prefix.txt"), `# Prefix\n\n## Required reads\n\nIntro.\n\n${manifest.join("\n")}\n`, "utf8");
       const result = runScript(["--scope", "draft-gate-coverage", "--prefix-file", "prefix.txt"], { cwd: tmpDir });
       assert.equal(result.status, status, `${label}: ${result.stderr || result.stdout}`);
@@ -985,4 +988,26 @@ test("verify-fresh-review-context --prefix-file refuses a hashless or malformed 
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+test('declared trusted absence participates without blocked emission, but invalid binding refuses before sentinel', async () => {
+  const { seedValidation } = await import('./_validation-fixture.mjs');
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'absence-sentinel-'));
+  try {
+    const { context } = await seedValidation(tmpDir, { headSha: 'HEAD' });
+    await writeFile(path.join(tmpDir, 'context.json'), JSON.stringify(context));
+    const args = ['--context-path', 'context.json', '--prefix-hash', 'a'.repeat(64)];
+    const env = process.env;
+    const result = runScript(args, { cwd: tmpDir, env });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(JSON.parse(result.stdout).sentinelCreated, true);
+    assert.equal(JSON.parse(result.stdout).validationWarning.code, 'validation_not_configured');
+    assert.doesNotMatch(result.stdout, /blocked|finding|retry/);
+    context.scope.validationResultsPath = 'missing.json';
+    await writeFile(path.join(tmpDir, 'context.json'), JSON.stringify(context));
+    const stale = runScript([...args, '--scope', 'bad-binding'], { cwd: tmpDir, env });
+    assert.equal(stale.status, 1, stale.stdout);
+    assert.equal(JSON.parse(stale.stdout).sentinelCreated, false);
+    assert.match(JSON.parse(stale.stdout).reason, /validation/);
+  } finally { await rm(tmpDir, { recursive: true, force: true }); }
 });

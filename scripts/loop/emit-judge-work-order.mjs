@@ -18,6 +18,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath } from "../github/_gate-artifact-paths.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { readValidationEvidence } from "../github/_validation-evidence.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
@@ -61,7 +62,7 @@ export function renderWorkOrder(workOrder) {
   return `# Judge work order (ADR 0106)
 
 Adjudicate every finding in the \`findings\` read per agents/judge.agent.md, against the COMPLETE spec in the \`spec\` read.
-Read every \`required\` entry below IN FULL before any judgment. If one is missing, unreadable, or its sha256 differs, stop and report which read failed; never write a verdict.
+Read every \`required\` entry below IN FULL before any judgment. If one is missing, unreadable, or its sha256 differs, stop and report which read failed; never write a verdict.${workOrder.scope?.validationResultsPath ? "\nRead optional validation evidence by field for status, warning and configResolution. Verified not_configured is warning-only; preserve its warning without inventing a validation finding or fallback run." : ""}
 Write exactly two artifacts: the relevance verdict to \`${verdictPath}\` and the spec-authority verdict to \`${specVerdictPath}\`.
 Widening: ${JUDGE_WIDENING_RULE}.
 
@@ -102,6 +103,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   if (JSON.stringify(stamp.checkedCriteria) !== JSON.stringify(specCriterionIds(parseSource(spec)).sort())) throw new Refusal(`spec identity ${identityFile} checkedCriteria is not the spec's complete criterion set; re-run spec-context.mjs`);
   // The PR declared scope and the diff reach the judge through the round's evidence read.
   const context = await readJson(abs(buildGateContextPath({ repo, pr, gate, headSha, tmpRoot })));
+  const validation = await readValidationEvidence({ context, headSha, cwd: path.dirname(abs(tmpRoot)) });
+  if (validation?.refusal) throw new Refusal(validation.reason);
   const evidenceRead = context?.requiredReads?.find((read) => read?.kind === "evidence");
   if (!evidenceRead) throw new Refusal(`no gate-context evidence read for ${gate} at ${headSha}; pass the --tmp-root the round's context was written with, or run write-gate-context.mjs for this round first`);
   // write-gate-context records the evidence path relative to the checkout that owns tmpRoot (<checkout>/tmp).
@@ -125,7 +128,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
       priorVerdictDigests: priors.map((prior) => sha256Hex(parseSource(prior))),
     },
     contracts,
-    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read)],
+    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...(validation ? [validation.read] : []), ...priors.map((prior) => prior.read)],
+    ...(validation ? { scope: { validationResultsPath: validation.validationResultsPath } } : {}),
     // Per-round paths: a superseded round's late verdict never lands where this round's is read.
     outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],
     executionRules: { widening: JUDGE_WIDENING_RULE, contract: "agents/judge.agent.md" },
@@ -224,7 +228,12 @@ export async function locateJudgeUnit({ ref, tmpRoots }) {
 registerWorkOrderRole("judge", {
   locate: locateJudgeUnit,
   validate: (order) => {
-    const kinds = new Set((Array.isArray(order.requiredReads) ? order.requiredReads : []).map((read) => read?.kind));
+    const reads = Array.isArray(order.requiredReads) ? order.requiredReads : [];
+    const validation = reads.filter((read) => read?.kind === "validation");
+    if (validation.length || order.scope?.validationResultsPath != null) {
+      if (validation.length !== 1 || validation[0].path !== order.scope?.validationResultsPath || !/^[0-9a-f]{64}$/.test(validation[0].sha256) || !Number.isInteger(validation[0].bytes) || validation[0].bytes < 0 || validation[0].required !== false) return "judge validation read has inconsistent binding";
+    }
+    const kinds = new Set(reads.map((read) => read?.kind));
     const missing = ["findings", "spec", "spec-identity", "evidence"].filter((kind) => !kinds.has(kind));
     return missing.length > 0 ? `judge work order is missing required read(s) ${missing.join(", ")}`
       : typeof order.authority?.specDigest !== "string" || typeof order.authority?.findingsDigest !== "string" ? "judge work order pins no spec or findings digest"

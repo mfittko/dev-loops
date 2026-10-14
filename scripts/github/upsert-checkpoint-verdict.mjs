@@ -58,6 +58,7 @@ import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerd
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { buildValidationResultsPath } from "./write-gate-context.mjs";
+import { verifyNotConfiguredEvidence } from "./_validation-evidence.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -1540,7 +1541,7 @@ function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, 
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, pr }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, pr, validationWarning }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1580,6 +1581,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
   // of whether this round also carries a finding surface (pivot — the
   // digest line's own computation never changes; only the block below it does).
   const angles = normalizeStructuredFindings(structuredFindings);
+  if (validationWarning && (angles || !String(findingsSummary).includes(validationWarning.message))) lines.push("", `**Validation warning:** ${sanitizeInline(validationWarning.message)}`);
   lines.push(
     "",
     `**Findings summary:** ${angles ? buildStructuredFindingsDigest(angles, findingsSeverityCounts) : findingsSummary}`,
@@ -2367,10 +2369,11 @@ async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = def
  * check: it proves the round resolved its validation, and reviewers already
  * report it as incomplete evidence.
  */
-export async function assertGateValidationArtifact({ repo, pr, gate, headSha, repoRoot, contextTmpRoot }) {
+export async function assertGateValidationArtifact({ repo, pr, gate, headSha, repoRoot, contextTmpRoot, required = true }) {
   const relPath = buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot: contextTmpRoot || "tmp" });
   const expectedHead = String(headSha).toLowerCase();
   let problem = "is absent";
+  let sawNotConfigured = false;
   for (const root of resolveLedgerCheckouts(repoRoot)) {
     let raw;
     try {
@@ -2387,10 +2390,17 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
       problem = "is unreadable (not valid JSON)";
       continue;
     }
+    sawNotConfigured ||= artifact?.status === "not_configured";
+    if (!required && artifact?.status !== "not_configured") continue;
     const stamped = typeof artifact?.headSha === "string" ? artifact.headSha.toLowerCase() : null;
-    if (stamped === expectedHead) return;
+    if (stamped === expectedHead) {
+      if (artifact.status !== "not_configured") return { artifact };
+      try { return { artifact, warning: await verifyNotConfiguredEvidence(artifact, { cwd: root }) }; }
+      catch (error) { problem = `has invalid trusted absence evidence (${error.message})`; continue; }
+    }
     problem = `is stamped with head ${stamped ?? "(none)"}, not the reviewed head ${expectedHead}`;
   }
+  if (!required && !sawNotConfigured) return null;
   throw new Error(
     `Cannot post a fanout_fanin verdict for ${repo}#${pr} ${gate}: the validation artifact ${relPath} ${problem}. `
     + `Resolve the round's validation once before dispatching reviewers with dev-loops gate resolve-validation --profile <targeted|full-repository> --repo ${repo} --pr ${pr} --gate ${gate} --head-sha ${headSha} [--suite <name>]..., which writes this artifact through run-gate-validation.mjs. If the round resolved validation under an explicit --tmp-root, pass that path as --context-tmp-root instead of re-running (GATE-EXEC-VALIDATION-RESOLUTION).`,
@@ -3156,11 +3166,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         + `Write it with write-gate-findings-log.mjs (from consolidate-fanin.mjs's --ledger-out) before posting the verdict.`,
       );
     }
-    // GATE-EXEC-VALIDATION-RESOLUTION enforcement: the round must have run
-    // run-gate-validation.mjs once for the reviewed head. Same opt-out and
-    // placement as the ledger refusal above, so its message wins when both fire.
-    await assertGateValidationArtifact({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, repoRoot, contextTmpRoot: options.contextTmpRoot });
   }
+  // Preserve mandatory resolution and old-record admission; carry new warnings even on optional/standalone paths.
+  const validationEvidence = await assertGateValidationArtifact({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, repoRoot, contextTmpRoot: options.contextTmpRoot, required: Boolean(postTimeFanoutEnforcement?.required && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin") });
   // FINDINGS-SOURCE FOOTGUN WARNING: a fanout_fanin round posted with
   // --findings-json but no --findings-ledger silently files ZERO inline
   // comments — the --findings-ledger (consolidate-fanin --ledger-out →
@@ -3261,6 +3269,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ...options,
     headSha: canonicalHeadSha,
     findingsSummary: effectiveFindingsSummary,
+    validationWarning: validationEvidence?.warning,
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,

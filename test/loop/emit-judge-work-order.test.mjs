@@ -296,3 +296,22 @@ test("J6: a corrupt plan at another head is skipped; a corrupt own plan refuses 
     assert.equal(pull(await emitJudgeWorkOrder(sources), root).status, 0);
   });
 });
+
+test('validation read is additive for judge pull, preserves warning bytes, and stales on mutation', async () => {
+  const { seedValidation } = await import('../github/_validation-fixture.mjs');
+  for (const record of [{}, { status: 'complete', allPassed: true, suites: [], authority: 'ci-authoritative' }, { status: 'failed', allPassed: false, suites: [] }, { status: 'incomplete', allPassed: false, suites: [] }]) await withDir(async (root) => {
+    const sources = await seed(root);
+    const fixture = await seedValidation(root, { record });
+    const contextPath = path.join(root, buildGateContextPath(sources));
+    const context = JSON.parse(await readFile(contextPath, 'utf8'));
+    context.scope = fixture.context.scope;
+    context.requiredReads.push(fixture.read);
+    await writeFile(contextPath, JSON.stringify(context));
+    const plan = await emitJudgeWorkOrder(sources);
+    assert.equal(plan.workOrder.requiredReads.find((read) => read.kind === 'validation').required, false);
+    assert.equal(pull(plan, root).status, 0);
+    assert.equal(JSON.parse(await readFile(fixture.file, 'utf8')).status, fixture.artifact.status);
+    await writeFile(fixture.file, '{}');
+    assert.equal(refusal(pull(plan, root)), 'stale_dispatch');
+  });
+});

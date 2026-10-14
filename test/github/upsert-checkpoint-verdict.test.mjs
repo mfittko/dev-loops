@@ -11982,3 +11982,33 @@ test("upsert-checkpoint-verdict --findings-ledger: a judged --findings-json defe
     assert.doesNotMatch(body, /disposition=deferred issue=17 -->/);
   }, { prefix: "dev-loops-upsert-findings-json-followup-" });
 });
+
+test('trusted absence artifact returns a warning and renders it once for every verdict despite structured summaries', async () => {
+  const { seedValidation, validationWarning } = await import('./_validation-fixture.mjs');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'absence-verdict-'));
+  const stubbedPath = process.env.PATH;
+  process.env.PATH = originalPath;
+  try {
+    const fixture = await seedValidation(root);
+    const artifactPath = path.resolve(root, buildValidationResultsPath({ repo: 'o/r', pr: 7, gate: 'pre_approval_gate', headSha: fixture.artifact.headSha }));
+    await mkdir(path.dirname(artifactPath), { recursive: true });
+    await writeFile(artifactPath, JSON.stringify(fixture.artifact));
+    const evidence = await assertGateValidationArtifact({ repo: 'o/r', pr: 7, gate: 'pre_approval_gate', headSha: fixture.artifact.headSha, repoRoot: root });
+    assert.equal(evidence.warning.code, 'validation_not_configured');
+    for (const gate of ['review', 'pre_approval_gate']) for (const verdict of ['clean', 'findings_present', 'blocked']) {
+      const body = renderGateReviewCommentBody({ gate, repo: 'o/r', headSha: fixture.artifact.headSha, verdict, findingsSummary: summarizeCheckpointVerdictText(`$ test\npass 4\n${validationWarning.message}`), nextAction: 'continue', validationWarning: evidence.warning, structuredFindings: [{ angle: 'correctness', verdict: 'clean', findings: [] }], sizeOutcome: 'pass', sizeTouchesT1: false, sizeWaiverGranted: false });
+      assert.equal(body.split(validationWarning.message).length - 1, 1);
+      const parsed = parseGateReviewCommentBody(body);
+      if (gate === 'review') { assert.equal(parsed, null, 'standalone review remains non-lifecycle evidence'); continue; }
+      assert.equal(parsed.verdict, verdict);
+      if (gate === 'pre_approval_gate' && verdict === 'clean') {
+        const checkpoint = { currentHeadSha: fixture.artifact.headSha, draftGate: { visible: true, verdict: 'clean' }, preApprovalGateMarker: { visible: true, contractComplete: true, ...parsed } };
+        assert.equal(buildPreMergeGateCheck(checkpoint, 0).ok, true, JSON.stringify({ checkpoint, check: buildPreMergeGateCheck(checkpoint, 0) }));
+        assert.equal(buildPreMergeGateCheck(checkpoint, 1).ok, false, 'unresolved threads still block');
+        assert.equal(buildPreMergeGateCheck({ ...checkpoint, draftGate: { visible: false } }, 0).ok, false, 'missing lifecycle evidence still blocks');
+        assert.equal(buildPreMergeGateCheck({ ...checkpoint, preApprovalGateMarker: { ...checkpoint.preApprovalGateMarker, sizeOutcome: 'escalate' } }, 0).ok, false, 'required human approval still blocks');
+      }
+    }
+    assert.equal((await assertGateValidationArtifact({ repo: 'o/r', pr: 7, gate: 'pre_approval_gate', headSha: fixture.artifact.headSha, repoRoot: root, required: false })).warning.code, 'validation_not_configured');
+  } finally { process.env.PATH = stubbedPath; await rm(root, { recursive: true, force: true }); }
+});

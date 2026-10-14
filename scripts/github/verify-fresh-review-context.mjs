@@ -7,6 +7,7 @@ import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helper
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { canonicalizeScope } from "./_gate-names.mjs";
 import { renderRequiredReadLine } from "./write-gate-context.mjs";
+import { readValidationEvidence } from "./_validation-evidence.mjs";
 const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>] [--context-path <path>]
        [--prefix-hash <sha256>|--prefix-file <path>] [--same-head-retry]
 Verify that the current scoped-reviewer session has fresh context.
@@ -243,15 +244,18 @@ async function readSentinelPrefixHash(sentinelPath) {
 // with that hash and byte count, and every other `required: true` entry is
 // readable, else a reason naming the failing read. An unparseable artifact is
 // a failure: its required reads cannot be proven.
-async function verifyRequiredReads(contextPath, cwd) {
+async function verifyRequiredReads(contextPath, cwd, headSha) {
   let artifact;
   try {
     artifact = JSON.parse(await readFile(contextPath, "utf8"));
   } catch (err) {
-    return `gate-context artifact is unreadable (${err.code ?? err.message}), so its required reads cannot be verified`;
+    return { reason: `gate-context artifact is unreadable (${err.code ?? err.message}), so its required reads cannot be verified` };
   }
+  const validation = await readValidationEvidence({ context: artifact, headSha, cwd });
+  if (validation?.refusal) return { reason: `required read validation: ${validation.reason}` };
   const reads = Array.isArray(artifact?.requiredReads) ? artifact.requiredReads : [];
   for (const read of reads) {
+    if (read?.kind === "validation") continue; // Already read and bound by shared admission.
     const hashed = typeof read?.sha256 === "string";
     if (!hashed && read?.required !== true) continue;
     const label = `required read ${read.kind} "${read.path}"`;
@@ -259,15 +263,15 @@ async function verifyRequiredReads(contextPath, cwd) {
     try {
       bytes = await readFile(path.resolve(cwd, String(read.path)));
     } catch (err) {
-      return `${label} is unreadable (${err.code ?? "error"})`;
+      return { reason: `${label} is unreadable (${err.code ?? "error"})` };
     }
     if (!hashed) continue;
     const actual = createHash("sha256").update(bytes).digest("hex");
     if (actual !== read.sha256 || (typeof read.bytes === "number" && bytes.length !== read.bytes)) {
-      return `${label} does not match its recorded sha256 ${read.sha256} (found ${actual}, ${bytes.length} bytes)`;
+      return { reason: `${label} does not match its recorded sha256 ${read.sha256} (found ${actual}, ${bytes.length} bytes)` };
     }
   }
-  return null;
+  return { warning: validation?.warning };
 }
 // The prefix is the hash-bound copy of the manifest the reviewer reads from;
 // the context JSON is mutable. Verify every hashed read line of the prefix's
@@ -387,7 +391,8 @@ async function main(argv = process.argv.slice(2)) {
   // fresh/contaminated verdict maps to the exit code via `ok` here so the
   // shared --jq/--silent contract composes with the existing 0=fresh/1=refuse
   // signal instead of always reading ok:true as success.
-  const finish = (payload, freshLike) => emitResult(payload, { jq, silent, ok: freshLike });
+  let validationWarning;
+  const finish = (payload, freshLike) => emitResult({ ...payload, ...(validationWarning ? { validationWarning } : {}) }, { jq, silent, ok: freshLike });
   const round = resolveHeadRound();
   if (contextPathArg !== null) {
     const cwd = process.cwd();
@@ -426,8 +431,9 @@ async function main(argv = process.argv.slice(2)) {
     // Reference seeding: every hashed required read the builder bound into the
     // prefix must still match, before the sentinel exists. An artifact without
     // requiredReads (legacy or --prefix-file) has nothing to check.
-    const readFailure = await verifyRequiredReads(resolvedContextPath, cwd);
-    if (readFailure !== null) {
+    const validation = await verifyRequiredReads(resolvedContextPath, cwd, round);
+    validationWarning = validation.warning;
+    if (validation.reason) {
       return finish({
         ok: true,
         fresh: false,
@@ -435,7 +441,7 @@ async function main(argv = process.argv.slice(2)) {
         round: round ?? null,
         gateContextPath: contextPathArg,
         gateContextPresent: true,
-        reason: `${readFailure} — refusing to review from missing or stale evidence. Emit a blocked result via emit-reviewer-blocked.mjs (omit --completed-angles); never judge from a summary or partial read.`,
+        reason: `${validation.reason} — refusing to review from missing or stale evidence. Emit a blocked result via emit-reviewer-blocked.mjs (omit --completed-angles); never judge from a summary or partial read.`,
       }, false);
     }
   }

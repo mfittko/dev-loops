@@ -4139,13 +4139,15 @@ test("renderBriefingEvidence: validationResultsPath present appends the section 
   const expectedSection = [
     "## Validation results at this head",
     "",
-    "The gate preamble ran this round's validation suites once and recorded them here:",
+    "The gate preamble resolved this round's validation and recorded the outcome here:",
     "  /abs/tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.validation.json",
     "",
-    "Read a field directly (never `cat`/`head` the whole file): `jq '.allPassed' \"/abs/tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.validation.json\"`.",
+    "Read fields directly (never `cat`/`head` the whole file): `jq '{status, allPassed, warning, configResolution}' \"/abs/tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.validation.json\"`.", // secret-scan:allow expected jq field list and synthetic validation artifact path, no credential
     "",
     "Read that record for suite status, exit codes, and output tails. Executing a suite it",
     "already records is outside a read-only angle review's scope. A record with",
+    "`status: \"not_configured\"` and verified trusted absence means validation was not performed:",
+    "preserve its actionable warning; do not count it as a pass, finding, or reason to run a fallback command.",
     "`status: \"incomplete\"` ran no suite; it is incomplete evidence, never a pass. A record with",
     "`status: \"complete\"` and `authority: \"ci-authoritative\"` ran no local suite by design: current-head CI",
     "is its evidence, so it satisfies gate evidence. If the record",
@@ -8124,4 +8126,17 @@ test("issue 2511 per-angle dispatch counts angles: carried angles are never disp
 test("issue 2511 a mandatory angle in a mixed unit is never stripped (carry refused)", () => {
   const config = { version: 1, gates: { fanout: { groups: [{ name: "g", angles: ["scope", "gate-evidence"] }] } } };
   assert.throws(() => resolveFanoutDispatch(config, "draft", ["scope", "gate-evidence"], { carriedAngles: ["gate-evidence"] }), /can never legitimately carry forward/);
+});
+
+test('prefix-file keeps exact bytes while binding optional validation evidence', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'validation-prefix-'));
+  try {
+    await writeFile(path.join(root, 'prefix.txt'), 'exact-prefix\r\n');
+    await writeFile(path.join(root, 'validation.json'), JSON.stringify({ headSha: 'abc1234', allPassed: false, suites: [], status: 'incomplete' }));
+    const result = await writeGateContext({ ...parseWriteGateContextCliArgs(['--repo', 'o/r', '--pr', '3', '--gate', 'draft_gate', '--head-sha', 'abc1234', '--angles', '["scope"]', '--prefix-file', 'prefix.txt', '--validation-results', 'validation.json']) }, { repoRoot: root });
+    assert.equal(await readFile(path.resolve(root, result.prefixPath), 'utf8'), 'exact-prefix\r\n');
+    const read = result.artifact.requiredReads.find((read) => read.kind === 'validation');
+    assert.equal(read.required, false);
+    assert.equal(read.sha256, createHash('sha256').update(await readFile(path.join(root, 'validation.json'))).digest('hex'));
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

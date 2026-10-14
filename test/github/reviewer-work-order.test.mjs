@@ -52,7 +52,7 @@ async function withTmpDir(fn) {
   }
 }
 
-async function writeRound(repoRoot, { diffOutput = makeDiff(10), issueBody = `${ISSUE_BODY_MARKER}\n- [ ] AC one`, harness, angleScopes } = {}) {
+async function writeRound(repoRoot, { diffOutput = makeDiff(10), issueBody = `${ISSUE_BODY_MARKER}\n- [ ] AC one`, harness, angleScopes, validationResultsPath } = {}) {
   const { config } = await loadDevLoopConfig({ repoRoot });
   const options = parseWriteGateContextCliArgs([
     "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
@@ -70,11 +70,33 @@ async function writeRound(repoRoot, { diffOutput = makeDiff(10), issueBody = `${
     diffToWrite: { path: diffPath, text: diffOutput },
     changedFiles: ["src/a.mjs"],
     adjacentCode: { files: [{ path: "src/b.mjs", role: "importer", content: "ADJACENT-CONTENT" }], stripped: [], truncated: [], missing: [] },
+    validationResultsPath,
     ...(harness ? { harness } : {}),
     ...(angleScopes ? { angleScopes } : {}),
   });
   return writeGateContext(options, { repoRoot });
 }
+
+test('reviewer fanout and pull preserve optional legacy and trusted absence reads without projecting a status', async () => {
+  const { seedValidation } = await import('./_validation-fixture.mjs');
+  const { pullWorkOrder } = await import('../../scripts/github/_work-order-protocol.mjs');
+  await import('../../scripts/github/pull-work-order.mjs');
+  for (const record of [{}, { status: 'incomplete', allPassed: false, suites: [] }]) await withTmpDir(async (root) => {
+    const fixture = await seedValidation(root, { headSha: HEAD_SHA, record });
+    const written = await writeRound(root, { validationResultsPath: fixture.file, harness: 'claude' });
+    const payload = runEmit(root);
+    for (const unit of payload.units) {
+      const read = unit.workOrder.requiredReads.find((entry) => entry.kind === 'validation');
+      assert.equal(read.required, false);
+      assert.equal(read.sha256, fixture.read.sha256);
+      assert.equal(unit.workOrder.validationStatus, undefined);
+      const result = await pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, cwd: root, tmpRoots: [path.join(root, 'tmp')], receiptTmpRoot: path.join(root, 'tmp') });
+      assert.ok(result);
+      assert.equal(JSON.parse(await readFile(path.resolve(root, read.path), 'utf8')).status, fixture.artifact.status);
+    }
+    assert.match(await readFile(path.resolve(root, written.artifact.requiredReads.find((entry) => entry.kind === 'evidence').path), 'utf8'), /not_configured.*verified trusted absence/);
+  });
+});
 
 function runEmit(repoRoot, env = {}) {
   const baseEnv = { ...process.env };

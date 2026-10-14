@@ -2,9 +2,24 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { mergePr, parseMergePrCliArgs, main } from "../../scripts/github/merge-pr.mjs";
 import { captureStream } from "../_helpers.mjs";
+import { renderGateReviewCommentBody } from '../../scripts/github/upsert-checkpoint-verdict.mjs';
+import { parseGateReviewCommentBody } from '../../scripts/_core-helpers.mjs';
+import { buildPreMergeGateCheck } from '../../scripts/github/detect-checkpoint-evidence.mjs';
+import { validationWarning } from './_validation-fixture.mjs';
 
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 const MERGE_COMMIT = "aaaa1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
+
+test('warning-bearing clean evidence still requires independent green CI and merge approval', async () => {
+  const parsed = parseGateReviewCommentBody(renderGateReviewCommentBody({ gate: 'pre_approval_gate', headSha: HEAD, verdict: 'clean', findingsSummary: 'no findings', nextAction: 'await approval', sizeOutcome: 'pass', sizeTouchesT1: false, sizeWaiverGranted: false, validationWarning }));
+  const evidence = buildPreMergeGateCheck({ currentHeadSha: HEAD, draftGate: { visible: true, verdict: 'clean' }, preApprovalGateMarker: { visible: true, contractComplete: true, ...parsed } }, 0);
+  assert.equal(evidence.ok, true, JSON.stringify({ parsed, evidence }));
+  for (const [expected, checks, standingAuthorization] of [['ci_green', [{ status: 'IN_PROGRESS' }], true], ['ci_green', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], true], ['merge_approval', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], false]]) {
+    const { runtime, calls } = makeRuntime({ evidence: { ...evidence, sizeOutcome: 'pass', touchesT1: false }, prView: { statusCheckRollup: checks } });
+    await assert.rejects(mergePr(baseOptions({ standingAuthorization }), runtime), (error) => error.mergePrFailure.failures.some((failure) => failure.precondition === expected));
+    assert.equal(calls.runChild.length, 0);
+  }
+});
 
 // A drain merge asserting a recorded standing authorization (--standing-authorization).
 function baseOptions(overrides = {}) {
