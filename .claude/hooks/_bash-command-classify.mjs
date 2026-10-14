@@ -289,10 +289,27 @@ function quotedHeredoc(command, index) {
     const newline = command.indexOf("\n", end);
     const lineEnd = newline < 0 ? command.length : newline;
     const line = command.slice(end, lineEnd);
-    if ((header[1] ? line.replace(/^\t+/, "") : line) === delimiter) return { start, end: lineEnd };
+    if ((header[1] ? line.replace(/^\t+/, "") : line) === delimiter) return { start, end: lineEnd, body: command.slice(start + 1, end) };
     end = lineEnd + 1;
   }
-  return { start, end: command.length };
+  return { start, end: command.length, body: command.slice(start + 1) };
+}
+
+function shellConsumesStdin(header) {
+  // Inspect command ownership without recursively reading its stdin payload again.
+  return normalizedVerificationSegments(header, 0, false).some(({ text }) => {
+    const words = text.match(new RegExp(PACKAGE_MANAGER_WORD, "g")) ?? [];
+    if (!/^(?:ba|z|da|k)?sh$/.test(words[0] ?? "")) return false;
+    let stdin = false;
+    for (const word of words.slice(1)) {
+      if (/^-[^-]*c/.test(word) || /^--command(?:=|$)/.test(word)) return false;
+      if (/^-[^-]*s/.test(word)) stdin = true;
+      if (word === "--") continue;
+      if (word === "-") return true;
+      if (!word.startsWith("-")) return stdin;
+    }
+    return true;
+  });
 }
 
 function substitutionEnd(command, start, backtick) {
@@ -313,15 +330,19 @@ function substitutionEnd(command, start, backtick) {
   return -1;
 }
 
-function validationShellSegments(command, depth = 0) {
+function validationShellSegments(command, depth = 0, inspectStdin = true) {
   const segments = [];
   let heredoc = null;
   let words = [], word = "", started = false, quote = null, uncertain = false, redirectTarget = false;
+  let hereString = false, headerStart = 0;
+  const stdinPrograms = [];
   const finishWord = () => {
     if (started) {
       const option = word.match(/^((?:--?[\w-]+|[A-Za-z_]\w*)=)([\s\S]*)$/);
       if (!redirectTarget) words.push(/^[\w./:@=+-]+$/.test(word) ? word : option ? option[1] + JSON.stringify(option[2]) : JSON.stringify(word));
+      if (hereString) stdinPrograms.push({ body: word, headerStart });
       redirectTarget = false;
+      hereString = false;
     }
     word = "";
     started = false;
@@ -335,7 +356,14 @@ function validationShellSegments(command, depth = 0) {
   };
   for (let i = 0; i < command.length; i += 1) {
     const char = command[i], next = command[i + 1];
-    if (heredoc?.start === i) { finishSegment(); i = heredoc.end; heredoc = null; continue; }
+    if (heredoc?.start === i) {
+      finishSegment();
+      if (inspectStdin && depth < 8 && shellConsumesStdin(command.slice(heredoc.headerStart, heredoc.headerEnd ?? i))) segments.push(...validationShellSegments(heredoc.body, depth + 1));
+      i = heredoc.end;
+      headerStart = i + 1;
+      heredoc = null;
+      continue;
+    }
     if (char === "\\" && quote !== "'") {
       if (next === "\n") { i += 1; continue; }
       if (next === undefined) { uncertain = true; continue; }
@@ -349,7 +377,7 @@ function validationShellSegments(command, depth = 0) {
       uncertain = true;
       // shortcut: eight literal nesting levels; deeper or malformed substitutions stay opaque.
       if (end !== -1 && depth < 8) {
-        segments.push(...validationShellSegments(command.slice(start, end), depth + 1));
+        segments.push(...validationShellSegments(command.slice(start, end), depth + 1, inspectStdin));
         word += "$substitution";
         started = true;
         i = end;
@@ -367,10 +395,15 @@ function validationShellSegments(command, depth = 0) {
     if (char === "'" || char === '"') { quote = char; started = true; continue; }
     if ((char === "<" || char === ">") && next === "(") uncertain = true;
     else if (char === "<" || char === ">" || (char === "&" && next === ">")) {
-      const operator = command.slice(i).match(/^(?:&>>?|[<>](?:[>&]|<)?)/)[0];
+      const operator = command.slice(i).match(/^(?:&>>?|<<<|[<>](?:[>&]|<)?)/)[0];
       if (/^\d+$/.test(word)) { word = ""; started = false; }
       else finishWord();
-      if (operator === "<<") { uncertain = true; heredoc = quotedHeredoc(command, i); }
+      if (operator === "<<") {
+        heredoc = quotedHeredoc(command, i);
+        if (heredoc) heredoc.headerStart = headerStart;
+        else uncertain = true;
+      }
+      hereString = operator === "<<<";
       redirectTarget = true;
       i += operator.length - 1;
       continue;
@@ -379,7 +412,15 @@ function validationShellSegments(command, depth = 0) {
     if (/[()]/.test(char)) { finishSegment(); continue; }
     if (/[{}!]/.test(char) && !started) { words.push(char); continue; }
     if (char === "}") { finishWord(); words.push(char); continue; }
-    if (/[;&|\n\r]/.test(char)) { finishSegment(); continue; }
+    if (/[;&|\n\r]/.test(char)) {
+      finishSegment();
+      if (char !== "|") {
+        if (heredoc && heredoc.headerEnd === undefined) heredoc.headerEnd = i;
+        for (const program of stdinPrograms) if (program.headerEnd === undefined) program.headerEnd = i;
+        headerStart = i + 1;
+      }
+      continue;
+    }
     if (/\s/.test(char)) { finishWord(); continue; }
     if (/[$`*?\[\]<>]/.test(char)) uncertain = true;
     word += char;
@@ -387,6 +428,9 @@ function validationShellSegments(command, depth = 0) {
   }
   if (quote) uncertain = true;
   finishSegment();
+  if (inspectStdin && depth < 8) for (const program of stdinPrograms) {
+    if (shellConsumesStdin(command.slice(program.headerStart, program.headerEnd))) segments.push(...validationShellSegments(program.body, depth + 1));
+  }
   return segments;
 }
 
@@ -418,14 +462,11 @@ function verificationWrapperLaunches(text) {
   return launches;
 }
 
-function normalizedVerificationSegments(command) {
+function normalizedVerificationSegments(command, depth = 0, inspectStdin = true) {
   if (typeof command !== "string") return [];
-  const shellWrapper = new RegExp(`(^|[;&|\\n])\\s*${VERIFY_EXEC_PREFIX}(?:ba|z|da|k)?sh\\s+-[lc]*c\\s+(['"])([\\s\\S]*?)\\2`, "gi");
-  // shortcut: bounded literal shell wrappers only; opaque scripts need a supported process boundary.
-  for (let depth = 0; depth < 4; depth += 1) command = command.replace(shellWrapper, "$1$3");
   const prefix = new RegExp(`^${VERIFY_EXEC_PREFIX.replaceAll("[A-Za-z_][A-Za-z0-9_]*=\\S*", `[A-Za-z_][A-Za-z0-9_]*=${PACKAGE_MANAGER_WORD}`)}`, "i");
-  const controlPrefix = /^(?:(?:if|then|elif|else|do|while|until)(?:\s+|$)|[!({]\s*)/;
-  return validationShellSegments(command).flatMap(({ text, uncertain }) => {
+  const controlPrefix = /^(?:(?:if|then|elif|else|do|while|until)(?:\s+|$)|coproc(?:\s+\w+(?=\s*\{))?(?:\s+|$)|function\s+\w+\s*\{\s*|[!({]\s*)/;
+  return validationShellSegments(command, depth, inspectStdin).flatMap(({ text, uncertain }) => {
     const pending = [text], normalized = [];
     for (const original of pending) {
       let candidate = original;
@@ -434,6 +475,20 @@ function normalizedVerificationSegments(command) {
       if (launches.length !== 1 || launches[0] !== stripped) { pending.push(...launches); continue; }
       candidate = stripped.replace(prefix, "");
       if (candidate !== original) { pending.push(candidate); continue; }
+      const words = candidate.match(new RegExp(PACKAGE_MANAGER_WORD, "g")) ?? [];
+      const shell = /^(?:ba|z|da|k)?sh$/.test(words[0] ?? "");
+      let commandFlag = -1;
+      if (shell) for (let index = 1; index < words.length && words[index].startsWith("-") && words[index] !== "--"; index += 1) {
+        if (/^-[^-]*c/.test(words[index]) || words[index] === "--command") { commandFlag = index; break; }
+      }
+      const payload = commandFlag > 0 ? words[commandFlag + 1] : null;
+      const decode = (word) => word.startsWith('"') ? JSON.parse(word) : word;
+      const program = payload ? decode(payload) : words[0] === "eval" ? words.slice(1).map(decode).join(" ") : null;
+      // shortcut: eight literal shell nesting levels; dynamic or malformed programs stay opaque.
+      if (program && depth < 8) {
+        normalized.push(...normalizedVerificationSegments(program, depth + 1, inspectStdin).map((segment) => ({ ...segment, uncertain: uncertain || segment.uncertain })));
+        continue;
+      }
       normalized.push({ text: candidate.replace(/(?:\s*[)}])+\s*$/, ""), uncertain });
     }
     return normalized;

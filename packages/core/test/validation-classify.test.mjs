@@ -27,6 +27,42 @@ test("quoted heredoc substitution bodies stay inert while actual commands still 
   assert.equal(classifyValidationCommand("echo \"$(cat <<'EOF'\ntext\nEOF\nnpm test\n)\""), "full-repository");
 });
 
+test("literal shell programs compose with normalized wrappers and command positions", () => {
+  for (const prefix of ["time", "nohup", "nice -n10", "timeout --signal KILL 60", "env CI=1", "!", "(", "{", "if"]) {
+    const suffix = prefix === "(" ? ")" : prefix === "{" ? "; }" : prefix === "if" ? "; then true; fi" : "";
+    for (const [body, expected] of [["npm test", "full-repository"], ["bun test test/foo.test.mjs", "targeted"], ["echo npm test", "non-validation"]]) {
+      const command = `${prefix} bash -lc '${body}'${suffix}`;
+      assert.equal(classifyValidationCommand(command), expected, command);
+    }
+  }
+  for (const [body, expected] of [["npm test", "full-repository"], ["bun run test:core", "targeted"], ["echo npm test", "non-validation"]]) {
+    for (const command of [`function f { ${body}; }; f`, `eval ${body}`, `eval '${body}'`, `coproc ${body}`, `coproc worker { ${body}; }`]) assert.equal(classifyValidationCommand(command), expected, command);
+  }
+  assert.equal(classifyValidationCommand("time sh -c 'bash -c \"npm test\"'"), "full-repository");
+});
+
+test("quoted stdin is program text only when a shell consumes it as a program", () => {
+  for (const consumer of ["bash", "sh -s", "time bash", "env CI=1 nohup sh -s", "cat <<PLACEHOLDER | nice -n10 bash"]) {
+    for (const delimiter of ["'EOF'", '"EOF"', "\\EOF"]) {
+      for (const [body, expected] of [["npm test", "full-repository"], ["bun run test:core", "targeted"], ["echo npm test", "non-validation"]]) {
+        const command = consumer.includes("PLACEHOLDER") ? `${consumer.replace("PLACEHOLDER", delimiter)}\n${body}\nEOF` : `${consumer} <<${delimiter}\n${body}\nEOF`;
+        assert.equal(classifyValidationCommand(command), expected, command);
+      }
+    }
+  }
+  for (const consumer of ["cat", "bash script.sh", "sh -c 'cat'", "bash -s -c 'cat'", "bash script.sh -c 'npm test'", "cat <<PLACEHOLDER | bash script.sh", "cat <<PLACEHOLDER | sh -c 'cat'"]) {
+    const command = consumer.includes("PLACEHOLDER") ? `${consumer.replace("PLACEHOLDER", "'EOF'")}\nnpm test\nEOF` : `${consumer} <<'EOF'\nnpm test\nEOF`;
+    assert.equal(classifyValidationCommand(command), "non-validation", command);
+  }
+  assert.equal(classifyValidationCommand("echo \"$(bash <<'EOF'\nnpm test\nEOF\n)\""), "full-repository");
+  assert.equal(classifyValidationCommand("sh -c 'bun run test:core' <<'EOF'\nnpm test\nEOF"), "targeted");
+  assert.equal(classifyValidationCommand("cat <<'EOF'; bash\nnpm test\nEOF"), "non-validation");
+  assert.equal(classifyValidationCommand("bash; cat <<'EOF'\nnpm test\nEOF"), "non-validation");
+  assert.equal(classifyValidationCommand("cat <<< 'npm test'; bash"), "non-validation");
+  assert.equal(classifyValidationCommand("cat <<< 'npm test' | bash"), "full-repository");
+  for (const [consumer, expected] of [["bash", "full-repository"], ["time sh -s", "full-repository"], ["cat", "non-validation"], ["bash script.sh", "non-validation"], ["sh -c 'cat'", "non-validation"]]) assert.equal(classifyValidationCommand(`${consumer} <<< 'npm test'`), expected, consumer);
+});
+
 test("canonical script launcher uses existing script validation ownership", () => {
   for (const prefix of ["dev-loops-run", "dev-loops-run --repo-root /work", 'dev-loops-run --repo-root "my work"']) {
     assert.equal(classifyValidationCommand(`${prefix} scripts/verify.mjs`), "full-repository", prefix);

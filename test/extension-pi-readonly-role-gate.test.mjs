@@ -435,6 +435,15 @@ test("wrapper, heredoc and canonical-launcher fixes preserve both worker boundar
   }
 });
 
+test("literal shell program ownership preserves Claude and registered Pi worker boundaries", async () => {
+  const full = ["time bash -c 'npm test'", "(bash -c 'bun run verify')", "nice -n10 sh -c 'npm test'", "function f { npm test; }; f", "eval 'npm test'", "coproc npm test", "bash <<'EOF'\nnpm test\nEOF", "cat <<'EOF' | nohup sh -s\nbun run verify\nEOF", "bash <<< 'npm test'"];
+  const allowed = ["time sh -c 'bun run test:core'", "bash <<'EOF'\nbun run test:core\nEOF", "cat <<'EOF'\nnpm test\nEOF", "bash script.sh <<'EOF'\nnpm test\nEOF", "sh -c 'cat' <<< 'npm test'", "eval 'echo npm test'"];
+  for (const role of ["developer", "fixer"]) for (const [commands, block] of [[full, true], [allowed, false]]) for (const command of commands) {
+    assert.equal(decideBashGate({ command, agentType: role }).decision, block ? "deny" : "allow", `${role}: ${command}`);
+    assert.equal((await callAs(role, command)).block, block, `${role}: ${command}`);
+  }
+});
+
 test("opaque package options keep test aliases blocked on Pi and Claude", async () => {
   for (const role of ["developer", "fixer"]) {
     for (const command of ["npm --tag x t", "npm --script-shell sh tst", "npm --node-options x it", "pnpm --tag x cit"]) {

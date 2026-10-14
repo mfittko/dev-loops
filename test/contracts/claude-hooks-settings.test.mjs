@@ -1046,6 +1046,17 @@ test("generated Bash hook preserves wrapper, launcher and inert-heredoc routing"
   }
 });
 
+test("generated Bash hook distinguishes literal shell programs from stdin data", () => {
+  for (const agent_type of ["developer", "fixer"]) for (const [commands, denied] of [
+    [["time bash -c 'npm test'", "(bash -c 'bun run verify')", "function f { npm test; }; f", "eval 'npm test'", "coproc npm test", "bash <<'EOF'\nnpm test\nEOF", "cat <<'EOF' | sh -s\nnpm test\nEOF", "bash <<< 'npm test'"], true],
+    [["time sh -c 'bun run test:core'", "bash <<'EOF'\nbun run test:core\nEOF", "cat <<'EOF'\nnpm test\nEOF", "bash script.sh <<'EOF'\nnpm test\nEOF", "sh -c 'cat' <<< 'npm test'"], false],
+  ]) for (const command of commands) {
+    const result = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
+    assert.equal(result.code, 0, command);
+    assert.equal(result.json?.hookSpecificOutput?.permissionDecision === "deny", denied, `${agent_type}: ${command}`);
+  }
+});
+
 test("Bash hook keeps native role and malformed-command behavior", () => {
   for (const command of [undefined, 42]) {
     for (const agent_type of ["review", "judge"]) assert.equal(runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, agent_type, cwd: repoRoot}).json?.hookSpecificOutput?.permissionDecision, "deny");
