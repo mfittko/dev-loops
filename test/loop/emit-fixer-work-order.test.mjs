@@ -3,18 +3,20 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, realpathSync } from "node:fs";
-import { mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "bun:test";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
-import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder, locateFixerUnit } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
+import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 
 const EMITTER = path.resolve("scripts/loop/emit-fixer-work-order.mjs");
@@ -818,7 +820,13 @@ test("F5: a plan edited in place grants nothing", async () => {
 test("F7: emit, pull, mutate in authority and verify the disposition; missing materialization refuses and re-emission supersedes the old reference", async () => {
   await withFixture(async ({ root, wt, head, emit }) => {
     const unit = await emit();
-    assert.equal(pull(unit, wt).status, 0);
+    const planBefore = await readFile(unit.planPath, "utf8");
+    const pulled = pull(unit, wt);
+    assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+    assert.equal(pulled.stdout, await readFile(unit.promptPath, "utf8"));
+    const receipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
+    assert.equal(receipt.subject.planPath, unit.planPath);
+    assert.equal(receipt.workOrderDigest, workOrderDigest(unit.workOrder));
     const target = path.join(wt, "src", "fix.mjs");
     assert.equal(hook(wt, target), "allow");
     await mkdir(path.dirname(target), { recursive: true });
@@ -831,6 +839,13 @@ test("F7: emit, pull, mutate in authority and verify the disposition; missing ma
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath }, { env: runIdFreeEnv(), runChild, repoRoot: wt });
     assert.equal(result.complete, true);
     assert.ok(result.checkpointPath.startsWith(path.join(root, "tmp")));
+    const checkpointBefore = [await readFile(result.checkpointPath, "utf8"), (await stat(result.checkpointPath)).mtimeMs];
+    const checkRuntime = makeGhMock([{ assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: head }) }, { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) }, { assertArgs: ["api", "user"], stdout: '{"login":"bot"}' }]);
+    const checked = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: head, parsedThreads: { threads: [], comments: [] } }, { env: runIdFreeEnv(), runChild: checkRuntime.runChild, repoRoot: wt });
+    assert.equal(checked.complete, true);
+    assert.deepEqual([await readFile(result.checkpointPath, "utf8"), (await stat(result.checkpointPath)).mtimeMs], checkpointBefore);
+    assert.equal(await readFile(unit.planPath, "utf8"), planBefore);
+    assert.equal(checkRuntime.calls.some((call) => call.args.includes("POST") || call.args.some((arg) => String(arg).includes("mutation"))), false);
 
     await rm(unit.promptPath);
     assert.equal(refusal(pull(unit, wt)), "local_materialization_integrity_failure");
@@ -849,6 +864,57 @@ test("F7: emit, pull, mutate in authority and verify the disposition; missing ma
 // ---------------------------------------------------------------------------
 // F8 — validation ownership is unchanged
 // ---------------------------------------------------------------------------
+
+test("historical 44f57175 main producer/pull selects the real feature helper and completes unchanged THREAD delivery", async () => {
+  await withFixture(async ({ root, wt, head, files, writeRecord }) => {
+    const historical = "44f57175a215711923fb128d74e9357b33ff95e9";
+    const checkout = process.cwd();
+    const archive = execFileSync("git", ["-C", checkout, "archive", historical, "scripts", "packages", "lib", "cli", "package.json", "skills", "agents"], { env: gitFreeEnv(), maxBuffer: 32 * 1024 * 1024 });
+    const unpack = spawnSync("tar", ["-xf", "-", "-C", root], { input: archive, encoding: "utf8" });
+    assert.equal(unpack.status, 0, unpack.stderr);
+    for (const relative of ["scripts", "packages", "lib", "cli", "package.json", "skills", "agents"]) {
+      await cp(path.join(checkout, relative), path.join(wt, relative), { recursive: true });
+    }
+    for (const target of [root, wt]) await symlink(path.join(checkout, "node_modules"), path.join(target, "node_modules"), "dir");
+    const oldEmitterPath = path.join(root, "scripts/loop/emit-fixer-work-order.mjs");
+    assert.equal(await readFile(oldEmitterPath, "utf8"), execFileSync("git", ["-C", checkout, "show", `${historical}:scripts/loop/emit-fixer-work-order.mjs`], { encoding: "utf8", env: gitFreeEnv() }));
+    const oldEmitter = await import(pathToFileURL(oldEmitterPath).href);
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_OLD" }] }));
+    await writeRecord({ items: [{ ref: "PRRT_OLD", status: "resolved" }] });
+    const unit = await oldEmitter.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", threadsFile: files.threads, cwd: wt, executionIdentity: nextExecution(), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
+    const before = await readFile(unit.planPath, "utf8");
+    const coverageDir = path.join(root, "tmp", "node-coverage");
+    const pulled = spawnSync("node", [path.join(root, "scripts/github/pull-work-order.mjs"), unit.executionIdentity], { cwd: root, encoding: "utf8", env: { ...gitFreeEnv(), NODE_V8_COVERAGE: coverageDir } });
+    assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+    assert.equal(pulled.stdout, await readFile(unit.promptPath, "utf8"));
+    const loaded = (await Promise.all((await readdir(coverageDir)).map(async (name) => JSON.parse(await readFile(path.join(coverageDir, name), "utf8")).result.map((entry) => entry.url)))).flat();
+    for (const file of [path.join(root, "scripts/github/pull-work-order.mjs"), path.join(wt, "scripts/github/pull-work-order.mjs"), path.join(wt, "scripts/loop/emit-fixer-work-order.mjs")]) assert(loaded.includes(pathToFileURL(file).href), `real helper loaded: ${file}`);
+    const receipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
+    assert.equal(receipt.subject.planPath, unit.planPath);
+    assert.equal(receipt.subject.branch, "issue-1");
+    assert.equal(receipt.workOrderDigest, unit.workOrderDigest);
+    assert.equal(unit.workOrderDigest, workOrderDigest(unit.workOrder));
+    await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
+    await writeFile(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: head, dispositions: [{ threadId: "PRRT_OLD", fixingCommitSha: head, disposition: "tackled" }] }));
+    const nodes = [{ id: "PRRT_OLD", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const parsedThreads = { threads: [{ id: "PRRT_OLD", isResolved: true }], comments: [{ threadId: "PRRT_OLD", body: `Fixed in commit ${head}.` }] };
+    const entries = () => [{ assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: head }) }, { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) }, { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' }];
+    const featureVerifierPath = path.join(wt, "scripts/github/verify-fixer-disposition.mjs");
+    assert.equal(await readFile(featureVerifierPath, "utf8"), await readFile(path.join(checkout, "scripts/github/verify-fixer-disposition.mjs"), "utf8"));
+    const featureVerifier = await import(pathToFileURL(featureVerifierPath).href);
+    const runtime = (mock) => ({ repoRoot: wt, env: runIdFreeEnv(), runChild: mock.runChild });
+    const completed = await featureVerifier.verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath }, runtime(makeGhMock(entries())));
+    assert.equal(completed.complete, true);
+    const checkpoint = [await readFile(completed.checkpointPath, "utf8"), (await stat(completed.checkpointPath)).mtimeMs];
+    const featureResolver = await import(pathToFileURL(path.join(wt, "scripts/loop/detect-pr-gate-coordination-state.mjs")).href);
+    const mock = makeGhMock([...entries(), { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' }]);
+    const checked = await featureResolver.resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: head, parsedThreads }, runtime(mock));
+    assert.equal(checked.complete, true);
+    assert.equal(mock.calls.some((call) => call.args.includes("POST") || call.args.some((arg) => String(arg).includes("mutation"))), false, "THREAD performs no ACT query, history query or mutation");
+    assert.deepEqual([await readFile(completed.checkpointPath, "utf8"), (await stat(completed.checkpointPath)).mtimeMs], checkpoint);
+    assert.equal(await readFile(unit.planPath, "utf8"), before);
+  });
+});
 
 test("F8: the work order routes validation through the canonical policy and carries no full-run command", async () => {
   await withFixture(async ({ emit }) => {

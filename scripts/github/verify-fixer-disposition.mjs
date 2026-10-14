@@ -51,6 +51,8 @@ Required:
                         when written at or after that pull, and when its headSha is
                         the observed --head-sha.
 Optional:
+  --check                     Read-only delivery and live-state check; never
+                               write a checkpoint or reply/resolve a thread.
   --tmp-root <path>            Root tmp directory for the checkpoint and the pull
                                receipts (default: the main git worktree's tmp/, so
                                a prune of a linked worktree never takes the
@@ -60,6 +62,7 @@ Idempotent: re-entry re-verifies the receipt against the plan, rewrites the
 checkpoint for --head-sha and re-verifies live GitHub state; a thread already
 replied with its commit's evidence is never replied to twice, and a thread
 already resolved live is left alone.
+In --check mode checkpointPath is null and all evidence remains unchanged.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": 17, "headSha": "...", "checkpointPath": "...",
     "complete": true|false, "incomplete": [{ threadId, expectedCommit, failedStep, deltaStatus?, deltaRecord? }],
@@ -82,6 +85,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
     args: [...argv],
     options: {
       help: { type: "boolean", short: "h" },
+      check: { type: "boolean" },
       repo: { type: "string" },
       pr: { type: "string" },
       "head-sha": { type: "string" },
@@ -95,6 +99,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
   });
   const options = {
     help: false,
+    check: false,
     repo: undefined,
     pr: undefined,
     headSha: undefined,
@@ -111,6 +116,10 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
     if (token.name === "help") {
       options.help = true;
       return options;
+    }
+    if (token.name === "check") {
+      options.check = true;
+      continue;
     }
     if (token.name === "repo") {
       options.repo = requireTokenValue(token, parseError).trim();
@@ -211,6 +220,20 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     if (!contained.contained) throw new Error(`the work order head ${order.headSha} is not contained by the observed head ${options.headSha}: ${contained.reason}`);
   }
   const handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
+  const threadsRead = (order.requiredReads ?? []).find((read) => read?.kind === "threads");
+  if (threadsRead) {
+    const bytes = await readFile(threadsRead.path);
+    if (createHash("sha256").update(bytes).digest("hex") !== String(threadsRead.sha256 ?? "").replace(/^sha256:/, "")) {
+      throw new Error(`the work order's threads ${threadsRead.path} differ from the sha256 the work order binds`);
+    }
+    const source = JSON.parse(bytes.toString("utf8"));
+    if (!Array.isArray(source?.threads) || source.threads.some((thread) => typeof thread?.threadId !== "string" || !thread.threadId)) {
+      throw new Error(`the work order's threads ${threadsRead.path} have invalid thread IDs`);
+    }
+    const disposed = new Set(handoff.dispositions.map((entry) => entry.threadId));
+    const missing = source.threads.filter((thread) => !disposed.has(thread.threadId));
+    if (missing.length) throw new Error(`the handoff has no disposition entry for source thread(s) ${missing.map((thread) => thread.threadId).join(", ")}`);
+  }
   // GATE-EXEC-REMEDIATION-SITE-QUERY: an act-list work order's items with a siteQuery need a coverage record.
   const actRead = (order.requiredReads ?? []).find((read) => read?.kind === "act-list");
   let actList = null;
@@ -305,8 +328,10 @@ export async function verifyFixerDisposition(
   if (Array.isArray(actList)) {
     assertActItemThreadsDisposed(actList, handoff, initialSnapshot, await resolveAuthenticatedLogin({ env, ghCommand, runChild }));
   }
-  await mkdir(path.dirname(fullPath), { recursive: true });
-  await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery }, null, 2)}\n`, "utf8");
+  if (!options.check) {
+    await mkdir(path.dirname(fullPath), { recursive: true });
+    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery }, null, 2)}\n`, "utf8");
+  }
 
   const tackledShas = [...new Set(
     handoff.dispositions
@@ -340,7 +365,7 @@ export async function verifyFixerDisposition(
     entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING
     || entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED
   ));
-  if (actionable.length > 0) {
+  if (!options.check && actionable.length > 0) {
     const { matchedTargets } = planBatchReplyTargets(initialSnapshot, "all");
     const commentIdByThreadId = new Map(matchedTargets.map((target) => [target.threadId, target.commentId]));
     for (const entry of actionable) {
@@ -404,7 +429,7 @@ export async function verifyFixerDisposition(
     repo: options.repo,
     pr: options.pr,
     headSha: options.headSha,
-    checkpointPath: logPath,
+    checkpointPath: options.check ? null : logPath,
     complete: evaluation.ok,
     incomplete,
     forbiddenActions: evaluation.forbiddenActions,
