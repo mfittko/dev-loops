@@ -167,7 +167,7 @@ directly.
 
 ## Codex fixer dispatch
 
-Inside `dev-loop`, emit `--harness codex` and pass the exact `dispatchPayload` to `collaboration.spawn_agent`. Its only fields are `task_name` (derived from the validated fixer execution identity), unchanged pointer `message` and `fork_turns: "none"`; never append setup or unsupported fields. Rebuilding does not resume an actor. The fresh child learns its rules after the canonical pull from the pinned [fixer contract](../../agents/fixer.agent.md#codex-after-pull-setup), including truthful child-scoped neutral run binding and propagation under actual managed permissions. Codex has no Claude native role or hook enforcement.
+Inside `dev-loop`, emit `--harness codex` and pass the exact `dispatchPayload` to `collaboration.spawn_agent`. Its only fields are `task_name` (derived from the validated fixer execution identity), unchanged pointer `message` and `fork_turns: "none"`; never append setup or unsupported fields. Rebuilding does not resume an actor. The fresh child learns its rules after the canonical pull from the pinned [fixer contract](../../agents/fixer.agent.md#codex-after-pull-setup), including truthful runtime provenance under actual managed permissions. Codex has no Claude native role or hook enforcement.
 
 ## Async dispatch posture (Pi)
 

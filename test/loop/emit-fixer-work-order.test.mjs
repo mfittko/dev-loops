@@ -165,11 +165,13 @@ test("F1: bootstrap teaches permitted reads and immediate denial stop before ver
     const text = await readFile(unit.promptPath, "utf8");
     const prefix = text.slice(0, text.indexOf("\n## Required reads\n"));
     assert.ok(prefix.includes(rule), "the bootstrap must be visible before relative required-read paths");
+    assert.match(prefix, /If tool output is truncated, read bounded ranges separately and do not proceed until every required read is complete/);
     const canonical = await readFile("agents/fixer.agent.md", "utf8");
     const generated = await readFile(".claude/agents/fixer.md", "utf8");
     const setup = (body) => body.slice(body.indexOf("## Codex after-pull setup"), body.indexOf("## Authorized remediation sites"));
     assert.match(setup(canonical), /stops this actor immediately/);
-    assert.match(setup(canonical), /editor\/patch.*ephemeral.*`node <file>`/);
+    assert.match(setup(canonical), /If tool output is truncated, read bounded ranges separately and do not proceed until every required read is complete/);
+    assert.match(setup(canonical), /actual collaboration parent\/child task identities.*`CODEX_THREAD_ID`/);
     assert.equal(setup(generated), setup(canonical), "generated setup must retain the safe bootstrap");
   });
 });
