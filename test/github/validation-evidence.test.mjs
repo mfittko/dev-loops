@@ -149,3 +149,23 @@ test('every binding component is required; ENOENT and pointer substitution are n
     assert.equal(await readValidationEvidence({ context: {}, headSha: HEAD, cwd: root }), null);
   });
 });
+test('legacy prefix-file context without a validation read admits configured evidence but not not_configured or bad supplied bindings', async () => {
+  await withTempDir(async (root) => {
+    for (const status of [undefined, 'complete', 'failed', 'incomplete']) {
+      const fixture = await seedValidation(root, { record: { status, allPassed: status !== 'failed', suites: [], warning: undefined, configResolution: undefined } });
+      const context = { ...fixture.context, requiredReads: [] };
+      assert.equal((await read(root, fixture, { context })).refusal, undefined, String(status));
+      delete context.requiredReads;
+      assert.equal((await read(root, fixture, { context })).refusal, undefined, String(status));
+      const bad = { ...fixture.context, requiredReads: [{ ...fixture.read, sha256: '0'.repeat(64) }] };
+      assert.match((await read(root, fixture, { context: bad })).reason, /hash-bound/);
+      const dup = { ...fixture.context, requiredReads: [fixture.read, fixture.read] };
+      assert.match((await read(root, fixture, { context: dup })).reason, /hash-bound/);
+    }
+  });
+  await withTempDir(async (root) => {
+    const fixture = await seedValidation(root);
+    const context = { ...fixture.context, requiredReads: [] };
+    assert.match((await read(root, fixture, { context })).reason, /hash-bound/);
+  });
+});

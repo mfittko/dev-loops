@@ -75,9 +75,10 @@ export async function readValidationEvidence({ context, headSha, cwd = process.c
   try {
     const bytes = await readFile(validationResultsPath);
     const sha256 = hash(bytes);
-    if (requireBinding && (reads.length !== 1 || canonical(path.resolve(cwd, reads[0].path)) !== canonical(validationResultsPath) || reads[0].sha256 !== sha256 || reads[0].bytes !== bytes.length)) return refuse("validation record does not match the context's hash-bound validation read");
     let artifact;
     try { artifact = JSON.parse(bytes.toString('utf8')); } catch { return refuse('validation record is not valid JSON'); }
+    // Legacy prefix-file contexts carry no validation read; binding stays mandatory for not_configured and for any supplied read.
+    if (requireBinding && (reads.length > 0 || artifact?.status === 'not_configured') && (reads.length !== 1 || canonical(path.resolve(cwd, reads[0].path)) !== canonical(validationResultsPath) || reads[0].sha256 !== sha256 || reads[0].bytes !== bytes.length)) return refuse("validation record does not match the context's hash-bound validation read");
     if (!headSha || artifact?.headSha !== headSha) return refuse(`validation record head ${artifact?.headSha ?? 'missing'} differs from requested head ${headSha ?? 'missing'}`);
     if (artifact.status === 'not_configured') {
       try { await verifyNotConfiguredEvidence(artifact, { cwd, git }); } catch (error) { return refuse(`trusted absence verification failed: ${error.message}`); }
