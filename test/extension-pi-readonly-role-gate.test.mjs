@@ -445,8 +445,8 @@ test("literal shell program ownership preserves Claude and registered Pi worker 
 });
 
 test("shell option values and pipeline operators preserve both worker boundaries", async () => {
-  const full = ["bash -euo pipefail -c -- 'npm test'", "bash -O extglob <<'EOF'\nnpm test\nEOF", "cat <<'EOF' |& bash -o pipefail\nnpm test\nEOF"];
-  const allowed = ["bash -co pipefail 'bun run test:core'", "bash -so pipefail <<< 'bun run test:core'", "bash -o pipefail script.sh <<'EOF'\nnpm test\nEOF", "cat <<'EOF' || bash\nnpm test\nEOF"];
+  const full = ["bash -euo pipefail -c -- 'npm test'", "bash -O extglob <<'EOF'\nnpm test\nEOF", "cat <<'EOF' |& bash -o pipefail\nnpm test\nEOF", "{ bash; } <<'EOF'\nnpm test\nEOF", "cat <<'EOF' |\nnpm test\nEOF\nbash", "source /dev/stdin <<< 'npm test'", "builtin eval -- npm test", `${"eval ".repeat(9)}npm test`];
+  const allowed = ["bash -co pipefail 'bun run test:core'", "bash -so pipefail <<< 'bun run test:core'", "bash -o pipefail script.sh <<'EOF'\nnpm test\nEOF", "cat <<'EOF' || bash\nnpm test\nEOF", "bash <<'A' <<'B'\nnpm test\nA\necho safe\nB"];
   for (const role of ["developer", "fixer"]) for (const [commands, block] of [[full, true], [allowed, false]]) for (const command of commands) {
     assert.equal(decideBashGate({ command, agentType: role }).decision, block ? "deny" : "allow", `${role}: ${command}`);
     assert.equal((await callAs(role, command)).block, block, `${role}: ${command}`);

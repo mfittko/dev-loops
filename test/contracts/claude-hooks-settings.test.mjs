@@ -1065,6 +1065,12 @@ test("generated Bash hook preserves shell option and pipeline ownership", () => 
     ["bash -co pipefail 'bun run test:core'", false],
     ["bash -so pipefail <<< 'bun run test:core'", false],
     ["cat <<'EOF' || bash\nnpm test\nEOF", false],
+    ["{ bash; } <<'EOF'\nnpm test\nEOF", true],
+    ["cat <<'EOF' |\nnpm test\nEOF\nbash", true],
+    ["bash <<'A' <<'B'\nnpm test\nA\necho safe\nB", false],
+    ["source /dev/stdin <<< 'npm test'", true],
+    ["builtin eval -- npm test", true],
+    [`${"eval ".repeat(9)}npm test`, true],
   ]) {
     const result = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
     assert.equal(result.code, 0, command);

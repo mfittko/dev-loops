@@ -2,6 +2,28 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { classifyValidationCommand, resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
 
+test("literal stdin attachment survives compounds, continued pipelines and separate heredocs", () => {
+  for (const consumer of ["{ bash; }", "if true; then bash; fi", "(true; bash)", "bash /dev/stdin", "bash /dev/fd/0", "source /dev/stdin", ". /dev/stdin", "cat <<PLACEHOLDER | { true; bash; }", "cat <<PLACEHOLDER |\nbash"]) {
+    for (const [body, expected] of [["npm test", "full-repository"], ["bun run test:core", "targeted"], ["echo npm test", "non-validation"]]) {
+      const command = consumer.endsWith("|\nbash") ? `cat <<'EOF' |\n${body}\nEOF\nbash` : consumer.includes("PLACEHOLDER") ? `${consumer.replace("PLACEHOLDER", "'EOF'")}\n${body}\nEOF` : `${consumer} <<'EOF'\n${body}\nEOF`;
+      assert.equal(classifyValidationCommand(command), expected, command);
+    }
+  }
+  for (const command of ["{ bash; } <<< 'npm test'", "cat <<< 'npm test' |\nbash", "bash <<'A'; cat <<'B'\nnpm test\nA\nx\nB", "cat <<'A'; bash <<'B'\nx\nA\nnpm test\nB", "bash <<'A' <<'B'\nx\nA\nnpm test\nB"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+  for (const command of ["bash <<'A' <<'B'\nnpm test\nA\necho safe\nB", "cat <<'A' | bash <<'B'\nnpm test\nA\necho safe\nB", "bash <<'A' </dev/null\nnpm test\nA", "cat <<'A'; bash\nnpm test\nA", "cat <<'A' | cat; bash\nnpm test\nA"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
+});
+
+test("recognized executable literal text fails closed at the nesting bound", () => {
+  for (const command of ["eval -- npm test", "builtin eval npm test", "function a-b { npm test; }; a-b", `${"eval ".repeat(9)}npm test`, "bash <<< $'npm test'", "bash -c $'npm test'", "eval \"$(cat)\" <<'EOF'\nnpm test\nEOF", "while read -r l; do bash -c \"$l\"; done <<'EOF'\nnpm test\nEOF"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+  for (const command of ["eval -- bun run test:core", "builtin eval 'echo npm test'", "function a-b { echo npm test; }; a-b"]) assert.notEqual(classifyValidationCommand(command), "full-repository", command);
+  let program = "npm test";
+  for (let depth = 0; depth < 9; depth += 1) program = `bash -c ${JSON.stringify(program)}`;
+  assert.equal(classifyValidationCommand(program), "full-repository");
+  program = "bash <<'EOF'\nnpm test\nEOF\n";
+  for (let depth = 0; depth < 8; depth += 1) program = `echo $(${program})`;
+  assert.equal(classifyValidationCommand(program), "full-repository");
+});
+
 test("option-bearing wrappers preserve command ownership and literal split strings", () => {
   for (const prefix of ["nice -10", "nice -n10", "timeout -v 60", "timeout --signal KILL 60", "timeout --future value 60", "env -v", "env --debug", "env --future value"]) {
     assert.equal(classifyValidationCommand(`${prefix} npm test`), "full-repository", prefix);
