@@ -731,7 +731,7 @@ export async function performCopilotReviewRequest(
     ? before.prData.headRefOid.trim()
     : null;
   // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the same shared input the gate coordination detector reads.
-  // The thread read is lazy: it runs only when a verification checkpoint exists for this head.
+  // Live thread reads are deferred until an applicable full plan or checkpoint needs evidence.
   const fixerDisposition = currentHeadSha
     ? await resolveFixerDispositionInput(
       {

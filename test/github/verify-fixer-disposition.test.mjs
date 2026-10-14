@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
+import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 import { initGitFixture, makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import {
@@ -14,6 +15,8 @@ import {
 } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { pullReceiptPath, verifyPulledResult, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 
 const REPO = "owner/repo";
 const PR = 1975;
@@ -66,13 +69,21 @@ const REF = `fixer:${REPO}#${PR}:${HEAD_SHA}:f1-0000abcd`;
 // receipt under <repoRoot>/tmp, and the disposition handoff at the plan's outputRef.
 async function deliver(repoRoot, dispositions, {
   handoffHead = HEAD_SHA, orderHead = HEAD_SHA, phase = "full", receipt = {}, writeReceipt = true, writeHandoff = true, pulledAt = new Date(Date.now() - 1000).toISOString(),
-  receiptMtime = null, handoffText = null, actList = null, editActListAfter = false,
+  receiptMtime = null, handoffText = null, actList = null, editActListAfter = false, threads = null,
 } = {}) {
   const dir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
   const outputRef = path.join(dir, "f1-0000abcd", "fixer-disposition.json");
   const actListPath = path.join(dir, "act-list.json");
   const workOrder = { role: "fixer", phase, target: { repo: REPO, pr: PR }, headSha: orderHead, mutationAuthority: { branch: "issue-1" }, outputRefs: [outputRef], ...(actList ? { requiredReads: [{ kind: "act-list", path: actListPath, sha256: createHash("sha256").update(JSON.stringify(actList)).digest("hex") }] } : {}) };
   const plan = { workOrderRef: REF, workOrderDigest: workOrderDigest(workOrder), executionIdentity: "f1-0000abcd", workOrder };
+  if (threads) {
+    const source = path.join(dir, "threads.json");
+    workOrder.requiredReads = [{ kind: "threads", path: source, sha256: createHash("sha256").update(JSON.stringify(threads)).digest("hex") }];
+    workOrder.authority = { sourceDigest: sha256Hex(threads).slice(7) };
+    await mkdir(dir, { recursive: true });
+    await writeFile(source, JSON.stringify(threads));
+    plan.workOrderDigest = workOrderDigest(workOrder);
+  }
   const planPath = path.join(dir, "fixer-emit-plan.json");
   await mkdir(path.dirname(outputRef), { recursive: true });
   await writeFile(planPath, JSON.stringify(plan));
@@ -83,9 +94,12 @@ async function deliver(repoRoot, dispositions, {
     await writeFile(receiptPath, JSON.stringify({
       role: "fixer", workOrderRef: REF, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity, pulledAt, subject: { planPath }, ...receipt,
     }));
-    if (receiptMtime) await utimes(receiptPath, receiptMtime, receiptMtime);
   }
   if (writeHandoff) await writeFile(outputRef, handoffText ?? JSON.stringify({ headSha: handoffHead, dispositions }));
+  if (receiptMtime) {
+    await utimes(pullReceiptPath(path.join(repoRoot, "tmp"), REF), receiptMtime, receiptMtime);
+    if (writeHandoff) await utimes(outputRef, 1, 1);
+  }
   return planPath;
 }
 
@@ -123,7 +137,7 @@ test("F6: a caller-supplied --dispositions or --dispositions-file is rejected", 
 
 const TACKLED = [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" }];
 
-for (const [name, setup, expected] of [
+for (const check of [false, true]) for (const [name, setup, expected] of [
   ["a missing receipt", { writeReceipt: false }, /receipt_missing/],
   ["a malformed receipt", { receipt: { workOrderRef: 7 } }, /unit_mismatch/],
   ["a receipt for another role", { receipt: { role: "review" } }, /role_mismatch/],
@@ -132,7 +146,7 @@ for (const [name, setup, expected] of [
   ["a receipt without a handoff (receipt-only)", { writeHandoff: false }, /result_missing/],
   ["a prose-only handoff", { handoffText: "Fixed all threads." }, /is not valid JSON/],
   ["a handoff with a malformed dispositions list", { handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: "x" }) }, /dispositions must be an array/],
-  ["a handoff written before the pull (stale or replayed)", { receiptMtime: new Date(Date.now() + 60_000) }, /result_predates_pull/],
+  ["a handoff written before the pull (stale or replayed)", { receiptMtime: new Date("2000-01-01T00:00:00Z") }, /result_predates_pull/],
   ["a handoff whose head is not the observed head", { handoffHead: FIX_SHA }, /not the observed head/],
   ["a commit_only plan", { phase: "commit_only" }, /not a full-phase fixer work order/],
   ["an act item with a siteQuery and no coverage record", { actList: [{ fingerprint: "fp1", severity: "high", summary: "s", judgeDisposition: "act", siteQuery: "git grep -n x" }] }, /act item fp1 has a site query and no site coverage record/],
@@ -140,11 +154,11 @@ for (const [name, setup, expected] of [
   ["a handoff leaving a returned site neither fixed nor skipped", { handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: [{ threadId: "PRRT_kwDOabc", fixingCommitSha: FIX_SHA, disposition: "tackled", returnedSites: ["src/a.mjs:guard", "src/b.mjs:guard"], sites: [{ site: "src/a.mjs:guard", status: "fixed" }] }] }) }, /leaves returned site src\/b\.mjs:guard neither fixed nor skipped/],
   ["a handoff skipping a returned site without a reason", { handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: [{ threadId: "PRRT_kwDOabc", fixingCommitSha: FIX_SHA, disposition: "tackled", returnedSites: ["src/a.mjs:guard"], sites: [{ site: "src/a.mjs:guard", status: "skipped" }] }] }) }, /records no skip reason/],
 ]) {
-  test(`F6: ${name} refuses and writes no checkpoint`, async () => {
+  test(`F6 (${check ? "check" : "default"}): ${name} refuses and writes no checkpoint`, async () => {
     await withRepoRoot(async (repoRoot) => {
       const fixerPlan = await deliver(repoRoot, TACKLED, setup);
       const { deps, calls } = runtime([], repoRoot);
-      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), expected);
+      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp", check }, deps), expected);
       assert.equal(calls.length, 0);
       assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-findings")), false);
     });
@@ -166,24 +180,25 @@ test("F6: a handoff written in the same clock tick as the pull (equal mtimes) pa
   });
 });
 
-test("F6: a plan for another target, or a missing plan, refuses", async () => {
+for (const check of [false, true]) test(`F6 (${check ? "check" : "default"}): a plan for another target, or a missing plan, refuses`, async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, TACKLED);
     const { deps } = runtime([], repoRoot);
-    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR + 1, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /not a full-phase fixer work order for owner\/repo#1976/);
-    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: "nope.json", tmpRoot: "tmp" }, deps), /Cannot read --fixer-plan/);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR + 1, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp", check }, deps), /not a full-phase fixer work order for owner\/repo#1976/);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: "nope.json", tmpRoot: "tmp", check }, deps), /Cannot read --fixer-plan/);
   });
 });
 
-test("F6: a work order head not contained by the observed head refuses; a contained one passes and the checkpoint records delivery", async () => {
+for (const check of [false, true]) test(`F6 (${check ? "check" : "default"}): a work order head not contained by the observed head refuses; a contained one passes and the checkpoint records delivery`, async () => {
   await withRepoRoot(async (repoRoot) => {
     const orderHead = "c".repeat(40);
     const fixerPlan = await deliver(repoRoot, [], { orderHead });
     const diverged = runtime([compareEntry(orderHead, "diverged")], repoRoot, { live: false });
-    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, diverged.deps), /not contained by the observed head/);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp", check }, diverged.deps), /not contained by the observed head/);
     const ahead = runtime([compareEntry(orderHead, "ahead"), liveHeadEntry(), threadsCallEntry([])], repoRoot, { live: false });
-    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, ahead.deps);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp", check }, ahead.deps);
     assert.equal(result.complete, true);
+    if (check) { assert.equal(result.checkpointPath, null); assert.deepEqual(await checkpointFiles(repoRoot), []); return; }
     const checkpoint = JSON.parse(await readFile(path.join(repoRoot, result.checkpointPath), "utf8"));
     const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
     assert.deepEqual(
@@ -193,20 +208,20 @@ test("F6: a work order head not contained by the observed head refuses; a contai
   });
 });
 
-test("F6: a plan whose work order was edited in place after emission refuses before any read", async () => {
+for (const check of [false, true]) test(`F6 (${check ? "check" : "default"}): a plan whose work order was edited in place after emission refuses before any read`, async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, TACKLED);
     const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
     for (const workOrder of [{ ...plan.workOrder, mutationAuthority: { branch: "main" } }, { ...plan.workOrder, headSha: FIX_SHA }]) {
       await writeFile(fixerPlan, JSON.stringify({ ...plan, workOrder }));
       const { deps, calls } = runtime([], repoRoot);
-      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /does not match its workOrderDigest/);
+      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp", check }, deps), /does not match its workOrderDigest/);
       assert.equal(calls.length, 0);
     }
   });
 });
 
-test("F6: an outputRef edited in place (outside the digest) refuses; the handoff is never read from it", async () => {
+for (const check of [false, true]) test(`F6 (${check ? "check" : "default"}): an outputRef edited in place (outside the digest) refuses; the handoff is never read from it`, async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, TACKLED);
     const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
@@ -214,12 +229,12 @@ test("F6: an outputRef edited in place (outside the digest) refuses; the handoff
     await writeFile(forged, JSON.stringify({ headSha: HEAD_SHA, dispositions: [] }));
     await writeFile(fixerPlan, JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, outputRefs: [forged] } }));
     const { deps, calls } = runtime([], repoRoot);
-    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /is not the emitted handoff path/);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp", check }, deps), /is not the emitted handoff path/);
     assert.equal(calls.length, 0);
   });
 });
 
-test("F6: a plan copied to another directory with a matching outputRef refuses; the pulled plan location is bound", async () => {
+for (const check of [false, true]) test(`F6 (${check ? "check" : "default"}): a plan copied to another directory with a matching outputRef refuses; the pulled plan location is bound`, async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, TACKLED);
     const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
@@ -230,16 +245,16 @@ test("F6: a plan copied to another directory with a matching outputRef refuses; 
     const copied = path.join(copyDir, "fixer-emit-plan.json");
     await writeFile(copied, JSON.stringify({ ...plan, workOrder: { ...plan.workOrder, outputRefs: [forged] } }));
     const { deps, calls } = runtime([], repoRoot);
-    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: copied, tmpRoot: "tmp" }, deps), /is not the plan the fixer pull read/);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: copied, tmpRoot: "tmp", check }, deps), /is not the plan the fixer pull read/);
     assert.equal(calls.length, 0);
   });
 });
 
-test("F6: a --head-sha other than the live PR head refuses before any checkpoint write", async () => {
+for (const check of [false, true]) test(`F6 (${check ? "check" : "default"}): a --head-sha other than the live PR head refuses before any checkpoint write`, async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, TACKLED);
     const { deps } = runtime([liveHeadEntry(FIX_SHA)], repoRoot, { live: false });
-    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /is not the live PR head b{40}/);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp", check }, deps), /is not the live PR head b{40}/);
     assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-findings")), false);
   });
 });
@@ -290,7 +305,7 @@ test("records a checkpoint, replies+resolves a tackled thread with missing evide
 // AC row 2 — uncontained commit blocks; no mutation is ever attempted
 // ---------------------------------------------------------------------------
 
-test("uncontained commit stays incomplete and never triggers a reply/resolve mutation", async () => {
+for (const check of [false, true]) test(`uncontained commit stays incomplete and never triggers a reply/resolve mutation (${check})`, async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, [
       { threadId: "PRRT_T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
@@ -302,7 +317,7 @@ test("uncontained commit stays incomplete and never triggers a reply/resolve mut
       compareEntry(FIX_SHA, "diverged"),
     ], repoRoot);
 
-    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp", check }, deps);
 
     assert.equal(result.complete, false);
     assert.equal(result.incomplete.length, 1);
@@ -577,6 +592,168 @@ const unresolvedT1 = () => threadsCallEntry([
   { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
 ]);
 const hasPost = (calls) => calls.some((call) => call.args.includes("POST"));
+
+test("check mode refuses a tackled thread absent live and THREAD ignores unrelated live threads", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    let fixerPlan = await deliver(repoRoot, TACKLED);
+    let mock = runtime([threadsCallEntry([]), compareEntry(FIX_SHA, "ahead")], repoRoot);
+    const missing = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check: true }, mock.deps);
+    assert.equal(missing.complete, false);
+    assert.equal(missing.incomplete[0].failedStep, "reply_missing");
+    fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_SOURCE", fixingCommitSha: FIX_SHA, disposition: "deferred" }], { threads: { threads: [{ threadId: "PRRT_SOURCE" }] } });
+    mock = runtime([threadsCallEntry([actThread("PRRT_UNRELATED", [gateComment("c1", 101)])])], repoRoot);
+    const narrow = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check: true }, mock.deps);
+    assert.equal(narrow.complete, true);
+    assert.equal(mock.calls.length, 2, "only live head and threads, no ACT/login/history reads");
+  });
+});
+
+for (const [isResolved, reply, expected] of [[true, true, null], [false, false, "reply_missing"], [false, true, "not_resolved"]]) {
+  test(`check mode preserves report/checkpoint bytes and times with ${expected ?? "complete"} live evidence`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const fixerPlan = await deliver(repoRoot, TACKLED);
+      const output = JSON.parse(await readFile(fixerPlan, "utf8")).workOrder.outputRefs[0];
+      const checkpoint = buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+      for (const existing of [false, true]) {
+        if (existing) { await mkdir(path.dirname(checkpoint), { recursive: true }); await writeFile(checkpoint, "existing checkpoint\n"); }
+        const paths = [fixerPlan, output, pullReceiptPath(path.join(repoRoot, "tmp"), REF), ...(existing ? [checkpoint] : [])];
+        const snapshot = async () => Promise.all(paths.map(async (file) => [await readFile(file, "utf8"), (await stat(file)).mtimeMs]));
+        const before = await snapshot();
+        const { deps, calls } = runtime([threadsCallEntry([actThread("PRRT_T1", [gateComment("c1", 101, reply ? `Fixed in commit ${FIX_SHA}.` : "fix")], isResolved)]), compareEntry(FIX_SHA, "ahead")], repoRoot);
+        const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check: true }, deps);
+        assert.equal(result.complete, !expected);
+        assert.deepEqual(result.incomplete.map((entry) => entry.failedStep), expected ? [expected] : []);
+        assert.deepEqual(result.actions, []);
+        assert.equal(result.checkpointPath, null);
+        assert.deepEqual(await snapshot(), before);
+        assert.equal(existsSync(path.dirname(checkpoint)), existing, "check creates no checkpoint directory");
+        assert.equal(calls.some((call) => call.args.includes("POST") || call.args.some((arg) => String(arg).includes("mutation"))), false);
+      }
+    });
+  });
+}
+
+test("check CLI flag is explicit and Delta refusal survives check mode", async () => {
+  assert.equal(parseVerifyFixerDispositionCliArgs(["--repo", REPO, "--pr", String(PR), "--head-sha", HEAD_SHA, "--fixer-plan", "p", "--check"]).check, true);
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, TACKLED);
+    await writeDeltaRecord(repoRoot, { items: [{ ref: "PRRT_T1", status: "cannot_verify" }] });
+    const { deps, calls } = runtimeWithGit([unresolvedT1(), compareEntry(FIX_SHA, "ahead")], repoRoot, () => ({ code: 0, stdout: `${FIX_SHA}\n` }));
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check: true }, deps);
+    assert.equal(result.incomplete[0].failedStep, "delta_blocked");
+    assert.deepEqual(result.actions, []);
+    assert.deepEqual(await checkpointFiles(repoRoot), []);
+    assert.equal(hasPost(calls), false);
+  });
+});
+
+for (const check of [false, true]) for (const missing of [false, true]) {
+  test(`THREAD source hash and membership are enforced (${check}, missing=${missing})`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const fixerPlan = await deliver(repoRoot, [], { threads: { threads: [{ threadId: "PRRT_SOURCE" }] } });
+      const read = JSON.parse(await readFile(fixerPlan, "utf8")).workOrder.requiredReads[0];
+      if (!missing) await writeFile(read.path, '{"threads":[]}');
+      const { deps, calls } = runtime([], repoRoot);
+      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps), missing ? /no disposition entry.*PRRT_SOURCE/ : /sha256/);
+      assert.equal(calls.length, 0, "THREAD never queries ACT, login or history");
+    });
+  });
+}
+
+for (const check of [false, true]) test(`THREAD canonical source digest is enforced (${check})`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [], { threads: { threads: [] } });
+    const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+    plan.workOrder.authority.sourceDigest = "0".repeat(64);
+    plan.workOrderDigest = workOrderDigest(plan.workOrder);
+    await writeFile(fixerPlan, JSON.stringify(plan));
+    const receiptPath = pullReceiptPath(path.join(repoRoot, "tmp"), REF);
+    const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+    await writeFile(receiptPath, JSON.stringify({ ...receipt, workOrderDigest: plan.workOrderDigest }));
+    await writeFile(plan.workOrder.outputRefs[0], JSON.stringify({ headSha: HEAD_SHA, dispositions: [] }));
+    const { deps, calls } = runtime([], repoRoot);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps), /threads.*sourceDigest/);
+    assert.equal(calls.length, 0);
+    assert.deepEqual(await checkpointFiles(repoRoot), []);
+  });
+});
+
+test("authentically threadless ACT with complete existing coverage remains valid in check mode", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const actList = [{ ...ACT_LIST[0], siteQuery: "git grep x" }];
+    const fixerPlan = await deliver(repoRoot, [], { actList, handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: [], siteCoverage: [{ fingerprint: ACT_FP, returnedSites: [], sites: [], noSitesReason: "no matches" }] }) });
+    const { deps } = runtime([threadsCallEntry([]), userEntry], repoRoot);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check: true }, deps);
+    assert.equal(result.complete, true);
+    assert.deepEqual(await checkpointFiles(repoRoot), []);
+  });
+});
+
+for (const checkpoint of [false, true]) test(`successful active check preserves existing ${checkpoint ? "malformed checkpoint" : "not_verified fallback"}`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    await deliver(repoRoot, TACKLED);
+    if (checkpoint) {
+      const file = buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, "{");
+    }
+    const { deps } = runtime([threadsCallEntry([actThread("PRRT_T1", [gateComment("c1", 1, `Fixed in commit ${FIX_SHA}.`)], true)]), compareEntry(FIX_SHA, "ahead")], repoRoot);
+    const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD_SHA }, deps);
+    assert.equal(result.complete, false);
+    assert.match(result.incomplete[0].failedStep, checkpoint ? /unreadable_checkpoint/ : /not_verified/);
+  });
+});
+
+for (const hasCheckpoint of [false, true]) for (const [name, setup, expected] of [
+  ["missing output", { writeHandoff: false }, /result_missing/],
+  ["empty THREAD output", { threads: { threads: [{ threadId: "PRRT_SOURCE" }] } }, /PRRT_SOURCE/],
+  ["omitted authenticated ACT thread", { actList: [{ fingerprint: "0123456789abcdef", severity: "medium", summary: "s", judgeDisposition: "act" }] }, /PRRT_ACT/],
+  ["malformed output", { handoffText: "{" }, /not valid JSON/],
+  ["stale head", { handoffHead: FIX_SHA }, /not the observed head/],
+  ["predates pull", { receiptMtime: new Date("2000-01-01T00:00:00Z") }, /result_predates_pull/],
+]) {
+  test(`active full obligation vetoes ${hasCheckpoint ? "empty" : "absent"} checkpoint: ${name}`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      await deliver(repoRoot, [], setup);
+      const checkpoint = buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+      if (hasCheckpoint) {
+        await mkdir(path.dirname(checkpoint), { recursive: true });
+        await writeFile(checkpoint, JSON.stringify({ headSha: HEAD_SHA, dispositions: [] }));
+      }
+      const { deps, calls } = runtime(setup.actList ? [threadsCallEntry([actThread("PRRT_ACT", [gateComment("c1", 101)])]), userEntry] : [], repoRoot);
+      const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD_SHA }, deps);
+      assert.equal(result.complete, false);
+      assert.match(result.incomplete[0].failedStep, expected);
+      assert.equal(hasPost(calls), false);
+    });
+  });
+}
+
+for (const [name, change, compare, expected] of [
+  ["foreign target", (order) => { order.target.pr++; }, null, null],
+  ["commit_only", (order) => { order.phase = "commit_only"; }, null, null],
+  ["unrelated head", (order) => { order.headSha = FIX_SHA; }, "diverged", null],
+  ["uncertain containment", (order) => { order.headSha = FIX_SHA; }, "unknown", /unexpected compare status/],
+  ["contained order head", (order) => { order.headSha = FIX_SHA; }, "ahead", /result_missing/],
+  ["invalid digest", (order) => { order.phase = "commit_only"; }, null, /workOrderDigest/],
+]) {
+  test(`active plan applicability: ${name}`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const fixerPlan = await deliver(repoRoot, [], { writeHandoff: false });
+      const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+      change(plan.workOrder);
+      if (name !== "invalid digest") plan.workOrderDigest = workOrderDigest(plan.workOrder);
+      await writeFile(fixerPlan, JSON.stringify(plan));
+      const receiptPath = pullReceiptPath(path.join(repoRoot, "tmp"), REF);
+      const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+      await writeFile(receiptPath, JSON.stringify({ ...receipt, workOrderDigest: plan.workOrderDigest }));
+      const { deps } = runtime(compare ? [compareEntry(FIX_SHA, compare)] : [], repoRoot, { live: false });
+      const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD_SHA }, deps);
+      if (expected) { assert.equal(result.complete, false); assert.match(result.incomplete[0].failedStep, expected); }
+      else assert.equal(result, null);
+    });
+  });
+}
 
 test("an abbreviated fixingCommitSha resolving to a commit a not_resolved record covers gets no Fixed reply", async () => {
   await withRepoRoot(async (repoRoot) => {

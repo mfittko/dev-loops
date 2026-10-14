@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,8 @@ import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION, shouldGuardCopilotReviewRequest, e
 import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig } from "@dev-loops/core/config";
 import { evaluateUiDesignerReviewScoping, DESIGNER_REVIEW_SATISFIED_OUTCOME } from "../../packages/core/src/loop/ui-designer-review-scoping.mjs";
 import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
+import { pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
 
@@ -3899,21 +3902,50 @@ test("detect-pr-gate-coordination-state behaves exactly as before when no fixer-
 
 // A full-phase fixer handoff delivered for the live head that lists a tackled thread, with no
 // verification checkpoint, means verify-fixer-disposition never completed: the boundary fails closed.
-async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw }, assertResult) {
+async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, active }, assertResult) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-not-verified-"));
   const REPO = "owner/repo";
   const PR = 3004;
-  const HEAD_SHA = "abc9988776";
+  const HEAD_SHA = active ? "a".repeat(40) : "abc9988776";
 
   try {
     initGitFixture(tempDir);
     const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
     await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
-    await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ executionIdentity: "f1-0000abcd", workOrder: { phase } }));
+    if (phase === "commit_only") {
+      const workOrder = { role: "fixer", phase, target: { repo: REPO, pr: PR }, headSha: HEAD_SHA };
+      await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: workOrderDigest(workOrder) }));
+    }
     await writeFile(path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json"), handoffRaw ?? JSON.stringify({
       headSha: handoffHead ?? HEAD_SHA,
       dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543", disposition: "tackled" }],
     }));
+    const checkerCalls = [];
+    if (active) {
+      const output = path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json");
+      const source = path.join(fixerDir, "source.json");
+      const act = active === "omitted ACT";
+      const bytes = JSON.stringify(act ? [{ fingerprint: "0123456789abcdef", summary: "fix", judgeDisposition: "act" }] : { threads: [{ threadId: "PRRT_T1" }] });
+      await writeFile(source, bytes);
+      const workOrder = { role: "fixer", phase: "full", target: { repo: REPO, pr: PR }, headSha: HEAD_SHA, outputRefs: [output], requiredReads: [{ kind: act ? "act-list" : "threads", path: source, sha256: createHash("sha256").update(bytes).digest("hex") }] };
+      workOrder.authority = { sourceDigest: sha256Hex(JSON.parse(bytes)).slice(7) };
+      const planPath = path.join(fixerDir, "fixer-emit-plan.json");
+      const plan = { workOrder, workOrderDigest: workOrderDigest(workOrder), workOrderRef: `fixer:${REPO}#${PR}:${HEAD_SHA}:f1-0000abcd`, executionIdentity: "f1-0000abcd" };
+      await writeFile(planPath, JSON.stringify(plan));
+      const receipt = pullReceiptPath(path.join(tempDir, "tmp"), plan.workOrderRef);
+      await mkdir(path.dirname(receipt), { recursive: true });
+      await writeFile(receipt, JSON.stringify({ ...plan, role: "fixer", pulledAt: new Date().toISOString(), subject: { planPath } }));
+      if (active === "missing") await rm(output);
+      else await writeFile(output, active === "malformed" ? "{" : JSON.stringify({ headSha: active === "stale" ? "b".repeat(40) : HEAD_SHA, dispositions: [] }));
+      const checkpoint = path.join(tempDir, "tmp", "gate-findings", "owner-repo", `pr-${PR}`, `fixer-disposition-${HEAD_SHA}.json`);
+      await mkdir(path.dirname(checkpoint), { recursive: true });
+      await writeFile(checkpoint, JSON.stringify({ headSha: HEAD_SHA, dispositions: [] }));
+      if (act) checkerCalls.push(
+        { assertArgs: ["pr", "view", String(PR), "--json", "headRefOid"], stdout: jsonLine({ headRefOid: HEAD_SHA }) },
+        { assertArgs: ["api", "graphql"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "<!-- dev-loops:finding 0123456789abcdef -->", author: { login: "gate", __typename: "User" } }] } }] } } } } }) },
+        { assertArgs: ["api", "user"], stdout: jsonLine({ login: "gate" }) },
+      );
+    }
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -3935,15 +3967,31 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw }
         }]]),
       },
       { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`], stdout: jsonLine([[]]) },
+      ...checkerCalls,
       { assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: "\n" },
     ]);
 
-    const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR }, buildMockRuntime(env, { repoRoot: tempDir }));
+    const runtime = buildMockRuntime(env, { repoRoot: tempDir });
+    const calls = [];
+    const run = runtime.runChild;
+    runtime.runChild = (...args) => { calls.push(args[1]); return run(...args); };
+    const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR }, runtime);
+    assert.equal(calls.some((args) => args.includes("POST") || args.some((arg) => String(arg).includes("mutation"))), false);
 
     assertResult(result);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+}
+
+for (const [active, failure] of [["missing", /result_missing/], ["empty", /PRRT_T1/], ["malformed", /not valid JSON/], ["stale", /not the observed head/], ["omitted ACT", /PRRT_ACT/]]) {
+  test(`gate rejects active full ${active} output despite an empty complete checkpoint`, async () => {
+    await runNotVerifiedFixture({ active }, (result) => {
+      assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+      assert.match(result.reason, failure);
+      assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+    });
+  });
 }
 
 test("detect-pr-gate-coordination-state reports not_verified for a delivered tackled handoff with no checkpoint for the live head", async () => {
