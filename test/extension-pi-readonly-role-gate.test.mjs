@@ -411,8 +411,8 @@ test("opaque package options keep test aliases blocked on Pi and Claude", async 
 });
 
 test("quoted package option values preserve full-run denial and safe commands on Pi and Claude", async () => {
-  const full = ['npm --tag "a b" t', "pnpm --tag 'a b' cit", "npm --prefix my\\ dir test", 'pnpm run --prefix "my dir" verify', 'npm --tag="a b" run verify'];
-  const safe = ['npm --prefix "my dir" run test:core', "pnpm run --prefix my\\ dir test:core", 'npm --tag "a b" install', "npm run --prefix 'my dir' lint", 'npm run lint --prefix="my dir" verify'];
+  const full = ['npm --tag "a b" t', "pnpm --tag 'a b' cit", "npm --prefix my\\ dir test", 'pnpm run --prefix "my dir" verify', 'npm --tag="a b" run verify', 'npm --tag "a;b" t', 'npm --prefix "a&b" test', 'pnpm run --prefix "x|y" verify', "bun run \\\n verify", "npm te\\st"];
+  const safe = ['npm --prefix "my dir" run test:core', "pnpm run --prefix my\\ dir test:core", 'npm --tag "a b" install', "npm run --prefix 'my dir' lint", 'npm run lint --prefix="my dir" verify', 'npm --prefix "a;b" run test:core', "bun run \\\n test:core", "npm run lint\\;verify"];
   for (const role of ["developer", "fixer"]) {
     for (const [commands, block] of [[full, true], [safe, false]]) {
       for (const command of commands) {

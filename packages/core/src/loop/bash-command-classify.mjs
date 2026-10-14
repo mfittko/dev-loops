@@ -275,17 +275,67 @@ const SHELL_EXEC_PREFIX = `${ENV_ASSIGNMENT_RUN}(?:${ENV_WRAPPER}|(?:command|exe
 const VERIFY_EXEC_PREFIX =
   `${ENV_ASSIGNMENT_RUN}(?:${ENV_WRAPPER}|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?`;
 
-/** Reuse the existing wrapper boundary for pure validation classification. */
-export function verificationCommandSegments(command) {
+// Validation needs shell words, while the mutation and read/search guards keep their own boundaries.
+function validationShellSegments(command) {
+  const segments = [];
+  let words = [], word = "", started = false, quote = null, uncertain = false;
+  const finishWord = () => {
+    if (started) {
+      const option = word.match(/^(--?[\w-]+=)([\s\S]*)$/);
+      words.push(/^[\w./:@=+-]+$/.test(word) ? word : option ? option[1] + JSON.stringify(option[2]) : JSON.stringify(word));
+    }
+    word = "";
+    started = false;
+  };
+  const finishSegment = () => {
+    finishWord();
+    if (words.length) segments.push({ text: words.join(" "), uncertain });
+    words = [];
+    uncertain = false;
+  };
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i], next = command[i + 1];
+    if (char === "\\" && quote !== "'") {
+      if (next === "\n") { i += 1; continue; }
+      if (next === undefined) { uncertain = true; continue; }
+      if (quote !== '"' || /[$`"\\]/.test(next)) { word += next; started = true; i += 1; continue; }
+      word += char;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      else {
+        if (quote === '"' && /[$`]/.test(char)) uncertain = true;
+        word += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') { quote = char; started = true; continue; }
+    if (/[;&|\n\r]/.test(char)) { finishSegment(); continue; }
+    if (/\s/.test(char)) { finishWord(); continue; }
+    if (/[$`*?\[\]<>]/.test(char)) uncertain = true;
+    word += char;
+    started = true;
+  }
+  if (quote) uncertain = true;
+  finishSegment();
+  return segments;
+}
+
+function normalizedVerificationSegments(command) {
   if (typeof command !== "string") return [];
   const shellWrapper = new RegExp(`(^|[;&|\\n])\\s*${VERIFY_EXEC_PREFIX}(?:ba|z|da|k)?sh\\s+-[lc]*c\\s+(['"])([\\s\\S]*?)\\2`, "gi");
   // shortcut: bounded literal shell wrappers only; opaque scripts need a supported process boundary.
   for (let depth = 0; depth < 4; depth += 1) command = command.replace(shellWrapper, "$1$3");
   const prefix = new RegExp(`^${VERIFY_EXEC_PREFIX}`, "i");
-  return shellSegments(command).map((segment) => {
-    const unquoted = segment.replace(/(['"])([\w./:@=-]+)\1/g, "$2");
-    return unquoted.replace(prefix, "");
+  return validationShellSegments(command).map(({ text, uncertain }) => {
+    return { text: text.replace(prefix, ""), uncertain };
   });
+}
+
+/** Normalize literal validation words without granting shell execution or read/search admission. */
+export function verificationCommandSegments(command) {
+  return normalizedVerificationSegments(command).map(({ text }) => text);
 }
 
 /**
@@ -1286,7 +1336,8 @@ export function classifyValidationCommand(command) {
   if (/(?:^|[;&|\n])\s*\.\/scripts\/verify\.mjs(?:\s|$)/.test(command)) return "full-repository";
   const suites = new Set();
   let targeted = false;
-  for (const segment of verificationCommandSegments(command)) {
+  for (const { text: segment, uncertain } of normalizedVerificationSegments(command)) {
+    if (uncertain && /^(?:bun|npm|pnpm|yarn|node|vitest|npx|bunx)(?:\s|$)/i.test(segment)) return "full-repository";
     for (const launch of runtimeLaunches(segment)) {
       const scriptPath = launch.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?([\w./-]+\.mjs)(?:\s|$)/)?.[1];
       const normalizedPath = scriptPath ? posix.normalize(scriptPath) : "";

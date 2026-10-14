@@ -46,6 +46,18 @@ test("package option values retain quoted and escaped whitespace as one shell wo
   }
 });
 
+test("validation lexing distinguishes quoted separators, static escapes and active shell boundaries", () => {
+  for (const command of ['npm --tag "a;b" t', 'npm --prefix "a&b" test', 'pnpm run --prefix "x|y" verify', "npm --prefix a\\;b test", "bun run \\\n  verify", "npm --workspace core \\\n  test", "npm te\\st", "npm t\\st", 'npm te"st"', "bun run \\\n test:all && bun run test:docs && bun run test:workflows", "echo ready; npm te\\st", "npm --prefix \"unterminated test", 'npm "$script"']) {
+    assert.equal(classifyValidationCommand(command), "full-repository", command);
+  }
+  for (const command of ['npm --prefix "a;b" run test:core', "pnpm --prefix 'a&b' run test:core", "bun run \\\n test:core", "npm run te\\st:core", "npm --prefix '$inert' run test:core", "echo ready | bun test test/foo.test.mjs"]) {
+    assert.equal(classifyValidationCommand(command), "targeted", command);
+  }
+  for (const command of ['npm --prefix "a|b" install', 'npm run lint --prefix "x;y" verify', "echo 'npm test; bun run verify'", "npm run lint\nverify", "npm run lint\\;verify", "npm run 'te\\st'"]) {
+    assert.equal(classifyValidationCommand(command), "non-validation", command);
+  }
+});
+
 test("validation commands have one shared classification", () => {
   const cases = [
     ["git status --short", "non-validation"],

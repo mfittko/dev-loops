@@ -1016,8 +1016,8 @@ test("Bash hook denies normalized wrappers and full aggregates for workers", () 
 test("Bash hook keeps quoted package values within worker validation boundaries", () => {
   for (const agent_type of ["developer", "fixer"]) {
     for (const [commands, denied] of [
-      [['npm --tag "a b" t', "npm --prefix my\\ dir test", 'pnpm run --prefix "my dir" verify'], true],
-      [['npm --prefix "my dir" run test:core', "pnpm run --prefix my\\ dir test:core", 'npm --tag "a b" install'], false],
+      [['npm --tag "a b" t', "npm --prefix my\\ dir test", 'pnpm run --prefix "my dir" verify', 'npm --tag "a;b" t', 'npm --prefix "a&b" test', 'pnpm run --prefix "x|y" verify', "bun run \\\n verify", "npm te\\st"], true],
+      [['npm --prefix "my dir" run test:core', "pnpm run --prefix my\\ dir test:core", 'npm --tag "a b" install', 'npm --prefix "a;b" run test:core', "bun run \\\n test:core", "npm run lint\\;verify"], false],
     ]) {
       for (const command of commands) {
         const r = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
