@@ -257,7 +257,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     if (order.authority?.sourceDigest && sha256Hex(actList).slice(7) !== order.authority.sourceDigest) {
       throw new Error("the work order's act list differs from authority.sourceDigest");
     }
-    const residualFingerprints = new Set();
+    const residualRefs = new Set();
     const deltaRead = (order.requiredReads ?? []).find((read) => read?.kind === "delta-result");
     // Legacy deliveries remain strict without both semantic authorities.
     if (deltaRead && order.authority?.sourceDigest && order.authority?.deltaResultDigest) {
@@ -287,23 +287,29 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
         throw new Error("the delta decision is neither locally clear nor invocation-three bounded_out");
       }
       const statuses = new Map(delta.actionableItems.map(({ ref, status }) => [ref, status]));
-      deltaStatuses = statuses;
+      deltaStatuses = new Map();
+      // A shared fingerprint permits tackled/live resolution only when every member is resolved.
+      for (const item of sequence.actItems) {
+        const fingerprint = item.fingerprint ?? item.ref;
+        const status = statuses.get(item.ref);
+        if (!deltaStatuses.has(fingerprint) || status !== "resolved") deltaStatuses.set(fingerprint, status);
+      }
       for (const entry of handoff.dispositions) {
         if (!entry.fingerprint) continue;
-        const status = statuses.get(entry.fingerprint);
+        const status = deltaStatuses.get(entry.fingerprint);
         if (!status || entry.disposition !== (status === "resolved" ? FIXER_DISPOSITION_KIND.TACKLED : FIXER_DISPOSITION_KIND.DEFERRED)) {
           throw new Error(`delta status and disposition disagree for ${entry.fingerprint}`);
         }
       }
       if (bounded) {
-        for (const [ref, status] of statuses) if (status === "not_resolved" || status === "cannot_verify") residualFingerprints.add(ref);
+        for (const [ref, status] of statuses) if (status === "not_resolved" || status === "cannot_verify") residualRefs.add(ref);
       }
     }
     const coverage = [
       ...(handoff.siteCoverage ?? []),
       ...handoff.dispositions.filter((entry) => entry.fingerprint && (entry.sites || entry.returnedSites || entry.noSitesReason)),
     ];
-    const gaps = siteCoverageGaps(toDeltaActItems(actList), coverage, residualFingerprints);
+    const gaps = siteCoverageGaps(toDeltaActItems(actList), coverage, residualRefs);
     if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
   }
   return {
