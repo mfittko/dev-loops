@@ -34,3 +34,19 @@ export async function seedValidation(root, { validation, headSha = 'd'.repeat(40
   const read = { kind: 'validation', path: file, sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length, required: false };
   return { artifact, read, file, context: { headSha, scope: { validationResultsPath: file }, requiredReads: [read] } };
 }
+
+/** Write the artifact at the verdict poster's path and the round context that hash-binds it. */
+export async function stageBoundValidation(root, fixture, { repo = 'o/r', pr = 7, gate = 'pre_approval_gate', tmpRoot = 'tmp' } = {}) {
+  const { buildValidationResultsPath } = await import('../../scripts/github/write-gate-context.mjs');
+  const { buildGateContextPath } = await import('../../scripts/github/_gate-artifact-paths.mjs');
+  const { mkdir } = await import('node:fs/promises');
+  const headSha = fixture.artifact.headSha;
+  const artifactPath = path.resolve(root, buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot }));
+  const contextPath = path.resolve(root, buildGateContextPath({ repo, pr, gate, headSha, tmpRoot }));
+  const bytes = Buffer.from(JSON.stringify(fixture.artifact));
+  await mkdir(path.dirname(artifactPath), { recursive: true });
+  await writeFile(artifactPath, bytes);
+  const read = { kind: 'validation', path: artifactPath, sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length, required: false };
+  await writeFile(contextPath, JSON.stringify({ headSha, scope: { validationResultsPath: artifactPath }, requiredReads: [read] }));
+  return { artifactPath, contextPath };
+}

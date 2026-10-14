@@ -11984,15 +11984,13 @@ test("upsert-checkpoint-verdict --findings-ledger: a judged --findings-json defe
 });
 
 test('trusted absence artifact returns a warning and renders it once for every verdict despite structured summaries', async () => {
-  const { seedValidation, validationWarning } = await import('./_validation-fixture.mjs');
+  const { seedValidation, stageBoundValidation, validationWarning } = await import('./_validation-fixture.mjs');
   const root = await mkdtemp(path.join(os.tmpdir(), 'absence-verdict-'));
   const stubbedPath = process.env.PATH;
   process.env.PATH = originalPath;
   try {
     const fixture = await seedValidation(root);
-    const artifactPath = path.resolve(root, buildValidationResultsPath({ repo: 'o/r', pr: 7, gate: 'pre_approval_gate', headSha: fixture.artifact.headSha }));
-    await mkdir(path.dirname(artifactPath), { recursive: true });
-    await writeFile(artifactPath, JSON.stringify(fixture.artifact));
+    await stageBoundValidation(root, fixture);
     const evidence = await assertGateValidationArtifact({ repo: 'o/r', pr: 7, gate: 'pre_approval_gate', headSha: fixture.artifact.headSha, repoRoot: root });
     assert.equal(evidence.warning.code, 'validation_not_configured');
     for (const gate of ['review', 'pre_approval_gate']) for (const verdict of ['clean', 'findings_present', 'blocked']) {
@@ -12011,4 +12009,70 @@ test('trusted absence artifact returns a warning and renders it once for every v
     }
     assert.equal((await assertGateValidationArtifact({ repo: 'o/r', pr: 7, gate: 'pre_approval_gate', headSha: fixture.artifact.headSha, repoRoot: root, required: false })).warning.code, 'validation_not_configured');
   } finally { process.env.PATH = stubbedPath; await rm(root, { recursive: true, force: true }); }
+});
+
+test('not_configured verdict admission enforces the round context binding', async () => {
+  const { seedValidation, stageBoundValidation, validationWarning } = await import('./_validation-fixture.mjs');
+  const args = (root, fixture) => ({ repo: 'o/r', pr: 7, gate: 'pre_approval_gate', headSha: fixture.artifact.headSha, repoRoot: root });
+  const stubbedPath = process.env.PATH;
+  process.env.PATH = originalPath;
+  const rejects = (promise, pattern) => assert.rejects(promise, (error) => /has invalid trusted absence evidence/.test(error.message) && pattern.test(error.message));
+  try {
+    await withTempDir(async (root) => {
+      const fixture = await seedValidation(root);
+      const { artifactPath, contextPath } = await stageBoundValidation(root, fixture);
+      assert.equal((await assertGateValidationArtifact(args(root, fixture))).warning.message, validationWarning.message);
+      const context = JSON.parse(await readFile(contextPath, 'utf8'));
+      // Replaced after context creation: same head and provenance, different warning bytes.
+      const changed = { ...fixture.artifact, warning: { ...validationWarning, message: `${validationWarning.message} Also see the docs.` } };
+      await writeFile(artifactPath, JSON.stringify(changed));
+      await rejects(assertGateValidationArtifact(args(root, fixture)), /does not match the context's hash-bound validation read/);
+      // Mismatched pointer.
+      await writeFile(artifactPath, JSON.stringify(fixture.artifact));
+      await writeFile(contextPath, JSON.stringify({ ...context, scope: { validationResultsPath: path.join(root, 'validation.json') } }));
+      await rejects(assertGateValidationArtifact(args(root, fixture)), /does not match the context's hash-bound validation read|different validation artifact/);
+      // Missing context.
+      await rm(contextPath);
+      await rejects(assertGateValidationArtifact(args(root, fixture)), /ENOENT/);
+      // Wrong head and invalid provenance stay refused.
+      await stageBoundValidation(root, fixture);
+      await writeFile(artifactPath, JSON.stringify({ ...fixture.artifact, configResolution: { ...fixture.artifact.configResolution, commitSha: 'f'.repeat(40) } }));
+      await rejects(assertGateValidationArtifact(args(root, fixture)), /does not match the context's hash-bound validation read/);
+    }, { prefix: 'absence-bound-' });
+  } finally { process.env.PATH = stubbedPath; }
+});
+
+test('a same-head verdict updates in place when the admitted validation warning is new, and is a noop once it is visible', async () => {
+  const { seedValidation, stageBoundValidation, validationWarning } = await import('./_validation-fixture.mjs');
+  const headSha = 'abc1234000000000000000000000000000000000';
+  const stubbedPath = process.env.PATH;
+  process.env.PATH = originalPath;
+  try {
+    await withTempDir(async (root) => {
+      const fixture = await seedValidation(root, { headSha, configText: JSON.stringify({ version: 1, gates: { requireFanoutEvidence: false } }) });
+      await stageBoundValidation(root, fixture, { repo: 'owner/repo', pr: 17, gate: 'draft_gate' });
+      const inputs = { repo: 'owner/repo', pr: 17, gate: 'draft_gate', headSha, verdict: 'clean', findingsSeverityCounts: { 'must-fix': 0, 'worth-fixing-now': 0, 'nice-to-have': 0 }, findingsSummary: 'no issues found', nextAction: 'mark ready for review', executionMode: 'inline_single_agent', inlineReason: 'test' };
+      const coordination = (issueComments) => buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'SUCCESS' }], issueComments });
+      const comment = (body) => [{ id: 103, body, html_url: 'https://github.com/owner/repo/pull/17#issuecomment-103', updated_at: '2026-08-03T00:00:00Z' }];
+      const plain = await makeGhMock([...coordination([]), { assertArgs: ['api', '-X', 'POST', 'repos/owner/repo/pulls/17/reviews', '--input', '-'], stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-103"}\n' }], { repeatLastOnOverflow: true });
+      await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: '' }), ghCommand: 'gh', runChild: plain.runChild, repoRoot: fanoutDisabledRepoRoot });
+      const withoutWarning = JSON.parse(plain.calls.find((c) => c.args.includes('repos/owner/repo/pulls/17/reviews')).stdinText).body;
+      assert.doesNotMatch(withoutWarning, /Validation warning/);
+      const run = async (body) => {
+        const mock = makeGhMock([...coordination(comment(body)), { assertArgs: ['api', '-X'], stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-103"}\n' }], { repeatLastOnOverflow: true });
+        // The one read of the visible report returns the current body; every other call follows the sequence.
+        const runChild = async (cmd, a = [], ...rest) => (a.length === 2 && a[0] === 'api' && a[1] === 'repos/owner/repo/issues/comments/103')
+          ? { code: 0, stdout: `${JSON.stringify({ id: 103, body })}\n`, stderr: '' } : mock.runChild(cmd, a, ...rest);
+        const result = await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: '' }), ghCommand: 'gh', runChild, repoRoot: root });
+        return { result, mock };
+      };
+      const added = await run(withoutWarning);
+      assert.notEqual(added.result.action, 'noop');
+      const updated = added.mock.calls.find((c) => c.args.includes('-X') && c.args.includes('PUT') || c.args.includes('PATCH'));
+      assert.match(updated?.stdinText || updated?.args.join(' ') || '', new RegExp(validationWarning.message.slice(0, 30)));
+      const visible = (updated.stdinText ? JSON.parse(updated.stdinText).body : updated.args.find((a) => a.startsWith('body=')).slice(5));
+      const second = await run(visible); assert.equal(second.result.action, 'noop', JSON.stringify(second.mock.calls.map((c) => c.args.join(' ').slice(0, 90))));
+      assert.notEqual((await run(visible.replace(validationWarning.message, 'Validation was not performed: changed. Configure validation.'))).result.action, 'noop');
+    }, { prefix: 'absence-update-' });
+  } finally { process.env.PATH = stubbedPath; }
 });

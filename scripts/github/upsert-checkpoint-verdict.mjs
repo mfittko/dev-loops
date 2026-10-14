@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -58,7 +58,8 @@ import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerd
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { buildValidationResultsPath } from "./write-gate-context.mjs";
-import { verifyNotConfiguredEvidence } from "./_validation-evidence.mjs";
+import { readValidationEvidence } from "./_validation-evidence.mjs";
+import { buildGateContextPath } from "./_gate-artifact-paths.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -2395,8 +2396,14 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
     const stamped = typeof artifact?.headSha === "string" ? artifact.headSha.toLowerCase() : null;
     if (stamped === expectedHead) {
       if (artifact.status !== "not_configured") return { artifact };
-      try { return { artifact, warning: await verifyNotConfiguredEvidence(artifact, { cwd: root }) }; }
-      catch (error) { problem = `has invalid trusted absence evidence (${error.message})`; continue; }
+      // Same context-bound reader as reviewer/judge admission: pointer, hash and bytes must match the round context.
+      try {
+        const context = JSON.parse(await readFile(path.resolve(root, buildGateContextPath({ repo, pr, gate, headSha, tmpRoot: contextTmpRoot || "tmp" })), "utf8"));
+        const bound = await readValidationEvidence({ context, headSha, cwd: root });
+        if (!bound?.warning) throw new Error(bound?.reason ?? "round context carries no validation read");
+        if (await realpath(bound.validationResultsPath) !== await realpath(path.resolve(root, relPath))) throw new Error("round context binds a different validation artifact");
+        return { artifact: bound.artifact, warning: bound.warning };
+      } catch (error) { problem = `has invalid trusted absence evidence (${error.message})`; continue; }
     }
     problem = `is stamped with head ${stamped ?? "(none)"}, not the reviewed head ${expectedHead}`;
   }
@@ -3429,9 +3436,20 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const desiredSizeTouchesT1 = options.sizeOutcome ? (options.sizeTouchesT1 === true) : null;
   const desiredSizeWaiverGranted = options.sizeOutcome ? (options.sizeWaiverGranted === true) : null;
   const desiredSizeWaiverApprovedBy = options.sizeOutcome ? (options.sizeWaiverApprovedBy ?? null) : null;
+  // The existing summary carries no body, so read the visible report once and compare its
+  // validation-warning line with the desired one (added, changed or removed). A failed read re-renders.
+  const warningLine = (text) => String(text ?? "").split("\n").find((line) => line.startsWith("**Validation warning:**")) ?? null;
+  let validationWarningCurrent = true;
+  // ponytail: only rounds that consumed a validation artifact pay the read; a round without one renders no warning.
+  if (existing?.contractComplete && validationEvidence) {
+    const route = existing.surface === "review" ? `repos/${options.repo}/pulls/${options.pr}/reviews/${existing.commentId}` : `repos/${options.repo}/issues/comments/${existing.commentId}`;
+    try { validationWarningCurrent = warningLine((await runGhJson(["api", route], gh))?.body) === warningLine(desiredBody); }
+    catch { validationWarningCurrent = false; }
+  }
   if (
     existing
     && existing.contractComplete
+    && validationWarningCurrent
     && existing.verdict === options.verdict
     && existing.findingsSummary === effectiveFindingsSummary
     && existing.nextAction === options.nextAction
