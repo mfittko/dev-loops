@@ -12059,11 +12059,11 @@ test('a same-head verdict updates in place when the admitted validation warning 
       await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: '' }), ghCommand: 'gh', runChild: plain.runChild, repoRoot: fanoutDisabledRepoRoot });
       const withoutWarning = JSON.parse(plain.calls.find((c) => c.args.includes('repos/owner/repo/pulls/17/reviews')).stdinText).body;
       assert.doesNotMatch(withoutWarning, /Validation warning/);
-      const run = async (body, repoRoot = root) => {
+      const run = async (body, repoRoot = root, failRead = false) => {
         const mock = makeGhMock([...coordination(comment(body)), { assertArgs: ['api', '-X'], stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-103"}\n' }], { repeatLastOnOverflow: true });
-        // The one read of the visible report returns the current body; every other call follows the sequence.
+        // The one read of the visible report returns the current body (or fails); every other call follows the sequence.
         const runChild = async (cmd, a = [], ...rest) => (a.length === 2 && a[0] === 'api' && a[1] === 'repos/owner/repo/issues/comments/103')
-          ? { code: 0, stdout: `${JSON.stringify({ id: 103, body })}\n`, stderr: '' } : mock.runChild(cmd, a, ...rest);
+          ? { code: failRead ? 1 : 0, stdout: failRead ? '' : `${JSON.stringify({ id: 103, body })}\n`, stderr: failRead ? 'transient' : '' } : mock.runChild(cmd, a, ...rest);
         const result = await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: '' }), ghCommand: 'gh', runChild, repoRoot });
         return { result, mock };
       };
@@ -12078,6 +12078,8 @@ test('a same-head verdict updates in place when the admitted validation warning 
       const removed = await run(visible, fanoutDisabledRepoRoot);
       assert.notEqual(removed.result.action, 'noop');
       assert.ok(removed.mock.calls.some((c) => c.args.includes('-X')), 'the stale warning is replaced in place');
+      // A failed visible-report read with no admitted evidence re-renders instead of a silent noop.
+      assert.notEqual((await run(visible, fanoutDisabledRepoRoot, true)).result.action, 'noop');
     }, { prefix: 'absence-update-' });
   } finally { process.env.PATH = stubbedPath; }
 });

@@ -3443,8 +3443,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (existing?.contractComplete) {
     const route = existing.surface === "review" ? `repos/${options.repo}/pulls/${options.pr}/reviews/${existing.commentId}` : `repos/${options.repo}/issues/comments/${existing.commentId}`;
     try { validationWarningCurrent = warningLine((await runGhJson(["api", route], gh))?.body) === warningLine(desiredBody); }
-    // A failed read re-renders only when a warning is due; with no admitted evidence there is nothing to add, so keep the noop.
-    catch { validationWarningCurrent = !validationEvidence; }
+    // A failed read cannot show whether a stale warning is visible, so re-render rather than declare equality.
+    catch { validationWarningCurrent = false; }
   }
   if (
     existing
