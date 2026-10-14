@@ -208,11 +208,11 @@ export async function emitFixerWorkOrder({
   // Producers record suite logs repo-relative; an external temporary record keeps the explicit cwd.
   const recordOwnerRoot = validationFile ? (() => { const p = abs(validationFile); const i = p.lastIndexOf(`${path.sep}tmp${path.sep}`); const root = p.slice(0, i); return i > 0 && existsSync(path.join(root, ".git")) ? root : cwd; })() : cwd;
 
-  const source = actListFile ? await readSource("act-list", abs(actListFile)) : threadsFile ? await readSource("threads", abs(threadsFile)) : await readSource("validation", abs(validationFile));
+  const validation = validationFile ? await readValidationEvidence({ context: { scope: { validationResultsPath: abs(validationFile) } }, headSha, cwd, requireBinding: false }) : null;
+  if (validation && validation.refusal !== "validation_failed") throw new Refusal(`validation source must be failed at requested head ${headSha}: ${validation.reason ?? "validation passed"}`);
+  const source = actListFile ? await readSource("act-list", abs(actListFile)) : threadsFile ? await readSource("threads", abs(threadsFile)) : { parsed: validation.artifact, read: { ...validation.read, required: true } };
   const validationLogs = [];
   if (validationFile) {
-    const validation = await readValidationEvidence({ context: { scope: { validationResultsPath: abs(validationFile) } }, headSha, cwd, requireBinding: false });
-    if (validation.refusal !== "validation_failed") throw new Refusal(`validation source must be failed at requested head ${headSha}: ${validation.reason ?? "validation passed"}`);
     for (const suite of source.parsed.suites.filter((suite) => suite.exitCode !== 0)) {
       if (typeof suite.name !== "string" || typeof suite.outputPath !== "string" || !suite.outputPath) throw new Refusal("failing validation suite has no name or text log outputPath");
       const logPath = path.resolve(recordOwnerRoot, suite.outputPath);

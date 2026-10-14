@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { classifyValidationCommand, resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
 
 test("exact-file runner selectors preserve test-name option values", () => {
@@ -10,6 +11,17 @@ test("exact-file runner selectors preserve test-name option values", () => {
 test("bare test basenames fail closed while path selectors remain targeted", () => {
   for (const command of ['bun test a.test.mjs e.test.mjs s.test.mjs', 'bun test foo.test.mjs', 'bun scripts/run-bun-test.mjs s.test.mjs']) assert.equal(classifyValidationCommand(command), "full-repository", command);
   for (const command of ['bun test test/foo.test.mjs', 'bun test ./test/foo.test.mjs', 'bun scripts/run-bun-test.mjs packages/core/test/validation-classify.test.mjs', 'vitest run test/foo.spec.ts']) assert.equal(classifyValidationCommand(command), "targeted", command);
+});
+
+test("nested compound closers preserve heredoc program ownership", () => {
+  for (const consumer of ["{ if true; then bash; fi; }", "if true; then if true; then bash; fi; fi", "{ echo ${HOME}; bash; }", "case x in a) bash;; esac", "time if true; then bash; fi"]) {
+    for (const [body, expected] of [["npm test", "full-repository"], ["bun run test:core", "targeted"], ["echo npm test", "non-validation"]]) {
+      const command = `${consumer} <<'EOF'\n${body}\nEOF`;
+      const syntax = spawnSync("bash", ["-n"], { input: command, encoding: "utf8" });
+      assert.equal(syntax.status, 0, syntax.stderr);
+      assert.equal(classifyValidationCommand(command), expected, command);
+    }
+  }
 });
 
 test("literal stdin attachment survives compounds, continued pipelines and separate heredocs", () => {

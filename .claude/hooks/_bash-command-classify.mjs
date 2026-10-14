@@ -351,7 +351,8 @@ function substitutionEnd(command, start, backtick) {
 function validationShellSegments(command, depth = 0, inspectStdin = true) {
   const segments = [];
   const heredocs = [], bodySpans = [], statements = [];
-  let statement = [], stage = { start: 0, inputs: [] }, nesting = 0, pipeline = false;
+  let statement = [], stage = { start: 0, inputs: [] }, pipeline = false;
+  const nesting = [];
   statement.push(stage);
   statements.push(statement);
   const endStage = (end, pipe) => {
@@ -365,8 +366,8 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
   const finishWord = () => {
     if (started) {
       if (!redirectTarget) {
-        if (!words.length && /^(?:if|while|until|for|select|case)$/.test(word)) nesting += 1;
-        if (!words.length && /^(?:fi|done|esac)$/.test(word)) nesting = Math.max(0, nesting - 1);
+        if (words.every((prefix) => ["{", "!", "time", "-p", "then", "do", "else", "elif"].includes(prefix)) && /^(?:if|while|until|for|select|case)$/.test(word)) nesting.push(word === "if" ? "fi" : word === "case" ? "esac" : "done");
+        if (!words.length && word === nesting.at(-1)) nesting.pop();
         pipeline = false;
       }
       const option = word.match(/^((?:--?[\w-]+|[A-Za-z_]\w*)=)([\s\S]*)$/);
@@ -397,9 +398,9 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
         bodySpans.push(body);
         cursor = body.end;
       }
-      if (!nesting && !continued) endStage(i);
+      if (!nesting.length && !continued) endStage(i);
       i = cursor;
-      if (!continued && !nesting) stage.start = i + 1;
+      if (!continued && !nesting.length) stage.start = i + 1;
       continue;
     }
     if (char === "\\" && quote !== "'") {
@@ -452,14 +453,13 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
       continue;
     }
     // Unquoted parentheses delimit command positions (groups, function bodies and case arms).
-    if (/[()]/.test(char)) { finishSegment(); nesting = Math.max(0, nesting + (char === "(" ? 1 : -1)); continue; }
-    if (/[{}!]/.test(char) && !started) { if (char === "{") nesting += 1; if (char === "}") nesting = Math.max(0, nesting - 1); words.push(char); continue; }
-    if (char === "}") { finishWord(); nesting = Math.max(0, nesting - 1); words.push(char); continue; }
+    if (/[()]/.test(char)) { finishSegment(); if (char === "(") nesting.push(")"); else if (nesting.at(-1) === ")") nesting.pop(); continue; }
+    if (/[{}!]/.test(char) && !started) { if (char === "{") nesting.push("}"); if (char === "}" && nesting.at(-1) === "}") nesting.pop(); words.push(char); continue; }
     if (/[;&|\n\r]/.test(char)) {
       const operator = char === "|" && (next === "|" || next === "&") ? char + next : char === "&" && next === "&" ? "&&" : char;
       finishSegment();
       const pipe = operator === "|" || operator === "|&";
-      if (!nesting && !(char === "\n" && pipeline)) endStage(i, pipe ? operator : null);
+      if (!nesting.length && !(char === "\n" && pipeline)) endStage(i, pipe ? operator : null);
       if (pipe) pipeline = true;
       i += operator.length - 1;
       continue;

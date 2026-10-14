@@ -2,6 +2,7 @@
 // emission -> compact dispatch -> sanctioned pull -> guarded mutation -> checked disposition.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -38,6 +39,8 @@ test("#2470: validation source binds text logs and preserves PR authority", asyn
   await writeFile(validationFile, JSON.stringify(record));
   const plan = await emit(args);
   assert.equal(plan.workOrder.source, "validation");
+  const bytes = await readFile(validationFile);
+  assert.deepEqual(plan.workOrder.requiredReads[0], { kind: "validation", path: validationFile, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length, required: true });
   assert.deepEqual(plan.workOrder.requiredReads.map((r) => r.kind), ["validation", "validation-log"]);
   assert.equal(plan.workOrder.mutationAuthority.branch, "issue-1");
   assert.equal(plan.workOrder.siteCoverage, undefined);
@@ -53,7 +56,7 @@ test("#2470: validation source binds text logs and preserves PR authority", asyn
   assert.equal(await readFile(marker, "utf8"), previousMarker, "validation repairs preserve existing delta push authority");
   await assert.rejects(emit({ ...args, actListFile: files.actList }), /exactly one/);
   await assert.rejects(emit({ ...args, phase: "full" }), /commit_only/);
-  for (const over of [{ status: "incomplete" }, { status: "complete", allPassed: true, suites: [] }, { headSha: "a".repeat(40) }]) {
+  for (const over of [{ status: "incomplete" }, { status: "complete", allPassed: true, suites: [] }, { headSha: "a".repeat(40) }, { suites: null }, { suites: {} }]) {
     await writeFile(validationFile, JSON.stringify({ ...record, ...over }));
     await assert.rejects(emit(args), /validation/);
   }
@@ -70,6 +73,30 @@ test("#2470: a red record without status emits a validation fixer order", async 
   const plan = await emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, validationFile, phase: "commit_only" });
   assert.equal(plan.workOrder.source, "validation");
   assert.deepEqual(plan.workOrder.requiredReads.map((r) => r.kind), ["validation", "validation-log"]);
+}));
+
+test("#2470: validation admission and required-read binding use one file read", async () => withFixture(async ({ root, wt, head }) => {
+  const validationFile = path.join(root, "tmp/src/validation.json");
+  await writeFile(validationFile, JSON.stringify({ headSha: head, status: "failed", allPassed: false, suites: [] }));
+  const runner = path.join(root, "tmp/src/single-read.mjs");
+  await writeFile(runner, `
+    import fs from 'node:fs/promises';
+    import { syncBuiltinESMExports } from 'node:module';
+    import assert from 'node:assert/strict';
+    const original = fs.readFile;
+    let reads = 0;
+    fs.readFile = async (file, ...args) => {
+      if (file === ${JSON.stringify(validationFile)} && ++reads > 1) throw new Error('validation source read twice');
+      return original(file, ...args);
+    };
+    syncBuiltinESMExports();
+    const { emitFixerWorkOrder } = await import(${JSON.stringify(EMITTER)});
+    const plan = await emitFixerWorkOrder({ repo: ${JSON.stringify(REPO)}, pr: ${PR}, headSha: ${JSON.stringify(head)}, phase: 'commit_only', validationFile: ${JSON.stringify(validationFile)}, cwd: ${JSON.stringify(wt)}, fetchPr: async () => ({ headRefName: 'issue-1', headRefOid: ${JSON.stringify(head)} }), executionIdentity: ${JSON.stringify(nextExecution())} });
+    assert.equal(reads, 1);
+    assert.equal(plan.workOrder.requiredReads[0].kind, 'validation');
+  `);
+  const result = spawnSync("node", [runner], { cwd: wt, encoding: "utf8", env: gitFreeEnv() });
+  assert.equal(result.status, 0, result.stderr);
 }));
 
 test("#2470: ci-only red validation binds its reason and empty suite set", async () => withFixture(async ({ root, head, emit }) => {
