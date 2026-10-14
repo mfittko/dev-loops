@@ -2,6 +2,31 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { classifyValidationCommand, resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
 
+test("validation redirections preserve reach without granting expansions", () => {
+  for (const command of ["bun test test/foo.test.mjs 2>&1 | tail -40", "bun test test/foo.test.mjs > /tmp/out.log 2>&1", "bun run test:core > /tmp/out.log", "bun scripts/run-bun-test.mjs test/foo.test.mjs 2>&1", "bun test test/foo.test.mjs>>out.log", "bun test test/foo.test.mjs < input.log", "bun test test/foo.test.mjs &>out.log", "2>out.log bun test test/foo.test.mjs", "bun test test/foo.test.mjs 3>&2"]) assert.equal(classifyValidationCommand(command), "targeted", command);
+  for (const command of ["bun run verify > /tmp/out.log 2>&1", "npm test 2>&1 | tail", "bun test 2>&1", 'bun test "$WT/test/foo.test.mjs"', "bun test test/*.test.mjs", "bun test $(ls test)", "bun test test/foo.test.mjs <(echo x)", "bun test test/foo.test.mjs >(cat)"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+});
+
+test("shell control prefixes and quoted env values retain validation reach", () => {
+  for (const command of ["time bun run verify", "nohup npm test", "(bun run verify)", "{ bun run verify; }", "! npm test", "if bun run verify; then echo ok; fi", "while true; do npm test; done", "if true; then npm test; fi", 'GIT_AUTHOR_NAME="A B" npm test', "FOO='x y' bun run verify", 'env FOO="a b" npm t', "time env FOO='a b' (bun run verify)"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+  for (const command of ["time bun test test/foo.test.mjs", "(bun run test:core)", "timeout 60 bun test test/foo.test.mjs", "FOO='a b' bun run test:core"]) assert.equal(classifyValidationCommand(command), "targeted", command);
+  for (const command of ["nohup git status", "FOO='a b' npm install", "echo '(npm test)'", "echo time npm test"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
+});
+
+test("package exec vitest entrypoints preserve exact selectors and option values", () => {
+  for (const launcher of ["npm exec vitest", "npm exec -- vitest", "pnpm exec vitest", "pnpm dlx vitest", "pnpm vitest", "yarn exec vitest", "yarn vitest", "npx -y vitest", "npx --yes vitest", "npx vitest@latest", "npx --package vitest vitest", "bunx --bun vitest", "bun x --bun vitest"]) {
+    assert.equal(classifyValidationCommand(`${launcher} run`), "full-repository", launcher);
+    assert.equal(classifyValidationCommand(`${launcher} run test/foo.spec.ts`), "targeted", launcher);
+  }
+  for (const command of ["npm exec eslint vitest", "npx --package vitest eslint", "npm exec --package vitest eslint", "pnpm run lint vitest", "yarn info vitest", "npx vitest-helper"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
+});
+
+test("Node package-script entrypoints retain the shared script reach", () => {
+  for (const command of ["node --run verify", "node --run=test", "node --no-warnings --run verify", "time node --run test", "node --run test -- test/foo.test.mjs", "node --run test:all && node --run test:docs && node --run test:workflows"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+  for (const command of ["node --run test:core", "node --run=test:core", "node --no-warnings --run test:core"]) assert.equal(classifyValidationCommand(command), "targeted", command);
+  for (const command of ["node --run lint", "node --run lint -- verify", "node scripts/github/view-pr.mjs --run verify"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
+});
+
 test("package-manager options preserve validation reach and opaque validation fails closed", () => {
   for (const pm of ["npm", "bun", "pnpm", "yarn"]) {
     for (const options of ["-s", "--loglevel silent", "--loglevel=silent", "--workspace core", "-w core", "--prefix . --dir . --cwd .", "--cache /tmp/cache --registry https://registry.npmjs.org"]) {

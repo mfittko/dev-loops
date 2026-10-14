@@ -1000,15 +1000,16 @@ test("Bash hook routes direct verification scripts through coordinator opt-in", 
 
 test("Bash hook denies normalized wrappers and full aggregates for workers", () => {
   for (const agent_type of ["developer", "fixer"]) {
-    for (const command of ["npm run -s test:core", "npm --loglevel silent run test:core", "npm -s install", "npm run --tag x t", "npm install --tag x t"]) {
+    for (const command of ["npm run -s test:core", "npm --loglevel silent run test:core", "npm -s install", "npm run --tag x t", "npm install --tag x t", "bun test test/foo.test.mjs 2>&1 | tail -40", "(bun run test:core)", "npx --yes vitest run test/foo.spec.ts"]) {
       const r = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
       assert.equal(r.code, 0);
       assert.equal(r.json, null, `${agent_type}: ${command}`);
     }
-    for (const command of ["npm --tag x t", "npm --script-shell sh tst", "npm --node-options x it", "pnpm --tag x cit", "env -u DEVLOOPS_COORDINATOR_READONLY timeout 30 nice -n 10 command /usr/local/bin/bun run verify", "bash -lc 'npm test'", '"bun" run "verify"', "bun test test/foo.test.mjs test", "node --test", "bun run test:all && bun run test:docs && bun run test:workflows"]) {
+    for (const command of ["npm --tag x t", "npm --script-shell sh tst", "npm --node-options x it", "pnpm --tag x cit", "env -u DEVLOOPS_COORDINATOR_READONLY timeout 30 nice -n 10 command /usr/local/bin/bun run verify", "bash -lc 'npm test'", '"bun" run "verify"', "bun test test/foo.test.mjs test", "node --test", "bun run test:all && bun run test:docs && bun run test:workflows", "time bun run verify", 'env FOO="a b" npm test', "pnpm dlx vitest"]) {
       const r = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
       assert.equal(r.json?.hookSpecificOutput?.permissionDecision, "deny", `${agent_type}: ${command}`);
       assert.match(r.json.hookSpecificOutput.permissionDecisionReason, /`dev-loops-run cli\/index\.mjs gate resolve-validation`/);
+      assert.match(r.json.hookSpecificOutput.permissionDecisionReason, /dev-loops gate resolve-validation/);
     }
   }
 });

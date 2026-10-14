@@ -1,4 +1,4 @@
-import { classifyValidationCommand, isReadSearchCommand, isReviewerContractCommand } from '@dev-loops/core/loop/bash-command-classify';
+import { classifyValidationCommand, FULL_VALIDATION_REMEDY, isReadSearchCommand, isReviewerContractCommand } from '@dev-loops/core/loop/bash-command-classify';
 import { EXECUTION_IDENTITY_RE } from '@dev-loops/core/loop/work-order-digest';
 import { NATIVE_PI_PARENT_SESSION_MARKER, isNativePiAsyncContext } from '@dev-loops/core/loop/run-context';
 import { fileURLToPath } from 'node:url';
@@ -100,7 +100,7 @@ export function decidePiToolCall({ toolName, input, agentType }: {
   if (agentType === null || toolName !== 'bash') return { block: false };
   const command = typeof input?.command === 'string' ? input.command : '';
   if (['developer', 'fixer'].includes(agentType) && classifyValidationCommand(command) === 'full-repository') {
-    return { block: true, reason: 'Full validation boundary: developers and fixers run targeted checks only. Request full evidence through `dev-loops gate resolve-validation`.' };
+    return { block: true, reason: FULL_VALIDATION_REMEDY };
   }
   if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
   if (parseSanctionedPullLine(command)) return { block: false };

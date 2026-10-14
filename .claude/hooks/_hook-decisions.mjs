@@ -16,6 +16,7 @@ import { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE } from "./_work-order
 import {
   deriveInManagedRepo,
   classifyValidationCommand,
+  FULL_VALIDATION_REMEDY,
   isReadSearchCommand,
   isReviewerContractCommand,
   commandContainsGhPrReady,
@@ -196,7 +197,7 @@ export function decideBashGate({
     };
   }
   if (["developer", "fixer"].includes(role) && classifyValidationCommand(command) === "full-repository") {
-    return { decision: "deny", reason: "Full validation boundary: developers and fixers run targeted checks only. Request full evidence through `dev-loops-run cli/index.mjs gate resolve-validation`." };
+    return { decision: "deny", reason: FULL_VALIDATION_REMEDY };
   }
   // The fixer's binding is recorded only for the exact pull line (ADR 0107), so a modified one denies with the fix.
   if (normalizeAgentType(agentType) === FIXER_AGENT_TYPE && isFixerPullAttempt(command) && !parseSanctionedPullLine(command)) {

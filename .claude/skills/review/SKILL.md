@@ -47,8 +47,13 @@ summary, since the route runs no judge phase (`GATE-EXEC-GATE-COORDINATOR`). The
 then runs the `upsert-checkpoint-verdict.mjs` post and the submit choice. In the main session
 this skill dispatches the `review` agents directly.
 
-1. **Phase 1 — context-builder.** `dev-loops-run scripts/github/write-gate-context.mjs
+1. **Phase 1 — context-builder.** First resolve the shared head-bound validation
+   artifact through `dev-loops-run cli/index.mjs gate resolve-validation`
+   per `GATE-EXEC-VALIDATION-RESOLUTION` in the shared contract; reviewers and
+   judges consume that artifact without running validation. Then run
+   `dev-loops-run scripts/github/write-gate-context.mjs
    --repo <owner/repo> --pr <n> --gate review --head-sha <sha> --base <ref>
+   --validation-results <path>
    [...]` — the SAME build-once neutral bundle (diff + adjacent code) draft/
    pre-approval get. Angle resolution for `review` is NOT dynamic/tiered: it is
    the deterministic UNION of `draft`'s and `preApproval`'s configured angle

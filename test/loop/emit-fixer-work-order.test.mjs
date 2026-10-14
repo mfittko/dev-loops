@@ -62,6 +62,23 @@ test("#2470: validation source binds text logs and preserves PR authority", asyn
   await assert.rejects(emit(args), /log/);
 }));
 
+test("#2470: ci-only red validation binds its reason and empty suite set", async () => withFixture(async ({ root, head, emit }) => {
+  const validationFile = path.join(root, "tmp/src/validation.json");
+  const record = { headSha: head, status: "failed", allPassed: false, reason: "current-head CI is failure", suites: [] };
+  await writeFile(validationFile, JSON.stringify(record));
+  const plan = await emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, validationFile, phase: "commit_only" });
+  assert.equal(plan.workOrder.source, "validation");
+  assert.deepEqual(plan.workOrder.failingSuites, []);
+  assert.deepEqual(plan.workOrder.requiredReads.map((r) => [r.kind, r.path]), [["validation", validationFile]]);
+  assert.equal(JSON.parse(await readFile(plan.workOrder.requiredReads[0].path, "utf8")).reason, record.reason);
+}));
+
+test("#2470: a failed suite without its outputPath refuses fixer emission", async () => withFixture(async ({ root, head, emit }) => {
+  const validationFile = path.join(root, "tmp/src/validation.json");
+  await writeFile(validationFile, JSON.stringify({ headSha: head, status: "failed", allPassed: false, suites: [{ name: "unit", exitCode: 1 }] }));
+  await assert.rejects(emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, validationFile, phase: "commit_only" }), /outputPath/);
+}));
+
 test("#2470: a repo-relative suite outputPath resolves against the record's checkout, not the caller cwd", async () => withFixture(async ({ root, head, emit }) => {
   const validationFile = path.join(root, "tmp/src/validation.json");
   await writeFile(path.join(root, "tmp/src/unit.log"), "test failed\n");

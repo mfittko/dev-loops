@@ -57,9 +57,12 @@ The judge and reviewer boundaries are enforced on both harnesses: Claude Code us
 | No tag, native async child session (`PI_SUBAGENT_CHILD=1` plus a non-blank `PI_SUBAGENT_PARENT_SESSION`, and a non-blank calling session id that differs from the parent marker) | Pull-only |
 | One distinct name `judge` | Pull line plus the `check-judge-decision.mjs` line |
 | One distinct name `review` | Pull line plus read, search and contract-mandated read-only forms |
-| One distinct name, another roster role | Unrestricted |
+| One distinct name `developer` or `fixer` | Targeted checks allowed; full-repository validation denied |
+| One distinct name, any remaining roster role | Unrestricted |
 | Blank name, an unknown `dev-loops:` name, or two different names | Pull-only |
 | A bare name outside the roster (`reviewer`, `worker`, `scout`) | Unrestricted, as on Claude Code |
+
+On both harnesses, developers and fixers keep targeted checks and receive the same full-validation denial. Full evidence is owned solely by `node <dev-loops-package-root>/cli/index.mjs gate resolve-validation`; the denial names that canonical operation and includes the repo's self-host launcher. Reviewers and judges never execute validation.
 
 The judge may run only the sanctioned `pull-work-order.mjs` line and the `check-judge-decision.mjs --file` line (a `tmp/gate-judge/` path, no `..`, no chaining). The Pi judge reads and searches with the shell-free builtins `read`, `grep`, `find` and `ls`: `TOOL_NAME_MAP_PI` maps `search` to `grep`, `find` and `ls`. The reviewer may also run shell-inert read and search commands. Reviewer words are unquoted, fully single-quoted or fully double-quoted, and one trailing `| cut -c<N>-<M>` is allowed. Both harnesses also admit the review contract's single unchained `gh api repos/<owner>/<repo>/pulls/<n>/reviews|commits` GET reads, `gh pr view` and their rendered `node <dev-loops-package-root>/cli/index.mjs gate resolve-role` forms. Pi binds the rendered CLI path exactly to the loaded extension's own package; arbitrary Node script paths remain denied. Field/input flags, non-GET methods, chaining, pipes and substitutions remain denied for these forms. Both roles are denied test and build commands. The `gate-coordinator` role is not restricted on Pi. Known limitation: the bash gate does not bound the reviewer's own `write` and `edit` tools, which can author a script that an allowed `dev-loops-run` line then runs. `test/extension-pi-readonly-role-gate.test.mjs` pins the Pi fixtures, the parity of the Pi pull matcher with `parseSanctionedPullLine`, and the agreement of the source agents, generated `.claude` assets and Pi mapping.
 

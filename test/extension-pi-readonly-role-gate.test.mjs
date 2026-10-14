@@ -397,6 +397,24 @@ test("launcher options preserve worker admission on Pi and Claude", async () => 
   }
 });
 
+test("shell normalization preserves worker boundaries on both harnesses", async () => {
+  const full = ["time bun run verify", "(npm test)", "{ bun run verify; }", "! npm test", "if bun run verify; then echo ok; fi", "while true; do npm test; done", 'GIT_AUTHOR_NAME="A B" npm test', 'env FOO="a b" npm t', "npm exec vitest", "pnpm dlx vitest", "yarn exec vitest", "npx -y vitest@latest", "node --run verify"];
+  const targeted = ["bun test test/foo.test.mjs 2>&1 | tail -40", "bun run test:core > /tmp/out.log", "time bun test test/foo.test.mjs", "(bun run test:core)", "FOO='a b' bun run test:core", "npm exec vitest run test/foo.spec.ts", "npx --yes vitest run test/foo.spec.ts", "node --run test:core"];
+  for (const role of ["developer", "fixer"]) {
+    for (const [commands, block] of [[full, true], [targeted, false]]) for (const command of commands) {
+      const claude = decideBashGate({ command, agentType: role });
+      const pi = await callAs(role, command);
+      assert.equal(claude.decision, block ? "deny" : "allow", `${role}: ${command}`);
+      assert.equal(pi.block, block, `${role}: ${command}`);
+      if (block) {
+        assert.match(claude.reason, /dev-loops gate resolve-validation/);
+        assert.match(pi.reason, /dev-loops gate resolve-validation/);
+        assert.equal(claude.reason, pi.reason);
+      }
+    }
+  }
+});
+
 test("opaque package options keep test aliases blocked on Pi and Claude", async () => {
   for (const role of ["developer", "fixer"]) {
     for (const command of ["npm --tag x t", "npm --script-shell sh tst", "npm --node-options x it", "pnpm --tag x cit"]) {
