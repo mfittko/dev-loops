@@ -1,7 +1,88 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { classifyValidationCommand, resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
+
+const bashVersion = spawnSync("bash", ["-c", "printf '%s' \"${BASH_VERSINFO[0]}\""], { encoding: "utf8", timeout: 1000 });
+function assertBashSyntax(command) {
+  if (bashVersion.error?.code === "ENOENT" || (command.includes("coproc ") && Number(bashVersion.stdout) < 4)) return;
+  assert.ifError(bashVersion.error);
+  const syntax = spawnSync("bash", ["-n"], { input: command, encoding: "utf8", timeout: 1000 });
+  assert.ifError(syntax.error);
+  assert.equal(syntax.status, 0, syntax.stderr || command);
+}
+
+test("package exec literal command strings keep their validation reach", () => {
+  for (const prefix of ["npx -c", "bunx -c", "npm exec -c", "pnpm exec -c", "yarn exec --call", "pnpm dlx --call", "npm exec --call="]) {
+    for (const [body, expected] of [["npm test", "full-repository"], ["bun run verify", "full-repository"], ["bun test test/foo.test.mjs", "targeted"], ["echo npm test", "non-validation"]]) {
+      assert.equal(classifyValidationCommand(`${prefix}${prefix.endsWith("=") ? "" : " "}'${body}'`), expected, prefix + body);
+    }
+  }
+  assert.equal(classifyValidationCommand("npm exec -c 'bun test packages/core/test/validation-classify.test.mjs'"), "targeted");
+  assert.equal(classifyValidationCommand("npm exec -c 'echo safe' --call='npm test'"), "full-repository");
+});
+
+test("partial quoted heredoc delimiters do not swallow later commands", () => {
+  for (const delimiter of ["'EOF'", "'E'OF", "\\E\\OF", 'E"O"F']) {
+    assert.equal(classifyValidationCommand(`cat <<${delimiter}\nnpm test\nEOF`), "non-validation", delimiter);
+    for (const [body, expected] of [["npm test", "full-repository"], ["bun test test/foo.test.mjs", "targeted"]]) {
+      assert.equal(classifyValidationCommand(`cat <<${delimiter}\nx\nEOF\n${body}`), expected, delimiter + body);
+    }
+  }
+});
+
+test("opaque package flags classify in bounded time", () => {
+  const start = performance.now();
+  for (const [command, expected] of [["npm --silent run lint", "non-validation"], ["npm -w pkg test:core", "targeted"], ["npm -x val test", "full-repository"], ["npx --opaque value -- vitest", "full-repository"], [`npm ${"-a ".repeat(60)}; npm test`, "full-repository"]]) {
+    assert.equal(classifyValidationCommand(command), expected, command);
+  }
+  assert.ok(performance.now() - start < 1000);
+});
+
+const stdinCompositions = [
+  ["{ cat <<'A'; } | bash\n", "\nA"],
+  ["(cat <<'A') | bash\n", "\nA"],
+  ["{ { cat <<'A'; } | bash; }\n", "\nA"],
+  ["if true; then { cat <<'A'; } | bash; fi\n", "\nA"],
+  ["{ cat <<'A'; } | { true; bash; }\n", "\nA"],
+  ["{ cat <<'A' | bash; } </dev/null\n", "\nA"],
+  ["if true; then cat <<'A' | bash; fi </dev/null\n", "\nA"],
+  ["{ cat <<'A' | bash; } <<'B'\n", "\nA\necho safe\nB"],
+  ["{ cat <<'A'; echo ':'; } | bash\n", "\nA"],
+];
+test("closed compound outputs and inner pipes preserve stdin precedence", () => {
+  for (const [prefix, suffix] of stdinCompositions) for (const [body, expected] of [["npm test", "full-repository"], ["bun test test/foo.test.mjs", "targeted"], ["echo npm test", "non-validation"], ["echo hi", "non-validation"]]) {
+    const command = prefix + body + suffix;
+    assertBashSyntax(command);
+    assert.equal(classifyValidationCommand(command), expected, command);
+  }
+  for (const command of ["{ cat <<'A'; } | bash </dev/null\nnpm test\nA", "{ cat <<'A'; } | bash <<'B'\nnpm test\nA\necho safe\nB", "{ cat <<'A'; } ; bash\nnpm test\nA", "{ cat <<'A'; } && bash\nnpm test\nA", "{ cat <<'A'; } || bash\nnpm test\nA"]) {
+    assertBashSyntax(command);
+    assert.equal(classifyValidationCommand(command), "non-validation", command);
+  }
+});
+
+test("Bash oracle grounds composed stdin precedence with harmless runner stubs", { skip: bashVersion.error?.code === "ENOENT" }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "validation-stdin-oracle-"));
+  try {
+    for (const name of ["npm", "bun"]) writeFileSync(join(dir, name), "#!/bin/sh\nprintf '__validation_stub__ %s\\n' \"$*\"\n", { mode: 0o755 });
+    for (const [prefix, suffix] of stdinCompositions) for (const body of ["npm test", "bun test test/foo.test.mjs", "echo npm test"]) {
+      const command = prefix + body + suffix;
+      const actual = spawnSync("bash", ["-c", command], { encoding: "utf8", timeout: 2000, env: { PATH: `${dir}:/usr/bin:/bin` } });
+      assert.ifError(actual.error);
+      assert.equal(actual.status, 0, actual.stderr || command);
+      assert.equal(actual.stdout.includes("__validation_stub__"), !body.startsWith("echo "), command);
+    }
+    for (const command of ["{ cat <<'A'; } | bash </dev/null\nnpm test\nA", "{ cat <<'A'; } | bash <<'B'\nnpm test\nA\necho safe\nB", "{ cat <<'A'; } ; bash\nnpm test\nA"]) {
+      const actual = spawnSync("bash", ["-c", command], { encoding: "utf8", timeout: 2000, env: { PATH: `${dir}:/usr/bin:/bin` } });
+      assert.ifError(actual.error);
+      assert.equal(actual.stdout.includes("__validation_stub__"), false, command);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("exact-file runner selectors preserve test-name option values", () => {
   for (const command of ['bun test test/foo.test.mjs -t foo', 'bun test test/foo.test.mjs -t "returns null"', 'bun test test/foo.test.mjs --test-name-pattern "a b"', 'vitest run test/foo.spec.ts -t name', 'bun test test/foo.test.mjs --rerun-each 3']) assert.equal(classifyValidationCommand(command), "targeted", command);
@@ -17,8 +98,7 @@ test("nested compound closers preserve heredoc program ownership", () => {
   for (const consumer of ["{ if true; then bash; fi; }", "if true; then if true; then bash; fi; fi", "{ echo ${HOME}; bash; }", "case x in a) bash;; esac", "time if true; then bash; fi"]) {
     for (const [body, expected] of [["npm test", "full-repository"], ["bun run test:core", "targeted"], ["echo npm test", "non-validation"]]) {
       const command = `${consumer} <<'EOF'\n${body}\nEOF`;
-      const syntax = spawnSync("bash", ["-n"], { input: command, encoding: "utf8" });
-      assert.equal(syntax.status, 0, syntax.stderr);
+      assertBashSyntax(command);
       assert.equal(classifyValidationCommand(command), expected, command);
     }
   }
@@ -38,13 +118,11 @@ test("literal stdin belongs to its command and enclosing compound", () => {
     ["{ bash <<'EOF'\n", "\nEOF\n} <<'X'\necho safe\nX"],
   ]) for (const [body, expected] of [["npm test", "full-repository"], ["bun run test:core", "targeted"], ["echo npm test", "non-validation"]]) {
     const command = prefix + body + suffix;
-    const syntax = spawnSync("bash", ["-n"], { input: command, encoding: "utf8" });
-    assert.equal(syntax.status, 0, syntax.stderr);
+    assertBashSyntax(command);
     assert.equal(classifyValidationCommand(command), expected, command);
   }
   for (const command of ["{ bash </dev/null; } <<'EOF'\nnpm test\nEOF", "{ bash <<'X'\necho safe\nX\n} <<'EOF'\nnpm test\nEOF", "{ bash <<'X' </dev/null\nnpm test\nX\n} <<'EOF'\nnpm test\nEOF"]) {
-    const syntax = spawnSync("bash", ["-n"], { input: command, encoding: "utf8" });
-    assert.equal(syntax.status, 0, syntax.stderr);
+    assertBashSyntax(command);
     assert.equal(classifyValidationCommand(command), "non-validation", command);
   }
 });

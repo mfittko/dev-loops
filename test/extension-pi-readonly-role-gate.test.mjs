@@ -446,6 +446,9 @@ test("literal shell program ownership preserves Claude and registered Pi worker 
 
 test("shell option values and pipeline operators preserve both worker boundaries", async () => {
   for (const [prefix, suffix] of [
+    ["{ cat <<'EOF'; } | bash\n", "\nEOF"],
+    ["{ { cat <<'EOF'; } | bash; }\n", "\nEOF"],
+    ["{ cat <<'EOF' | bash; } </dev/null\n", "\nEOF"],
     ["echo {a,b}\nbash <<'EOF'\n", "\nEOF\ntrue </dev/null"],
     ["{ echo }; bash; } <<'EOF'\n", "\nEOF"],
     ["{ bash <<'EOF'\n", "\nEOF\ntrue </dev/null; }"],
@@ -470,6 +473,15 @@ test("shell option values and pipeline operators preserve both worker boundaries
   for (const role of ["developer", "fixer"]) for (const [commands, block] of [[full, true], [allowed, false]]) for (const command of commands) {
     assert.equal(decideBashGate({ command, agentType: role }).decision, block ? "deny" : "allow", `${role}: ${command}`);
     assert.equal((await callAs(role, command)).block, block, `${role}: ${command}`);
+  }
+});
+
+test("package exec programs and mixed heredoc delimiters preserve both worker boundaries", async () => {
+  for (const role of ["developer", "fixer"]) for (const [body, block] of [["npm test", true], ["bun test test/foo.test.mjs", false], ["echo npm test", false]]) {
+    for (const command of [`npx -c '${body}'`, `npm exec -c '${body}'`, `npm exec --call='${body}'`, `pnpm exec -c '${body}'`, `cat <<'E'OF\nx\nEOF\n${body}`]) {
+      assert.equal(decideBashGate({ command, agentType: role }).decision, block ? "deny" : "allow", command);
+      assert.equal((await callAs(role, command)).block, block, command);
+    }
   }
 });
 

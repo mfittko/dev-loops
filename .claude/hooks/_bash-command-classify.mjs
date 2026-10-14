@@ -279,11 +279,23 @@ const VERIFY_EXEC_PREFIX =
 // Validation needs shell words, while the mutation and read/search guards keep their own boundaries.
 // Read literal substitutions and shell-owned stdin programs; never evaluate variables or scripts.
 function quotedHeredoc(command, index, bodyNewline) {
-  const header = command.slice(index).match(/^<<(-?)[ \t]*(?:'([^']+)'|"([^"]+)"|\\([\w]+))/);
+  const header = command.slice(index).match(/^<<(-?)[ \t]*/);
   if (!header) return null;
-  const start = bodyNewline ?? command.indexOf("\n", index + header[0].length);
+  let cursor = index + header[0].length, delimiter = "", quote = null, quoted = false;
+  for (; cursor < command.length; cursor += 1) {
+    const char = command[cursor], next = command[cursor + 1];
+    if (!quote && /[\s;&|<>()]/.test(char)) break;
+    if (char === "\\" && quote !== "'" && next !== undefined) {
+      quoted = true;
+      if (quote !== '"' || /[$`"\\\n]/.test(next)) { delimiter += next === "\n" ? "" : next; cursor += 1; continue; }
+    }
+    if (quote) { if (char === quote) quote = null; else delimiter += char; }
+    else if (char === "'" || char === '"') { quote = char; quoted = true; }
+    else delimiter += char;
+  }
+  if (!quoted || quote) return null;
+  const start = bodyNewline ?? command.indexOf("\n", cursor);
   if (start < 0) return null;
-  const delimiter = header[2] ?? header[3] ?? header[4];
   let end = start + 1;
   while (end < command.length) {
     const newline = command.indexOf("\n", end);
@@ -365,6 +377,7 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
   let words = [], word = "", started = false, quotedWord = false, quote = null, uncertain = false, redirectTarget = false;
   let ownInputs = [], closedOwner = null, pipeFrom = null, lastOwner = null;
   let input = null;
+  const openCompound = (closer) => nesting.push({ closer, inputs: [], outputs: [], parents: [...nesting], pipeFrom });
   const finishWord = () => {
     if (started) {
       if (!redirectTarget) {
@@ -375,7 +388,7 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
             if (stripped === prefix) break;
             prefix = stripped;
           }
-          if (!prefix || prefix === word) nesting.push({ closer: word === "{" ? "}" : word === "if" ? "fi" : word === "case" ? "esac" : "done", inputs: [], pipeFrom });
+          if (!prefix || prefix === word) openCompound(word === "{" ? "}" : word === "if" ? "fi" : word === "case" ? "esac" : "done");
         }
         if (!quotedWord && !words.length && word === nesting.at(-1)?.closer) closedOwner = nesting.pop();
         pipeline = false;
@@ -395,10 +408,11 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
     if (words.length) {
       const text = words.join(" ");
       segments.push({ text, uncertain });
-      lastOwner = { text, inputs: ownInputs, parents: [...nesting], pipeFrom };
-      stage.owners.push(lastOwner);
+      lastOwner = closedOwner ?? { text, inputs: ownInputs, parents: [...nesting], pipeFrom };
+      if (!closedOwner) stage.owners.push(lastOwner);
+      for (const parent of nesting) parent.outputs.push(lastOwner);
       pipeFrom = null;
-    }
+    } else if (closedOwner) lastOwner = closedOwner;
     words = [];
     ownInputs = [];
     uncertain = false;
@@ -472,7 +486,7 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
       continue;
     }
     // Unquoted parentheses delimit command positions (groups, function bodies and case arms).
-    if (/[()]/.test(char)) { finishSegment(); if (char === "(") nesting.push({ closer: ")", inputs: [], pipeFrom }); else if (nesting.at(-1)?.closer === ")") closedOwner = nesting.pop(); continue; }
+    if (/[()]/.test(char)) { finishSegment(); if (char === "(") openCompound(")"); else if (nesting.at(-1)?.closer === ")") closedOwner = nesting.pop(); continue; }
     if (/[;&|\n\r]/.test(char)) {
       const operator = char === "|" && (next === "|" || next === "&") ? char + next : char === "&" && next === "&" ? "&&" : char;
       finishSegment();
@@ -491,19 +505,25 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
   }
   if (quote) uncertain = true;
   finishSegment();
-  if (inspectStdin) for (const stages of statements) for (let index = 0; index < stages.length; index += 1) {
-    for (const owner of stages[index].owners) {
+  const stdinPrograms = (owner, visited = new Set()) => {
+    if (!owner || visited.has(owner)) return [];
+    visited.add(owner);
+    if (owner.outputs) return owner.outputs.flatMap((producer) => stdinPrograms(producer, visited));
+    if (owner.inputs.length) return [owner.inputs.at(-1)];
+    if (owner.pipeFrom) return stdinPrograms(owner.pipeFrom, visited);
+    for (const parent of owner.parents.toReversed()) {
+      if (parent.inputs.length) return [parent.inputs.at(-1)];
+      if (parent.pipeFrom) return stdinPrograms(parent.pipeFrom, visited);
+    }
+    return [];
+  };
+  if (inspectStdin) for (const stages of statements) for (const current of stages) {
+    for (const owner of current.owners) {
       if (!shellConsumesStdin(owner.text)) continue;
-      let program;
-      for (let source = owner; source && !program;) {
-        program = source.inputs.at(-1) ?? source.parents.toReversed().find((parent) => parent.inputs.length)?.inputs.at(-1);
-        source = source.pipeFrom ?? source.parents.toReversed().find((parent) => parent.pipeFrom)?.pipeFrom;
+      for (const program of stdinPrograms(owner)) {
+        if (program.body === undefined) continue;
+        segments.push(...(depth < 8 && !program.body.startsWith("$") ? validationShellSegments(program.body, depth + 1) : [{ text: "<opaque-shell-program>", fullValidation: true }]));
       }
-      if (!program) for (let source = index - 1; source >= 0; source -= 1) {
-        if (stages[source].inputs.length) { program = stages[source].inputs.at(-1); break; }
-      }
-      if (program?.body === undefined) continue;
-      segments.push(...(depth < 8 && !program.body.startsWith("$") ? validationShellSegments(program.body, depth + 1) : [{ text: "<opaque-shell-program>", fullValidation: true }]));
     }
   }
   return segments;
@@ -553,11 +573,13 @@ function normalizedVerificationSegments(command, depth = 0, inspectStdin = true)
       const words = candidate.match(new RegExp(PACKAGE_MANAGER_WORD, "g")) ?? [];
       const payload = literalShellProgram(words).program;
       const decode = (word) => word.startsWith('"') ? JSON.parse(word) : word;
-      const program = payload ? decode(payload) : words[0] === "eval" ? words.slice(words[1] === "--" ? 2 : 1).map(decode).join(" ") : null;
-      // shortcut: eight literal shell levels; refuse recognized executable text beyond that bound.
-      if (program && (depth >= 8 || program.startsWith("$"))) { normalized.push({ text: "<opaque-shell-program>", fullValidation: true }); continue; }
-      if (program) {
-        normalized.push(...normalizedVerificationSegments(program, depth + 1, inspectStdin).map((segment) => ({ ...segment, uncertain: uncertain || segment.uncertain })));
+      const programs = payload ? [decode(payload)] : words[0] === "eval" ? [words.slice(words[1] === "--" ? 2 : 1).map(decode).join(" ")] : literalPackagePrograms(words).map(decode);
+      if (programs.length) {
+        for (const program of programs) {
+          // shortcut: eight literal shell levels; refuse recognized executable text beyond that bound.
+          if (depth >= 8 || program.startsWith("$")) normalized.push({ text: "<opaque-shell-program>", fullValidation: true });
+          else normalized.push(...normalizedVerificationSegments(program, depth + 1, inspectStdin).map((segment) => ({ ...segment, uncertain: uncertain || segment.uncertain })));
+        }
         continue;
       }
       normalized.push({ text: candidate.replace(/(?:\s*[)}])+\s*$/, ""), uncertain });
@@ -1520,10 +1542,51 @@ const TEST_ALIAS_WORD = String.raw`(?:t|tst|it|install-test|cit|install-ci-test|
 const TEST_ALIAS = new RegExp(`^(?:npm|pnpm)${PACKAGE_MANAGER_OPTIONS}\\s+${TEST_ALIAS_WORD}(?:\\s|$)`, "i");
 const PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(${VALIDATION_SCRIPT})(?:\\s|$)`, "i");
 const PACKAGE_MANAGER_COMMAND = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(?!${RUN_WORD}(?:\\s|$))[\\w:][\\w:-]*(?:\\s|$)`, "i");
-// An opaque value-taking option before a recognizable validation script cannot grant worker execution.
-const OPAQUE_PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+-${PACKAGE_MANAGER_WORD}(?:\s+${PACKAGE_MANAGER_WORD})?)*`;
-const OPAQUE_VITEST_LAUNCH = new RegExp(`^(?:(?:npx|bunx)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+|(?:npm|pnpm|yarn)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+(?:exec|dlx)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+|(?:bun|pnpm|yarn)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+(?:(?:run|x)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+)?)vitest(?:@[^\\s]+)?(?:\\s|$)`, "i");
-const OPAQUE_PACKAGE_MANAGER_RUN = new RegExp(`^(?:(?:bun|npm|pnpm|yarn)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+)?${VALIDATION_SCRIPT}|(?:npm|pnpm)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+${TEST_ALIAS_WORD})(?:\\s|$)`, "i");
+// Visit each option position once, preserving both arities without regex backtracking.
+function packageOptionPositions(words, starts) {
+  const positions = new Set(starts);
+  for (const index of positions) {
+    const word = words[index];
+    if (!word?.startsWith("-") || word === "--") continue;
+    positions.add(index + 1);
+    if (!word.includes("=") && words[index + 1] && !words[index + 1].startsWith("-")) positions.add(index + 2);
+  }
+  return positions;
+}
+
+function literalPackagePrograms(words) {
+  const starts = /^(?:npx|bunx)$/.test(words[0]) ? [1] : /^(?:npm|pnpm|yarn)$/.test(words[0])
+    ? [...packageOptionPositions(words, [1])].filter((index) => /^(?:exec|dlx)$/.test(words[index])).map((index) => index + 1) : [];
+  const programs = [];
+  for (const index of packageOptionPositions(words, starts)) {
+    if (/^(?:-c|--call)$/.test(words[index])) programs.push(words[index + 1] ?? "$missing-program");
+    if (words[index]?.startsWith("--call=")) programs.push(words[index].slice(7) || "$missing-program");
+  }
+  return programs;
+}
+
+function opaquePackageValidation(segment, runner = false) {
+  const words = segment.match(new RegExp(PACKAGE_MANAGER_WORD, "g")) ?? [];
+  if (!(runner ? /^(?:bun|npm|pnpm|yarn|npx|bunx)$/ : /^(?:bun|npm|pnpm|yarn)$/).test(words[0])) return false;
+  const positions = packageOptionPositions(words, [1]), nested = [];
+  const validationScript = new RegExp(`^${VALIDATION_SCRIPT}$`, "i");
+  for (let index of positions) {
+    if (words[index] === "--") index += 1;
+    const word = words[index] ?? "";
+    if (!runner) {
+      if (validationScript.test(word) || /^(?:npm|pnpm)$/.test(words[0]) && new RegExp(`^${TEST_ALIAS_WORD}$`, "i").test(word)) return true;
+      if (new RegExp(`^${RUN_WORD}$`, "i").test(word)) nested.push(index + 1);
+    } else {
+      if (words[0] !== "npm" && /^vitest(?:@.*)?$/.test(word)) return true;
+      if (/^(?:npm|pnpm|yarn)$/.test(words[0]) && /^(?:exec|dlx)$/.test(word) || /^(?:bun|pnpm|yarn)$/.test(words[0]) && /^(?:run|x)$/.test(word)) nested.push(index + 1);
+    }
+  }
+  for (let index of packageOptionPositions(words, nested)) {
+    if (words[index] === "--") index += 1;
+    if (runner ? /^vitest(?:@.*)?$/.test(words[index] ?? "") : validationScript.test(words[index] ?? "")) return true;
+  }
+  return false;
+}
 const RUNTIME_VALUE_FLAGS = new Set([
   "-r", "--require", "--preload", "--import", "-l", "--loader", "--experimental-loader", "--env-file", "--env-file-if-exists", "--conditions", "-C", "--cwd", "-c", "--config",
   "--title", "--redirect-warnings", "--port", "--max-old-space-size", "--inspect-port", "--diagnostic-dir", "--openssl-config", "--icu-data-dir", "--input-type", "--stack-trace-limit",
@@ -1599,7 +1662,7 @@ export function classifyValidationCommand(command) {
         targeted = true;
         continue;
       }
-      if (!PACKAGE_MANAGER_COMMAND.test(segment) && OPAQUE_PACKAGE_MANAGER_RUN.test(segment)) return "full-repository";
+      if (!PACKAGE_MANAGER_COMMAND.test(segment) && opaquePackageValidation(segment)) return "full-repository";
       const runner = launch.match(/^(?:(?:bun(?:\s+run)?|node)\s+)?(?:[\w./-]+\/)?run-bun-test\.mjs(?:\s+(.*))?$/);
       if (runner) {
         const args = runner[1] ?? "";
@@ -1609,7 +1672,7 @@ export function classifyValidationCommand(command) {
         continue;
       }
       const direct = launch.match(/^node\s+--test(?:\s+(.*))?$/i) ?? launch.match(VITEST_LAUNCH);
-      if (!direct && !OTHER_PACKAGE_RUNNER_COMMAND.test(launch) && OPAQUE_VITEST_LAUNCH.test(launch)) return "full-repository";
+      if (!direct && !OTHER_PACKAGE_RUNNER_COMMAND.test(launch) && opaquePackageValidation(launch, true)) return "full-repository";
       if (direct) {
         if (!hasOnlyExactTestSelectors((direct[1] ?? "").replace(/^run(?:\s|$)/, ""))) return "full-repository";
         targeted = true;

@@ -1062,6 +1062,11 @@ test("generated Bash hook preserves shell option and pipeline ownership", () => 
     ["bash -euo pipefail -c -- 'npm test'", true],
     ["bash -O extglob <<'EOF'\nnpm test\nEOF", true],
     ["cat <<'EOF' |& bash\nnpm test\nEOF", true],
+    ["{ cat <<'EOF'; } | bash\nnpm test\nEOF", true],
+    ["{ { cat <<'EOF'; } | bash; }\nnpm test\nEOF", true],
+    ["{ cat <<'EOF' | bash; } </dev/null\nnpm test\nEOF", true],
+    ["{ cat <<'EOF'; } | bash\nbun test test/foo.test.mjs\nEOF", false],
+    ["{ cat <<'EOF'; } | bash\necho npm test\nEOF", false],
     ["bash -co pipefail 'bun run test:core'", false],
     ["bash -so pipefail <<< 'bun run test:core'", false],
     ["cat <<'EOF' || bash\nnpm test\nEOF", false],
@@ -1075,6 +1080,16 @@ test("generated Bash hook preserves shell option and pipeline ownership", () => 
     const result = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
     assert.equal(result.code, 0, command);
     assert.equal(result.json?.hookSpecificOutput?.permissionDecision === "deny", denied, `${agent_type}: ${command}`);
+  }
+});
+
+test("generated Bash hook classifies package exec programs and mixed heredoc delimiters", () => {
+  for (const agent_type of ["developer", "fixer"]) for (const [body, denied] of [["npm test", true], ["bun test test/foo.test.mjs", false], ["echo npm test", false]]) {
+    for (const command of [`npx -c '${body}'`, `npm exec -c '${body}'`, `npm exec --call='${body}'`, `pnpm exec -c '${body}'`, `cat <<'E'OF\nx\nEOF\n${body}`]) {
+      const result = runHook("pre-tool-use-bash-gate.mjs", { tool_name: "Bash", tool_input: { command }, cwd: repoRoot, agent_type });
+      assert.equal(result.code, 0, command);
+      assert.equal(result.json?.hookSpecificOutput?.permissionDecision === "deny", denied, command);
+    }
   }
 });
 
