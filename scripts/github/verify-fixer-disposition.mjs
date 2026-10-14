@@ -349,8 +349,9 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
     for (const fp of fps) {
       const status = deltaStatuses?.get(fp);
       const entry = handoff.dispositions.find((item) => item.threadId === thread.id);
-      if (status && entry && ((entry.fingerprint && entry.fingerprint !== fp) || (status !== "resolved" && thread.isResolved)
-        || entry.disposition !== (status === "resolved" ? FIXER_DISPOSITION_KIND.TACKLED : FIXER_DISPOSITION_KIND.DEFERRED))) {
+      if (status && ((status !== "resolved" && thread.isResolved)
+        || (entry && ((entry.fingerprint && entry.fingerprint !== fp)
+          || entry.disposition !== (status === "resolved" ? FIXER_DISPOSITION_KIND.TACKLED : FIXER_DISPOSITION_KIND.DEFERRED))))) {
         throw new Error(`delta status and live thread disposition disagree for ${thread.id} (${fp})`);
       }
       if (thread.isResolved) continue;
