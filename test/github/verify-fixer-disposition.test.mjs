@@ -986,6 +986,52 @@ for (const check of [false, true]) for (const kind of ["threadless-mixed", "thre
   });
 }
 
+for (const check of [false, true]) for (const [kind, statuses, disposition, member] of [
+  ["resolved-first", ["resolved", "resolved"], "tackled", 0],
+  ["resolved-second", ["resolved", "resolved"], "tackled", 1],
+  ["residual-first", ["not_resolved", "cannot_verify"], "deferred", 0],
+  ["residual-second", ["not_resolved", "cannot_verify"], "deferred", 1],
+  ["foreign", ["resolved", "resolved", "resolved"], "tackled", 2],
+  ["mixed-tackled", ["resolved", "not_resolved"], "tackled", 0],
+  ["mixed-deferred", ["resolved", "not_resolved"], "deferred", 1],
+  ["resolved-residual", ["not_resolved", "cannot_verify"], "deferred", 0],
+  ["incomplete-coverage", ["resolved", "resolved"], "tackled", 0],
+]) {
+  test(`distinct merged fingerprints validate every member (${check}, ${kind})`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const fingerprints = [ACT_FP, "fedcba9876543210", "1111111111111111"];
+      const actList = statuses.map((status, index) => ({ ...ACT_LIST[0], fingerprint: fingerprints[index], siteQuery: "query", acceptedForms: [`--member-${index}`] }));
+      const items = statuses.map((status, index) => ({ ref: fingerprints[index], status }));
+      const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList }).actSetId, actionableItems: items.map((item) => ({ ...item, evidence: ["targeted check"] })), newFindings: [], widenedReads: [], outcome: "bounded_out" };
+      const decision = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: delta.actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items };
+      const dispositions = [{ threadId: "PRRT_MERGED", fingerprint: fingerprints[member], fixingCommitSha: HEAD_SHA, disposition }];
+      const siteCoverage = actList.map((item, index) => ({ fingerprint: item.fingerprint, returnedSites: item.acceptedForms, sites: item.acceptedForms.map((site) => ({ site, kind: "input_form", status: statuses[index] === "resolved" ? "fixed" : "skipped", ...(statuses[index] === "resolved" ? { test: "targeted member test" } : { reason: "still fails at invocation three" }) })) }));
+      if (kind === "incomplete-coverage") siteCoverage[1].sites = [];
+      const handoffText = JSON.stringify({ headSha: HEAD_SHA, dispositions, siteCoverage });
+      const fixerPlan = await deliver(repoRoot, dispositions, { actList, delta, decision, handoffText });
+      const fixed = disposition === "tackled";
+      const root = `${ACT_MARKER}\n${ACT_MARKER.replace(ACT_FP, fingerprints[1])}\n**Problem:** merged members`;
+      const nodes = [actThread("PRRT_MERGED", [gateComment("c1", 1, root), ...(fixed ? [gateComment("c2", 2, `Fixed in commit ${HEAD_SHA}.`)] : [])], fixed || kind === "resolved-residual")];
+      const { deps, calls } = runtime([threadsCallEntry(nodes), userEntry, ...(fixed ? [compareEntry(HEAD_SHA, "identical")] : [])], repoRoot);
+      const before = await readFile(fixerPlan, "utf8");
+      const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
+      if (["foreign", "mixed-tackled", "mixed-deferred", "resolved-residual", "incomplete-coverage"].includes(kind)) {
+        await assert.rejects(verify(), kind === "incomplete-coverage" ? /returned site/ : /delta status and live thread disposition disagree/);
+        assert.equal(calls.length, kind === "incomplete-coverage" ? 0 : 3);
+        assert.deepEqual(await checkpointFiles(repoRoot), []);
+      } else {
+        const result = await verify();
+        assert.equal(result.complete, true);
+        assert.deepEqual(result.actions, []);
+        assert.equal(calls.length, fixed ? 4 : 3);
+        assert.equal((await checkpointFiles(repoRoot)).length, check ? 0 : 1);
+      }
+      assert.equal(hasPost(calls), false);
+      assert.equal(await readFile(fixerPlan, "utf8"), before);
+    });
+  });
+}
+
 async function checkpointFiles(repoRoot) {
   const entries = await readdir(path.join(repoRoot, "tmp"), { recursive: true }).catch(() => []);
   return entries.filter((entry) => path.basename(entry).startsWith("fixer-disposition-"));

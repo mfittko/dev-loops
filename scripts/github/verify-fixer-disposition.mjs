@@ -352,12 +352,14 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
     // A merged inline comment carries one marker per member: index every one, not just the first.
     const fps = new Set();
     collectFingerprints(root.body, fps);
+    const entry = handoff.dispositions.find((item) => item.threadId === thread.id);
+    if (entry?.fingerprint && !fps.has(entry.fingerprint) && [...fps].some((fp) => deltaStatuses?.has(fp))) {
+      throw new Error(`delta status and live thread disposition disagree for ${thread.id} (${entry.fingerprint})`);
+    }
     for (const fp of fps) {
       const status = deltaStatuses?.get(fp);
-      const entry = handoff.dispositions.find((item) => item.threadId === thread.id);
       if (status && ((status !== "resolved" && thread.isResolved)
-        || (entry && ((entry.fingerprint && entry.fingerprint !== fp)
-          || entry.disposition !== (status === "resolved" ? FIXER_DISPOSITION_KIND.TACKLED : FIXER_DISPOSITION_KIND.DEFERRED))))) {
+        || (entry && entry.disposition !== (status === "resolved" ? FIXER_DISPOSITION_KIND.TACKLED : FIXER_DISPOSITION_KIND.DEFERRED)))) {
         throw new Error(`delta status and live thread disposition disagree for ${thread.id} (${fp})`);
       }
       if (thread.isResolved) continue;
