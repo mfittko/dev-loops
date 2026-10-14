@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFile, writeFile, symlink, rm } from 'node:fs/promises';
+import { readFile, writeFile, symlink, rm, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'bun:test';
 import { withTempDir } from '../_helpers.mjs';
@@ -43,6 +43,35 @@ test('trusted absent and empty records are warning-only, including realpath alia
   await withTempDir(async (root) => {
     const fixture = await seedValidation(root, { configText: '{"version":1}' });
     assert.equal((await read(root, fixture)).artifact.configResolution.state, 'absent');
+  });
+});
+test('dangling first-priority checkout config is not confirmed absence', async () => {
+  await withTempDir(async (root) => {
+    const fixture = await seedValidation(root);
+    await symlink('missing-config', path.join(root, '.devloops'));
+    assert.match((await read(root, fixture)).reason, /checkout config is unreadable: ENOENT/);
+  });
+});
+test('dangling first-priority checkout config cannot fall back to a lower-priority file', async () => {
+  await withTempDir(async (root) => {
+    const fixture = await seedValidation(root, { validation: {} });
+    await symlink('missing-config', path.join(root, '.devloops'));
+    assert.match((await read(root, fixture)).reason, /checkout config is unreadable: ENOENT/);
+  });
+});
+test('checkout config symlink to a directory refuses instead of skipping the entry', async () => {
+  for (const validation of [undefined, {}]) await withTempDir(async (root) => {
+    const fixture = await seedValidation(root, { validation });
+    await symlink(root, path.join(root, '.devloops'));
+    assert.match((await read(root, fixture)).reason, /checkout config is unreadable: EISDIR/);
+  });
+});
+test('checkout config symlink retaining trusted bytes and family path remains compatible', async () => {
+  await withTempDir(async (root) => {
+    const fixture = await seedValidation(root, { validation: {} });
+    await rename(path.join(root, '.devloops.json'), path.join(root, 'compatible-config'));
+    await symlink('compatible-config', path.join(root, '.devloops.json'));
+    assert.equal((await read(root, fixture)).warning.code, 'validation_not_configured');
   });
 });
 test('new branch rejects false success, malformed warning/provenance, stale binding and wrong head', async () => {

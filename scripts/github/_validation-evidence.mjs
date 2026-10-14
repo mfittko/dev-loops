@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { ValidationConfig } from '@dev-loops/core/config';
@@ -35,8 +35,14 @@ async function verifyAbsence(artifact, cwd, git) {
   let checkoutPath = null;
   let checkoutBytes = null;
   for (const name of DEVLOOPS_CONFIG_PATHS) {
-    try { checkoutBytes = await readFile(path.resolve(cwd, name)); checkoutPath = name; break; }
-    catch (error) { if (error.code !== 'ENOENT') throw new Error(`checkout config is unreadable: ${error.code}`); }
+    const file = path.resolve(cwd, name);
+    try { await lstat(file); }
+    catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw new Error(`checkout config is unreadable: ${error.code}`);
+    }
+    try { checkoutBytes = await readFile(file); checkoutPath = name; break; }
+    catch (error) { throw new Error(`checkout config is unreadable: ${error.code}`); }
   }
   if (checkoutPath !== configPath || (bytes && !bytes.equals(checkoutBytes))) throw new Error('checkout config source differs from trusted default branch');
   let config = {};
