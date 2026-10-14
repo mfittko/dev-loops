@@ -78,18 +78,22 @@ jobs:
           - test:docs
           - test:workflows
         include:
-          # Only the test:docs leg needs full history for the decision-record
-          # merge-base comparison; every other leg checks out the default (depth 1).
+          # Docs need the decision-record merge base; test shards need the
+          # historical producer fixture regardless of its current shard assignment.
           - suite: test:docs
             fetch_depth: 0
           - suite: test:all
             shard: 1/4
+            fetch_depth: 0
           - suite: test:all
             shard: 2/4
+            fetch_depth: 0
           - suite: test:all
             shard: 3/4
+            fetch_depth: 0
           - suite: test:all
             shard: 4/4
+            fetch_depth: 0
     steps:
       - name: Check out repository
         uses: actions/checkout@v5

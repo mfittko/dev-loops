@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, realpathSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "bun:test";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
@@ -868,7 +868,7 @@ test("F7: emit, pull, mutate in authority and verify the disposition; missing ma
 test("historical 44f57175 main producer/pull selects the real feature helper and completes unchanged THREAD delivery", async () => {
   await withFixture(async ({ root, wt, head, files, writeRecord }) => {
     const historical = "44f57175a215711923fb128d74e9357b33ff95e9";
-    const checkout = process.cwd();
+    const checkout = fileURLToPath(new URL("../../", import.meta.url));
     const archive = execFileSync("git", ["-C", checkout, "archive", historical, "scripts", "packages", "lib", "cli", "package.json", "skills", "agents"], { env: gitFreeEnv(), maxBuffer: 32 * 1024 * 1024 });
     const unpack = spawnSync("tar", ["-xf", "-", "-C", root], { input: archive, encoding: "utf8" });
     assert.equal(unpack.status, 0, unpack.stderr);
