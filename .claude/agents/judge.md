@@ -36,6 +36,8 @@ The work order gives you:
 3. **The PR's declared scope** — the change summary and scope statement from the PR description, in the round's evidence read.
 4. **Prior-round judge verdicts** — the judge verdict artifacts from earlier rounds at this gate, so you can detect accretion, self-renewing churn, and drift across rounds.
 
+When the work order declares shared validation evidence, consume its fields under `GATE-EXEC-VALIDATION-RESOLUTION` in the [sub-loop contract](../skills/docs/gate-review-sub-loop-contract.md), alongside the source reads. Verified `not_configured` means validation was not performed: preserve the warning without requiring an absence finding, fixer, retry or fallback run. Invalid evidence and configured outcomes retain their existing meanings; validation remains optional on legacy judge orders.
+
 ## Output: the verdict artifact
 
 Write a single JSON object to the deterministic path your work order names (under `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/<roundId>/judge-verdict.json`). This is your relevance-verdict write; the spec-authority verdict below is your other write, to a sibling path. The relevance verdict's shape, validated by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):

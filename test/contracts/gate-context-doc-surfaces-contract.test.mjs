@@ -22,6 +22,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
+import { parse as parseYaml } from "yaml";
 
 import {
   ISSUE_BODY_ABSENT_SENTINEL,
@@ -29,6 +30,18 @@ import {
 } from "../../scripts/github/write-gate-context.mjs";
 
 const srcUrl = new URL("../../scripts/github/write-gate-context.mjs", import.meta.url);
+
+test("docs and link-check prompts consume recorded evidence without absence findings or fallback runs (#2757)", async () => {
+  const defaults = parseYaml(await readFile(new URL("../../packages/core/src/config/extension-defaults.yaml", import.meta.url), "utf8"));
+  const prompts = Object.values(defaults.gates).flatMap((gate) => gate.angles ?? []).filter((angle) => ["docs", "link-check"].includes(angle.name));
+  assert.equal(prompts.length, 3);
+  for (const { prompt } of prompts) {
+    assert.match(prompt, /shared recorded mechanical link-validation evidence/);
+    assert.match(prompt, /not_configured.*validation was not performed/s);
+    assert.match(prompt, /preserve its warning without a mandatory absence finding or fallback command/);
+    assert.doesNotMatch(prompt, /validate-links\.mjs/);
+  }
+});
 
 test("write-gate-context --help: --acceptance-criteria and --issue-body describe multi-issue resolution and fail-closed (#1541)", async () => {
   const src = await readFile(srcUrl, "utf8");

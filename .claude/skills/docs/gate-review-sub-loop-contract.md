@@ -242,15 +242,19 @@ write, or cannot confirm the worktree HEAD, removes the artifact and writes none
 verdict writer refuses the post as absent. The argument-parsing cleanup deletes only an
 artifact inside the checkout: a parse failure under a `--tmp-root` that resolves outside
 the checkout leaves that root's prior artifact in place. An exception writes the typed incomplete artifact only when a head
-check at that point confirms the requested head. A reviewer that finds the artifact absent, unreadable, incomplete,
+check at that point confirms the requested head. Except for the verified consumer outcome below, a reviewer that finds the artifact absent, unreadable, incomplete,
 or stamped with a different head SHA MUST report a gate-evidence finding; it
 MUST NOT silently run the suite itself and MUST NOT treat the gap as clean. The verdict writer
 enforces this rule: `upsert-checkpoint-verdict.mjs` refuses a `fanout_fanin` verdict post when
 the head's `<gate>-<headSha>.validation.json` is absent, unreadable, or stamped with a different
-head SHA. A typed incomplete artifact satisfies this check. The verdict writer checks only the
+head SHA. A typed incomplete artifact satisfies this check. For existing configured records, the verdict writer checks only the
 artifact's presence, readability and head stamp. The reviewer gate-evidence finding path, not the verdict
 writer, prevents a `clean` verdict over an incomplete artifact. The refusal names the artifact and `run-gate-validation.mjs`. It applies under the
 same `gates.requireFanoutEvidence` condition as the durable-ledger refusal. When the round resolved its validation under an explicit `--tmp-root`, pass that same path as `upsert-checkpoint-verdict.mjs --context-tmp-root <path>` (default `tmp`).
+
+**Consumer acceptance.** Read a declared validation record field by field through the shared `scripts/github/_validation-evidence.mjs` contract: bind its requested head, pointer identity, SHA-256 and byte count. A future `status: "not_configured"` is accepted only with `ok: true`, `allPassed: null`, empty `suites`, an actionable `validation_not_configured` warning, and verified `configResolution`. Verification compares the actual `origin/HEAD` ref/commit, first config-family path and raw bytes/hash, and checkout source; raw schema-valid absence means no explicit mode, full command or actual mapped command (including empty paths/all-empty command lists). Missing, malformed, stale or untrusted evidence never establishes absence. Legacy configured records and optional validation reads on old native orders retain their existing acceptance and outcome semantics.
+
+Verified `not_configured` permits semantic review with the warning: validation was not performed. It is neither passed, failed nor incomplete validation, creates no mandatory absence finding, fixer or incomplete retry, and authorizes no fallback command. Preserve the warning through coordinator handoff and final reporting (`GATE-COMMENT-VALIDATION-REPORTING`); independent CI, approval and merge requirements still apply. Consumer capability here comes from trusted raw validation config, not Bun or JavaScript manifests; Bun 1.4.1 remains this repo's contributor toolchain. This is A1 consumer preparation ([issue #2757](https://github.com/mfittko/dev-loops/issues/2757)); current producer/default policy above remains unchanged. A2 ([issue #2758](https://github.com/mfittko/dev-loops/issues/2758)) owns enabling the outcome and amending ADR 0137 after compatible consumers are merged and loaded.
 
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 

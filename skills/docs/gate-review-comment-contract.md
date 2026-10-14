@@ -386,6 +386,8 @@ instead of the visible audit comment. When a pass reached `clean` only after cor
 summary SHOULD briefly say what gap was found, what changed, and why the current head now
 satisfies the gate.
 
+For verified `not_configured` evidence (`GATE-EXEC-VALIDATION-RESOLUTION` in the [sub-loop contract](gate-review-sub-loop-contract.md)), preserve its actionable `validation_not_configured` warning exactly once in every visible verdict, including clean, findings and blocked reports, even when structured logs compact the validation summary. Say validation was not performed; never count absence as validation passed or as a finding.
+
 ## Behavior requirements
 
 `GATE-EXEC-POST-BEFORE-FIX` owns post-before-fix ordering for both gate boundaries

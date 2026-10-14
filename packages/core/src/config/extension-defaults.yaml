@@ -58,8 +58,10 @@ gates:
             or sections.
           - Flag placeholder links (e.g. href targets still using example URLs,
             404 references, or TODO links).
-          - When the repo provides `scripts/docs/validate-links.mjs`, run it
-            for the mechanical link pass and report any failures.
+          - Consume the shared recorded mechanical link-validation evidence;
+            report recorded failures rather than rerunning commands.
+            Verified `not_configured` means validation was not performed:
+            preserve its warning without a mandatory absence finding or fallback command.
           - Flag symlink-backed doc pointers that point to missing targets. - This persona complements mechanical link validation with context-aware
             judgment for link intent and anchor correctness.
       - name: config-drift
@@ -308,7 +310,7 @@ gates:
         prompt: "Dependency Inversion Principle: flag high-level modules depending on low-level implementation details. Check that abstractions are owned by the consumer, not the implementation. Flag concrete imports where an interface/contract should exist."
       - name: docs
         persona: docs
-        prompt: "Review documentation correctness for the current change. Check that relative markdown links resolve, symlink-backed doc pointers resolve, navigable doc references are actual markdown links rather than bare backtick path mentions, command/script references still exist and use current names, and index/surface references match the current file tree. Also flag stale command references: removed or renamed npm scripts, CLI commands, or tool invocations that no longer match the current codebase. When the repo provides `scripts/docs/validate-links.mjs`, use it for the mechanical link pass; otherwise keep the review scoped to the touched doc surface and current change only."
+        prompt: "Review documentation correctness for the current change. Check that relative markdown links resolve, symlink-backed doc pointers resolve, navigable doc references are actual markdown links rather than bare backtick path mentions, command/script references still exist and use current names, and index/surface references match the current file tree. Also flag stale command references: removed or renamed npm scripts, CLI commands, or tool invocations that no longer match the current codebase. Consume shared recorded mechanical link-validation evidence rather than rerunning commands. Verified `not_configured` means validation was not performed: preserve its warning without a mandatory absence finding or fallback command. Keep the review scoped to the touched doc surface and current change only."
       - name: pr-checklist
         mandatory: true
         persona: review
@@ -377,7 +379,7 @@ gates:
         prompt: Check whether every changed file belongs in this PR. Flag unrelated or out-of-scope changes. The PR description's scope section is the contract.
       - name: docs
         persona: docs
-        prompt: "Review documentation correctness for the current change. Check that relative markdown links resolve, symlink-backed doc pointers resolve, navigable doc references are actual markdown links rather than bare backtick path mentions, command/script references still exist and use current names, and index/surface references match the current file tree. Also flag stale command references: removed or renamed npm scripts, CLI commands, or tool invocations that no longer match the current codebase. When the repo provides `scripts/docs/validate-links.mjs`, use it for the mechanical link pass; otherwise keep the review scoped to the touched doc surface and current change only."
+        prompt: "Review documentation correctness for the current change. Check that relative markdown links resolve, symlink-backed doc pointers resolve, navigable doc references are actual markdown links rather than bare backtick path mentions, command/script references still exist and use current names, and index/surface references match the current file tree. Also flag stale command references: removed or renamed npm scripts, CLI commands, or tool invocations that no longer match the current codebase. Consume shared recorded mechanical link-validation evidence rather than rerunning commands. Verified `not_configured` means validation was not performed: preserve its warning without a mandatory absence finding or fallback command. Keep the review scoped to the touched doc surface and current change only."
     required: false
     requireCi: false
 
