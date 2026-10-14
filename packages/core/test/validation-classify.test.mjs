@@ -70,6 +70,11 @@ test("opaque package flags classify in bounded time", () => {
 });
 
 const stdinCompositions = [
+  ["case x in (x) bash;; esac <<'A'\n", "\nA"],
+  ["cat <<'A' | case x in (x) bash;; esac\n", "\nA"],
+  ["case x in x) bash;; esac <<'A'\n", "\nA"],
+  ["cat <<'A' | case x in x) bash;; esac\n", "\nA"],
+  ["case x in (y|x) bash;; esac <<'A'\n", "\nA"],
   ["{ cat <<'A'; } | bash\n", "\nA"],
   ["(cat <<'A') | bash\n", "\nA"],
   ["{ { cat <<'A'; } | bash; }\n", "\nA"],
@@ -87,6 +92,10 @@ test("closed compound outputs and inner pipes preserve stdin precedence", () => 
     assert.equal(classifyValidationCommand(command), expected, command);
   }
   for (const command of ["{ cat <<'A'; } | bash </dev/null\nnpm test\nA", "{ cat <<'A'; } | bash <<'B'\nnpm test\nA\necho safe\nB", "{ cat <<'A'; } ; bash\nnpm test\nA", "{ cat <<'A'; } && bash\nnpm test\nA", "{ cat <<'A'; } || bash\nnpm test\nA"]) {
+    assertBashSyntax(command);
+    assert.equal(classifyValidationCommand(command), "non-validation", command);
+  }
+  for (const command of ["case x in (x) bash </dev/null;; esac <<'A'\nnpm test\nA", "cat <<'A' | case x in (x) bash </dev/null;; esac\nnpm test\nA", "case x in (x) bash <<'B';; esac <<'A'\necho safe\nB\nnpm test\nA"]) {
     assertBashSyntax(command);
     assert.equal(classifyValidationCommand(command), "non-validation", command);
   }

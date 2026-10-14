@@ -383,6 +383,7 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
   const finishWord = () => {
     if (started) {
       if (!redirectTarget) {
+        closedOwner = null;
         if (!quotedWord && /^(?:\{|if|while|until|for|select|case)$/.test(word)) {
           let prefix = [...words, word].join(" ");
           for (;;) {

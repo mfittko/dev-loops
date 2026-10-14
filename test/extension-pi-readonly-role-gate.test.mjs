@@ -485,6 +485,15 @@ test("package exec programs and mixed heredoc delimiters preserve both worker bo
   }
 });
 
+test("parenthesized case patterns preserve the shell owner on Pi and Claude", async () => {
+  for (const role of ["developer", "fixer"]) for (const [body, block] of [["npm test", true], ["bun test test/foo.test.mjs", false], ["echo npm test", false]]) {
+    for (const command of [`case x in (x) bash;; esac <<'A'\n${body}\nA`, `cat <<'A' | case x in (x) bash;; esac\n${body}\nA`]) {
+      assert.equal(decideBashGate({ command, agentType: role }).decision, block ? "deny" : "allow", command);
+      assert.equal((await callAs(role, command)).block, block, command);
+    }
+  }
+});
+
 test("opaque package options keep test aliases blocked on Pi and Claude", async () => {
   for (const role of ["developer", "fixer"]) {
     for (const command of ["npm --tag x t", "npm --script-shell sh tst", "npm --node-options x it", "pnpm --tag x cit"]) {

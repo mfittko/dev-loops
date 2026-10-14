@@ -1093,6 +1093,16 @@ test("generated Bash hook classifies package exec programs and mixed heredoc del
   }
 });
 
+test("generated Bash hook preserves the shell owner after a parenthesized case pattern", () => {
+  for (const agent_type of ["developer", "fixer"]) for (const [body, denied] of [["npm test", true], ["bun test test/foo.test.mjs", false], ["echo npm test", false]]) {
+    for (const command of [`case x in (x) bash;; esac <<'A'\n${body}\nA`, `cat <<'A' | case x in (x) bash;; esac\n${body}\nA`]) {
+      const result = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
+      assert.equal(result.code, 0, command);
+      assert.equal(result.json?.hookSpecificOutput?.permissionDecision === "deny", denied, `${agent_type}: ${command}`);
+    }
+  }
+});
+
 test("Bash hook keeps native role and malformed-command behavior", () => {
   for (const command of [undefined, 42]) {
     for (const agent_type of ["review", "judge"]) assert.equal(runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, agent_type, cwd: repoRoot}).json?.hookSpecificOutput?.permissionDecision, "deny");
