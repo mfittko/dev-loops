@@ -24,7 +24,7 @@ import {
   normalizeFixerDispositionHandoff,
   siteCoverageGaps,
 } from "@dev-loops/core/loop/fixer-disposition";
-import { startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
@@ -283,7 +283,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       const bounded = decision.outcome === "bounded_out" && decision.nextStep === "push_to_gate" && decision.invocation === 3;
       if (!bounded && !(decision.outcome === "locally_clear" && decision.nextStep === "push"
         && Number.isInteger(decision.invocation) && decision.invocation >= 1 && decision.invocation <= 3
-        && delta.outcome === "locally_clear" && delta.candidateHead === options.headSha)) {
+        && delta.outcome === "locally_clear" && isDeltaResultFresh(delta, options.headSha))) {
         throw new Error("the delta decision is neither locally clear nor invocation-three bounded_out");
       }
       const statuses = new Map(delta.actionableItems.map(({ ref, status }) => [ref, status]));

@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
-import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
+import { decideDeltaNextStep, startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
 import { initGitFixture, makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import {
@@ -902,6 +902,35 @@ const ACT_LIST = [{ fingerprint: ACT_FP, severity: "medium", summary: "s", judge
 const userEntry = { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` };
 const gateComment = (id, databaseId, body = `${ACT_MARKER}\n**Problem:** s`, login = "gate") => ({ id, databaseId, body, author: { login, __typename: "User" } });
 const actThread = (id, comments, isResolved = false) => ({ id, isResolved, comments: { nodes: comments } });
+
+for (const mismatched of [false, true]) {
+  test(`locally-clear full completion ${mismatched ? "rejects a mismatched" : "accepts a whitespace-padded current"} result candidate`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const actList = [{ ...ACT_LIST[0], siteQuery: "query", acceptedForms: ["--flag"] }];
+      const sequence = startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList });
+      const siteCoverage = [{ fingerprint: ACT_FP, returnedSites: ["--flag"], sites: [{ site: "--flag", kind: "input_form", status: "fixed", test: "targeted form test" }] }];
+      const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: ` ${HEAD_SHA} `, actSetId: sequence.actSetId, actionableItems: [{ ref: ACT_FP, status: "resolved", evidence: ["targeted check"] }], newFindings: [], widenedReads: [], outcome: "locally_clear" };
+      const next = decideDeltaNextStep({ sequence, result: delta, invocation: 1, currentHead: HEAD_SHA, siteCoverage });
+      assert.equal(next.outcome, "locally_clear");
+      assert.equal(next.nextStep, "push");
+      const decision = { ...next, reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: sequence.actSetId, invocation: 1, items: delta.actionableItems };
+      if (mismatched) delta.candidateHead = ` ${FIX_SHA} `;
+      const handoffText = JSON.stringify({ headSha: HEAD_SHA, dispositions: [], siteCoverage });
+      const fixerPlan = await deliver(repoRoot, [], { actList, delta, decision, handoffText });
+      const { deps, calls } = runtime([threadsCallEntry([]), userEntry], repoRoot);
+      const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+      if (mismatched) {
+        await assert.rejects(verify(), /neither locally clear nor invocation-three bounded_out/);
+        assert.equal(calls.length, 0);
+        assert.deepEqual(await checkpointFiles(repoRoot), []);
+      } else {
+        assert.equal((await verify()).complete, true);
+        assert.equal((await checkpointFiles(repoRoot)).length, 1);
+      }
+      assert.equal(hasPost(calls), false);
+    });
+  });
+}
 
 for (const check of [false, true]) for (const defect of [null, "missing", "nonclearing", "source", "delta", "bytes", "baseline", "membership", "statuses", "candidate", "invocation", "tackled", "resolved", "resolvedForms", "unaccounted", "unbound", "residualResolved", "residualResolvedOmitted", "legacy"]) {
   test(`bounded-out full completion authenticates residual authority (${check}, ${defect})`, async () => {
