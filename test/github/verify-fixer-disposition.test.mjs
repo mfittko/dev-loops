@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { decideDeltaNextStep, startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
 import { initGitFixture, makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import {
@@ -69,7 +70,7 @@ const REF = `fixer:${REPO}#${PR}:${HEAD_SHA}:f1-0000abcd`;
 // receipt under <repoRoot>/tmp, and the disposition handoff at the plan's outputRef.
 async function deliver(repoRoot, dispositions, {
   handoffHead = HEAD_SHA, orderHead = HEAD_SHA, phase = "full", receipt = {}, writeReceipt = true, writeHandoff = true, pulledAt = new Date(Date.now() - 1000).toISOString(),
-  receiptMtime = null, handoffText = null, actList = null, editActListAfter = false, threads = null,
+  receiptMtime = null, handoffText = null, actList = null, editActListAfter = false, threads = null, delta = null, decision = null, semanticAuthority = true,
 } = {}) {
   const dir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
   const outputRef = path.join(dir, "f1-0000abcd", "fixer-disposition.json");
@@ -83,6 +84,19 @@ async function deliver(repoRoot, dispositions, {
     await mkdir(dir, { recursive: true });
     await writeFile(source, JSON.stringify(threads));
     plan.workOrderDigest = workOrderDigest(workOrder);
+  }
+  if (delta) {
+    const deltaPath = path.join(dir, "delta.json");
+    workOrder.requiredReads.push({ kind: "delta-result", path: deltaPath, sha256: createHash("sha256").update(JSON.stringify(delta)).digest("hex") });
+    if (semanticAuthority) workOrder.authority = { sourceDigest: sha256Hex(actList).slice(7), deltaResultDigest: sha256Hex(delta).slice(7) };
+    await mkdir(dir, { recursive: true });
+    await writeFile(deltaPath, JSON.stringify(delta));
+    plan.workOrderDigest = workOrderDigest(workOrder);
+    if (decision) {
+      const recordPath = path.join(repoRoot, "tmp", "gate-delta", `${orderHead}.json`);
+      await mkdir(path.dirname(recordPath), { recursive: true });
+      await writeFile(recordPath, JSON.stringify(decision));
+    }
   }
   const planPath = path.join(dir, "fixer-emit-plan.json");
   await mkdir(path.dirname(outputRef), { recursive: true });
@@ -888,6 +902,168 @@ const ACT_LIST = [{ fingerprint: ACT_FP, severity: "medium", summary: "s", judge
 const userEntry = { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` };
 const gateComment = (id, databaseId, body = `${ACT_MARKER}\n**Problem:** s`, login = "gate") => ({ id, databaseId, body, author: { login, __typename: "User" } });
 const actThread = (id, comments, isResolved = false) => ({ id, isResolved, comments: { nodes: comments } });
+
+for (const mismatched of [false, true]) {
+  test(`locally-clear full completion ${mismatched ? "rejects a mismatched" : "accepts a whitespace-padded current"} result candidate`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const actList = [{ ...ACT_LIST[0], siteQuery: "query", acceptedForms: ["--flag"] }];
+      const sequence = startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList });
+      const siteCoverage = [{ fingerprint: ACT_FP, returnedSites: ["--flag"], sites: [{ site: "--flag", kind: "input_form", status: "fixed", test: "targeted form test" }] }];
+      const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: ` ${HEAD_SHA} `, actSetId: sequence.actSetId, actionableItems: [{ ref: ACT_FP, status: "resolved", evidence: ["targeted check"] }], newFindings: [], widenedReads: [], outcome: "locally_clear" };
+      const next = decideDeltaNextStep({ sequence, result: delta, invocation: 1, currentHead: HEAD_SHA, siteCoverage });
+      assert.equal(next.outcome, "locally_clear");
+      assert.equal(next.nextStep, "push");
+      const decision = { ...next, reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: sequence.actSetId, invocation: 1, items: delta.actionableItems };
+      if (mismatched) delta.candidateHead = ` ${FIX_SHA} `;
+      const handoffText = JSON.stringify({ headSha: HEAD_SHA, dispositions: [], siteCoverage });
+      const fixerPlan = await deliver(repoRoot, [], { actList, delta, decision, handoffText });
+      const { deps, calls } = runtime([threadsCallEntry([]), userEntry], repoRoot);
+      const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
+      if (mismatched) {
+        await assert.rejects(verify(), /neither locally clear nor invocation-three bounded_out/);
+        assert.equal(calls.length, 0);
+        assert.deepEqual(await checkpointFiles(repoRoot), []);
+      } else {
+        assert.equal((await verify()).complete, true);
+        assert.equal((await checkpointFiles(repoRoot)).length, 1);
+      }
+      assert.equal(hasPost(calls), false);
+    });
+  });
+}
+
+for (const check of [false, true]) for (const defect of [null, "missing", "nonclearing", "source", "delta", "bytes", "baseline", "membership", "statuses", "candidate", "invocation", "tackled", "resolved", "resolvedForms", "unaccounted", "unbound", "residualResolved", "residualResolvedOmitted", "residualUnmarked", "residualForeign", "residualMissing", "legacy"]) {
+  test(`bounded-out full completion authenticates residual authority (${check}, ${defect})`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const actList = [{ ...ACT_LIST[0], siteQuery: "query", acceptedForms: ["--flag"] }];
+      const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: FIX_SHA, actSetId: startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList }).actSetId, actionableItems: [{ ref: ACT_FP, status: "not_resolved", evidence: ["still fails"] }], newFindings: [], widenedReads: [], outcome: "bounded_out" };
+      const decision = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: delta.actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items: [{ ref: ACT_FP, status: "not_resolved" }] };
+      if (defect === "nonclearing") decision.nextStep = "fix_and_rereview";
+      if (defect === "baseline") delta.reviewBaselineHead = FIX_SHA;
+      if (defect === "membership") delta.actionableItems[0].ref = "foreign";
+      if (defect === "statuses") decision.items[0].status = "cannot_verify";
+      if (defect === "candidate") decision.candidateHead = FIX_SHA;
+      if (defect === "invocation") decision.invocation = 2;
+      if (["resolved", "resolvedForms"].includes(defect)) { delta.actionableItems[0].status = "resolved"; decision.items[0].status = "resolved"; }
+      const dispositions = [{ threadId: "PRRT_RESIDUAL", fingerprint: defect === "unbound" ? null : ACT_FP, fixingCommitSha: HEAD_SHA, disposition: ["tackled", "resolvedForms", "unbound"].includes(defect) ? "tackled" : "deferred", returnedSites: ["--flag"], sites: defect === "unaccounted" ? [] : [{ site: "--flag", kind: "input_form", status: "skipped", reason: "still fails after invocation three" }] }];
+      const handoffText = ["unbound", "residualResolvedOmitted"].includes(defect) ? JSON.stringify({ headSha: HEAD_SHA, dispositions: defect === "residualResolvedOmitted" ? [] : dispositions, siteCoverage: [{ ...dispositions[0], fingerprint: ACT_FP }] }) : null;
+      const fixerPlan = await deliver(repoRoot, dispositions, { actList, delta, decision: defect === "missing" ? null : decision, semanticAuthority: defect !== "legacy", handoffText });
+      if (["source", "delta", "bytes"].includes(defect)) {
+        const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+        const read = plan.workOrder.requiredReads.find((entry) => entry.kind === (defect === "source" ? "act-list" : "delta-result"));
+        const altered = defect === "source" ? [{ ...actList[0], summary: "tampered" }] : { ...delta, newFindings: [{ severity: "low", summary: "tampered", evidence: ["x"] }] };
+        await writeFile(read.path, JSON.stringify(altered));
+        if (defect !== "bytes") read.sha256 = createHash("sha256").update(JSON.stringify(altered)).digest("hex");
+        assert.equal(workOrderDigest(plan.workOrder), plan.workOrderDigest, "local byte hashes cannot change semantic authority");
+        await writeFile(fixerPlan, JSON.stringify(plan));
+      }
+      const root = gateComment("c1", 1);
+      if (defect === "residualUnmarked") root.body = "Unmarked review finding";
+      if (defect === "residualForeign") root.author.login = "reviewer";
+      const resolvedResidual = ["residualResolved", "residualResolvedOmitted", "residualUnmarked", "residualForeign"].includes(defect);
+      const nodes = defect === "residualMissing" ? [] : [actThread("PRRT_RESIDUAL", [root], resolvedResidual)];
+      const { deps, calls } = runtime([threadsCallEntry(nodes), userEntry], repoRoot);
+      const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
+      if (defect) {
+        const expected = { missing: /delta clearing decision/, nonclearing: /delta clearing decision/, source: /authority.sourceDigest/, delta: /authority.deltaResultDigest/, bytes: /delta result differs from its sha256/, baseline: /pinned baseline/, membership: /not in the act set/, statuses: /delta clearing decision/, candidate: /actual pushed candidate/, invocation: /invocation-three/, tackled: /delta status and disposition disagree/, resolved: /delta status and disposition disagree/, resolvedForms: /fixed status and a test/, unaccounted: /returned site/, unbound: /delta status and live thread disposition disagree/, residualResolved: /delta status and live thread disposition disagree/, residualResolvedOmitted: /delta status and live thread disposition disagree/, legacy: /fixed status and a test/ };
+        const before = await readFile(fixerPlan, "utf8");
+        await assert.rejects(verify(), ["residualUnmarked", "residualForeign", "residualMissing"].includes(defect) ? /delta status and live thread disposition disagree/ : expected[defect]);
+        assert.equal(calls.length, defect === "unbound" || resolvedResidual || defect === "residualMissing" ? 3 : 0, "authority fails before GitHub mutation or checkpoint");
+        assert.deepEqual(await checkpointFiles(repoRoot), []);
+        assert.equal(await readFile(fixerPlan, "utf8"), before);
+      } else {
+        const before = await readFile(fixerPlan, "utf8");
+        const result = await verify();
+        assert.equal(result.complete, true, "only tackled disposition completion; residual is still open");
+        assert.deepEqual(result.actions, []);
+        assert.equal(nodes[0].isResolved, false);
+        assert.equal(calls.length, 3);
+        assert.equal(await readFile(fixerPlan, "utf8"), before);
+        if (check) assert.deepEqual(await checkpointFiles(repoRoot), []);
+      }
+    });
+  });
+}
+
+for (const check of [false, true]) for (const kind of ["threadless-mixed", "threadless-fixed", "live-mixed", "residual", "resolved"]) {
+  test(`repeated fingerprint completion preserves ref statuses (${check}, ${kind})`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const refuses = kind.endsWith("mixed");
+      const live = !kind.startsWith("threadless");
+      const fixed = kind === "threadless-fixed" || kind === "live-mixed" || kind === "resolved";
+      const actList = ["--first", "--second"].map((form) => ({ ...ACT_LIST[0], siteQuery: "query", acceptedForms: [form] }));
+      const statuses = !live ? ["not_resolved", "resolved"] : kind === "live-mixed" ? ["resolved", "cannot_verify"] : kind === "resolved" ? ["resolved", "resolved"] : ["not_resolved", "cannot_verify"];
+      const items = statuses.map((status, index) => ({ ref: index ? `${ACT_FP}#2` : ACT_FP, status }));
+      const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: FIX_SHA, actSetId: startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList }).actSetId, actionableItems: items.map((item) => ({ ...item, evidence: ["targeted check"] })), newFindings: [], widenedReads: [], outcome: "bounded_out" };
+      const decision = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: delta.actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items };
+      const dispositions = live ? [{ threadId: "PRRT_REPEAT", fixingCommitSha: HEAD_SHA, disposition: fixed ? "tackled" : "deferred" }] : [];
+      const handoffText = JSON.stringify({ headSha: HEAD_SHA, dispositions, siteCoverage: [{ fingerprint: ACT_FP, returnedSites: ["--first", "--second"], sites: ["--first", "--second"].map((site) => ({ site, kind: "input_form", status: fixed ? "fixed" : "skipped", ...(fixed ? { test: "targeted form test" } : { reason: "still fails at invocation three" }) })) }] });
+      const fixerPlan = await deliver(repoRoot, dispositions, { actList, delta, decision, handoffText });
+      const nodes = live ? [actThread("PRRT_REPEAT", [gateComment("c1", 1, `${ACT_MARKER}\n${fixed ? `Fixed in commit ${HEAD_SHA}.` : "still fails"}`)], fixed)] : [];
+      const { deps, calls } = runtime([threadsCallEntry(nodes), userEntry, ...(live && fixed ? [compareEntry(HEAD_SHA, "identical")] : [])], repoRoot);
+      const before = await readFile(fixerPlan, "utf8");
+      const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
+      if (refuses) {
+        await assert.rejects(verify(), live ? /delta status and live thread disposition disagree/ : /fixed status and a test/);
+        assert.equal(calls.length, live ? 3 : 0, "refuses before checkpoint or GitHub mutation");
+        assert.deepEqual(await checkpointFiles(repoRoot), []);
+      } else {
+        const result = await verify();
+        assert.equal(result.complete, true);
+        assert.deepEqual(result.actions, []);
+        assert.equal(calls.length, live && fixed ? 4 : 3);
+        if (check) assert.deepEqual(await checkpointFiles(repoRoot), []);
+      }
+      assert.equal(await readFile(fixerPlan, "utf8"), before);
+    });
+  });
+}
+
+for (const check of [false, true]) for (const [kind, statuses, disposition, member] of [
+  ["resolved-first", ["resolved", "resolved"], "tackled", 0],
+  ["resolved-second", ["resolved", "resolved"], "tackled", 1],
+  ["residual-first", ["not_resolved", "cannot_verify"], "deferred", 0],
+  ["residual-second", ["not_resolved", "cannot_verify"], "deferred", 1],
+  ["foreign", ["resolved", "resolved", "resolved"], "tackled", 2],
+  ["mixed-tackled", ["resolved", "not_resolved"], "tackled", 0],
+  ["mixed-deferred", ["resolved", "not_resolved"], "deferred", 1],
+  ["resolved-residual", ["not_resolved", "cannot_verify"], "deferred", 0],
+  ["incomplete-coverage", ["resolved", "resolved"], "tackled", 0],
+]) {
+  test(`distinct merged fingerprints validate every member (${check}, ${kind})`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const fingerprints = [ACT_FP, "fedcba9876543210", "1111111111111111"];
+      const actList = statuses.map((status, index) => ({ ...ACT_LIST[0], fingerprint: fingerprints[index], siteQuery: "query", acceptedForms: [`--member-${index}`] }));
+      const items = statuses.map((status, index) => ({ ref: fingerprints[index], status }));
+      const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList }).actSetId, actionableItems: items.map((item) => ({ ...item, evidence: ["targeted check"] })), newFindings: [], widenedReads: [], outcome: "bounded_out" };
+      const decision = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: delta.actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items };
+      const dispositions = [{ threadId: "PRRT_MERGED", fingerprint: fingerprints[member], fixingCommitSha: HEAD_SHA, disposition }];
+      const siteCoverage = actList.map((item, index) => ({ fingerprint: item.fingerprint, returnedSites: item.acceptedForms, sites: item.acceptedForms.map((site) => ({ site, kind: "input_form", status: statuses[index] === "resolved" ? "fixed" : "skipped", ...(statuses[index] === "resolved" ? { test: "targeted member test" } : { reason: "still fails at invocation three" }) })) }));
+      if (kind === "incomplete-coverage") siteCoverage[1].sites = [];
+      const handoffText = JSON.stringify({ headSha: HEAD_SHA, dispositions, siteCoverage });
+      const fixerPlan = await deliver(repoRoot, dispositions, { actList, delta, decision, handoffText });
+      const fixed = disposition === "tackled";
+      const root = `${ACT_MARKER}\n${ACT_MARKER.replace(ACT_FP, fingerprints[1])}\n**Problem:** merged members`;
+      const nodes = [actThread("PRRT_MERGED", [gateComment("c1", 1, root), ...(fixed ? [gateComment("c2", 2, `Fixed in commit ${HEAD_SHA}.`)] : [])], fixed || kind === "resolved-residual")];
+      const { deps, calls } = runtime([threadsCallEntry(nodes), userEntry, ...(fixed ? [compareEntry(HEAD_SHA, "identical")] : [])], repoRoot);
+      const before = await readFile(fixerPlan, "utf8");
+      const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
+      if (["foreign", "mixed-tackled", "mixed-deferred", "resolved-residual", "incomplete-coverage"].includes(kind)) {
+        await assert.rejects(verify(), kind === "incomplete-coverage" ? /returned site/ : /delta status and live thread disposition disagree/);
+        assert.equal(calls.length, kind === "incomplete-coverage" ? 0 : 3);
+        assert.deepEqual(await checkpointFiles(repoRoot), []);
+      } else {
+        const result = await verify();
+        assert.equal(result.complete, true);
+        assert.deepEqual(result.actions, []);
+        assert.equal(calls.length, fixed ? 4 : 3);
+        assert.equal((await checkpointFiles(repoRoot)).length, check ? 0 : 1);
+      }
+      assert.equal(hasPost(calls), false);
+      assert.equal(await readFile(fixerPlan, "utf8"), before);
+    });
+  });
+}
 
 async function checkpointFiles(repoRoot) {
   const entries = await readdir(path.join(repoRoot, "tmp"), { recursive: true }).catch(() => []);

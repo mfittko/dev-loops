@@ -24,7 +24,8 @@ import {
   normalizeFixerDispositionHandoff,
   siteCoverageGaps,
 } from "@dev-loops/core/loop/fixer-disposition";
-import { toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
+import { isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { DELTA_CLEARING_NEXT_STEPS, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> --fixer-plan <path> [--tmp-root <path>]
@@ -241,6 +242,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   // GATE-EXEC-REMEDIATION-SITE-QUERY: an act-list work order's items with a siteQuery need a coverage record.
   const actRead = (order.requiredReads ?? []).find((read) => read?.kind === "act-list");
   let actList = null;
+  let deltaStatuses = null;
   if (actRead) {
     try {
       const actBytes = await readFile(actRead.path);
@@ -252,16 +254,68 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       if (/differs from the sha256/.test(error.message)) throw error;
       throw new Error(`Cannot read the work order's act list ${actRead.path}`);
     }
+    if (order.authority?.sourceDigest && sha256Hex(actList).slice(7) !== order.authority.sourceDigest) {
+      throw new Error("the work order's act list differs from authority.sourceDigest");
+    }
+    const residualRefs = new Set();
+    const deltaRead = (order.requiredReads ?? []).find((read) => read?.kind === "delta-result");
+    // Legacy deliveries remain strict without both semantic authorities.
+    if (deltaRead && order.authority?.sourceDigest && order.authority?.deltaResultDigest) {
+      const bytes = await readFile(deltaRead.path);
+      if (createHash("sha256").update(bytes).digest("hex") !== String(deltaRead.sha256 ?? "").replace(/^sha256:/, "")) {
+        throw new Error("the work order's delta result differs from its sha256");
+      }
+      const delta = JSON.parse(bytes.toString("utf8"));
+      if (sha256Hex(delta).slice(7) !== order.authority.deltaResultDigest) {
+        throw new Error("the work order's delta result differs from authority.deltaResultDigest");
+      }
+      const sequence = startDeltaSequence({ reviewBaselineHead: order.headSha, actList });
+      const errors = validateDeltaResult(delta, { sequence, membershipOnly: true });
+      if (errors.length) throw new Error(`Invalid delta result: ${errors.join("; ")}`);
+      const decision = readGateDeltaRecord(receiptTmpRoot, order.headSha);
+      const pairs = (items) => (items ?? []).map(({ ref, status }) => JSON.stringify([ref, status])).sort().join("\n");
+      if (!decision || !DELTA_CLEARING_NEXT_STEPS.includes(decision.nextStep)
+        || decision.reviewBaselineHead !== order.headSha || decision.actSetId !== sequence.actSetId
+        || decision.candidateHead !== options.headSha || !Array.isArray(decision.items)
+        || pairs(decision.items) !== pairs(delta.actionableItems)) {
+        throw new Error("the delta clearing decision does not match the baseline, act set, item statuses or actual pushed candidate");
+      }
+      const bounded = decision.outcome === "bounded_out" && decision.nextStep === "push_to_gate" && decision.invocation === 3;
+      if (!bounded && !(decision.outcome === "locally_clear" && decision.nextStep === "push"
+        && Number.isInteger(decision.invocation) && decision.invocation >= 1 && decision.invocation <= 3
+        && delta.outcome === "locally_clear" && isDeltaResultFresh(delta, options.headSha))) {
+        throw new Error("the delta decision is neither locally clear nor invocation-three bounded_out");
+      }
+      const statuses = new Map(delta.actionableItems.map(({ ref, status }) => [ref, status]));
+      deltaStatuses = new Map();
+      // A shared fingerprint permits tackled/live resolution only when every member is resolved.
+      for (const item of sequence.actItems) {
+        const fingerprint = item.fingerprint ?? item.ref;
+        const status = statuses.get(item.ref);
+        if (!deltaStatuses.has(fingerprint) || status !== "resolved") deltaStatuses.set(fingerprint, status);
+      }
+      for (const entry of handoff.dispositions) {
+        if (!entry.fingerprint) continue;
+        const status = deltaStatuses.get(entry.fingerprint);
+        if (!status || entry.disposition !== (status === "resolved" ? FIXER_DISPOSITION_KIND.TACKLED : FIXER_DISPOSITION_KIND.DEFERRED)) {
+          throw new Error(`delta status and disposition disagree for ${entry.fingerprint}`);
+        }
+      }
+      if (bounded) {
+        for (const [ref, status] of statuses) if (status === "not_resolved" || status === "cannot_verify") residualRefs.add(ref);
+      }
+    }
     const coverage = [
       ...(handoff.siteCoverage ?? []),
       ...handoff.dispositions.filter((entry) => entry.fingerprint && (entry.sites || entry.returnedSites || entry.noSitesReason)),
     ];
-    const gaps = siteCoverageGaps(toDeltaActItems(actList), coverage);
+    const gaps = siteCoverageGaps(toDeltaActItems(actList), coverage, residualRefs);
     if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
   }
   return {
     handoff,
     actList,
+    deltaStatuses,
     delivery: { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity },
   };
 }
@@ -289,16 +343,33 @@ function threadRootComment(parsed, threadId) {
 // cycle: the handoff needs a disposition entry for that thread, never a threadless claim.
 // Gate-authored is the authenticated login on the thread ROOT comment, never marker text alone;
 // every matching thread needs its own entry.
-function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin) {
+function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, deltaStatuses) {
+  for (const entry of handoff.dispositions) {
+    const status = deltaStatuses?.get(entry.fingerprint);
+    if (status && status !== "resolved"
+      && parsed.threads.find((thread) => thread.id === entry.threadId)?.isResolved !== false) {
+      throw new Error(`delta status and live thread disposition disagree for ${entry.threadId} (${entry.fingerprint})`);
+    }
+  }
   const dispositioned = new Set(handoff.dispositions.map((entry) => entry.threadId));
   const openFingerprints = new Map();
-  for (const thread of parsed.threads.filter((t) => !t.isResolved)) {
+  for (const thread of parsed.threads) {
     const root = threadRootComment(parsed, thread.id);
     if (!root || root.author?.login !== gateLogin) continue;
     // A merged inline comment carries one marker per member: index every one, not just the first.
     const fps = new Set();
     collectFingerprints(root.body, fps);
+    const entry = handoff.dispositions.find((item) => item.threadId === thread.id);
+    if (entry?.fingerprint && !fps.has(entry.fingerprint) && [...fps].some((fp) => deltaStatuses?.has(fp))) {
+      throw new Error(`delta status and live thread disposition disagree for ${thread.id} (${entry.fingerprint})`);
+    }
     for (const fp of fps) {
+      const status = deltaStatuses?.get(fp);
+      if (status && ((status !== "resolved" && thread.isResolved)
+        || (entry && entry.disposition !== (status === "resolved" ? FIXER_DISPOSITION_KIND.TACKLED : FIXER_DISPOSITION_KIND.DEFERRED)))) {
+        throw new Error(`delta status and live thread disposition disagree for ${thread.id} (${fp})`);
+      }
+      if (thread.isResolved) continue;
       if (!openFingerprints.has(fp)) openFingerprints.set(fp, new Set());
       openFingerprints.get(fp).add(thread.id);
     }
@@ -320,7 +391,7 @@ export async function verifyFixerDisposition(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, delivery } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, actList, deltaStatuses, delivery } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
   const liveHead = live.code === 0 ? (() => { try { return JSON.parse(live.stdout).headRefOid; } catch { return null; } })() : null;
@@ -330,7 +401,7 @@ export async function verifyFixerDisposition(
   // A refused handoff writes no checkpoint: capture and assert before the write.
   const initialSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
   if (Array.isArray(actList)) {
-    assertActItemThreadsDisposed(actList, handoff, initialSnapshot, await resolveAuthenticatedLogin({ env, ghCommand, runChild }));
+    assertActItemThreadsDisposed(actList, handoff, initialSnapshot, await resolveAuthenticatedLogin({ env, ghCommand, runChild }), deltaStatuses);
   }
   if (!options.check) {
     await mkdir(path.dirname(fullPath), { recursive: true });

@@ -909,7 +909,9 @@ test("F5: a plan edited in place grants nothing", async () => {
 // ---------------------------------------------------------------------------
 
 test("F7: emit, pull, mutate in authority and verify the disposition; missing materialization refuses and re-emission supersedes the old reference", async () => {
-  await withFixture(async ({ root, wt, head, emit }) => {
+  await withFixture(async ({ root, wt, head, emit, files, writeRecord }) => {
+    await writeFile(files.delta, JSON.stringify(clearingDeltaFor(head, { candidateHead: head })));
+    await writeRecord({ candidateHead: head, items: [{ ref: ACT_REF, status: "resolved" }] });
     const unit = await emit();
     const planBefore = await readFile(unit.planPath, "utf8");
     const pulled = pull(unit, wt);
@@ -999,7 +1001,7 @@ for (const check of [false, true]) for (const form of ["unchanged", "empty", "al
   });
 }
 
-test("historical 44f57175 main producer/pull selects the real feature helper and completes unchanged THREAD delivery", async () => {
+for (const route of ["THREAD", "ACT"]) test(`historical 44f57175 main producer/pull selects the real feature helper and completes ${route} delivery`, async () => {
   await withFixture(async ({ root, wt, head, files, writeRecord }) => {
     const historical = "44f57175a215711923fb128d74e9357b33ff95e9";
     const checkout = fileURLToPath(new URL("../../", import.meta.url));
@@ -1015,7 +1017,16 @@ test("historical 44f57175 main producer/pull selects the real feature helper and
     const oldEmitter = await import(pathToFileURL(oldEmitterPath).href);
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_OLD" }] }));
     await writeRecord({ items: [{ ref: "PRRT_OLD", status: "resolved" }] });
-    const unit = await oldEmitter.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", threadsFile: files.threads, cwd: wt, executionIdentity: nextExecution(), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
+    const warning = withFp({ severity: "low", angle: "correctness", summary: "residual warning", judgeDisposition: "act", siteQuery: "query", rejectedForms: ["--warning"] });
+    const act = [...ACT, warning];
+    if (route === "ACT") {
+      const actSetId = startDeltaSequence({ reviewBaselineHead: head, actList: act }).actSetId;
+      const actionableItems = [{ ref: ACT_REF, status: "resolved", evidence: ["guarded"] }, { ref: warning.fingerprint, status: "cannot_verify", evidence: ["still unverified"] }];
+      await writeFile(files.actList, JSON.stringify(act));
+      await writeFile(files.delta, JSON.stringify(deltaResultFor(head, { actSetId, actionableItems })));
+      await writeRecord({ candidateHead: head, actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items: actionableItems.map(({ ref, status }) => ({ ref, status })) });
+    }
+    const unit = await oldEmitter.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", ...(route === "THREAD" ? { threadsFile: files.threads } : { actListFile: files.actList, gate: "draft_gate", deltaResult: files.delta }), cwd: wt, executionIdentity: nextExecution(), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
     const before = await readFile(unit.planPath, "utf8");
     const coverageDir = path.join(root, "tmp", "node-coverage");
     const pulled = spawnSync("node", [path.join(root, "scripts/github/pull-work-order.mjs"), unit.executionIdentity], { cwd: root, encoding: "utf8", env: { ...gitFreeEnv(), NODE_V8_COVERAGE: coverageDir } });
@@ -1029,16 +1040,22 @@ test("historical 44f57175 main producer/pull selects the real feature helper and
     assert.equal(receipt.workOrderDigest, unit.workOrderDigest);
     assert.equal(unit.workOrderDigest, workOrderDigest(unit.workOrder));
     await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
-    await writeFile(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: head, dispositions: [{ threadId: "PRRT_OLD", fixingCommitSha: head, disposition: "tackled" }] }));
+    const dispositions = [{ threadId: "PRRT_OLD", fixingCommitSha: head, disposition: "tackled", ...(route === "ACT" ? { fingerprint: ACT_REF, returnedSites: [], noSitesReason: "no remaining matches" } : {}) }];
+    if (route === "ACT") dispositions.push({ threadId: "PRRT_WARNING", fingerprint: warning.fingerprint, fixingCommitSha: head, disposition: "deferred", returnedSites: ["--warning"], sites: [{ site: "--warning", kind: "input_form", status: "skipped", reason: "unverified at invocation three" }] });
+    await writeFile(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: head, dispositions }));
     const nodes = [{ id: "PRRT_OLD", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    if (route === "ACT") nodes[0].comments.nodes[0].body += `\n<!-- dev-loops:finding ${ACT_REF} severity=high angle=correctness round=1 -->`;
     const parsedThreads = { threads: [{ id: "PRRT_OLD", isResolved: true }], comments: [{ threadId: "PRRT_OLD", body: `Fixed in commit ${head}.` }] };
-    const entries = () => [{ assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: head }) }, { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) }, { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' }];
+    if (route === "ACT") nodes.push({ id: "PRRT_WARNING", isResolved: false, comments: { nodes: [{ id: "c2", databaseId: 2, body: `<!-- dev-loops:finding ${warning.fingerprint} severity=low angle=correctness round=1 -->`, author: { login: "bot", __typename: "User" } }] } });
+    const entries = () => [{ assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: head }) }, { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) }, ...(route === "ACT" ? [{ assertArgs: ["api", "user"], stdout: '{"login":"bot"}' }] : []), { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' }];
     const featureVerifierPath = path.join(wt, "scripts/github/verify-fixer-disposition.mjs");
     assert.equal(await readFile(featureVerifierPath, "utf8"), await readFile(path.join(checkout, "scripts/github/verify-fixer-disposition.mjs"), "utf8"));
     const featureVerifier = await import(pathToFileURL(featureVerifierPath).href);
     const runtime = (mock) => ({ repoRoot: wt, env: runIdFreeEnv(), runChild: mock.runChild });
     const completed = await featureVerifier.verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath }, runtime(makeGhMock(entries())));
     assert.equal(completed.complete, true);
+    assert.deepEqual(completed.actions, []);
+    if (route === "ACT") assert.equal(nodes[1].isResolved, false, "deferred residual receives no Fixed reply or resolution");
     const checkpoint = [await readFile(completed.checkpointPath, "utf8"), (await stat(completed.checkpointPath)).mtimeMs];
     const featureResolver = await import(pathToFileURL(path.join(wt, "scripts/loop/detect-pr-gate-coordination-state.mjs")).href);
     const mock = makeGhMock([...entries(), { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' }]);
