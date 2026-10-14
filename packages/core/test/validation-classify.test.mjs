@@ -34,6 +34,33 @@ test("partial quoted heredoc delimiters do not swallow later commands", () => {
   }
 });
 
+test("dollar quoted heredoc delimiters keep following commands visible", () => {
+  for (const delimiter of ["$'EOF'", '$"EOF"', "$'E\\x4fF'"]) {
+    for (const [body, expected] of [["npm test", "full-repository"], ["bun test test/foo.test.mjs", "targeted"], ["echo npm test", "non-validation"]]) {
+      assert.equal(classifyValidationCommand(`cat <<${delimiter}\nx\nEOF\n${body}`), expected, delimiter + body);
+      assert.equal(classifyValidationCommand(`echo $(cat <<${delimiter}\nx\nEOF\n${body}\n)`), expected, delimiter + body);
+    }
+  }
+});
+
+test("Bash oracle ends dollar quoted heredocs before the following command", { skip: bashVersion.error?.code === "ENOENT" }, () => {
+  for (const delimiter of ["$'EOF'", '$"EOF"', "$'E\\x4fF'"]) {
+    const actual = spawnSync("bash", ["-c", `cat <<${delimiter}\nx\nEOF\nprintf '__after_heredoc__'`], { encoding: "utf8", timeout: 1000, env: { PATH: "/usr/bin:/bin", LC_ALL: "C" } });
+    assert.ifError(actual.error);
+    assert.equal(actual.status, 0, actual.stderr);
+    assert.equal(actual.stdout, "x\n__after_heredoc__", delimiter);
+  }
+});
+
+test("pnpm shell mode joins argv after exec with flags before exec", () => {
+  for (const prefix of ["pnpm -c exec", "pnpm --shell-mode exec", "pnpm -rc exec", "pnpm --filter pkg -c exec", "pnpm -c --filter pkg exec"]) {
+    for (const [body, expected] of [["npm test", "full-repository"], ["bun run verify", "full-repository"], ["bun test test/foo.test.mjs", "targeted"], ["echo npm test", "non-validation"]]) {
+      for (const program of [body, `'${body}'`]) assert.equal(classifyValidationCommand(`${prefix} ${program}`), expected, prefix + program);
+    }
+  }
+  for (const command of ["pnpm -r exec echo npm test", "pnpm exec echo --shell-mode npm test"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
+});
+
 test("opaque package flags classify in bounded time", () => {
   const start = performance.now();
   for (const [command, expected] of [["npm --silent run lint", "non-validation"], ["npm -w pkg test:core", "targeted"], ["npm -x val test", "full-repository"], ["npx --opaque value -- vitest", "full-repository"], [`npm ${"-a ".repeat(60)}; npm test`, "full-repository"]]) {

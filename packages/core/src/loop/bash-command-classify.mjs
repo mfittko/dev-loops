@@ -284,6 +284,8 @@ function quotedHeredoc(command, index, bodyNewline) {
   for (; cursor < command.length; cursor += 1) {
     const char = command[cursor], next = command[cursor + 1];
     if (!quote && /[\s;&|<>()]/.test(char)) break;
+    // shortcut: dollar quoted delimiters stay uncertain; add decoding if inert-data callers need it.
+    if (!quote && char === "$" && (next === "'" || next === '"')) return null;
     if (char === "\\" && quote !== "'" && next !== undefined) {
       quoted = true;
       if (quote !== '"' || /[$`"\\\n]/.test(next)) { delimiter += next === "\n" ? "" : next; cursor += 1; continue; }
@@ -1554,9 +1556,18 @@ function packageOptionPositions(words, starts) {
 }
 
 function literalPackagePrograms(words) {
+  const positions = packageOptionPositions(words, [1]);
   const starts = /^(?:npx|bunx)$/.test(words[0]) ? [1] : /^(?:npm|pnpm|yarn)$/.test(words[0])
-    ? [...packageOptionPositions(words, [1])].filter((index) => /^(?:exec|dlx)$/.test(words[index])).map((index) => index + 1) : [];
+    ? [...positions].filter((index) => /^(?:exec|dlx)$/.test(words[index])).map((index) => index + 1) : [];
   const programs = [];
+  if (words[0] === "pnpm") {
+    let shellMode = Infinity;
+    for (const index of positions) if (words[index] === "--shell-mode" || /^-[sqrdc]+$/.test(words[index]) && words[index].includes("c")) shellMode = Math.min(shellMode, index);
+    for (const start of starts) if (words[start - 1] === "exec" && shellMode < start - 1) {
+      const program = words.slice(start).map((word) => word.startsWith('"') ? JSON.parse(word) : word).join(" ");
+      programs.push(JSON.stringify(program || "$missing-program"));
+    }
+  }
   for (const index of packageOptionPositions(words, starts)) {
     if (/^(?:-c|--call)$/.test(words[index])) programs.push(words[index + 1] ?? "$missing-program");
     if (words[index]?.startsWith("--call=")) programs.push(words[index].slice(7) || "$missing-program");

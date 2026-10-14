@@ -478,7 +478,7 @@ test("shell option values and pipeline operators preserve both worker boundaries
 
 test("package exec programs and mixed heredoc delimiters preserve both worker boundaries", async () => {
   for (const role of ["developer", "fixer"]) for (const [body, block] of [["npm test", true], ["bun test test/foo.test.mjs", false], ["echo npm test", false]]) {
-    for (const command of [`npx -c '${body}'`, `npm exec -c '${body}'`, `npm exec --call='${body}'`, `pnpm exec -c '${body}'`, `cat <<'E'OF\nx\nEOF\n${body}`]) {
+    for (const command of [`npx -c '${body}'`, `npm exec -c '${body}'`, `npm exec --call='${body}'`, `pnpm exec -c '${body}'`, `pnpm -c exec ${body}`, `pnpm --shell-mode exec '${body}'`, `pnpm -rc exec ${body}`, `cat <<'E'OF\nx\nEOF\n${body}`, `cat <<$'EOF'\nx\nEOF\n${body}`, `cat <<$"EOF"\nx\nEOF\n${body}`]) {
       assert.equal(decideBashGate({ command, agentType: role }).decision, block ? "deny" : "allow", command);
       assert.equal((await callAs(role, command)).block, block, command);
     }
