@@ -932,7 +932,7 @@ for (const mismatched of [false, true]) {
   });
 }
 
-for (const check of [false, true]) for (const defect of [null, "missing", "nonclearing", "source", "delta", "bytes", "baseline", "membership", "statuses", "candidate", "invocation", "tackled", "resolved", "resolvedForms", "unaccounted", "unbound", "residualResolved", "residualResolvedOmitted", "legacy"]) {
+for (const check of [false, true]) for (const defect of [null, "missing", "nonclearing", "source", "delta", "bytes", "baseline", "membership", "statuses", "candidate", "invocation", "tackled", "resolved", "resolvedForms", "unaccounted", "unbound", "residualResolved", "residualResolvedOmitted", "residualUnmarked", "residualForeign", "residualMissing", "legacy"]) {
   test(`bounded-out full completion authenticates residual authority (${check}, ${defect})`, async () => {
     await withRepoRoot(async (repoRoot) => {
       const actList = [{ ...ACT_LIST[0], siteQuery: "query", acceptedForms: ["--flag"] }];
@@ -957,14 +957,18 @@ for (const check of [false, true]) for (const defect of [null, "missing", "noncl
         assert.equal(workOrderDigest(plan.workOrder), plan.workOrderDigest, "local byte hashes cannot change semantic authority");
         await writeFile(fixerPlan, JSON.stringify(plan));
       }
-      const nodes = [actThread("PRRT_RESIDUAL", [gateComment("c1", 1)], ["residualResolved", "residualResolvedOmitted"].includes(defect))];
+      const root = gateComment("c1", 1);
+      if (defect === "residualUnmarked") root.body = "Unmarked review finding";
+      if (defect === "residualForeign") root.author.login = "reviewer";
+      const resolvedResidual = ["residualResolved", "residualResolvedOmitted", "residualUnmarked", "residualForeign"].includes(defect);
+      const nodes = defect === "residualMissing" ? [] : [actThread("PRRT_RESIDUAL", [root], resolvedResidual)];
       const { deps, calls } = runtime([threadsCallEntry(nodes), userEntry], repoRoot);
       const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
       if (defect) {
         const expected = { missing: /delta clearing decision/, nonclearing: /delta clearing decision/, source: /authority.sourceDigest/, delta: /authority.deltaResultDigest/, bytes: /delta result differs from its sha256/, baseline: /pinned baseline/, membership: /not in the act set/, statuses: /delta clearing decision/, candidate: /actual pushed candidate/, invocation: /invocation-three/, tackled: /delta status and disposition disagree/, resolved: /delta status and disposition disagree/, resolvedForms: /fixed status and a test/, unaccounted: /returned site/, unbound: /delta status and live thread disposition disagree/, residualResolved: /delta status and live thread disposition disagree/, residualResolvedOmitted: /delta status and live thread disposition disagree/, legacy: /fixed status and a test/ };
         const before = await readFile(fixerPlan, "utf8");
-        await assert.rejects(verify(), expected[defect]);
-        assert.equal(calls.length, ["unbound", "residualResolved", "residualResolvedOmitted"].includes(defect) ? 3 : 0, "authority fails before GitHub mutation or checkpoint");
+        await assert.rejects(verify(), ["residualUnmarked", "residualForeign", "residualMissing"].includes(defect) ? /delta status and live thread disposition disagree/ : expected[defect]);
+        assert.equal(calls.length, defect === "unbound" || resolvedResidual || defect === "residualMissing" ? 3 : 0, "authority fails before GitHub mutation or checkpoint");
         assert.deepEqual(await checkpointFiles(repoRoot), []);
         assert.equal(await readFile(fixerPlan, "utf8"), before);
       } else {

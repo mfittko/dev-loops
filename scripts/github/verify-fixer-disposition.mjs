@@ -344,6 +344,13 @@ function threadRootComment(parsed, threadId) {
 // Gate-authored is the authenticated login on the thread ROOT comment, never marker text alone;
 // every matching thread needs its own entry.
 function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, deltaStatuses) {
+  for (const entry of handoff.dispositions) {
+    const status = deltaStatuses?.get(entry.fingerprint);
+    if (status && status !== "resolved"
+      && parsed.threads.find((thread) => thread.id === entry.threadId)?.isResolved !== false) {
+      throw new Error(`delta status and live thread disposition disagree for ${entry.threadId} (${entry.fingerprint})`);
+    }
+  }
   const dispositioned = new Set(handoff.dispositions.map((entry) => entry.threadId));
   const openFingerprints = new Map();
   for (const thread of parsed.threads) {
