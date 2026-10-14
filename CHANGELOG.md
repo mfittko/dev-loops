@@ -16,7 +16,6 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Gate coordination and Copilot requests check active full fixer obligations even when output is missing or incomplete; `verify-fixer-disposition --check` validates existing evidence without writes or GitHub actions (#2767)
 - `merge-pr` refuses a merge whose added decision record number already exists on the base branch tip (#2484)
 - Reject-close judge-rejected medium and low gate threads; the act-thread guard reads every marker and the emitter refuses a non-canonical fingerprint (#2485)
 - Gate fan-in treats an empty `verifiedItems` array on a non-checklist angle as absent instead of refusing the round (#2568)
