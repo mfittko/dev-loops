@@ -277,7 +277,7 @@ const VERIFY_EXEC_PREFIX =
   `${ENV_ASSIGNMENT_RUN}(?:${ENV_WRAPPER}|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?`;
 
 // Validation needs shell words, while the mutation and read/search guards keep their own boundaries.
-// Read literal substitution bodies only; never evaluate variables or scripts.
+// Read literal substitutions and shell-owned stdin programs; never evaluate variables or scripts.
 function quotedHeredoc(command, index) {
   const header = command.slice(index).match(/^<<(-?)[ \t]*(?:'([^']+)'|"([^"]+)"|\\([\w]+))/);
   if (!header) return null;
@@ -295,20 +295,33 @@ function quotedHeredoc(command, index) {
   return { start, end: command.length, body: command.slice(start + 1) };
 }
 
+function literalShellProgram(words) {
+  if (!/^(?:ba|z|da|k)?sh$/.test(words[0] ?? "")) return { program: null, stdin: false };
+  let index = 1, command = false, stdin = false;
+  for (; index < words.length; index += 1) {
+    const option = words[index];
+    if (option === "--" || option === "-") { index += 1; break; }
+    if (!/^[+-]/.test(option)) break;
+    if (option.startsWith("--")) {
+      if (option === "--command") command = true;
+      if (option === "--rcfile" || option === "--init-file") index += 1;
+      continue;
+    }
+    // Shell short options cluster; o/O take the next word even within a cluster.
+    for (const flag of option.slice(1)) {
+      if (option[0] === "-" && flag === "c") command = true;
+      if (option[0] === "-" && flag === "s") stdin = true;
+      if (flag === "o" || flag === "O") index += 1;
+    }
+  }
+  return { program: command ? words[index] ?? null : null, stdin: !command && (stdin || index >= words.length) };
+}
+
 function shellConsumesStdin(header) {
   // Inspect command ownership without recursively reading its stdin payload again.
   return normalizedVerificationSegments(header, 0, false).some(({ text }) => {
     const words = text.match(new RegExp(PACKAGE_MANAGER_WORD, "g")) ?? [];
-    if (!/^(?:ba|z|da|k)?sh$/.test(words[0] ?? "")) return false;
-    let stdin = false;
-    for (const word of words.slice(1)) {
-      if (/^-[^-]*c/.test(word) || /^--command(?:=|$)/.test(word)) return false;
-      if (/^-[^-]*s/.test(word)) stdin = true;
-      if (word === "--") continue;
-      if (word === "-") return true;
-      if (!word.startsWith("-")) return stdin;
-    }
-    return true;
+    return literalShellProgram(words).stdin;
   });
 }
 
@@ -413,12 +426,14 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
     if (/[{}!]/.test(char) && !started) { words.push(char); continue; }
     if (char === "}") { finishWord(); words.push(char); continue; }
     if (/[;&|\n\r]/.test(char)) {
+      const operator = char === "|" && (next === "|" || next === "&") ? char + next : char === "&" && next === "&" ? "&&" : char;
       finishSegment();
-      if (char !== "|") {
+      if (operator !== "|" && operator !== "|&") {
         if (heredoc && heredoc.headerEnd === undefined) heredoc.headerEnd = i;
         for (const program of stdinPrograms) if (program.headerEnd === undefined) program.headerEnd = i;
-        headerStart = i + 1;
+        headerStart = i + operator.length;
       }
+      i += operator.length - 1;
       continue;
     }
     if (/\s/.test(char)) { finishWord(); continue; }
@@ -476,12 +491,7 @@ function normalizedVerificationSegments(command, depth = 0, inspectStdin = true)
       candidate = stripped.replace(prefix, "");
       if (candidate !== original) { pending.push(candidate); continue; }
       const words = candidate.match(new RegExp(PACKAGE_MANAGER_WORD, "g")) ?? [];
-      const shell = /^(?:ba|z|da|k)?sh$/.test(words[0] ?? "");
-      let commandFlag = -1;
-      if (shell) for (let index = 1; index < words.length && words[index].startsWith("-") && words[index] !== "--"; index += 1) {
-        if (/^-[^-]*c/.test(words[index]) || words[index] === "--command") { commandFlag = index; break; }
-      }
-      const payload = commandFlag > 0 ? words[commandFlag + 1] : null;
+      const payload = literalShellProgram(words).program;
       const decode = (word) => word.startsWith('"') ? JSON.parse(word) : word;
       const program = payload ? decode(payload) : words[0] === "eval" ? words.slice(1).map(decode).join(" ") : null;
       // shortcut: eight literal shell nesting levels; dynamic or malformed programs stay opaque.

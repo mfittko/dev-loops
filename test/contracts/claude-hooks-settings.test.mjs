@@ -1057,6 +1057,21 @@ test("generated Bash hook distinguishes literal shell programs from stdin data",
   }
 });
 
+test("generated Bash hook preserves shell option and pipeline ownership", () => {
+  for (const agent_type of ["developer", "fixer"]) for (const [command, denied] of [
+    ["bash -euo pipefail -c -- 'npm test'", true],
+    ["bash -O extglob <<'EOF'\nnpm test\nEOF", true],
+    ["cat <<'EOF' |& bash\nnpm test\nEOF", true],
+    ["bash -co pipefail 'bun run test:core'", false],
+    ["bash -so pipefail <<< 'bun run test:core'", false],
+    ["cat <<'EOF' || bash\nnpm test\nEOF", false],
+  ]) {
+    const result = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type});
+    assert.equal(result.code, 0, command);
+    assert.equal(result.json?.hookSpecificOutput?.permissionDecision === "deny", denied, `${agent_type}: ${command}`);
+  }
+});
+
 test("Bash hook keeps native role and malformed-command behavior", () => {
   for (const command of [undefined, 42]) {
     for (const agent_type of ["review", "judge"]) assert.equal(runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, agent_type, cwd: repoRoot}).json?.hookSpecificOutput?.permissionDecision, "deny");

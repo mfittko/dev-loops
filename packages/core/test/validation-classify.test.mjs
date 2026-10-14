@@ -63,6 +63,28 @@ test("quoted stdin is program text only when a shell consumes it as a program", 
   for (const [consumer, expected] of [["bash", "full-repository"], ["time sh -s", "full-repository"], ["cat", "non-validation"], ["bash script.sh", "non-validation"], ["sh -c 'cat'", "non-validation"]]) assert.equal(classifyValidationCommand(`${consumer} <<< 'npm test'`), expected, consumer);
 });
 
+test("shell option arity and end-of-options preserve literal program ownership", () => {
+  for (const options of ["-euo pipefail -c", "-o pipefail -c", "-O extglob -c", "-co pipefail", "+o pipefail -c", "--norc -c", "--rcfile profile -c", "-c --"]) {
+    for (const [body, expected] of [["npm test", "full-repository"], ["bun run test:core", "targeted"], ["echo npm test", "non-validation"]]) assert.equal(classifyValidationCommand(`bash ${options} '${body}'`), expected, options);
+  }
+  for (const options of ["-euo pipefail", "-o pipefail", "-O extglob", "+o pipefail", "--rcfile profile", "-so pipefail -- args"]) {
+    assert.equal(classifyValidationCommand(`bash ${options} <<'EOF'\nnpm test\nEOF`), "full-repository", options);
+    assert.equal(classifyValidationCommand(`bash ${options} <<< 'bun run test:core'`), "targeted", options);
+  }
+  for (const options of ["-o pipefail script.sh", "-- script.sh", "-- -c", "-c 'cat'", "script.sh -c 'npm test'"]) assert.equal(classifyValidationCommand(`bash ${options} <<'EOF'\nnpm test\nEOF`), "non-validation", options);
+});
+
+test("stdin pipelines distinguish stderr piping from logical lists", () => {
+  for (const operator of ["|", "|&"]) {
+    assert.equal(classifyValidationCommand(`cat <<'EOF' ${operator} bash -o pipefail\nnpm test\nEOF`), "full-repository", operator);
+    assert.equal(classifyValidationCommand(`cat <<< 'bun run test:core' ${operator} sh -s`), "targeted", operator);
+  }
+  for (const operator of ["||", "&&", ";", "&"]) {
+    assert.equal(classifyValidationCommand(`cat <<'EOF' ${operator} bash\nnpm test\nEOF`), "non-validation", operator);
+    assert.equal(classifyValidationCommand(`cat <<< 'npm test' ${operator} bash`), "non-validation", operator);
+  }
+});
+
 test("canonical script launcher uses existing script validation ownership", () => {
   for (const prefix of ["dev-loops-run", "dev-loops-run --repo-root /work", 'dev-loops-run --repo-root "my work"']) {
     assert.equal(classifyValidationCommand(`${prefix} scripts/verify.mjs`), "full-repository", prefix);
