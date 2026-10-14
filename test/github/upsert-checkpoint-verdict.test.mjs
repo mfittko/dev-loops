@@ -2297,9 +2297,10 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["high"],
     });
-    // Seven gh calls: the explicit fixture repoRoot owns config resolution, so
-    // this bare synthetic root does not inherit the ambient light-mode fetch.
-    assert.equal(result.ghCallCount(), 7);
+    // Eight gh calls: the explicit fixture repoRoot owns config resolution, so
+    // this bare synthetic root does not inherit the ambient light-mode fetch;
+    // the eighth reads the visible report to compare its validation warning.
+    assert.equal(result.ghCallCount(), 8);
   }, { prefix: "dev-loops-upsert-gate-review-noop-" });
 });
 
@@ -12058,12 +12059,12 @@ test('a same-head verdict updates in place when the admitted validation warning 
       await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: '' }), ghCommand: 'gh', runChild: plain.runChild, repoRoot: fanoutDisabledRepoRoot });
       const withoutWarning = JSON.parse(plain.calls.find((c) => c.args.includes('repos/owner/repo/pulls/17/reviews')).stdinText).body;
       assert.doesNotMatch(withoutWarning, /Validation warning/);
-      const run = async (body) => {
+      const run = async (body, repoRoot = root) => {
         const mock = makeGhMock([...coordination(comment(body)), { assertArgs: ['api', '-X'], stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-103"}\n' }], { repeatLastOnOverflow: true });
         // The one read of the visible report returns the current body; every other call follows the sequence.
         const runChild = async (cmd, a = [], ...rest) => (a.length === 2 && a[0] === 'api' && a[1] === 'repos/owner/repo/issues/comments/103')
           ? { code: 0, stdout: `${JSON.stringify({ id: 103, body })}\n`, stderr: '' } : mock.runChild(cmd, a, ...rest);
-        const result = await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: '' }), ghCommand: 'gh', runChild, repoRoot: root });
+        const result = await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: '' }), ghCommand: 'gh', runChild, repoRoot });
         return { result, mock };
       };
       const added = await run(withoutWarning);
@@ -12073,6 +12074,10 @@ test('a same-head verdict updates in place when the admitted validation warning 
       const visible = (updated.stdinText ? JSON.parse(updated.stdinText).body : updated.args.find((a) => a.startsWith('body=')).slice(5));
       const second = await run(visible); assert.equal(second.result.action, 'noop', JSON.stringify(second.mock.calls.map((c) => c.args.join(' ').slice(0, 90))));
       assert.notEqual((await run(visible.replace(validationWarning.message, 'Validation was not performed: changed. Configure validation.'))).result.action, 'noop');
+      // Removal: a visible warning is dropped once optional admission returns no evidence.
+      const removed = await run(visible, fanoutDisabledRepoRoot);
+      assert.notEqual(removed.result.action, 'noop');
+      assert.ok(removed.mock.calls.some((c) => c.args.includes('-X')), 'the stale warning is replaced in place');
     }, { prefix: 'absence-update-' });
   } finally { process.env.PATH = stubbedPath; }
 });

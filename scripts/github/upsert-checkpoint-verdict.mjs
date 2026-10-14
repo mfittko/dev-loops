@@ -3440,11 +3440,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // validation-warning line with the desired one (added, changed or removed). A failed read re-renders.
   const warningLine = (text) => String(text ?? "").split("\n").find((line) => line.startsWith("**Validation warning:**")) ?? null;
   let validationWarningCurrent = true;
-  // ponytail: only rounds that consumed a validation artifact pay the read; a round without one renders no warning.
-  if (existing?.contractComplete && validationEvidence) {
+  if (existing?.contractComplete) {
     const route = existing.surface === "review" ? `repos/${options.repo}/pulls/${options.pr}/reviews/${existing.commentId}` : `repos/${options.repo}/issues/comments/${existing.commentId}`;
     try { validationWarningCurrent = warningLine((await runGhJson(["api", route], gh))?.body) === warningLine(desiredBody); }
-    catch { validationWarningCurrent = false; }
+    // A failed read re-renders only when a warning is due; with no admitted evidence there is nothing to add, so keep the noop.
+    catch { validationWarningCurrent = !validationEvidence; }
   }
   if (
     existing
