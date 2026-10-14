@@ -3442,7 +3442,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let validationWarningCurrent = true;
   if (existing?.contractComplete) {
     const route = existing.surface === "review" ? `repos/${options.repo}/pulls/${options.pr}/reviews/${existing.commentId}` : `repos/${options.repo}/issues/comments/${existing.commentId}`;
-    try { validationWarningCurrent = warningLine((await runGhJson(["api", route], gh))?.body) === warningLine(desiredBody); }
+    try { const visibleBody = (await runGhJson(["api", route], gh))?.body; validationWarningCurrent = typeof visibleBody === "string" && warningLine(visibleBody) === warningLine(desiredBody); }
     // A failed read cannot show whether a stale warning is visible, so re-render rather than declare equality.
     catch { validationWarningCurrent = false; }
   }
