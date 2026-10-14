@@ -348,41 +348,59 @@ function substitutionEnd(command, start, backtick) {
   return -1;
 }
 
+const VERIFICATION_CONTROL_PREFIX = /^(?:(?:if|then|elif|else|do|while|until)(?:\s+|$)|coproc(?:\s+\w+(?=\s*\{))?(?:\s+|$)|function\s+[^\s{]+\s*\{\s*|[!({]\s*)/;
+
 function validationShellSegments(command, depth = 0, inspectStdin = true) {
   const segments = [];
-  const heredocs = [], bodySpans = [], statements = [];
-  let statement = [], stage = { start: 0, inputs: [] }, pipeline = false;
+  const heredocs = [], statements = [];
+  let statement = [], stage = { inputs: [], owners: [] }, pipeline = false;
   const nesting = [];
   statement.push(stage);
   statements.push(statement);
-  const endStage = (end, pipe) => {
-    stage.end = end;
-    stage = { start: end + (pipe?.length ?? 1), inputs: [] };
+  const endStage = (pipe) => {
+    stage = { inputs: [], owners: [] };
     if (!pipe) { statement = []; statements.push(statement); }
     statement.push(stage);
   };
-  let words = [], word = "", started = false, quote = null, uncertain = false, redirectTarget = false;
+  let words = [], word = "", started = false, quotedWord = false, quote = null, uncertain = false, redirectTarget = false;
+  let ownInputs = [], closedOwner = null, pipeFrom = null, lastOwner = null;
   let input = null;
   const finishWord = () => {
     if (started) {
       if (!redirectTarget) {
-        if (words.every((prefix) => ["{", "!", "time", "-p", "then", "do", "else", "elif"].includes(prefix)) && /^(?:if|while|until|for|select|case)$/.test(word)) nesting.push(word === "if" ? "fi" : word === "case" ? "esac" : "done");
-        if (!words.length && word === nesting.at(-1)) nesting.pop();
+        if (!quotedWord && /^(?:\{|if|while|until|for|select|case)$/.test(word)) {
+          let prefix = [...words, word].join(" ");
+          for (;;) {
+            const stripped = prefix.replace(VERIFICATION_CONTROL_PREFIX, "").replace(/^time(?:\s+-p)?(?:\s+|$)/, "");
+            if (stripped === prefix) break;
+            prefix = stripped;
+          }
+          if (!prefix || prefix === word) nesting.push({ closer: word === "{" ? "}" : word === "if" ? "fi" : word === "case" ? "esac" : "done", inputs: [], pipeFrom });
+        }
+        if (!quotedWord && !words.length && word === nesting.at(-1)?.closer) closedOwner = nesting.pop();
         pipeline = false;
       }
       const option = word.match(/^((?:--?[\w-]+|[A-Za-z_]\w*)=)([\s\S]*)$/);
-      if (!redirectTarget) words.push(/^[\w./:@=+-]+$/.test(word) ? word : option ? option[1] + JSON.stringify(option[2]) : JSON.stringify(word));
+      if (!redirectTarget) words.push(/^[\w./:@=+-]+$/.test(word) || (!quotedWord && /^[{}!]$/.test(word)) ? word : option ? option[1] + JSON.stringify(option[2]) : JSON.stringify(word));
       if (input?.hereString) input.body = word;
       redirectTarget = false;
       input = null;
     }
     word = "";
     started = false;
+    quotedWord = false;
   };
   const finishSegment = () => {
     finishWord();
-    if (words.length) segments.push({ text: words.join(" "), uncertain });
+    if (words.length) {
+      const text = words.join(" ");
+      segments.push({ text, uncertain });
+      lastOwner = { text, inputs: ownInputs, parents: [...nesting], pipeFrom };
+      stage.owners.push(lastOwner);
+      pipeFrom = null;
+    }
     words = [];
+    ownInputs = [];
     uncertain = false;
     redirectTarget = false;
   };
@@ -395,18 +413,18 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
       for (const pending of heredocs.splice(0)) {
         const body = quotedHeredoc(command, pending.index, cursor);
         Object.assign(pending, body);
-        bodySpans.push(body);
         cursor = body.end;
       }
-      if (!nesting.length && !continued) endStage(i);
+      if (!nesting.length && !continued) endStage();
+      if (!continued) pipeFrom = null;
+      closedOwner = null;
       i = cursor;
-      if (!continued && !nesting.length) stage.start = i + 1;
       continue;
     }
     if (char === "\\" && quote !== "'") {
       if (next === "\n") { i += 1; continue; }
       if (next === undefined) { uncertain = true; continue; }
-      if (quote !== '"' || /[$`"\\]/.test(next)) { word += next; started = true; i += 1; continue; }
+      if (quote !== '"' || /[$`"\\]/.test(next)) { word += next; started = true; quotedWord = true; i += 1; continue; }
       word += char;
       continue;
     }
@@ -432,7 +450,7 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
       }
       continue;
     }
-    if (char === "'" || char === '"') { quote = char; started = true; continue; }
+    if (char === "'" || char === '"') { quote = char; started = true; quotedWord = true; continue; }
     if ((char === "<" || char === ">") && next === "(") uncertain = true;
     else if (char === "<" || char === ">" || (char === "&" && next === ">")) {
       const operator = command.slice(i).match(/^(?:&>>?|<<<|<<-?|[<>](?:[>&]|<)?)/)[0];
@@ -443,6 +461,7 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
       if (operator.startsWith("<") && (fd === null || fd === "0")) {
         input = { index: i, hereString: operator === "<<<" };
         stage.inputs.push(input);
+        (closedOwner?.inputs ?? ownInputs).push(input);
       }
       if (/^<<-?$/.test(operator)) {
         if (quotedHeredoc(command, i)) heredocs.push(input ?? { index: i });
@@ -453,13 +472,14 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
       continue;
     }
     // Unquoted parentheses delimit command positions (groups, function bodies and case arms).
-    if (/[()]/.test(char)) { finishSegment(); if (char === "(") nesting.push(")"); else if (nesting.at(-1) === ")") nesting.pop(); continue; }
-    if (/[{}!]/.test(char) && !started) { if (char === "{") nesting.push("}"); if (char === "}" && nesting.at(-1) === "}") nesting.pop(); words.push(char); continue; }
+    if (/[()]/.test(char)) { finishSegment(); if (char === "(") nesting.push({ closer: ")", inputs: [], pipeFrom }); else if (nesting.at(-1)?.closer === ")") closedOwner = nesting.pop(); continue; }
     if (/[;&|\n\r]/.test(char)) {
       const operator = char === "|" && (next === "|" || next === "&") ? char + next : char === "&" && next === "&" ? "&&" : char;
       finishSegment();
       const pipe = operator === "|" || operator === "|&";
-      if (!nesting.length && !(char === "\n" && pipeline)) endStage(i, pipe ? operator : null);
+      if (!nesting.length && !(char === "\n" && pipeline)) endStage(pipe ? operator : null);
+      if (!(char === "\n" && pipeline)) pipeFrom = pipe ? lastOwner : null;
+      closedOwner = null;
       if (pipe) pipeline = true;
       i += operator.length - 1;
       continue;
@@ -471,17 +491,19 @@ function validationShellSegments(command, depth = 0, inspectStdin = true) {
   }
   if (quote) uncertain = true;
   finishSegment();
-  stage.end ??= command.length;
   if (inspectStdin) for (const stages of statements) for (let index = 0; index < stages.length; index += 1) {
-    const program = stages[index].inputs.at(-1);
-    if (program?.body === undefined) continue;
-    for (let target = index; target < stages.length; target += 1) {
-      if (target > index && stages[target].inputs.length) break; // A downstream stdin redirect replaces the pipe.
-      const owner = stages[target];
-      const header = bodySpans.reduce((text, body) => text.replace(command.slice(body.start, body.end + 1), "\n"), command.slice(owner.start, owner.end));
-      if (!shellConsumesStdin(header)) continue;
+    for (const owner of stages[index].owners) {
+      if (!shellConsumesStdin(owner.text)) continue;
+      let program;
+      for (let source = owner; source && !program;) {
+        program = source.inputs.at(-1) ?? source.parents.toReversed().find((parent) => parent.inputs.length)?.inputs.at(-1);
+        source = source.pipeFrom ?? source.parents.toReversed().find((parent) => parent.pipeFrom)?.pipeFrom;
+      }
+      if (!program) for (let source = index - 1; source >= 0; source -= 1) {
+        if (stages[source].inputs.length) { program = stages[source].inputs.at(-1); break; }
+      }
+      if (program?.body === undefined) continue;
       segments.push(...(depth < 8 && !program.body.startsWith("$") ? validationShellSegments(program.body, depth + 1) : [{ text: "<opaque-shell-program>", fullValidation: true }]));
-      break;
     }
   }
   return segments;
@@ -518,13 +540,12 @@ function verificationWrapperLaunches(text) {
 function normalizedVerificationSegments(command, depth = 0, inspectStdin = true) {
   if (typeof command !== "string") return [];
   const prefix = new RegExp(`^${VERIFY_EXEC_PREFIX.replaceAll("[A-Za-z_][A-Za-z0-9_]*=\\S*", `[A-Za-z_][A-Za-z0-9_]*=${PACKAGE_MANAGER_WORD}`)}`, "i");
-  const controlPrefix = /^(?:(?:if|then|elif|else|do|while|until)(?:\s+|$)|coproc(?:\s+\w+(?=\s*\{))?(?:\s+|$)|function\s+[^\s{]+\s*\{\s*|[!({]\s*)/;
   return validationShellSegments(command, depth, inspectStdin).flatMap(({ text, uncertain, fullValidation }) => {
     if (fullValidation) return [{ text, fullValidation }];
     const pending = [text], normalized = [];
     for (const original of pending) {
       let candidate = original;
-      const stripped = candidate.replace(controlPrefix, "");
+      const stripped = candidate.replace(VERIFICATION_CONTROL_PREFIX, "");
       const launches = verificationWrapperLaunches(stripped);
       if (launches.length !== 1 || launches[0] !== stripped) { pending.push(...launches); continue; }
       candidate = stripped.replace(prefix, "");

@@ -24,6 +24,31 @@ test("nested compound closers preserve heredoc program ownership", () => {
   }
 });
 
+test("literal stdin belongs to its command and enclosing compound", () => {
+  for (const [prefix, suffix] of [
+    ["echo {a,b}\nbash <<'EOF'\n", "\nEOF\ntrue </dev/null"],
+    ["{ echo }; bash; } <<'EOF'\n", "\nEOF"],
+    ["{ bash <<'EOF'\n", "\nEOF\ntrue </dev/null; }"],
+    ["{ bash <<'EOF'\n", "\nEOF\ncat <<'X'\nsafe\nX\n}"],
+    ["if true; then bash <<'EOF'\n", "\nEOF\nfi </dev/null"],
+    ["coproc while true; do bash; done <<'EOF'\n", "\nEOF"],
+    ["coproc name { bash; } <<'EOF'\n", "\nEOF"],
+    ["{ cat <<'EOF' | bash\n", "\nEOF\n}"],
+    ["{ cat <<'EOF' | { true; bash; }; }\n", "\nEOF"],
+    ["{ bash <<'EOF'\n", "\nEOF\n} <<'X'\necho safe\nX"],
+  ]) for (const [body, expected] of [["npm test", "full-repository"], ["bun run test:core", "targeted"], ["echo npm test", "non-validation"]]) {
+    const command = prefix + body + suffix;
+    const syntax = spawnSync("bash", ["-n"], { input: command, encoding: "utf8" });
+    assert.equal(syntax.status, 0, syntax.stderr);
+    assert.equal(classifyValidationCommand(command), expected, command);
+  }
+  for (const command of ["{ bash </dev/null; } <<'EOF'\nnpm test\nEOF", "{ bash <<'X'\necho safe\nX\n} <<'EOF'\nnpm test\nEOF", "{ bash <<'X' </dev/null\nnpm test\nX\n} <<'EOF'\nnpm test\nEOF"]) {
+    const syntax = spawnSync("bash", ["-n"], { input: command, encoding: "utf8" });
+    assert.equal(syntax.status, 0, syntax.stderr);
+    assert.equal(classifyValidationCommand(command), "non-validation", command);
+  }
+});
+
 test("literal stdin attachment survives compounds, continued pipelines and separate heredocs", () => {
   for (const consumer of ["{ bash; }", "if true; then bash; fi", "(true; bash)", "bash /dev/stdin", "bash /dev/fd/0", "source /dev/stdin", ". /dev/stdin", "cat <<PLACEHOLDER | { true; bash; }", "cat <<PLACEHOLDER |\nbash"]) {
     for (const [body, expected] of [["npm test", "full-repository"], ["bun run test:core", "targeted"], ["echo npm test", "non-validation"]]) {

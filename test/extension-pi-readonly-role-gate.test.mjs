@@ -445,6 +445,19 @@ test("literal shell program ownership preserves Claude and registered Pi worker 
 });
 
 test("shell option values and pipeline operators preserve both worker boundaries", async () => {
+  for (const [prefix, suffix] of [
+    ["echo {a,b}\nbash <<'EOF'\n", "\nEOF\ntrue </dev/null"],
+    ["{ echo }; bash; } <<'EOF'\n", "\nEOF"],
+    ["{ bash <<'EOF'\n", "\nEOF\ntrue </dev/null; }"],
+    ["{ bash <<'EOF'\n", "\nEOF\ncat <<'X'\nsafe\nX\n}"],
+    ["if true; then bash <<'EOF'\n", "\nEOF\nfi </dev/null"],
+    ["coproc while true; do bash; done <<'EOF'\n", "\nEOF"],
+    ["{ bash <<'EOF'\n", "\nEOF\n} <<'X'\necho safe\nX"],
+  ]) for (const role of ["developer", "fixer"]) for (const [body, block] of [["npm test", true], ["bun run test:core", false], ["echo npm test", false]]) {
+    const command = prefix + body + suffix;
+    assert.equal(decideBashGate({ command, agentType: role }).decision, block ? "deny" : "allow", command);
+    assert.equal((await callAs(role, command)).block, block, command);
+  }
   for (const consumer of ["{ if true; then bash; fi; }", "if true; then if true; then bash; fi; fi", "{ echo ${HOME}; bash; }", "case x in a) bash;; esac", "time if true; then bash; fi"]) {
     for (const role of ["developer", "fixer"]) for (const [body, block] of [["npm test", true], ["bun run test:core", false], ["echo npm test", false]]) {
       const command = `${consumer} <<'EOF'\n${body}\nEOF`;
