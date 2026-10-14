@@ -140,9 +140,10 @@ function normalizeSiteCoverageRecords(raw, ruleIds) {
  * item (`acceptedForms` / `rejectedForms`) needs one fixed `input_form` site with a test per listed form.
  * @param {Array<object>} actItems delta act items (each with `fingerprint` or `ref`)
  * @param {Array<object>|undefined} siteCoverage normalized `siteCoverage` of a handoff
+ * @param {Set<string>} [residualFingerprints] full-completion fingerprints authenticated by a bounded-out Delta decision
  * @returns {string[]}
  */
-export function siteCoverageGaps(actItems, siteCoverage) {
+export function siteCoverageGaps(actItems, siteCoverage, residualFingerprints = new Set()) {
   const byFingerprint = new Map((siteCoverage ?? []).map((record) => [record.fingerprint, record]));
   const gaps = [];
   for (const item of actItems) {
@@ -161,6 +162,7 @@ export function siteCoverageGaps(actItems, siteCoverage) {
     for (const form of [...(item.acceptedForms ?? []), ...(item.rejectedForms ?? [])]) {
       const site = disposed.get(form);
       if (site?.kind !== "input_form") gaps.push(`act item ${key} records no input_form site for form ${JSON.stringify(form)}`);
+      else if (residualFingerprints.has(key) && site.status === SITE_STATUS.SKIPPED && isNonEmptyString(site.reason) && !site.reason.trim().startsWith("FILL:")) continue;
       else if (site.status !== SITE_STATUS.FIXED || !isNonEmptyString(site.test)) gaps.push(`act item ${key} input_form site ${JSON.stringify(form)} needs a fixed status and a test`);
     }
   }

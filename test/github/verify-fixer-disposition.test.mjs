@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
 import { initGitFixture, makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import {
@@ -69,7 +70,7 @@ const REF = `fixer:${REPO}#${PR}:${HEAD_SHA}:f1-0000abcd`;
 // receipt under <repoRoot>/tmp, and the disposition handoff at the plan's outputRef.
 async function deliver(repoRoot, dispositions, {
   handoffHead = HEAD_SHA, orderHead = HEAD_SHA, phase = "full", receipt = {}, writeReceipt = true, writeHandoff = true, pulledAt = new Date(Date.now() - 1000).toISOString(),
-  receiptMtime = null, handoffText = null, actList = null, editActListAfter = false, threads = null,
+  receiptMtime = null, handoffText = null, actList = null, editActListAfter = false, threads = null, delta = null, decision = null, semanticAuthority = true,
 } = {}) {
   const dir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
   const outputRef = path.join(dir, "f1-0000abcd", "fixer-disposition.json");
@@ -83,6 +84,19 @@ async function deliver(repoRoot, dispositions, {
     await mkdir(dir, { recursive: true });
     await writeFile(source, JSON.stringify(threads));
     plan.workOrderDigest = workOrderDigest(workOrder);
+  }
+  if (delta) {
+    const deltaPath = path.join(dir, "delta.json");
+    workOrder.requiredReads.push({ kind: "delta-result", path: deltaPath, sha256: createHash("sha256").update(JSON.stringify(delta)).digest("hex") });
+    if (semanticAuthority) workOrder.authority = { sourceDigest: sha256Hex(actList).slice(7), deltaResultDigest: sha256Hex(delta).slice(7) };
+    await mkdir(dir, { recursive: true });
+    await writeFile(deltaPath, JSON.stringify(delta));
+    plan.workOrderDigest = workOrderDigest(workOrder);
+    if (decision) {
+      const recordPath = path.join(repoRoot, "tmp", "gate-delta", `${orderHead}.json`);
+      await mkdir(path.dirname(recordPath), { recursive: true });
+      await writeFile(recordPath, JSON.stringify(decision));
+    }
   }
   const planPath = path.join(dir, "fixer-emit-plan.json");
   await mkdir(path.dirname(outputRef), { recursive: true });
@@ -888,6 +902,53 @@ const ACT_LIST = [{ fingerprint: ACT_FP, severity: "medium", summary: "s", judge
 const userEntry = { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` };
 const gateComment = (id, databaseId, body = `${ACT_MARKER}\n**Problem:** s`, login = "gate") => ({ id, databaseId, body, author: { login, __typename: "User" } });
 const actThread = (id, comments, isResolved = false) => ({ id, isResolved, comments: { nodes: comments } });
+
+for (const check of [false, true]) for (const defect of [null, "missing", "nonclearing", "source", "delta", "bytes", "baseline", "membership", "statuses", "candidate", "invocation", "tackled", "resolved", "resolvedForms", "unaccounted", "unbound", "residualResolved", "legacy"]) {
+  test(`bounded-out full completion authenticates residual authority (${check}, ${defect})`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const actList = [{ ...ACT_LIST[0], siteQuery: "query", acceptedForms: ["--flag"] }];
+      const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: FIX_SHA, actSetId: startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList }).actSetId, actionableItems: [{ ref: ACT_FP, status: "not_resolved", evidence: ["still fails"] }], newFindings: [], widenedReads: [], outcome: "bounded_out" };
+      const decision = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: delta.actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items: [{ ref: ACT_FP, status: "not_resolved" }] };
+      if (defect === "nonclearing") decision.nextStep = "fix_and_rereview";
+      if (defect === "baseline") delta.reviewBaselineHead = FIX_SHA;
+      if (defect === "membership") delta.actionableItems[0].ref = "foreign";
+      if (defect === "statuses") decision.items[0].status = "cannot_verify";
+      if (defect === "candidate") decision.candidateHead = FIX_SHA;
+      if (defect === "invocation") decision.invocation = 2;
+      if (["resolved", "resolvedForms"].includes(defect)) { delta.actionableItems[0].status = "resolved"; decision.items[0].status = "resolved"; }
+      const dispositions = [{ threadId: "PRRT_RESIDUAL", fingerprint: defect === "unbound" ? null : ACT_FP, fixingCommitSha: HEAD_SHA, disposition: ["tackled", "resolvedForms", "unbound"].includes(defect) ? "tackled" : "deferred", returnedSites: ["--flag"], sites: defect === "unaccounted" ? [] : [{ site: "--flag", kind: "input_form", status: "skipped", reason: "still fails after invocation three" }] }];
+      const handoffText = defect === "unbound" ? JSON.stringify({ headSha: HEAD_SHA, dispositions, siteCoverage: [{ ...dispositions[0], fingerprint: ACT_FP }] }) : null;
+      const fixerPlan = await deliver(repoRoot, dispositions, { actList, delta, decision: defect === "missing" ? null : decision, semanticAuthority: defect !== "legacy", handoffText });
+      if (["source", "delta", "bytes"].includes(defect)) {
+        const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+        const read = plan.workOrder.requiredReads.find((entry) => entry.kind === (defect === "source" ? "act-list" : "delta-result"));
+        const altered = defect === "source" ? [{ ...actList[0], summary: "tampered" }] : { ...delta, newFindings: [{ severity: "low", summary: "tampered", evidence: ["x"] }] };
+        await writeFile(read.path, JSON.stringify(altered));
+        if (defect !== "bytes") read.sha256 = createHash("sha256").update(JSON.stringify(altered)).digest("hex");
+        assert.equal(workOrderDigest(plan.workOrder), plan.workOrderDigest, "local byte hashes cannot change semantic authority");
+        await writeFile(fixerPlan, JSON.stringify(plan));
+      }
+      const nodes = [actThread("PRRT_RESIDUAL", [gateComment("c1", 1)], defect === "residualResolved")];
+      const { deps, calls } = runtime([threadsCallEntry(nodes), userEntry], repoRoot);
+      const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
+      if (defect) {
+        const expected = { missing: /delta clearing decision/, nonclearing: /delta clearing decision/, source: /authority.sourceDigest/, delta: /authority.deltaResultDigest/, bytes: /delta result differs from its sha256/, baseline: /pinned baseline/, membership: /not in the act set/, statuses: /delta clearing decision/, candidate: /actual pushed candidate/, invocation: /invocation-three/, tackled: /delta status and disposition disagree/, resolved: /delta status and disposition disagree/, resolvedForms: /fixed status and a test/, unaccounted: /returned site/, unbound: /delta status and live thread disposition disagree/, residualResolved: /delta status and live thread disposition disagree/, legacy: /fixed status and a test/ };
+        await assert.rejects(verify(), expected[defect]);
+        assert.equal(calls.length, ["unbound", "residualResolved"].includes(defect) ? 3 : 0, "authority fails before GitHub mutation or checkpoint");
+        assert.deepEqual(await checkpointFiles(repoRoot), []);
+      } else {
+        const before = await readFile(fixerPlan, "utf8");
+        const result = await verify();
+        assert.equal(result.complete, true, "only tackled disposition completion; residual is still open");
+        assert.deepEqual(result.actions, []);
+        assert.equal(nodes[0].isResolved, false);
+        assert.equal(calls.length, 3);
+        assert.equal(await readFile(fixerPlan, "utf8"), before);
+        if (check) assert.deepEqual(await checkpointFiles(repoRoot), []);
+      }
+    });
+  });
+}
 
 async function checkpointFiles(repoRoot) {
   const entries = await readdir(path.join(repoRoot, "tmp"), { recursive: true }).catch(() => []);
