@@ -276,7 +276,23 @@ const VERIFY_EXEC_PREFIX =
   `${ENV_ASSIGNMENT_RUN}(?:${ENV_WRAPPER}|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?`;
 
 // Validation needs shell words, while the mutation and read/search guards keep their own boundaries.
-function validationShellSegments(command) {
+// Read literal substitution bodies only; never evaluate variables or scripts.
+function substitutionEnd(command, start, backtick) {
+  const quotes = [null];
+  for (let i = start; i < command.length; i += 1) {
+    const char = command[i], next = command[i + 1], quote = quotes.at(-1);
+    if (char === "\\" && quote !== "'") { i += 1; continue; }
+    if (backtick && char === "`") return i;
+    if (char === "$" && next === "(" && quote !== "'") { quotes.push(null); i += 1; continue; }
+    if (quote) { if (char === quote) quotes[quotes.length - 1] = null; continue; }
+    if (char === "'" || char === '"') { quotes[quotes.length - 1] = char; continue; }
+    if (!backtick && char === "(") quotes.push(null);
+    if (!backtick && char === ")") { quotes.pop(); if (quotes.length === 0) return i; }
+  }
+  return -1;
+}
+
+function validationShellSegments(command, depth = 0) {
   const segments = [];
   let words = [], word = "", started = false, quote = null, uncertain = false, redirectTarget = false;
   const finishWord = () => {
@@ -304,6 +320,19 @@ function validationShellSegments(command) {
       word += char;
       continue;
     }
+    if (quote !== "'" && ((char === "$" && next === "(") || char === "`")) {
+      const start = i + (char === "`" ? 1 : 2);
+      const end = substitutionEnd(command, start, char === "`");
+      uncertain = true;
+      // shortcut: eight literal nesting levels; deeper or malformed substitutions stay opaque.
+      if (end !== -1 && depth < 8) {
+        segments.push(...validationShellSegments(command.slice(start, end), depth + 1));
+        word += "$substitution";
+        started = true;
+        i = end;
+        continue;
+      }
+    }
     if (quote) {
       if (char === quote) quote = null;
       else {
@@ -323,8 +352,10 @@ function validationShellSegments(command) {
       i += operator.length - 1;
       continue;
     }
-    if (/[(){}!]/.test(char) && !started) { words.push(char); continue; }
-    if (/[)}]/.test(char)) { finishWord(); words.push(char); continue; }
+    // Unquoted parentheses delimit command positions (groups, function bodies and case arms).
+    if (/[()]/.test(char)) { finishSegment(); continue; }
+    if (/[{}!]/.test(char) && !started) { words.push(char); continue; }
+    if (char === "}") { finishWord(); words.push(char); continue; }
     if (/[;&|\n\r]/.test(char)) { finishSegment(); continue; }
     if (/\s/.test(char)) { finishWord(); continue; }
     if (/[$`*?\[\]<>]/.test(char)) uncertain = true;
@@ -336,17 +367,44 @@ function validationShellSegments(command) {
   return segments;
 }
 
+function verificationWrapperLaunches(text) {
+  const words = text.match(new RegExp(PACKAGE_MANAGER_WORD, "g")) ?? [];
+  const wrapper = words[0]?.split("/").at(-1);
+  if (!["time", "nohup", "command", "exec"].includes(wrapper)) return [text];
+  const commandStart = words.findIndex((word, index) => index > 0 && !word.startsWith("-"));
+  if (wrapper === "command" && words.slice(1, commandStart < 0 ? undefined : commandStart).some((word) => /^-[vV]+$/.test(word))) return [text];
+  const positions = [1], launches = [];
+  for (let i of positions) {
+    while (i < words.length && words[i].startsWith("-")) {
+      if (words[i] === "--") { i += 1; break; }
+      // Unknown options may consume a value; retain both literal interpretations.
+      if (!words[i].includes("=") && words[i + 1] && !words[i + 1].startsWith("-")) positions.push(i + 2);
+      i += 1;
+    }
+    if (i < words.length) launches.push(words.slice(i).join(" "));
+  }
+  return launches;
+}
+
 function normalizedVerificationSegments(command) {
   if (typeof command !== "string") return [];
   const shellWrapper = new RegExp(`(^|[;&|\\n])\\s*${VERIFY_EXEC_PREFIX}(?:ba|z|da|k)?sh\\s+-[lc]*c\\s+(['"])([\\s\\S]*?)\\2`, "gi");
   // shortcut: bounded literal shell wrappers only; opaque scripts need a supported process boundary.
   for (let depth = 0; depth < 4; depth += 1) command = command.replace(shellWrapper, "$1$3");
   const prefix = new RegExp(`^${VERIFY_EXEC_PREFIX.replaceAll("[A-Za-z_][A-Za-z0-9_]*=\\S*", `[A-Za-z_][A-Za-z0-9_]*=${PACKAGE_MANAGER_WORD}`)}`, "i");
-  const controlPrefix = /^(?:(?:time|nohup|if|then|elif|else|do|while|until)(?:\s+|$)|[!({]\s*)/;
-  return validationShellSegments(command).map(({ text, uncertain }) => {
-    let previous;
-    do { previous = text; text = text.replace(controlPrefix, "").replace(prefix, ""); } while (text !== previous);
-    return { text: text.replace(/(?:\s*[)}])+\s*$/, ""), uncertain };
+  const controlPrefix = /^(?:(?:if|then|elif|else|do|while|until)(?:\s+|$)|[!({]\s*)/;
+  return validationShellSegments(command).flatMap(({ text, uncertain }) => {
+    const pending = [text], normalized = [];
+    for (const original of pending) {
+      let candidate = original;
+      const stripped = candidate.replace(controlPrefix, "");
+      const launches = verificationWrapperLaunches(stripped);
+      if (launches.length !== 1 || launches[0] !== stripped) { pending.push(...launches); continue; }
+      candidate = stripped.replace(prefix, "");
+      if (candidate !== original) { pending.push(candidate); continue; }
+      normalized.push({ text: candidate.replace(/(?:\s*[)}])+\s*$/, ""), uncertain });
+    }
+    return normalized;
   });
 }
 
@@ -1292,8 +1350,10 @@ const RUNNER_VALUE_FLAGS = new Set(["--timeout", "--test-name-pattern", "--test-
 // Quoted parts and escapes keep whitespace inside an option value, never a command word.
 const PACKAGE_MANAGER_WORD = String.raw`(?:[^\s'"\\]|\\[\s\S]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')+`;
 const PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+(?:(?:--prefix|--dir|--cwd|--loglevel|--workspace|--filter|--cache|--registry|--userconfig|--config|--modules-folder|--use-yarnrc|-w|-C)\s+${PACKAGE_MANAGER_WORD}|--?[\w-]+=${PACKAGE_MANAGER_WORD}|(?:--silent|--quiet|--verbose|--bun|--if-present|--ignore-scripts|--offline|--frozen-lockfile|--recursive|-[sqrd]+)(?=\s|$)))*`;
-const PACKAGE_EXEC_OPTIONS = String.raw`(?:\s+(?:(?:--package|-p)\s+${PACKAGE_MANAGER_WORD}|--?[\w-]+=${PACKAGE_MANAGER_WORD}|(?:--yes|--no|--bun|-[yn]+)(?=\s|$)))*`;
-const VITEST_LAUNCH = new RegExp(`^(?:(?:npx|bunx)${PACKAGE_EXEC_OPTIONS}\\s+(?:--\\s+)?|(?:npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:exec|dlx)${PACKAGE_EXEC_OPTIONS}\\s+(?:--\\s+)?|(?:pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+|bun\\s+x${PACKAGE_EXEC_OPTIONS}\\s+)?vitest(?:@[^\\s]+)?(?:\\s+(.*))?$`, "i");
+const PACKAGE_EXEC_OPTIONS = String.raw`(?:\s+(?:(?:--package|-p)\s+${PACKAGE_MANAGER_WORD}|--?[\w-]+=${PACKAGE_MANAGER_WORD}|(?:--yes|--no|--bun|--quiet|--silent|-[ynqs]+)(?=\s|$)))*`;
+const PACKAGE_RUNNER_PREFIX = `(?:(?:npx|bunx)${PACKAGE_EXEC_OPTIONS}\\s+(?:--\\s+)?|(?:npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:exec|dlx)${PACKAGE_EXEC_OPTIONS}\\s+(?:--\\s+)?|(?:bun|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:run${PACKAGE_MANAGER_OPTIONS}\\s+)?|bun\\s+x${PACKAGE_EXEC_OPTIONS}\\s+)`;
+const VITEST_LAUNCH = new RegExp(`^${PACKAGE_RUNNER_PREFIX}?vitest(?:@[^\\s]+)?(?:\\s+(.*))?$`, "i");
+const OTHER_PACKAGE_RUNNER_COMMAND = new RegExp(`^${PACKAGE_RUNNER_PREFIX}(?!vitest(?:@|\\s|$))[\\w./][\\w./-]*(?:\\s|$)`, "i");
 export const FULL_VALIDATION_REMEDY = "Full validation boundary: developers and fixers run targeted checks only. Request full evidence through `dev-loops gate resolve-validation` (in this repo: `dev-loops-run cli/index.mjs gate resolve-validation`).";
 const VALIDATION_SCRIPT = String.raw`(?:test(?::[\w-]+)*|verify(?::[\w-]+)*|build(?::[\w-]+)*|assets:check|schema:check)`;
 // npm/pnpm aliases and install-and-test commands all run the test script.
@@ -1304,6 +1364,7 @@ const PACKAGE_MANAGER_RUN = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_
 const PACKAGE_MANAGER_COMMAND = new RegExp(`^(?:bun|npm|pnpm|yarn)${PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${PACKAGE_MANAGER_OPTIONS}\\s+)?(?!${RUN_WORD}(?:\\s|$))[\\w:][\\w:-]*(?:\\s|$)`, "i");
 // An opaque value-taking option before a recognizable validation script cannot grant worker execution.
 const OPAQUE_PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+-${PACKAGE_MANAGER_WORD}(?:\s+${PACKAGE_MANAGER_WORD})?)*`;
+const OPAQUE_VITEST_LAUNCH = new RegExp(`^(?:(?:npx|bunx)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+|(?:npm|pnpm|yarn)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+(?:exec|dlx)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+|(?:bun|pnpm|yarn)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+(?:(?:run|x)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+)?)vitest(?:@[^\\s]+)?(?:\\s|$)`, "i");
 const OPAQUE_PACKAGE_MANAGER_RUN = new RegExp(`^(?:(?:bun|npm|pnpm|yarn)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+(?:${RUN_WORD}${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+)?${VALIDATION_SCRIPT}|(?:npm|pnpm)${OPAQUE_PACKAGE_MANAGER_OPTIONS}\\s+${TEST_ALIAS_WORD})(?:\\s|$)`, "i");
 const RUNTIME_VALUE_FLAGS = new Set([
   "-r", "--require", "--preload", "--import", "-l", "--loader", "--experimental-loader", "--env-file", "--env-file-if-exists", "--conditions", "-C", "--cwd", "-c", "--config",
@@ -1388,6 +1449,7 @@ export function classifyValidationCommand(command) {
         continue;
       }
       const direct = launch.match(/^node\s+--test(?:\s+(.*))?$/i) ?? launch.match(VITEST_LAUNCH);
+      if (!direct && !OTHER_PACKAGE_RUNNER_COMMAND.test(launch) && OPAQUE_VITEST_LAUNCH.test(launch)) return "full-repository";
       if (direct) {
         if (!hasOnlyExactTestSelectors((direct[1] ?? "").replace(/^run(?:\s|$)/, ""))) return "full-repository";
         targeted = true;

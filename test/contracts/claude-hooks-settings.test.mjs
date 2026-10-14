@@ -1028,6 +1028,13 @@ test("Bash hook keeps quoted package values within worker validation boundaries"
   }
 });
 
+test("generated Bash hook denies literal shell residues and opaque vitest launches", () => {
+  for (const command of ["command -p npm test", "echo $(bun run verify)", "case x in *) npm test;; esac", "f() { npm test; }; f", "npx --future value vitest", "yarn run vitest"]) {
+    const result = runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, cwd: repoRoot, agent_type: "fixer"});
+    assert.equal(result.json?.hookSpecificOutput?.permissionDecision, "deny", command);
+  }
+});
+
 test("Bash hook keeps native role and malformed-command behavior", () => {
   for (const command of [undefined, 42]) {
     for (const agent_type of ["review", "judge"]) assert.equal(runHook("pre-tool-use-bash-gate.mjs", {tool_name: "Bash", tool_input: {command}, agent_type, cwd: repoRoot}).json?.hookSpecificOutput?.permissionDecision, "deny");

@@ -2,6 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { classifyValidationCommand, resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
 
+test("literal nested command positions and wrapper options preserve validation reach", () => {
+  assert.equal(classifyValidationCommand("command -p npm test -v"), "full-repository");
+  for (const command of ["time -p bun run verify", "/usr/bin/time -v npm test", "command -p npm test", "echo $(bun run verify)", "x=$(npm test)", "echo `npm test`", 'echo "$(npm test)"', "echo $(echo $(npm test))", "case x in *) npm test;; esac", "case x in a) echo ok;; b) npm test;; esac", "f() { npm test; }; f", "function f() { bun run verify; }"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+  for (const command of ["time -p bun test test/foo.test.mjs", "command -p bun run test:core", "echo $(bun run test:core)", "echo `bun test test/foo.test.mjs`", "case x in *) bun run test:core;; esac", "f() { bun test test/foo.test.mjs; }; f"]) assert.equal(classifyValidationCommand(command), "targeted", command);
+  for (const command of ["echo '$(npm test)'", "echo '`npm test`'", "echo \"\\$(npm test)\"", "echo $(git status)", "time -p git status", "case x in npm) echo test;; esac", "f() { echo npm test; }; f"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
+});
+
+test("vitest launch families fail closed on opaque flags without scanning inert arguments", () => {
+  for (const command of ["npx --quiet vitest", "npx -q vitest", "npm exec --silent vitest", "npm --future value exec --other value vitest", "bun run vitest", "bun vitest", "yarn run vitest", "yarn run --silent vitest", "pnpm run vitest", "npx --future value vitest run test/foo.spec.ts"]) assert.equal(classifyValidationCommand(command), "full-repository", command);
+  for (const command of ["bun run vitest run test/foo.spec.ts", "bun vitest run test/foo.spec.ts", "yarn run vitest run test/foo.spec.ts", "pnpm run vitest run test/foo.spec.ts"]) assert.equal(classifyValidationCommand(command), "targeted", command);
+  for (const command of ["npx --quiet eslint vitest", "npm exec --silent eslint vitest", "bun run lint vitest", "yarn run lint vitest", "npm exec --package vitest eslint"]) assert.equal(classifyValidationCommand(command), "non-validation", command);
+});
+
 test("validation redirections preserve reach without granting expansions", () => {
   for (const command of ["bun test test/foo.test.mjs 2>&1 | tail -40", "bun test test/foo.test.mjs > /tmp/out.log 2>&1", "bun run test:core > /tmp/out.log", "bun scripts/run-bun-test.mjs test/foo.test.mjs 2>&1", "bun test test/foo.test.mjs>>out.log", "bun test test/foo.test.mjs < input.log", "bun test test/foo.test.mjs &>out.log", "2>out.log bun test test/foo.test.mjs", "bun test test/foo.test.mjs 3>&2"]) assert.equal(classifyValidationCommand(command), "targeted", command);
   for (const command of ["bun run verify > /tmp/out.log 2>&1", "npm test 2>&1 | tail", "bun test 2>&1", 'bun test "$WT/test/foo.test.mjs"', "bun test test/*.test.mjs", "bun test $(ls test)", "bun test test/foo.test.mjs <(echo x)", "bun test test/foo.test.mjs >(cat)"]) assert.equal(classifyValidationCommand(command), "full-repository", command);

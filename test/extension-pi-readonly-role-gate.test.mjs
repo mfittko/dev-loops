@@ -415,6 +415,15 @@ test("shell normalization preserves worker boundaries on both harnesses", async 
   }
 });
 
+test("literal shell residues and opaque vitest launches reach both worker guards", async () => {
+  const full = ["time -p bun run verify", "/usr/bin/time -v npm test", "command -p npm test", "echo $(bun run verify)", "x=$(npm test)", "echo `npm test`", "case x in *) npm test;; esac", "f() { npm test; }; f", "npx --quiet vitest", "npm exec --silent vitest", "npx --future value vitest", "bun run vitest", "yarn run vitest"];
+  const allowed = ["time -p bun test test/foo.test.mjs", "echo $(bun run test:core)", "case x in *) bun run test:core;; esac", "f() { bun test test/foo.test.mjs; }; f", "bun run vitest run test/foo.spec.ts", "echo '$(npm test)'", "npx --quiet eslint vitest", "npm exec --package vitest eslint"];
+  for (const role of ["developer", "fixer"]) for (const [commands, block] of [[full, true], [allowed, false]]) for (const command of commands) {
+    assert.equal(decideBashGate({ command, agentType: role }).decision, block ? "deny" : "allow", `${role}: ${command}`);
+    assert.equal((await callAs(role, command)).block, block, `${role}: ${command}`);
+  }
+});
+
 test("opaque package options keep test aliases blocked on Pi and Claude", async () => {
   for (const role of ["developer", "fixer"]) {
     for (const command of ["npm --tag x t", "npm --script-shell sh tst", "npm --node-options x it", "pnpm --tag x cit"]) {
