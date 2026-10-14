@@ -2221,6 +2221,11 @@ test("upsert-checkpoint-verdict refuses a pre_approval_gate post on a ready PR w
 
 test("upsert-checkpoint-verdict suppresses duplicate repost when the current same-head comment already matches", async () => {
   await withTempDir(async (tempDir) => {
+    const existingBody = renderGateReviewCommentBody({
+      gate: "draft_gate", headSha: "abc1234000000000000000000000000000000000", verdict: "clean",
+      findingsSummary: "no issues found", nextAction: "mark ready for review",
+      executionMode: "inline_single_agent", inlineReason: DEFAULT_TEST_INLINE_REASON,
+    });
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -2243,17 +2248,7 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
         stdout: `${JSON.stringify([
           {
             id: 101,
-            body: [
-            "### Gate review: `draft_gate`",
-            "",
-            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
-            "**Verdict:** clean",
-            "**Execution mode:** inline_single_agent — single-agent inline review (test)",
-            "",
-            "**Findings summary:** no issues found",
-            "",
-            "**Next action:** mark ready for review",
-            ].join("\n"),
+            body: existingBody,
             html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
             updated_at: "2026-05-30T17:00:00Z",
           },
@@ -2266,6 +2261,10 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
         stdout: '{"files":[{"path":"src/index.ts"}]}\n',
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/comments/101"],
+        stdout: `${JSON.stringify({ id: 101, body: existingBody })}\n`,
       },
     ]);
 
@@ -2352,6 +2351,9 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
         issueComments: [{ id: 103, body: postedBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-103", updated_at: "2026-08-03T00:00:00Z" }],
       }),
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--json", "files"], stdout: '{"files":[{"path":"src/index.ts"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/issues/comments/103"], stdout: `${JSON.stringify({ id: 103, body: postedBody })}\n` },
     ], { repeatLastOnOverflow: true });
     const second = await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChild2, repoRoot: fanoutDisabledRepoRoot });
     assert.equal(second.action, "noop");
@@ -2421,6 +2423,9 @@ test("upsert-checkpoint-verdict a second same-head call is a noop for an inline 
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
         issueComments: [{ id: 103, body: postedBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-103", updated_at: "2026-08-03T00:00:00Z" }],
       }),
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--json", "files"], stdout: '{"files":[{"path":"src/index.ts"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/issues/comments/103"], stdout: `${JSON.stringify({ id: 103, body: postedBody })}\n` },
     ], { repeatLastOnOverflow: true });
     const second = await upsertCheckpointVerdict(inputs, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChild2, repoRoot: fanoutDisabledRepoRoot });
     assert.equal(second.action, "noop");
@@ -2496,6 +2501,9 @@ test("upsert-checkpoint-verdict: --spec-authority stamps the returned created/no
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
         issueComments: [{ id: 103, body: postedBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-103", updated_at: "2026-08-03T00:00:00Z" }],
       }),
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--json", "files"], stdout: '{"files":[{"path":"src/index.ts"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/issues/comments/103"], stdout: `${JSON.stringify({ id: 103, body: postedBody })}\n` },
     ], { repeatLastOnOverflow: true });
     const noop = await upsertCheckpointVerdict(
       { ...inputs, specAuthority: identityPath },
@@ -2627,6 +2635,11 @@ test("upsert-checkpoint-verdict updates (not noop) when only the inline reason c
 
 test("upsert-checkpoint-verdict noop still warns when a stale comment exists on a different head", async () => {
   await withTempDir(async (tempDir) => {
+    const existingBody = renderGateReviewCommentBody({
+      gate: "draft_gate", headSha: "abc1234000000000000000000000000000000000", verdict: "clean",
+      findingsSummary: "no issues found", nextAction: "mark ready for review",
+      executionMode: "inline_single_agent", inlineReason: DEFAULT_TEST_INLINE_REASON,
+    });
     const env = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
@@ -2649,17 +2662,7 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
         stdout: `${JSON.stringify([
           {
             id: 101,
-            body: [
-            "### Gate review: `draft_gate`",
-            "",
-            "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
-            "**Verdict:** clean",
-            "**Execution mode:** inline_single_agent — single-agent inline review (test)",
-            "",
-            "**Findings summary:** no issues found",
-            "",
-            "**Next action:** mark ready for review",
-            ].join("\n"),
+            body: existingBody,
             html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
             updated_at: "2026-05-30T17:00:00Z",
           },
@@ -2680,6 +2683,9 @@ test("upsert-checkpoint-verdict noop still warns when a stale comment exists on 
           },
         ])}\n`,
       },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["pr", "view", "17", "--json", "files"], stdout: '{"files":[{"path":"src/index.ts"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/issues/comments/101"], stdout: `${JSON.stringify({ id: 101, body: existingBody })}\n` },
     ]);
 
     const result = await runNode([
@@ -6872,7 +6878,7 @@ test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted
       findingsSeverityCounts,
     });
 
-    const env = await writeGhStub(tempDir, buildGateCoordinationEntries({
+    const env = await writeGhStub(tempDir, [...buildGateCoordinationEntries({
       isDraft: true,
       statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
       issueComments: [[{
@@ -6881,7 +6887,11 @@ test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted
         html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
         updated_at: "2026-05-31T20:00:00Z",
       }]],
-    }));
+    }),
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+    { assertArgs: ["pr", "view", "17", "--json", "files"], stdout: '{"files":[{"path":"src/index.ts"}]}\n' },
+    { assertArgs: ["api", "repos/owner/repo/issues/comments/101"], stdout: `${JSON.stringify({ id: 101, body: desiredBody })}\n` },
+    ]);
 
     const result = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
@@ -8318,7 +8328,10 @@ test("upsert-checkpoint-verdict --findings-ledger: an identical same-head rerun 
         nonLocatableFindings: [],
       }),
     };
-    const { runChild, calls } = makeGhMock(singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }), { repeatLastOnOverflow: true });
+    const { runChild, calls } = makeGhMock([
+      ...singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }),
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews/706"], stdout: `${JSON.stringify(existingReview)}\n` },
+    ], { repeatLastOnOverflow: true });
     const result = await upsertCheckpointVerdict({
       repo: "owner/repo",
       pr: 17,
@@ -8383,7 +8396,10 @@ test("upsert-checkpoint-verdict --findings-ledger: a same-head rerun with a SWAP
 
     // Control: the SAME ledger the posted review already carries still noops.
     await writeSingleSurfaceLedger(tempDir, [postedFinding]);
-    const control = makeGhMock(singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }));
+    const control = makeGhMock([
+      ...singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }),
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews/707"], stdout: `${JSON.stringify(existingReview)}\n` },
+    ]);
     const controlResult = await upsertCheckpointVerdict(verdictOptions, { ...ghOptions, runChild: control.runChild });
     assert.equal(controlResult.action, "noop");
     assert.equal(controlResult.suppressed, 1);
@@ -8393,6 +8409,7 @@ test("upsert-checkpoint-verdict --findings-ledger: a same-head rerun with a SWAP
     await writeSingleSurfaceLedger(tempDir, [swappedFinding]);
     const { runChild, calls } = makeGhMock([
       ...singleSurfaceLeadingEntries({ reviews: [existingReview], files: null }),
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews/707"], stdout: `${JSON.stringify(existingReview)}\n` },
       {
         assertArgs: ["api", "-X", "PUT", "repos/owner/repo/pulls/17/reviews/707", "--input", "-"],
         assertStdinIncludes: [swappedFinding.summary],
@@ -9774,6 +9791,10 @@ function makeAcRunChild({
     }
     // gate:full label resource creation (idempotent).
     if (args[0] === "label" && args[1] === "create") return { code: 0, stdout: "", stderr: "" };
+    if (args.length === 2 && args[0] === "api" && args[1].startsWith("repos/owner/repo/issues/comments/")) {
+      const comment = issueComments.find((entry) => args[1] === `repos/owner/repo/issues/comments/${entry.id}`);
+      return comment ? { code: 0, stdout: `${JSON.stringify(comment)}\n`, stderr: "" } : { code: 1, stdout: "", stderr: "HTTP 404: comment not found\n" };
+    }
     // add gate:full label to the PR.
     if (args[0] === "pr" && args[1] === "edit" && args.includes("--add-label")) return { code: 0, stdout: "", stderr: "" };
     if (a.includes("pulls/17/reviews") && a.includes("-X POST")) return { code: 0, stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n', stderr: "" };
@@ -12082,6 +12103,7 @@ test('a same-head verdict updates in place when the admitted validation warning 
       assert.notEqual((await run(visible, fanoutDisabledRepoRoot, true)).result.action, 'noop');
       // A successful read whose body is missing or not a string re-renders too.
       assert.notEqual((await run(visible, fanoutDisabledRepoRoot, false, { id: 103 })).result.action, 'noop');
+      assert.notEqual((await run(visible, fanoutDisabledRepoRoot, false, { id: 103, body: null })).result.action, 'noop');
       assert.notEqual((await run(visible, fanoutDisabledRepoRoot, false, { id: 103, body: 5 })).result.action, 'noop');
     }, { prefix: 'absence-update-' });
   } finally { process.env.PATH = stubbedPath; }
