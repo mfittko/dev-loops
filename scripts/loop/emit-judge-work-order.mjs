@@ -25,7 +25,7 @@ import { resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.m
 const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--tmp-root <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
 ledger (consolidate-fanin --ledger-out), the structured spec and identity stamp
-(spec-context.mjs --spec-out/--identity-out), the gate-context evidence read and the
+(spec-context.mjs --spec-out/--identity-out), the gate-context evidence and validation reads and the
 prior-round judge verdicts. It writes the immutable work order under
 <tmp-root>/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/ and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, planPath }.
@@ -33,7 +33,8 @@ The work order's two verdict outputRefs sit under that directory's <roundId>/ se
 --tmp-root must be a listed checkout's tmp directory (the default is <checkout root>/tmp).
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
 previous emission for this PR and gate at any head. It accepts no brief or summary input.
-Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error.`;
+Exit codes: 0 emitted, 1 refused (missing or inconsistent source; the refusal field
+reports validation_incomplete or semantic_harness_unqualified for those boundaries), 2 usage/IO error.`;
 
 // ref = judge:<owner/repo>#<pr>:<gate>:<headSha>:<roundId>; executionIdentity = roundId.
 const JUDGE_REF_RE = /^judge:([^/\s#]+\/[^/\s#]+)#(\d+):([a-z_]+):([0-9a-f]{40}|[0-9a-f]{64}):(j(\d+)-[0-9a-f]+)$/;

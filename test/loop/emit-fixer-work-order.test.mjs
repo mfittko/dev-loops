@@ -53,13 +53,23 @@ test("#2470: validation source binds text logs and preserves PR authority", asyn
   assert.equal(await readFile(marker, "utf8"), previousMarker, "validation repairs preserve existing delta push authority");
   await assert.rejects(emit({ ...args, actListFile: files.actList }), /exactly one/);
   await assert.rejects(emit({ ...args, phase: "full" }), /commit_only/);
-  for (const over of [{ status: "incomplete" }, { allPassed: true }, { headSha: "a".repeat(40) }]) {
+  for (const over of [{ status: "incomplete" }, { status: "complete", allPassed: true, suites: [] }, { headSha: "a".repeat(40) }]) {
     await writeFile(validationFile, JSON.stringify({ ...record, ...over }));
     await assert.rejects(emit(args), /validation/);
   }
   await writeFile(validationFile, JSON.stringify(record));
   await rm(log);
   await assert.rejects(emit(args), /log/);
+}));
+
+test("#2470: a red record without status emits a validation fixer order", async () => withFixture(async ({ root, head, emit }) => {
+  const validationFile = path.join(root, "tmp/src/validation.json");
+  const outputPath = path.join(root, "tmp/src/unit.log");
+  await writeFile(outputPath, "failed assertion\n");
+  await writeFile(validationFile, JSON.stringify({ headSha: head, allPassed: false, suites: [{ name: "unit", exitCode: 1, outputPath }] }));
+  const plan = await emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, validationFile, phase: "commit_only" });
+  assert.equal(plan.workOrder.source, "validation");
+  assert.deepEqual(plan.workOrder.requiredReads.map((r) => r.kind), ["validation", "validation-log"]);
 }));
 
 test("#2470: ci-only red validation binds its reason and empty suite set", async () => withFixture(async ({ root, head, emit }) => {

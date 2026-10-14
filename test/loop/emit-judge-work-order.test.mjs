@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { test } from "bun:test";
+import { afterAll, beforeAll, test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
@@ -12,8 +12,11 @@ import { withTempDir } from "../_helpers.mjs";
 import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 
 const HEAD = "d".repeat(40);
+let callerCodexThreadId;
+beforeAll(() => { callerCodexThreadId = process.env.CODEX_THREAD_ID; delete process.env.CODEX_THREAD_ID; });
+afterAll(() => { if (callerCodexThreadId === undefined) delete process.env.CODEX_THREAD_ID; else process.env.CODEX_THREAD_ID = callerCodexThreadId; });
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-judge-wo-" });
-const node = (script, args, cwd) => spawnSync("node", [path.resolve(script), ...args], { cwd, encoding: "utf8" });
+const node = (script, args, cwd) => spawnSync("node", [path.resolve(script), ...args], { cwd, encoding: "utf8", env: { ...process.env, CODEX_THREAD_ID: undefined } });
 const pull = (plan, cwd, over = {}) => node("scripts/github/pull-work-order.mjs", [
   "--ref", over.ref ?? plan.workOrderRef, "--digest", over.digest ?? plan.workOrderDigest, "--execution", over.execution ?? plan.executionIdentity,
 ], cwd);

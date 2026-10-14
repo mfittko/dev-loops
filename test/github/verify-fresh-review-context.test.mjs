@@ -24,14 +24,15 @@ test("#2470: reviewer validation admission blocks absent/wrong-head evidence bef
     await writeFile(validationPath, JSON.stringify({ headSha, allPassed: true, status: "complete", suites: [] }));
     await writeFile(contextPath, JSON.stringify({ ...context, requiredReads: [{ kind: "validation" }] }));
     assert.equal(JSON.parse(run().stdout).refusal, "validation_incomplete");
-    for (const recordedHead of ["b".repeat(40), headSha]) {
-      const bytes = JSON.stringify({ headSha: recordedHead, allPassed: true, status: "complete", suites: [] });
+    for (const [recordedHead, status] of [["b".repeat(40), "complete"], [headSha, "failed"], [headSha, "complete"]]) {
+      const bytes = JSON.stringify({ headSha: recordedHead, allPassed: status === "complete", status, suites: status === "failed" ? [{ name: "verify", exitCode: 1, outputPath: "/tmp/verify.log" }] : [] });
       await writeFile(validationPath, bytes);
       context.requiredReads = [{ kind: "validation", path: validationPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length, required: false }];
       await writeFile(contextPath, JSON.stringify(context));
-      const result = run();
+      const result = runScript(["--scope", status, "--context-path", contextPath, "--prefix-hash", "a".repeat(64)], { cwd: root, timeout: 90000 });
       assert.equal(result.status, recordedHead === headSha ? 0 : 1, result.stderr);
       if (recordedHead !== headSha) assert.equal(JSON.parse(result.stdout).refusal, "validation_incomplete");
+      else assert.equal(JSON.parse(result.stdout).refusal, undefined);
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });

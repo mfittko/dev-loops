@@ -1481,8 +1481,8 @@ export function commandContainsCodeVerificationEntrypoint(command) {
 
 const COMPONENT_SUITES = new Set(["test:core", "test:scripts", "test:assets", "test:extension", "test:dev-loop", "test:pack", "test:docs", "test:workflows"]);
 const FULL_SUITES = ["test:all", "test:docs", "test:workflows"];
-const EXACT_TEST_FILE = /^[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?$/;
-const RUNNER_VALUE_FLAGS = new Set(["--timeout", "--test-name-pattern", "--test-reporter", "--test-reporter-destination", "--reporter", "--test-timeout", "--test-concurrency", "--test-shard", "--max-workers", "--filter"]);
+const EXACT_TEST_FILE = /^[\w./-]*\/[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?$/;
+const RUNNER_VALUE_FLAGS = new Set(["-t", "--rerun-each", "--timeout", "--test-name-pattern", "--test-reporter", "--test-reporter-destination", "--reporter", "--test-timeout", "--test-concurrency", "--test-shard", "--max-workers", "--filter"]);
 // Quoted parts and escapes keep whitespace inside an option value, never a command word.
 const PACKAGE_MANAGER_WORD = String.raw`(?:[^\s'"\\]|\\[\s\S]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')+`;
 const PACKAGE_MANAGER_OPTIONS = String.raw`(?:\s+(?:(?:--prefix|--dir|--cwd|--loglevel|--workspace|--filter|--cache|--registry|--userconfig|--config|--modules-folder|--use-yarnrc|-w|-C)\s+${PACKAGE_MANAGER_WORD}|--?[\w-]+=${PACKAGE_MANAGER_WORD}|(?:--silent|--quiet|--verbose|--bun|--if-present|--ignore-scripts|--offline|--frozen-lockfile|--recursive|-[sqrd]+)(?=\s|$)))*`;
@@ -1535,7 +1535,7 @@ function runtimeLaunches(segment) {
 }
 
 function hasOnlyExactTestSelectors(args = "") {
-  const words = args.trim().split(/\s+/).filter(Boolean);
+  const words = args.match(new RegExp(PACKAGE_MANAGER_WORD, "g")) ?? [];
   let selectors = 0;
   for (let i = 0; i < words.length; i += 1) {
     const word = words[i];

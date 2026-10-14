@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { test } from "bun:test";
+import { afterAll, beforeAll, test } from "bun:test";
 import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, listPriorFindingsLogHeads, main, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
@@ -21,9 +21,12 @@ import { createHash } from "node:crypto";
 import { executionIndexPath, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
+let callerCodexThreadId;
+beforeAll(() => { callerCodexThreadId = process.env.CODEX_THREAD_ID; delete process.env.CODEX_THREAD_ID; });
+afterAll(() => { if (callerCodexThreadId === undefined) delete process.env.CODEX_THREAD_ID; else process.env.CODEX_THREAD_ID = callerCodexThreadId; });
 
 function runEmitCli(args = [], opts = {}) {
-  return spawnSync("node", [emitCliPath, ...args], { encoding: "utf8", ...opts });
+  return spawnSync("node", [emitCliPath, ...args], { encoding: "utf8", env: { ...process.env, CODEX_THREAD_ID: undefined }, ...opts });
 }
 
 // The reviewer's first step (#2416): pull its work order with the compact reference.
@@ -63,10 +66,12 @@ for (const gate of ["draft_gate", "pre_approval_gate", "review"]) {
     assert.deepEqual(payload.suites, [{ name: "unit", outputPath: "/tmp/unit.log" }]);
     assert.deepEqual(JSON.parse(runEmitCli(args, { cwd: root, timeout: 90000 }).stdout), payload);
     assert.deepEqual((await readdir(dir)).filter((f) => /emit-plan|suffix|work-order/.test(f)), []);
+    assert.deepEqual(await readdir(path.join(root, "tmp/work-order-executions")).catch((e) => { if (e.code === "ENOENT") return []; throw e; }), []);
     await writeFile(validationPath, JSON.stringify({ headSha: HEAD_SHA, status: "incomplete", allPassed: false, reason: "pending CI", suites: [] }));
     const incomplete = JSON.parse(runEmitCli(args, { cwd: root, timeout: 90000 }).stdout);
     assert.equal(incomplete.refusal, "validation_incomplete");
     assert.equal(incomplete.reason, "pending CI");
+    assert.deepEqual(await readdir(path.join(root, "tmp/work-order-executions")).catch((e) => { if (e.code === "ENOENT") return []; throw e; }), []);
     await writeFile(validationPath, JSON.stringify({ headSha: HEAD_SHA, status: "complete", allPassed: true, suites: [{ name: "missing-exit-code" }] }));
     assert.equal(JSON.parse(runEmitCli(args, { cwd: root, timeout: 90000 }).stdout).refusal, "validation_incomplete");
     await writeFile(validationPath, JSON.stringify({ headSha: HEAD_SHA, status: "complete", allPassed: true, suites: [] }));

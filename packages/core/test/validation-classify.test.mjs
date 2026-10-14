@@ -2,6 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { classifyValidationCommand, resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
 
+test("exact-file runner selectors preserve test-name option values", () => {
+  for (const command of ['bun test test/foo.test.mjs -t foo', 'bun test test/foo.test.mjs -t "returns null"', 'bun test test/foo.test.mjs --test-name-pattern "a b"', 'vitest run test/foo.spec.ts -t name', 'bun test test/foo.test.mjs --rerun-each 3']) assert.equal(classifyValidationCommand(command), "targeted", command);
+  for (const command of ['bun test -t foo', 'bun test --test-name-pattern foo', 'bun run verify', 'npm test -- -t foo']) assert.equal(classifyValidationCommand(command), "full-repository", command);
+});
+
+test("bare test basenames fail closed while path selectors remain targeted", () => {
+  for (const command of ['bun test a.test.mjs e.test.mjs s.test.mjs', 'bun test foo.test.mjs', 'bun scripts/run-bun-test.mjs s.test.mjs']) assert.equal(classifyValidationCommand(command), "full-repository", command);
+  for (const command of ['bun test test/foo.test.mjs', 'bun test ./test/foo.test.mjs', 'bun scripts/run-bun-test.mjs packages/core/test/validation-classify.test.mjs', 'vitest run test/foo.spec.ts']) assert.equal(classifyValidationCommand(command), "targeted", command);
+});
+
 test("literal stdin attachment survives compounds, continued pipelines and separate heredocs", () => {
   for (const consumer of ["{ bash; }", "if true; then bash; fi", "(true; bash)", "bash /dev/stdin", "bash /dev/fd/0", "source /dev/stdin", ". /dev/stdin", "cat <<PLACEHOLDER | { true; bash; }", "cat <<PLACEHOLDER |\nbash"]) {
     for (const [body, expected] of [["npm test", "full-repository"], ["bun run test:core", "targeted"], ["echo npm test", "non-validation"]]) {

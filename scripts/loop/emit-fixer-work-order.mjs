@@ -212,7 +212,7 @@ export async function emitFixerWorkOrder({
   const validationLogs = [];
   if (validationFile) {
     const validation = await readValidationEvidence({ context: { scope: { validationResultsPath: abs(validationFile) } }, headSha, cwd, requireBinding: false });
-    if (validation.refusal !== "validation_failed" || source.parsed.headSha !== headSha || source.parsed.status !== "failed" || source.parsed.allPassed !== false || !Array.isArray(source.parsed.suites)) throw new Refusal(`validation source must be status:failed, allPassed:false at requested head ${headSha}: ${validation.reason ?? "validation passed"}`);
+    if (validation.refusal !== "validation_failed") throw new Refusal(`validation source must be failed at requested head ${headSha}: ${validation.reason ?? "validation passed"}`);
     for (const suite of source.parsed.suites.filter((suite) => suite.exitCode !== 0)) {
       if (typeof suite.name !== "string" || typeof suite.outputPath !== "string" || !suite.outputPath) throw new Refusal("failing validation suite has no name or text log outputPath");
       const logPath = path.resolve(recordOwnerRoot, suite.outputPath);
