@@ -173,7 +173,7 @@ test("F1: bootstrap teaches permitted reads and immediate denial stop before ver
     const generated = await readFile(".claude/agents/fixer.md", "utf8");
     const setup = (body) => body.slice(body.indexOf("## Codex after-pull setup"), body.indexOf("## Authorized remediation sites"));
     for (const delivery of [rule, setup(canonical)]) {
-      assert.match(delivery, /Before an authorized Git write to protected shared Git metadata/);
+      assert.match(delivery, /Under Codex only, before an authorized Git write to protected shared Git metadata, use `tools\.exec_command`/);
       assert.match(delivery, /`tools\.exec_command` with `sandbox_permissions: "require_escalated"` and a factual `justification` up front when the actual managed environment requires it/);
       assert.match(delivery, /do not probe with a write expected to be denied/);
       assert.match(delivery, /configured targeted suites needing shared Git metadata or local sockets/);
