@@ -10,6 +10,7 @@ import { checkForCopilotComments, parseRequestCliArgs, performCopilotReviewReque
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 const scriptPath = path.resolve("scripts/github/request-copilot-review.mjs");
 
@@ -2807,6 +2808,7 @@ async function withFixerHandoff(fn, { checkpoint = false, active } = {}) {
       const bytes = JSON.stringify(act ? [{ fingerprint: "0123456789abcdef", summary: "fix", judgeDisposition: "act" }] : { threads: [{ threadId: "PRRT_T1" }] });
       await writeFile(source, bytes);
       const workOrder = { role: "fixer", phase: "full", target: { repo: "owner/repo", pr: 17 }, headSha: head, outputRefs: [output], requiredReads: [{ kind: act ? "act-list" : "threads", path: source, sha256: createHash("sha256").update(bytes).digest("hex") }] };
+      workOrder.authority = { sourceDigest: sha256Hex(JSON.parse(bytes)).slice(7) };
       const planPath = path.join(fixerDir, "fixer-emit-plan.json");
       const plan = { workOrder, workOrderDigest: workOrderDigest(workOrder), workOrderRef: `fixer:owner/repo#17:${head}:f1-0000abcd`, executionIdentity: "f1-0000abcd" };
       await writeFile(planPath, JSON.stringify(plan));

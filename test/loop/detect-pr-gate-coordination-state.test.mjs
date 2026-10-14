@@ -23,6 +23,7 @@ import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig } from "@
 import { evaluateUiDesignerReviewScoping, DESIGNER_REVIEW_SATISFIED_OUTCOME } from "../../packages/core/src/loop/ui-designer-review-scoping.mjs";
 import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
 
@@ -3927,6 +3928,7 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, 
       const bytes = JSON.stringify(act ? [{ fingerprint: "0123456789abcdef", summary: "fix", judgeDisposition: "act" }] : { threads: [{ threadId: "PRRT_T1" }] });
       await writeFile(source, bytes);
       const workOrder = { role: "fixer", phase: "full", target: { repo: REPO, pr: PR }, headSha: HEAD_SHA, outputRefs: [output], requiredReads: [{ kind: act ? "act-list" : "threads", path: source, sha256: createHash("sha256").update(bytes).digest("hex") }] };
+      workOrder.authority = { sourceDigest: sha256Hex(JSON.parse(bytes)).slice(7) };
       const planPath = path.join(fixerDir, "fixer-emit-plan.json");
       const plan = { workOrder, workOrderDigest: workOrderDigest(workOrder), workOrderRef: `fixer:${REPO}#${PR}:${HEAD_SHA}:f1-0000abcd`, executionIdentity: "f1-0000abcd" };
       await writeFile(planPath, JSON.stringify(plan));

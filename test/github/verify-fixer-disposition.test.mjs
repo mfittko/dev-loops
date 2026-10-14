@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
+import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 import { initGitFixture, makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import {
@@ -78,6 +79,7 @@ async function deliver(repoRoot, dispositions, {
   if (threads) {
     const source = path.join(dir, "threads.json");
     workOrder.requiredReads = [{ kind: "threads", path: source, sha256: createHash("sha256").update(JSON.stringify(threads)).digest("hex") }];
+    workOrder.authority = { sourceDigest: sha256Hex(threads).slice(7) };
     await mkdir(dir, { recursive: true });
     await writeFile(source, JSON.stringify(threads));
     plan.workOrderDigest = workOrderDigest(workOrder);
@@ -92,9 +94,12 @@ async function deliver(repoRoot, dispositions, {
     await writeFile(receiptPath, JSON.stringify({
       role: "fixer", workOrderRef: REF, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity, pulledAt, subject: { planPath }, ...receipt,
     }));
-    if (receiptMtime) await utimes(receiptPath, receiptMtime, receiptMtime);
   }
   if (writeHandoff) await writeFile(outputRef, handoffText ?? JSON.stringify({ headSha: handoffHead, dispositions }));
+  if (receiptMtime) {
+    await utimes(pullReceiptPath(path.join(repoRoot, "tmp"), REF), receiptMtime, receiptMtime);
+    if (writeHandoff) await utimes(outputRef, 1, 1);
+  }
   return planPath;
 }
 
@@ -141,7 +146,7 @@ for (const check of [false, true]) for (const [name, setup, expected] of [
   ["a receipt without a handoff (receipt-only)", { writeHandoff: false }, /result_missing/],
   ["a prose-only handoff", { handoffText: "Fixed all threads." }, /is not valid JSON/],
   ["a handoff with a malformed dispositions list", { handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions: "x" }) }, /dispositions must be an array/],
-  ["a handoff written before the pull (stale or replayed)", { receiptMtime: new Date(Date.now() + 60_000) }, /result_predates_pull/],
+  ["a handoff written before the pull (stale or replayed)", { receiptMtime: new Date("2000-01-01T00:00:00Z") }, /result_predates_pull/],
   ["a handoff whose head is not the observed head", { handoffHead: FIX_SHA }, /not the observed head/],
   ["a commit_only plan", { phase: "commit_only" }, /not a full-phase fixer work order/],
   ["an act item with a siteQuery and no coverage record", { actList: [{ fingerprint: "fp1", severity: "high", summary: "s", judgeDisposition: "act", siteQuery: "git grep -n x" }] }, /act item fp1 has a site query and no site coverage record/],
@@ -655,6 +660,24 @@ for (const check of [false, true]) for (const missing of [false, true]) {
   });
 }
 
+for (const check of [false, true]) test(`THREAD canonical source digest is enforced (${check})`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [], { threads: { threads: [] } });
+    const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+    plan.workOrder.authority.sourceDigest = "0".repeat(64);
+    plan.workOrderDigest = workOrderDigest(plan.workOrder);
+    await writeFile(fixerPlan, JSON.stringify(plan));
+    const receiptPath = pullReceiptPath(path.join(repoRoot, "tmp"), REF);
+    const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+    await writeFile(receiptPath, JSON.stringify({ ...receipt, workOrderDigest: plan.workOrderDigest }));
+    await writeFile(plan.workOrder.outputRefs[0], JSON.stringify({ headSha: HEAD_SHA, dispositions: [] }));
+    const { deps, calls } = runtime([], repoRoot);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps), /threads.*sourceDigest/);
+    assert.equal(calls.length, 0);
+    assert.deepEqual(await checkpointFiles(repoRoot), []);
+  });
+});
+
 test("authentically threadless ACT with complete existing coverage remains valid in check mode", async () => {
   await withRepoRoot(async (repoRoot) => {
     const actList = [{ ...ACT_LIST[0], siteQuery: "git grep x" }];
@@ -687,7 +710,7 @@ for (const hasCheckpoint of [false, true]) for (const [name, setup, expected] of
   ["omitted authenticated ACT thread", { actList: [{ fingerprint: "0123456789abcdef", severity: "medium", summary: "s", judgeDisposition: "act" }] }, /PRRT_ACT/],
   ["malformed output", { handoffText: "{" }, /not valid JSON/],
   ["stale head", { handoffHead: FIX_SHA }, /not the observed head/],
-  ["predates pull", { receiptMtime: new Date(Date.now() + 60_000) }, /result_predates_pull/],
+  ["predates pull", { receiptMtime: new Date("2000-01-01T00:00:00Z") }, /result_predates_pull/],
 ]) {
   test(`active full obligation vetoes ${hasCheckpoint ? "empty" : "absent"} checkpoint: ${name}`, async () => {
     await withRepoRoot(async (repoRoot) => {

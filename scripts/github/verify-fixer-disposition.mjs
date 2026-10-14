@@ -25,6 +25,7 @@ import {
   siteCoverageGaps,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
+import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> --fixer-plan <path> [--tmp-root <path>]
 Enforce GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: verify every review thread a fixer
@@ -227,6 +228,9 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error(`the work order's threads ${threadsRead.path} differ from the sha256 the work order binds`);
     }
     const source = JSON.parse(bytes.toString("utf8"));
+    if (sha256Hex(source).slice(7) !== order.authority?.sourceDigest) {
+      throw new Error(`the work order's threads ${threadsRead.path} differ from the canonical authority.sourceDigest the work order binds`);
+    }
     if (!Array.isArray(source?.threads) || source.threads.some((thread) => typeof thread?.threadId !== "string" || !thread.threadId)) {
       throw new Error(`the work order's threads ${threadsRead.path} have invalid thread IDs`);
     }

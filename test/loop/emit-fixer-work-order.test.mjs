@@ -2,6 +2,7 @@
 // emission -> compact dispatch -> sanctioned pull -> guarded mutation -> checked disposition.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, realpathSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -864,6 +865,49 @@ test("F7: emit, pull, mutate in authority and verify the disposition; missing ma
 // ---------------------------------------------------------------------------
 // F8 — validation ownership is unchanged
 // ---------------------------------------------------------------------------
+
+for (const check of [false, true]) for (const form of ["unchanged", "empty", "altered"]) {
+  test(`genuine THREAD delivery binds canonical source identity (${check}, ${form})`, async () => {
+    await withFixture(async ({ wt, root, head, files, emit, writeRecord }) => {
+      const boundThreads = [{ ...THREADS.threads[0], threadId: "PRRT_SOURCE" }];
+      await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: boundThreads }));
+      await writeRecord({ items: [{ ref: "PRRT_SOURCE", status: "resolved" }] });
+      const unit = await emit({ ...threadsOnly, threadsFile: files.threads });
+      const pulled = pull(unit, wt);
+      assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+      const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
+      const source = form === "unchanged" ? { threads: boundThreads, pr: PR, repo: REPO, ok: true }
+        : { ...THREADS, threads: form === "empty" ? [] : [{ ...THREADS.threads[0], threadId: "PRRT_ALTERED" }] };
+      const bytes = JSON.stringify(source, null, 2);
+      await writeFile(files.threads, bytes);
+      plan.workOrder.requiredReads.find((read) => read.kind === "threads").sha256 = createHash("sha256").update(bytes).digest("hex");
+      assert.equal(workOrderDigest(plan.workOrder), unit.workOrderDigest, "local byte hash is outside semantic authority");
+      await writeFile(unit.planPath, JSON.stringify(plan));
+      const output = unit.workOrder.outputRefs[0];
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, JSON.stringify({ headSha: head, dispositions: form === "unchanged" ? [{ threadId: "PRRT_SOURCE", fixingCommitSha: head, disposition: "tackled" }] : [] }));
+      const nodes = [
+        { id: "PRRT_SOURCE", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${head}.`, author: { login: "bot", __typename: "User" } }] } },
+        { id: "UNRELATED", isResolved: false, comments: { nodes: [{ id: "c2", databaseId: 2, body: "unrelated", author: { login: "bot", __typename: "User" } }] } },
+      ];
+      const { runChild, calls } = makeGhMock([
+        { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: head }) },
+        { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) },
+        { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' },
+      ]);
+      const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath, check }, { env: runIdFreeEnv(), runChild, repoRoot: wt });
+      if (form === "unchanged") {
+        const result = await verify();
+        assert.equal(result.complete, true, "canonical key order and unrelated live threads preserve narrow source membership");
+        assert.equal(calls.length, 3);
+      } else {
+        await assert.rejects(verify(), /threads.*sourceDigest/);
+        assert.equal(calls.length, 0, "tampered sources refuse before any GitHub action");
+      }
+      if (check || form !== "unchanged") assert.equal(existsSync(path.join(root, "tmp/gate-findings")), false);
+    });
+  });
+}
 
 test("historical 44f57175 main producer/pull selects the real feature helper and completes unchanged THREAD delivery", async () => {
   await withFixture(async ({ root, wt, head, files, writeRecord }) => {
