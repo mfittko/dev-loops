@@ -11,7 +11,7 @@ import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.m
 import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
-import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder, locateFixerUnit } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
@@ -140,6 +140,64 @@ test("F1: a PR branch name with a backtick stays JSON-quoted in the rendered pro
     const { promptPath } = await emit({ fetchPr: async () => ({ headRefName: branch, headRefOid: head }) });
     const line = (await readFile(promptPath, "utf8")).split("\n").find((l) => l.startsWith("Mutation authority:"));
     assert.ok(line.startsWith(`Mutation authority: branch ${JSON.stringify(branch)}, paths ".".`), line);
+  });
+});
+
+test("F1: bootstrap teaches permitted reads and immediate denial stop before verification", async () => {
+  await withFixture(async ({ emit }) => {
+    const unit = await emit();
+    const rule = unit.workOrder.executionRules.mutation;
+    assert.match(rule, /before reading any relative contract or source path, run `git worktree list --porcelain`/);
+    assert.match(rule, /Match a `branch` record literally to `refs\/heads\/` plus mutationAuthority.branch/);
+    assert.match(rule, /exactly one matching checked-out worktree and an absolute `worktree` root, otherwise stop/);
+    assert.match(rule, /absolute root as the explicit cwd of every subsequent tool call\/subprocess/);
+    assert.match(rule, /absolute `executionRules.contract`.*emitting toolchain root/);
+    assert.match(rule, /pull subprocess does not change later tool-call cwd/);
+    assert.match(rule, /Keep every contract\/source hash, branch, allowed-path and phase check/);
+    const verifyAt = rule.indexOf("Verify every contract/source digest");
+    assert.ok(verifyAt > rule.indexOf("stops this actor immediately"));
+    assert.ok(rule.indexOf("stops this actor immediately") > 0);
+    assert.match(rule.slice(0, verifyAt), /no subsequent read, verification or alternate-command attempt/);
+    assert.match(rule.slice(0, verifyAt), /normal file-read tools or `cat`/);
+    assert.match(rule.slice(0, verifyAt), /`command -v shasum`/);
+    assert.match(rule.slice(0, verifyAt), /OPS-NO-INLINE-INTERPRETER.*no inline Python or Node/);
+    assert.match(rule.slice(verifyAt), /`shasum -a 256`/);
+    const text = await readFile(unit.promptPath, "utf8");
+    const prefix = text.slice(0, text.indexOf("\n## Required reads\n"));
+    assert.ok(prefix.includes(rule), "the bootstrap must be visible before relative required-read paths");
+    assert.match(prefix, /If tool output is truncated, read bounded ranges separately and do not proceed until every required read is complete/);
+    const canonical = await readFile("agents/fixer.agent.md", "utf8");
+    const generated = await readFile(".claude/agents/fixer.md", "utf8");
+    const setup = (body) => body.slice(body.indexOf("## Codex after-pull setup"), body.indexOf("## Authorized remediation sites"));
+    assert.match(setup(canonical), /stops this actor immediately/);
+    assert.match(setup(canonical), /If tool output is truncated, read bounded ranges separately and do not proceed until every required read is complete/);
+    assert.match(setup(canonical), /actual collaboration parent\/child task identities.*`CODEX_THREAD_ID`/);
+    assert.equal(setup(generated), setup(canonical), "generated setup must retain the safe bootstrap");
+  });
+});
+
+test("F1: older authority contracts cannot replace the emitting toolchain's pinned reads", async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    await mkdir(path.join(wt, "agents"));
+    await writeFile(path.join(wt, "agents/fixer.agent.md"), "older authority contract\n");
+    const unit = await emit();
+    assert.equal(unit.workOrder.executionRules.contract, path.resolve("agents/fixer.agent.md"));
+    const toolchainRoot = path.dirname(path.dirname(unit.workOrder.executionRules.contract));
+    for (const contract of unit.workOrder.contracts) {
+      assert.ok(!path.isAbsolute(contract.path), "contract filenames remain semantic");
+      const digest = execFileSync("shasum", ["-a", "256", path.join(toolchainRoot, contract.path)], { encoding: "utf8" }).split(/\s/)[0];
+      assert.equal(digest, contract.digest);
+    }
+    const order = pull(unit, root);
+    assert.equal(order.status, 0, order.stderr);
+    assert.equal(order.stdout, await readFile(unit.promptPath, "utf8"));
+    const pinned = await readFile(unit.workOrder.executionRules.contract, "utf8");
+    assert.notEqual(pinned, await readFile(path.join(wt, "agents/fixer.agent.md"), "utf8"));
+    const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
+    plan.workOrder.executionRules.contract = path.join(wt, "agents/fixer.agent.md");
+    assert.equal(workOrderDigest(plan.workOrder), unit.workOrderDigest, "absolute roots are local material, not semantic identity");
+    await writeFile(unit.planPath, JSON.stringify(plan));
+    assert.equal(refusal(pull(unit, root)), "local_materialization_integrity_failure", "changing the local contract root must disagree with rendered bytes");
   });
 });
 
@@ -426,7 +484,7 @@ test("F2: initial, resumed and replacement dispatches of one reference pull the 
   });
 });
 
-test("F2: Claude and Pi initial, resumed and replacement adapter payloads are the fixed pointer only; other harnesses refuse", async () => {
+test("F2: Claude, Pi and Codex initial, rebuilt and replacement payloads carry the exact pointer; other harnesses refuse before emission", async () => {
   const hostOverrides = process.env.DEVLOOPS_AGENT_OVERRIDES;
   delete process.env.DEVLOOPS_AGENT_OVERRIDES;
   try {
@@ -438,31 +496,50 @@ test("F2: Claude and Pi initial, resumed and replacement adapter payloads are th
     chmodSync(path.join(bin, "gh"), 0o755);
     // Hermetic: a launched session's DEVLOOPS_AGENT_OVERRIDES must not flip the consumer-checkout agent type.
     const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
-    const cli = (harness) => spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate", "--delta-result", files.delta], { cwd: wt, encoding: "utf8", env });
-    for (const [harness, textKey] of [["claude", "prompt"], ["pi", "task"]]) {
+    const cli = (harness, extra = []) => spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate", "--delta-result", files.delta, ...extra], { cwd: wt, encoding: "utf8", env });
+    const unsupportedRoot = path.join(root, "tmp", "unsupported");
+    const unsupported = cli("unknown", ["--tmp-root", unsupportedRoot]);
+    assert.equal(refusal(unsupported), "unsupported_adapter");
+    assert.equal(existsSync(unsupportedRoot), false, "no work order, plan, execution index or sequence marker");
+    for (const artifact of ["gate-fixer", "work-order-executions", `gate-delta/${head}.sequence`]) {
+      assert.equal(existsSync(path.join(root, "tmp", artifact)), false, `no canonical ${artifact}`);
+    }
+    assert.throws(() => buildFixerDispatchPayload({ harness: "unknown", plan: {} }), (err) => err.refusal === "unsupported_adapter");
+    for (const [harness, textKey] of [["claude", "prompt"], ["pi", "task"], ["codex", "message"]]) {
       const initial = JSON.parse(cli(harness).stdout);
+      assert.equal(initial.ok, true, `${harness}: ${JSON.stringify(initial)}`);
       const plan = JSON.parse(await readFile(initial.planPath, "utf8"));
       const resumed = buildFixerDispatchPayload({ harness, plan, cwd: wt });
       const replacementOut = JSON.parse(cli(harness).stdout);
       const replacement = { plan: JSON.parse(await readFile(replacementOut.planPath, "utf8")), payload: replacementOut.dispatchPayload };
       for (const [payload, unit] of [[initial.dispatchPayload, plan], [resumed, plan], [replacement.payload, replacement.plan]]) {
-        assert.deepEqual(Object.keys(payload).sort(), (harness === "claude" ? ["subagent_type", "description"] : ["agent"]).concat(textKey).sort());
+        assert.deepEqual(Object.keys(payload).sort(), (harness === "claude" ? ["subagent_type", "description"] : harness === "codex" ? ["task_name", "fork_turns"] : ["agent"]).concat(textKey).sort());
         // A consumer checkout resolves the plugin-namespaced agent; the hooks normalize it to `fixer`.
         if (harness === "claude") assert.deepEqual([payload.subagent_type, payload.description], ["dev-loops:fixer", "fixer work order"]);
+        if (harness === "codex") {
+          assert.equal(payload.task_name, `fixer_${unit.executionIdentity.replaceAll("-", "_")}`);
+          assert.match(payload.task_name, /^[a-z0-9_]+$/);
+          assert.equal(payload.fork_turns, "none");
+        }
         assert.equal(payload[textKey], buildDispatchPointer(unit));
         assert.ok(Buffer.byteLength(payload[textKey]) <= DISPATCH_POINTER_MAX_BYTES);
         assertFixerDispatchPayload({ harness, payload, plan: unit, cwd: wt });
       }
       assert.deepEqual(initial.dispatchPayload, resumed);
+      if (harness === "codex") {
+        assert.notEqual(initial.dispatchPayload.task_name, replacement.payload.task_name);
+        for (const executionIdentity of [undefined, null, 7, "", "f1-abcdefg1", "f1-ABCDEF12", "f1-abcdef12\n", "f1-abcdef12/extra"]) {
+          assert.throws(() => buildFixerDispatchPayload({ harness, plan: { ...plan, executionIdentity } }), /execution identity/i);
+        }
+        for (const bad of [{ ...resumed, task_name: "fixer_other" }, { ...resumed, fork_turns: "all" }, { message: resumed.message, task_name: resumed.task_name }, Object.assign(Object.create(resumed), { extra1: 1, extra2: 2, extra3: 3 })]) {
+          assert.throws(() => assertFixerDispatchPayload({ harness, payload: bad, plan, cwd: wt }), (err) => err.refusal === "dispatch_payload_mismatch" && err.message.includes('"fork_turns":"none"'));
+        }
+      }
       for (const bad of [{ ...resumed, [textKey]: `${resumed[textKey]} Also refactor the parser.` }, { ...resumed, [textKey]: `Context: x. ${resumed[textKey]}` }, { ...resumed, extra: "prose" }, ...(harness === "claude" ? [{ ...resumed, description: "fix the parser" }, { ...resumed, subagent_type: "fixer" }] : [])]) {
         assert.throws(() => assertFixerDispatchPayload({ harness, payload: bad, plan, cwd: wt }), (err) => err.refusal === "dispatch_payload_mismatch");
       }
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
-    const codex = cli("codex");
-    assert.equal(codex.status, 1, codex.stderr);
-    assert.equal(JSON.parse(codex.stdout).refusal, "unsupported_adapter");
-    assert.throws(() => buildFixerDispatchPayload({ harness: "codex", plan: {} }), (err) => err.refusal === "unsupported_adapter");
     // The dev-loops source checkout resolves its repo-local agent.
     assert.equal(buildFixerDispatchPayload({ harness: "claude", plan: {}, cwd: process.cwd() }).subagent_type, "fixer");
     // A launcher-rendered fixer override makes the bare type the only dispatchable one.
@@ -915,7 +992,7 @@ test("regenerate: the rendered line is present and the materialization hash stil
   });
 });
 
-test("regenerate: the rule is identical for the claude and pi harness CLI adapters", async () => {
+test("regenerate: the rule is identical for the claude, pi and codex harness CLI adapters", async () => {
   await withFixture(async ({ root, wt, head, files, writeRecord }) => {
     await writeRecord({ items: [{ ref: ACT_REF, status: "resolved" }] });
     await addGenerator(wt);
@@ -925,14 +1002,14 @@ test("regenerate: the rule is identical for the claude and pi harness CLI adapte
     chmodSync(path.join(bin, "gh"), 0o755);
     const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
     const rules = [];
-    for (const harness of ["claude", "pi"]) {
+    for (const harness of ["claude", "pi", "codex"]) {
       const cli = spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "full", "--act-list-file", files.actList, "--gate", "draft_gate", "--delta-result", files.delta], { cwd: wt, encoding: "utf8", env });
       assert.equal(cli.status, 0, cli.stderr);
       rules.push(JSON.parse(await readFile(JSON.parse(cli.stdout).planPath, "utf8")).workOrder.executionRules.regenerate);
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
     assert.ok(rules[0]);
-    assert.equal(rules[0], rules[1]);
+    assert.equal(new Set(rules).size, 1);
   });
 });
 

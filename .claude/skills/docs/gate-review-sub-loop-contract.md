@@ -989,11 +989,12 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 
 - The coordinator emits the fixer work order with `scripts/loop/emit-fixer-work-order.mjs
   --repo <owner/name> --pr <n> --head-sha <headRefOid> --phase commit_only
-  --act-list-file <judge-pass --out> --gate <gate> --harness <claude|pi>` and dispatches the
+  --act-list-file <judge-pass --out> --gate <gate> --harness <claude|pi|codex>` and dispatches the
   printed `dispatchPayload` unchanged, on initial, resumed and replacement dispatches alike
   (ADR 0106, 0107). The act-list fix pass is `commit_only`: the later `full` emission that
   pushes and replies follows [delta mode](pre-pr-review-contract.md#delta-mode).
   A changed act list, delta result, head or phase requires a new emission.
+  For Codex, call `collaboration.spawn_agent` with that payload unchanged: only the execution-derived `task_name`, canonical pointer `message` and `fork_turns: "none"`. A rebuild is not actor resume; each replacement needs a fresh child. After pulling, the child follows the pinned fixer contract (`agents/fixer.agent.md`, "Codex after-pull setup") for truthful runtime provenance and managed permissions.
 - When a judge verdict is present (Phase 3.5), the fix pass executes **only the `act` list**
   — findings the judge marked `act`. The fixer retains reproduction-based rejection (a finding
   that does not reproduce is dead regardless of the judge's verdict) but stops deciding

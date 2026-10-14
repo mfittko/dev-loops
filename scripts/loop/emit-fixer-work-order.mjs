@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
@@ -26,7 +27,7 @@ import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
+const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
 or the unresolved review threads (list-review-threads.mjs --unresolved-only), plus the
 optional pre-push delta result (dev-loops loop pre-push-delta). --phase full needs a clearing
@@ -254,10 +255,10 @@ export async function emitFixerWorkOrder({
       ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(abs(actListFile))} --baseline ${headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)}`
       : undefined,
     executionRules: {
-      contract: "agents/fixer.agent.md",
+      contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)),
       phase,
       validation: VALIDATION_RULE,
-      mutation: "Mutate only files under mutationAuthority.allowedPaths on mutationAuthority.branch",
+      mutation: "After a successful pull, before reading any relative contract or source path, run `git worktree list --porcelain` in the current repository. Match a `branch` record literally to `refs/heads/` plus mutationAuthority.branch (no pattern or shell evaluation); require exactly one matching checked-out worktree and an absolute `worktree` root, otherwise stop and report the refusal. Use that absolute root as the explicit cwd of every subsequent tool call/subprocess (or resolve each repo-relative source path against it); the pull subprocess does not change later tool-call cwd. Do not create or switch worktrees or invent a root. A permission or classifier denial stops this actor immediately: no subsequent read, verification or alternate-command attempt; report the denial. Before verification, use normal file-read tools or `cat`; qualify digest-tool availability with `command -v shasum` and stop if unavailable. Follow OPS-NO-INLINE-INTERPRETER in skills/docs/copilot-loop-operations.md: no inline Python or Node for this bootstrap. Derive the emitting toolchain root from the absolute `executionRules.contract` by removing its `agents/fixer.agent.md` suffix; resolve `contracts[].path` only against that emitting toolchain root, never the mutation worktree or a searched fallback. The root is local material bound by the pull's rendered-byte integrity check; relative contract paths and digests retain semantic identity. Verify every contract/source digest with direct `shasum -a 256` on those exact paths, then read every required contract/source in full. If tool output is truncated, read bounded ranges separately and do not proceed until every required read is complete. Keep every contract/source hash, branch, allowed-path and phase check. Mutate only files under mutationAuthority.allowedPaths on mutationAuthority.branch",
       regenerate: existsSync(path.join(resolveRepoRoot(cwd), "scripts/claude/generate-claude-assets.mjs")) ? REGENERATE_RULE : undefined,
     },
   };
@@ -306,26 +307,35 @@ export function claudeFixerAgentType(cwd = process.cwd(), env = process.env) {
   return "dev-loops:fixer";
 }
 
-// The checked dispatch seam per harness: the adapter payload carries the fixed pointer only
-// (plus the fixed `description` the Claude Agent tool requires).
+// Each adapter carries the fixed pointer and its tool's required routing fields.
 const FIXER_DISPATCH_ADAPTERS = {
   claude: (prompt, cwd) => ({ subagent_type: claudeFixerAgentType(cwd), description: "fixer work order", prompt }),
   pi: (prompt) => ({ agent: "fixer", task: prompt }),
+  codex: (message, _cwd, executionIdentity) => {
+    if (typeof executionIdentity !== "string" || !/^f\d+-[0-9a-f]{8}$/.test(executionIdentity) || executionIdentity.trim() !== executionIdentity) {
+      throw new WorkOrderRefusal("invalid_execution_identity", "Codex fixer execution identity must be f<digits>-<8 lowercase hex>");
+    }
+    return { task_name: `fixer_${executionIdentity.replaceAll("-", "_")}`, message, fork_turns: "none" };
+  },
 };
+
+function fixerDispatchAdapter(harness) {
+  const adapter = Object.hasOwn(FIXER_DISPATCH_ADAPTERS, harness) ? FIXER_DISPATCH_ADAPTERS[harness] : null;
+  if (!adapter) throw new WorkOrderRefusal("unsupported_adapter", `harness ${JSON.stringify(harness)} has no fixer dispatch adapter; supported: ${Object.keys(FIXER_DISPATCH_ADAPTERS).join(", ")}`);
+  return adapter;
+}
 
 /** The harness adapter payload for a fixer dispatch; any other harness refuses (never legacy prose). */
 export function buildFixerDispatchPayload({ harness, plan, cwd = process.cwd() }) {
-  const adapter = Object.hasOwn(FIXER_DISPATCH_ADAPTERS, harness) ? FIXER_DISPATCH_ADAPTERS[harness] : null;
-  if (!adapter) throw new WorkOrderRefusal("unsupported_adapter", `harness ${JSON.stringify(harness)} has no fixer dispatch adapter; supported: ${Object.keys(FIXER_DISPATCH_ADAPTERS).join(", ")}`);
-  return adapter(plan.dispatchPrompt, cwd);
+  return fixerDispatchAdapter(harness)(plan.dispatchPrompt, cwd, plan.executionIdentity);
 }
 
 /** Refuses a payload that is not exactly the harness adapter payload for the plan's pointer (same keys, same values). */
 export function assertFixerDispatchPayload({ harness, payload, plan, cwd = process.cwd() }) {
-  const expected = buildFixerDispatchPayload({ harness, plan: { dispatchPrompt: buildDispatchPointer(plan) }, cwd });
+  const expected = buildFixerDispatchPayload({ harness, plan: { executionIdentity: plan.executionIdentity, dispatchPrompt: buildDispatchPointer(plan) }, cwd });
   const keys = Object.keys(expected);
-  if (Object.keys(payload ?? {}).length !== keys.length || keys.some((key) => payload[key] !== expected[key])) {
-    throw new WorkOrderRefusal("dispatch_payload_mismatch", `the ${harness} fixer dispatch must be ${JSON.stringify({ ...expected, [keys.at(-1)]: "<the compact pointer>" })} unchanged`);
+  if (Object.keys(payload ?? {}).length !== keys.length || keys.some((key) => !Object.hasOwn(payload, key) || payload[key] !== expected[key])) {
+    throw new WorkOrderRefusal("dispatch_payload_mismatch", `the ${harness} fixer dispatch must be ${JSON.stringify(expected)} unchanged`);
   }
 }
 
@@ -429,7 +439,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   if (values["tmp-root"]) assertTmpRootOutsideLinkedWorktree(path.resolve(cwd, values["tmp-root"]), resolveRepoRoot(cwd));
   const emit = (payload) => emitResult(payload, { jq: values.jq, silent: values.silent, fields: values.fields });
   try {
-    buildFixerDispatchPayload({ harness: values.harness, plan: {} }); // refuse an unknown harness before emitting
+    fixerDispatchAdapter(values.harness); // refuse an unknown harness before emitting
     const plan = await emitFixerWorkOrder({
       repo: values.repo, pr: values.pr, headSha: values["head-sha"].toLowerCase(), phase: values.phase,
       actListFile: values["act-list-file"], gate: values.gate, threadsFile: values["threads-file"],
