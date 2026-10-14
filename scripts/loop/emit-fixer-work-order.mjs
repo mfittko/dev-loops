@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
@@ -254,10 +255,10 @@ export async function emitFixerWorkOrder({
       ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(abs(actListFile))} --baseline ${headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)}`
       : undefined,
     executionRules: {
-      contract: "agents/fixer.agent.md",
+      contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)),
       phase,
       validation: VALIDATION_RULE,
-      mutation: "After a successful pull, before reading any relative contract or source path, run `git worktree list --porcelain` in the current repository. Match a `branch` record literally to `refs/heads/` plus mutationAuthority.branch (no pattern or shell evaluation); require exactly one matching checked-out worktree and an absolute `worktree` root, otherwise stop and report the refusal. Use that absolute root as the explicit cwd of every subsequent tool call/subprocess (or resolve each repo-relative path against it), including contract digest verification; the pull subprocess does not change later tool-call cwd. Do not create or switch worktrees or invent a root. Keep every contract/source hash, branch, allowed-path and phase check. Mutate only files under mutationAuthority.allowedPaths on mutationAuthority.branch",
+      mutation: "After a successful pull, before reading any relative contract or source path, run `git worktree list --porcelain` in the current repository. Match a `branch` record literally to `refs/heads/` plus mutationAuthority.branch (no pattern or shell evaluation); require exactly one matching checked-out worktree and an absolute `worktree` root, otherwise stop and report the refusal. Use that absolute root as the explicit cwd of every subsequent tool call/subprocess (or resolve each repo-relative source path against it); the pull subprocess does not change later tool-call cwd. Do not create or switch worktrees or invent a root. A permission or classifier denial stops this actor immediately: no subsequent read, verification or alternate-command attempt; report the denial. Before verification, use normal file-read tools or `cat`; qualify digest-tool availability with `command -v shasum` and stop if unavailable. Follow OPS-NO-INLINE-INTERPRETER in skills/docs/copilot-loop-operations.md: no inline Python or Node for this bootstrap. Derive the emitting toolchain root from the absolute `executionRules.contract` by removing its `agents/fixer.agent.md` suffix; resolve `contracts[].path` only against that emitting toolchain root, never the mutation worktree or a searched fallback. The root is local material bound by the pull's rendered-byte integrity check; relative contract paths and digests retain semantic identity. Verify every contract/source digest with direct `shasum -a 256` on those exact paths, then read every required contract/source in full. Keep every contract/source hash, branch, allowed-path and phase check. Mutate only files under mutationAuthority.allowedPaths on mutationAuthority.branch",
       regenerate: existsSync(path.join(resolveRepoRoot(cwd), "scripts/claude/generate-claude-assets.mjs")) ? REGENERATE_RULE : undefined,
     },
   };

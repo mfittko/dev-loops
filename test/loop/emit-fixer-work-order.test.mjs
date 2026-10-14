@@ -11,7 +11,7 @@ import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.m
 import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
-import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder, locateFixerUnit } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
@@ -143,7 +143,7 @@ test("F1: a PR branch name with a backtick stays JSON-quoted in the rendered pro
   });
 });
 
-test("F1: emitted bootstrap locates the authority worktree before relative contract and source reads", async () => {
+test("F1: bootstrap teaches permitted reads and immediate denial stop before verification", async () => {
   await withFixture(async ({ emit }) => {
     const unit = await emit();
     const rule = unit.workOrder.executionRules.mutation;
@@ -151,12 +151,51 @@ test("F1: emitted bootstrap locates the authority worktree before relative contr
     assert.match(rule, /Match a `branch` record literally to `refs\/heads\/` plus mutationAuthority.branch/);
     assert.match(rule, /exactly one matching checked-out worktree and an absolute `worktree` root, otherwise stop/);
     assert.match(rule, /absolute root as the explicit cwd of every subsequent tool call\/subprocess/);
-    assert.match(rule, /including contract digest verification/);
+    assert.match(rule, /absolute `executionRules.contract`.*emitting toolchain root/);
     assert.match(rule, /pull subprocess does not change later tool-call cwd/);
     assert.match(rule, /Keep every contract\/source hash, branch, allowed-path and phase check/);
+    const verifyAt = rule.indexOf("Verify every contract/source digest");
+    assert.ok(verifyAt > rule.indexOf("stops this actor immediately"));
+    assert.ok(rule.indexOf("stops this actor immediately") > 0);
+    assert.match(rule.slice(0, verifyAt), /no subsequent read, verification or alternate-command attempt/);
+    assert.match(rule.slice(0, verifyAt), /normal file-read tools or `cat`/);
+    assert.match(rule.slice(0, verifyAt), /`command -v shasum`/);
+    assert.match(rule.slice(0, verifyAt), /OPS-NO-INLINE-INTERPRETER.*no inline Python or Node/);
+    assert.match(rule.slice(verifyAt), /`shasum -a 256`/);
     const text = await readFile(unit.promptPath, "utf8");
     const prefix = text.slice(0, text.indexOf("\n## Required reads\n"));
     assert.ok(prefix.includes(rule), "the bootstrap must be visible before relative required-read paths");
+    const canonical = await readFile("agents/fixer.agent.md", "utf8");
+    const generated = await readFile(".claude/agents/fixer.md", "utf8");
+    const setup = (body) => body.slice(body.indexOf("## Codex after-pull setup"), body.indexOf("## Authorized remediation sites"));
+    assert.match(setup(canonical), /stops this actor immediately/);
+    assert.match(setup(canonical), /editor\/patch.*ephemeral.*`node <file>`/);
+    assert.equal(setup(generated), setup(canonical), "generated setup must retain the safe bootstrap");
+  });
+});
+
+test("F1: older authority contracts cannot replace the emitting toolchain's pinned reads", async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    await mkdir(path.join(wt, "agents"));
+    await writeFile(path.join(wt, "agents/fixer.agent.md"), "older authority contract\n");
+    const unit = await emit();
+    assert.equal(unit.workOrder.executionRules.contract, path.resolve("agents/fixer.agent.md"));
+    const toolchainRoot = path.dirname(path.dirname(unit.workOrder.executionRules.contract));
+    for (const contract of unit.workOrder.contracts) {
+      assert.ok(!path.isAbsolute(contract.path), "contract filenames remain semantic");
+      const digest = execFileSync("shasum", ["-a", "256", path.join(toolchainRoot, contract.path)], { encoding: "utf8" }).split(/\s/)[0];
+      assert.equal(digest, contract.digest);
+    }
+    const order = pull(unit, root);
+    assert.equal(order.status, 0, order.stderr);
+    assert.equal(order.stdout, await readFile(unit.promptPath, "utf8"));
+    const pinned = await readFile(unit.workOrder.executionRules.contract, "utf8");
+    assert.notEqual(pinned, await readFile(path.join(wt, "agents/fixer.agent.md"), "utf8"));
+    const plan = JSON.parse(await readFile(unit.planPath, "utf8"));
+    plan.workOrder.executionRules.contract = path.join(wt, "agents/fixer.agent.md");
+    assert.equal(workOrderDigest(plan.workOrder), unit.workOrderDigest, "absolute roots are local material, not semantic identity");
+    await writeFile(unit.planPath, JSON.stringify(plan));
+    assert.equal(refusal(pull(unit, root)), "local_materialization_integrity_failure", "changing the local contract root must disagree with rendered bytes");
   });
 });
 
