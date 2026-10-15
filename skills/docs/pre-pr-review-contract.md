@@ -264,8 +264,19 @@ before normal verification. Follow the complete source,
 prior commit-only provenance, raw coverage identity and live-root checks in
 `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`; retain original Delta baseline A independently of full
 authority/live candidate B. Construction writes only its own report and does not finish delivery.
-Normal verification and `--check` authenticate that same optional source. The current producer,
-legacy deliveries, pre-push Delta policy and dispatch payloads remain unchanged until issue 2765.
+Normal verification and `--check` authenticate that same source. Ordinary ACT/full emission now
+requires the immediate genuine commit-only plan/pull/raw report and both complete modern result
+and clearing-decision bindings. It preserves raw coverage and fixing F, checks clean committed
+candidate B on the authority branch, and retains reviewed A as `authority.reviewBaselineHead`.
+CLI/live PR head, Delta and push marker remain A; full order/ref/receipt name B. Locally-clear
+results must be fresh B; invocation-three bounded-out results may remain at F while the decision
+names B. Missing, partial or historical digest-only evidence refuses before replacement/grant.
+Original A retirement is checked using its original execution timestamp before publication and
+after awaited capture. Both emitted verifier commands use the absolute emitting script while
+cwd remains the authority worktree. The constructor writes exclusively; an authentic existing
+report is retried through normal/check, never removed and reconstructed. Legacy deliveries,
+pre-push Delta policy and compact dispatch payloads retain their existing behavior. Isolated
+mixed-root tests establish command routing, not actual worker qualification or recovery.
 
 The explicit `legacyRevalidation.origin: "legacy_revalidated"` consumer exception in
 `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` replaces only unavailable historical coverage hashes

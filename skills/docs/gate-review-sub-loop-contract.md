@@ -1253,7 +1253,7 @@ While any tackled thread is incomplete, `FIXER_DISPOSITION_FORBIDDEN_ACTIONS` al
 
 `scripts/github/verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <fixer-emit-plan.json>` reads the handoff from the work order's outputRef and refuses without a matching fixer pull receipt, when the handoff predates the pull, or when the handoff head is not the observed head. It also fails, naming the thread id, when a work order's judge-act item carries the fingerprint of an open inline gate thread and the handoff has no disposition entry for that thread (an act item with an open inline gate thread is never threadless; only a thread whose root comment is authored by the gate login counts, every such thread needs its own entry, and a refused handoff writes no checkpoint). It records `tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`, captures live state, checks containment, and only after containment passes posts the evidenced reply and resolves (resolving without reposting when a matching reply exists). Live checks precede writes, so restart, rate limit, timeout and reply-success/resolve-failure re-entry cannot duplicate replies.
 
-Adding `--check` runs the same current-protocol plan/digest, role/target/execution, receipt/path, after-pull output, source integrity, current-head/contained-order-head, coverage, authenticated ACT-thread and containment checks, including live reply/resolution and `delta_blocked` evaluation. It writes no report or checkpoint and posts no reply or resolution. A THREAD unit validates its digest-bound source hash and requires dispositions for its own pinned thread IDs only; it adds no ACT query or all-history requirement. An authentic threadless ACT unit with complete required coverage may have an empty dispositions array. The default mutating verification remains the completion path for current-producer full units, with no new producer fields or coverage requirements.
+Adding `--check` runs the same current-protocol plan/digest, role/target/execution, receipt/path, after-pull output, source integrity, current-head/contained-order-head, coverage, authenticated ACT-thread and containment checks, including live reply/resolution and `delta_blocked` evaluation. It writes no report or checkpoint and posts no reply or resolution. A THREAD unit validates its digest-bound source hash and requires dispositions for its own pinned thread IDs only; it adds no ACT query or all-history requirement. An authentic threadless ACT unit with complete required coverage may have an empty dispositions array. The default mutating verification remains the completion path after populated construction; legacy deliveries retain their existing coverage requirements.
 
 The optional `--construct` operation (ADR 0149) is ACT/full only and mutually exclusive with
 `--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
@@ -1279,8 +1279,8 @@ Content identity preserves arrays, every key (including `__proto__`) and absolut
 work-order local-material exclusions do not apply. Null, malformed, partial, duplicate or
 unauthenticated supplied authority refuses. Pull and grant retirement checks retain each distinct
 B/A across their existing roots and emission timestamps; branch containment always checks B.
-An absent field retains legacy admission without new ACT or history reads. The ordinary producer
-still omits it; issue 2786 enables populated emission after this consumer contract lands.
+An absent field retains legacy admission without new ACT or history reads. Ordinary ACT/full
+emission supplies this field while keeping CLI `--head-sha` at reviewed A and full authority at B.
 The full order's head B remains separate from the authenticated Delta's original reviewed baseline A:
 use A for the ACT sequence, clearing record and origin ref, and prove both A and the fixing commit
 are contained by live B. Require whole-Delta semantic authority and matching raw coverage identities
@@ -1293,8 +1293,22 @@ deferred/open. Omit the scalar fingerprint hint. After all checks, write raw aut
 exactly and the authenticated fixing SHA only to the current canonical report; return `constructed:
 true` and its output location, never checkpoint/reply/resolution or completed-verification evidence.
 Normal verification remains mandatory and checks delivered coverage/fixing SHAs against the same
-source. Absent optional inputs retain legacy behavior. Producer emission stays disabled until
-issue 2765; consumer fixtures are neither producer support nor the later operational worker smoke.
+source. Absent optional inputs retain legacy behavior. Ordinary ACT/full emission authenticates
+the immediate canonical commit-only plan, actual pull and after-pull raw report before replacement.
+Both modern result and clearing decision must bind its exact coverage/report bytes and origin;
+digest-only historical or partial bindings refuse rather than produce an empty skeleton.
+The committed clean authority branch and HEAD must equal candidate B, with A ≤ fixing F ≤ B.
+The order/ref/new receipt use B; Delta, sequence and push marker retain A. Capture the original
+raw coverage, fixing F and origin unchanged in one exclusive execution-derived completion input,
+with required hash/bytes and both semantic and raw-byte authority. Query live threads and login
+even for empty membership; use the shared selector for every authenticated matching root/member.
+Check original A retirement with the original execution timestamp in emission, canonical and
+authority roots before preparing publication and again after awaited capture, immediately before
+replacement. Recheck candidate authority and captured identities before the atomic rename.
+Populated-full instructions push reviewed B and pin both constructor and normal verifier to the
+absolute emitting script derived from `executionRules.contract`, preserving authority cwd.
+Construct only absent output; existing-output retries use normal/check without deletion or
+reconstruction. These fixtures do not qualify an operational worker or recovery.
 
 Explicit historical revalidation (ADR 0151 in the [decision records](https://github.com/mfittko/dev-loops/tree/main/docs/decisions))
 adds only an optional `legacyRevalidation` to that authenticated source:
@@ -1337,7 +1351,7 @@ participating current emitters serialize; this is not compare-and-swap against o
 helpers ignoring the lock, nor protection against an adversarial filesystem mutation after
 the final check. Do not run a frozen old emitter concurrently during rollout.
 
-Only unchanged-candidate `locally_clear`/`push` with every ACT member resolved qualifies.
+Only unchanged-candidate `locally_clear`/`push` with every ACT member resolved qualifies for historical revalidation.
 Recheck canonical clearing bytes/status/membership, active plan, retirement, branch and tree.
 The sole supported ACT literal is `readValidationEvidence|requireBinding|validationResultsPath|prefix-file`.
 Run native `git --no-pager -c color.ui=never grep -n -E <literal> <full-candidate> --`
@@ -1346,9 +1360,9 @@ All native identity/tree/query calls use a 10000ms timeout, SIGKILL and 1MiB out
 Require successful complete rows, exact stdout-byte digest, complete raw file/form coverage,
 tests and skip reasons; normalization only checks gaps. Recheck tree and current canonical plan
 after the query. Construct, normal and check each requalify; future-bound input never scans.
-This consumer enables no producer. Current authenticated compound authority asserts pre-overwrite
-capture; hashes/timestamps do not prove chronology. Later producer work must perform/prove that
-ordering and fresh-worker smoke. Receipt authentication covers the existing protocol fields,
+Historical compound authority alone asserts pre-overwrite capture; hashes/timestamps do not prove
+chronology. Ordinary modern emission performs the capture above; historical operational recovery
+and fresh-worker qualification remain separate work. Receipt authentication covers the existing protocol fields,
 without claiming exact-byte attestation for unrelated receipt fields or real A1 recovery.
 
 Full ACT completion alone may accept an explicitly recorded `input_form` with `status: "skipped"`
