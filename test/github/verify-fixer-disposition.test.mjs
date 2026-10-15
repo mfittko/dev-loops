@@ -1103,7 +1103,8 @@ for (const failure of ["plan", "discovery", "empty", "relative"]) test(`legacy q
       },
     }, await import("@dev-loops/core/loop/gate-round-retirement"), await import("@dev-loops/core/loop/fixer-disposition"),
     await import("@dev-loops/core/loop/pre-push-delta-review"), await import("../../scripts/loop/_repo-root-resolver.mjs"),
-    await import("../../scripts/loop/_gate-delta-record.mjs"), await import("../../scripts/github/_gate-artifact-paths.mjs"), await import("../../scripts/github/_work-order-protocol.mjs"));
+    await import("../../scripts/loop/_gate-delta-record.mjs"), await import("../../scripts/github/_gate-artifact-paths.mjs"), await import("../../scripts/github/_work-order-protocol.mjs"),
+    await import("../../scripts/github/_fixer-emission-evidence.mjs"));
     if (failure === "discovery") context.listWorktreeEntries = () => { throw Object.assign(new Error("worktree listing failed"), { code: "ETIMEDOUT" }); };
     if (failure === "empty" || failure === "relative") context.listWorktreeEntries = () => failure === "empty" ? [] : [{ path: "relative" }];
     const qualify = runInNewContext(`${source.slice(source.indexOf("const PATTERN")).replace("export async function", "async function")}\nrevalidateLegacyCompletion`, context);

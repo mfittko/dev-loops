@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, realpathSync } from "node:fs";
-import { cp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, link, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "bun:test";
@@ -117,6 +117,117 @@ async function withFixture(fn) {
     await fn({ root, wt, head, files, emit, recordPath, writeRecord });
   }, { prefix: "dev-loops-fixer-" });
 }
+
+for (const phase of ["commit_only", "full"]) test(`capture preserves genuine ${phase} delivery before replacement without granting archive authority`, async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    const old = await emit({ phase });
+    assert.equal(pull(old, root).status, 0);
+    const tmp = path.join(root, "tmp");
+    await mkdir(path.dirname(old.workOrder.outputRefs[0]), { recursive: true });
+    await writeFile(old.workOrder.outputRefs[0], '{ "genuine fixture report": true }\n');
+    const files = [old.planPath, old.promptPath, old.workOrder.outputRefs[0], pullReceiptPath(tmp, old.workOrderRef), executionIndexPath(tmp, old.executionIdentity)];
+    const before = await Promise.all(files.map((file) => readFile(file)));
+    const archive = path.join(path.dirname(old.planPath), old.executionIdentity, "original-fixer-emit-plan.json");
+    await emit({ phase: "commit_only" });
+    assert.deepEqual(await readFile(archive), before[0]);
+    assert.deepEqual(await Promise.all(files.slice(1).map((file) => readFile(file))), before.slice(1));
+    assert.equal(JSON.parse(before[3]).subject.planPath, old.planPath);
+    assert.equal((await locateFixerUnit({ ref: old.workOrderRef, cwd: wt, tmpRoots: [tmp] })).stale.includes("superseded"), true);
+    assert.equal(pull(old, root).status, 1, "archived execution cannot be pulled again");
+    assert.equal(hook(wt, path.join(wt, "src/a.mjs")), "deny", "superseded original receipt cannot grant a write");
+  });
+});
+
+test("unpulled capture and equal archive reentry preserve bytes without inventing a receipt", async () => {
+  await withFixture(async ({ root, emit }) => {
+    const old = await emit({ phase: "commit_only" });
+    const bytes = await readFile(old.planPath);
+    const archive = path.join(path.dirname(old.planPath), old.executionIdentity, "original-fixer-emit-plan.json");
+    await mkdir(path.dirname(archive), { recursive: true });
+    await writeFile(archive, bytes);
+    await emit({ phase: "commit_only" });
+    assert.deepEqual(await readFile(archive), bytes);
+    assert.equal(existsSync(pullReceiptPath(path.join(root, "tmp"), old.workOrderRef)), false);
+  });
+});
+
+for (const unsafe of ["unequal", "symlink", "hardlink", "directory", "ancestor", "lock", "active-link", "prompt-link"])
+  test(`capture refuses ${unsafe} without replacing active plan or marker`, async () => {
+    await withFixture(async ({ root, emit }) => {
+      const old = await emit({ phase: "commit_only" });
+      const dir = path.dirname(old.planPath);
+      const archive = path.join(dir, old.executionIdentity, "original-fixer-emit-plan.json");
+      await mkdir(path.dirname(archive), { recursive: true });
+      const bytes = await readFile(old.planPath);
+      if (unsafe === "unequal") await writeFile(archive, "different");
+      if (unsafe === "symlink") await symlink(old.planPath, archive);
+      if (unsafe === "hardlink") await link(old.planPath, archive);
+      if (unsafe === "directory") await mkdir(archive);
+      if (unsafe === "ancestor") {
+        await rename(path.dirname(archive), `${path.dirname(archive)}-elsewhere`);
+        await symlink(`${path.dirname(archive)}-elsewhere`, path.dirname(archive));
+      }
+      if (unsafe === "lock") await writeFile(path.join(dir, ".fixer-emission.lock"), "other owner");
+      if (["active-link", "prompt-link"].includes(unsafe)) {
+        const file = unsafe === "active-link" ? old.planPath : old.promptPath;
+        await rename(file, `${file}-elsewhere`);
+        await symlink(`${file}-elsewhere`, file);
+      }
+      const markerDir = path.join(root, "tmp", "gate-delta");
+      const markers = await Promise.all((await readdir(markerDir)).map(async (file) => [file, await readFile(path.join(markerDir, file))]));
+      await assert.rejects(emit({ phase: "full" }), /fixer emission|archive|regular|link|lock|different/i);
+      assert.deepEqual(await readFile(old.planPath), bytes);
+      for (const [file, content] of markers) assert.deepEqual(await readFile(path.join(markerDir, file)), content);
+      if (unsafe === "lock") assert.equal(await readFile(path.join(dir, ".fixer-emission.lock"), "utf8"), "other owner");
+    });
+  });
+
+for (const changed of ["active", "source", "delta", "decision", "prompt", "report", "receipt", "directory"])
+  test(`capture detects ${changed} identity changes across authority await`, async () => {
+    await withFixture(async ({ root, head, files, emit, recordPath }) => {
+      const old = await emit({ phase: "commit_only" });
+      assert.equal(pull(old, root).status, 0);
+      await mkdir(path.dirname(old.workOrder.outputRefs[0]), { recursive: true });
+      await writeFile(old.workOrder.outputRefs[0], "report");
+      const active = await readFile(old.planPath);
+      const file = { active: old.planPath, source: files.actList, delta: files.delta, decision: recordPath, prompt: old.promptPath, report: old.workOrder.outputRefs[0], receipt: pullReceiptPath(path.join(root, "tmp"), old.workOrderRef) }[changed];
+      await assert.rejects(emit({ phase: "commit_only", fetchPr: async () => {
+        if (changed === "directory") {
+          const dir = path.dirname(old.planPath);
+          await rename(dir, `${dir}-moved`);
+          await mkdir(dir);
+        } else {
+          const bytes = await readFile(file);
+          await rename(file, `${file}-moved`);
+          await writeFile(file, bytes);
+        }
+        return { headRefName: "issue-1", headRefOid: head };
+      } }), /fixer emission|changed/i);
+      if (changed !== "directory") assert.deepEqual(await readFile(old.planPath), active);
+    });
+  });
+
+test("participating concurrent emitters refuse contention and release only their own lock", async () => {
+  await withFixture(async ({ head, emit }) => {
+    const old = await emit({ phase: "commit_only" });
+    let entered;
+    const ready = new Promise((resolve) => { entered = resolve; });
+    let release;
+    const wait = new Promise((resolve) => { release = resolve; });
+    const running = emit({ phase: "commit_only", fetchPr: async () => { entered(); await wait; return { headRefName: "issue-1", headRefOid: head }; } });
+    await ready;
+    try { await assert.rejects(emit({ phase: "commit_only" }), /lock|EEXIST/i); }
+    finally { release(); await running; }
+    const lock = path.join(path.dirname(old.planPath), ".fixer-emission.lock");
+    assert.equal(existsSync(lock), false);
+    await assert.rejects(emit({ phase: "commit_only", fetchPr: async () => {
+      await rename(lock, `${lock}-original`);
+      await writeFile(lock, "replacement owner");
+      throw new Error("authority failed");
+    } }), /authority failed/);
+    assert.equal(await readFile(lock, "utf8"), "replacement owner");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // F1 — the briefing is derived by tooling from typed sources
@@ -941,8 +1052,12 @@ test("F7: emit, pull, mutate in authority and verify the disposition; missing ma
     assert.equal(await readFile(unit.planPath, "utf8"), planBefore);
     assert.equal(checkRuntime.calls.some((call) => call.args.includes("POST") || call.args.some((arg) => String(arg).includes("mutation"))), false);
 
+    const originalPrompt = await readFile(unit.promptPath);
     await rm(unit.promptPath);
     assert.equal(refusal(pull(unit, wt)), "local_materialization_integrity_failure");
+    await assert.rejects(emit(), /missing.*work-orders/);
+    assert.equal(await readFile(unit.planPath, "utf8"), planBefore, "missing evidence cannot be superseded");
+    await writeFile(unit.promptPath, originalPrompt);
     const reemitted = await emit();
     assert.notEqual(reemitted.workOrderRef, unit.workOrderRef);
     assert.equal(refusal(pull(unit, wt)), "stale_dispatch");
@@ -1003,7 +1118,7 @@ for (const check of [false, true]) for (const form of ["unchanged", "empty", "al
 }
 
 for (const route of ["THREAD", "ACT", "CONSTRUCT", "LEGACY"]) test(`historical 44f57175 main producer/pull selects the real feature helper and completes ${route} delivery`, async () => {
-  await withFixture(async ({ root, wt, head, files, writeRecord }) => {
+  await withFixture(async ({ root, wt, head, files, writeRecord, emit }) => {
     const historical = "44f57175a215711923fb128d74e9357b33ff95e9";
     const checkout = fileURLToPath(new URL("../../", import.meta.url));
     const archive = execFileSync("git", ["-C", checkout, "archive", historical, "scripts", "packages", "lib", "cli", "package.json", "skills", "agents"], { env: gitFreeEnv(), maxBuffer: 32 * 1024 * 1024 });
@@ -1067,8 +1182,9 @@ for (const route of ["THREAD", "ACT", "CONSTRUCT", "LEGACY"]) test(`historical 4
       const originalPull = await protocol.pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, cwd: wt, tmpRoots: [path.join(root, "tmp")], receiptTmpRoot: path.join(root, "tmp") });
       assert.equal(originalPull.workOrderText, await readFile(unit.promptPath, "utf8"));
       const archivePath = path.join(path.dirname(unit.planPath), unit.executionIdentity, "original-fixer-emit-plan.json");
-      await mkdir(path.dirname(archivePath), { recursive: true });
-      await writeFile(archivePath, await readFile(unit.planPath));
+      const originalPlanBytes = await readFile(unit.planPath);
+      await emit();
+      assert.deepEqual(await readFile(archivePath), originalPlanBytes, "current emitter captures the genuinely pulled historical renderer bytes");
       git(wt, "config", "grep.column", "true");
       const query = execFileSync("git", ["--no-pager", "-c", "color.ui=never", "grep", "-n", "-E", pattern, candidate, "--"], { cwd: wt, env: { ...gitFreeEnv(), GIT_NO_REPLACE_OBJECTS: "1",
         GIT_CONFIG_PARAMETERS: undefined, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "grep.column", GIT_CONFIG_VALUE_0: "false" } });

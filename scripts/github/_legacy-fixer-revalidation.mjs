@@ -8,7 +8,7 @@ import { toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
 import { gitEnvNoDirOverrides, listWorktreeEntries } from "../loop/_repo-root-resolver.mjs";
 import { gateDeltaRecordPath } from "../loop/_gate-delta-record.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
-import { verifyPullReceipt, workOrderDigest } from "./_work-order-protocol.mjs";
+import { authenticateOriginalPlan } from "./_fixer-emission-evidence.mjs";
 
 const PATTERN = "readValidationEvidence|requireBinding|validationResultsPath|prefix-file";
 const HEX = /^[a-f0-9]{64}$/;
@@ -82,21 +82,11 @@ export async function revalidateLegacyCompletion({ completion, plan, planPath, p
   const old = JSON.parse(archive);
   const oldOrder = old.workOrder;
   if (["workOrderRef", "workOrderDigest", "executionIdentity"].some((key) => old[key] !== original[key])
-    || workOrderDigest(oldOrder) !== original.workOrderDigest || oldOrder?.role !== "fixer" || oldOrder.phase !== "full"
+    || oldOrder?.role !== "fixer" || oldOrder.phase !== "full"
     || oldOrder.source !== "act-list" || order.source !== "act-list" || oldOrder.gate !== order.gate
     || oldOrder.target?.repo !== order.target.repo || oldOrder.target?.pr !== order.target.pr
     || oldOrder.headSha !== delta.reviewBaselineHead || oldOrder.mutationAuthority?.branch !== order.mutationAuthority?.branch) refuse("original full archive identity or authority mismatch");
-  const pulled = await verifyPullReceipt({ receiptTmpRoot, role: "fixer", ...original });
-  if (!pulled.ok) refuse(`original full pull receipt failed: ${pulled.reason}`);
-  const subject = pulled.receipt.subject;
-  if (subject?.repo !== order.target.repo || subject.pr !== order.target.pr || subject.headSha !== oldOrder.headSha
-    || subject.branch !== order.mutationAuthority.branch || subject.phase !== "full"
-    || typeof subject.planPath !== "string" || await realpath(subject.planPath) !== canonical) refuse("original full receipt subject is not the original canonical full plan");
-  const prompt = await readFile(path.join(directory, "work-orders", `${original.executionIdentity}.md`));
-  if (sha256Hex(prompt) !== old.materializationHash || sha256Hex(prompt) !== pulled.receipt.materializationHash) refuse("original historical materialization hash mismatch");
-  // Semantic identity excludes local read fields; the genuine old prompt seals their complete JSON.
-  const suffix = Buffer.from(`## Work order\n\n\`\`\`json\n${JSON.stringify(oldOrder, null, 2)}\n\`\`\`\n`);
-  if (!prompt.subarray(-suffix.length).equals(suffix)) refuse("historical complete Work order JSON suffix differs");
+  await authenticateOriginalPlan({ plan: old, canonical, receiptTmpRoot: await realpath(receiptTmpRoot), requireReceipt: true });
   for (const [kind, authority, current] of [["act-list", "sourceDigest", actList], ["delta-result", "deltaResultDigest", delta]]) {
     const originals = oldOrder.requiredReads?.filter((read) => read.kind === kind) ?? [];
     const currents = order.requiredReads?.filter((read) => read.kind === kind) ?? [];

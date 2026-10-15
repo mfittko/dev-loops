@@ -1306,6 +1306,26 @@ local read paths/hashes/bytes excluded from semantic identity. Never rerender hi
 Exactly one required original ACT and Delta read must reproduce raw hash/bytes and semantic
 authority, and match current authenticated reads. Preserve all original records and receipts.
 
+Fixer emission preserves the prior raw canonical `fixer-emit-plan.json` before replacement
+as `<canonical-plan-dir>/<old-execution>/original-fixer-emit-plan.json` (ADR 0152).
+The real emitter and legacy consumer share original identity/digest and historical
+prompt/receipt hash plus complete JSON-suffix authentication. Capture leaves the immutable
+`work-orders/<old-execution>.md`, report, receipt and execution index unchanged; the original
+receipt still names the original canonical plan path. An unpulled emission may be archived,
+but the archive creates no receipt or completion authority and never enters pull/grant lookup.
+
+Acquire the exclusive `<canonical-plan-dir>/.fixer-emission.lock` before reading the active
+plan; hold it through capture, source/decision and file/directory identity rechecks, atomic
+active-plan rename and sequence-marker publication. Existing locks refuse immediately;
+`finally` releases only the invocation's owned lock. There is no timeout, stale takeover or
+automatic crash recovery: an interrupted owner's lock requires operator investigation.
+Archive and new prompt/temporary-plan destinations are exclusive, execution-derived and
+accept existing bytes only when identical. Symlinks, redirected ancestors, nonregular or
+multiply-linked evidence and detected identity changes refuse before publication. Concurrent
+participating current emitters serialize; this is not compare-and-swap against obsolete
+helpers ignoring the lock, nor protection against an adversarial filesystem mutation after
+the final check. Do not run a frozen old emitter concurrently during rollout.
+
 Only unchanged-candidate `locally_clear`/`push` with every ACT member resolved qualifies.
 Recheck canonical clearing bytes/status/membership, active plan, retirement, branch and tree.
 The sole supported ACT literal is `readValidationEvidence|requireBinding|validationResultsPath|prefix-file`.
